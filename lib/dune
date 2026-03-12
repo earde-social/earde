@@ -1,0 +1,15 @@
+(library
+ (name earde)
+ (public_name earde)
+ (libraries
+  dream
+  caqti
+  caqti-lwt
+  caqti-lwt.unix
+  caqti-driver-postgresql
+  argon2
+  yojson
+  logs
+  unix)
+ (preprocess
+  (pps lwt_ppx)))

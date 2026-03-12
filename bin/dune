@@ -1,0 +1,8 @@
+(executables
+ (public_names earde_server -)
+ (names main seed)
+ (libraries earde dream uri lwt.unix caqti-lwt.unix caqti-driver-postgresql)
+ (link_flags
+  (:standard -cclib -largon2))
+ (preprocess
+  (pps lwt_ppx)))

@@ -1,0 +1,11 @@
+_build/
+_opam/
+
+.merlin
+*.install
+.env
+
+.DS_Store
+.vscode/
+*.swp
+*~
