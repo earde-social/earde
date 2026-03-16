@@ -120,7 +120,7 @@ let login_handler request =
             (match%lwt Auth.verify_password ~password ~hash with
             | Ok true ->
                 if is_banned then
-                  Dream.html (Pages.msg_page ~title:"Account Banned" ~message:"Your account has been permanently banned from Koinon." ~alert_type:"error" ~return_url:"/login" request)
+                  Dream.html (Pages.msg_page ~title:"Account Banned" ~message:"Your account has been permanently banned from Earde." ~alert_type:"error" ~return_url:"/login" request)
                 else
                   let%lwt () = Dream.set_session_field request "user_id" (string_of_int id) in
                   let%lwt () = Dream.set_session_field request "username" user in
@@ -696,7 +696,7 @@ let create_post_handler request =
               | Ok b -> Lwt.return b | Error _ -> Lwt.return false
             in
             if is_gb then
-              Dream.respond ~status:`Forbidden (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Account Banned" ~message:"Your account has been permanently banned from Koinon." ~alert_type:"error" ~return_url:"/" request)
+              Dream.respond ~status:`Forbidden (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Account Banned" ~message:"Your account has been permanently banned from Earde." ~alert_type:"error" ~return_url:"/" request)
             else
               match%lwt Db.is_member db user_id community_id with
               | Ok true ->
@@ -868,7 +868,7 @@ let create_comment_handler request =
               | Ok b -> Lwt.return b | Error _ -> Lwt.return false
             in
             if is_gb then
-              Dream.respond ~status:`Forbidden (Pages.msg_page ~user:username ~title:"Account Banned" ~message:"Your account has been permanently banned from Koinon." ~alert_type:"error" ~return_url:"/" request)
+              Dream.respond ~status:`Forbidden (Pages.msg_page ~user:username ~title:"Account Banned" ~message:"Your account has been permanently banned from Earde." ~alert_type:"error" ~return_url:"/" request)
             else
             (* Lookup post to get community_id for the ban check — avoids adding a hidden
                form field that a client could forge to bypass their own community ban. *)

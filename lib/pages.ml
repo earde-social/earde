@@ -1602,8 +1602,8 @@ let hq_dashboard_page ((v1, v7, v30), (u1, u7, u30), (c1, c7, c30), (a1, a7, a30
       <div class='max-w-7xl mx-auto'>
           <header class='flex justify-between items-end border-b border-green-900 pb-4 mb-8'>
               <div>
-                  <h1 class='text-4xl font-bold tracking-tighter text-white'>KOINON <span class='text-green-500'>SYS.CORE</span></h1>
-                  <p class='text-green-700 text-sm mt-1'>LIVE TELEMETRY // UPDATED EVERY 60s</p>
+                  <h1 class='text-4xl font-bold tracking-tighter text-white'>Earde <span class='text-green-500'>SYS.CORE</span></h1>
+                  <p class='text-green-700 text-sm mt-1'>live telemetry // UPDATED EVERY 60s</p>
               </div>
               <div class='text-right'>
                   <div class='text-3xl font-bold text-white'>%d</div>
