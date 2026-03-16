@@ -14,7 +14,18 @@ let () =
     | Some h -> h
     | None -> "localhost"
   in
+  (* Dream alpha7 has no Dream.proxy. We trust X-Forwarded-For from Nginx so
+     Dream.client returns the real user IP for the rate limiter. *)
+  let proxy handler request =
+    (match Dream.header request "X-Forwarded-For" with
+     | Some v ->
+       let ip = String.trim (List.nth (String.split_on_char ',' v) 0) in
+       Dream.set_client request ip
+     | None -> ());
+    handler request
+  in
   Dream.run ~interface ~port:8080
+  @@ proxy
   @@ Dream.logger
   @@ Dream.sql_pool db_url
   @@ secret_middleware
