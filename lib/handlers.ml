@@ -71,19 +71,19 @@ let signup_handler request =
 
           let token = Dream.to_base64url (Dream.random 32) in
 
-          Dream.sql request (fun db ->
-            match%lwt Db.create_user db username email password_hash token with
-            | Ok _ ->
-                Dream.log "=========================================================";
-                Dream.log "📧 EMAIL INVIATA A: %s" email;
-                Dream.log "OGGETTO: Action Required - Verify your Koinon Account";
-                Dream.log "LINK: http://localhost:8080/verify?token=%s" token;
-                Dream.log "=========================================================";
-
-                let%lwt () = Dream.set_session_field request "username" username in
-                Dream.redirect request "/"
-            | Error err -> Dream.html (Pages.msg_page ~title:"Registration Failed" ~message:("Registration failed: " ^ err) ~alert_type:"error" ~return_url:"/signup" request)
-          )
+          (* DB connection is returned to the pool before the Brevo HTTP call —
+             holding a pool slot for a third-party round-trip would starve concurrent
+             signups under load. *)
+          let%lwt create_result = Dream.sql request (fun db ->
+            Db.create_user db username email password_hash token
+          ) in
+          (match create_result with
+          | Ok () ->
+              let%lwt () = Email.send_verification_email ~to_email:email ~token in
+              let%lwt () = Dream.set_session_field request "username" username in
+              Dream.redirect request "/"
+          | Error err ->
+              Dream.html (Pages.msg_page ~title:"Registration Failed" ~message:("Registration failed: " ^ err) ~alert_type:"error" ~return_url:"/signup" request))
       | Error err -> Dream.html (Pages.msg_page ~title:"Security Error" ~message:("Security error: " ^ err) ~alert_type:"error" ~return_url:"/signup" request))
 
   | _ -> Dream.html (Pages.msg_page ~title:"Form Error" ~message:"Your form submission failed. The CSRF token was invalid or your session expired. Please try again." ~alert_type:"error" ~return_url:"/signup" request)

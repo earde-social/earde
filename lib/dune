@@ -10,6 +10,8 @@
   argon2
   yojson
   logs
-  unix)
+  unix
+  cohttp-lwt-unix
+  uri)
  (preprocess
   (pps lwt_ppx)))
