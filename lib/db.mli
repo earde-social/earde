@@ -114,6 +114,10 @@ module Security : sig
   val verify_email : (module Caqti_lwt.CONNECTION) -> string -> (string option, string) result Lwt.t
 end
 
+module Rate_limit : sig
+  val check : (module Caqti_lwt.CONNECTION) -> string -> string -> ([`Allowed | `Blocked], string) result Lwt.t
+end
+
 module Admin : sig
   val admin_delete_post : (module Caqti_lwt.CONNECTION) -> label:string -> int -> (unit, string) result Lwt.t
   val admin_delete_comment : (module Caqti_lwt.CONNECTION) -> label:string -> int -> (unit, string) result Lwt.t

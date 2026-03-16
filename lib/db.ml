@@ -964,6 +964,39 @@ module Admin = struct
     | Error e -> Lwt.return (Error (Caqti_error.show e))
 end
 
+(* DB-backed rate limit trades a synchronous Hashtbl lookup for a round-trip to
+   Postgres; the ~1ms I/O penalty is the price of crash resilience and shared
+   state across replicas — unavoidable once we move beyond a single process. *)
+module Rate_limit = struct
+  let max_attempts = 5
+
+  (* Single atomic upsert: resets the window when expired, otherwise increments.
+     Hardcoding 60.0 avoids a fourth bind parameter and keeps the query plan stable. *)
+  let check_q =
+    let open Caqti_request.Infix in
+    (Caqti_type.(t3 string string float) ->! Caqti_type.int)
+    {|INSERT INTO rate_limits (ip_address, endpoint, attempts, window_start)
+      VALUES ($1, $2, 1, $3)
+      ON CONFLICT (ip_address, endpoint) DO UPDATE
+        SET attempts     = CASE WHEN rate_limits.window_start + 60.0 < EXCLUDED.window_start
+                                THEN 1
+                                ELSE rate_limits.attempts + 1
+                           END,
+            window_start = CASE WHEN rate_limits.window_start + 60.0 < EXCLUDED.window_start
+                                THEN EXCLUDED.window_start
+                                ELSE rate_limits.window_start
+                           END
+      RETURNING attempts|}
+
+  let check (module C : Caqti_lwt.CONNECTION) ip endpoint =
+    let now = Unix.gettimeofday () in
+    C.find check_q (ip, endpoint, now) >>= function
+    | Ok attempts ->
+        if attempts > max_attempts then Lwt.return (Ok `Blocked)
+        else Lwt.return (Ok `Allowed)
+    | Error e -> Lwt.return (Error (Caqti_error.show e))
+end
+
 (* Zero-cost aliases preserving the flat Db.f call style at handler callsites.
    Use Db.Post.f / Db.User.f etc. for explicit namespacing in new code. *)
 let get_all_communities = Community.get_all_communities

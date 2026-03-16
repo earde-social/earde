@@ -8,39 +8,20 @@ let safe_local_redirect target =
 
 (* === RATE LIMITING === *)
 
-(* In-memory sliding-window rate limiter keyed by client IP.
-   Tradeoff: resets on server restart and doesn't share state across
-   instances — acceptable at single-instance scale, revisit if we
-   horizontally scale. *)
+(* DB-backed rate limit trades a synchronous Hashtbl lookup for a round-trip to
+   Postgres; the ~1ms I/O penalty is the price of crash resilience and shared
+   state across replicas — unavoidable once we move beyond a single process. *)
 module Rate_limit = struct
-  type entry = { mutable count: int; mutable window_start: float }
-
-  let table : (string, entry) Hashtbl.t = Hashtbl.create 256
-  let max_attempts = 5
-  let window_seconds = 60.0
-
-  let check ip =
-    let now = Unix.gettimeofday () in
-    match Hashtbl.find_opt table ip with
-    | Some entry when now -. entry.window_start < window_seconds ->
-        if entry.count >= max_attempts then `Blocked
-        else begin entry.count <- entry.count + 1; `Allowed end
-    | Some entry ->
-        entry.count <- 1;
-        entry.window_start <- now;
-        `Allowed
-    | None ->
-        Hashtbl.replace table ip { count = 1; window_start = now };
-        `Allowed
-
   let middleware inner_handler request =
     let ip = Dream.client request in
-    match check ip with
-    | `Blocked ->
+    let endpoint = Dream.target request in
+    match%lwt Dream.sql request (fun db -> Db.Rate_limit.check db ip endpoint) with
+    | Ok `Blocked ->
         Dream.response ~status:`Too_Many_Requests
           "Too many attempts. Try again later."
         |> Lwt.return
-    | `Allowed -> inner_handler request
+    | Ok `Allowed -> inner_handler request
+    | Error _ -> inner_handler request
 end
 
 (* === SHARED HELPERS === *)

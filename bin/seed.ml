@@ -48,6 +48,18 @@ let ok_caqti r = match r with Ok x -> Lwt.return x | Error e -> failwith (Caqti_
 (* === Seed queries (raw SQL not exposed in Earde.Db)   === *)
 (* ======================================================= *)
 
+(* rate_limits has no FK — it tracks anonymous IPs before any user context exists. *)
+let create_rate_limits_table_q =
+  let open Caqti_request.Infix in
+  (Caqti_type.unit ->. Caqti_type.unit)
+  "CREATE TABLE IF NOT EXISTS rate_limits (
+     ip_address   TEXT NOT NULL,
+     endpoint     TEXT NOT NULL,
+     attempts     INT  NOT NULL DEFAULT 1,
+     window_start REAL NOT NULL,
+     PRIMARY KEY (ip_address, endpoint)
+   )"
+
 (* dream_session schema mirrors Dream's internal expectation exactly.
    Defined here rather than via Dream.Session.SQL.create_table to keep seed
    self-contained and avoid coupling to Dream's private module hierarchy. *)
@@ -235,6 +247,9 @@ let get_user_id_q =
    converts exceptions back to (Error string) for clean propagation. *)
 let seed_body (module C : Caqti_lwt.CONNECTION) =
   let db = (module C : Caqti_lwt.CONNECTION) in
+
+  (* --- Rate limits table (must precede app schema; checked before session) -- *)
+  let%lwt () = C.exec create_rate_limits_table_q () >>= ok_caqti in
 
   (* --- Session table (must precede app schema; Dream's sql_sessions
          middleware expects dream_session to exist at startup) -------------- *)
