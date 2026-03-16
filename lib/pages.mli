@@ -9,6 +9,7 @@ val index : ?user:string -> (int * int) list -> int -> string -> admin_usernames
 val signup_form : ?user:string -> Dream.request -> string
 val login_form : ?user:string -> Dream.request -> string
 val forgot_password_page : Dream.request -> string
+val reset_password_page : token:string -> ?error:string -> Dream.request -> string
 
 (** === COMMUNITY === *)
 val new_community_form : ?user:string -> Dream.request -> string

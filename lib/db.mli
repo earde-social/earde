@@ -127,6 +127,12 @@ module Admin : sig
   val get_globally_banned_users : (module Caqti_lwt.CONNECTION) -> (user list, string) result Lwt.t
 end
 
+module PasswordReset : sig
+  val create_token : (module Caqti_lwt.CONNECTION) -> string -> string -> (bool, string) result Lwt.t
+  val validate_token : (module Caqti_lwt.CONNECTION) -> string -> (int option, string) result Lwt.t
+  val consume_token : (module Caqti_lwt.CONNECTION) -> string -> (int option, string) result Lwt.t
+end
+
 val create_user : (module Caqti_lwt.CONNECTION) -> string -> string -> string -> string -> (unit, string) result Lwt.t
 val get_user_for_login : (module Caqti_lwt.CONNECTION) -> string -> ((int * string * string * string * bool * bool) option, string) result Lwt.t
 val anonymize_user : (module Caqti_lwt.CONNECTION) -> int -> (unit, string) result Lwt.t
@@ -200,3 +206,7 @@ val ban_user : (module Caqti_lwt.CONNECTION) -> int -> (unit, string) result Lwt
 val is_globally_banned : (module Caqti_lwt.CONNECTION) -> int -> (bool, string) result Lwt.t
 val unban_user_global : (module Caqti_lwt.CONNECTION) -> int -> (unit, string) result Lwt.t
 val get_globally_banned_users : (module Caqti_lwt.CONNECTION) -> (user list, string) result Lwt.t
+
+val password_reset_create_token : (module Caqti_lwt.CONNECTION) -> string -> string -> (bool, string) result Lwt.t
+val password_reset_validate_token : (module Caqti_lwt.CONNECTION) -> string -> (int option, string) result Lwt.t
+val password_reset_consume_token : (module Caqti_lwt.CONNECTION) -> string -> (int option, string) result Lwt.t

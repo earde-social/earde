@@ -216,6 +216,17 @@ let create_community_bans_table_q =
 
 (* Truncate all user-generated tables in FK-safe order, reset sequences.
    CASCADE handles any FK constraints we haven't ordered explicitly. *)
+(* password_resets FK-references users — created after users, cleared via CASCADE on TRUNCATE. *)
+let create_password_resets_table_q =
+  let open Caqti_request.Infix in
+  (Caqti_type.unit ->. Caqti_type.unit)
+  "CREATE TABLE IF NOT EXISTS password_resets (
+     id         SERIAL PRIMARY KEY,
+     user_id    INT  NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+     token      TEXT NOT NULL UNIQUE,
+     expires_at TIMESTAMPTZ NOT NULL
+   )"
+
 let truncate_all_q =
   let open Caqti_request.Infix in
   (Caqti_type.unit ->. Caqti_type.unit)
@@ -267,6 +278,7 @@ let seed_body (module C : Caqti_lwt.CONNECTION) =
   let%lwt () = C.exec create_page_views_table_q         () >>= ok_caqti in
   let%lwt () = C.exec create_community_moderators_table_q () >>= ok_caqti in
   let%lwt () = C.exec create_community_bans_table_q     () >>= ok_caqti in
+  let%lwt () = C.exec create_password_resets_table_q    () >>= ok_caqti in
   let%lwt () = C.exec migrate_users_last_active_q   () >>= ok_caqti in
   Printf.printf "  Schema ensured.\n%!";
 

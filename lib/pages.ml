@@ -128,17 +128,51 @@ let login_form ?user request =
   Components.layout ~title:"Log In" ?user ~request content
 
 let forgot_password_page request =
-  let content = "
+  let csrf_token = Dream.csrf_tag request in
+  let content = Printf.sprintf "
     <div class='max-w-md mx-auto bg-white p-8 rounded-lg shadow-sm border border-gray-200 mt-10'>
         <h1 class='text-2xl font-bold mb-2 text-gray-900 text-center'>Forgot Password?</h1>
-        <p class='text-gray-600 text-sm text-center mb-6'>During the Beta, password resets are handled manually.</p>
-        <div class='bg-teal-50 border border-teal-200 rounded-lg p-4 text-center'>
-            <p class='text-gray-700 text-sm mb-3'>Contact the founder on Telegram to get your password reset:</p>
-            <a href='https://t.me/tolwiz' target='_blank' rel='noopener noreferrer' class='inline-block bg-[#0D9488] text-white py-2 px-6 rounded font-bold hover:bg-teal-700 transition shadow-sm'>Message on Telegram</a>
+        <p class='text-gray-600 text-sm text-center mb-6'>Enter your email address and we'll send you a reset link.</p>
+        <form action='/forgot-password' method='POST' class='space-y-4'>
+            %s
+            <div>
+                <label class='block text-sm font-medium text-gray-700 mb-1'>Email address</label>
+                <input type='email' name='email' required class='block w-full rounded-md border-gray-300 focus:border-[#0D9488] focus:ring-1 focus:ring-[#0D9488]/20 focus:outline-none p-2 border' placeholder='you@example.com'>
+            </div>
+            <button type='submit' class='w-full bg-[#0D9488] text-white py-2 px-4 rounded font-bold hover:bg-teal-700 transition shadow-sm'>Send Reset Link</button>
+        </form>
+        <div class='mt-4 text-center text-sm text-gray-500'>
+            <a href='/login' class='text-[#0D9488] hover:underline'>Back to login</a>
         </div>
-        <p class='text-gray-400 text-xs text-center mt-4'>Automated password resets will be available after Beta.</p>
-    </div>"
+    </div>" csrf_token
   in Components.layout ~noindex:true ~request ~title:"Forgot Password" content
+
+let reset_password_page ~token ?error request =
+  let csrf_token = Dream.csrf_tag request in
+  let error_html = match error with
+    | None -> ""
+    | Some msg -> Printf.sprintf "<div class='bg-red-50 border border-red-200 text-red-700 rounded p-3 text-sm mb-4'>%s</div>" msg
+  in
+  let content = Printf.sprintf "
+    <div class='max-w-md mx-auto bg-white p-8 rounded-lg shadow-sm border border-gray-200 mt-10'>
+        <h1 class='text-2xl font-bold mb-2 text-gray-900 text-center'>Set New Password</h1>
+        <p class='text-gray-600 text-sm text-center mb-6'>Enter a new password for your account.</p>
+        %s
+        <form action='/reset-password' method='POST' class='space-y-4'>
+            %s
+            <input type='hidden' name='token' value='%s'>
+            <div>
+                <label class='block text-sm font-medium text-gray-700 mb-1'>New password</label>
+                <input type='password' name='password' required minlength='8' class='block w-full rounded-md border-gray-300 focus:border-[#0D9488] focus:ring-1 focus:ring-[#0D9488]/20 focus:outline-none p-2 border'>
+            </div>
+            <div>
+                <label class='block text-sm font-medium text-gray-700 mb-1'>Confirm new password</label>
+                <input type='password' name='confirm_password' required minlength='8' class='block w-full rounded-md border-gray-300 focus:border-[#0D9488] focus:ring-1 focus:ring-[#0D9488]/20 focus:outline-none p-2 border'>
+            </div>
+            <button type='submit' class='w-full bg-[#0D9488] text-white py-2 px-4 rounded font-bold hover:bg-teal-700 transition shadow-sm'>Reset Password</button>
+        </form>
+    </div>" error_html csrf_token token
+  in Components.layout ~noindex:true ~request ~title:"Reset Password" content
 
 (* === COMMUNITY === *)
 

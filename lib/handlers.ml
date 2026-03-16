@@ -138,6 +138,80 @@ let logout_handler request =
 
 let forgot_password_page request = Dream.html (Pages.forgot_password_page request)
 
+(* Never confirm or deny email existence — identical response hides whether the
+   address is registered, preventing account enumeration via the reset flow. *)
+let forgot_password_handler request =
+  match%lwt Dream.form request with
+  | `Ok form_data ->
+      let email = String.trim (List.assoc_opt "email" form_data |> Option.value ~default:"") in
+      if email = "" then
+        Dream.html (Pages.msg_page ~title:"Validation Error" ~message:"Email address is required." ~alert_type:"error" ~return_url:"/forgot-password" request)
+      else begin
+        let token = Dream.to_base64url (Dream.random 32) in
+        (* DB connection released before Brevo call — same pattern as signup. *)
+        let%lwt result = Dream.sql request (fun db ->
+          Db.password_reset_create_token db email token
+        ) in
+        (match result with
+        | Ok true ->
+            let%lwt () = Email.send_password_reset_email ~to_email:email ~token in
+            Dream.html (Pages.msg_page ~title:"Check your email" ~message:"If an account with that email exists, a reset link has been sent. Check your inbox (and spam folder)." ~alert_type:"info" ~return_url:"/login" request)
+        | Ok false ->
+            Dream.html (Pages.msg_page ~title:"Check your email" ~message:"If an account with that email exists, a reset link has been sent. Check your inbox (and spam folder)." ~alert_type:"info" ~return_url:"/login" request)
+        | Error err ->
+            Dream.log "forgot_password DB error: %s" err;
+            Dream.html (Pages.msg_page ~title:"Check your email" ~message:"If an account with that email exists, a reset link has been sent. Check your inbox (and spam folder)." ~alert_type:"info" ~return_url:"/login" request))
+      end
+  | _ -> Dream.html (Pages.msg_page ~title:"Form Error" ~message:"Your form submission failed. Please try again." ~alert_type:"error" ~return_url:"/forgot-password" request)
+
+let reset_password_page_handler request =
+  match Dream.query request "token" with
+  | None ->
+      Dream.html (Pages.msg_page ~title:"Invalid Link" ~message:"This password reset link is missing a token. Please request a new one." ~alert_type:"error" ~return_url:"/forgot-password" request)
+  | Some token ->
+      (match%lwt Dream.sql request (fun db -> Db.password_reset_validate_token db token) with
+      | Ok (Some _) -> Dream.html (Pages.reset_password_page ~token request)
+      | Ok None ->
+          Dream.html (Pages.msg_page ~title:"Link Expired" ~message:"This password reset link is invalid or has expired. Please request a new one." ~alert_type:"error" ~return_url:"/forgot-password" request)
+      | Error _ ->
+          Dream.html (Pages.msg_page ~title:"Error" ~message:"An error occurred. Please try again." ~alert_type:"error" ~return_url:"/forgot-password" request))
+
+(* Token is consumed atomically by DELETE+RETURNING before the password update —
+   prevents replay even if the hash step fails; user must re-request a fresh link. *)
+let reset_password_handler request =
+  match%lwt Dream.form request with
+  | `Ok form_data ->
+      let token    = List.assoc_opt "token"            form_data |> Option.value ~default:"" in
+      let password = List.assoc_opt "password"         form_data |> Option.value ~default:"" in
+      let confirm  = List.assoc_opt "confirm_password" form_data |> Option.value ~default:"" in
+      if token = "" then
+        Dream.html (Pages.msg_page ~title:"Invalid Request" ~message:"Token is missing. Please use the link from your email." ~alert_type:"error" ~return_url:"/forgot-password" request)
+      else if password <> confirm then
+        Dream.html (Pages.reset_password_page ~token ~error:"Passwords do not match." request)
+      else if String.length password < 8 then
+        Dream.html (Pages.reset_password_page ~token ~error:"Password must be at least 8 characters." request)
+      else
+        Dream.sql request (fun db ->
+          match%lwt Db.password_reset_consume_token db token with
+          | Ok None ->
+              Dream.html (Pages.msg_page ~title:"Link Expired" ~message:"This reset link is invalid or has expired. Please request a new one." ~alert_type:"error" ~return_url:"/forgot-password" request)
+          | Ok (Some user_id) ->
+              (match%lwt Auth.hash_password password with
+              | Ok new_hash ->
+                  (match%lwt Db.update_password db user_id new_hash with
+                  | Ok () ->
+                      Dream.html (Pages.msg_page ~title:"Password Updated" ~message:"Your password has been updated. You can now log in with your new password." ~alert_type:"success" ~return_url:"/login" request)
+                  | Error err ->
+                      Dream.log "reset_password update_password error: %s" err;
+                      Dream.html (Pages.msg_page ~title:"Error" ~message:"An error occurred while updating your password. Please try again." ~alert_type:"error" ~return_url:"/forgot-password" request))
+              | Error err ->
+                  Dream.log "reset_password hash error: %s" err;
+                  Dream.html (Pages.msg_page ~title:"Error" ~message:"An error occurred. Please try again." ~alert_type:"error" ~return_url:"/forgot-password" request))
+          | Error err ->
+              Dream.log "reset_password consume_token error: %s" err;
+              Dream.html (Pages.msg_page ~title:"Error" ~message:"An error occurred. Please try again." ~alert_type:"error" ~return_url:"/forgot-password" request))
+  | _ -> Dream.html (Pages.msg_page ~title:"Form Error" ~message:"Your form submission failed. Please try again." ~alert_type:"error" ~return_url:"/forgot-password" request)
+
 (* === CORE FEED === *)
 
 let home_handler request =

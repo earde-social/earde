@@ -964,6 +964,46 @@ module Admin = struct
     | Error e -> Lwt.return (Error (Caqti_error.show e))
 end
 
+module PasswordReset = struct
+  (* INSERT...SELECT atomically creates the token iff the email maps to a live user.
+     RETURNING distinguishes "email not found" from "inserted" without a second SELECT,
+     avoiding TOCTOU between the lookup and the insert. *)
+  let create_query =
+    let open Caqti_request.Infix in
+    (Caqti_type.(t2 string string) ->? Caqti_type.int)
+    "INSERT INTO password_resets (token, user_id, expires_at)
+     SELECT $1, id, NOW() + INTERVAL '2 hours' FROM users WHERE email = $2
+     RETURNING user_id"
+
+  let create_token (module C : Caqti_lwt.CONNECTION) email token =
+    C.find_opt create_query (token, email) >>= function
+    | Ok res -> Lwt.return (Ok (Option.is_some res))
+    | Error e -> Lwt.return (Error (Caqti_error.show e))
+
+  (* expires_at > NOW() makes tokens inert after 2h with no background job required. *)
+  let validate_query =
+    let open Caqti_request.Infix in
+    (Caqti_type.string ->? Caqti_type.int)
+    "SELECT user_id FROM password_resets WHERE token = $1 AND expires_at > NOW()"
+
+  let validate_token (module C : Caqti_lwt.CONNECTION) token =
+    C.find_opt validate_query token >>= function
+    | Ok res -> Lwt.return (Ok res)
+    | Error e -> Lwt.return (Error (Caqti_error.show e))
+
+  (* DELETE+RETURNING atomically consumes the token — prevents replay if the
+     subsequent password UPDATE fails; user must re-request a fresh reset. *)
+  let consume_query =
+    let open Caqti_request.Infix in
+    (Caqti_type.string ->? Caqti_type.int)
+    "DELETE FROM password_resets WHERE token = $1 AND expires_at > NOW() RETURNING user_id"
+
+  let consume_token (module C : Caqti_lwt.CONNECTION) token =
+    C.find_opt consume_query token >>= function
+    | Ok res -> Lwt.return (Ok res)
+    | Error e -> Lwt.return (Error (Caqti_error.show e))
+end
+
 (* DB-backed rate limit trades a synchronous Hashtbl lookup for a round-trip to
    Postgres; the ~1ms I/O penalty is the price of crash resilience and shared
    state across replicas — unavoidable once we move beyond a single process. *)
@@ -1066,6 +1106,10 @@ let get_kpi_dashboard = Analytics.get_kpi_dashboard
 
 let update_password = Security.update_password
 let verify_email = Security.verify_email
+
+let password_reset_create_token = PasswordReset.create_token
+let password_reset_validate_token = PasswordReset.validate_token
+let password_reset_consume_token = PasswordReset.consume_token
 
 let admin_delete_post = Admin.admin_delete_post
 let admin_delete_comment = Admin.admin_delete_comment

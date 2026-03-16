@@ -3,3 +3,4 @@
     so a delivery failure never propagates into the HTTP response cycle. *)
 
 val send_verification_email : to_email:string -> token:string -> unit Lwt.t
+val send_password_reset_email : to_email:string -> token:string -> unit Lwt.t

@@ -15,6 +15,9 @@ val login_page : Dream.handler
 val login_handler : Dream.handler
 val logout_handler : Dream.handler
 val forgot_password_page : Dream.handler
+val forgot_password_handler : Dream.handler
+val reset_password_page_handler : Dream.handler
+val reset_password_handler : Dream.handler
 
 (** === CORE FEED === *)
 val home_handler : Dream.handler

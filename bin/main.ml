@@ -75,6 +75,9 @@ let () =
     Dream.post "/logout" Earde.Handlers.logout_handler;
     Dream.post "/settings/password" Earde.Handlers.change_password_handler;
     Dream.get "/forgot-password" Earde.Handlers.forgot_password_page;
+    Dream.post "/forgot-password" (Earde.Handlers.Rate_limit.middleware Earde.Handlers.forgot_password_handler);
+    Dream.get "/reset-password" Earde.Handlers.reset_password_page_handler;
+    Dream.post "/reset-password" Earde.Handlers.reset_password_handler;
     Dream.get "/export-data" Earde.Handlers.export_data_handler;
     Dream.get "/earde-hq-dashboard" Earde.Handlers.hq_dashboard_handler;
     Dream.get "/_debug/state" Earde.Handlers.debug_state_handler;
