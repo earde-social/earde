@@ -10,7 +10,11 @@ let () =
     | Some s -> Dream.set_secret s
     | None -> Fun.id
   in
-  Dream.run
+  let interface = match Sys.getenv_opt "HOST" with
+    | Some h -> h
+    | None -> "localhost"
+  in
+  Dream.run ~interface ~port:8080
   @@ Dream.logger
   @@ Dream.sql_pool db_url
   @@ secret_middleware
