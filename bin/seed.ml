@@ -48,6 +48,19 @@ let ok_caqti r = match r with Ok x -> Lwt.return x | Error e -> failwith (Caqti_
 (* === Seed queries (raw SQL not exposed in Earde.Db)   === *)
 (* ======================================================= *)
 
+(* dream_session schema mirrors Dream's internal expectation exactly.
+   Defined here rather than via Dream.Session.SQL.create_table to keep seed
+   self-contained and avoid coupling to Dream's private module hierarchy. *)
+let create_dream_session_table_q =
+  let open Caqti_request.Infix in
+  (Caqti_type.unit ->. Caqti_type.unit)
+  "CREATE TABLE IF NOT EXISTS dream_session (
+     id         TEXT NOT NULL PRIMARY KEY,
+     label      TEXT NOT NULL,
+     expires_at REAL NOT NULL,
+     payload    TEXT NOT NULL
+   )"
+
 (* Seed is the sole DDL authority for dev. Tables are created in FK-safe order:
    independent tables first, then dependents referencing them. *)
 let create_users_table_q =
@@ -222,6 +235,10 @@ let get_user_id_q =
    converts exceptions back to (Error string) for clean propagation. *)
 let seed_body (module C : Caqti_lwt.CONNECTION) =
   let db = (module C : Caqti_lwt.CONNECTION) in
+
+  (* --- Session table (must precede app schema; Dream's sql_sessions
+         middleware expects dream_session to exist at startup) -------------- *)
+  let%lwt () = C.exec create_dream_session_table_q () >>= ok_caqti in
 
   (* --- Schema (idempotent, FK-safe order) -------------------------------- *)
   let%lwt () = C.exec create_users_table_q              () >>= ok_caqti in

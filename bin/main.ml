@@ -14,7 +14,10 @@ let () =
   @@ Dream.logger
   @@ Dream.sql_pool db_url
   @@ secret_middleware
-  @@ Dream.memory_sessions
+  (* sql_sessions trades ~1ms per-request DB round-trip for crash-safe session
+     persistence. memory_sessions is zero-latency but loses all sessions on
+     every systemd restart, forcing mass re-login. *)
+  @@ Dream.sql_sessions
   @@ Earde.Handlers.analytics_middleware
   @@ Dream.router [
     Dream.get "/" Earde.Handlers.home_handler;
