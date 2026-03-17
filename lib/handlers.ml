@@ -581,18 +581,17 @@ let ban_community_user_handler request =
       | `Ok form_data ->
           let community_id = try int_of_string (List.assoc_opt "community_id" form_data |> Option.value ~default:"") with _ -> 0 in
           let target_username = String.trim (List.assoc_opt "target_username" form_data |> Option.value ~default:"") in
+          let reason = String.trim (List.assoc_opt "reason" form_data |> Option.value ~default:"") in
           if community_id = 0 || target_username = "" then
             Dream.respond ~status:`Bad_Request (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Form Error" ~message:"Invalid form data." ~alert_type:"error" ~return_url:"/" request)
           else
           Dream.sql request (fun db ->
             (* TOCTOU guard: re-verify authorization at mutation time, not just at render.
-               Admins bypass the mod-row lookup — global authority covers local bans. *)
-            let%lwt is_authorized =
-              if is_admin then Lwt.return true
-              else (match%lwt Db.is_moderator db user_id community_id with
-                | Ok b -> Lwt.return b
-                | _ -> Lwt.return false)
+               Separate is_community_mod from is_admin so we can log admin overrides distinctly. *)
+            let%lwt is_community_mod = match%lwt Db.is_moderator db user_id community_id with
+              | Ok b -> Lwt.return b | _ -> Lwt.return false
             in
+            let is_authorized = is_admin || is_community_mod in
             if not is_authorized then
               Dream.respond ~status:`Forbidden (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Access Denied" ~message:"You are not a moderator of this community." ~alert_type:"error" ~return_url:"/" request)
             else
@@ -605,6 +604,11 @@ let ban_community_user_handler request =
                     Dream.html (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Action Denied" ~message:"You cannot ban a Global Administrator." ~alert_type:"error" ~return_url:"/" request)
                   else begin
                     let%lwt _ = Db.community_ban_user db target_user.id community_id in
+                    (* Admin acting without mod role logged distinctly to prevent spoofing the mod log. *)
+                    let is_admin_override = is_admin && not is_community_mod in
+                    let action_type = if is_admin_override then "admin_ban_user" else "ban_user" in
+                    let logged_reason = if is_admin_override then "Admin Intervention: " ^ reason else reason in
+                    let%lwt _ = Db.log_mod_action db community_id user_id action_type (Some target_user.id) logged_reason in
                     let referer = safe_local_redirect (match Dream.header request "Referer" with Some r -> r | None -> "/") in
                     Dream.redirect request referer
                   end

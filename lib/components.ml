@@ -405,16 +405,74 @@ let render_post ?(is_current_user_mod=false) ?(mod_usernames=[]) ?(admin_usernam
   (* Ban button: mods exile per-community only; suppressed on home/profile feeds where
      is_current_user_mod defaults to false. Never shown for already-deleted accounts.
      banned_usernames replaces the hammer with a badge — prevents double-ban confusion.
-     Admins share mod authority site-wide, so the same button is granted to them. *)
+     Rule B (mod) and Rule C (admin-only) are mutually exclusive — mod role takes priority
+     so an admin who is also a mod doesn't bypass the public mod log via admin path. *)
   let ban_btn =
     if (is_current_user_mod || is_admin) && not (target_is_admin && not is_admin) then
       match current_user with
       | Some u when u <> post.username && not (is_deleted_user post.username) ->
           if List.mem post.username banned_usernames then
             "<span class='text-xs text-red-500 font-semibold ml-2'>🚫 Banned</span>"
+          else if is_current_user_mod then
+            (* Rule B: mod/top_mod ban — dialog enforces a public reason *)
+            Printf.sprintf "
+              <button onclick=\"document.getElementById('ban-modal-post-%d').showModal()\" class='text-xs font-bold text-amber-700 hover:text-amber-900 border border-amber-300 bg-amber-50 hover:bg-amber-100 rounded px-2 py-0.5 transition-colors ml-1'>🔨 Mod Ban</button>
+              <dialog id='ban-modal-post-%d' class='rounded-2xl shadow-2xl p-0 w-full max-w-md backdrop:bg-black/60 backdrop:backdrop-blur-sm border-0'>
+                <div class='bg-white rounded-2xl overflow-hidden'>
+                  <div class='bg-amber-50 border-b border-amber-200 px-6 py-4'>
+                    <h3 class='text-base font-bold text-amber-900'>🔨 Mod Ban</h3>
+                    <p class='text-xs text-amber-700 mt-0.5'>This action is logged publicly in the mod log.</p>
+                  </div>
+                  <form action='/ban-community-user' method='POST' class='px-6 py-5 flex flex-col gap-4'>
+                    %s
+                    <input type='hidden' name='target_username' value='%s'>
+                    <input type='hidden' name='community_id' value='%d'>
+                    <label class='flex flex-col gap-1.5'>
+                      <span class='text-sm font-semibold text-gray-700'>Reason <span class='text-red-500'>*</span></span>
+                      <textarea name='reason' required rows='4'
+                        placeholder='Explain why this user is being banned (visible to the community)...'
+                        class='w-full rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400 resize-none'></textarea>
+                    </label>
+                    <div class='flex justify-end gap-2 pt-1'>
+                      <button type='button' onclick=\"document.getElementById('ban-modal-post-%d').close()\"
+                        class='px-4 py-2 rounded-lg text-sm font-semibold text-gray-600 bg-gray-100 hover:bg-gray-200 transition-colors'>Cancel</button>
+                      <button type='submit'
+                        class='px-4 py-2 rounded-lg text-sm font-bold text-white bg-amber-600 hover:bg-amber-700 transition-colors shadow-sm'>Confirm Ban</button>
+                    </div>
+                  </form>
+                </div>
+              </dialog>"
+              post.id post.id csrf_token (html_escape post.username) post.community_id post.id
           else
-            Printf.sprintf "<form action='/ban-community-user' method='POST' class='inline m-0 p-0 ml-1' onsubmit=\"confirmModal(event, 'Ban this user from this community? This action cannot be undone.')\">%s<input type='hidden' name='target_username' value='%s'><input type='hidden' name='community_id' value='%d'><button type='submit' class='text-xs text-gray-400 hover:text-orange-500 transition opacity-50 hover:opacity-100' title='Ban user from this community'>🔨</button></form>"
-              csrf_token (html_escape post.username) post.community_id
+            (* Rule C: admin acting without mod role — handler prefixes reason as admin override *)
+            Printf.sprintf "
+              <button onclick=\"document.getElementById('ban-modal-post-%d').showModal()\" class='text-xs font-bold text-red-700 hover:text-red-900 border border-red-300 bg-red-50 hover:bg-red-100 rounded px-2 py-0.5 transition-colors ml-1'>⚡ Admin Ban</button>
+              <dialog id='ban-modal-post-%d' class='rounded-2xl shadow-2xl p-0 w-full max-w-md backdrop:bg-black/60 backdrop:backdrop-blur-sm border-0'>
+                <div class='bg-white rounded-2xl overflow-hidden'>
+                  <div class='bg-red-50 border-b border-red-200 px-6 py-4'>
+                    <h3 class='text-base font-bold text-red-900'>⚡ Admin Ban</h3>
+                    <p class='text-xs text-red-700 mt-0.5'>This action is logged publicly as an admin override.</p>
+                  </div>
+                  <form action='/ban-community-user' method='POST' class='px-6 py-5 flex flex-col gap-4'>
+                    %s
+                    <input type='hidden' name='target_username' value='%s'>
+                    <input type='hidden' name='community_id' value='%d'>
+                    <label class='flex flex-col gap-1.5'>
+                      <span class='text-sm font-semibold text-gray-700'>Reason <span class='text-red-500'>*</span></span>
+                      <textarea name='reason' required rows='4'
+                        placeholder='Explain the admin intervention reason (visible to the community)...'
+                        class='w-full rounded-lg border border-red-300 bg-red-50 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-400 resize-none'></textarea>
+                    </label>
+                    <div class='flex justify-end gap-2 pt-1'>
+                      <button type='button' onclick=\"document.getElementById('ban-modal-post-%d').close()\"
+                        class='px-4 py-2 rounded-lg text-sm font-semibold text-gray-600 bg-gray-100 hover:bg-gray-200 transition-colors'>Cancel</button>
+                      <button type='submit'
+                        class='px-4 py-2 rounded-lg text-sm font-bold text-white bg-red-600 hover:bg-red-700 transition-colors shadow-sm'>Confirm Ban</button>
+                    </div>
+                  </form>
+                </div>
+              </dialog>"
+              post.id post.id csrf_token (html_escape post.username) post.community_id post.id
       | _ -> ""
     else ""
   in
