@@ -30,6 +30,7 @@ val community_page_handler : Dream.handler
 val join_community_handler : Dream.handler
 val leave_community_handler : Dream.handler
 val community_settings_handler : Dream.handler
+val modlog_handler : Dream.handler
 val update_community_handler : Dream.handler
 val add_mod_handler : Dream.handler
 val remove_mod_handler : Dream.handler

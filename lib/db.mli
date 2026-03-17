@@ -24,6 +24,11 @@ type notification = {
   id : int; user_id : int; post_id : int; message : string; is_read : bool; created_at : string;
 }
 
+type mod_action = {
+  id : int; community_id : int; moderator_id : int; moderator_username : string;
+  action_type : string; target_id : int option; reason : string; created_at : string;
+}
+
 (** APM helper — wraps any DB call, emits {query, execution_ms, status} JSON via Logs.info. *)
 val with_query_timer : name:string -> (unit -> ('a, string) result Lwt.t) -> ('a, string) result Lwt.t
 
@@ -85,6 +90,12 @@ module Moderator : sig
   val get_community_moderators : (module Caqti_lwt.CONNECTION) -> int -> (user list, string) result Lwt.t
   val remove_moderator : (module Caqti_lwt.CONNECTION) -> int -> int -> (unit, string) result Lwt.t
   val get_moderated_communities : (module Caqti_lwt.CONNECTION) -> int -> (community list, string) result Lwt.t
+  val promote_to_top_mod : (module Caqti_lwt.CONNECTION) -> int -> int -> (unit, string) result Lwt.t
+end
+
+module Mod_action : sig
+  val log_action : (module Caqti_lwt.CONNECTION) -> int -> int -> string -> int option -> string -> (unit, string) result Lwt.t
+  val get_modlog : (module Caqti_lwt.CONNECTION) -> int -> (mod_action list, string) result Lwt.t
 end
 
 module Ban : sig
@@ -206,6 +217,10 @@ val ban_user : (module Caqti_lwt.CONNECTION) -> int -> (unit, string) result Lwt
 val is_globally_banned : (module Caqti_lwt.CONNECTION) -> int -> (bool, string) result Lwt.t
 val unban_user_global : (module Caqti_lwt.CONNECTION) -> int -> (unit, string) result Lwt.t
 val get_globally_banned_users : (module Caqti_lwt.CONNECTION) -> (user list, string) result Lwt.t
+
+val promote_to_top_mod : (module Caqti_lwt.CONNECTION) -> int -> int -> (unit, string) result Lwt.t
+val log_mod_action : (module Caqti_lwt.CONNECTION) -> int -> int -> string -> int option -> string -> (unit, string) result Lwt.t
+val get_modlog : (module Caqti_lwt.CONNECTION) -> int -> (mod_action list, string) result Lwt.t
 
 val password_reset_create_token : (module Caqti_lwt.CONNECTION) -> string -> string -> (bool, string) result Lwt.t
 val password_reset_validate_token : (module Caqti_lwt.CONNECTION) -> string -> (int option, string) result Lwt.t

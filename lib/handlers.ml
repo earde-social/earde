@@ -444,6 +444,19 @@ let community_settings_handler request =
         | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:("Database error: " ^ e) ~alert_type:"error" ~return_url:"/" request)
       )
 
+let modlog_handler request =
+  let slug = Dream.param request "slug" in
+  let user = Dream.session_field request "username" in
+  Dream.sql request (fun db ->
+    match%lwt Db.get_community_by_slug db slug with
+    | Ok (Some community) ->
+        (match%lwt Db.get_modlog db community.id with
+         | Ok actions -> Dream.html (Pages.mod_log_page ?user ~community actions request)
+         | Error err -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:("Database error: " ^ err) ~alert_type:"error" ~return_url:("/c/" ^ slug) request))
+    | Ok None -> Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"Not Found" ~message:"This community does not exist." ~alert_type:"error" ~return_url:"/" request)
+    | Error err -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:("Database error: " ^ err) ~alert_type:"error" ~return_url:"/" request)
+  )
+
 let update_community_handler request =
   match Dream.session_field request "user_id" with
   | None -> Dream.redirect request "/login"

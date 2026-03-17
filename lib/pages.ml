@@ -1606,6 +1606,57 @@ let admin_dashboard_page ?user ~(banned_users : user list) request =
   in
   Components.layout ?user ~request ~title:"Admin Dashboard" content
 
+(* === MODERATION LOG === *)
+
+let mod_log_page ?user ~(community : Db.community) (actions : Db.mod_action list) request =
+  let render_action (a : Db.mod_action) =
+    let target_html = match a.target_id with
+      | None -> ""
+      | Some tid -> Printf.sprintf " &middot; target #%d" tid
+    in
+    Printf.sprintf "
+    <tr class='border-b border-gray-100 hover:bg-gray-50'>
+        <td class='py-3 px-4 text-sm text-gray-500 whitespace-nowrap'>%s</td>
+        <td class='py-3 px-4 text-sm font-medium text-gray-900'><a href='/u/%s' class='text-[#0D9488] hover:underline'>%s</a></td>
+        <td class='py-3 px-4 text-sm'><span class='inline-block px-2 py-0.5 rounded bg-gray-100 text-gray-700 font-mono text-xs'>%s</span>%s</td>
+        <td class='py-3 px-4 text-sm text-gray-600'>%s</td>
+    </tr>"
+      (Components.time_ago a.created_at)
+      (Components.html_escape a.moderator_username) (Components.html_escape a.moderator_username)
+      (Components.html_escape a.action_type) target_html
+      (Components.html_escape a.reason)
+  in
+  let table_body =
+    if actions = [] then
+      "<tr><td colspan='4' class='py-10 text-center text-gray-400 italic'>No moderation actions recorded yet.</td></tr>"
+    else String.concat "\n" (List.map render_action actions)
+  in
+  let content = Printf.sprintf "
+    <div class='max-w-4xl mx-auto'>
+        <div class='mb-6'>
+            <a href='/c/%s' class='text-sm text-[#0D9488] hover:underline'>&larr; Back to %s</a>
+            <h1 class='text-2xl font-bold text-gray-900 mt-2'>Moderation Log</h1>
+            <p class='text-sm text-gray-500 mt-1'>Public record of moderator actions in this community.</p>
+        </div>
+        <div class='bg-white border border-gray-200 rounded-lg shadow-sm overflow-hidden'>
+            <table class='w-full'>
+                <thead class='bg-gray-50 border-b border-gray-200'>
+                    <tr>
+                        <th class='py-3 px-4 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide'>When</th>
+                        <th class='py-3 px-4 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide'>Moderator</th>
+                        <th class='py-3 px-4 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide'>Action</th>
+                        <th class='py-3 px-4 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide'>Reason</th>
+                    </tr>
+                </thead>
+                <tbody>%s</tbody>
+            </table>
+        </div>
+    </div>"
+    (Components.html_escape community.slug) (Components.html_escape community.name)
+    table_body
+  in
+  Components.layout ?user ~request ~title:(community.name ^ " — Mod Log") content
+
 (* Standalone HTML — intentionally outside Components.layout to prevent nav/JS
    assets from loading on an admin-only internal page that needs no public shell. *)
 let hq_dashboard_page (((v1, v7, v30), (uv1, uv7, uv30)), (u1, u7, u30), (c1, c7, c30), (a1, a7, a30)) =

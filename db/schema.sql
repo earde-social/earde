@@ -126,7 +126,8 @@ CREATE TABLE public.community_members (
 CREATE TABLE public.community_moderators (
     user_id integer NOT NULL,
     community_id integer NOT NULL,
-    promoted_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP NOT NULL
+    promoted_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    role character varying(50) DEFAULT 'mod'::character varying NOT NULL
 );
 
 
@@ -140,6 +141,41 @@ CREATE TABLE public.dream_session (
     expires_at real NOT NULL,
     payload text NOT NULL
 );
+
+
+--
+-- Name: mod_actions; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.mod_actions (
+    id integer NOT NULL,
+    community_id integer NOT NULL,
+    moderator_id integer NOT NULL,
+    action_type character varying(50) NOT NULL,
+    target_id integer,
+    reason text NOT NULL,
+    created_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP NOT NULL
+);
+
+
+--
+-- Name: mod_actions_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.mod_actions_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: mod_actions_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.mod_actions_id_seq OWNED BY public.mod_actions.id;
 
 
 --
@@ -363,6 +399,13 @@ ALTER TABLE ONLY public.communities ALTER COLUMN id SET DEFAULT nextval('public.
 
 
 --
+-- Name: mod_actions id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.mod_actions ALTER COLUMN id SET DEFAULT nextval('public.mod_actions_id_seq'::regclass);
+
+
+--
 -- Name: notifications id; Type: DEFAULT; Schema: public; Owner: -
 --
 
@@ -459,6 +502,14 @@ ALTER TABLE ONLY public.community_moderators
 
 ALTER TABLE ONLY public.dream_session
     ADD CONSTRAINT dream_session_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: mod_actions mod_actions_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.mod_actions
+    ADD CONSTRAINT mod_actions_pkey PRIMARY KEY (id);
 
 
 --
@@ -638,6 +689,22 @@ ALTER TABLE ONLY public.community_moderators
 
 
 --
+-- Name: mod_actions mod_actions_community_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.mod_actions
+    ADD CONSTRAINT mod_actions_community_id_fkey FOREIGN KEY (community_id) REFERENCES public.communities(id) ON DELETE CASCADE;
+
+
+--
+-- Name: mod_actions mod_actions_moderator_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.mod_actions
+    ADD CONSTRAINT mod_actions_moderator_id_fkey FOREIGN KEY (moderator_id) REFERENCES public.users(id) ON DELETE CASCADE;
+
+
+--
 -- Name: notifications notifications_post_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -706,4 +773,5 @@ ALTER TABLE ONLY public.posts
 
 INSERT INTO public.schema_migrations (version) VALUES
     ('20260317133145'),
-    ('20260317142357');
+    ('20260317142357'),
+    ('20260317170540');

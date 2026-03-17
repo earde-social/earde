@@ -43,6 +43,17 @@ type notification = {
   created_at : string;
 }
 
+type mod_action = {
+  id : int;
+  community_id : int;
+  moderator_id : int;
+  moderator_username : string;
+  action_type : string;
+  target_id : int option;
+  reason : string;
+  created_at : string;
+}
+
 (* post has 11 SELECT columns; Caqti tN stops at t7, so nest tuples to stay within arity. *)
 let post_row_type =
   let open Caqti_type in
@@ -681,6 +692,29 @@ module Moderator = struct
     | Ok () -> Lwt.return (Ok ())
     | Error err -> Lwt.return (Error (Caqti_error.show err))
 
+  (* COUNT before INSERT: enforces the "Max 3 Top Mods" business rule at DB read time
+     rather than via a UNIQUE constraint, because the limit is per-community cardinal —
+     not a uniqueness invariant on a single column. *)
+  let count_top_mods_query =
+    let open Caqti_request.Infix in
+    (Caqti_type.int ->! Caqti_type.int)
+    "SELECT COUNT(*)::int FROM community_moderators WHERE community_id = $1 AND role = 'top_mod'"
+
+  let promote_to_top_mod_query =
+    let open Caqti_request.Infix in
+    (Caqti_type.(t2 int int) ->. Caqti_type.unit)
+    "UPDATE community_moderators SET role = 'top_mod' WHERE user_id = $1 AND community_id = $2"
+
+  let promote_to_top_mod (module C : Caqti_lwt.CONNECTION) user_id community_id =
+    C.find count_top_mods_query community_id >>= function
+    | Error e -> Lwt.return (Error (Caqti_error.show e))
+    | Ok count ->
+        if count >= 3 then Lwt.return (Error "Maximum of 3 Top Mods reached")
+        else
+          C.exec promote_to_top_mod_query (user_id, community_id) >>= function
+          | Ok () -> Lwt.return (Ok ())
+          | Error e -> Lwt.return (Error (Caqti_error.show e))
+
   (* Inverse of get_community_moderators: used for profile badge display.
      ORDER BY promoted_at ASC keeps creation order consistent with mod panels. *)
   let get_moderated_communities_query =
@@ -1010,6 +1044,44 @@ module PasswordReset = struct
     | Error e -> Lwt.return (Error (Caqti_error.show e))
 end
 
+module Mod_action = struct
+  (* 8-column result: nested t2(t4, t4) to stay within Caqti's per-tuple arity limit. *)
+  let mod_action_row_type =
+    let open Caqti_type in
+    t2 (t4 int int int string) (t4 string (option int) string string)
+
+  let log_action_query =
+    let open Caqti_request.Infix in
+    (Caqti_type.(t2 (t2 int int) (t3 string (option int) string)) ->. Caqti_type.unit)
+    "INSERT INTO mod_actions (community_id, moderator_id, action_type, target_id, reason) VALUES ($1, $2, $3, $4, $5)"
+
+  let log_action (module C : Caqti_lwt.CONNECTION) community_id moderator_id action_type target_id reason =
+    C.exec log_action_query ((community_id, moderator_id), (action_type, target_id, reason)) >>= function
+    | Ok () -> Lwt.return (Ok ())
+    | Error e -> Lwt.return (Error (Caqti_error.show e))
+
+  (* JOIN on users for the username — avoids a second query at render time; the join
+     is cheap since moderator_id is indexed via the FK. *)
+  let get_modlog_query =
+    let open Caqti_request.Infix in
+    (Caqti_type.int ->* mod_action_row_type)
+    "SELECT ma.id, ma.community_id, ma.moderator_id, u.username, ma.action_type, ma.target_id, ma.reason, ma.created_at::text
+     FROM mod_actions ma
+     JOIN users u ON ma.moderator_id = u.id
+     WHERE ma.community_id = $1
+     ORDER BY ma.created_at DESC
+     LIMIT 100"
+
+  let get_modlog (module C : Caqti_lwt.CONNECTION) community_id =
+    C.collect_list get_modlog_query community_id >>= function
+    | Ok rows ->
+        let actions = List.map (fun ((id, community_id, moderator_id, moderator_username), (action_type, target_id, reason, created_at)) ->
+          { id; community_id; moderator_id; moderator_username; action_type; target_id; reason; created_at }
+        ) rows in
+        Lwt.return (Ok actions)
+    | Error e -> Lwt.return (Error (Caqti_error.show e))
+end
+
 (* DB-backed rate limit trades a synchronous Hashtbl lookup for a round-trip to
    Postgres; the ~1ms I/O penalty is the price of crash resilience and shared
    state across replicas — unavoidable once we move beyond a single process. *)
@@ -1125,3 +1197,7 @@ let ban_user = Admin.ban_user
 let is_globally_banned = Admin.is_globally_banned
 let unban_user_global = Admin.unban_user_global
 let get_globally_banned_users = Admin.get_globally_banned_users
+
+let promote_to_top_mod = Moderator.promote_to_top_mod
+let log_mod_action = Mod_action.log_action
+let get_modlog = Mod_action.get_modlog

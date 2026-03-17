@@ -37,6 +37,9 @@ val about_page : ?user:string -> Dream.request -> string
 (** === MESSAGE PAGE === *)
 val msg_page : ?user:string -> title:string -> message:string -> alert_type:string -> return_url:string -> Dream.request -> string
 
+(** === MODERATION LOG === *)
+val mod_log_page : ?user:string -> community:Db.community -> Db.mod_action list -> Dream.request -> string
+
 (** === ADMIN === *)
 val admin_dashboard_page : ?user:string -> banned_users:Db.user list -> Dream.request -> string
 val hq_dashboard_page : (((int * int * int) * (int * int * int)) * (int * int * int) * (int * int * int) * (int * int * int)) -> string
