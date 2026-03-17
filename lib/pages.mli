@@ -39,4 +39,4 @@ val msg_page : ?user:string -> title:string -> message:string -> alert_type:stri
 
 (** === ADMIN === *)
 val admin_dashboard_page : ?user:string -> banned_users:Db.user list -> Dream.request -> string
-val hq_dashboard_page : ((int * int * int) * (int * int * int) * (int * int * int) * (int * int * int)) -> string
+val hq_dashboard_page : (((int * int * int) * (int * int * int)) * (int * int * int) * (int * int * int) * (int * int * int)) -> string

@@ -823,11 +823,11 @@ end
 module Analytics = struct
   let log_page_view_query =
     let open Caqti_request.Infix in
-    (Caqti_type.(t2 string (option string)) ->. Caqti_type.unit)
-    "INSERT INTO page_views (path, referer) VALUES ($1, $2)"
+    (Caqti_type.(t3 string (option string) string) ->. Caqti_type.unit)
+    "INSERT INTO page_views (path, referer, session_hash) VALUES ($1, $2, $3)"
 
-  let log_page_view (module C: Caqti_lwt.CONNECTION) path referer =
-    C.exec log_page_view_query (path, referer) >>= function
+  let log_page_view (module C: Caqti_lwt.CONNECTION) path referer session_hash =
+    C.exec log_page_view_query (path, referer, session_hash) >>= function
     | Ok () -> Lwt.return (Ok ())
     | Error e -> Lwt.return (Error (Caqti_error.show e))
 
@@ -841,9 +841,12 @@ module Analytics = struct
     | Ok () -> Lwt.return (Ok ())
     | Error e -> Lwt.return (Error (Caqti_error.show e))
 
+  (* Caqti arity limit: encode 6 page-view columns as t2(t3, t3) nested inside the outer t4.
+     Unique visitors use COUNT(DISTINCT session_hash) — daily-rotating hash guarantees GDPR
+     pseudonymisation while still giving investor-grade UV metrics. *)
   let kpi_stats_type =
     let open Caqti_type in
-    t4 (t3 int int int) (t3 int int int) (t3 int int int) (t3 int int int)
+    t4 (t2 (t3 int int int) (t3 int int int)) (t3 int int int) (t3 int int int) (t3 int int int)
 
   let get_kpi_dashboard_query =
     let open Caqti_request.Infix in
@@ -852,6 +855,9 @@ module Analytics = struct
       (SELECT COUNT(*)::int FROM page_views WHERE created_at > NOW() - INTERVAL '1 day'),
       (SELECT COUNT(*)::int FROM page_views WHERE created_at > NOW() - INTERVAL '7 days'),
       (SELECT COUNT(*)::int FROM page_views WHERE created_at > NOW() - INTERVAL '30 days'),
+      (SELECT COUNT(DISTINCT session_hash)::int FROM page_views WHERE created_at > NOW() - INTERVAL '1 day'),
+      (SELECT COUNT(DISTINCT session_hash)::int FROM page_views WHERE created_at > NOW() - INTERVAL '7 days'),
+      (SELECT COUNT(DISTINCT session_hash)::int FROM page_views WHERE created_at > NOW() - INTERVAL '30 days'),
 
       (SELECT COUNT(*)::int FROM users WHERE created_at > NOW() - INTERVAL '1 day'),
       (SELECT COUNT(*)::int FROM users WHERE created_at > NOW() - INTERVAL '7 days'),

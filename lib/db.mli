@@ -104,9 +104,9 @@ module Notification : sig
 end
 
 module Analytics : sig
-  val log_page_view : (module Caqti_lwt.CONNECTION) -> string -> string option -> (unit, string) result Lwt.t
+  val log_page_view : (module Caqti_lwt.CONNECTION) -> string -> string option -> string -> (unit, string) result Lwt.t
   val touch_user_active : (module Caqti_lwt.CONNECTION) -> int -> (unit, string) result Lwt.t
-  val get_kpi_dashboard : (module Caqti_lwt.CONNECTION) -> (((int * int * int) * (int * int * int) * (int * int * int) * (int * int * int)), string) result Lwt.t
+  val get_kpi_dashboard : (module Caqti_lwt.CONNECTION) -> ((((int * int * int) * (int * int * int)) * (int * int * int) * (int * int * int) * (int * int * int)), string) result Lwt.t
 end
 
 module Security : sig
@@ -189,9 +189,9 @@ val mark_notifs_read : (module Caqti_lwt.CONNECTION) -> int -> (unit, string) re
 val create_notif : (module Caqti_lwt.CONNECTION) -> int -> int -> string -> (unit, string) result Lwt.t
 val get_post_owner : (module Caqti_lwt.CONNECTION) -> int -> (int, string) result Lwt.t
 val get_comment_owner : (module Caqti_lwt.CONNECTION) -> int -> (int, string) result Lwt.t
-val log_page_view : (module Caqti_lwt.CONNECTION) -> string -> string option -> (unit, string) result Lwt.t
+val log_page_view : (module Caqti_lwt.CONNECTION) -> string -> string option -> string -> (unit, string) result Lwt.t
 val touch_user_active : (module Caqti_lwt.CONNECTION) -> int -> (unit, string) result Lwt.t
-val get_kpi_dashboard : (module Caqti_lwt.CONNECTION) -> (((int * int * int) * (int * int * int) * (int * int * int) * (int * int * int)), string) result Lwt.t
+val get_kpi_dashboard : (module Caqti_lwt.CONNECTION) -> ((((int * int * int) * (int * int * int)) * (int * int * int) * (int * int * int) * (int * int * int)), string) result Lwt.t
 
 val search_communities : (module Caqti_lwt.CONNECTION) -> string -> int -> int -> (community list, string) result Lwt.t
 val search_users : (module Caqti_lwt.CONNECTION) -> string -> int -> int -> ((int * string * string * string option * string option) list, string) result Lwt.t

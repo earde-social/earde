@@ -1608,7 +1608,7 @@ let admin_dashboard_page ?user ~(banned_users : user list) request =
 
 (* Standalone HTML — intentionally outside Components.layout to prevent nav/JS
    assets from loading on an admin-only internal page that needs no public shell. *)
-let hq_dashboard_page ((v1, v7, v30), (u1, u7, u30), (c1, c7, c30), (a1, a7, a30)) =
+let hq_dashboard_page (((v1, v7, v30), (uv1, uv7, uv30)), (u1, u7, u30), (c1, c7, c30), (a1, a7, a30)) =
   Printf.sprintf "
   <!DOCTYPE html>
   <html lang='en'>
@@ -1634,11 +1634,23 @@ let hq_dashboard_page ((v1, v7, v30), (u1, u7, u30), (c1, c7, c30), (a1, a7, a30
           <div class='grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-6'>
 
               <div class='bg-gray-900 border border-green-900 p-6 rounded-lg shadow-[0_0_15px_rgba(34,197,94,0.1)]'>
-                  <h2 class='text-green-600 text-sm font-bold mb-4 tracking-widest'>RAW TRAFFIC (VIEWS)</h2>
-                  <div class='mb-4'><div class='text-4xl font-bold text-white'>%d</div><div class='text-xs text-green-700'>TODAY (24H)</div></div>
+                  <h2 class='text-green-600 text-sm font-bold mb-4 tracking-widest'>PAGE VIEWS</h2>
+                  <div class='mb-4'>
+                      <div class='text-4xl font-bold text-white'>%d</div>
+                      <div class='text-xs text-green-700'>TODAY (24H)</div>
+                      <div class='text-sm text-green-500 mt-1'>%d <span class='text-green-800 text-xs'>unique visitors</span></div>
+                  </div>
                   <div class='flex justify-between border-t border-green-900 pt-3'>
-                      <div><div class='text-lg font-bold text-gray-300'>%d</div><div class='text-[10px] text-green-800'>WEEK (7D)</div></div>
-                      <div class='text-right'><div class='text-lg font-bold text-gray-300'>%d</div><div class='text-[10px] text-green-800'>MONTH (30D)</div></div>
+                      <div>
+                          <div class='text-lg font-bold text-gray-300'>%d</div>
+                          <div class='text-[10px] text-green-800'>VIEWS 7D</div>
+                          <div class='text-xs text-green-600'>%d UV</div>
+                      </div>
+                      <div class='text-right'>
+                          <div class='text-lg font-bold text-gray-300'>%d</div>
+                          <div class='text-[10px] text-green-800'>VIEWS 30D</div>
+                          <div class='text-xs text-green-600'>%d UV</div>
+                      </div>
                   </div>
               </div>
 
@@ -1678,7 +1690,7 @@ let hq_dashboard_page ((v1, v7, v30), (u1, u7, u30), (c1, c7, c30), (a1, a7, a30
   </body>
   </html>"
   a30
-  v1 v7 v30
+  v1 uv1 v7 uv7 v30 uv30
   u1 u7 u30
   c1 c7 c30
   a1 a7 a30

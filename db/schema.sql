@@ -184,7 +184,8 @@ CREATE TABLE public.page_views (
     id integer NOT NULL,
     path text NOT NULL,
     referer text,
-    created_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP NOT NULL
+    created_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    session_hash text DEFAULT ''::text NOT NULL
 );
 
 
@@ -704,4 +705,5 @@ ALTER TABLE ONLY public.posts
 --
 
 INSERT INTO public.schema_migrations (version) VALUES
-    ('20260317133145');
+    ('20260317133145'),
+    ('20260317142357');

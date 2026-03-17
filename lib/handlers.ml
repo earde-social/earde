@@ -1335,19 +1335,75 @@ let debug_state_handler request =
    self-counting); unread-notifs is polled every page load and would inflate counts. *)
 let analytics_middleware inner_handler request =
   let path = Dream.target request in
-  let referer = Dream.header request "Referer" in
   let user_id_opt = Dream.session_field request "user_id" in
 
-  let%lwt _ =
-    if path = "/earde-hq-dashboard" || path = "/api/unread-notifs" then Lwt.return_unit
-    else Dream.sql request (fun db ->
-      let%lwt _ = Db.log_page_view db path referer in
+  (* Static asset filter: log only meaningful page navigations, not asset fetches. *)
+  let is_static =
+    let has_prefix p = String.length path >= String.length p && String.sub path 0 (String.length p) = p in
+    let has_suffix s =
+      let pl = String.length path and sl = String.length s in
+      pl >= sl && String.sub path (pl - sl) sl = s
+    in
+    has_prefix "/static/" || has_prefix "/css/" || has_prefix "/js/"
+    || has_suffix ".js" || has_suffix ".css" || has_suffix ".ico"
+    || has_suffix ".png" || has_suffix ".jpg" || has_suffix ".svg"
+    || has_suffix ".woff" || has_suffix ".woff2" || has_suffix ".ttf"
+  in
 
-      match user_id_opt with
-      | Some uid_str ->
-          let%lwt _ = Db.touch_user_active db (int_of_string uid_str) in
-          Lwt.return_unit
-      | None -> Lwt.return_unit
-    )
+  (* Bot filter: skip synthetic traffic that inflates page-view counts. *)
+  let is_bot =
+    match Dream.header request "User-Agent" with
+    | None -> false
+    | Some ua ->
+        let lc = String.lowercase_ascii ua in
+        let contains needle =
+          let hl = String.length lc and nl = String.length needle in
+          if nl = 0 || hl < nl then false
+          else
+            let rec loop i =
+              if i > hl - nl then false
+              else if String.sub lc i nl = needle then true
+              else loop (i + 1)
+            in
+            loop 0
+        in
+        contains "bot" || contains "crawler" || contains "spider" || contains "scraper"
+  in
+
+  let%lwt _ =
+    if path = "/earde-hq-dashboard" || path = "/api/unread-notifs" || is_static || is_bot
+    then Lwt.return_unit
+    else begin
+      (* Sanitize referer: keep only host to avoid leaking tokens in paths/query strings. *)
+      let referer =
+        match Dream.header request "Referer" with
+        | None -> None
+        | Some raw ->
+            let uri = Uri.of_string raw in
+            (match Uri.host uri with
+             | None -> None
+             | Some h -> Some h)
+      in
+      (* Daily-rotating session hash: IP + UA + date → MD5 hex. Rotating daily means
+         the hash never accumulates cross-day fingerprinting risk (GDPR Art. 5(1)(e)).
+         MD5 is intentionally chosen — cryptographic strength is not needed here,
+         just collision-resistance within a single day's window. *)
+      let ip = Dream.client request in
+      let ua = Option.value ~default:"" (Dream.header request "User-Agent") in
+      let date =
+        let t = Unix.gettimeofday () in
+        let tm = Unix.gmtime t in
+        Printf.sprintf "%04d-%02d-%02d" (tm.Unix.tm_year + 1900) (tm.Unix.tm_mon + 1) tm.Unix.tm_mday
+      in
+      let session_hash = Digest.to_hex (Digest.string (ip ^ ua ^ date)) in
+      Dream.sql request (fun db ->
+        let%lwt _ = Db.log_page_view db path referer session_hash in
+        match user_id_opt with
+        | Some uid_str ->
+            let%lwt _ = Db.touch_user_active db (int_of_string uid_str) in
+            Lwt.return_unit
+        | None -> Lwt.return_unit
+      )
+    end
   in
   inner_handler request
