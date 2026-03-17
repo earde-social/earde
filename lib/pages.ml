@@ -841,15 +841,78 @@ let post_page ?user ~is_member ~is_current_user_mod ~mod_usernames ~admin_userna
     || post.content = Some "[removed by moderator]"
   in
   let post_target_is_admin = List.mem post.username admin_usernames in
-  let delete_post_btn =
+  (* Rule A/B/C: strictly mutually exclusive — prevents admins silently using the personal
+     Delete path to avoid the public mod log (admin spoofing). No two rules fire at once.
+     Rule A: own post → personal Delete. Rule B: mod/top_mod (not own post) → Mod Remove dialog.
+     Rule C: admin acting without mod role (not own post) → Admin Remove dialog. *)
+  let post_action_btn =
     if is_post_deleted then ""
     else match current_user with
-      | Some u when u = post.username || is_admin || (is_current_user_mod && not post_target_is_admin) ->
-        Printf.sprintf "<form action='/delete-post' method='POST' class='inline m-0 p-0 ml-3' onsubmit=\"confirmModal(event, 'Do you really want to delete this post? This action cannot be undone.')\">
-            %s <input type='hidden' name='post_id' value='%d'>
-            <button type='submit' class='text-sm %s hover:text-red-700 font-bold'>🗑️ Delete</button>
-        </form>" csrf_token post.id (if u <> post.username then "text-red-600" else "text-red-500")
-    | _ -> ""
+    | None -> ""
+    | Some u ->
+        if u = post.username then
+          (* Rule A: personal delete — no audit required *)
+          Printf.sprintf "<form action='/delete-post' method='POST' class='inline m-0 p-0 ml-3' onsubmit=\"confirmModal(event, 'Do you really want to delete this post? This action cannot be undone.')\">
+              %s <input type='hidden' name='post_id' value='%d'>
+              <button type='submit' class='text-sm text-red-500 hover:text-red-700 font-bold'>🗑️ Delete</button>
+          </form>" csrf_token post.id
+        else if is_current_user_mod && not post_target_is_admin then
+          (* Rule B: mod/top_mod removal — dialog enforces a public reason *)
+          Printf.sprintf "
+            <button onclick=\"document.getElementById('mod-modal-%d').showModal()\" class='text-xs font-bold text-amber-700 hover:text-amber-900 border border-amber-300 bg-amber-50 hover:bg-amber-100 rounded px-2 py-1 transition-colors ml-3'>🛡️ Mod Remove</button>
+            <dialog id='mod-modal-%d' class='rounded-2xl shadow-2xl p-0 w-full max-w-md backdrop:bg-black/60 backdrop:backdrop-blur-sm border-0'>
+              <div class='bg-white rounded-2xl overflow-hidden'>
+                <div class='bg-amber-50 border-b border-amber-200 px-6 py-4'>
+                  <h3 class='text-base font-bold text-amber-900'>🛡️ Moderator Removal</h3>
+                  <p class='text-xs text-amber-700 mt-0.5'>This action is logged publicly in the mod log.</p>
+                </div>
+                <form action='/c/%s/posts/%d/mod_delete' method='POST' class='px-6 py-5 flex flex-col gap-4'>
+                  %s
+                  <label class='flex flex-col gap-1.5'>
+                    <span class='text-sm font-semibold text-gray-700'>Reason <span class='text-red-500'>*</span></span>
+                    <textarea name='reason' required maxlength='255' rows='4'
+                      placeholder='Explain why this post is being removed (visible to the community)...'
+                      class='w-full rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400 resize-none'></textarea>
+                  </label>
+                  <div class='flex justify-end gap-2 pt-1'>
+                    <button type='button' onclick=\"document.getElementById('mod-modal-%d').close()\"
+                      class='px-4 py-2 rounded-lg text-sm font-semibold text-gray-600 bg-gray-100 hover:bg-gray-200 transition-colors'>Cancel</button>
+                    <button type='submit'
+                      class='px-4 py-2 rounded-lg text-sm font-bold text-white bg-red-600 hover:bg-red-700 transition-colors shadow-sm'>Confirm Removal</button>
+                  </div>
+                </form>
+              </div>
+            </dialog>"
+            post.id post.id post.community_slug post.id csrf_token post.id
+        else if is_admin && not post_target_is_admin then
+          (* Rule C: admin override (not a mod of this community) — logged as admin_delete_post *)
+          Printf.sprintf "
+            <button onclick=\"document.getElementById('mod-modal-%d').showModal()\" class='text-xs font-bold text-red-700 hover:text-red-900 border border-red-300 bg-red-50 hover:bg-red-100 rounded px-2 py-1 transition-colors ml-3'>⚡ Admin Remove</button>
+            <dialog id='mod-modal-%d' class='rounded-2xl shadow-2xl p-0 w-full max-w-md backdrop:bg-black/60 backdrop:backdrop-blur-sm border-0'>
+              <div class='bg-white rounded-2xl overflow-hidden'>
+                <div class='bg-red-50 border-b border-red-200 px-6 py-4'>
+                  <h3 class='text-base font-bold text-red-900'>⚡ Admin Intervention</h3>
+                  <p class='text-xs text-red-700 mt-0.5'>This action is logged publicly as an admin override.</p>
+                </div>
+                <form action='/c/%s/posts/%d/mod_delete' method='POST' class='px-6 py-5 flex flex-col gap-4'>
+                  %s
+                  <label class='flex flex-col gap-1.5'>
+                    <span class='text-sm font-semibold text-gray-700'>Reason <span class='text-red-500'>*</span></span>
+                    <textarea name='reason' required maxlength='255' rows='4'
+                      placeholder='Explain the admin intervention reason (visible to the community)...'
+                      class='w-full rounded-lg border border-red-300 bg-red-50 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-400 resize-none'></textarea>
+                  </label>
+                  <div class='flex justify-end gap-2 pt-1'>
+                    <button type='button' onclick=\"document.getElementById('mod-modal-%d').close()\"
+                      class='px-4 py-2 rounded-lg text-sm font-semibold text-gray-600 bg-gray-100 hover:bg-gray-200 transition-colors'>Cancel</button>
+                    <button type='submit'
+                      class='px-4 py-2 rounded-lg text-sm font-bold text-white bg-red-600 hover:bg-red-700 transition-colors shadow-sm'>Confirm Removal</button>
+                  </div>
+                </form>
+              </div>
+            </dialog>"
+            post.id post.id post.community_slug post.id csrf_token post.id
+        else ""
   in
 
   (* post_page renders the post inline, not via Components.render_post, so ban_post_btn
@@ -932,7 +995,7 @@ let post_page ?user ~is_member ~is_current_user_mod ~mod_usernames ~admin_userna
     </div>"
     (Components.left_sidebar ?user ~moderated_communities user_communities)
     post.community_slug post.community_slug
-    (Components.render_author ~mod_usernames ~admin_usernames post.username) (Components.time_ago post.created_at) (delete_post_btn ^ ban_post_btn)
+    (Components.render_author ~mod_usernames ~admin_usernames post.username) (Components.time_ago post.created_at) (post_action_btn ^ ban_post_btn)
     post.title
     link_content post_content voting_pill
     action_section comments_html

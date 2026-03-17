@@ -842,6 +842,58 @@ let delete_post_handler request =
           )
       | _ -> Dream.respond ~status:`Bad_Request (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Form Error" ~message:"Invalid form submission." ~alert_type:"error" ~return_url:"/" request)
 
+(* Mod removal is a separate endpoint from /delete-post so that:
+   (a) a reason is always required and stored, (b) the action is always
+   attributed to a community moderator (not an admin shortcut), keeping
+   mod_actions as a faithful community-level audit trail. *)
+let mod_delete_post_handler request =
+  match Dream.session_field request "user_id" with
+  | None -> Dream.redirect request "/login"
+  | Some uid_str ->
+      let user_id = int_of_string uid_str in
+      let slug = Dream.param request "slug" in
+      let post_id = try int_of_string (Dream.param request "id") with _ -> 0 in
+      if post_id = 0 then
+        Dream.respond ~status:`Bad_Request (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Bad Request" ~message:"Invalid post ID." ~alert_type:"error" ~return_url:("/c/" ^ slug) request)
+      else
+      match%lwt Dream.form request with
+      | `Ok form_data ->
+          let reason = String.trim (List.assoc_opt "reason" form_data |> Option.value ~default:"") in
+          if reason = "" then
+            Dream.respond ~status:`Bad_Request (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Validation Error" ~message:"A reason is required for moderation actions." ~alert_type:"error" ~return_url:("/c/" ^ slug) request)
+          else
+          Dream.sql request (fun db ->
+            match%lwt Db.get_community_by_slug db slug with
+            | Error err ->
+                Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Error" ~message:("Database error: " ^ err) ~alert_type:"error" ~return_url:"/" request)
+            | Ok None ->
+                Dream.respond ~status:`Not_Found (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Not Found" ~message:"Community not found." ~alert_type:"error" ~return_url:"/" request)
+            | Ok (Some community) ->
+                (* Always query is_moderator even for admins — we need the distinction
+                   to write the correct action_type in the audit log (admin_delete_post
+                   vs delete_post), preventing admin spoofing via the community mod log. *)
+                let is_admin = Dream.session_field request "is_admin" = Some "true" in
+                let%lwt is_community_mod_res = Db.is_moderator db user_id community.id in
+                let is_community_mod = match is_community_mod_res with Ok true -> true | _ -> false in
+                if not (is_admin || is_community_mod) then
+                    Dream.respond ~status:`Forbidden (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Forbidden" ~message:"You are not a moderator of this community." ~alert_type:"error" ~return_url:("/c/" ^ slug) request)
+                else
+                    let%lwt delete_res = Db.mod_delete_post db post_id in
+                    (match delete_res with
+                    | Error err ->
+                        Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Error" ~message:("Database error: " ^ err) ~alert_type:"error" ~return_url:("/c/" ^ slug) request)
+                    | Ok () ->
+                        (* Admin acting without mod role: flag action_type and prefix reason
+                           so the public mod_actions log explicitly shows "Admin Intervention". *)
+                        let is_admin_override = is_admin && not is_community_mod in
+                        let action_type = if is_admin_override then "admin_delete_post" else "delete_post" in
+                        let logged_reason = if is_admin_override then "Admin Intervention: " ^ reason else reason in
+                        let%lwt _ = Db.log_mod_action db community.id user_id action_type (Some post_id) logged_reason in
+                        Dream.redirect request ("/c/" ^ slug))
+          )
+      | _ ->
+          Dream.respond ~status:`Bad_Request (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Form Error" ~message:"Invalid form submission." ~alert_type:"error" ~return_url:("/c/" ^ slug) request)
+
 (* === COMMENT === *)
 
 (* Push notifications are fan-out on write: one notification per comment, sent to

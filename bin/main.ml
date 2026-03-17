@@ -62,6 +62,7 @@ let () =
     Dream.get "/api/unread-notifs" Earde.Handlers.unread_notifs_api;
     Dream.post "/delete-account" Earde.Handlers.delete_account_handler;
     Dream.post "/delete-post" Earde.Handlers.delete_post_handler;
+    Dream.post "/c/:slug/posts/:id/mod_delete" Earde.Handlers.mod_delete_post_handler;
     Dream.post "/delete-comment" Earde.Handlers.delete_comment_handler;
     Dream.get  "/admin" Earde.Handlers.admin_dashboard_handler;
     Dream.post "/admin/ban/user/:id" Earde.Handlers.ban_user_handler;
