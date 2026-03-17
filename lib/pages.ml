@@ -668,18 +668,78 @@ let post_page ?user ~is_member ~is_current_user_mod ~mod_usernames ~admin_userna
           || c.content = "[removed by moderator]"
         in
         let comment_target_is_admin = List.mem c.username admin_usernames in
+        (* Rule A/B/C: strictly mutually exclusive — mirrors post action_btn logic.
+           Rule A: own comment → personal Delete. Rule B: mod (not own, not admin target) → Mod Remove dialog.
+           Rule C: admin acting without mod role (not own, not admin target) → Admin Remove dialog. *)
         let delete_comment_btn =
           if is_comment_deleted then ""
           else match current_user with
-          | Some u when u = c.username || is_admin || (is_current_user_mod && not comment_target_is_admin) ->
-              (* community_id is forwarded so delete_comment_handler can verify mod status
-                 server-side without an extra DB round-trip to resolve comment → post → community. *)
-              Printf.sprintf "<form action='/delete-comment' method='POST' class='inline m-0 p-0' onsubmit=\"confirmModal(event, 'Do you really want to delete this comment? This action cannot be undone.')\">
-                  %s <input type='hidden' name='comment_id' value='%d'>
-                  <input type='hidden' name='community_id' value='%d'>
-                  <button type='submit' class='text-xs %s hover:text-red-700 font-bold'>🗑️</button>
-              </form>" csrf_token c.id post.community_id (if u <> c.username then "text-red-600" else "text-red-500")
-          | _ -> ""
+          | None -> ""
+          | Some u ->
+              if u = c.username then
+                (* Rule A: personal delete — no audit trail needed *)
+                Printf.sprintf "<form action='/delete-comment' method='POST' class='inline m-0 p-0' onsubmit=\"confirmModal(event, 'Do you really want to delete this comment? This action cannot be undone.')\">
+                    %s <input type='hidden' name='comment_id' value='%d'>
+                    <input type='hidden' name='community_id' value='%d'>
+                    <button type='submit' class='text-xs text-red-500 hover:text-red-700 font-bold'>🗑️</button>
+                </form>" csrf_token c.id post.community_id
+              else if is_current_user_mod && not comment_target_is_admin then
+                (* Rule B: mod removal — dialog enforces a public reason in the mod log *)
+                Printf.sprintf "
+                  <button onclick=\"document.getElementById('mod-modal-comment-%d').showModal()\" class='text-xs font-bold text-amber-700 hover:text-amber-900 border border-amber-300 bg-amber-50 hover:bg-amber-100 rounded px-2 py-0.5 transition-colors'>🛡️ Mod Remove</button>
+                  <dialog id='mod-modal-comment-%d' class='rounded-2xl shadow-2xl p-0 w-full max-w-md backdrop:bg-black/60 backdrop:backdrop-blur-sm border-0'>
+                    <div class='bg-white rounded-2xl overflow-hidden'>
+                      <div class='bg-amber-50 border-b border-amber-200 px-6 py-4'>
+                        <h3 class='text-base font-bold text-amber-900'>🛡️ Moderator Removal</h3>
+                        <p class='text-xs text-amber-700 mt-0.5'>This action is logged publicly in the mod log.</p>
+                      </div>
+                      <form action='/c/%s/comments/%d/mod_delete' method='POST' class='px-6 py-5 flex flex-col gap-4'>
+                        %s
+                        <label class='flex flex-col gap-1.5'>
+                          <span class='text-sm font-semibold text-gray-700'>Reason <span class='text-red-500'>*</span></span>
+                          <textarea name='reason' required maxlength='255' rows='4'
+                            placeholder='Explain why this comment is being removed (visible to the community)...'
+                            class='w-full rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400 resize-none'></textarea>
+                        </label>
+                        <div class='flex justify-end gap-2 pt-1'>
+                          <button type='button' onclick=\"document.getElementById('mod-modal-comment-%d').close()\"
+                            class='px-4 py-2 rounded-lg text-sm font-semibold text-gray-600 bg-gray-100 hover:bg-gray-200 transition-colors'>Cancel</button>
+                          <button type='submit'
+                            class='px-4 py-2 rounded-lg text-sm font-bold text-white bg-red-600 hover:bg-red-700 transition-colors shadow-sm'>Confirm Removal</button>
+                        </div>
+                      </form>
+                    </div>
+                  </dialog>"
+                  c.id c.id post.community_slug c.id csrf_token c.id
+              else if is_admin && not comment_target_is_admin then
+                (* Rule C: admin override — logged as admin_delete_comment in mod_actions *)
+                Printf.sprintf "
+                  <button onclick=\"document.getElementById('mod-modal-comment-%d').showModal()\" class='text-xs font-bold text-red-700 hover:text-red-900 border border-red-300 bg-red-50 hover:bg-red-100 rounded px-2 py-0.5 transition-colors'>⚡ Admin Remove</button>
+                  <dialog id='mod-modal-comment-%d' class='rounded-2xl shadow-2xl p-0 w-full max-w-md backdrop:bg-black/60 backdrop:backdrop-blur-sm border-0'>
+                    <div class='bg-white rounded-2xl overflow-hidden'>
+                      <div class='bg-red-50 border-b border-red-200 px-6 py-4'>
+                        <h3 class='text-base font-bold text-red-900'>⚡ Admin Intervention</h3>
+                        <p class='text-xs text-red-700 mt-0.5'>This action is logged publicly as an admin override.</p>
+                      </div>
+                      <form action='/c/%s/comments/%d/mod_delete' method='POST' class='px-6 py-5 flex flex-col gap-4'>
+                        %s
+                        <label class='flex flex-col gap-1.5'>
+                          <span class='text-sm font-semibold text-gray-700'>Reason <span class='text-red-500'>*</span></span>
+                          <textarea name='reason' required maxlength='255' rows='4'
+                            placeholder='Explain the admin intervention reason (visible to the community)...'
+                            class='w-full rounded-lg border border-red-300 bg-red-50 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-400 resize-none'></textarea>
+                        </label>
+                        <div class='flex justify-end gap-2 pt-1'>
+                          <button type='button' onclick=\"document.getElementById('mod-modal-comment-%d').close()\"
+                            class='px-4 py-2 rounded-lg text-sm font-semibold text-gray-600 bg-gray-100 hover:bg-gray-200 transition-colors'>Cancel</button>
+                          <button type='submit'
+                            class='px-4 py-2 rounded-lg text-sm font-bold text-white bg-red-600 hover:bg-red-700 transition-colors shadow-sm'>Confirm Removal</button>
+                        </div>
+                      </form>
+                    </div>
+                  </dialog>"
+                  c.id c.id post.community_slug c.id csrf_token c.id
+              else ""
         in
 
         (* Ban button mirrors render_post's ban_btn logic; closed over post.community_id.

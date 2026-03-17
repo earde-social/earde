@@ -47,6 +47,7 @@ val mod_delete_post_handler : Dream.handler
 (** === COMMENT === *)
 val create_comment_handler : Dream.handler
 val delete_comment_handler : Dream.handler
+val mod_delete_comment_handler : Dream.handler
 
 (** === VOTING === *)
 val vote_handler : Dream.handler

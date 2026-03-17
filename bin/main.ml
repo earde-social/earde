@@ -64,6 +64,7 @@ let () =
     Dream.post "/delete-post" Earde.Handlers.delete_post_handler;
     Dream.post "/c/:slug/posts/:id/mod_delete" Earde.Handlers.mod_delete_post_handler;
     Dream.post "/delete-comment" Earde.Handlers.delete_comment_handler;
+    Dream.post "/c/:slug/comments/:id/mod_delete" Earde.Handlers.mod_delete_comment_handler;
     Dream.get  "/admin" Earde.Handlers.admin_dashboard_handler;
     Dream.post "/admin/ban/user/:id" Earde.Handlers.ban_user_handler;
     Dream.post "/admin/unban/user/:id" Earde.Handlers.unban_user_global_handler;
