@@ -990,6 +990,25 @@ let user_profile_page ?user ~is_admin ~is_globally_banned ~profile_id ~admin_use
     if profile_admin_badge = "" && mod_badges = "" && globally_banned_badge = "" then ""
     else Printf.sprintf "<div class='flex flex-wrap items-center gap-1.5 mt-2'>%s%s%s</div>" profile_admin_badge mod_badges globally_banned_badge
   in
+  (* Edit Profile: only render when the logged-in user is viewing their own profile.
+     Avoids exposing /settings entry point on others' profiles — a cosmetic boundary
+     that reinforces the expectation that settings are personal. *)
+  let edit_profile_btn =
+    match user with
+    | Some logged_in when logged_in = username ->
+      "<a href='/settings' class='inline-flex items-center gap-1.5 mt-3 bg-[#0D9488] text-white text-sm font-semibold px-4 py-1.5 rounded-md hover:bg-teal-700 transition shadow-sm'>✏️ Edit Profile</a>"
+    | _ -> ""
+  in
+  (* Admin Panel: only render for the logged-in admin on their own profile.
+     Gating on both own-profile AND is_admin prevents leaking the /admin route
+     to non-admins even if they inspect another admin's profile page. *)
+  let admin_panel_btn =
+    match user with
+    | Some logged_in when logged_in = username && is_admin ->
+      "<a href='/admin' class='inline-flex items-center gap-1.5 mt-3 bg-red-600 text-white text-sm font-semibold px-4 py-1.5 rounded-md hover:bg-red-700 transition shadow-sm'>🛡️ Admin Panel</a>"
+    | _ -> ""
+  in
+
   let admin_controls =
     if is_admin && (Option.value ~default:"" user) <> username then
       let ban_or_unban_btn =
@@ -1068,6 +1087,7 @@ let user_profile_page ?user ~is_admin ~is_globally_banned ~profile_id ~admin_use
                 <div>
                     <h1 class='text-3xl font-bold text-gray-900'>u/%s</h1>
                     %s
+                    <div class='flex items-center gap-2 flex-wrap'>%s%s</div>
                     <div class='flex items-center space-x-4 mt-2 text-sm text-gray-600'>
                         <span><strong class='text-gray-900'>%d</strong> Karma</span>
                         <span>Joined %s</span>
@@ -1083,7 +1103,7 @@ let user_profile_page ?user ~is_admin ~is_globally_banned ~profile_id ~admin_use
         <div>
             %s
         </div>
-    </div>" avatar_url username username role_badges karma joined_at bio admin_controls tab_nav feed_html
+    </div>" avatar_url username username role_badges edit_profile_btn admin_panel_btn karma joined_at bio admin_controls tab_nav feed_html
   in
   Components.layout ?user ~request ~title:(username ^ "'s Profile") content
 

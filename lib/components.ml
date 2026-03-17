@@ -50,7 +50,6 @@ let layout ?(noindex=false) ?user ?request ~title content =
             <a href='/notifications' class='relative text-gray-400 hover:text-gray-600 text-base' title='Notifications'>
                 🔔 <span id='notif-badge' class='hidden absolute -top-1 -right-2 bg-red-500 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full'>0</span>
             </a>
-            <a href='/settings' class='text-gray-400 hover:text-gray-600 text-base' title='Settings'>⚙️</a>
             <form action='/logout' method='POST' class='m-0 p-0 flex items-center'>
                <button type='submit' class='text-xs text-gray-500 hover:text-red-600 font-medium border border-gray-200 px-3 py-1 rounded-md hover:border-red-200 transition'>
                  Log out
