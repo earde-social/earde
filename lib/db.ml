@@ -653,6 +653,20 @@ module Moderator = struct
     | Ok () -> Lwt.return (Ok ())
     | Error err -> Lwt.return (Error (Caqti_error.show err))
 
+  (* Community creators need top_mod from birth — default role is 'mod', so we
+     must set role explicitly. ON CONFLICT UPDATE covers the edge case where the
+     user somehow already exists as a plain mod and re-creates. *)
+  let add_top_moderator_query =
+    let open Caqti_request.Infix in
+    (Caqti_type.(t2 int int) ->. Caqti_type.unit)
+    "INSERT INTO community_moderators (user_id, community_id, role) VALUES ($1, $2, 'top_mod') ON CONFLICT (user_id, community_id) DO UPDATE SET role = 'top_mod'"
+
+  let add_top_moderator (module C : Caqti_lwt.CONNECTION) user_id community_id =
+    C.exec add_top_moderator_query (user_id, community_id)
+    >>= function
+    | Ok () -> Lwt.return (Ok ())
+    | Error err -> Lwt.return (Error (Caqti_error.show err))
+
   (* SELECT 1 existence check is cheaper than COUNT — we only need bool, not cardinality. *)
   let is_moderator_query =
     let open Caqti_request.Infix in
@@ -1227,6 +1241,7 @@ let leave_community = Membership.leave_community
 let get_user_communities = Membership.get_user_communities
 
 let add_moderator = Moderator.add_moderator
+let add_top_moderator = Moderator.add_top_moderator
 let is_moderator = Moderator.is_moderator
 let get_community_moderators = Moderator.get_community_moderators
 let remove_moderator = Moderator.remove_moderator

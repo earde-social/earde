@@ -381,32 +381,9 @@ let community_page ?user ~is_member ~is_current_user_mod ~is_current_user_top_mo
 
 let community_settings_page ?user ~(community : community) ~(mods : user list) ~(banned_users : user list) request =
   let csrf_token = Dream.csrf_tag request in
-  let mod_count = List.length mods in
-
-  let mod_rows = String.concat "\n" (List.map (fun (m : user) ->
-    let remove_btn =
-      (* At least one mod must remain — enforce at render time and again server-side
-         to close the race window between page load and form submission. *)
-      if mod_count > 1 then
-        Printf.sprintf "
-          <form action='/remove-mod' method='POST' class='inline m-0 p-0' onsubmit=\"confirmModal(event, 'Remove this moderator? This action cannot be undone.')\">
-            %s
-            <input type='hidden' name='target_user_id' value='%d'>
-            <input type='hidden' name='community_id' value='%d'>
-            <input type='hidden' name='community_slug' value='%s'>
-            <button type='submit' class='text-xs text-red-500 hover:text-red-700 font-bold border border-red-200 px-2 py-1 rounded transition'>Remove</button>
-          </form>"
-          csrf_token m.id community.id (Components.html_escape community.slug)
-      else
-        "<span class='text-xs text-gray-400 italic'>Last mod</span>"
-    in
-    Printf.sprintf "
-      <li class='flex items-center justify-between py-3 border-b border-gray-100 last:border-0'>
-        <a href='/u/%s' class='font-medium text-gray-800 hover:text-[#0D9488] hover:underline'>u/%s</a>
-        %s
-      </li>"
-      (Components.html_escape m.username) (Components.html_escape m.username) remove_btn
-  ) mods) in
+  (* mods param retained in signature for backward compat with community_settings_handler
+     which still passes it; unused here since mod management moved to manage_mods_page. *)
+  let _ = mods in
 
   let banned_section =
     if banned_users = [] then
@@ -470,24 +447,14 @@ let community_settings_page ?user ~(community : community) ~(mods : user list) ~
         </form>
       </div>
 
-      <div class='bg-white rounded-lg shadow-sm border border-gray-200 p-6 mb-6'>
-        <h2 class='text-lg font-bold text-gray-800 mb-4'>Moderators</h2>
-        <ul>%s</ul>
-      </div>
-
-      <div class='bg-white rounded-lg shadow-sm border border-gray-200 p-6 mb-6'>
-        <h2 class='text-lg font-bold text-gray-800 mb-4'>Add Moderator</h2>
-        <form action='/add-mod' method='POST' class='flex items-center space-x-3'>
-          %s
-          <input type='hidden' name='community_id' value='%d'>
-          <input type='hidden' name='community_slug' value='%s'>
-          <input type='text' name='username' required placeholder='Username to promote'
-                 class='flex-1 rounded-md border-gray-300 shadow-sm focus:border-[#0D9488] p-2 border text-sm'>
-          <button type='submit' class='bg-[#0D9488] text-white px-4 py-2 rounded font-bold text-sm hover:bg-teal-700 transition shadow-sm'>
-            Add Mod
-          </button>
-        </form>
-      </div>
+      <a href='/c/%s/manage-mods'
+         class='flex items-center justify-between bg-white rounded-lg shadow-sm border border-[#0D9488] p-5 mb-6 group hover:bg-teal-50 transition'>
+        <div>
+          <p class='text-base font-bold text-gray-900 group-hover:text-[#0D9488] transition'>Manage Moderators Team</p>
+          <p class='text-sm text-gray-500 mt-0.5'>Add, promote, and remove moderators &mdash; Council of Equals governance.</p>
+        </div>
+        <span class='text-[#0D9488] text-xl font-bold'>&rarr;</span>
+      </a>
 
       <div class='bg-white rounded-lg shadow-sm border border-gray-200 p-6'>
         <h2 class='text-lg font-bold text-gray-800 mb-4'>Banned Users</h2>
@@ -509,8 +476,7 @@ let community_settings_page ?user ~(community : community) ~(mods : user list) ~
     (Components.html_escape (Option.value ~default:"" community.rules))
     (Components.html_escape (Option.value ~default:"" community.avatar_url))
     (Components.html_escape (Option.value ~default:"" community.banner_url))
-    mod_rows
-    csrf_token community.id community.slug
+    community.slug
     banned_section csrf_token community.id
   in
   Components.layout ?user ~request ~title:(Printf.sprintf "Settings — /c/%s" community.slug) content

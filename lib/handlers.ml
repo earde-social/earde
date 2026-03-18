@@ -308,13 +308,15 @@ let create_community_handler request =
           Dream.sql request (fun db ->
             match%lwt Db.create_community db name slug description with
             | Ok () ->
-                (* Divine Right: creator becomes first moderator automatically.
+                (* Divine Right: creator becomes first top_mod automatically.
                    Round-trip via get_community_by_slug is necessary — INSERT does not
                    return the new id, and changing create_community's return type would
-                   cascade through the mli and all other callers. *)
+                   cascade through the mli and all other callers.
+                   add_top_moderator (not add_moderator) so the creator can see the
+                   Manage Moderators link immediately — default role is 'mod'. *)
                 let%lwt _ = match%lwt Db.get_community_by_slug db slug with
                   | Ok (Some community) ->
-                      let%lwt _ = Db.add_moderator db user_id community.id in
+                      let%lwt _ = Db.add_top_moderator db user_id community.id in
                       (* Auto-subscribe creator: join_community uses ON CONFLICT DO NOTHING,
                          so this is idempotent even on concurrent retries. Non-fatal. *)
                       Db.join_community db user_id community.id

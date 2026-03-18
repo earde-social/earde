@@ -88,6 +88,7 @@ end
 
 module Moderator : sig
   val add_moderator : (module Caqti_lwt.CONNECTION) -> int -> int -> (unit, string) result Lwt.t
+  val add_top_moderator : (module Caqti_lwt.CONNECTION) -> int -> int -> (unit, string) result Lwt.t
   val is_moderator : (module Caqti_lwt.CONNECTION) -> int -> int -> (bool, string) result Lwt.t
   val get_moderator_role : (module Caqti_lwt.CONNECTION) -> int -> int -> (string option, string) result Lwt.t
   val get_community_moderators : (module Caqti_lwt.CONNECTION) -> int -> (user list, string) result Lwt.t
@@ -171,6 +172,7 @@ val is_member : (module Caqti_lwt.CONNECTION) -> int -> int -> (bool, string) re
 val get_user_communities : (module Caqti_lwt.CONNECTION) -> int -> (community list, string) result Lwt.t
 
 val add_moderator : (module Caqti_lwt.CONNECTION) -> int -> int -> (unit, string) result Lwt.t
+val add_top_moderator : (module Caqti_lwt.CONNECTION) -> int -> int -> (unit, string) result Lwt.t
 val is_moderator : (module Caqti_lwt.CONNECTION) -> int -> int -> (bool, string) result Lwt.t
 val get_community_moderators : (module Caqti_lwt.CONNECTION) -> int -> (user list, string) result Lwt.t
 val remove_moderator : (module Caqti_lwt.CONNECTION) -> int -> int -> (unit, string) result Lwt.t
