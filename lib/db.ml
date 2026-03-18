@@ -54,6 +54,12 @@ type mod_action = {
   created_at : string;
 }
 
+type moderator_entry = {
+  user_id : int;
+  username : string;
+  role : string;
+}
+
 (* post has 11 SELECT columns; Caqti tN stops at t7, so nest tuples to stay within arity. *)
 let post_row_type =
   let open Caqti_type in
@@ -660,6 +666,19 @@ module Moderator = struct
     | Ok None -> Lwt.return (Ok false)
     | Error err -> Lwt.return (Error (Caqti_error.show err))
 
+  (* Point-read by (user_id, community_id): used to gate promote/remove operations
+     and to derive is_top_mod without a separate is_moderator round-trip. *)
+  let get_moderator_role_query =
+    let open Caqti_request.Infix in
+    (Caqti_type.(t2 int int) ->? Caqti_type.string)
+    "SELECT role FROM community_moderators WHERE user_id = $1 AND community_id = $2"
+
+  let get_moderator_role (module C : Caqti_lwt.CONNECTION) user_id community_id =
+    C.find_opt get_moderator_role_query (user_id, community_id)
+    >>= function
+    | Ok r -> Lwt.return (Ok r)
+    | Error err -> Lwt.return (Error (Caqti_error.show err))
+
   (* ORDER BY promoted_at ASC: original creator appears first, preserving
      appointment history without a separate position/rank column. *)
   let get_community_moderators_query =
@@ -677,6 +696,26 @@ module Moderator = struct
     | Ok rows ->
         let users = List.map (fun (id, username, email) -> { id; username; email }) rows in
         Lwt.return (Ok users)
+    | Error err -> Lwt.return (Error (Caqti_error.show err))
+
+  (* CASE ordering: top_mod=1, mod=2, legacy_mod=3 — explicit role hierarchy for the
+     manage-mods panel. promoted_at ASC breaks ties preserving appointment seniority. *)
+  let get_community_mods_with_roles_query =
+    let open Caqti_request.Infix in
+    (Caqti_type.int ->* Caqti_type.(t3 int string string))
+    "SELECT u.id, u.username, cm.role
+     FROM users u
+     JOIN community_moderators cm ON u.id = cm.user_id
+     WHERE cm.community_id = $1
+     ORDER BY CASE cm.role WHEN 'top_mod' THEN 1 WHEN 'mod' THEN 2 ELSE 3 END ASC,
+              cm.promoted_at ASC"
+
+  let get_community_mods_with_roles (module C : Caqti_lwt.CONNECTION) community_id =
+    C.collect_list get_community_mods_with_roles_query community_id
+    >>= function
+    | Ok rows ->
+        let entries = List.map (fun (user_id, username, role) -> { user_id; username; role }) rows in
+        Lwt.return (Ok entries)
     | Error err -> Lwt.return (Error (Caqti_error.show err))
 
   (* Hard delete: mod removal is administrative; no tombstone needed since
@@ -705,15 +744,43 @@ module Moderator = struct
     (Caqti_type.(t2 int int) ->. Caqti_type.unit)
     "UPDATE community_moderators SET role = 'top_mod' WHERE user_id = $1 AND community_id = $2"
 
+  (* Two-phase guard: first reject illegal source roles, then enforce the 3-seat cap.
+     Order matters — rejecting already-top_mods avoids decrementing the cap incorrectly
+     when count happens to equal the cap and the target is already counted in it. *)
   let promote_to_top_mod (module C : Caqti_lwt.CONNECTION) user_id community_id =
-    C.find count_top_mods_query community_id >>= function
+    C.find_opt get_moderator_role_query (user_id, community_id) >>= function
     | Error e -> Lwt.return (Error (Caqti_error.show e))
-    | Ok count ->
-        if count >= 3 then Lwt.return (Error "Maximum of 3 Top Mods reached")
-        else
-          C.exec promote_to_top_mod_query (user_id, community_id) >>= function
-          | Ok () -> Lwt.return (Ok ())
-          | Error e -> Lwt.return (Error (Caqti_error.show e))
+    | Ok None -> Lwt.return (Error "User is not a moderator of this community")
+    | Ok (Some "top_mod") -> Lwt.return (Error "User is already a Top Mod")
+    | Ok (Some "legacy_mod") -> Lwt.return (Error "Cannot promote a legacy moderator; reinstate as mod first")
+    | Ok (Some _) ->
+        C.find count_top_mods_query community_id >>= function
+        | Error e -> Lwt.return (Error (Caqti_error.show e))
+        | Ok count ->
+            if count >= 3 then Lwt.return (Error "Maximum of 3 Top Mods reached for this community")
+            else
+              C.exec promote_to_top_mod_query (user_id, community_id) >>= function
+              | Ok () -> Lwt.return (Ok ())
+              | Error e -> Lwt.return (Error (Caqti_error.show e))
+
+  (* Single UPDATE across all communities: triggered on community page load to lazily
+     enforce inactivity without a background job. UPDATE FROM ... WHERE is standard
+     PostgreSQL; the 3-month threshold matches the "squatter prevention" governance spec. *)
+  let demote_inactive_mods_query =
+    let open Caqti_request.Infix in
+    (Caqti_type.unit ->. Caqti_type.unit)
+    "UPDATE community_moderators cm
+     SET role = 'legacy_mod'
+     FROM users u
+     WHERE cm.user_id = u.id
+       AND cm.role IN ('top_mod', 'mod')
+       AND (u.last_active_at IS NULL OR u.last_active_at < NOW() - INTERVAL '3 months')"
+
+  let demote_inactive_mods (module C : Caqti_lwt.CONNECTION) =
+    C.exec demote_inactive_mods_query ()
+    >>= function
+    | Ok () -> Lwt.return (Ok ())
+    | Error err -> Lwt.return (Error (Caqti_error.show err))
 
   (* Inverse of get_community_moderators: used for profile badge display.
      ORDER BY promoted_at ASC keeps creation order consistent with mod panels. *)
@@ -1199,5 +1266,8 @@ let unban_user_global = Admin.unban_user_global
 let get_globally_banned_users = Admin.get_globally_banned_users
 
 let promote_to_top_mod = Moderator.promote_to_top_mod
+let get_moderator_role = Moderator.get_moderator_role
+let get_community_mods_with_roles = Moderator.get_community_mods_with_roles
+let demote_inactive_mods = Moderator.demote_inactive_mods
 let log_mod_action = Mod_action.log_action
 let get_modlog = Mod_action.get_modlog

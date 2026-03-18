@@ -342,6 +342,9 @@ let community_page_handler request =
   let offset = (max 1 page - 1) * limit in
 
   Dream.sql request (fun db ->
+    (* Lazy inactivity enforcement: runs on every community page load rather than a
+       background job, trading occasional extra latency for zero infrastructure cost. *)
+    let%lwt _ = Db.demote_inactive_mods db in
     match%lwt Db.get_community_by_slug db slug with
     | Ok (Some community) ->
         let%lwt posts = Db.get_posts_by_community db community.id sort_mode limit offset in
@@ -351,10 +354,9 @@ let community_page_handler request =
         let%lwt is_mem =
           if user_id > 0 then Db.is_member db user_id community.id else Lwt.return_ok false
         in
-        (* Local mod status: fetched unconditionally so match arms stay symmetric;
-           cost is a single indexed lookup vs. the posts query which dominates. *)
-        let%lwt is_mod_res = if user_id > 0 then Db.is_moderator db user_id community.id else Lwt.return_ok false in
-        let%lwt mods_res = Db.get_community_moderators db community.id in
+        (* get_community_mods_with_roles subsumes is_moderator: we derive both
+           is_mod and is_top_mod from one query instead of two round-trips. *)
+        let%lwt mods_res = Db.get_community_mods_with_roles db community.id in
         let%lwt admin_usernames_res = Db.get_admin_usernames db in
         let admin_usernames = match admin_usernames_res with Ok l -> l | Error _ -> [] in
         let%lwt banned_res = Db.community_get_banned_users db community.id in
@@ -365,9 +367,11 @@ let community_page_handler request =
         let moderated_communities = match moderated_communities_res with Ok l -> l | Error _ -> [] in
         (match posts, user_votes, is_mem with
          | Ok p, Ok v, Ok m ->
-             let is_mod = match is_mod_res with Ok b -> b | _ -> false in
-             let mod_usernames = match mods_res with Ok ms -> List.map (fun (u: Db.user) -> u.username) ms | _ -> [] in
-             Dream.html (Pages.community_page ?user ~is_member:m ~is_current_user_mod:is_mod ~mod_usernames ~admin_usernames ~banned_usernames ~user_communities ~moderated_communities v page sort_mode community p request)
+             let mods = match mods_res with Ok ms -> ms | _ -> [] in
+             let mod_usernames = List.map (fun (e: Db.moderator_entry) -> e.username) mods in
+             let is_mod = user_id > 0 && List.exists (fun (e: Db.moderator_entry) -> e.user_id = user_id) mods in
+             let is_top_mod = user_id > 0 && List.exists (fun (e: Db.moderator_entry) -> e.user_id = user_id && e.role = "top_mod") mods in
+             Dream.html (Pages.community_page ?user ~is_member:m ~is_current_user_mod:is_mod ~is_current_user_top_mod:is_top_mod ~mod_usernames ~admin_usernames ~banned_usernames ~user_communities ~moderated_communities v page sort_mode community p request)
          | _ -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:"Failed to load community data. Please try again later." ~alert_type:"error" ~return_url:"/" request))
     | Ok None -> Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"Not Found" ~message:"This community does not exist." ~alert_type:"error" ~return_url:"/" request)
     | Error err -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:("Database error: " ^ err) ~alert_type:"error" ~return_url:"/" request)
@@ -1448,6 +1452,142 @@ let debug_state_handler request =
       Dream.respond ~status:`Forbidden
         ~headers:[("Content-Type", "application/json")]
         {|{"error":"forbidden"}|}
+
+(* === MANAGE MODS === *)
+
+let manage_mods_handler request =
+  let slug = Dream.param request "slug" in
+  let user = Dream.session_field request "username" in
+  let is_admin = Dream.session_field request "is_admin" = Some "true" in
+  match Dream.session_field request "user_id" with
+  | None -> Dream.redirect request "/login"
+  | Some uid_str ->
+      let user_id = int_of_string uid_str in
+      Dream.sql request (fun db ->
+        match%lwt Db.get_community_by_slug db slug with
+        | Ok (Some community) ->
+            let%lwt role_res = Db.get_moderator_role db user_id community.id in
+            let current_user_role = match role_res with Ok r -> r | _ -> None in
+            let is_authorized = is_admin || current_user_role = Some "top_mod" in
+            if not is_authorized then
+              Dream.respond ~status:`Forbidden (Pages.msg_page ?user ~title:"Access Denied" ~message:"Only Top Mods and Admins can manage moderators." ~alert_type:"error" ~return_url:("/c/" ^ slug) request)
+            else
+              (match%lwt Db.get_community_mods_with_roles db community.id with
+               | Ok mods ->
+                   Dream.html (Pages.manage_mods_page ?user ~is_admin ~current_user_role ~community ~mods request)
+               | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:("Database error: " ^ e) ~alert_type:"error" ~return_url:("/c/" ^ slug) request))
+        | Ok None -> Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"Not Found" ~message:"This community does not exist." ~alert_type:"error" ~return_url:"/" request)
+        | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:("Database error: " ^ e) ~alert_type:"error" ~return_url:"/" request)
+      )
+
+let manage_mods_add_handler request =
+  let slug = Dream.param request "slug" in
+  let user = Dream.session_field request "username" in
+  let is_admin = Dream.session_field request "is_admin" = Some "true" in
+  match Dream.session_field request "user_id" with
+  | None -> Dream.redirect request "/login"
+  | Some uid_str ->
+      let user_id = int_of_string uid_str in
+      match%lwt Dream.form request with
+      | `Ok form_data ->
+          let target_username = String.trim (List.assoc_opt "username" form_data |> Option.value ~default:"") in
+          if target_username = "" then
+            Dream.respond ~status:`Bad_Request (Pages.msg_page ?user ~title:"Form Error" ~message:"Username is required." ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/manage-mods") request)
+          else
+          Dream.sql request (fun db ->
+            match%lwt Db.get_community_by_slug db slug with
+            | Ok (Some community) ->
+                let%lwt role_res = Db.get_moderator_role db user_id community.id in
+                let current_user_role = match role_res with Ok r -> r | _ -> None in
+                let is_authorized = is_admin || current_user_role = Some "top_mod" in
+                if not is_authorized then
+                  Dream.respond ~status:`Forbidden (Pages.msg_page ?user ~title:"Access Denied" ~message:"Only Top Mods and Admins can add moderators." ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/manage-mods") request)
+                else
+                  (match%lwt Db.get_user_by_username db target_username with
+                   | Ok (Some target_user) ->
+                       let%lwt _ = Db.add_moderator db target_user.id community.id in
+                       Dream.redirect request ("/c/" ^ slug ^ "/manage-mods")
+                   | Ok None -> Dream.html (Pages.msg_page ?user ~title:"User Not Found" ~message:("No user found: u/" ^ target_username) ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/manage-mods") request)
+                   | Error e -> Dream.html (Pages.msg_page ?user ~title:"Error" ~message:("Database error: " ^ e) ~alert_type:"error" ~return_url:"/" request))
+            | Ok None -> Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"Not Found" ~message:"Community not found." ~alert_type:"error" ~return_url:"/" request)
+            | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:("Database error: " ^ e) ~alert_type:"error" ~return_url:"/" request)
+          )
+      | _ -> Dream.respond ~status:`Bad_Request (Pages.msg_page ?user ~title:"Form Error" ~message:"Invalid form submission." ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/manage-mods") request)
+
+let manage_mods_promote_handler request =
+  let slug = Dream.param request "slug" in
+  let user = Dream.session_field request "username" in
+  let is_admin = Dream.session_field request "is_admin" = Some "true" in
+  match Dream.session_field request "user_id" with
+  | None -> Dream.redirect request "/login"
+  | Some uid_str ->
+      let user_id = int_of_string uid_str in
+      match%lwt Dream.form request with
+      | `Ok form_data ->
+          let target_user_id = try int_of_string (List.assoc_opt "target_user_id" form_data |> Option.value ~default:"") with _ -> 0 in
+          if target_user_id = 0 then
+            Dream.respond ~status:`Bad_Request (Pages.msg_page ?user ~title:"Form Error" ~message:"Invalid user reference." ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/manage-mods") request)
+          else
+          Dream.sql request (fun db ->
+            match%lwt Db.get_community_by_slug db slug with
+            | Ok (Some community) ->
+                let%lwt role_res = Db.get_moderator_role db user_id community.id in
+                let current_user_role = match role_res with Ok r -> r | _ -> None in
+                let is_authorized = is_admin || current_user_role = Some "top_mod" in
+                if not is_authorized then
+                  Dream.respond ~status:`Forbidden (Pages.msg_page ?user ~title:"Access Denied" ~message:"Only Top Mods and Admins can promote moderators." ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/manage-mods") request)
+                else
+                  (match%lwt Db.promote_to_top_mod db target_user_id community.id with
+                   | Ok () -> Dream.redirect request ("/c/" ^ slug ^ "/manage-mods")
+                   | Error msg -> Dream.html (Pages.msg_page ?user ~title:"Promotion Failed" ~message:msg ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/manage-mods") request))
+            | Ok None -> Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"Not Found" ~message:"Community not found." ~alert_type:"error" ~return_url:"/" request)
+            | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:("Database error: " ^ e) ~alert_type:"error" ~return_url:"/" request)
+          )
+      | _ -> Dream.respond ~status:`Bad_Request (Pages.msg_page ?user ~title:"Form Error" ~message:"Invalid form submission." ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/manage-mods") request)
+
+let manage_mods_remove_handler request =
+  let slug = Dream.param request "slug" in
+  let user = Dream.session_field request "username" in
+  let is_admin = Dream.session_field request "is_admin" = Some "true" in
+  match Dream.session_field request "user_id" with
+  | None -> Dream.redirect request "/login"
+  | Some uid_str ->
+      let user_id = int_of_string uid_str in
+      match%lwt Dream.form request with
+      | `Ok form_data ->
+          let target_user_id = try int_of_string (List.assoc_opt "target_user_id" form_data |> Option.value ~default:"") with _ -> 0 in
+          if target_user_id = 0 then
+            Dream.respond ~status:`Bad_Request (Pages.msg_page ?user ~title:"Form Error" ~message:"Invalid user reference." ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/manage-mods") request)
+          else
+          Dream.sql request (fun db ->
+            match%lwt Db.get_community_by_slug db slug with
+            | Ok (Some community) ->
+                let%lwt role_res = Db.get_moderator_role db user_id community.id in
+                let current_user_role = match role_res with Ok r -> r | _ -> None in
+                let is_authorized = is_admin || current_user_role = Some "top_mod" in
+                if not is_authorized then
+                  Dream.respond ~status:`Forbidden (Pages.msg_page ?user ~title:"Access Denied" ~message:"Only Top Mods and Admins can remove moderators." ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/manage-mods") request)
+                else
+                  (* Re-fetch target role server-side: prevents a top_mod from removing
+                     another top_mod by manipulating the form — TOCTOU guard. *)
+                  (match%lwt Db.get_moderator_role db target_user_id community.id with
+                   | Ok (Some "top_mod") when not is_admin ->
+                       Dream.html (Pages.msg_page ?user ~title:"Action Denied" ~message:"Top Mods cannot remove other Top Mods. Only an admin can do this." ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/manage-mods") request)
+                   | Ok None ->
+                       Dream.html (Pages.msg_page ?user ~title:"Not a Moderator" ~message:"That user is not a moderator of this community." ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/manage-mods") request)
+                   | Ok _ ->
+                       (match%lwt Db.get_community_mods_with_roles db community.id with
+                        | Ok mods when List.length mods > 1 ->
+                            let%lwt _ = Db.remove_moderator db target_user_id community.id in
+                            Dream.redirect request ("/c/" ^ slug ^ "/manage-mods")
+                        | Ok _ ->
+                            Dream.html (Pages.msg_page ?user ~title:"Cannot Remove" ~message:"You cannot remove the last moderator of a community." ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/manage-mods") request)
+                        | Error e -> Dream.html (Pages.msg_page ?user ~title:"Error" ~message:("Database error: " ^ e) ~alert_type:"error" ~return_url:"/" request))
+                   | Error e -> Dream.html (Pages.msg_page ?user ~title:"Error" ~message:("Database error: " ^ e) ~alert_type:"error" ~return_url:"/" request))
+            | Ok None -> Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"Not Found" ~message:"Community not found." ~alert_type:"error" ~return_url:"/" request)
+            | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:("Database error: " ^ e) ~alert_type:"error" ~return_url:"/" request)
+          )
+      | _ -> Dream.respond ~status:`Bad_Request (Pages.msg_page ?user ~title:"Form Error" ~message:"Invalid form submission." ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/manage-mods") request)
 
 (* === MIDDLEWARE === *)
 

@@ -36,6 +36,10 @@ val add_mod_handler : Dream.handler
 val remove_mod_handler : Dream.handler
 val ban_community_user_handler : Dream.handler
 val unban_community_user_handler : Dream.handler
+val manage_mods_handler : Dream.handler
+val manage_mods_add_handler : Dream.handler
+val manage_mods_promote_handler : Dream.handler
+val manage_mods_remove_handler : Dream.handler
 
 (** === POST === *)
 val new_post_page : Dream.handler

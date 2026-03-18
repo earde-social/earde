@@ -43,6 +43,10 @@ let () =
     Dream.get "/c/:slug" Earde.Handlers.community_page_handler;
     Dream.get "/c/:slug/settings" Earde.Handlers.community_settings_handler;
     Dream.get "/c/:slug/modlog" Earde.Handlers.modlog_handler;
+    Dream.get "/c/:slug/manage-mods" Earde.Handlers.manage_mods_handler;
+    Dream.post "/c/:slug/manage-mods/add" Earde.Handlers.manage_mods_add_handler;
+    Dream.post "/c/:slug/manage-mods/promote" Earde.Handlers.manage_mods_promote_handler;
+    Dream.post "/c/:slug/manage-mods/remove" Earde.Handlers.manage_mods_remove_handler;
     Dream.post "/update-community" Earde.Handlers.update_community_handler;
     Dream.post "/add-mod" Earde.Handlers.add_mod_handler;
     Dream.post "/remove-mod" Earde.Handlers.remove_mod_handler;

@@ -13,8 +13,9 @@ val reset_password_page : token:string -> ?error:string -> Dream.request -> stri
 
 (** === COMMUNITY === *)
 val new_community_form : ?user:string -> Dream.request -> string
-val community_page : ?user:string -> is_member:bool -> is_current_user_mod:bool -> mod_usernames:string list -> admin_usernames:string list -> banned_usernames:string list -> user_communities:Db.community list -> moderated_communities:Db.community list -> (int * int) list -> int -> string -> Db.community -> Db.post list -> Dream.request -> string
+val community_page : ?user:string -> is_member:bool -> is_current_user_mod:bool -> is_current_user_top_mod:bool -> mod_usernames:string list -> admin_usernames:string list -> banned_usernames:string list -> user_communities:Db.community list -> moderated_communities:Db.community list -> (int * int) list -> int -> string -> Db.community -> Db.post list -> Dream.request -> string
 val community_settings_page : ?user:string -> community:Db.community -> mods:Db.user list -> banned_users:Db.user list -> Dream.request -> string
+val manage_mods_page : ?user:string -> is_admin:bool -> current_user_role:string option -> community:Db.community -> mods:Db.moderator_entry list -> Dream.request -> string
 
 (** === POST === *)
 val choose_community_page : ?user:string -> Db.community list -> string

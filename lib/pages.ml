@@ -220,7 +220,7 @@ let new_community_form ?user request =
   in
   Components.layout ?user ~request ~title:"New Community" content
 
-let community_page ?user ~is_member ~is_current_user_mod ~mod_usernames ~admin_usernames ~banned_usernames ~user_communities ~moderated_communities user_votes current_page sort_mode (community : community) (posts : post list) request =
+let community_page ?user ~is_member ~is_current_user_mod ~is_current_user_top_mod ~mod_usernames ~admin_usernames ~banned_usernames ~user_communities ~moderated_communities user_votes current_page sort_mode (community : community) (posts : post list) request =
   let csrf_token = Dream.csrf_tag request in
   let is_admin = Dream.session_field request "is_admin" = Some "true" in
   let has_next = List.length posts = 20 in
@@ -313,12 +313,21 @@ let community_page ?user ~is_member ~is_current_user_mod ~mod_usernames ~admin_u
     | _ -> ""
   in
 
+  (* Manage Mods link: top_mod role or admin authority required — regular mods
+     cannot appoint or demote peers, preventing collusion against the council. *)
+  let manage_mods_link =
+    if is_current_user_top_mod || is_admin then
+      Printf.sprintf "<div class='mt-3'><a href='/c/%s/manage-mods' class='text-xs text-[#0D9488] hover:underline font-semibold'>Manage Moderators &rarr;</a></div>" (Components.html_escape community.slug)
+    else ""
+  in
+
   let mods_card = Printf.sprintf "
     <div class='bg-white border border-gray-200 rounded-xl shadow-sm p-5'>
         <h3 class='text-xs font-bold text-gray-500 uppercase tracking-wider mb-3'>Moderators</h3>
         %s
+        %s
     </div>"
-    mods_sidebar_html
+    mods_sidebar_html manage_mods_link
   in
 
   let content = Printf.sprintf "
@@ -505,6 +514,141 @@ let community_settings_page ?user ~(community : community) ~(mods : user list) ~
     banned_section csrf_token community.id
   in
   Components.layout ?user ~request ~title:(Printf.sprintf "Settings — /c/%s" community.slug) content
+
+let manage_mods_page ?user ~is_admin ~current_user_role ~(community : community) ~(mods : moderator_entry list) request =
+  let csrf_token = Dream.csrf_tag request in
+
+  (* Group mods by role for visual separation. *)
+  let top_mods   = List.filter (fun m -> m.role = "top_mod")   mods in
+  let regular_mods = List.filter (fun m -> m.role = "mod")     mods in
+  let legacy_mods  = List.filter (fun m -> m.role = "legacy_mod") mods in
+
+  let can_manage = is_admin || current_user_role = Some "top_mod" in
+
+  let render_top_mod_row (m : moderator_entry) =
+    (* A top_mod cannot demote another top_mod; only admins have that power.
+       Prevents power consolidation by a single top_mod ousting peers. *)
+    let action_btn =
+      if is_admin then
+        Printf.sprintf "
+          <form action='/c/%s/manage-mods/remove' method='POST' class='inline m-0 p-0' onsubmit=\"confirmModal(event, 'Demote this Top Mod? They will be removed from the council.')\">
+            %s
+            <input type='hidden' name='target_user_id' value='%d'>
+            <button type='submit' class='text-xs text-red-500 hover:text-red-700 font-bold border border-red-200 px-2 py-1 rounded transition'>Remove</button>
+          </form>"
+          (Components.html_escape community.slug) csrf_token m.user_id
+      else "<span class='text-xs text-gray-400 italic'>Top Mod</span>"
+    in
+    Printf.sprintf "
+      <li class='flex items-center justify-between py-3 border-b border-gray-100 last:border-0'>
+        <div><a href='/u/%s' class='font-medium text-gray-800 hover:text-[#0D9488] hover:underline'>u/%s</a>
+        <span class='ml-2 text-xs bg-teal-100 text-teal-700 px-1.5 py-0.5 rounded font-semibold'>Top Mod</span></div>
+        %s
+      </li>"
+      (Components.html_escape m.username) (Components.html_escape m.username) action_btn
+  in
+
+  let render_mod_row (m : moderator_entry) =
+    let action_btns =
+      if can_manage then
+        Printf.sprintf "
+          <div class='flex items-center gap-2'>
+            <form action='/c/%s/manage-mods/promote' method='POST' class='inline m-0 p-0'>
+              %s
+              <input type='hidden' name='target_user_id' value='%d'>
+              <button type='submit' class='text-xs text-teal-600 hover:text-teal-800 font-bold border border-teal-200 px-2 py-1 rounded transition'>Promote to Top Mod</button>
+            </form>
+            <form action='/c/%s/manage-mods/remove' method='POST' class='inline m-0 p-0' onsubmit=\"confirmModal(event, 'Remove this moderator?')\">
+              %s
+              <input type='hidden' name='target_user_id' value='%d'>
+              <button type='submit' class='text-xs text-red-500 hover:text-red-700 font-bold border border-red-200 px-2 py-1 rounded transition'>Remove</button>
+            </form>
+          </div>"
+          (Components.html_escape community.slug) csrf_token m.user_id
+          (Components.html_escape community.slug) csrf_token m.user_id
+      else ""
+    in
+    Printf.sprintf "
+      <li class='flex items-center justify-between py-3 border-b border-gray-100 last:border-0'>
+        <a href='/u/%s' class='font-medium text-gray-800 hover:text-[#0D9488] hover:underline'>u/%s</a>
+        %s
+      </li>"
+      (Components.html_escape m.username) (Components.html_escape m.username) action_btns
+  in
+
+  let render_legacy_row (m : moderator_entry) =
+    Printf.sprintf "
+      <li class='flex items-center justify-between py-3 border-b border-gray-100 last:border-0'>
+        <div><a href='/u/%s' class='font-medium text-gray-500 hover:text-[#0D9488] hover:underline'>u/%s</a>
+        <span class='ml-2 text-xs bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded'>Legacy</span></div>
+        <span class='text-xs text-gray-400 italic'>No active powers</span>
+      </li>"
+      (Components.html_escape m.username) (Components.html_escape m.username)
+  in
+
+  let top_mod_section =
+    if top_mods = [] then "<p class='text-gray-400 italic text-xs'>No Top Mods yet.</p>"
+    else Printf.sprintf "<ul>%s</ul>" (String.concat "\n" (List.map render_top_mod_row top_mods))
+  in
+  let mod_section =
+    if regular_mods = [] then "<p class='text-gray-400 italic text-xs'>No standard moderators.</p>"
+    else Printf.sprintf "<ul>%s</ul>" (String.concat "\n" (List.map render_mod_row regular_mods))
+  in
+  let legacy_section =
+    if legacy_mods = [] then ""
+    else Printf.sprintf "
+      <div class='bg-white rounded-lg shadow-sm border border-gray-200 p-6 mb-6'>
+        <h2 class='text-lg font-bold text-gray-800 mb-1'>Legacy Moderators</h2>
+        <p class='text-xs text-gray-400 mb-4'>Demoted due to inactivity. No permissions granted.</p>
+        <ul>%s</ul>
+      </div>" (String.concat "\n" (List.map render_legacy_row legacy_mods))
+  in
+
+  let add_mod_form =
+    if can_manage then Printf.sprintf "
+      <div class='bg-white rounded-lg shadow-sm border border-gray-200 p-6 mb-6'>
+        <h2 class='text-lg font-bold text-gray-800 mb-4'>Add New Moderator</h2>
+        <form action='/c/%s/manage-mods/add' method='POST' class='flex items-center space-x-3'>
+          %s
+          <input type='text' name='username' required placeholder='Username'
+                 class='flex-1 rounded-md border-gray-300 shadow-sm focus:border-[#0D9488] p-2 border text-sm'>
+          <button type='submit' class='bg-[#0D9488] text-white px-4 py-2 rounded font-bold text-sm hover:bg-teal-700 transition shadow-sm'>
+            Add Mod
+          </button>
+        </form>
+      </div>" (Components.html_escape community.slug) csrf_token
+    else ""
+  in
+
+  let content = Printf.sprintf "
+    <div class='max-w-2xl mx-auto'>
+      <div class='flex items-center justify-between mb-6'>
+        <h1 class='text-2xl font-bold text-gray-900'>Council of Mods &mdash; /c/%s</h1>
+        <a href='/c/%s' class='text-sm text-[#0D9488] hover:underline'>&larr; Back to Community</a>
+      </div>
+
+      %s
+
+      <div class='bg-white rounded-lg shadow-sm border border-gray-200 p-6 mb-6'>
+        <h2 class='text-lg font-bold text-gray-800 mb-1'>Top Mods</h2>
+        <p class='text-xs text-gray-400 mb-4'>Council seats (max 3). Only admins can remove Top Mods.</p>
+        %s
+      </div>
+
+      <div class='bg-white rounded-lg shadow-sm border border-gray-200 p-6 mb-6'>
+        <h2 class='text-lg font-bold text-gray-800 mb-4'>Moderators</h2>
+        %s
+      </div>
+
+      %s
+    </div>"
+    (Components.html_escape community.slug) (Components.html_escape community.slug)
+    add_mod_form
+    top_mod_section
+    mod_section
+    legacy_section
+  in
+  Components.layout ?user ~request ~title:(Printf.sprintf "Manage Mods — /c/%s" community.slug) content
 
 (* === POST === *)
 

@@ -29,6 +29,8 @@ type mod_action = {
   action_type : string; target_id : int option; reason : string; created_at : string;
 }
 
+type moderator_entry = { user_id : int; username : string; role : string; }
+
 (** APM helper — wraps any DB call, emits {query, execution_ms, status} JSON via Logs.info. *)
 val with_query_timer : name:string -> (unit -> ('a, string) result Lwt.t) -> ('a, string) result Lwt.t
 
@@ -87,10 +89,13 @@ end
 module Moderator : sig
   val add_moderator : (module Caqti_lwt.CONNECTION) -> int -> int -> (unit, string) result Lwt.t
   val is_moderator : (module Caqti_lwt.CONNECTION) -> int -> int -> (bool, string) result Lwt.t
+  val get_moderator_role : (module Caqti_lwt.CONNECTION) -> int -> int -> (string option, string) result Lwt.t
   val get_community_moderators : (module Caqti_lwt.CONNECTION) -> int -> (user list, string) result Lwt.t
+  val get_community_mods_with_roles : (module Caqti_lwt.CONNECTION) -> int -> (moderator_entry list, string) result Lwt.t
   val remove_moderator : (module Caqti_lwt.CONNECTION) -> int -> int -> (unit, string) result Lwt.t
   val get_moderated_communities : (module Caqti_lwt.CONNECTION) -> int -> (community list, string) result Lwt.t
   val promote_to_top_mod : (module Caqti_lwt.CONNECTION) -> int -> int -> (unit, string) result Lwt.t
+  val demote_inactive_mods : (module Caqti_lwt.CONNECTION) -> (unit, string) result Lwt.t
 end
 
 module Mod_action : sig
@@ -219,6 +224,9 @@ val unban_user_global : (module Caqti_lwt.CONNECTION) -> int -> (unit, string) r
 val get_globally_banned_users : (module Caqti_lwt.CONNECTION) -> (user list, string) result Lwt.t
 
 val promote_to_top_mod : (module Caqti_lwt.CONNECTION) -> int -> int -> (unit, string) result Lwt.t
+val get_moderator_role : (module Caqti_lwt.CONNECTION) -> int -> int -> (string option, string) result Lwt.t
+val get_community_mods_with_roles : (module Caqti_lwt.CONNECTION) -> int -> (moderator_entry list, string) result Lwt.t
+val demote_inactive_mods : (module Caqti_lwt.CONNECTION) -> (unit, string) result Lwt.t
 val log_mod_action : (module Caqti_lwt.CONNECTION) -> int -> int -> string -> int option -> string -> (unit, string) result Lwt.t
 val get_modlog : (module Caqti_lwt.CONNECTION) -> int -> (mod_action list, string) result Lwt.t
 
