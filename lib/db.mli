@@ -21,7 +21,8 @@ type comment = {
 }
 
 type notification = {
-  id : int; user_id : int; post_id : int; message : string; is_read : bool; created_at : string;
+  id : int; user_id : int; post_id : int option; notif_type : string;
+  message : string; is_read : bool; created_at : string;
 }
 
 type mod_action = {
@@ -58,7 +59,7 @@ module User : sig
 end
 
 module Post : sig
-  val create_post : (module Caqti_lwt.CONNECTION) -> string -> string option -> string option -> int -> int -> (unit, string) result Lwt.t
+  val create_post : (module Caqti_lwt.CONNECTION) -> string -> string option -> string option -> int -> int -> (int, string) result Lwt.t
   val get_all_posts : (module Caqti_lwt.CONNECTION) -> string -> int -> int -> (post list, string) result Lwt.t
   val get_personalized_feed : (module Caqti_lwt.CONNECTION) -> int -> string -> int -> int -> (post list, string) result Lwt.t
   val get_posts_by_community : (module Caqti_lwt.CONNECTION) -> int -> string -> int -> int -> (post list, string) result Lwt.t
@@ -116,9 +117,10 @@ module Notification : sig
   val get_notifications : (module Caqti_lwt.CONNECTION) -> int -> (notification list, string) result Lwt.t
   val count_unread_notifs : (module Caqti_lwt.CONNECTION) -> int -> (int, string) result Lwt.t
   val mark_notifs_read : (module Caqti_lwt.CONNECTION) -> int -> (unit, string) result Lwt.t
-  val create_notif : (module Caqti_lwt.CONNECTION) -> int -> int -> string -> (unit, string) result Lwt.t
+  val create_notif : (module Caqti_lwt.CONNECTION) -> int -> int option -> string -> string -> (unit, string) result Lwt.t
   val get_post_owner : (module Caqti_lwt.CONNECTION) -> int -> (int, string) result Lwt.t
   val get_comment_owner : (module Caqti_lwt.CONNECTION) -> int -> (int, string) result Lwt.t
+  val get_comment_post_id : (module Caqti_lwt.CONNECTION) -> int -> (int, string) result Lwt.t
 end
 
 module Analytics : sig
@@ -184,7 +186,7 @@ val community_unban_user : (module Caqti_lwt.CONNECTION) -> int -> int -> (unit,
 val community_is_banned : (module Caqti_lwt.CONNECTION) -> int -> int -> (bool, string) result Lwt.t
 val community_get_banned_users : (module Caqti_lwt.CONNECTION) -> int -> (user list, string) result Lwt.t
 
-val create_post : (module Caqti_lwt.CONNECTION) -> string -> string option -> string option -> int -> int -> (unit, string) result Lwt.t
+val create_post : (module Caqti_lwt.CONNECTION) -> string -> string option -> string option -> int -> int -> (int, string) result Lwt.t
 val get_all_posts : (module Caqti_lwt.CONNECTION) -> string -> int -> int -> (post list, string) result Lwt.t
 val get_personalized_feed : (module Caqti_lwt.CONNECTION) -> int -> string -> int -> int -> (post list, string) result Lwt.t
 val get_posts_by_community : (module Caqti_lwt.CONNECTION) -> int -> string -> int -> int -> (post list, string) result Lwt.t
@@ -206,9 +208,10 @@ val get_user_comment_votes : (module Caqti_lwt.CONNECTION) -> int -> ((int * int
 val get_notifications : (module Caqti_lwt.CONNECTION) -> int -> (notification list, string) result Lwt.t
 val count_unread_notifs : (module Caqti_lwt.CONNECTION) -> int -> (int, string) result Lwt.t
 val mark_notifs_read : (module Caqti_lwt.CONNECTION) -> int -> (unit, string) result Lwt.t
-val create_notif : (module Caqti_lwt.CONNECTION) -> int -> int -> string -> (unit, string) result Lwt.t
+val create_notif : (module Caqti_lwt.CONNECTION) -> int -> int option -> string -> string -> (unit, string) result Lwt.t
 val get_post_owner : (module Caqti_lwt.CONNECTION) -> int -> (int, string) result Lwt.t
 val get_comment_owner : (module Caqti_lwt.CONNECTION) -> int -> (int, string) result Lwt.t
+val get_comment_post_id : (module Caqti_lwt.CONNECTION) -> int -> (int, string) result Lwt.t
 val log_page_view : (module Caqti_lwt.CONNECTION) -> string -> string option -> string -> (unit, string) result Lwt.t
 val touch_user_active : (module Caqti_lwt.CONNECTION) -> int -> (unit, string) result Lwt.t
 val get_kpi_dashboard : (module Caqti_lwt.CONNECTION) -> ((((int * int * int) * (int * int * int)) * (int * int * int) * (int * int * int) * (int * int * int)), string) result Lwt.t

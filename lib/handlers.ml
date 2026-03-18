@@ -6,6 +6,30 @@ let safe_local_redirect target =
   else if String.length target > 0 && target.[0] = '/' then target
   else "/"
 
+(* Scan body text for @username tokens without external library deps.
+   Only ASCII-alphanumeric + underscore is valid; deduped via sort_uniq to avoid
+   sending the same user multiple notifications from repeated mentions. *)
+let extract_mentions text =
+  let len = String.length text in
+  let mentions = ref [] in
+  let i = ref 0 in
+  while !i < len do
+    if text.[!i] = '@' then begin
+      let start = !i + 1 in
+      let j = ref start in
+      while !j < len && (let c = text.[!j] in
+        (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+        (c >= '0' && c <= '9') || c = '_') do
+        incr j
+      done;
+      if !j > start then
+        mentions := String.sub text start (!j - start) :: !mentions;
+      i := !j
+    end else
+      incr i
+  done;
+  List.sort_uniq String.compare !mentions
+
 (* === RATE LIMITING === *)
 
 (* DB-backed rate limit trades a synchronous Hashtbl lookup for a round-trip to
@@ -655,6 +679,9 @@ let ban_community_user_handler request =
                     let action_type = if is_admin_override then "admin_ban_user" else "ban_user" in
                     let logged_reason = if is_admin_override then "Admin Intervention: " ^ reason else reason in
                     let%lwt _ = Db.log_mod_action db community_id user_id action_type (Some target_user.id) logged_reason in
+                    (* Notify banned user — no post_id since a ban is not tied to a single post. *)
+                    let ban_msg = "You have been banned from a community. Reason: " ^ reason in
+                    let%lwt _ = Db.create_notif db target_user.id None "mod_action" ban_msg in
                     let referer = safe_local_redirect (match Dream.header request "Referer" with Some r -> r | None -> "/") in
                     Dream.redirect request referer
                   end
@@ -732,6 +759,7 @@ let create_post_handler request =
   | None -> Dream.redirect request "/login"
   | Some user_id_str ->
       let user_id = int_of_string user_id_str in
+      let username = Option.value (Dream.session_field request "username") ~default:"Someone" in
 
       match%lwt Dream.form request with
       | `Ok form_data ->
@@ -769,7 +797,18 @@ let create_post_handler request =
                       Dream.respond ~status:`Forbidden (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Banned from Community" ~message:"You are banned from posting in this community." ~alert_type:"error" ~return_url:"/" request)
                   | _ ->
                       (match%lwt Db.create_post db title url content community_id user_id with
-                      | Ok () -> Dream.redirect request "/"
+                      | Ok new_post_id ->
+                          (* Fan-out @mention notifications — best-effort, skips self-mentions. *)
+                          let text = title ^ " " ^ (Option.value ~default:"" content) in
+                          let%lwt () = Lwt_list.iter_s (fun uname ->
+                            match%lwt Db.get_user_by_username db uname with
+                            | Ok (Some mentioned) when mentioned.id <> user_id ->
+                                let msg = username ^ " mentioned you in a post." in
+                                let%lwt _ = Db.create_notif db mentioned.id (Some new_post_id) "mention" msg in
+                                Lwt.return_unit
+                            | _ -> Lwt.return_unit
+                          ) (extract_mentions text) in
+                          Dream.redirect request "/"
                       | Error err -> Dream.html (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Error" ~message:("Error: " ^ err) ~alert_type:"error" ~return_url:"/" request)))
               | Ok false ->
                   Dream.html (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Not a Member" ~message:"You must join this community before you can post in it." ~alert_type:"error" ~return_url:"/" request)
@@ -939,6 +978,13 @@ let mod_delete_post_handler request =
                         let action_type = if is_admin_override then "admin_delete_post" else "delete_post" in
                         let logged_reason = if is_admin_override then "Admin Intervention: " ^ reason else reason in
                         let%lwt _ = Db.log_mod_action db community.id user_id action_type (Some post_id) logged_reason in
+                        (* Notify post author — best-effort; post is a tombstone at this point so get_post_owner still works. *)
+                        let%lwt _ = match%lwt Db.get_post_owner db post_id with
+                          | Ok author_id ->
+                              let msg = "Your post was removed by a moderator. Reason: " ^ reason in
+                              Db.create_notif db author_id (Some post_id) "mod_action" msg
+                          | Error _ -> Lwt.return (Ok ())
+                        in
                         Dream.redirect request ("/c/" ^ slug))
           )
       | _ ->
@@ -991,6 +1037,16 @@ let mod_delete_comment_handler request =
                         let action_type = if is_admin_override then "admin_delete_comment" else "delete_comment" in
                         let logged_reason = if is_admin_override then "Admin Intervention: " ^ reason else reason in
                         let%lwt _ = Db.log_mod_action db community.id user_id action_type (Some comment_id) logged_reason in
+                        (* Notify comment author — fetch both owner and post_id for the notification link. *)
+                        let%lwt _ = match%lwt Db.get_comment_owner db comment_id with
+                          | Ok author_id ->
+                              (match%lwt Db.get_comment_post_id db comment_id with
+                              | Ok pid ->
+                                  let msg = "Your comment was removed by a moderator. Reason: " ^ reason in
+                                  Db.create_notif db author_id (Some pid) "mod_action" msg
+                              | Error _ -> Lwt.return (Ok ()))
+                          | Error _ -> Lwt.return (Ok ())
+                        in
                         let referer = safe_local_redirect (match Dream.header request "Referer" with Some r -> r | None -> "/c/" ^ slug) in
                         Dream.redirect request referer)
           )
@@ -1060,9 +1116,18 @@ let create_comment_handler request =
                         let%lwt _ = match target_user with
                           | Ok target_id when target_id <> user_id ->
                               let msg = if parent_id_opt = None then username ^ " replied to your post." else username ^ " replied to your comment." in
-                              Db.create_notif db target_id post_id msg
+                              Db.create_notif db target_id (Some post_id) "comment_reply" msg
                           | _ -> Lwt.return (Ok ())
                         in
+                        (* Fan-out @mention notifications for comment body — best-effort, skips self. *)
+                        let%lwt () = Lwt_list.iter_s (fun uname ->
+                          match%lwt Db.get_user_by_username db uname with
+                          | Ok (Some mentioned) when mentioned.id <> user_id ->
+                              let msg = username ^ " mentioned you in a comment." in
+                              let%lwt _ = Db.create_notif db mentioned.id (Some post_id) "mention" msg in
+                              Lwt.return_unit
+                          | _ -> Lwt.return_unit
+                        ) (extract_mentions content) in
                         Dream.redirect request ("/p/" ^ string_of_int post_id)
                     | Error err -> Dream.html (Pages.msg_page ~user:username ~title:"Error" ~message:("Database error: " ^ err) ~alert_type:"error" ~return_url:("/p/" ^ string_of_int post_id) request)))
             | Ok None -> Dream.html (Pages.msg_page ~user:username ~title:"Post Not Found" ~message:"The post you tried to comment on could not be found." ~alert_type:"error" ~return_url:"/" request)
@@ -1427,6 +1492,8 @@ let ban_user_handler request =
       Dream.sql request (fun db ->
         match%lwt Db.ban_user db user_id_to_ban with
         | Ok () ->
+            (* Notify banned user — best-effort; no post to link to. *)
+            let%lwt _ = Db.create_notif db user_id_to_ban None "mod_action" "You have been globally banned by an administrator." in
             (* Redirect back to the profile page rather than "/" so the admin
                immediately sees the updated 🚫 badge and the Unban button. *)
             let target = safe_local_redirect (match Dream.header request "Referer" with Some r -> r | None -> "/") in

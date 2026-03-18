@@ -185,10 +185,11 @@ ALTER SEQUENCE public.mod_actions_id_seq OWNED BY public.mod_actions.id;
 CREATE TABLE public.notifications (
     id integer NOT NULL,
     user_id integer NOT NULL,
-    post_id integer NOT NULL,
+    post_id integer,
     message text NOT NULL,
     is_read boolean DEFAULT false NOT NULL,
-    created_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP NOT NULL
+    created_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    notif_type character varying(50) DEFAULT 'comment_reply'::character varying NOT NULL
 );
 
 
@@ -774,4 +775,5 @@ ALTER TABLE ONLY public.posts
 INSERT INTO public.schema_migrations (version) VALUES
     ('20260317133145'),
     ('20260317142357'),
-    ('20260317170540');
+    ('20260317170540'),
+    ('20260318120000');

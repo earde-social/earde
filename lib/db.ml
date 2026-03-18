@@ -37,7 +37,8 @@ type comment = {
 type notification = {
   id : int;
   user_id : int;
-  post_id : int;
+  post_id : int option;
+  notif_type : string;
   message : string;
   is_read : bool;
   created_at : string;
@@ -312,12 +313,14 @@ end
 module Post = struct
   let create_post_query =
     let open Caqti_request.Infix in
-    (Caqti_type.(t4 string (option string) (option string) (t2 int int)) ->. Caqti_type.unit)
-    "INSERT INTO posts (title, url, content, community_id, user_id) VALUES ($1, $2, $3, $4, $5)"
+    (* RETURNING id lets the handler fan-out @mention notifications without a
+       second query — avoids a race between INSERT and SELECT MAX(id). *)
+    (Caqti_type.(t4 string (option string) (option string) (t2 int int)) ->! Caqti_type.int)
+    "INSERT INTO posts (title, url, content, community_id, user_id) VALUES ($1, $2, $3, $4, $5) RETURNING id"
 
   let create_post (module C : Caqti_lwt.CONNECTION) title url content community_id user_id =
-    C.exec create_post_query (title, url, content, (community_id, user_id)) >>= function
-    | Ok () -> Lwt.return (Ok ())
+    C.find create_post_query (title, url, content, (community_id, user_id)) >>= function
+    | Ok id -> Lwt.return (Ok id)
     | Error err -> Lwt.return (Error (Caqti_error.show err))
 
   let get_post_by_id_query =
@@ -907,12 +910,14 @@ end
 module Notification = struct
   let get_notifications_query =
     let open Caqti_request.Infix in
-    (Caqti_type.int ->* Caqti_type.(t6 int int int string bool string))
-    "SELECT id, user_id, post_id, message, is_read, created_at::text FROM notifications WHERE user_id = $1 ORDER BY created_at DESC LIMIT 50"
+    (* Caqti arity limit: encode 7 columns as t2(t4, t3) nested tuples.
+       post_id is nullable since ban notifications have no associated post. *)
+    (Caqti_type.int ->* Caqti_type.(t2 (t4 int int (option int) string) (t3 string bool string)))
+    "SELECT id, user_id, post_id, notif_type, message, is_read, created_at::text FROM notifications WHERE user_id = $1 ORDER BY created_at DESC LIMIT 50"
 
   let get_notifications (module C: Caqti_lwt.CONNECTION) user_id =
     C.collect_list get_notifications_query user_id >>= function
-    | Ok rows -> Lwt.return (Ok (List.map (fun (id, user_id, post_id, message, is_read, created_at) -> {id; user_id; post_id; message; is_read; created_at}) rows))
+    | Ok rows -> Lwt.return (Ok (List.map (fun ((id, user_id, post_id, notif_type), (message, is_read, created_at)) -> {id; user_id; post_id; notif_type; message; is_read; created_at}) rows))
     | Error e -> Lwt.return (Error (Caqti_error.show e))
 
   let count_unread_notifs_query =
@@ -937,11 +942,11 @@ module Notification = struct
 
   let create_notif_query =
     let open Caqti_request.Infix in
-    (Caqti_type.(t3 int int string) ->. Caqti_type.unit)
-    "INSERT INTO notifications (user_id, post_id, message) VALUES ($1, $2, $3)"
+    (Caqti_type.(t4 int (option int) string string) ->. Caqti_type.unit)
+    "INSERT INTO notifications (user_id, post_id, notif_type, message) VALUES ($1, $2, $3, $4)"
 
-  let create_notif (module C: Caqti_lwt.CONNECTION) user_id post_id message =
-    C.exec create_notif_query (user_id, post_id, message) >>= function
+  let create_notif (module C: Caqti_lwt.CONNECTION) user_id post_id_opt notif_type message =
+    C.exec create_notif_query (user_id, post_id_opt, notif_type, message) >>= function
     | Ok () -> Lwt.return (Ok())
     | Error e -> Lwt.return (Error (Caqti_error.show e))
 
@@ -964,6 +969,16 @@ module Notification = struct
 
   let get_comment_owner (module C: Caqti_lwt.CONNECTION) cid =
     C.find_opt get_comment_owner_query cid >>= function
+    | Ok (Some id) -> Lwt.return (Ok id)
+    | _ -> Lwt.return (Error "not found")
+
+  let get_comment_post_id_query =
+    let open Caqti_request.Infix in
+    (Caqti_type.int ->? Caqti_type.int)
+    "SELECT post_id FROM comments WHERE id = $1"
+
+  let get_comment_post_id (module C: Caqti_lwt.CONNECTION) cid =
+    C.find_opt get_comment_post_id_query cid >>= function
     | Ok (Some id) -> Lwt.return (Ok id)
     | _ -> Lwt.return (Error "not found")
 end
@@ -1293,6 +1308,7 @@ let mark_notifs_read = Notification.mark_notifs_read
 let create_notif = Notification.create_notif
 let get_post_owner = Notification.get_post_owner
 let get_comment_owner = Notification.get_comment_owner
+let get_comment_post_id = Notification.get_comment_post_id
 
 let log_page_view = Analytics.log_page_view
 let touch_user_active = Analytics.touch_user_active

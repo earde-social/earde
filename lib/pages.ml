@@ -1535,21 +1535,34 @@ let settings_page ?user bio avatar_url request =
 let notifications_page ?user (notifs : Db.notification list) request =
   let render_notif (n : Db.notification) =
     let bg_color = if n.is_read then "bg-white" else "bg-teal-50 border-l-4 border-[#0D9488]" in
-
-    let len = String.length n.message in
-    let is_post = len >= 5 && String.sub n.message (len - 5) 5 = "post." in
-    let icon = if is_post then "📝" else "💬" in
-
-    Printf.sprintf "
-    <a href='/p/%d' onclick=\"this.classList.remove('bg-teal-50', 'border-l-4', 'border-[#0D9488]'); this.classList.add('bg-white');\" class='block %s p-4 rounded-lg border border-gray-200 hover:shadow-md transition mb-3'>
+    let icon = match n.notif_type with
+      | "mention"    -> "&#64;"   (* @ symbol — avoids mojibake in Printf *)
+      | "mod_action" -> "&#9888;" (* ⚠ warning sign *)
+      | _ ->
+          (* Legacy comment_reply: distinguish post vs comment reply by message suffix. *)
+          let len = String.length n.message in
+          if len >= 5 && String.sub n.message (len - 5) 5 = "post." then "&#128221;" (* 📝 *)
+          else "&#128172;" (* 💬 *)
+    in
+    let inner = Printf.sprintf "
         <div class='flex items-center'>
             <div class='text-2xl mr-4'>%s</div>
             <div>
                 <p class='text-gray-900 font-medium'>%s</p>
                 <p class='text-xs text-gray-500 mt-1'>%s</p>
             </div>
-        </div>
-    </a>" n.post_id bg_color icon (Components.html_escape n.message) (Components.time_ago n.created_at)
+        </div>" icon (Components.html_escape n.message) (Components.time_ago n.created_at)
+    in
+    (* Mod-action notifications without a post link render as non-clickable divs. *)
+    match n.post_id with
+    | Some pid ->
+        Printf.sprintf "
+    <a href='/p/%d' onclick=\"this.classList.remove('bg-teal-50','border-l-4','border-[#0D9488]');this.classList.add('bg-white');\" class='block %s p-4 rounded-lg border border-gray-200 hover:shadow-md transition mb-3'>%s
+    </a>" pid bg_color inner
+    | None ->
+        Printf.sprintf "
+    <div class='block %s p-4 rounded-lg border border-gray-200 mb-3'>%s
+    </div>" bg_color inner
   in
   let list_html =
     if notifs = [] then "<div class='text-center py-12 text-gray-500 bg-white rounded border border-dashed'>No notifications yet.</div>"
