@@ -36,6 +36,7 @@ let () =
   @@ Earde.Handlers.analytics_middleware
   @@ Dream.router [
     Dream.get "/" Earde.Handlers.home_handler;
+    Dream.get "/all" Earde.Handlers.global_feed_handler;
     Dream.get "/new-community" Earde.Handlers.new_community_page;
     Dream.post "/communities" Earde.Handlers.create_community_handler;
     Dream.post "/join" Earde.Handlers.join_community_handler;

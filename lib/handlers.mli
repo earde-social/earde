@@ -21,6 +21,7 @@ val reset_password_handler : Dream.handler
 
 (** === CORE FEED === *)
 val home_handler : Dream.handler
+val global_feed_handler : Dream.handler
 val search_handler : Dream.handler
 
 (** === COMMUNITY === *)

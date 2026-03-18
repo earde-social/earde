@@ -60,6 +60,7 @@ end
 module Post : sig
   val create_post : (module Caqti_lwt.CONNECTION) -> string -> string option -> string option -> int -> int -> (unit, string) result Lwt.t
   val get_all_posts : (module Caqti_lwt.CONNECTION) -> string -> int -> int -> (post list, string) result Lwt.t
+  val get_personalized_feed : (module Caqti_lwt.CONNECTION) -> int -> string -> int -> int -> (post list, string) result Lwt.t
   val get_posts_by_community : (module Caqti_lwt.CONNECTION) -> int -> string -> int -> int -> (post list, string) result Lwt.t
   val get_post_by_id : (module Caqti_lwt.CONNECTION) -> int -> (post option, string) result Lwt.t
   val get_posts_by_user : (module Caqti_lwt.CONNECTION) -> int -> (post list, string) result Lwt.t
@@ -185,6 +186,7 @@ val community_get_banned_users : (module Caqti_lwt.CONNECTION) -> int -> (user l
 
 val create_post : (module Caqti_lwt.CONNECTION) -> string -> string option -> string option -> int -> int -> (unit, string) result Lwt.t
 val get_all_posts : (module Caqti_lwt.CONNECTION) -> string -> int -> int -> (post list, string) result Lwt.t
+val get_personalized_feed : (module Caqti_lwt.CONNECTION) -> int -> string -> int -> int -> (post list, string) result Lwt.t
 val get_posts_by_community : (module Caqti_lwt.CONNECTION) -> int -> string -> int -> int -> (post list, string) result Lwt.t
 val get_post_by_id : (module Caqti_lwt.CONNECTION) -> int -> (post option, string) result Lwt.t
 val get_posts_by_user : (module Caqti_lwt.CONNECTION) -> int -> (post list, string) result Lwt.t

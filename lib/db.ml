@@ -464,6 +464,39 @@ module Post = struct
     C.collect_list search_posts_query (term, limit, offset) >>= function
     | Ok rows -> Lwt.return (Ok (List.map map_post_row rows))
     | Error err -> Lwt.return (Error (Caqti_error.show err))
+
+  (* Personalized feed: identical HN gravity to get_all_posts but filtered to
+     communities the user has joined. JOIN on community_members instead of a
+     subquery — avoids a correlated scan per post on large datasets. *)
+  let get_personalized_feed (module C : Caqti_lwt.CONNECTION) user_id sort_mode limit offset =
+    with_query_timer ~name:"get_personalized_feed" (fun () ->
+      let order_clause = match sort_mode with
+        | "new" -> "ORDER BY p.created_at DESC"
+        | "top" -> "ORDER BY score DESC, p.created_at DESC"
+        | _ -> "ORDER BY (COALESCE(SUM(v.direction), 0) + 1.0) / POWER(EXTRACT(EPOCH FROM (NOW() - p.created_at))/3600.0 + 2.0, 1.5) DESC"
+      in
+      let query_str = Printf.sprintf
+        "SELECT p.id, p.title, p.url, p.content, p.community_id, p.user_id, u.username, a.slug, p.created_at::text,
+                COALESCE(SUM(v.direction), 0) as score,
+                (SELECT COUNT(*) FROM comments c WHERE c.post_id = p.id) as comment_count
+         FROM posts p
+         JOIN users u ON p.user_id = u.id
+         JOIN communities a ON p.community_id = a.id
+         JOIN community_members cm ON p.community_id = cm.community_id AND cm.user_id = $1
+         LEFT JOIN post_votes v ON p.id = v.post_id
+         GROUP BY p.id, u.username, a.slug
+         %s
+         LIMIT $2 OFFSET $3" order_clause
+      in
+      let query =
+        let open Caqti_request.Infix in
+        (Caqti_type.(t3 int int int) ->* post_row_type) query_str
+      in
+      C.collect_list query (user_id, limit, offset)
+      >>= function
+      | Ok rows -> Lwt.return (Ok (List.map map_post_row rows))
+      | Error err -> Lwt.return (Error (Caqti_error.show err))
+    )
 end
 
 module Comment = struct
@@ -1220,6 +1253,7 @@ let is_user_admin = User.is_user_admin
 let create_post = Post.create_post
 let get_post_by_id = Post.get_post_by_id
 let get_all_posts = Post.get_all_posts
+let get_personalized_feed = Post.get_personalized_feed
 let get_posts_by_community = Post.get_posts_by_community
 let get_posts_by_user = Post.get_posts_by_user
 let vote_post = Post.vote_post

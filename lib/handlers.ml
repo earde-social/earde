@@ -217,6 +217,46 @@ let reset_password_handler request =
 let home_handler request =
   let user = Dream.session_field request "username" in
   let user_id = match Dream.session_field request "user_id" with Some id -> int_of_string id | None -> 0 in
+  let is_logged_in = user_id > 0 in
+
+  let page = match Dream.query request "page" with
+    | Some p_str -> (try int_of_string p_str with _ -> 1)
+    | None -> 1
+  in
+  let sort_mode = match Dream.query request "sort" with
+    | Some s when s = "new" || s = "top" -> s
+    | _ -> "hot"
+  in
+  let limit = 20 in
+  let offset = (max 1 page - 1) * limit in
+
+  Dream.sql request (fun db ->
+    (* Logged-in users get a personalised feed from their joined communities;
+       guests fall back to the global feed so the page is never empty. *)
+    let%lwt posts =
+      if is_logged_in then Db.get_personalized_feed db user_id sort_mode limit offset
+      else Db.get_all_posts db sort_mode limit offset
+    in
+    let feed_type = if is_logged_in then "home" else "all" in
+    let%lwt user_votes =
+      if user_id > 0 then Db.get_user_post_votes db user_id else Lwt.return_ok []
+    in
+    let%lwt user_communities =
+      if user_id > 0 then Db.get_user_communities db user_id else Lwt.return_ok []
+    in
+    let%lwt admin_usernames_res = Db.get_admin_usernames db in
+    let admin_usernames = match admin_usernames_res with Ok l -> l | Error _ -> [] in
+    let%lwt moderated_communities_res = if user_id > 0 then Db.get_moderated_communities db user_id else Lwt.return_ok [] in
+    let moderated_communities = match moderated_communities_res with Ok l -> l | Error _ -> [] in
+
+    match posts, user_votes, user_communities with
+    | Ok p, Ok v, Ok a -> Dream.html (Pages.index ?user v page sort_mode ~feed_type ~admin_usernames ~moderated_communities p a request)
+    | Error e, _, _ | _, Error e, _ | _, _, Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:("Database error: " ^ e) ~alert_type:"error" ~return_url:"/" request)
+  )
+
+let global_feed_handler request =
+  let user = Dream.session_field request "username" in
+  let user_id = match Dream.session_field request "user_id" with Some id -> int_of_string id | None -> 0 in
 
   let page = match Dream.query request "page" with
     | Some p_str -> (try int_of_string p_str with _ -> 1)
@@ -243,7 +283,7 @@ let home_handler request =
     let moderated_communities = match moderated_communities_res with Ok l -> l | Error _ -> [] in
 
     match posts, user_votes, user_communities with
-    | Ok p, Ok v, Ok a -> Dream.html (Pages.index ?user v page sort_mode ~admin_usernames ~moderated_communities p a request)
+    | Ok p, Ok v, Ok a -> Dream.html (Pages.index ?user v page sort_mode ~feed_type:"all" ~admin_usernames ~moderated_communities p a request)
     | Error e, _, _ | _, Error e, _ | _, _, Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:("Database error: " ^ e) ~alert_type:"error" ~return_url:"/" request)
   )
 

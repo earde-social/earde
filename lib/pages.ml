@@ -2,8 +2,10 @@ open Db
 
 (* === CORE FEED === *)
 
-let index ?user user_votes current_page sort_mode ~admin_usernames ~moderated_communities (posts : post list) (user_communities : community list) request =
+let index ?user user_votes current_page sort_mode ~feed_type ~admin_usernames ~moderated_communities (posts : post list) (user_communities : community list) request =
   let has_next = List.length posts = 20 in
+  (* base_url drives pagination and sort links so they stay within the correct feed *)
+  let base_url = if feed_type = "home" then "/" else "/all" in
 
   let posts_html =
     if posts = [] then
@@ -11,17 +13,28 @@ let index ?user user_votes current_page sort_mode ~admin_usernames ~moderated_co
     else String.concat "\n" (List.map (Components.render_post ~admin_usernames request user_votes) posts)
   in
 
-  let prev_btn = if current_page <= 1 then "" else Printf.sprintf "<a href='/?sort=%s&page=%d' class='bg-white border border-gray-300 text-gray-700 px-4 py-2 rounded font-bold hover:bg-gray-50 transition'>&larr; Prev</a>" sort_mode (current_page - 1) in
-  let next_btn = if not has_next then "" else Printf.sprintf "<a href='/?sort=%s&page=%d' class='bg-white border border-gray-300 text-gray-700 px-4 py-2 rounded font-bold hover:bg-gray-50 transition'>Next &rarr;</a>" sort_mode (current_page + 1) in
+  let prev_btn = if current_page <= 1 then "" else Printf.sprintf "<a href='%s?sort=%s&page=%d' class='bg-white border border-gray-300 text-gray-700 px-4 py-2 rounded font-bold hover:bg-gray-50 transition'>&larr; Prev</a>" base_url sort_mode (current_page - 1) in
+  let next_btn = if not has_next then "" else Printf.sprintf "<a href='%s?sort=%s&page=%d' class='bg-white border border-gray-300 text-gray-700 px-4 py-2 rounded font-bold hover:bg-gray-50 transition'>Next &rarr;</a>" base_url sort_mode (current_page + 1) in
 
   let get_sort_class s = if s = sort_mode then "text-[#0D9488] border-b-2 border-[#0D9488] pb-1" else "text-gray-500 hover:text-gray-800 transition" in
   let sort_menu = Printf.sprintf "
     <div class='flex space-x-6 mb-6 px-2 border-b border-gray-200'>
-        <a href='/?sort=hot' class='font-bold text-sm tracking-wide uppercase %s'>🔥 Hot</a>
-        <a href='/?sort=new' class='font-bold text-sm tracking-wide uppercase %s'>✨ New</a>
-        <a href='/?sort=top' class='font-bold text-sm tracking-wide uppercase %s'>🏆 Top</a>
-    </div>" (get_sort_class "hot") (get_sort_class "new") (get_sort_class "top")
+        <a href='%s?sort=hot' class='font-bold text-sm tracking-wide uppercase %s'>🔥 Hot</a>
+        <a href='%s?sort=new' class='font-bold text-sm tracking-wide uppercase %s'>✨ New</a>
+        <a href='%s?sort=top' class='font-bold text-sm tracking-wide uppercase %s'>🏆 Top</a>
+    </div>" base_url (get_sort_class "hot") base_url (get_sort_class "new") base_url (get_sort_class "top")
   in
+
+  (* Feed toggle: active tab gets a teal bottom border; inactive is muted *)
+  let get_tab_class t = if t = feed_type then "font-bold text-[#0D9488] border-b-2 border-[#0D9488] pb-2" else "font-medium text-gray-500 hover:text-gray-800 pb-2 transition" in
+  let feed_tabs = Printf.sprintf "
+    <div class='flex space-x-6 mb-4 border-b border-gray-100'>
+        <a href='/' class='%s'>Home</a>
+        <a href='/all' class='%s'>All</a>
+    </div>" (get_tab_class "home") (get_tab_class "all")
+  in
+
+  let feed_title = if feed_type = "home" then "Home" else "All" in
 
   let sidebar_html = Components.left_sidebar ?user ~moderated_communities user_communities in
 
@@ -30,8 +43,9 @@ let index ?user user_votes current_page sort_mode ~admin_usernames ~moderated_co
         <div class='w-full lg:w-1/4 hidden lg:block'><div class='sticky top-20'>%s</div></div>
         <div class='w-full lg:w-2/4 min-w-0'>
             <div class='flex justify-between items-center mb-4'>
-                <h1 class='text-2xl font-bold text-gray-900'>Global Feed</h1>
+                <h1 class='text-2xl font-bold text-gray-900'>%s</h1>
             </div>
+            %s
             <div class='block lg:hidden mb-6 bg-blue-50 border border-blue-100 rounded-lg p-4 shadow-sm'><h3 class='text-sm font-bold text-blue-900 mb-1'>Talk to me!</h3><p class='text-xs text-blue-800 mb-3 leading-relaxed'>For feature requests, ideas, critiques, if you are a Reddit mod and want to become a mod on the specular community here, or just to say hi!</p><a href='https://t.me/tolwiz' target='_blank' rel='noopener noreferrer' class='w-full flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold py-2 rounded-md transition-colors'>&#128172; Text me (the dev)!</a></div>
             %s <div>%s</div>
             <div class='flex justify-between items-center mt-8 mb-4'>
@@ -40,9 +54,9 @@ let index ?user user_votes current_page sort_mode ~admin_usernames ~moderated_co
         </div>
         <div class='w-full lg:w-1/4'><div class='bg-white p-5 rounded-lg border border-gray-200 sticky top-20'><h2 class='text-sm font-semibold text-gray-800 mb-1'>Earde</h2><p class='text-xs text-gray-500 mb-4'>Your personal frontpage.</p><div class='flex flex-col space-y-2'><a href='/new-post' class='w-full bg-[#0D9488] text-white text-center py-2 rounded-md font-semibold text-sm hover:bg-teal-700 transition'>Create Post</a><a href='/new-community' class='w-full bg-white text-[#0D9488] border border-[#0D9488] text-center py-2 rounded-md font-semibold text-sm hover:bg-teal-50 transition'>Create Community</a></div></div><div class='mt-6 bg-blue-50 border border-blue-100 rounded-lg p-4 shadow-sm'><h3 class='text-sm font-bold text-blue-900 mb-1'>Talk to me!</h3><p class='text-xs text-blue-800 mb-3 leading-relaxed'>For feature requests, ideas, critiques, if you are a Reddit mod and want to become a mod on the specular community here, or just to say hi!</p><a href='https://t.me/tolwiz' target='_blank' rel='noopener noreferrer' class='w-full flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold py-2 rounded-md transition-colors'>&#128172; Text me (the dev)!</a></div></div>
     </div>"
-    sidebar_html sort_menu posts_html prev_btn current_page next_btn
+    sidebar_html feed_title feed_tabs sort_menu posts_html prev_btn current_page next_btn
   in
-  Components.layout ?user ~request ~title:"Home" content
+  Components.layout ?user ~request ~title:feed_title content
 
 (* === AUTHENTICATION === *)
 

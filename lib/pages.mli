@@ -3,7 +3,7 @@
     standalone HTML with no shared nav, intentionally isolated from the main shell. *)
 
 (** === CORE FEED === *)
-val index : ?user:string -> (int * int) list -> int -> string -> admin_usernames:string list -> moderated_communities:Db.community list -> Db.post list -> Db.community list -> Dream.request -> string
+val index : ?user:string -> (int * int) list -> int -> string -> feed_type:string -> admin_usernames:string list -> moderated_communities:Db.community list -> Db.post list -> Db.community list -> Dream.request -> string
 
 (** === AUTHENTICATION === *)
 val signup_form : ?user:string -> Dream.request -> string
