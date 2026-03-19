@@ -41,9 +41,10 @@ module Rate_limit = struct
     let endpoint = Dream.target request in
     match%lwt Dream.sql request (fun db -> Db.Rate_limit.check db ip endpoint) with
     | Ok `Blocked ->
-        Dream.response ~status:`Too_Many_Requests
-          "Too many attempts. Try again later."
-        |> Lwt.return
+        let user = Dream.session_field request "username" in
+        Dream.html (Pages.msg_page ?user ~title:"Too Many Attempts"
+          ~message:"Too many attempts. Please try again later."
+          ~alert_type:"error" ~return_url:(Dream.target request) request)
     | Ok `Allowed -> inner_handler request
     | Error _ -> inner_handler request
 end
