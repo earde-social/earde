@@ -134,6 +134,18 @@ module Community = struct
     | Ok None -> Lwt.return (Ok None)
     | Error err -> Lwt.return (Error (Caqti_error.show err))
 
+  let get_by_id_query =
+    let open Caqti_request.Infix in
+    (Caqti_type.int ->? community_row_type)
+    "SELECT id, slug, name, description, rules, avatar_url, banner_url FROM communities WHERE id = $1"
+
+  let get_community_by_id (module C : Caqti_lwt.CONNECTION) id =
+    C.find_opt get_by_id_query id
+    >>= function
+    | Ok (Some row) -> Lwt.return (Ok (Some (map_community_row row)))
+    | Ok None -> Lwt.return (Ok None)
+    | Error err -> Lwt.return (Error (Caqti_error.show err))
+
   let search_communities_query =
     let open Caqti_request.Infix in
     (Caqti_type.(t3 string int int) ->* community_row_type)
@@ -1260,6 +1272,7 @@ end
 let get_all_communities = Community.get_all_communities
 let create_community = Community.create_community
 let get_community_by_slug = Community.get_community_by_slug
+let get_community_by_id = Community.get_community_by_id
 let search_communities = Community.search_communities
 let update_community_details = Community.update_community_details
 

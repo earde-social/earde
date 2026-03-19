@@ -397,7 +397,9 @@ let create_community_handler request =
                       Db.join_community db user_id community.id
                   | _ -> Lwt.return (Ok ())
                 in
-                Dream.redirect request "/"
+                (* Go straight to the new community page — "/" would force the creator
+                   to navigate back manually and lose the "just created" affordance. *)
+                Dream.redirect request ("/c/" ^ slug)
             | Error _ -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Error" ~message:"Could not create community. The URL slug may already be taken." ~alert_type:"error" ~return_url:"/new-community" request)
           )
       | _ -> Dream.respond ~status:`Bad_Request (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Form Error" ~message:"Your form submission was invalid. Please try again." ~alert_type:"error" ~return_url:"/new-community" request)
@@ -684,6 +686,8 @@ let ban_community_user_handler request =
                   if target_is_admin && not is_admin then
                     Dream.html (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Action Denied" ~message:"You cannot ban a Global Administrator." ~alert_type:"error" ~return_url:"/" request)
                   else begin
+                    (* Fetch community slug before the ban so we can redirect to /c/slug after. *)
+                    let%lwt community_res = Db.get_community_by_id db community_id in
                     let%lwt _ = Db.community_ban_user db target_user.id community_id in
                     (* Admin acting without mod role logged distinctly to prevent spoofing the mod log. *)
                     let is_admin_override = is_admin && not is_community_mod in
@@ -693,8 +697,8 @@ let ban_community_user_handler request =
                     (* Notify banned user — no post_id since a ban is not tied to a single post. *)
                     let ban_msg = "You have been banned from a community. Reason: " ^ reason in
                     let%lwt _ = Db.create_notif db target_user.id None "mod_action" ban_msg in
-                    let referer = safe_local_redirect (match Dream.header request "Referer" with Some r -> r | None -> "/") in
-                    Dream.redirect request referer
+                    let target = match community_res with Ok (Some c) -> "/c/" ^ c.slug | _ -> "/" in
+                    Dream.redirect request target
                   end
               | Ok None -> Dream.html (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"User Not Found" ~message:("No user was found with the username u/" ^ target_username ^ ".") ~alert_type:"error" ~return_url:"/" request)
               | Error e -> Dream.html (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Error" ~message:("A database error occurred: " ^ e) ~alert_type:"error" ~return_url:"/" request))
@@ -819,7 +823,9 @@ let create_post_handler request =
                                 Lwt.return_unit
                             | _ -> Lwt.return_unit
                           ) (extract_mentions text) in
-                          Dream.redirect request "/"
+                          (* Redirect to the new post rather than "/" so the author
+                             immediately sees their submission with its canonical URL. *)
+                          Dream.redirect request ("/p/" ^ string_of_int new_post_id)
                       | Error err -> Dream.html (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Error" ~message:("Error: " ^ err) ~alert_type:"error" ~return_url:"/" request)))
               | Ok false ->
                   Dream.html (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Not a Member" ~message:"You must join this community before you can post in it." ~alert_type:"error" ~return_url:"/" request)
@@ -1037,6 +1043,9 @@ let mod_delete_comment_handler request =
                 if not (is_admin || is_community_mod) then
                     Dream.respond ~status:`Forbidden (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Forbidden" ~message:"You are not a moderator of this community." ~alert_type:"error" ~return_url:("/c/" ^ slug) request)
                 else
+                    (* Fetch post_id before deletion — row still exists at this point,
+                       and we need it for both the notification link and the redirect target. *)
+                    let%lwt post_id_res = Db.get_comment_post_id db comment_id in
                     let%lwt delete_res = Db.mod_delete_comment db comment_id in
                     (match delete_res with
                     | Error err ->
@@ -1048,18 +1057,18 @@ let mod_delete_comment_handler request =
                         let action_type = if is_admin_override then "admin_delete_comment" else "delete_comment" in
                         let logged_reason = if is_admin_override then "Admin Intervention: " ^ reason else reason in
                         let%lwt _ = Db.log_mod_action db community.id user_id action_type (Some comment_id) logged_reason in
-                        (* Notify comment author — fetch both owner and post_id for the notification link. *)
+                        (* Notify comment author — reuse the post_id already fetched above. *)
                         let%lwt _ = match%lwt Db.get_comment_owner db comment_id with
                           | Ok author_id ->
-                              (match%lwt Db.get_comment_post_id db comment_id with
+                              (match post_id_res with
                               | Ok pid ->
                                   let msg = "Your comment was removed by a moderator. Reason: " ^ reason in
                                   Db.create_notif db author_id (Some pid) "mod_action" msg
                               | Error _ -> Lwt.return (Ok ()))
                           | Error _ -> Lwt.return (Ok ())
                         in
-                        let referer = safe_local_redirect (match Dream.header request "Referer" with Some r -> r | None -> "/c/" ^ slug) in
-                        Dream.redirect request referer)
+                        let target = match post_id_res with Ok pid -> "/p/" ^ string_of_int pid | Error _ -> "/c/" ^ slug in
+                        Dream.redirect request target)
           )
       | _ ->
           Dream.respond ~status:`Bad_Request (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Form Error" ~message:"Invalid form submission." ~alert_type:"error" ~return_url:("/c/" ^ slug) request)
@@ -1189,14 +1198,17 @@ let delete_comment_handler request =
             if blocked_by_immunity then
               Dream.respond ~status:`Forbidden "⛔ You cannot moderate an Admin."
             else
+            (* Fetch post_id before deletion so we can redirect to the post page regardless
+               of whether the delete succeeds — comment row may be gone after the call. *)
+            let%lwt post_id_res = Db.get_comment_post_id db comment_id in
             let%lwt db_action =
               if is_admin || is_mod then Db.admin_delete_comment db ~label:"[removed by admin]" comment_id
               else Db.soft_delete_comment db comment_id user_id
             in
             match db_action with
             | Ok () ->
-                let referer = safe_local_redirect (match Dream.header request "Referer" with Some r -> r | None -> "/") in
-                Dream.redirect request referer
+                let target = match post_id_res with Ok pid -> "/p/" ^ string_of_int pid | Error _ -> "/" in
+                Dream.redirect request target
             | Error err -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Error" ~message:("Database error: " ^ err) ~alert_type:"error" ~return_url:"/" request)
           )
       | _ -> Dream.respond ~status:`Bad_Request (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Form Error" ~message:"Invalid form submission." ~alert_type:"error" ~return_url:"/" request)

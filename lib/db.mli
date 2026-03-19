@@ -39,6 +39,7 @@ module Community : sig
   val get_all_communities : (module Caqti_lwt.CONNECTION) -> (community list, string) result Lwt.t
   val create_community : (module Caqti_lwt.CONNECTION) -> string -> string -> string option -> (unit, string) result Lwt.t
   val get_community_by_slug : (module Caqti_lwt.CONNECTION) -> string -> (community option, string) result Lwt.t
+  val get_community_by_id : (module Caqti_lwt.CONNECTION) -> int -> (community option, string) result Lwt.t
   val search_communities : (module Caqti_lwt.CONNECTION) -> string -> int -> int -> (community list, string) result Lwt.t
   val update_community_details : (module Caqti_lwt.CONNECTION) -> int -> string option -> string option -> string option -> string option -> (unit, string) result Lwt.t
 end
@@ -170,6 +171,7 @@ val is_user_admin : (module Caqti_lwt.CONNECTION) -> int -> (bool, string) resul
 val get_all_communities : (module Caqti_lwt.CONNECTION) -> (community list, string) result Lwt.t
 val create_community : (module Caqti_lwt.CONNECTION) -> string -> string -> string option -> (unit, string) result Lwt.t
 val get_community_by_slug : (module Caqti_lwt.CONNECTION) -> string -> (community option, string) result Lwt.t
+val get_community_by_id : (module Caqti_lwt.CONNECTION) -> int -> (community option, string) result Lwt.t
 val update_community_details : (module Caqti_lwt.CONNECTION) -> int -> string option -> string option -> string option -> string option -> (unit, string) result Lwt.t
 val join_community : (module Caqti_lwt.CONNECTION) -> int -> int -> (unit, string) result Lwt.t
 val leave_community : (module Caqti_lwt.CONNECTION) -> int -> int -> (unit, string) result Lwt.t
