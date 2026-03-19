@@ -60,13 +60,18 @@ let index ?user user_votes current_page sort_mode ~feed_type ~admin_usernames ~m
 
 (* === AUTHENTICATION === *)
 
-let signup_form ?user request =
+let signup_form ?user ?error request =
   let csrf_token = Dream.csrf_tag request in
+  let error_html = match error with
+    | None -> ""
+    | Some msg -> Printf.sprintf "<p class='text-sm text-red-600 bg-red-50 border border-red-200 rounded-md p-3'>%s</p>" msg
+  in
   let content = Printf.sprintf "
     <div class='max-w-md mx-auto bg-white p-8 rounded-lg shadow-md mt-10'>
         <h1 class='text-2xl font-bold mb-6 text-gray-800 text-center'>Join Earde</h1>
 
         <form action='/signup' method='POST' class='space-y-4'>
+            %s
             %s
 
             <div>
@@ -110,7 +115,7 @@ let signup_form ?user request =
             <a href='/login' class='font-medium text-[#0D9488] hover:text-[#0D9488]'>Log in</a>
         </div>
     </div>"
-    csrf_token
+    csrf_token error_html
   in
   Components.layout ?user ~request ~title:"Sign Up" content
 

@@ -45,6 +45,7 @@ end
 
 module User : sig
   val create_user : (module Caqti_lwt.CONNECTION) -> string -> string -> string -> string -> (unit, string) result Lwt.t
+  val user_exists : (module Caqti_lwt.CONNECTION) -> string -> string -> (bool, string) result Lwt.t
   val get_user_for_login : (module Caqti_lwt.CONNECTION) -> string -> ((int * string * string * string * bool * bool) option, string) result Lwt.t
   val anonymize_user : (module Caqti_lwt.CONNECTION) -> int -> (unit, string) result Lwt.t
   val get_user_public : (module Caqti_lwt.CONNECTION) -> string -> ((int * string * string * string option * string option) option, string) result Lwt.t
@@ -154,6 +155,7 @@ module PasswordReset : sig
 end
 
 val create_user : (module Caqti_lwt.CONNECTION) -> string -> string -> string -> string -> (unit, string) result Lwt.t
+val user_exists : (module Caqti_lwt.CONNECTION) -> string -> string -> (bool, string) result Lwt.t
 val get_user_for_login : (module Caqti_lwt.CONNECTION) -> string -> ((int * string * string * string * bool * bool) option, string) result Lwt.t
 val anonymize_user : (module Caqti_lwt.CONNECTION) -> int -> (unit, string) result Lwt.t
 val get_user_public : (module Caqti_lwt.CONNECTION) -> string -> ((int * string * string * string option * string option) option, string) result Lwt.t

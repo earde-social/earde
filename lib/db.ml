@@ -171,6 +171,17 @@ module User = struct
     | Ok () -> Lwt.return (Ok ())
     | Error e -> Lwt.return (Error (Caqti_error.show e))
 
+  (* Pre-insert uniqueness check avoids leaking raw Postgres constraint errors to the UI. *)
+  let user_exists_query =
+    let open Caqti_request.Infix in
+    (Caqti_type.(t2 string string) ->! Caqti_type.bool)
+    "SELECT EXISTS (SELECT 1 FROM users WHERE username = $1 OR email = $2)"
+
+  let user_exists (module C : Caqti_lwt.CONNECTION) username email =
+    C.find user_exists_query (username, email) >>= function
+    | Ok exists -> Lwt.return (Ok exists)
+    | Error e -> Lwt.return (Error (Caqti_error.show e))
+
   let get_user_for_login_query =
     let open Caqti_request.Infix in
     (Caqti_type.string ->? Caqti_type.(t6 int string string string bool bool))
@@ -1253,6 +1264,7 @@ let search_communities = Community.search_communities
 let update_community_details = Community.update_community_details
 
 let create_user = User.create_user
+let user_exists = User.user_exists
 let get_user_for_login = User.get_user_for_login
 let anonymize_user = User.anonymize_user
 let get_user_public = User.get_user_public

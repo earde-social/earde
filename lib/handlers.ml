@@ -91,6 +91,16 @@ let signup_handler request =
         Dream.html (Pages.msg_page ~title:"Validation Error" ~message:"Password must be at least 8 characters long." ~alert_type:"error" ~return_url:"/signup" request)
       else
 
+      (* Pre-check before the expensive argon2 hash — avoids leaking raw DB constraint errors. *)
+      let%lwt exists_result = Dream.sql request (fun db -> Db.user_exists db username email) in
+      (match exists_result with
+      | Error err ->
+          Dream.html (Pages.msg_page ~title:"Registration Failed" ~message:("Registration failed: " ^ err) ~alert_type:"error" ~return_url:"/signup" request)
+      | Ok true ->
+          let user = Dream.session_field request "username" in
+          Dream.html (Pages.signup_form ?user ~error:"This username or email is already taken." request)
+      | Ok false ->
+
       (match%lwt Auth.hash_password password with
       | Ok password_hash ->
 
@@ -109,7 +119,7 @@ let signup_handler request =
               Dream.redirect request "/"
           | Error err ->
               Dream.html (Pages.msg_page ~title:"Registration Failed" ~message:("Registration failed: " ^ err) ~alert_type:"error" ~return_url:"/signup" request))
-      | Error err -> Dream.html (Pages.msg_page ~title:"Security Error" ~message:("Security error: " ^ err) ~alert_type:"error" ~return_url:"/signup" request))
+      | Error err -> Dream.html (Pages.msg_page ~title:"Security Error" ~message:("Security error: " ^ err) ~alert_type:"error" ~return_url:"/signup" request)))
 
   | _ -> Dream.html (Pages.msg_page ~title:"Form Error" ~message:"Your form submission failed. The CSRF token was invalid or your session expired. Please try again." ~alert_type:"error" ~return_url:"/signup" request)
 
