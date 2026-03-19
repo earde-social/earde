@@ -311,9 +311,13 @@ let community_page ?user ~is_member ~is_current_user_mod ~is_current_user_top_mo
         <h2 class='font-bold text-gray-900 mb-1'>%s</h2>
         <div class='text-xs text-[#0D9488] font-mono mb-3'>/c/%s</div>
         <p class='text-sm text-gray-600'>%s</p>
+        <a href='/c/%s/modlog' class='mt-4 flex items-center gap-2 text-sm text-gray-400 hover:text-gray-600 transition-colors'>
+            <span>&#128220;</span><span>Public Modlog</span>
+        </a>
     </div>"
     (Components.html_escape community.name) (Components.html_escape community.slug)
     (Components.html_escape (Option.value ~default:"No description." community.description))
+    (Components.html_escape community.slug)
   in
 
   let rules_card =
@@ -1254,6 +1258,9 @@ let post_page ?user ~is_member ~is_current_user_mod ~mod_usernames ~admin_userna
         <p class='text-sm text-gray-600'>%s</p>
         %s
         <a href='/new-post?community=%s' class='bg-[#0D9488] text-white rounded-lg px-4 py-2 w-full block text-center mt-4 hover:bg-teal-700 transition text-sm font-semibold'>+ Create Post</a>
+        <a href='/c/%s/modlog' class='mt-2 flex items-center gap-2 text-sm text-gray-400 hover:text-gray-600 transition-colors'>
+            <span>&#128220;</span><span>Public Modlog</span>
+        </a>
         <div class='mt-4 pt-4 border-t border-gray-100'>
             <h3 class='text-xs font-bold text-gray-500 uppercase tracking-wider mb-2'>Moderators</h3>
             %s
@@ -1261,7 +1268,7 @@ let post_page ?user ~is_member ~is_current_user_mod ~mod_usernames ~admin_userna
     </div>"
     (Components.html_escape community.name) (Components.html_escape community.slug)
     (Components.html_escape (Option.value ~default:"No description." community.description))
-    post_rules_html (Components.html_escape community.slug) post_mods_html
+    post_rules_html (Components.html_escape community.slug) (Components.html_escape community.slug) post_mods_html
   in
 
   let content = Printf.sprintf "
