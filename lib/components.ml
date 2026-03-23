@@ -183,48 +183,52 @@ let layout ?(noindex=false) ?user ?request ~title content =
                 let score = parseInt(scoreSpan.innerText);
 
                 const upForm = container.firstElementChild;
-                const downForm = container.lastElementChild;
+                /* downForm may be absent when allow_downvotes=false — guard against
+                   lastElementChild being the score <span> rather than a vote form. */
+                const lastEl = container.lastElementChild;
+                const downForm = (lastEl && lastEl.tagName === 'FORM') ? lastEl : null;
 
-                const upBtn = upForm.querySelector(\"button\");
-                const downBtn = downForm.querySelector(\"button\");
+                const upBtn = upForm?.querySelector(\"button\");
+                const downBtn = downForm?.querySelector(\"button\");
 
-                const upInput = upForm.querySelector(\"input[name='direction']\");
-                const downInput = downForm.querySelector(\"input[name='direction']\");
+                const upInput = upForm?.querySelector(\"input[name='direction']\");
+                const downInput = downForm?.querySelector(\"input[name='direction']\");
 
                 const action = parseInt(formData.get(\"direction\"));
                 const isUpvoteBtn = form === upForm;
 
                 const resetColors = () => {
-                    upBtn.classList.remove(\"text-orange-500\");
-                    upBtn.classList.add(\"text-gray-400\", \"hover:text-orange-500\");
-                    downBtn.classList.remove(\"text-[#0D9488]\");
-                    downBtn.classList.add(\"text-gray-400\", \"hover:text-[#0D9488]\");
+                    upBtn?.classList.remove(\"text-orange-500\");
+                    upBtn?.classList.add(\"text-gray-400\", \"hover:text-orange-500\");
+                    downBtn?.classList.remove(\"text-[#0D9488]\");
+                    downBtn?.classList.add(\"text-gray-400\", \"hover:text-[#0D9488]\");
                 };
 
                 if (action === 1) {
-                    if (parseInt(downInput.value) === 0) score += 2;
+                    /* downInput===null means downvotes disabled → no prior downvote possible */
+                    if (downInput && parseInt(downInput.value) === 0) score += 2;
                     else score += 1;
                     resetColors();
-                    upBtn.classList.remove(\"text-gray-400\", \"hover:text-orange-500\");
-                    upBtn.classList.add(\"text-orange-500\");
-                    upInput.value = \"0\";
-                    downInput.value = \"-1\";
+                    upBtn?.classList.remove(\"text-gray-400\", \"hover:text-orange-500\");
+                    upBtn?.classList.add(\"text-orange-500\");
+                    if (upInput) upInput.value = \"0\";
+                    if (downInput) downInput.value = \"-1\";
                 }
                 else if (action === -1) {
-                    if (parseInt(upInput.value) === 0) score -= 2;
+                    if (upInput && parseInt(upInput.value) === 0) score -= 2;
                     else score -= 1;
                     resetColors();
-                    downBtn.classList.remove(\"text-gray-400\", \"hover:text-[#0D9488]\");
-                    downBtn.classList.add(\"text-[#0D9488]\");
-                    upInput.value = \"1\";
-                    downInput.value = \"0\";
+                    downBtn?.classList.remove(\"text-gray-400\", \"hover:text-[#0D9488]\");
+                    downBtn?.classList.add(\"text-[#0D9488]\");
+                    if (upInput) upInput.value = \"1\";
+                    if (downInput) downInput.value = \"0\";
                 }
                 else if (action === 0) {
                     if (isUpvoteBtn) score -= 1;
                     else score += 1;
                     resetColors();
-                    upInput.value = \"1\";
-                    downInput.value = \"-1\";
+                    if (upInput) upInput.value = \"1\";
+                    if (downInput) downInput.value = \"-1\";
                 }
 
                 scoreSpan.innerText = score;
@@ -481,7 +485,9 @@ let render_post ?(is_current_user_mod=false) ?(mod_usernames=[]) ?(admin_usernam
     | Some _ -> Printf.sprintf "<form action='/vote' method='POST' class='m-0 p-0'>%s<input type='hidden' name='post_id' value='%d'><input type='hidden' name='direction' value='%d'><button type='submit' class='%s font-bold text-sm leading-none'>▲</button></form>" csrf_token post.id up_action up_color
     | None -> "<a href='/login' class='text-gray-400 hover:text-orange-500 font-bold text-sm leading-none'>▲</a>"
   in
-  let downvote_html = match current_user with
+  let downvote_html =
+    if not post.allow_downvotes then ""
+    else match current_user with
     | Some _ -> Printf.sprintf "<form action='/vote' method='POST' class='m-0 p-0'>%s<input type='hidden' name='post_id' value='%d'><input type='hidden' name='direction' value='%d'><button type='submit' class='%s font-bold text-sm leading-none'>▼</button></form>" csrf_token post.id down_action down_color
     | None -> "<a href='/login' class='text-gray-400 hover:text-[#0D9488] font-bold text-sm leading-none'>▼</a>"
   in

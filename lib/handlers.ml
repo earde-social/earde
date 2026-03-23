@@ -883,7 +883,7 @@ let view_post_handler request =
         let community_for_page : Db.community = match community_res with
           | Ok (Some a) -> a
           | _ -> { id = post.community_id; slug = post.community_slug; name = post.community_slug;
-                   description = None; rules = None; avatar_url = None; banner_url = None }
+                   description = None; rules = None; avatar_url = None; banner_url = None; allow_downvotes = true }
         in
         (match comments_result, is_member_result with
         | Ok comments, Ok is_member ->
@@ -1231,6 +1231,15 @@ let vote_handler request =
             Dream.respond ~status:`Bad_Request "Invalid vote parameters."
           else
           Dream.sql request (fun db ->
+            (* Guard downvote at the handler boundary — community may have disabled them. *)
+            let%lwt downvotes_ok =
+              if direction = -1 then Db.get_allows_downvotes_for_post db post_id
+              else Lwt.return (Ok true)
+            in
+            match downvotes_ok with
+            | Error _ -> Dream.respond ~status:`Internal_Server_Error "DB Error: could not check community settings."
+            | Ok false -> Dream.respond ~status:`Forbidden "Downvotes are disabled in this community."
+            | Ok true ->
             let%lwt db_action =
               if direction = 0 then Db.remove_post_vote db user_id post_id
               else Db.vote_post db user_id post_id direction
@@ -1260,6 +1269,14 @@ let vote_comment_handler request =
             Dream.respond ~status:`Bad_Request "Invalid vote parameters."
           else
           Dream.sql request (fun db ->
+            let%lwt downvotes_ok =
+              if direction = -1 then Db.get_allows_downvotes_for_comment db comment_id
+              else Lwt.return (Ok true)
+            in
+            match downvotes_ok with
+            | Error _ -> Dream.respond ~status:`Internal_Server_Error "DB Error: could not check community settings."
+            | Ok false -> Dream.respond ~status:`Forbidden "Downvotes are disabled in this community."
+            | Ok true ->
             let%lwt db_action =
               if direction = 0 then Db.remove_comment_vote db user_id comment_id
               else Db.vote_comment db user_id comment_id direction
@@ -1270,6 +1287,34 @@ let vote_comment_handler request =
                 let referer = safe_local_redirect (match Dream.header request "Referer" with Some r -> r | None -> "/") in
                 Dream.redirect request referer
             | Error err -> Dream.respond ~status:`Internal_Server_Error ("DB Error: " ^ err)
+          )
+      | _ -> Dream.respond ~status:`Bad_Request "Invalid form submission."
+
+(* Top Mod only — flips allow_downvotes; guards via get_moderator_role to prevent
+   plain mods or non-members from toggling a community-wide setting. *)
+let toggle_downvotes_handler request =
+  let slug = Dream.param request "slug" in
+  match Dream.session_field request "user_id" with
+  | None -> Dream.redirect request "/login"
+  | Some uid_str ->
+      let user_id = int_of_string uid_str in
+      let is_admin = Dream.session_field request "is_admin" = Some "true" in
+      match%lwt Dream.form request with
+      | `Ok form_data ->
+          let new_val = List.assoc_opt "allow_downvotes" form_data = Some "true" in
+          Dream.sql request (fun db ->
+            match%lwt Db.get_community_by_slug db slug with
+            | Ok None -> Dream.respond ~status:`Not_Found "Community not found."
+            | Error err -> Dream.respond ~status:`Internal_Server_Error ("DB Error: " ^ err)
+            | Ok (Some community) ->
+                let%lwt role_res = Db.get_moderator_role db user_id community.id in
+                let is_top_mod = match role_res with Ok (Some "top_mod") -> true | _ -> false in
+                if not (is_top_mod || is_admin) then
+                  Dream.respond ~status:`Forbidden "Only the Top Moderator can change this setting."
+                else
+                  match%lwt Db.toggle_community_downvotes db community.id new_val with
+                  | Ok () -> Dream.redirect request ("/c/" ^ slug)
+                  | Error err -> Dream.respond ~status:`Internal_Server_Error ("DB Error: " ^ err)
           )
       | _ -> Dream.respond ~status:`Bad_Request "Invalid form submission."
 

@@ -74,7 +74,8 @@ CREATE TABLE public.communities (
     description text,
     rules text,
     avatar_url text,
-    banner_url text
+    banner_url text,
+    allow_downvotes boolean DEFAULT true NOT NULL
 );
 
 
@@ -776,4 +777,5 @@ INSERT INTO public.schema_migrations (version) VALUES
     ('20260317133145'),
     ('20260317142357'),
     ('20260317170540'),
-    ('20260318120000');
+    ('20260318120000'),
+    ('20260323140417');

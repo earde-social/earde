@@ -7,12 +7,13 @@ type user = { id : int; username : string; email : string; }
 type post = {
   id : int; title : string; url : string option; content : string option;
   community_id : int; user_id : int; username : string; community_slug : string;
-  created_at : string; score : int; comment_count : int;
+  created_at : string; score : int; comment_count : int; allow_downvotes : bool;
 }
 
 type community = {
   id : int; slug : string; name : string; description : string option;
   rules : string option; avatar_url : string option; banner_url : string option;
+  allow_downvotes : bool;
 }
 
 type comment = {
@@ -42,6 +43,9 @@ module Community : sig
   val get_community_by_id : (module Caqti_lwt.CONNECTION) -> int -> (community option, string) result Lwt.t
   val search_communities : (module Caqti_lwt.CONNECTION) -> string -> int -> int -> (community list, string) result Lwt.t
   val update_community_details : (module Caqti_lwt.CONNECTION) -> int -> string option -> string option -> string option -> string option -> (unit, string) result Lwt.t
+  val toggle_community_downvotes : (module Caqti_lwt.CONNECTION) -> int -> bool -> (unit, string) result Lwt.t
+  val get_allows_downvotes_for_post : (module Caqti_lwt.CONNECTION) -> int -> (bool, string) result Lwt.t
+  val get_allows_downvotes_for_comment : (module Caqti_lwt.CONNECTION) -> int -> (bool, string) result Lwt.t
 end
 
 module User : sig
@@ -240,6 +244,9 @@ val get_community_mods_with_roles : (module Caqti_lwt.CONNECTION) -> int -> (mod
 val demote_inactive_mods : (module Caqti_lwt.CONNECTION) -> (unit, string) result Lwt.t
 val log_mod_action : (module Caqti_lwt.CONNECTION) -> int -> int -> string -> int option -> string -> (unit, string) result Lwt.t
 val get_modlog : (module Caqti_lwt.CONNECTION) -> int -> (mod_action list, string) result Lwt.t
+val toggle_community_downvotes : (module Caqti_lwt.CONNECTION) -> int -> bool -> (unit, string) result Lwt.t
+val get_allows_downvotes_for_post : (module Caqti_lwt.CONNECTION) -> int -> (bool, string) result Lwt.t
+val get_allows_downvotes_for_comment : (module Caqti_lwt.CONNECTION) -> int -> (bool, string) result Lwt.t
 
 val password_reset_create_token : (module Caqti_lwt.CONNECTION) -> string -> string -> (bool, string) result Lwt.t
 val password_reset_validate_token : (module Caqti_lwt.CONNECTION) -> string -> (int option, string) result Lwt.t

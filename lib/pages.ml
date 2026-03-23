@@ -344,6 +344,27 @@ let community_page ?user ~is_member ~is_current_user_mod ~is_current_user_top_mo
     else ""
   in
 
+  (* Toggle downvotes: exposed only to top_mod/admin to prevent vote manipulation arms races
+     by regular mods who have less community-wide accountability. *)
+  let toggle_downvotes_card =
+    if is_current_user_top_mod || is_admin then
+      let (indicator, next_val, label) =
+        if community.allow_downvotes then ("🔴", "false", "Disable Downvotes")
+        else ("🟢", "true", "Enable Downvotes")
+      in
+      Printf.sprintf "
+    <div class='bg-white border border-gray-200 rounded-xl shadow-sm p-5'>
+        <h3 class='text-xs font-bold text-gray-500 uppercase tracking-wider mb-3'>Mod Tools</h3>
+        <form action='/c/%s/toggle_downvotes' method='POST' class='m-0 p-0'>
+            %s
+            <input type='hidden' name='allow_downvotes' value='%s'>
+            <button type='submit' class='text-xs font-semibold text-gray-700 hover:text-gray-900 transition'>%s %s</button>
+        </form>
+    </div>"
+      (Components.html_escape community.slug) csrf_token next_val indicator label
+    else ""
+  in
+
   let mods_card = Printf.sprintf "
     <div class='bg-white border border-gray-200 rounded-xl shadow-sm p-5'>
         <h3 class='text-xs font-bold text-gray-500 uppercase tracking-wider mb-3'>Moderators</h3>
@@ -387,6 +408,7 @@ let community_page ?user ~is_member ~is_current_user_mod ~is_current_user_top_mo
                     %s
                     %s
                     %s
+                    %s
                 </div>
             </div>
         </div>
@@ -398,7 +420,7 @@ let community_page ?user ~is_member ~is_current_user_mod ~is_current_user_top_mo
     create_post_btn settings_btn membership_btn
     sort_menu posts_html
     prev_btn current_page next_btn
-    community_info_card rules_card mods_card
+    community_info_card rules_card mods_card toggle_downvotes_card
   in
   Components.layout ?user ~request ~title:community.name content
 
@@ -957,7 +979,9 @@ let post_page ?user ~is_member ~is_current_user_mod ~mod_usernames ~admin_userna
           | Some _ -> Printf.sprintf "<form action='/vote-comment' method='POST' class='m-0 p-0'>%s<input type='hidden' name='comment_id' value='%d'><input type='hidden' name='direction' value='%d'><button type='submit' class='%s text-xs font-bold leading-none'>▲</button></form>" csrf_token c.id up_action up_color
           | None -> "<a href='/login' class='text-gray-400 hover:text-orange-500 text-xs font-bold leading-none'>▲</a>"
         in
-        let downvote_html = match current_user with
+        let downvote_html =
+          if not post.allow_downvotes then ""
+          else match current_user with
           | Some _ -> Printf.sprintf "<form action='/vote-comment' method='POST' class='m-0 p-0'>%s<input type='hidden' name='comment_id' value='%d'><input type='hidden' name='direction' value='%d'><button type='submit' class='%s text-xs font-bold leading-none'>▼</button></form>" csrf_token c.id down_action down_color
           | None -> "<a href='/login' class='text-gray-400 hover:text-[#0D9488] text-xs font-bold leading-none'>▼</a>"
         in
@@ -1072,13 +1096,23 @@ let post_page ?user ~is_member ~is_current_user_mod ~mod_usernames ~admin_userna
       post.id
   in
   let voting_pill =
+    let downvote_btn_logged_in =
+      if post.allow_downvotes then
+        Printf.sprintf "<form action='/vote' method='POST' class='m-0 p-0 flex'>%s<input type='hidden' name='post_id' value='%d'><input type='hidden' name='direction' value='%d'><button type='submit' class='%s text-sm font-bold leading-none'>▼</button></form>"
+          csrf_token post.id down_action down_color
+      else ""
+    in
+    let downvote_btn_logged_out =
+      if post.allow_downvotes then "<a href='/login' class='text-gray-400 hover:text-[#0D9488] text-sm font-bold leading-none'>▼</a>"
+      else ""
+    in
     match current_user with
     | Some _ ->
-        Printf.sprintf "<div class='flex items-center gap-3 mt-2 mb-6'><div class='flex items-center gap-2 bg-gray-50 border border-gray-200 rounded-full px-3 py-1.5'><form action='/vote' method='POST' class='m-0 p-0 flex'>%s<input type='hidden' name='post_id' value='%d'><input type='hidden' name='direction' value='%d'><button type='submit' class='%s text-sm font-bold leading-none'>▲</button></form><span class='text-sm font-semibold text-gray-700'>%d</span><form action='/vote' method='POST' class='m-0 p-0 flex'>%s<input type='hidden' name='post_id' value='%d'><input type='hidden' name='direction' value='%d'><button type='submit' class='%s text-sm font-bold leading-none'>▼</button></form></div>%s%s</div>"
-          csrf_token post.id up_action up_color post.score csrf_token post.id down_action down_color comments_pill share_pill
+        Printf.sprintf "<div class='flex items-center gap-3 mt-2 mb-6'><div class='flex items-center gap-2 bg-gray-50 border border-gray-200 rounded-full px-3 py-1.5'><form action='/vote' method='POST' class='m-0 p-0 flex'>%s<input type='hidden' name='post_id' value='%d'><input type='hidden' name='direction' value='%d'><button type='submit' class='%s text-sm font-bold leading-none'>▲</button></form><span class='text-sm font-semibold text-gray-700'>%d</span>%s</div>%s%s</div>"
+          csrf_token post.id up_action up_color post.score downvote_btn_logged_in comments_pill share_pill
     | None ->
-        Printf.sprintf "<div class='flex items-center gap-3 mt-2 mb-6'><div class='flex items-center gap-2 bg-gray-50 border border-gray-200 rounded-full px-3 py-1.5'><a href='/login' class='text-gray-400 hover:text-orange-500 text-sm font-bold leading-none'>▲</a><span class='text-sm font-semibold text-gray-700'>%d</span><a href='/login' class='text-gray-400 hover:text-[#0D9488] text-sm font-bold leading-none'>▼</a></div>%s%s</div>"
-          post.score comments_pill share_pill
+        Printf.sprintf "<div class='flex items-center gap-3 mt-2 mb-6'><div class='flex items-center gap-2 bg-gray-50 border border-gray-200 rounded-full px-3 py-1.5'><a href='/login' class='text-gray-400 hover:text-orange-500 text-sm font-bold leading-none'>▲</a><span class='text-sm font-semibold text-gray-700'>%d</span>%s</div>%s%s</div>"
+          post.score downvote_btn_logged_out comments_pill share_pill
   in
 
   let is_admin = Dream.session_field request "is_admin" = Some "true" in

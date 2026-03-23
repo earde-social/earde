@@ -8,6 +8,7 @@ type community = {
   rules : string option;
   avatar_url : string option;
   banner_url : string option;
+  allow_downvotes : bool;
 }
 
 type user = {
@@ -22,6 +23,7 @@ type post = {
   created_at : string;
   score : int;
   comment_count : int;
+  allow_downvotes : bool;
 }
 
 type comment = {
@@ -61,24 +63,25 @@ type moderator_entry = {
   role : string;
 }
 
-(* post has 11 SELECT columns; Caqti tN stops at t7, so nest tuples to stay within arity. *)
+(* post has 12 SELECT columns; Caqti tN stops at t7, so nest tuples to stay within arity. *)
 let post_row_type =
   let open Caqti_type in
-  t3
+  t4
     (t4 int string (option string) (option string))
     (t4 int int string string)
     (t3 string int int)
+    bool
 
-let map_post_row ((id, title, url, content), (community_id, user_id, username, community_slug), (created_at, score, comment_count)) =
-  { id; title; url; content; community_id; user_id; username; community_slug; created_at; score; comment_count }
+let map_post_row ((id, title, url, content), (community_id, user_id, username, community_slug), (created_at, score, comment_count), allow_downvotes) =
+  { id; title; url; content; community_id; user_id; username; community_slug; created_at; score; comment_count; allow_downvotes }
 
-(* 7-column community row: nest into t2(t4, t3) to stay within Caqti's per-tuple arity limit. *)
+(* 8-column community row: nest into t2(t4, t4) to stay within Caqti's per-tuple arity limit. *)
 let community_row_type =
   let open Caqti_type in
-  t2 (t4 int string string (option string)) (t3 (option string) (option string) (option string))
+  t2 (t4 int string string (option string)) (t4 (option string) (option string) (option string) bool)
 
-let map_community_row ((id, slug, name, description), (rules, avatar_url, banner_url)) =
-  { id; slug; name; description; rules; avatar_url; banner_url }
+let map_community_row ((id, slug, name, description), (rules, avatar_url, banner_url, allow_downvotes)) =
+  { id; slug; name; description; rules; avatar_url; banner_url; allow_downvotes }
 
 (* Applied selectively to hot paths — per-query instrumentation on every call
    adds two gettimeofday syscalls and a Yojson allocation per request. *)
@@ -100,7 +103,7 @@ module Community = struct
   let get_all_query =
     let open Caqti_request.Infix in
     (Caqti_type.unit ->* community_row_type)
-    "SELECT id, slug, name, description, rules, avatar_url, banner_url FROM communities"
+    "SELECT id, slug, name, description, rules, avatar_url, banner_url, allow_downvotes FROM communities"
 
   let get_all_communities (module C : Caqti_lwt.CONNECTION) =
     with_query_timer ~name:"get_all_communities" (fun () ->
@@ -125,7 +128,7 @@ module Community = struct
   let get_by_slug_query =
     let open Caqti_request.Infix in
     (Caqti_type.string ->? community_row_type)
-    "SELECT id, slug, name, description, rules, avatar_url, banner_url FROM communities WHERE slug = $1"
+    "SELECT id, slug, name, description, rules, avatar_url, banner_url, allow_downvotes FROM communities WHERE slug = $1"
 
   let get_community_by_slug (module C : Caqti_lwt.CONNECTION) slug =
     C.find_opt get_by_slug_query slug
@@ -137,7 +140,7 @@ module Community = struct
   let get_by_id_query =
     let open Caqti_request.Infix in
     (Caqti_type.int ->? community_row_type)
-    "SELECT id, slug, name, description, rules, avatar_url, banner_url FROM communities WHERE id = $1"
+    "SELECT id, slug, name, description, rules, avatar_url, banner_url, allow_downvotes FROM communities WHERE id = $1"
 
   let get_community_by_id (module C : Caqti_lwt.CONNECTION) id =
     C.find_opt get_by_id_query id
@@ -149,7 +152,7 @@ module Community = struct
   let search_communities_query =
     let open Caqti_request.Infix in
     (Caqti_type.(t3 string int int) ->* community_row_type)
-    "SELECT id, slug, name, description, rules, avatar_url, banner_url FROM communities WHERE name ILIKE $1 OR description ILIKE $1 ORDER BY name ASC LIMIT $2 OFFSET $3"
+    "SELECT id, slug, name, description, rules, avatar_url, banner_url, allow_downvotes FROM communities WHERE name ILIKE $1 OR description ILIKE $1 ORDER BY name ASC LIMIT $2 OFFSET $3"
 
   let search_communities (module C : Caqti_lwt.CONNECTION) search_term limit offset =
     let term = "%" ^ search_term ^ "%" in
@@ -169,6 +172,42 @@ module Community = struct
     C.exec update_community_details_query ((description, rules, avatar_url, banner_url), community_id)
     >>= function
     | Ok () -> Lwt.return (Ok ())
+    | Error err -> Lwt.return (Error (Caqti_error.show err))
+
+  let toggle_downvotes_query =
+    let open Caqti_request.Infix in
+    (Caqti_type.(t2 bool int) ->. Caqti_type.unit)
+    "UPDATE communities SET allow_downvotes = $1 WHERE id = $2"
+
+  let toggle_community_downvotes (module C : Caqti_lwt.CONNECTION) community_id allow =
+    C.exec toggle_downvotes_query (allow, community_id)
+    >>= function
+    | Ok () -> Lwt.return (Ok ())
+    | Error err -> Lwt.return (Error (Caqti_error.show err))
+
+  (* Joins posts→communities in one query so vote_handler avoids a second round-trip. *)
+  let get_allows_downvotes_for_post_query =
+    let open Caqti_request.Infix in
+    (Caqti_type.int ->? Caqti_type.bool)
+    "SELECT c.allow_downvotes FROM communities c JOIN posts p ON p.community_id = c.id WHERE p.id = $1"
+
+  let get_allows_downvotes_for_post (module C : Caqti_lwt.CONNECTION) post_id =
+    C.find_opt get_allows_downvotes_for_post_query post_id
+    >>= function
+    | Ok (Some v) -> Lwt.return (Ok v)
+    | Ok None -> Lwt.return (Ok true) (* post not found: let DB constraint handle it *)
+    | Error err -> Lwt.return (Error (Caqti_error.show err))
+
+  let get_allows_downvotes_for_comment_query =
+    let open Caqti_request.Infix in
+    (Caqti_type.int ->? Caqti_type.bool)
+    "SELECT c.allow_downvotes FROM communities c JOIN posts p ON p.community_id = c.id JOIN comments cm ON cm.post_id = p.id WHERE cm.id = $1"
+
+  let get_allows_downvotes_for_comment (module C : Caqti_lwt.CONNECTION) comment_id =
+    C.find_opt get_allows_downvotes_for_comment_query comment_id
+    >>= function
+    | Ok (Some v) -> Lwt.return (Ok v)
+    | Ok None -> Lwt.return (Ok true)
     | Error err -> Lwt.return (Error (Caqti_error.show err))
 end
 
@@ -351,7 +390,8 @@ module Post = struct
     (Caqti_type.int ->? post_row_type)
     "SELECT p.id, p.title, p.url, p.content, p.community_id, p.user_id, u.username, a.slug, p.created_at::text,
             COALESCE((SELECT SUM(direction) FROM post_votes WHERE post_id = p.id), 0) AS score,
-            (SELECT COUNT(*) FROM comments WHERE post_id = p.id) AS comment_count
+            (SELECT COUNT(*) FROM comments WHERE post_id = p.id) AS comment_count,
+            a.allow_downvotes
      FROM posts p JOIN users u ON p.user_id = u.id JOIN communities a ON p.community_id = a.id
      WHERE p.id = $1"
 
@@ -376,12 +416,13 @@ module Post = struct
       let query_str = Printf.sprintf
         "SELECT p.id, p.title, p.url, p.content, p.community_id, p.user_id, u.username, a.slug, p.created_at::text,
                 COALESCE(SUM(v.direction), 0) as score,
-                (SELECT COUNT(*) FROM comments c WHERE c.post_id = p.id) as comment_count
+                (SELECT COUNT(*) FROM comments c WHERE c.post_id = p.id) as comment_count,
+                a.allow_downvotes
          FROM posts p
          JOIN users u ON p.user_id = u.id
          JOIN communities a ON p.community_id = a.id
          LEFT JOIN post_votes v ON p.id = v.post_id
-         GROUP BY p.id, u.username, a.slug
+         GROUP BY p.id, u.username, a.slug, a.allow_downvotes
          %s
          LIMIT $1 OFFSET $2" order_clause
       in
@@ -405,13 +446,14 @@ module Post = struct
     let query_str = Printf.sprintf
       "SELECT p.id, p.title, p.url, p.content, p.community_id, p.user_id, u.username, a.slug, p.created_at::text,
               COALESCE(SUM(v.direction), 0) as score,
-              (SELECT COUNT(*) FROM comments c WHERE c.post_id = p.id) as comment_count
+              (SELECT COUNT(*) FROM comments c WHERE c.post_id = p.id) as comment_count,
+              a.allow_downvotes
        FROM posts p
        JOIN users u ON p.user_id = u.id
        JOIN communities a ON p.community_id = a.id
        LEFT JOIN post_votes v ON p.id = v.post_id
        WHERE p.community_id = $1
-       GROUP BY p.id, u.username, a.slug
+       GROUP BY p.id, u.username, a.slug, a.allow_downvotes
        %s
        LIMIT $2 OFFSET $3" order_clause
     in
@@ -429,7 +471,8 @@ module Post = struct
     (Caqti_type.int ->* post_row_type)
     "SELECT p.id, p.title, p.url, p.content, p.community_id, p.user_id, u.username, a.slug, p.created_at::text,
             COALESCE((SELECT SUM(direction) FROM post_votes WHERE post_id = p.id), 0) AS score,
-            (SELECT COUNT(*) FROM comments WHERE post_id = p.id) AS comment_count
+            (SELECT COUNT(*) FROM comments WHERE post_id = p.id) AS comment_count,
+            a.allow_downvotes
      FROM posts p JOIN users u ON p.user_id = u.id JOIN communities a ON p.community_id = a.id
      WHERE p.user_id = $1 ORDER BY score DESC, p.created_at DESC"
 
@@ -476,13 +519,14 @@ module Post = struct
     (Caqti_type.(t3 string int int) ->* post_row_type)
     "SELECT p.id, p.title, p.url, p.content, p.community_id, p.user_id, u.username, a.slug, p.created_at::text,
             COALESCE(SUM(v.direction), 0) AS score,
-            (SELECT COUNT(*) FROM comments WHERE post_id = p.id) AS comment_count
+            (SELECT COUNT(*) FROM comments WHERE post_id = p.id) AS comment_count,
+            a.allow_downvotes
      FROM posts p
      JOIN users u ON p.user_id = u.id
      JOIN communities a ON p.community_id = a.id
      LEFT JOIN post_votes v ON p.id = v.post_id
      WHERE p.title ILIKE $1 OR p.content ILIKE $1
-     GROUP BY p.id, u.username, a.slug
+     GROUP BY p.id, u.username, a.slug, a.allow_downvotes
      ORDER BY score DESC, p.created_at DESC LIMIT $2 OFFSET $3"
 
   let search_posts (module C : Caqti_lwt.CONNECTION) search_term limit offset =
@@ -504,13 +548,14 @@ module Post = struct
       let query_str = Printf.sprintf
         "SELECT p.id, p.title, p.url, p.content, p.community_id, p.user_id, u.username, a.slug, p.created_at::text,
                 COALESCE(SUM(v.direction), 0) as score,
-                (SELECT COUNT(*) FROM comments c WHERE c.post_id = p.id) as comment_count
+                (SELECT COUNT(*) FROM comments c WHERE c.post_id = p.id) as comment_count,
+                a.allow_downvotes
          FROM posts p
          JOIN users u ON p.user_id = u.id
          JOIN communities a ON p.community_id = a.id
          JOIN community_members cm ON p.community_id = cm.community_id AND cm.user_id = $1
          LEFT JOIN post_votes v ON p.id = v.post_id
-         GROUP BY p.id, u.username, a.slug
+         GROUP BY p.id, u.username, a.slug, a.allow_downvotes
          %s
          LIMIT $2 OFFSET $3" order_clause
       in
@@ -685,7 +730,7 @@ module Membership = struct
   let get_user_communities_query =
     let open Caqti_request.Infix in
     (Caqti_type.int ->* community_row_type)
-    "SELECT a.id, a.slug, a.name, a.description, a.rules, a.avatar_url, a.banner_url
+    "SELECT a.id, a.slug, a.name, a.description, a.rules, a.avatar_url, a.banner_url, a.allow_downvotes
      FROM communities a
      JOIN community_members am ON a.id = am.community_id
      WHERE am.user_id = $1
@@ -860,7 +905,7 @@ module Moderator = struct
   let get_moderated_communities_query =
     let open Caqti_request.Infix in
     (Caqti_type.int ->* community_row_type)
-    "SELECT a.id, a.slug, a.name, a.description, a.rules, a.avatar_url, a.banner_url
+    "SELECT a.id, a.slug, a.name, a.description, a.rules, a.avatar_url, a.banner_url, a.allow_downvotes
      FROM communities a
      JOIN community_moderators am ON a.id = am.community_id
      WHERE am.user_id = $1
@@ -1361,3 +1406,6 @@ let get_community_mods_with_roles = Moderator.get_community_mods_with_roles
 let demote_inactive_mods = Moderator.demote_inactive_mods
 let log_mod_action = Mod_action.log_action
 let get_modlog = Mod_action.get_modlog
+let toggle_community_downvotes = Community.toggle_community_downvotes
+let get_allows_downvotes_for_post = Community.get_allows_downvotes_for_post
+let get_allows_downvotes_for_comment = Community.get_allows_downvotes_for_comment
