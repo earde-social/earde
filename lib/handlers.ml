@@ -1544,9 +1544,18 @@ let about_page_handler request =
 let hq_dashboard_handler request =
   match Dream.session_field request "is_admin" with
   | Some "true" ->
+      let format_date t =
+        let tm = Unix.gmtime t in
+        Printf.sprintf "%04d-%02d-%02d" (tm.Unix.tm_year + 1900) (tm.Unix.tm_mon + 1) tm.Unix.tm_mday
+      in
+      let now = Unix.gettimeofday () in
+      let today = format_date now in
+      let thirty_days_ago = format_date (now -. (30. *. 86400.)) in
+      let start_date = Option.value ~default:thirty_days_ago (Dream.query request "start") in
+      let end_date   = Option.value ~default:today (Dream.query request "end") in
       Dream.sql request (fun db ->
-        match%lwt Db.get_kpi_dashboard db with
-        | Ok stats -> Dream.html (Pages.hq_dashboard_page stats)
+        match%lwt Db.get_kpi_dashboard db ~start_date ~end_date with
+        | Ok stats -> Dream.html (Pages.hq_dashboard_page stats ~start_date ~end_date)
         | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Error" ~message:("Analytics error: " ^ e) ~alert_type:"error" ~return_url:"/" request)
       )
   | _ -> Dream.respond ~status:`Forbidden
@@ -1808,7 +1817,15 @@ let analytics_middleware inner_handler request =
   in
 
   let%lwt _ =
-    if path = "/earde-hq-dashboard" || path = "/api/unread-notifs" || is_static || is_bot
+    let is_admin_route =
+      (* Exclude admin-only routes to prevent self-inflating page-view counts when admins
+         refresh the dashboard. Uses prefix match to cover query-string variants too. *)
+      let admin_prefix = "/earde-hq-dashboard" in
+      let plen = String.length path and alen = String.length admin_prefix in
+      (plen >= alen && String.sub path 0 alen = admin_prefix
+       && (plen = alen || path.[alen] = '?' || path.[alen] = '/'))
+    in
+    if is_admin_route || path = "/api/unread-notifs" || is_static || is_bot
     then Lwt.return_unit
     else begin
       (* Sanitize referer: keep only host to avoid leaking tokens in paths/query strings. *)

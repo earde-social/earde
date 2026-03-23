@@ -2079,89 +2079,127 @@ let mod_log_page ?user ~(community : Db.community) (actions : Db.mod_action list
 
 (* Standalone HTML — intentionally outside Components.layout to prevent nav/JS
    assets from loading on an admin-only internal page that needs no public shell. *)
-let hq_dashboard_page (((v1, v7, v30), (uv1, uv7, uv30)), (u1, u7, u30), (c1, c7, c30), (a1, a7, a30)) =
-  Printf.sprintf "
-  <!DOCTYPE html>
-  <html lang='en'>
-  <head>
-      <meta charset='UTF-8'>
-      <meta name='viewport' content='width=device-width, initial-scale=1.0'>
-      <meta http-equiv='refresh' content='60'> <title>Earde HQ - Mission Control</title>
-      <script src='https://cdn.tailwindcss.com'></script>
-  </head>
-  <body class='bg-gray-950 text-green-400 font-mono min-h-screen p-8'>
-      <div class='max-w-7xl mx-auto'>
-          <header class='flex justify-between items-end border-b border-green-900 pb-4 mb-8'>
-              <div>
-                  <h1 class='text-4xl font-bold tracking-tighter text-white'>Earde <span class='text-green-500'>SYS.CORE</span></h1>
-                  <p class='text-green-700 text-sm mt-1'>live telemetry // UPDATED EVERY 60s</p>
-              </div>
-              <div class='text-right'>
-                  <div class='text-3xl font-bold text-white'>%d</div>
-                  <div class='text-xs text-green-700'>TOTAL MAU (30 DAYS)</div>
-              </div>
-          </header>
+let hq_dashboard_page ((views, unique_visitors, signups), (content, active)) ~start_date ~end_date =
+  Printf.sprintf {html|<!DOCTYPE html>
+<html lang='en'>
+<head>
+    <meta charset='UTF-8'>
+    <meta name='viewport' content='width=device-width, initial-scale=1.0'>
+    <title>Earde HQ - Mission Control</title>
+    <script src='https://cdn.tailwindcss.com'></script>
+</head>
+<body class='bg-gray-950 text-green-400 font-mono min-h-screen p-8'>
+    <div class='max-w-7xl mx-auto'>
 
-          <div class='grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-6'>
+        <header class='flex justify-between items-end border-b border-green-900 pb-4 mb-6'>
+            <div>
+                <h1 class='text-4xl font-bold tracking-tighter text-white'>Earde <span class='text-green-500'>SYS.CORE</span></h1>
+                <p class='text-green-700 text-sm mt-1'>range: %s &rarr; %s</p>
+            </div>
+            <div class='text-right'>
+                <div class='text-3xl font-bold text-white'>%d</div>
+                <div class='text-xs text-green-700'>ACTIVE CONTRIBUTORS</div>
+            </div>
+        </header>
 
-              <div class='bg-gray-900 border border-green-900 p-6 rounded-lg shadow-[0_0_15px_rgba(34,197,94,0.1)]'>
-                  <h2 class='text-green-600 text-sm font-bold mb-4 tracking-widest'>PAGE VIEWS</h2>
-                  <div class='mb-4'>
-                      <div class='text-4xl font-bold text-white'>%d</div>
-                      <div class='text-xs text-green-700'>TODAY (24H)</div>
-                      <div class='text-sm text-green-500 mt-1'>%d <span class='text-green-800 text-xs'>unique visitors</span></div>
-                  </div>
-                  <div class='flex justify-between border-t border-green-900 pt-3'>
-                      <div>
-                          <div class='text-lg font-bold text-gray-300'>%d</div>
-                          <div class='text-[10px] text-green-800'>VIEWS 7D</div>
-                          <div class='text-xs text-green-600'>%d UV</div>
-                      </div>
-                      <div class='text-right'>
-                          <div class='text-lg font-bold text-gray-300'>%d</div>
-                          <div class='text-[10px] text-green-800'>VIEWS 30D</div>
-                          <div class='text-xs text-green-600'>%d UV</div>
-                      </div>
-                  </div>
-              </div>
+        <form method='GET' action='/earde-hq-dashboard' class='mb-8 bg-gray-900 border border-green-900 rounded-lg p-4'>
+            <div class='flex flex-wrap gap-2 items-end'>
+                <div class='flex gap-2 flex-wrap'>
+                    <button type='button' onclick='setRange(0,0)'
+                        class='px-3 py-1.5 text-xs border border-green-800 text-green-500 rounded hover:bg-green-900 hover:text-white transition-colors'>
+                        Today
+                    </button>
+                    <button type='button' onclick='setRange(6,0)'
+                        class='px-3 py-1.5 text-xs border border-green-800 text-green-500 rounded hover:bg-green-900 hover:text-white transition-colors'>
+                        Last 7 Days
+                    </button>
+                    <button type='button' onclick='setRange(29,0)'
+                        class='px-3 py-1.5 text-xs border border-green-800 text-green-500 rounded hover:bg-green-900 hover:text-white transition-colors'>
+                        Last 30 Days
+                    </button>
+                    <button type='button' onclick='setAllTime()'
+                        class='px-3 py-1.5 text-xs border border-green-800 text-green-500 rounded hover:bg-green-900 hover:text-white transition-colors'>
+                        All Time
+                    </button>
+                </div>
+                <div class='flex gap-2 items-center ml-auto'>
+                    <label class='text-xs text-green-700'>FROM</label>
+                    <input type='date' name='start' value='%s'
+                        class='bg-gray-800 border border-green-900 text-green-300 text-xs rounded px-2 py-1.5 focus:outline-none focus:border-green-500'>
+                    <label class='text-xs text-green-700'>TO</label>
+                    <input type='date' name='end' value='%s'
+                        class='bg-gray-800 border border-green-900 text-green-300 text-xs rounded px-2 py-1.5 focus:outline-none focus:border-green-500'>
+                    <button type='submit'
+                        class='px-4 py-1.5 text-xs bg-green-900 text-green-300 border border-green-700 rounded hover:bg-green-800 hover:text-white transition-colors'>
+                        Apply
+                    </button>
+                </div>
+            </div>
+        </form>
 
-              <div class='bg-gray-900 border border-green-900 p-6 rounded-lg shadow-[0_0_15px_rgba(34,197,94,0.1)]'>
-                  <h2 class='text-green-600 text-sm font-bold mb-4 tracking-widest'>NEW SIGNUPS</h2>
-                  <div class='mb-4'><div class='text-4xl font-bold text-white'>%d</div><div class='text-xs text-green-700'>TODAY (24H)</div></div>
-                  <div class='flex justify-between border-t border-green-900 pt-3'>
-                      <div><div class='text-lg font-bold text-gray-300'>%d</div><div class='text-[10px] text-green-800'>WEEK (7D)</div></div>
-                      <div class='text-right'><div class='text-lg font-bold text-gray-300'>%d</div><div class='text-[10px] text-green-800'>MONTH (30D)</div></div>
-                  </div>
-              </div>
+        <div class='grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-6'>
 
-              <div class='bg-gray-900 border border-green-900 p-6 rounded-lg shadow-[0_0_15px_rgba(34,197,94,0.1)]'>
-                  <h2 class='text-green-600 text-sm font-bold mb-4 tracking-widest'>CONTENT LIQUIDITY</h2>
-                  <div class='mb-4'><div class='text-4xl font-bold text-white'>%d</div><div class='text-xs text-green-700'>TODAY (24H)</div></div>
-                  <div class='flex justify-between border-t border-green-900 pt-3'>
-                      <div><div class='text-lg font-bold text-gray-300'>%d</div><div class='text-[10px] text-green-800'>WEEK (7D)</div></div>
-                      <div class='text-right'><div class='text-lg font-bold text-gray-300'>%d</div><div class='text-[10px] text-green-800'>MONTH (30D)</div></div>
-                  </div>
-              </div>
+            <div class='bg-gray-900 border border-green-900 p-6 rounded-lg shadow-[0_0_15px_rgba(34,197,94,0.1)]'>
+                <h2 class='text-green-600 text-sm font-bold mb-4 tracking-widest'>PAGE VIEWS</h2>
+                <div class='text-5xl font-bold text-white mb-2'>%d</div>
+                <div class='text-xs text-green-700 mb-3'>TOTAL IN RANGE</div>
+                <div class='border-t border-green-900 pt-3'>
+                    <div class='text-lg font-bold text-green-400'>%d</div>
+                    <div class='text-xs text-green-700'>UNIQUE VISITORS</div>
+                </div>
+                <p class='text-xs text-gray-500 mt-3 leading-relaxed'>Total number of pages loaded. Measures raw traffic volume and top-of-funnel reach.</p>
+            </div>
 
-              <div class='bg-gray-900 border border-green-900 p-6 rounded-lg shadow-[0_0_15px_rgba(34,197,94,0.1)] relative overflow-hidden'>
-                  <div class='absolute top-0 right-0 w-16 h-16 bg-green-500 opacity-10 rounded-bl-full'></div>
-                  <h2 class='text-green-500 text-sm font-bold mb-4 tracking-widest'>ACTIVE CONTRIBUTORS</h2>
-                  <div class='mb-4'>
-                      <div class='text-4xl font-bold text-white'>%d <span class='text-sm text-green-600 font-normal'>DAU</span></div>
-                      <div class='text-xs text-green-700'>TODAY (24H)</div>
-                  </div>
-                  <div class='flex justify-between border-t border-green-900 pt-3'>
-                      <div><div class='text-lg font-bold text-green-400'>%d <span class='text-[10px] text-green-700'>WAU</span></div><div class='text-[10px] text-green-800'>WEEK (7D)</div></div>
-                      <div class='text-right'><div class='text-lg font-bold text-green-400'>%d <span class='text-[10px] text-green-700'>MAU</span></div><div class='text-[10px] text-green-800'>MONTH (30D)</div></div>
-                  </div>
-              </div>
+            <div class='bg-gray-900 border border-green-900 p-6 rounded-lg shadow-[0_0_15px_rgba(34,197,94,0.1)]'>
+                <h2 class='text-green-600 text-sm font-bold mb-4 tracking-widest'>NEW SIGNUPS</h2>
+                <div class='text-5xl font-bold text-white mb-2'>%d</div>
+                <div class='text-xs text-green-700'>TOTAL IN RANGE</div>
+                <p class='text-xs text-gray-500 mt-3 leading-relaxed'>Total registered users. Measures our ability to convert casual visitors into community members.</p>
+            </div>
 
-          </div>
-      </div>
-  </body>
-  </html>"
-  a30
-  v1 uv1 v7 uv7 v30 uv30
-  u1 u7 u30
-  c1 c7 c30
-  a1 a7 a30
+            <div class='bg-gray-900 border border-green-900 p-6 rounded-lg shadow-[0_0_15px_rgba(34,197,94,0.1)]'>
+                <h2 class='text-green-600 text-sm font-bold mb-4 tracking-widest'>CONTENT ACTIVITY</h2>
+                <div class='text-5xl font-bold text-white mb-2'>%d</div>
+                <div class='text-xs text-green-700'>POSTS + COMMENTS IN RANGE</div>
+                <p class='text-xs text-gray-500 mt-3 leading-relaxed'>Total posts and comments created. Indicates if the platform is actively generating discussion or if it&apos;s read-only.</p>
+            </div>
+
+            <div class='bg-gray-900 border border-green-900 p-6 rounded-lg shadow-[0_0_15px_rgba(34,197,94,0.1)] relative overflow-hidden'>
+                <div class='absolute top-0 right-0 w-16 h-16 bg-green-500 opacity-10 rounded-bl-full'></div>
+                <h2 class='text-green-500 text-sm font-bold mb-4 tracking-widest'>ACTIVE CONTRIBUTORS</h2>
+                <div class='text-5xl font-bold text-white mb-2'>%d</div>
+                <div class='text-xs text-green-700'>ACTIVE USERS IN RANGE</div>
+                <p class='text-xs text-gray-500 mt-3 leading-relaxed'>Percentage of monthly users who return daily. A DAU/MAU ratio &gt; 20&percnt; indicates strong user retention.</p>
+            </div>
+
+        </div>
+    </div>
+
+    <script>
+        function isoDate(d) {
+            return d.toISOString().slice(0, 10);
+        }
+        function setRange(daysBack, daysEnd) {
+            var now = new Date();
+            var end = new Date(now);
+            end.setDate(end.getDate() - daysEnd);
+            var start = new Date(end);
+            start.setDate(start.getDate() - daysBack);
+            document.querySelector('input[name=start]').value = isoDate(start);
+            document.querySelector('input[name=end]').value = isoDate(end);
+            document.querySelector('form').submit();
+        }
+        function setAllTime() {
+            document.querySelector('input[name=start]').value = '1970-01-01';
+            document.querySelector('input[name=end]').value = '2099-12-31';
+            document.querySelector('form').submit();
+        }
+    </script>
+</body>
+</html>|html}
+  start_date end_date active
+  start_date end_date
+  views unique_visitors
+  signups
+  content
+  active

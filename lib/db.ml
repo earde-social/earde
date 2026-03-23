@@ -1072,38 +1072,26 @@ module Analytics = struct
     | Ok () -> Lwt.return (Ok ())
     | Error e -> Lwt.return (Error (Caqti_error.show e))
 
-  (* Caqti arity limit: encode 6 page-view columns as t2(t3, t3) nested inside the outer t4.
-     Unique visitors use COUNT(DISTINCT session_hash) — daily-rotating hash guarantees GDPR
-     pseudonymisation while still giving investor-grade UV metrics. *)
+  (* 5 scalar columns fit in t2(t3, t2) — no arity overflow.
+     end_date is inclusive: we shift it to the next day's midnight with ::date + INTERVAL '1 day'
+     so that "2026-03-23" captures all events on that calendar day. *)
   let kpi_stats_type =
     let open Caqti_type in
-    t4 (t2 (t3 int int int) (t3 int int int)) (t3 int int int) (t3 int int int) (t3 int int int)
+    t2 (t3 int int int) (t2 int int)
 
   let get_kpi_dashboard_query =
     let open Caqti_request.Infix in
-    (Caqti_type.unit ->! kpi_stats_type)
+    (Caqti_type.(t2 string string) ->! kpi_stats_type)
     "SELECT
-      (SELECT COUNT(*)::int FROM page_views WHERE created_at > NOW() - INTERVAL '1 day'),
-      (SELECT COUNT(*)::int FROM page_views WHERE created_at > NOW() - INTERVAL '7 days'),
-      (SELECT COUNT(*)::int FROM page_views WHERE created_at > NOW() - INTERVAL '30 days'),
-      (SELECT COUNT(DISTINCT session_hash)::int FROM page_views WHERE created_at > NOW() - INTERVAL '1 day'),
-      (SELECT COUNT(DISTINCT session_hash)::int FROM page_views WHERE created_at > NOW() - INTERVAL '7 days'),
-      (SELECT COUNT(DISTINCT session_hash)::int FROM page_views WHERE created_at > NOW() - INTERVAL '30 days'),
+      (SELECT COUNT(*)::int       FROM page_views WHERE created_at >= $1::timestamptz AND created_at < $2::date + INTERVAL '1 day'),
+      (SELECT COUNT(DISTINCT session_hash)::int FROM page_views WHERE created_at >= $1::timestamptz AND created_at < $2::date + INTERVAL '1 day'),
+      (SELECT COUNT(*)::int       FROM users    WHERE created_at >= $1::timestamptz AND created_at < $2::date + INTERVAL '1 day'),
+      (SELECT COUNT(*)::int FROM posts    WHERE created_at >= $1::timestamptz AND created_at < $2::date + INTERVAL '1 day')
+        + (SELECT COUNT(*)::int FROM comments WHERE created_at >= $1::timestamptz AND created_at < $2::date + INTERVAL '1 day'),
+      (SELECT COUNT(*)::int       FROM users    WHERE last_active_at >= $1::timestamptz AND last_active_at < $2::date + INTERVAL '1 day')"
 
-      (SELECT COUNT(*)::int FROM users WHERE created_at > NOW() - INTERVAL '1 day'),
-      (SELECT COUNT(*)::int FROM users WHERE created_at > NOW() - INTERVAL '7 days'),
-      (SELECT COUNT(*)::int FROM users WHERE created_at > NOW() - INTERVAL '30 days'),
-
-      (SELECT COUNT(*)::int FROM posts WHERE created_at > NOW() - INTERVAL '1 day') + (SELECT COUNT(*)::int FROM comments WHERE created_at > NOW() - INTERVAL '1 day'),
-      (SELECT COUNT(*)::int FROM posts WHERE created_at > NOW() - INTERVAL '7 days') + (SELECT COUNT(*)::int FROM comments WHERE created_at > NOW() - INTERVAL '7 days'),
-      (SELECT COUNT(*)::int FROM posts WHERE created_at > NOW() - INTERVAL '30 days') + (SELECT COUNT(*)::int FROM comments WHERE created_at > NOW() - INTERVAL '30 days'),
-
-      (SELECT COUNT(*)::int FROM users WHERE last_active_at > NOW() - INTERVAL '1 day'),
-      (SELECT COUNT(*)::int FROM users WHERE last_active_at > NOW() - INTERVAL '7 days'),
-      (SELECT COUNT(*)::int FROM users WHERE last_active_at > NOW() - INTERVAL '30 days')"
-
-  let get_kpi_dashboard (module C: Caqti_lwt.CONNECTION) =
-    C.find get_kpi_dashboard_query () >>= function
+  let get_kpi_dashboard (module C: Caqti_lwt.CONNECTION) ~start_date ~end_date =
+    C.find get_kpi_dashboard_query (start_date, end_date) >>= function
     | Ok res -> Lwt.return (Ok res)
     | Error e -> Lwt.return (Error (Caqti_error.show e))
 end

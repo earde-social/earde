@@ -43,4 +43,4 @@ val mod_log_page : ?user:string -> community:Db.community -> Db.mod_action list 
 
 (** === ADMIN === *)
 val admin_dashboard_page : ?user:string -> banned_users:Db.user list -> Dream.request -> string
-val hq_dashboard_page : (((int * int * int) * (int * int * int)) * (int * int * int) * (int * int * int) * (int * int * int)) -> string
+val hq_dashboard_page : ((int * int * int) * (int * int)) -> start_date:string -> end_date:string -> string
