@@ -1705,183 +1705,202 @@ let search_results_page ?user ~admin_usernames user_votes current_page active_ta
 
 (* === LEGAL / PRIVACY === *)
 
-(* Two-part structure: plain-English human summary up top, then full technical/legal
-   disclosure beneath. Dual audience (users + lawyers/DPAs) without burying either. *)
+(* Single-section structure: plain-English human summary up top, then technical spec.
+   Grounded in actual schema/auth.ml — no invented infrastructure or fictional DPO. *)
 let privacy_page ?user request =
   let content = "
     <div class='max-w-2xl mx-auto mt-10 mb-16'>
 
       <h1 class='text-3xl font-extrabold text-gray-900 mb-2'>Privacy Policy</h1>
-      <p class='text-sm text-gray-400 mb-10'>Last updated: March 2026 &mdash; Earde Network (provisional Data Controller)</p>
+      <p class='text-sm text-gray-400 mb-10'>Last updated: March 2026 &mdash; Written by Dami</p>
 
-      <!-- PART 1: Human-readable summary. Intentionally blunt. -->
+      <!-- Short version: intentionally blunt, no corporate hedging. -->
       <div class='bg-[#F0FDF9] border border-[#0D9488]/20 rounded-xl p-6 mb-12'>
-        <p class='text-xs font-bold text-[#0D9488] uppercase tracking-widest mb-4'>Part 1 &mdash; The Short Version (Plain English)</p>
+        <p class='text-xs font-bold text-[#0D9488] uppercase tracking-widest mb-4'>The Short Version (Plain English)</p>
         <div class='space-y-4 text-gray-800 leading-relaxed'>
-          <p class='text-lg font-semibold'>Here is every piece of personal information Earde collects about you:</p>
-          <ul class='list-none space-y-2 text-base'>
-            <li class='flex items-start gap-2'><span class='text-[#0D9488] font-bold mt-0.5'>&#10003;</span><span><strong>Your username.</strong> Public. It is your identity on the platform.</span></li>
-            <li class='flex items-start gap-2'><span class='text-[#0D9488] font-bold mt-0.5'>&#10003;</span><span><strong>Your email address.</strong> Private. Used only to verify your account and recover your password.</span></li>
-            <li class='flex items-start gap-2'><span class='text-[#0D9488] font-bold mt-0.5'>&#10003;</span><span><strong>Your password.</strong> We never see it. It is immediately hashed with Argon2id and the original is discarded.</span></li>
-            <li class='flex items-start gap-2'><span class='text-[#0D9488] font-bold mt-0.5'>&#10003;</span><span><strong>Your posts, comments, and votes.</strong> The forum content you choose to create.</span></li>
-            <li class='flex items-start gap-2'><span class='text-[#0D9488] font-bold mt-0.5'>&#10003;</span><span><strong>Your IP address, transiently.</strong> Held in memory for rate limiting. Never written to the database.</span></li>
+          <p class='text-base font-semibold'>Everything Earde collects about you:</p>
+          <ul class='list-none space-y-2 text-sm'>
+            <li class='flex items-start gap-2'><span class='text-[#0D9488] font-bold mt-0.5'>&#10003;</span><span><strong>Your username.</strong> Public. Your identity on the platform.</span></li>
+            <li class='flex items-start gap-2'><span class='text-[#0D9488] font-bold mt-0.5'>&#10003;</span><span><strong>Your email address.</strong> Private. Used only to verify your account and send password resets.</span></li>
+            <li class='flex items-start gap-2'><span class='text-[#0D9488] font-bold mt-0.5'>&#10003;</span><span><strong>Your password &mdash; hashed, immediately.</strong> The raw password is discarded the instant it is received. Only an Argon2id hash is stored. We cannot recover or read your password.</span></li>
+            <li class='flex items-start gap-2'><span class='text-[#0D9488] font-bold mt-0.5'>&#10003;</span><span><strong>Your posts, comments, and votes.</strong> The content you choose to contribute.</span></li>
+            <li class='flex items-start gap-2'><span class='text-[#0D9488] font-bold mt-0.5'>&#10003;</span><span><strong>Your IP address, for security.</strong> Temporarily stored in the database to enforce rate limiting on login and signup. Not used for anything else.</span></li>
+            <li class='flex items-start gap-2'><span class='text-[#0D9488] font-bold mt-0.5'>&#10003;</span><span><strong>Anonymous daily page-view counts.</strong> We count visits per page using a daily-resetting hash of your IP, browser string, and the current date. The hash is one-way: the original IP cannot be recovered from it.</span></li>
           </ul>
           <div class='border-t border-[#0D9488]/20 pt-4 mt-4 space-y-2 text-sm text-gray-700'>
-            <p><strong>No advertising. No tracking pixels. No third-party analytics. No data brokers. No behavioural profiling. No selling your data. Ever.</strong></p>
-            <p>We set exactly one cookie: a signed session cookie that keeps you logged in. It contains no tracking identifier. It is deleted when you log out. Because it is strictly necessary for the service to function, we are not legally required to ask for your consent to set it &mdash; which is why there is no cookie banner.</p>
-            <p>You can <a href='/export-data' class='text-[#0D9488] underline hover:text-teal-700 font-medium'>download everything we have about you</a> as JSON at any time. You can <a href='/settings' class='text-[#0D9488] underline hover:text-teal-700 font-medium'>delete your account</a> instantly. When you do, your personal data is wiped from our database within seconds.</p>
-            <p>That is it. No fine print that contradicts any of the above.</p>
+            <p><strong>No advertising. No tracking pixels. No Google Analytics. No Meta Pixel. No data brokers. No behavioural profiling. No selling your data. Ever.</strong></p>
+            <p>We set exactly one cookie: a session cookie that keeps you logged in. It is deleted when you log out. No cookie banner is shown because this cookie is strictly necessary for the service to function &mdash; consent is not legally required for it.</p>
+            <p>You can <a href='/export-data' class='text-[#0D9488] underline hover:text-teal-700 font-medium'>download all your data</a> as JSON at any time. You can <a href='/settings' class='text-[#0D9488] underline hover:text-teal-700 font-medium'>delete your account</a> instantly from Settings.</p>
           </div>
         </div>
       </div>
 
-      <!-- PART 2: Technical and legal specification. For lawyers, auditors, DPAs. -->
-      <p class='text-xs font-bold text-gray-500 uppercase tracking-widest mb-6'>Part 2 &mdash; Technical &amp; Legal Specification</p>
+      <p class='text-xs font-bold text-gray-500 uppercase tracking-widest mb-6'>Technical Specification</p>
 
       <div class='space-y-10 text-gray-700 leading-relaxed'>
 
-        <!-- Art. 13(1)(a-b) GDPR -->
         <section>
-          <h2 class='text-lg font-bold text-gray-900 mb-3 pb-1 border-b border-gray-200'>1. Data Controller (Art. 13(1)(a))</h2>
-          <p>The data controller is <strong>Earde Network</strong> (provisional). Contact for all data protection matters: <strong>privacy@earde.eu</strong>. No DPO is appointed at this stage; Earde Network does not carry out large-scale systematic monitoring and does not process special-category data (Art. 37 GDPR threshold not met).</p>
+          <h2 class='text-lg font-bold text-gray-900 mb-3 pb-1 border-b border-gray-200'>1. Who I Am</h2>
+          <p class='mb-3'>I am Dami, a developer based in Italy. I built and run Earde alone. There is no company, no legal team, no DPO, and no dedicated privacy email address &mdash; just me. Contact me for all data protection matters: <a href='mailto:dami@earde.com' class='text-[#0D9488] underline hover:text-teal-700'>dami@earde.com</a>.</p>
+          <p class='mb-3'>This policy reflects the actual source code.  If anything here contradicts the code, the code is the ground truth &mdash; and I want to know so I can fix the policy.</p>
+          <ul class='list-disc list-inside space-y-2 text-sm mt-3'>
+            <li><strong>Earde is fully open-source.</strong> You do not have to trust this policy. Read the code and verify it yourself: <a href='https://github.com/earde-social/earde' class='text-[#0D9488] underline hover:text-teal-700' target='_blank' rel='noopener noreferrer'>https://github.com/earde-social/earde</a></li>
+            <li>I collect the minimum data needed to run this.</li>
+            <li>No third-party services receive your data. Your browser makes no requests to any external server when you use Earde.</li>
+          </ul>
         </section>
 
-        <!-- Art. 13(1)(c-d) GDPR: legal basis table -->
         <section>
-          <h2 class='text-lg font-bold text-gray-900 mb-3 pb-1 border-b border-gray-200'>2. Personal data processed and legal basis (Art. 6 &amp; 13(1)(c))</h2>
-          <p class='mb-4 text-sm'>Every category of personal data, its technical representation, retention period, and the applicable Art. 6(1) legal basis:</p>
+          <h2 class='text-lg font-bold text-gray-900 mb-3 pb-1 border-b border-gray-200'>2. Infrastructure &amp; Hosting</h2>
+          <p class='mb-3'>Earde runs on servers provided by <strong>Hetzner</strong>, a German hosting company. All servers are located physically inside the European Union &mdash; either in Germany (Nuremberg/Falkenstein) or Finland (Helsinki).</p>
+          <p class='mb-3'>Your data never leaves EU jurisdiction. I do not use Amazon Web Services, Google Cloud, Microsoft Azure, or any comparable US-based cloud platform. There is no CDN routing your traffic through non-EU nodes. The infrastructure is a bespoke setup &mdash; server, PostgreSQL database, application &mdash; with no intermediary black boxes. The entire data pipeline is subject to EU law, including the GDPR, from end to end.</p>
+        </section>
+
+        <section>
+          <h2 class='text-lg font-bold text-gray-900 mb-3 pb-1 border-b border-gray-200'>3. Data Collected &amp; Legal Basis (Art. 6)</h2>
+          <p class='mb-4 text-sm'>Every category of personal data, its exact storage location, retention period, and GDPR legal basis:</p>
           <div class='overflow-x-auto'>
             <table class='w-full text-sm border border-gray-200 rounded-lg overflow-hidden'>
               <thead class='bg-gray-50 text-gray-600 font-semibold'>
                 <tr>
-                  <th class='text-left px-4 py-2 border-b border-gray-200'>Data category</th>
+                  <th class='text-left px-4 py-2 border-b border-gray-200'>Data</th>
                   <th class='text-left px-4 py-2 border-b border-gray-200'>Storage</th>
                   <th class='text-left px-4 py-2 border-b border-gray-200'>Retention</th>
-                  <th class='text-left px-4 py-2 border-b border-gray-200'>Legal basis</th>
+                  <th class='text-left px-4 py-2 border-b border-gray-200'>Basis</th>
                 </tr>
               </thead>
               <tbody class='divide-y divide-gray-100'>
                 <tr class='hover:bg-gray-50'>
                   <td class='px-4 py-2 font-medium'>Username</td>
-                  <td class='px-4 py-2 text-gray-500'>PostgreSQL <code class='bg-gray-100 px-1 rounded'>users.username</code> (plaintext; public by design)</td>
-                  <td class='px-4 py-2 text-gray-500'>Until account deletion; then replaced with <code class='bg-gray-100 px-1 rounded'>[deleted_&lt;id&gt;]</code></td>
-                  <td class='px-4 py-2 text-gray-500'>Art. 6(1)(b) &mdash; performance of contract</td>
+                  <td class='px-4 py-2 text-gray-500'><code class='bg-gray-100 px-1 rounded'>users.username</code> &mdash; plaintext, public</td>
+                  <td class='px-4 py-2 text-gray-500'>Until deletion; replaced with <code class='bg-gray-100 px-1 rounded'>[deleted_N]</code></td>
+                  <td class='px-4 py-2 text-gray-500'>Art. 6(1)(b)</td>
                 </tr>
                 <tr class='hover:bg-gray-50'>
                   <td class='px-4 py-2 font-medium'>Email address</td>
-                  <td class='px-4 py-2 text-gray-500'>PostgreSQL <code class='bg-gray-100 px-1 rounded'>users.email</code> (plaintext; never exposed in UI)</td>
-                  <td class='px-4 py-2 text-gray-500'>Until account deletion; then replaced with <code class='bg-gray-100 px-1 rounded'>deleted_&lt;id&gt;@earde.local</code></td>
-                  <td class='px-4 py-2 text-gray-500'>Art. 6(1)(b) &mdash; performance of contract</td>
+                  <td class='px-4 py-2 text-gray-500'><code class='bg-gray-100 px-1 rounded'>users.email</code> &mdash; plaintext, never shown in UI</td>
+                  <td class='px-4 py-2 text-gray-500'>Until deletion; overwritten with <code class='bg-gray-100 px-1 rounded'>deleted_N@earde.local</code></td>
+                  <td class='px-4 py-2 text-gray-500'>Art. 6(1)(b)</td>
                 </tr>
                 <tr class='hover:bg-gray-50'>
-                  <td class='px-4 py-2 font-medium'>Password</td>
-                  <td class='px-4 py-2 text-gray-500'>PostgreSQL <code class='bg-gray-100 px-1 rounded'>users.password_hash</code> (Argon2id; raw password never persisted)</td>
-                  <td class='px-4 py-2 text-gray-500'>Until account deletion; then zeroed</td>
-                  <td class='px-4 py-2 text-gray-500'>Art. 6(1)(b) &mdash; performance of contract</td>
+                  <td class='px-4 py-2 font-medium'>Password hash</td>
+                  <td class='px-4 py-2 text-gray-500'><code class='bg-gray-100 px-1 rounded'>users.password_hash</code> &mdash; Argon2id encoded string; raw password never stored</td>
+                  <td class='px-4 py-2 text-gray-500'>Until deletion; zeroed</td>
+                  <td class='px-4 py-2 text-gray-500'>Art. 6(1)(b)</td>
                 </tr>
                 <tr class='hover:bg-gray-50'>
                   <td class='px-4 py-2 font-medium'>Posts &amp; comments</td>
-                  <td class='px-4 py-2 text-gray-500'>PostgreSQL <code class='bg-gray-100 px-1 rounded'>posts</code>, <code class='bg-gray-100 px-1 rounded'>comments</code></td>
-                  <td class='px-4 py-2 text-gray-500'>Indefinite as community content; authorship anonymised on account deletion</td>
-                  <td class='px-4 py-2 text-gray-500'>Art. 6(1)(b) &mdash; performance of contract</td>
+                  <td class='px-4 py-2 text-gray-500'><code class='bg-gray-100 px-1 rounded'>posts</code>, <code class='bg-gray-100 px-1 rounded'>comments</code> tables</td>
+                  <td class='px-4 py-2 text-gray-500'>Indefinite as community content; authorship tombstoned on deletion (see &sect;6)</td>
+                  <td class='px-4 py-2 text-gray-500'>Art. 6(1)(b)</td>
                 </tr>
                 <tr class='hover:bg-gray-50'>
                   <td class='px-4 py-2 font-medium'>Votes</td>
-                  <td class='px-4 py-2 text-gray-500'>PostgreSQL <code class='bg-gray-100 px-1 rounded'>post_votes</code>, <code class='bg-gray-100 px-1 rounded'>comment_votes</code></td>
-                  <td class='px-4 py-2 text-gray-500'>Cascade-deleted on account deletion</td>
-                  <td class='px-4 py-2 text-gray-500'>Art. 6(1)(b) &mdash; performance of contract</td>
+                  <td class='px-4 py-2 text-gray-500'><code class='bg-gray-100 px-1 rounded'>post_votes</code>, <code class='bg-gray-100 px-1 rounded'>comment_votes</code> tables</td>
+                  <td class='px-4 py-2 text-gray-500'>Hard-deleted on account deletion (CASCADE)</td>
+                  <td class='px-4 py-2 text-gray-500'>Art. 6(1)(b)</td>
                 </tr>
                 <tr class='hover:bg-gray-50'>
-                  <td class='px-4 py-2 font-medium'>Bio &amp; avatar URL (optional)</td>
-                  <td class='px-4 py-2 text-gray-500'>PostgreSQL <code class='bg-gray-100 px-1 rounded'>users.bio</code>, <code class='bg-gray-100 px-1 rounded'>users.avatar_url</code></td>
+                  <td class='px-4 py-2 font-medium'>Bio &amp; avatar (optional)</td>
+                  <td class='px-4 py-2 text-gray-500'><code class='bg-gray-100 px-1 rounded'>users.bio</code>, <code class='bg-gray-100 px-1 rounded'>users.avatar_url</code></td>
                   <td class='px-4 py-2 text-gray-500'>Until changed or account deletion</td>
-                  <td class='px-4 py-2 text-gray-500'>Art. 6(1)(a) &mdash; consent (freely given, specific, withdrawable)</td>
+                  <td class='px-4 py-2 text-gray-500'>Art. 6(1)(a) &mdash; consent</td>
                 </tr>
                 <tr class='hover:bg-gray-50'>
-                  <td class='px-4 py-2 font-medium'>IP address</td>
-                  <td class='px-4 py-2 text-gray-500'>Dream framework in-process memory only; used for sliding-window rate limiting</td>
-                  <td class='px-4 py-2 text-gray-500'>Ephemeral; evicted on server restart, never written to database or logs</td>
-                  <td class='px-4 py-2 text-gray-500'>Art. 6(1)(f) &mdash; legitimate interest (abuse prevention)</td>
+                  <td class='px-4 py-2 font-medium'>IP address (rate limiting)</td>
+                  <td class='px-4 py-2 text-gray-500'><code class='bg-gray-100 px-1 rounded'>rate_limits.ip_address</code> &mdash; plaintext, alongside attempt count and time window</td>
+                  <td class='px-4 py-2 text-gray-500'>Sliding window (~60s); stale rows are overwritten, not archived</td>
+                  <td class='px-4 py-2 text-gray-500'>Art. 6(1)(f) &mdash; legitimate interest (security)</td>
+                </tr>
+                <tr class='hover:bg-gray-50'>
+                  <td class='px-4 py-2 font-medium'>Page-view session hash</td>
+                  <td class='px-4 py-2 text-gray-500'><code class='bg-gray-100 px-1 rounded'>page_views.session_hash</code> &mdash; MD5(IP + User-Agent + date); one-way, non-reversible</td>
+                  <td class='px-4 py-2 text-gray-500'>Indefinite aggregate; hash resets every 24 hours by design</td>
+                  <td class='px-4 py-2 text-gray-500'>Art. 6(1)(f) &mdash; legitimate interest (understanding usage)</td>
                 </tr>
                 <tr class='hover:bg-gray-50'>
                   <td class='px-4 py-2 font-medium'>Password reset token</td>
-                  <td class='px-4 py-2 text-gray-500'>PostgreSQL <code class='bg-gray-100 px-1 rounded'>users.reset_token</code></td>
-                  <td class='px-4 py-2 text-gray-500'>Hard-expiry: 1 hour from issuance</td>
-                  <td class='px-4 py-2 text-gray-500'>Art. 6(1)(b) &mdash; performance of contract</td>
+                  <td class='px-4 py-2 text-gray-500'><code class='bg-gray-100 px-1 rounded'>password_resets.token</code></td>
+                  <td class='px-4 py-2 text-gray-500'>Hard expiry via <code class='bg-gray-100 px-1 rounded'>expires_at</code>; deleted on use (CASCADE on user deletion)</td>
+                  <td class='px-4 py-2 text-gray-500'>Art. 6(1)(b)</td>
                 </tr>
               </tbody>
             </table>
           </div>
-          <p class='mt-4 text-sm text-gray-500'>No special-category data (Art. 9) is collected or processed. No data is transferred to third countries outside the EEA. No automated decision-making or profiling (Art. 22) takes place.</p>
+          <p class='mt-4 text-sm text-gray-500'>No real name, date of birth, phone number, or any other identifying information is collected or requested. No special-category data (Art. 9). No data transfers outside the EEA. No automated decision-making or profiling (Art. 22).</p>
+        </section>
+
+        <section>
+          <h2 class='text-lg font-bold text-gray-900 mb-3 pb-1 border-b border-gray-200'>4. Password Security (Art. 32)</h2>
+          <p class='mb-3'>When you set a password, the server runs the following logic (from <code class='bg-gray-100 px-1 rounded text-sm'>auth.ml</code>):</p>
+          <pre class='bg-gray-900 text-green-300 rounded-lg p-4 text-sm overflow-x-auto leading-relaxed'>let salt = Dream.random 16  (* 16 bytes from the framework CSPRNG *)
+Argon2.hash
+  ~t_cost:2           (* 2 iterations *)
+  ~m_cost:65536       (* 64 MB of RAM required per hash attempt *)
+  ~parallelism:1
+  ~kind:Argon2.ID     (* Argon2id variant *)
+  ~version:Argon2.VERSION_13
+  ~hash_len:32
+  ...</pre>
+          <p class='mt-3 mb-3'><strong>Argon2id</strong> is the algorithm recommended by OWASP and selected by the Password Hashing Competition. The <code class='bg-gray-100 px-1 rounded text-sm'>ID</code> variant provides resistance against both side-channel and GPU brute-force attacks. The 64 MB memory requirement means cracking a single password requires 64 MB of RAM per attempt &mdash; making large-scale GPU attacks economically prohibitive.</p>
+          <p>A fresh 16-byte random salt is generated for every password, so two users with identical passwords will have completely different hashes. Only the encoded hash string is written to the database. The plaintext password is never stored, logged, or accessible after the request completes.</p>
+          <p class='mt-3 text-sm text-gray-500'>Additional security measures: CSRF tokens on all state-mutating forms; HTML output escaping preventing XSS; rate limiting on auth endpoints; session cookie with <code class='bg-gray-100 px-1 rounded'>Secure</code>, <code class='bg-gray-100 px-1 rounded'>HttpOnly</code>, and <code class='bg-gray-100 px-1 rounded'>SameSite=Strict</code> attributes.</p>
         </section>
 
         <!-- ePrivacy Directive 2002/58/EC, Recital 25 -->
         <section>
-          <h2 class='text-lg font-bold text-gray-900 mb-3 pb-1 border-b border-gray-200'>3. Cookie and session architecture</h2>
-          <p class='mb-3'>Earde sets <strong>exactly one cookie</strong>: a cryptographically-signed session cookie issued by the Dream web framework. The cookie is HMAC-SHA256 signed using a 256-bit secret key configured via the <code class='bg-gray-100 px-1 rounded text-sm'>DREAM_SECRET</code> environment variable. It carries only an opaque session identifier; the session payload (user ID, username, admin flag) is held server-side in process memory and is never exposed to the client.</p>
-          <p class='mb-3'>This cookie is <strong>strictly necessary</strong> for the service to function: without it, login state cannot be maintained across requests. Under the ePrivacy Directive 2002/58/EC, Article 5(3) and Recital 25, strictly-necessary cookies are exempt from the prior-consent requirement. This is the legal basis for the absence of a cookie consent banner on Earde.</p>
-          <p>The cookie is cleared immediately on logout (<code class='bg-gray-100 px-1 rounded text-sm'>Dream.invalidate_session</code>). It does not persist across devices or browser profiles. No third-party cookies are set by Earde or any resource it loads.</p>
+          <h2 class='text-lg font-bold text-gray-900 mb-3 pb-1 border-b border-gray-200'>5. Cookies &amp; Tracking</h2>
+          <p class='mb-3'>Earde sets <strong>exactly one cookie</strong>: a session cookie issued by the Dream web framework. It carries only an opaque session identifier. The session data (user ID, username) is stored server-side in the <code class='bg-gray-100 px-1 rounded text-sm'>dream_session</code> PostgreSQL table &mdash; nothing personal is embedded in the cookie itself.</p>
+          <p class='mb-3'>This cookie is strictly necessary for the service to function. Under ePrivacy Directive 2002/58/EC, Art. 5(3) and Recital 25, strictly-necessary cookies are exempt from prior-consent requirements. This is why there is no cookie consent banner.</p>
+          <p class='mb-3'>The cookie is cleared immediately on logout. It does not persist across devices or browser profiles.</p>
+          <p class='font-medium text-gray-900'>What we do <em>not</em> use:</p>
+          <ul class='list-disc list-inside space-y-1 text-sm mt-2'>
+            <li>Google Analytics, Google Tag Manager, or any Google product</li>
+            <li>Meta (Facebook) Pixel or any Meta tracking</li>
+            <li>Any third-party advertising or analytics script</li>
+            <li>Cross-site tracking or browser fingerprinting</li>
+          </ul>
+          <p class='mt-3 text-sm'>When you visit Earde, your browser makes no requests to any third-party server.</p>
         </section>
 
-        <!-- Art. 17 GDPR: right to erasure — technical implementation -->
+        <!-- Art. 17 GDPR: right to erasure — exact SQL from the codebase -->
         <section>
-          <h2 class='text-lg font-bold text-gray-900 mb-3 pb-1 border-b border-gray-200'>4. Right to Erasure &mdash; technical implementation (Art. 17)</h2>
-          <p class='mb-3'>Account deletion is handled by <code class='bg-gray-100 px-1 rounded text-sm'>Db.anonymize_user</code>, which executes the following atomic SQL update:</p>
+          <h2 class='text-lg font-bold text-gray-900 mb-3 pb-1 border-b border-gray-200'>6. Account Deletion &amp; Right to Erasure (Art. 17)</h2>
+          <p class='mb-3'>When you delete your account, the server calls <code class='bg-gray-100 px-1 rounded text-sm'>Db.anonymize_user</code>, which executes this SQL:</p>
           <pre class='bg-gray-900 text-green-300 rounded-lg p-4 text-sm overflow-x-auto leading-relaxed'>UPDATE users
-  SET username      = \'[deleted_\' || id || \']\',
-      email         = \'deleted_\' || id || \'@earde.local\',
-      password_hash = \'\'
-  WHERE id = $1</pre>
-          <p class='mt-3 mb-3'>Downstream data (votes, memberships, moderator roles, community bans, notifications) is removed by PostgreSQL <code class='bg-gray-100 px-1 rounded text-sm'>ON DELETE CASCADE</code> foreign-key constraints, which fire within the same transaction.</p>
-          <p class='mb-3'><strong>Why anonymisation rather than hard-delete?</strong> Hard-deleting a user row would create orphaned comment and post rows, breaking thread coherence and violating referential integrity. Anonymisation satisfies Art. 17 because the resulting tokens (<code class='bg-gray-100 px-1 rounded text-sm'>[deleted_42]</code>, <code class='bg-gray-100 px-1 rounded text-sm'>deleted_42@earde.local</code>) cannot be re-linked to the original natural person without additional information that is simultaneously destroyed &mdash; meeting the pseudonymisation standard of Art. 4(5) and the &ldquo;no longer personal data&rdquo; threshold of Recital 26.</p>
-          <p>The post-deletion session is immediately invalidated (<code class='bg-gray-100 px-1 rounded text-sm'>Dream.invalidate_session</code>), ensuring no authenticated request can be made on behalf of the deleted identity.</p>
-          <p class='mt-3'><span class='text-[#0D9488] font-medium'>In-product shortcut:</span> <a href='/settings' class='text-[#0D9488] underline hover:text-teal-700'>Settings &rarr; Danger Zone &rarr; Delete account</a>.</p>
+SET username      = \'[deleted_\' || id || \']\',
+    email         = \'deleted_\' || id || \'@earde.local\',
+    password_hash = \'\'
+WHERE id = $1</pre>
+          <p class='mt-3 mb-3'>Your email is overwritten with an inert placeholder. Your password hash is wiped. Your username becomes an anonymous tombstone like <code class='bg-gray-100 px-1 rounded text-sm'>[deleted_42]</code>. Your votes, community memberships, moderator roles, bans, and notifications are hard-deleted by <code class='bg-gray-100 px-1 rounded text-sm'>ON DELETE CASCADE</code> constraints. Your session is immediately invalidated.</p>
+          <p class='mb-3'><strong>Your posts and comments are not deleted.</strong> They remain in the database attributed to the <code class='bg-gray-100 px-1 rounded text-sm'>[deleted_N]</code> tombstone. This is an intentional design choice: hard-deleting your user row would cascade and destroy every reply ever written to your comments, breaking discussion threads for everyone else. The tombstone cannot be linked back to you &mdash; your email and credentials are gone &mdash; satisfying the pseudonymisation threshold of GDPR Art. 4(5) and Recital 26.</p>
+          <p class='mb-3 text-sm bg-amber-50 border border-amber-200 rounded-lg p-3 text-amber-800'>If you also want your posts and comments deleted, email me at <a href='mailto:dami@earde.com' class='underline font-medium'>dami@earde.com</a> and I will remove them manually.</p>
+          <p>Before deleting, you can export your posts and comments as JSON from the <a href='/settings' class='text-[#0D9488] underline hover:text-teal-700'>Settings page</a>.</p>
         </section>
 
-        <!-- Art. 20 GDPR: data portability — technical implementation -->
+        <!-- Art. 15-21 GDPR -->
         <section>
-          <h2 class='text-lg font-bold text-gray-900 mb-3 pb-1 border-b border-gray-200'>5. Data Portability &mdash; technical implementation (Art. 20)</h2>
-          <p class='mb-3'>The <code class='bg-gray-100 px-1 rounded text-sm'>GET /export-data</code> endpoint returns a <code class='bg-gray-100 px-1 rounded text-sm'>Content-Disposition: attachment</code> JSON document containing the full data set held against the authenticated user: profile fields (username, bio, avatar_url, joined_at), all posts (id, title, url, content, community_slug, created_at, score), and all comments (id, content, created_at, post_id, post_title, score). The format is structured JSON &mdash; machine-readable and interoperable &mdash; satisfying the portability format requirement of Art. 20(1). The endpoint requires an authenticated session; unauthenticated requests receive a 401 redirect.</p>
-          <p class='mt-3'><span class='text-[#0D9488] font-medium'>In-product shortcut:</span> <a href='/export-data' class='text-[#0D9488] underline hover:text-teal-700'>Settings &rarr; Export your data</a>.</p>
-        </section>
-
-        <!-- Art. 15-21 GDPR: full rights enumeration -->
-        <section>
-          <h2 class='text-lg font-bold text-gray-900 mb-3 pb-1 border-b border-gray-200'>6. Data subject rights (Arts. 15&ndash;21)</h2>
+          <h2 class='text-lg font-bold text-gray-900 mb-3 pb-1 border-b border-gray-200'>7. Your GDPR Rights</h2>
+          <p class='mb-4 text-sm'>To exercise any right, email <a href='mailto:dami@earde.com' class='text-[#0D9488] underline hover:text-teal-700 font-medium'>dami@earde.com</a>. I will respond within 30 days (Art. 12(3)), at no charge (Art. 12(5)). Many rights are also exercisable directly in the product:</p>
           <ul class='space-y-3'>
-            <li><span class='font-semibold text-gray-900'>Access (Art. 15)</span> &mdash; Request a full copy of your data. <span class='text-[#0D9488]'>In-product: <a href='/export-data' class='underline hover:text-teal-700'>Export data</a>.</span></li>
-            <li><span class='font-semibold text-gray-900'>Rectification (Art. 16)</span> &mdash; Correct inaccurate data at any time. <span class='text-[#0D9488]'>In-product: <a href='/settings' class='underline hover:text-teal-700'>Settings &rarr; Edit profile</a>.</span></li>
-            <li><span class='font-semibold text-gray-900'>Erasure (Art. 17)</span> &mdash; Delete your account and anonymise your personal data immediately. <span class='text-[#0D9488]'>In-product: <a href='/settings' class='underline hover:text-teal-700'>Settings &rarr; Delete account</a>.</span></li>
-            <li><span class='font-semibold text-gray-900'>Restriction (Art. 18)</span> &mdash; Request restriction of processing pending a dispute. Contact privacy@earde.eu.</li>
-            <li><span class='font-semibold text-gray-900'>Portability (Art. 20)</span> &mdash; Receive your data in a structured, machine-readable format. <span class='text-[#0D9488]'>In-product: <a href='/export-data' class='underline hover:text-teal-700'>Export data</a>.</span></li>
-            <li><span class='font-semibold text-gray-900'>Object (Art. 21)</span> &mdash; Object to processing based on legitimate interest (Art. 6(1)(f)). We will cease unless overriding legitimate grounds are demonstrated. Contact privacy@earde.eu.</li>
-          </ul>
-          <p class='mt-4 text-sm'>To exercise any right not available via the product interface, write to <strong>privacy@earde.eu</strong>. We will respond within <strong>30 days</strong> per Art. 12(3), at no charge per Art. 12(5).</p>
-        </section>
-
-        <!-- Art. 32 GDPR: security -->
-        <section>
-          <h2 class='text-lg font-bold text-gray-900 mb-3 pb-1 border-b border-gray-200'>7. Security measures (Art. 32)</h2>
-          <ul class='list-disc list-inside space-y-2 text-sm'>
-            <li><strong>Argon2id</strong> for all password hashes (OWASP recommended; PHC winner). Raw passwords are never logged or persisted.</li>
-            <li><strong>CSRF tokens</strong> on every state-mutating form (Dream framework built-in).</li>
-            <li><strong>HTML output escaping</strong> on all user-supplied strings before template interpolation, preventing stored and reflected XSS.</li>
-            <li><strong>URL validation</strong> blocking <code class='bg-gray-100 px-1 rounded'>javascript:</code> and <code class='bg-gray-100 px-1 rounded'>data:</code> schemes in user-supplied link targets.</li>
-            <li><strong>Rate limiting</strong> (5 attempts / 60 seconds, sliding window) on signup, login, and password reset endpoints.</li>
-            <li><strong>TLS</strong> enforced in transit. The session cookie is issued with <code class='bg-gray-100 px-1 rounded'>Secure</code>, <code class='bg-gray-100 px-1 rounded'>HttpOnly</code>, and <code class='bg-gray-100 px-1 rounded'>SameSite=Strict</code> attributes by the Dream framework.</li>
-            <li><strong>Server-side re-authorisation</strong> on all privilege-sensitive mutations (moderator actions, admin actions) &mdash; no trust placed in client-supplied role claims.</li>
+            <li><span class='font-semibold text-gray-900'>Access (Art. 15)</span> &mdash; Request a copy of all data held about you. <span class='text-[#0D9488]'>In-product: <a href='/export-data' class='underline hover:text-teal-700'>Export data (JSON)</a>.</span></li>
+            <li><span class='font-semibold text-gray-900'>Rectification (Art. 16)</span> &mdash; Correct inaccurate data. <span class='text-[#0D9488]'>In-product: <a href='/settings' class='underline hover:text-teal-700'>Settings &rarr; Edit profile</a>.</span></li>
+            <li><span class='font-semibold text-gray-900'>Erasure (Art. 17)</span> &mdash; Delete your account and anonymise your data. <span class='text-[#0D9488]'>In-product: <a href='/settings' class='underline hover:text-teal-700'>Settings &rarr; Delete account</a>.</span> Or email me to also remove post/comment content.</li>
+            <li><span class='font-semibold text-gray-900'>Restriction (Art. 18)</span> &mdash; Request restriction of processing pending a dispute. Email me.</li>
+            <li><span class='font-semibold text-gray-900'>Portability (Art. 20)</span> &mdash; Receive your data in a machine-readable format. <span class='text-[#0D9488]'>In-product: <a href='/export-data' class='underline hover:text-teal-700'>Export data (JSON)</a>.</span></li>
+            <li><span class='font-semibold text-gray-900'>Object (Art. 21)</span> &mdash; Object to processing based on legitimate interest. Email me.</li>
           </ul>
         </section>
 
-        <!-- Art. 13(2)(d) GDPR: mandatory supervisory authority disclosure -->
+        <!-- Art. 13(2)(d) GDPR: supervisory authority -->
         <section>
-          <h2 class='text-lg font-bold text-gray-900 mb-3 pb-1 border-b border-gray-200'>8. Right to lodge a supervisory authority complaint (Art. 13(2)(d))</h2>
-          <p>Without prejudice to any other administrative or judicial remedy, you have the right to lodge a complaint with the supervisory authority in the EU Member State of your habitual residence, place of work, or place of the alleged infringement, if you consider that the processing of your personal data infringes the GDPR. A full directory of EU/EEA supervisory authorities is maintained at <strong>edpb.europa.eu</strong>.</p>
+          <h2 class='text-lg font-bold text-gray-900 mb-3 pb-1 border-b border-gray-200'>8. Supervisory Authority (Art. 13(2)(d))</h2>
+          <p>If you believe your rights under the GDPR have been violated, you have the right to lodge a complaint with a supervisory authority. As I am based in Italy, the lead authority is the <strong>Garante per la protezione dei dati personali</strong> (<a href='https://www.garanteprivacy.it' class='text-[#0D9488] underline hover:text-teal-700' target='_blank' rel='noopener noreferrer'>garanteprivacy.it</a>). You may also contact the authority in your own EU member state of residence.</p>
         </section>
 
         <section>
-          <h2 class='text-lg font-bold text-gray-900 mb-3 pb-1 border-b border-gray-200'>9. Changes to this policy</h2>
-          <p>Material changes will be communicated to registered users via a platform notification at least 14 days before they take effect. The &ldquo;Last updated&rdquo; date at the top of this page always reflects the current version. Continued use of Earde after the effective date constitutes acceptance of the revised policy.</p>
+          <h2 class='text-lg font-bold text-gray-900 mb-3 pb-1 border-b border-gray-200'>9. Changes to This Policy</h2>
+          <p>If the code changes in a way that affects data handling, this document will be updated and the date at the top of the page will reflect it. The source code remains the authoritative reference at all times.</p>
         </section>
 
       </div>
@@ -1889,69 +1908,91 @@ let privacy_page ?user request =
   in
   Components.layout ?user ~request ~title:"Privacy Policy" content
 
-(* About page: opinionated manifesto in the Lobsters/HN tradition.
-   Dense prose, no marketing fluff — explains the why, not just the what. *)
+(* About page: honest manifesto — who we are, why we built this, how we differ.
+   Written in first-person to match the voice of a founder-built product, not a corp. *)
 let about_page ?user request =
   let content = "
-    <div class='max-w-2xl mx-auto mt-10 mb-16'>
+    <div class='max-w-prose mx-auto mt-10 mb-16 px-4'>
 
-      <h1 class='text-3xl font-extrabold text-gray-900 mb-8'>About Earde</h1>
+      <h1 class='text-3xl font-extrabold text-gray-900 mb-2'>About Earde</h1>
+      <p class='text-sm text-gray-400 mb-10'>The european discussion platform &mdash; built from the alps, for everyone.</p>
 
-      <div class='space-y-8 text-gray-700 leading-relaxed'>
+      <div class='space-y-10 text-gray-700 leading-7'>
 
         <section>
-          <h2 class='text-base font-bold text-gray-900 uppercase tracking-wide mb-3'>What is Earde?</h2>
-          <p class='mb-3'>Earde is a community forum and link aggregator built as a fast, open-source, European alternative to Reddit. It is structured around <em>communities</em> &mdash; self-governing spaces, each with its own moderators, rules, and culture. There is no algorithmic feed, no recommendation engine, and no engagement optimisation. Posts are ranked by community votes. The most recent activity surfaces to the top. That is the entire algorithm.</p>
-          <p>The name comes from the ancient Greek <em>koin&oacute;n</em> (&kappa;&omicron;&iota;&nu;&#972;&nu;) &mdash; a league of communities acting in common. That is the model: sovereign communities, federated under shared rules of conduct, with no central authority dictating what you see or think.</p>
+          <h2 class='text-xl font-bold text-gray-900 mb-4'>Why we built this (and who we are)</h2>
+          <p class='mb-3'>The internet&rsquo;s largest communities are almost exclusively hosted in the US, run by US corporations, and subject to US data practices. We believe Europe needs its own digital public square.</p>
+          <p class='mb-3'>Earde is an <a href='https://github.com/earde-social/earde' class='text-[#0D9488] underline hover:text-teal-700' target='_blank' rel='noopener noreferrer'>open-source</a>, deeply european discussion platform. We built this to be a GDPR-compliant sanctuary: hosted entirely on european servers, free from data harvesting, and strictly moderated against hate speech. We want to prove that a modern social aggregator can be incredibly fast, privacy-respecting, and community-driven without treating its users as products.</p>
         </section>
 
         <section>
-          <h2 class='text-base font-bold text-gray-900 uppercase tracking-wide mb-3'>Why we built it</h2>
-          <p class='mb-3'>Reddit was a great idea that survived contact with venture capital. Over a decade it accumulated dark patterns: infinite scroll, autoplay video, feed manipulation, third-party ad networks, aggressive data collection, and a 2023 API shutdown that killed every serious third-party client. The company that built it is now publicly traded and answers to shareholders, not users.</p>
-          <p class='mb-3'>We are not interested in that trajectory. Earde is built for people who want a text-centric discussion forum that does not treat them as inventory to be monetised. It is built in Europe, hosted on European bare-metal servers, and designed from the first line of code to be compliant with the GDPR &mdash; not as an afterthought, but as an architectural constraint.</p>
-          <p>We are also making a small technical statement. Earde is written in <strong>OCaml</strong>, a statically-typed functional language developed at INRIA in France. OCaml has been powering critical infrastructure in finance, verification, and compilers for decades. It deserves a turn on the web.</p>
+          <h2 class='text-xl font-bold text-gray-900 mb-4'>Who is building this? (The team)</h2>
+          <p class='mb-3'>Earde isn&rsquo;t a product of a Silicon Valley incubator &mdash; it&rsquo;s being built from the italian alps.</p>
+          <p class='mb-3'>I&rsquo;m Dami, the developer. I have a degree in philosophy and a deep interest in formal logic. I also love to write code.</p>
+          <p class='mb-3'>The name <em>Earde</em> comes from cimbrian, an ancient germanic language still spoken in a few isolated villages here in the alps. It means &ldquo;earth&rdquo;. We chose it because we want to build something grounded &mdash; a solid foundation for real human connection, far removed from the hyper-commercialized &ldquo;clouds&rdquo; of modern big tech.</p>
+          <p>I am not doing this alone. My friend Nico is the other half of the brain behind Earde. He doesn&rsquo;t write a single line of code, and that is exactly why he is essential. Nico acts as the product manager. He ensures the platform is built for actual human beings, focusing on user experience, community dynamics, and keeping my engineering decisions aligned with our core philosophy.</p>
         </section>
 
         <section>
-          <h2 class='text-base font-bold text-gray-900 uppercase tracking-wide mb-3'>What we believe</h2>
-          <ul class='list-disc list-inside space-y-3'>
-            <li><strong>Privacy is a default, not a setting.</strong> We collect your username and email. Nothing else. See the <a href='/privacy' class='text-[#0D9488] underline hover:text-teal-700'>Privacy Policy</a> for the full technical disclosure.</li>
-            <li><strong>Communities should govern themselves.</strong> Each community sets its own rules and elects its own moderators. Platform-wide rules exist only to prevent serious harm, not to enforce a particular culture.</li>
-            <li><strong>Text is a feature, not a limitation.</strong> Earde is designed for reading and writing. Images, video, and infinite scroll are not on the roadmap.</li>
-            <li><strong>No algorithmic mediation.</strong> You see what your communities voted on, in the order they voted on it. We do not decide what is important for you.</li>
-            <li><strong>Open source is non-negotiable.</strong> You can audit every line of code, run your own instance, and fork the project. There are no backdoors, no proprietary modules, and no dark-pattern UI patterns hidden in a closed binary.</li>
+          <h2 class='text-xl font-bold text-gray-900 mb-4'>The Alternatives (And why we are different)</h2>
+          <p class='mb-4'>We aren&rsquo;t the first to try building a text-based community platform. Here is exactly where we stand compared to the rest of the landscape:</p>
+          <ul class='list-disc list-outside pl-5 space-y-3'>
+            <li><strong>How is it different from Reddit?</strong> Aside from being hosted in the EU, Earde is fully <a href='https://github.com/earde-social/earde' class='text-[#0D9488] underline hover:text-teal-700' target='_blank' rel='noopener noreferrer'>open-source</a>. We retain zero unnecessary data, run as little JavaScript as humanly possible, and our code is built for speed, not for tracking your every click.</li>
+            <li><strong>How is it different from Lemmy or Mastodon?</strong> We are fully centralized. We believe the fediverse is a fantastic technical experiment, but it is fundamentally hostile to the average user. Earde is designed to be frictionless: you sign up in three seconds and start reading. No instances, no federation delays, no confusing server rules.</li>
+            <li><strong>How is it different from Discuit?</strong> We actively want to raise capital to hire a real team, invest in marketing, and genuinely compete on a global scale (read our Investment Strategy below to see how we plan to do this without ruining the site).</li>
+            <li><strong>How is it different from Squabbles?</strong> Squabbles launched with a &ldquo;free speech absolutist&rdquo; approach that quickly spiraled into toxic community management. We take a firm stance: we will enforce the deletion of hate speech, racism, and harassment. Freedom of discussion requires a safe environment to discuss in.</li>
           </ul>
         </section>
 
         <section>
-          <h2 class='text-base font-bold text-gray-900 uppercase tracking-wide mb-3'>Community guidelines</h2>
-          <p class='mb-3'>Earde communities are self-governing within the following platform-wide rules. These exist to protect users, not to police opinion.</p>
-          <ul class='list-disc list-inside space-y-2'>
-            <li>No harassment, targeted abuse, or threats directed at individuals or groups.</li>
-            <li>No content that is illegal under the law of the European Union or the jurisdiction of the hosting country.</li>
-            <li>No spam, unsolicited commercial solicitation, or coordinated inauthentic behaviour.</li>
-            <li>No impersonation of real persons, organisations, or public figures.</li>
-            <li>No content that sexualises or endangers minors.</li>
+          <h2 class='text-xl font-bold text-gray-900 mb-4'>Transparency &amp; Privacy Policy</h2>
+          <p>We believe in radical data minimalism. We do not track your off-site activity, we do not sell your email, and we permanently delete what needs to be deleted. For the exact technical details of how your data flows through our EU servers, read our <a href='/privacy' class='text-[#0D9488] underline hover:text-teal-700'>Technical Privacy Policy here</a>.</p>
+        </section>
+
+        <section>
+          <h2 class='text-xl font-bold text-gray-900 mb-4'>Core features (the anti-toxicity engine)</h2>
+          <p class='mb-4'>We baked our philosophy directly into the code.</p>
+          <ul class='list-disc list-outside pl-5 space-y-3'>
+            <li><strong>Public moderation logs:</strong> every ban, deleted post, and rule change made by moderators is visible in a public log.</li>
+            <li><strong>The council of equals:</strong> there is no single &ldquo;dictator&rdquo; for a community. The top tier of moderation is shared by a council of up to 3 top mods with equal permissions.</li>
+            <li><strong>The anti-squatter rule (3-month expiry):</strong> if a top mod is inactive on Earde for 3 months, they automatically lose their status. Communities belong to active users, not absentee landlords.</li>
+            <li><strong>Optional downvote shadowing:</strong> for highly sensitive communities, founders can enable downvote shadowing to prevent dogpiling and toxicity, while keeping the platform democratic.</li>
+            <li><strong>No infinite scrolling:</strong> by default, Earde uses pagination. When you reach the bottom, it stops. We want you to read intentionally, not doomscroll.</li>
+            <li><strong>No gamification:</strong> no awards, no paid badges, no gimmicks designed to artificially drum up engagement. Just upvotes, downvotes, and words.</li>
           </ul>
-          <p class='mt-3'>Violations of these rules may result in content removal, community ban, or global suspension at moderator or administrator discretion. Community-specific rules are set by each community&rsquo;s moderators and displayed in the community sidebar.</p>
         </section>
 
         <section>
-          <h2 class='text-base font-bold text-gray-900 uppercase tracking-wide mb-3'>Who runs this?</h2>
-          <p>Earde is operated by <strong>Earde Network</strong> (provisional legal entity, European Union). The platform is hosted on bare-metal servers within the EEA. No user data is transferred to third countries. For legal and regulatory correspondence: <strong>legal@earde.eu</strong>.</p>
+          <h2 class='text-xl font-bold text-gray-900 mb-4'>Community guidelines</h2>
+          <p class='mb-4'>Earde is a curated space.</p>
+          <ul class='list-disc list-outside pl-5 space-y-2'>
+            <li>No illegal content, CSAM, or extreme violence.</li>
+            <li>No hate speech, racism, or targeted harassment.</li>
+            <li>No spam, self-promotion bots, or malicious links.</li>
+          </ul>
+          <p class='mt-4'>Individual communities can enforce stricter rules, but these global rules are non-negotiable.</p>
         </section>
 
         <section>
-          <h2 class='text-base font-bold text-gray-900 uppercase tracking-wide mb-3'>Open source</h2>
-          <p>The full source code for the Earde platform is publicly available. It is written in OCaml 5 using the Dream web framework and PostgreSQL. The codebase is intentionally small and readable &mdash; a few large, cohesive files rather than dozens of micro-modules. You can read it, run it, and improve it. Pull requests are welcome. Bug reports are appreciated. Forks are expected.</p>
+          <h2 class='text-xl font-bold text-gray-900 mb-4'>Our investment strategy (The &ldquo;Enshittification&rdquo; dilemma)</h2>
+          <p class='mb-3'>Let&rsquo;s address the elephant in the room. Most tech startups raise massive venture capital, which forces them to chase infinite hyper-growth. This inevitably leads to the &ldquo;enshittification&rdquo; of the product: aggressive ads, dark patterns, and algorithm manipulation just to satisfy a $400M valuation.</p>
+          <p class='mb-3'>However, building a genuine Reddit competitor requires serious money for servers, legal compliance, and marketing. We believe funding is not a black-and-white issue. There is a massive difference between raising $400M from predatory Silicon Valley VCs and raising $2M from EU-aligned funds, angel investors, or european tech grants. A smaller, sensible funding round could allow us to hire a dedicated team and reach break-even profitability gracefully, without ever needing to sell out our users to hit impossible revenue targets.</p>
+          <p>Furthermore, given Earde&rsquo;s explicitly pro-european, privacy-first political stance, we are entirely open to philanthropic funding models. So if you are an EU-aligned philanthropist, give us money! :) Let&rsquo;s build the european internet together. Reach out: <a href='mailto:dami@earde.com' class='text-[#0D9488] underline hover:text-teal-700'>dami@earde.com</a>.</p>
         </section>
 
         <section>
-          <h2 class='text-base font-bold text-gray-900 uppercase tracking-wide mb-3'>Contact</h2>
-          <p>General enquiries: <strong>hello@earde.eu</strong><br>
-             Privacy &amp; data protection: <strong>privacy@earde.eu</strong> &mdash; or see the <a href='/privacy' class='text-[#0D9488] underline hover:text-teal-700'>Privacy Policy</a><br>
-             Abuse &amp; safety reports: <strong>abuse@earde.eu</strong><br>
-             Legal &amp; regulatory: <strong>legal@earde.eu</strong></p>
+          <h2 class='text-xl font-bold text-gray-900 mb-4'>Future Roadmap</h2>
+          <ul class='list-disc list-outside pl-5 space-y-3'>
+            <li><strong>Free public API:</strong> we want to build a free, robust API so developers can build third-party apps and moderation bots.</li>
+            <li><strong>Toggleable infinite scroll:</strong> while we believe pagination is healthier, we will add an account-level toggle for users who prefer continuous scrolling.</li>
+            <li><strong>Saved content:</strong> a private bookmarking system so you can save insightful posts and comments to read later, without relying on browser bookmarks.</li>
+            <li><strong>Private messaging (done right):</strong> we will implement user-to-user direct messages, but with a strict anti-abuse philosophy. It will be an opt-in system where you completely control who can reach your inbox, preventing the spam and harassment common on other platforms.</li>
+            <li><strong>Modmail &amp; council tools:</strong> to make the &ldquo;council of equals&rdquo; work smoothly, we want to build internal communication tools for moderators to coordinate, and a transparent &ldquo;modmail&rdquo; system for users to appeal decisions or contact the moderation team securely.</li>
+            <li><strong>Custom feeds:</strong> since we refuse to use algorithms to guess what you want to read, we will build a feature allowing you to group specific communities together (e.g., a custom &ldquo;tech &amp; science&rdquo; feed) for pure, chronological reading.</li>
+          </ul>
+          <p class='mt-4 text-sm text-gray-500'>While we have our baseline goals, Earde belongs to its users. The features we prioritize and build next will ultimately be the ones most requested by you. We build what the community actually asks for.
+</p>
+        
         </section>
 
       </div>
