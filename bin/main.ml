@@ -90,4 +90,5 @@ let () =
     Dream.get "/export-data" Earde.Handlers.export_data_handler;
     Dream.get "/earde-hq-dashboard" Earde.Handlers.hq_dashboard_handler;
     Dream.get "/_debug/state" Earde.Handlers.debug_state_handler;
+    Dream.get "/static/**" (Dream.static "static");
   ]

@@ -40,18 +40,18 @@ let layout ?(noindex=false) ?user ?request ~title content =
            re-checks is_admin before rendering anything sensitive. *)
         let admin_link =
           if is_admin then
-            "<a href='/admin' class='text-red-600 hover:text-red-800 font-semibold text-xs border border-red-200 px-2 py-1 rounded-md hover:bg-red-50 transition' title='Admin Dashboard'>🛡️ Admin</a>"
+            "<a href='/admin' class='text-red-600 hover:text-red-800 font-semibold text-xs border border-red-200 px-2 py-1 rounded-xl hover:bg-red-50 transition' title='Admin Dashboard'>🛡️ Admin</a>"
           else ""
         in
         Printf.sprintf "
           <div class='flex flex-row items-center gap-2 sm:gap-3'>
-            <a href='/u/%s' class='hidden sm:block text-gray-600 hover:text-[#0D9488] font-medium text-sm transition'>u/%s</a>
+            <a href='/u/%s' class='hidden sm:block text-[#3C3630] hover:text-[#C94C4C] font-medium text-sm transition'>u/%s</a>
             %s
             <a href='/notifications' class='relative text-gray-400 hover:text-gray-600 text-base' title='Notifications'>
                 🔔 <span id='notif-badge' class='hidden absolute -top-1 -right-2 bg-red-500 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full'>0</span>
             </a>
             <form action='/logout' method='POST' class='m-0 p-0 flex items-center'>
-               <button type='submit' class='text-xs text-gray-500 hover:text-red-600 font-medium border border-gray-200 px-3 py-1 rounded-md hover:border-red-200 transition'>
+               <button type='submit' class='text-xs text-gray-500 hover:text-red-600 font-medium border border-[#E0D9CC] px-3 py-1 rounded-xl hover:border-red-200 transition'>
                  Log out
                </button>
             </form>
@@ -59,8 +59,8 @@ let layout ?(noindex=false) ?user ?request ~title content =
         (html_escape username) (html_escape username) admin_link
     | None ->
         "<div class='flex items-center space-x-3'>
-           <a href='/login' class='text-gray-600 hover:text-[#0D9488] font-medium text-sm transition'>Log in</a>
-           <a href='/signup' class='bg-[#0D9488] text-white px-4 py-1.5 rounded-md hover:bg-teal-700 font-semibold text-sm transition'>Sign up</a>
+           <a href='/login' class='text-[#3C3630] hover:text-[#C94C4C] font-medium text-sm transition'>Log in</a>
+           <a href='/signup' class='bg-[#C94C4C] text-[#F7F3E8] px-4 py-1.5 rounded-xl hover:bg-[#A83A3A] font-semibold text-sm transition'>Sign up</a>
          </div>"
   in
 
@@ -76,15 +76,15 @@ let layout ?(noindex=false) ?user ?request ~title content =
       %s
       <link rel='preconnect' href='https://fonts.googleapis.com'>
       <link rel='preconnect' href='https://fonts.gstatic.com' crossorigin>
-      <link href='https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap' rel='stylesheet'>
+      <link href='https://fonts.googleapis.com/css2?family=Nunito:wght@400;500;600;700;800&display=swap' rel='stylesheet'>
       <script src='https://cdn.tailwindcss.com'></script>
-      <style>body { font-family: 'Inter', sans-serif; }</style>
+      <style>body { font-family: 'Nunito', sans-serif; letter-spacing: 0.015em; }</style>
   </head>
-  <body class='bg-[#FDFCFB] text-gray-900 min-h-screen flex flex-col'>
-      <nav class='bg-white border-b border-gray-200 sticky top-0 z-50'>
-          <div class='w-full px-4 md:px-6 h-14 flex items-center justify-between'>
-              <div class='flex-shrink-0 w-48 lg:w-56 flex items-center'>
-                  <a href='/' class='text-xl font-bold text-[#0D9488] tracking-tight'>Earde</a>
+  <body class='bg-[#F7F3E8] text-[#3C3630] min-h-screen flex flex-col'>
+      <nav class='bg-[#F7F3E8] border-b border-[#E0D9CC] sticky top-0 z-50'>
+          <div class='w-full px-4 md:px-6 py-3 flex items-center justify-between'>
+              <div class='flex-shrink-0 flex items-center'>
+                  <a href='/' class='block py-1'><img src='/static/images/logo.svg' alt='Earde - Earth-focused social aggregator' class='h-10 sm:h-12 w-auto shrink-0 object-contain mr-4'></a>
               </div>
               <div class='flex-1 flex justify-center max-w-2xl px-4'>
                   <form action='/search' method='GET' class='hidden md:flex items-center w-full'>
@@ -93,7 +93,7 @@ let layout ?(noindex=false) ?user ?request ~title content =
                               <span class='text-gray-400 text-sm'>🔍</span>
                           </div>
                           <input type='text' name='q' placeholder='Search communities, users, posts...' required
-                                 class='w-full pl-9 pr-4 py-1.5 bg-gray-100 border border-transparent text-gray-900 text-sm rounded-md focus:bg-white focus:border-[#0D9488] focus:ring-1 focus:outline-none transition'>
+                                 class='w-full pl-9 pr-4 py-1.5 bg-[#EDE9DF] border border-transparent text-[#3C3630] text-sm rounded-xl focus:bg-white focus:border-[#C94C4C] focus:ring-1 focus:outline-none transition'>
                       </div>
                   </form>
               </div>
@@ -105,9 +105,9 @@ let layout ?(noindex=false) ?user ?request ~title content =
       <main class='flex-grow max-w-[1600px] w-full mx-auto px-6 sm:px-8 py-6'>
           %s
       </main>
-      <footer class='border-t border-gray-100 mt-auto'>
+      <footer class='border-t border-[#E0D9CC] mt-auto'>
           <div class='max-w-screen-2xl mx-auto py-4 px-6 sm:px-8'>
-              <p class='text-center text-gray-400 text-xs'>&copy; 2026 Earde &middot; <a href='/about' class='hover:text-[#0D9488] transition'>About</a> &middot; <a href='/privacy' class='hover:text-[#0D9488] transition'>Privacy</a></p>
+              <p class='text-center text-[#8C7E6E] text-xs'>&copy; 2026 Earde &middot; <a href='/about' class='hover:text-[#C94C4C] transition'>About</a> &middot; <a href='/privacy' class='hover:text-[#C94C4C] transition'>Privacy</a></p>
           </div>
       </footer>
 
@@ -125,8 +125,8 @@ let layout ?(noindex=false) ?user ?request ~title content =
             <h3 class='text-lg font-semibold text-gray-900 mb-2'>Are you sure?</h3>
             <p class='text-sm text-gray-500 mb-6' id='modal-confirm-msg'></p>
             <div class='flex justify-end gap-3'>
-              <button type='button' class='px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-[#0D9488]' id='cancel-btn'>Cancel</button>
-              <button type='button' class='px-4 py-2 text-sm font-medium text-white bg-red-600 border border-transparent rounded-lg hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-600' id='confirm-btn'>Confirm</button>
+              <button type='button' class='px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-xl hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-[#C94C4C]' id='cancel-btn'>Cancel</button>
+              <button type='button' class='px-4 py-2 text-sm font-medium text-white bg-red-600 border border-transparent rounded-xl hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-600' id='confirm-btn'>Confirm</button>
             </div>`;
           /* textContent prevents innerHTML XSS — message may contain user-supplied
              usernames (e.g., ban dialog). Using textContent treats the value as
@@ -200,8 +200,8 @@ let layout ?(noindex=false) ?user ?request ~title content =
                 const resetColors = () => {
                     upBtn?.classList.remove(\"text-orange-500\");
                     upBtn?.classList.add(\"text-gray-400\", \"hover:text-orange-500\");
-                    downBtn?.classList.remove(\"text-[#0D9488]\");
-                    downBtn?.classList.add(\"text-gray-400\", \"hover:text-[#0D9488]\");
+                    downBtn?.classList.remove(\"text-[#69C3D2]\");
+                    downBtn?.classList.add(\"text-gray-400\", \"hover:text-[#69C3D2]\");
                 };
 
                 if (action === 1) {
@@ -218,8 +218,8 @@ let layout ?(noindex=false) ?user ?request ~title content =
                     if (upInput && parseInt(upInput.value) === 0) score -= 2;
                     else score -= 1;
                     resetColors();
-                    downBtn?.classList.remove(\"text-gray-400\", \"hover:text-[#0D9488]\");
-                    downBtn?.classList.add(\"text-[#0D9488]\");
+                    downBtn?.classList.remove(\"text-gray-400\", \"hover:text-[#69C3D2]\");
+                    downBtn?.classList.add(\"text-[#69C3D2]\");
                     if (upInput) upInput.value = \"1\";
                     if (downInput) downInput.value = \"0\";
                 }
@@ -275,7 +275,7 @@ let render_author ?(mod_usernames=[]) ?(admin_usernames=[]) username =
         "<span class='mod-badge ml-1 text-[10px] font-semibold bg-red-100 text-red-700 px-1.5 py-0.5 rounded'>[ADMIN]</span>"
       else ""
     in
-    Printf.sprintf "<a href='/u/%s' class='hover:text-[#0D9488] hover:underline font-medium transition'>u/%s</a>%s%s" (html_escape username) (html_escape username) mod_badge admin_badge
+    Printf.sprintf "<a href='/u/%s' class='hover:text-[#C94C4C] hover:underline font-medium transition'>u/%s</a>%s%s" (html_escape username) (html_escape username) mod_badge admin_badge
 
 (* Parse and diff in OCaml rather than casting in SQL to keep DB queries generic
    and avoid timezone drift when the DB and app server are in different locales. *)
@@ -311,12 +311,12 @@ let time_ago date_str =
 let render_post ?(is_current_user_mod=false) ?(mod_usernames=[]) ?(admin_usernames=[]) ?(banned_usernames=[]) request user_votes (post : post) =
   let csrf_token = Dream.csrf_tag request in
   let content_preview = Option.value ~default:"" post.content in
-  let link_part = match post.url with | Some u -> Printf.sprintf "<a href='%s' class='text-xs text-[#0D9488] hover:underline' target='_blank'>%s ↗</a>" (safe_url u) (html_escape u) | None -> "" in
+  let link_part = match post.url with | Some u -> Printf.sprintf "<a href='%s' class='text-xs text-[#C94C4C] hover:underline' target='_blank'>%s ↗</a>" (safe_url u) (html_escape u) | None -> "" in
 
   let current_vote = Option.value ~default:0 (List.assoc_opt post.id user_votes) in
 
   let up_color = if current_vote = 1 then "text-orange-500" else "text-gray-400 hover:text-orange-500" in
-  let down_color = if current_vote = -1 then "text-[#0D9488]" else "text-gray-400 hover:text-[#0D9488]" in
+  let down_color = if current_vote = -1 then "text-[#69C3D2]" else "text-gray-400 hover:text-[#69C3D2]" in
   let up_action = if current_vote = 1 then 0 else 1 in
   let down_action = if current_vote = -1 then 0 else -1 in
 
@@ -363,13 +363,13 @@ let render_post ?(is_current_user_mod=false) ?(mod_usernames=[]) ?(admin_usernam
                     <span class='text-sm font-semibold text-gray-700'>Reason <span class='text-red-500'>*</span></span>
                     <textarea name='reason' required maxlength='255' rows='4'
                       placeholder='Explain why this post is being removed (visible to the community)...'
-                      class='w-full rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400 resize-none'></textarea>
+                      class='w-full rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400 resize-none'></textarea>
                   </label>
                   <div class='flex justify-end gap-2 pt-1'>
                     <button type='button' onclick=\"document.getElementById('mod-modal-%d').close()\"
-                      class='px-4 py-2 rounded-lg text-sm font-semibold text-gray-600 bg-gray-100 hover:bg-gray-200 transition-colors'>Cancel</button>
+                      class='px-4 py-2 rounded-xl text-sm font-semibold text-gray-600 bg-gray-100 hover:bg-gray-200 transition-colors'>Cancel</button>
                     <button type='submit'
-                      class='px-4 py-2 rounded-lg text-sm font-bold text-white bg-red-600 hover:bg-red-700 transition-colors shadow-sm'>Confirm Removal</button>
+                      class='px-4 py-2 rounded-xl text-sm font-bold text-white bg-red-600 hover:bg-red-700 transition-colors shadow-sm'>Confirm Removal</button>
                   </div>
                 </form>
               </div>
@@ -391,13 +391,13 @@ let render_post ?(is_current_user_mod=false) ?(mod_usernames=[]) ?(admin_usernam
                     <span class='text-sm font-semibold text-gray-700'>Reason <span class='text-red-500'>*</span></span>
                     <textarea name='reason' required maxlength='255' rows='4'
                       placeholder='Explain the admin intervention reason (visible to the community)...'
-                      class='w-full rounded-lg border border-red-300 bg-red-50 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-400 resize-none'></textarea>
+                      class='w-full rounded-xl border border-red-300 bg-red-50 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-400 resize-none'></textarea>
                   </label>
                   <div class='flex justify-end gap-2 pt-1'>
                     <button type='button' onclick=\"document.getElementById('mod-modal-%d').close()\"
-                      class='px-4 py-2 rounded-lg text-sm font-semibold text-gray-600 bg-gray-100 hover:bg-gray-200 transition-colors'>Cancel</button>
+                      class='px-4 py-2 rounded-xl text-sm font-semibold text-gray-600 bg-gray-100 hover:bg-gray-200 transition-colors'>Cancel</button>
                     <button type='submit'
-                      class='px-4 py-2 rounded-lg text-sm font-bold text-white bg-red-600 hover:bg-red-700 transition-colors shadow-sm'>Confirm Removal</button>
+                      class='px-4 py-2 rounded-xl text-sm font-bold text-white bg-red-600 hover:bg-red-700 transition-colors shadow-sm'>Confirm Removal</button>
                   </div>
                 </form>
               </div>
@@ -435,13 +435,13 @@ let render_post ?(is_current_user_mod=false) ?(mod_usernames=[]) ?(admin_usernam
                       <span class='text-sm font-semibold text-gray-700'>Reason <span class='text-red-500'>*</span></span>
                       <textarea name='reason' required rows='4'
                         placeholder='Explain why this user is being banned (visible to the community)...'
-                        class='w-full rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400 resize-none'></textarea>
+                        class='w-full rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400 resize-none'></textarea>
                     </label>
                     <div class='flex justify-end gap-2 pt-1'>
                       <button type='button' onclick=\"document.getElementById('ban-modal-post-%d').close()\"
-                        class='px-4 py-2 rounded-lg text-sm font-semibold text-gray-600 bg-gray-100 hover:bg-gray-200 transition-colors'>Cancel</button>
+                        class='px-4 py-2 rounded-xl text-sm font-semibold text-gray-600 bg-gray-100 hover:bg-gray-200 transition-colors'>Cancel</button>
                       <button type='submit'
-                        class='px-4 py-2 rounded-lg text-sm font-bold text-white bg-amber-600 hover:bg-amber-700 transition-colors shadow-sm'>Confirm Ban</button>
+                        class='px-4 py-2 rounded-xl text-sm font-bold text-white bg-amber-600 hover:bg-amber-700 transition-colors shadow-sm'>Confirm Ban</button>
                     </div>
                   </form>
                 </div>
@@ -465,13 +465,13 @@ let render_post ?(is_current_user_mod=false) ?(mod_usernames=[]) ?(admin_usernam
                       <span class='text-sm font-semibold text-gray-700'>Reason <span class='text-red-500'>*</span></span>
                       <textarea name='reason' required rows='4'
                         placeholder='Explain the admin intervention reason (visible to the community)...'
-                        class='w-full rounded-lg border border-red-300 bg-red-50 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-400 resize-none'></textarea>
+                        class='w-full rounded-xl border border-red-300 bg-red-50 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-400 resize-none'></textarea>
                     </label>
                     <div class='flex justify-end gap-2 pt-1'>
                       <button type='button' onclick=\"document.getElementById('ban-modal-post-%d').close()\"
-                        class='px-4 py-2 rounded-lg text-sm font-semibold text-gray-600 bg-gray-100 hover:bg-gray-200 transition-colors'>Cancel</button>
+                        class='px-4 py-2 rounded-xl text-sm font-semibold text-gray-600 bg-gray-100 hover:bg-gray-200 transition-colors'>Cancel</button>
                       <button type='submit'
-                        class='px-4 py-2 rounded-lg text-sm font-bold text-white bg-red-600 hover:bg-red-700 transition-colors shadow-sm'>Confirm Ban</button>
+                        class='px-4 py-2 rounded-xl text-sm font-bold text-white bg-red-600 hover:bg-red-700 transition-colors shadow-sm'>Confirm Ban</button>
                     </div>
                   </form>
                 </div>
@@ -489,11 +489,11 @@ let render_post ?(is_current_user_mod=false) ?(mod_usernames=[]) ?(admin_usernam
     if not post.allow_downvotes then ""
     else match current_user with
     | Some _ -> Printf.sprintf "<form action='/vote' method='POST' class='m-0 p-0'>%s<input type='hidden' name='post_id' value='%d'><input type='hidden' name='direction' value='%d'><button type='submit' class='%s font-bold text-sm leading-none'>▼</button></form>" csrf_token post.id down_action down_color
-    | None -> "<a href='/login' class='text-gray-400 hover:text-[#0D9488] font-bold text-sm leading-none'>▼</a>"
+    | None -> "<a href='/login' class='text-gray-400 hover:text-[#69C3D2] font-bold text-sm leading-none'>▼</a>"
   in
 
   Printf.sprintf "
-  <div onclick=\"if(!event.target.closest('a, button, form')) window.location='/p/%d'\" class='cursor-pointer border-b border-gray-100 py-4 flex gap-4 hover:bg-gray-50/50 transition-colors'>
+  <div onclick=\"if(!event.target.closest('a, button, form')) window.location='/p/%d'\" class='cursor-pointer border-b border-[#E8E2D9] py-4 flex gap-4 hover:bg-[#F0EBE0] transition-colors'>
 
       <div class='flex flex-col items-center pt-0.5 w-7 shrink-0 cursor-default' onclick=\"event.stopPropagation()\">
           %s
@@ -503,7 +503,7 @@ let render_post ?(is_current_user_mod=false) ?(mod_usernames=[]) ?(admin_usernam
 
       <div class='flex-1 min-w-0'>
           <div class='flex flex-wrap items-center gap-x-1.5 text-xs text-gray-500 mb-1'>
-              <a href='/c/%s' class='font-semibold text-gray-700 hover:text-[#0D9488] transition relative z-10'>/c/%s</a>
+              <a href='/c/%s' class='font-semibold text-gray-700 hover:text-[#C94C4C] transition relative z-10'>/c/%s</a>
               <span class='text-gray-300'>•</span>
               <span>by</span>
               <span class='relative z-10'>%s</span>
@@ -513,14 +513,14 @@ let render_post ?(is_current_user_mod=false) ?(mod_usernames=[]) ?(admin_usernam
           </div>
 
           <h3 class='text-base font-semibold text-gray-900 leading-snug mb-1'>
-              <a href='/p/%d' class='hover:text-[#0D9488] transition break-words'>%s</a>
+              <a href='/p/%d' class='hover:text-[#C94C4C] transition break-words'>%s</a>
           </h3>
 
           <div class='relative z-10 text-xs'>%s</div>
           <p class='text-sm text-gray-600 mt-2 break-words line-clamp-6'>%s</p>
 
           <div class='flex items-center mt-2 text-xs text-gray-400'>
-              <a href='/p/%d' class='hover:text-[#0D9488] flex items-center gap-1 transition relative z-10'>
+              <a href='/p/%d' class='hover:text-[#C94C4C] flex items-center gap-1 transition relative z-10'>
                   <span>💬</span><span>%d comments</span>
               </a>
               <button type='button' onclick='copyPostLink(\"/p/%d\", this)' class='text-xs font-medium text-gray-500 hover:text-gray-900 flex items-center transition-colors cursor-pointer ml-4'>🔗 Share</button>
@@ -534,9 +534,9 @@ let render_post ?(is_current_user_mod=false) ?(mod_usernames=[]) ?(admin_usernam
 
 let community_card (community : community) =
   Printf.sprintf "
-  <div class='bg-white rounded-lg p-5 border border-gray-200 hover:border-[#0D9488] transition border-l-4 border-l-[#0D9488]'>
+  <div class='bg-white rounded-xl p-5 border border-[#E0D9CC] hover:border-[#C94C4C] transition border-l-4 border-l-[#C94C4C] shadow-[0_2px_8px_rgba(60,54,48,0.06)]'>
       <h2 class='text-base font-semibold text-gray-900 mb-1'>%s</h2>
-      <div class='text-xs text-[#0D9488] mb-2 font-mono'>/c/%s</div>
+      <div class='text-xs text-[#C94C4C] mb-2 font-mono'>/c/%s</div>
       <p class='text-gray-500 text-sm'>%s</p>
   </div>"
     (html_escape community.name)
@@ -548,20 +548,20 @@ let community_card (community : community) =
 let left_sidebar ?user ~moderated_communities (user_communities : community list) =
   match user with
   | None ->
-      "<div class='bg-teal-50 p-4 rounded-xl border border-teal-100'><h3 class='font-semibold text-gray-900 mb-1 text-sm'>Join Earde</h3><p class='text-xs text-gray-600 mb-3'>Create an account to follow communities and join the conversation.</p><a href='/signup' class='block w-full bg-[#0D9488] text-white text-center py-2 rounded-md font-semibold text-sm hover:bg-teal-700 transition'>Sign Up</a></div>"
+      "<div class='bg-[#EDE9DF] p-4 rounded-xl border border-[#D8D0C0]'><h3 class='font-semibold text-[#3C3630] mb-1 text-sm'>Join Earde</h3><p class='text-xs text-[#5C5248] mb-3'>Create an account to follow communities and join the conversation.</p><a href='/signup' class='block w-full bg-[#C94C4C] text-[#F7F3E8] text-center py-2 rounded-xl font-semibold text-sm hover:bg-[#A83A3A] transition'>Sign Up</a></div>"
   | Some _ ->
       if user_communities = [] && moderated_communities = [] then
-        "<div class='p-4 bg-white rounded-xl border border-gray-200 shadow-sm'><p class='text-sm text-gray-500 mb-3'>You haven't joined any communities yet.</p><a href='/new-community' class='text-[#0D9488] font-bold text-sm hover:underline'>Create one &rarr;</a></div>"
+        "<div class='p-4 bg-white rounded-xl border border-[#E0D9CC] shadow-[0_2px_8px_rgba(60,54,48,0.06)]'><p class='text-sm text-gray-500 mb-3'>You haven't joined any communities yet.</p><a href='/new-community' class='text-[#C94C4C] font-bold text-sm hover:underline'>Create one &rarr;</a></div>"
       else
         (* Dedup: following list excludes communities the user already moderates. *)
         let mod_ids = List.map (fun (a : community) -> a.id) moderated_communities in
         let following_communities = List.filter (fun (a : community) -> not (List.mem a.id mod_ids)) user_communities in
-        let home_link = "<li><a href='/' class='flex items-center space-x-2 p-2 rounded-md hover:bg-gray-50 text-gray-700 font-medium transition'><span class='text-gray-400 mr-1'>🏠</span><span class='truncate'>Home</span></a></li>" in
+        let home_link = "<li><a href='/' class='flex items-center space-x-2 p-2 rounded-xl hover:bg-gray-50 text-gray-700 font-medium transition'><span class='text-gray-400 mr-1'>🏠</span><span class='truncate'>Home</span></a></li>" in
         let mod_section =
           if moderated_communities = [] then ""
           else
             let mod_items = List.map (fun (a : community) ->
-              Printf.sprintf "<li><a href='/c/%s' class='flex items-center space-x-2 p-2 rounded-md hover:bg-gray-50 text-gray-700 font-medium transition'><span class='text-teal-400 font-bold'>/c/</span><span class='truncate'>%s</span><span class='ml-auto text-xs' title='Moderating'>🛡️</span></a></li>"
+              Printf.sprintf "<li><a href='/c/%s' class='flex items-center space-x-2 p-2 rounded-xl hover:bg-gray-50 text-gray-700 font-medium transition'><span class='text-[#69C3D2] font-bold'>/c/</span><span class='truncate'>%s</span><span class='ml-auto text-xs' title='Moderating'>🛡️</span></a></li>"
                 (html_escape a.slug) (html_escape a.name)
             ) moderated_communities in
             Printf.sprintf "<h3 class='px-2 mb-1 text-xs font-semibold text-gray-500 uppercase tracking-wider mt-3'>Moderating</h3><ul class='space-y-1'>%s</ul>" (String.concat "\n" mod_items)
@@ -570,10 +570,10 @@ let left_sidebar ?user ~moderated_communities (user_communities : community list
           if following_communities = [] then ""
           else
             let items = List.map (fun (a : community) ->
-              Printf.sprintf "<li><a href='/c/%s' class='flex items-center space-x-2 p-2 rounded-md hover:bg-gray-50 text-gray-700 font-medium transition'><span class='text-teal-400 font-bold'>/c/</span><span class='truncate'>%s</span></a></li>"
+              Printf.sprintf "<li><a href='/c/%s' class='flex items-center space-x-2 p-2 rounded-xl hover:bg-gray-50 text-gray-700 font-medium transition'><span class='text-[#69C3D2] font-bold'>/c/</span><span class='truncate'>%s</span></a></li>"
                 (html_escape a.slug) (html_escape a.name)
             ) following_communities in
             Printf.sprintf "<h3 class='px-2 mb-1 text-xs font-semibold text-gray-500 uppercase tracking-wider mt-3'>Following</h3><ul class='space-y-1'>%s</ul>" (String.concat "\n" items)
         in
-        Printf.sprintf "<div class='bg-white p-4 rounded-xl border border-gray-200 shadow-sm'><ul class='space-y-1'>%s</ul>%s%s</div>"
+        Printf.sprintf "<div class='bg-white p-4 rounded-xl border border-[#E0D9CC] shadow-sm'><ul class='space-y-1'>%s</ul>%s%s</div>"
           home_link mod_section follow_section

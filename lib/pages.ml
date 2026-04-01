@@ -9,16 +9,16 @@ let index ?user user_votes current_page sort_mode ~feed_type ~admin_usernames ~m
 
   let posts_html =
     if posts = [] then
-      "<div class='text-center py-10 text-gray-500 border border-dashed border-gray-200 rounded-lg'>It's quiet here. Too quiet. <br><a href='/new-community' class='text-[#0D9488] underline'>Create a community</a> and start posting!</div>"
+      "<div class='text-center py-10 text-gray-500 border border-dashed border-[#E0D9CC] rounded-xl'>It's quiet here. Too quiet. <br><a href='/new-community' class='text-[#C94C4C] underline'>Create a community</a> and start posting!</div>"
     else String.concat "\n" (List.map (Components.render_post ~admin_usernames request user_votes) posts)
   in
 
-  let prev_btn = if current_page <= 1 then "" else Printf.sprintf "<a href='%s?sort=%s&page=%d' class='bg-white border border-gray-300 text-gray-700 px-4 py-2 rounded font-bold hover:bg-gray-50 transition'>&larr; Prev</a>" base_url sort_mode (current_page - 1) in
-  let next_btn = if not has_next then "" else Printf.sprintf "<a href='%s?sort=%s&page=%d' class='bg-white border border-gray-300 text-gray-700 px-4 py-2 rounded font-bold hover:bg-gray-50 transition'>Next &rarr;</a>" base_url sort_mode (current_page + 1) in
+  let prev_btn = if current_page <= 1 then "" else Printf.sprintf "<a href='%s?sort=%s&page=%d' class='bg-white border border-[#D0C9BC] text-gray-700 px-4 py-2 rounded font-bold hover:bg-[#EDE9DF] transition'>&larr; Prev</a>" base_url sort_mode (current_page - 1) in
+  let next_btn = if not has_next then "" else Printf.sprintf "<a href='%s?sort=%s&page=%d' class='bg-white border border-[#D0C9BC] text-gray-700 px-4 py-2 rounded font-bold hover:bg-[#EDE9DF] transition'>Next &rarr;</a>" base_url sort_mode (current_page + 1) in
 
-  let get_sort_class s = if s = sort_mode then "text-[#0D9488] border-b-2 border-[#0D9488] pb-1" else "text-gray-500 hover:text-gray-800 transition" in
+  let get_sort_class s = if s = sort_mode then "text-[#C94C4C] border-b-2 border-[#C94C4C] pb-1" else "text-gray-500 hover:text-gray-800 transition" in
   let sort_menu = Printf.sprintf "
-    <div class='flex space-x-6 mb-6 px-2 border-b border-gray-200'>
+    <div class='flex space-x-6 mb-6 px-2 border-b border-[#E0D9CC]'>
         <a href='%s?sort=hot' class='font-bold text-sm tracking-wide uppercase %s'>🔥 Hot</a>
         <a href='%s?sort=new' class='font-bold text-sm tracking-wide uppercase %s'>✨ New</a>
         <a href='%s?sort=top' class='font-bold text-sm tracking-wide uppercase %s'>🏆 Top</a>
@@ -26,7 +26,7 @@ let index ?user user_votes current_page sort_mode ~feed_type ~admin_usernames ~m
   in
 
   (* Feed toggle: active tab gets a teal bottom border; inactive is muted *)
-  let get_tab_class t = if t = feed_type then "font-bold text-[#0D9488] border-b-2 border-[#0D9488] pb-2" else "font-medium text-gray-500 hover:text-gray-800 pb-2 transition" in
+  let get_tab_class t = if t = feed_type then "font-bold text-[#C94C4C] border-b-2 border-[#C94C4C] pb-2" else "font-medium text-gray-500 hover:text-gray-800 pb-2 transition" in
   let feed_tabs = Printf.sprintf "
     <div class='flex space-x-6 mb-4 border-b border-gray-100'>
         <a href='/' class='%s'>Home</a>
@@ -46,13 +46,13 @@ let index ?user user_votes current_page sort_mode ~feed_type ~admin_usernames ~m
                 <h1 class='text-2xl font-bold text-gray-900'>%s</h1>
             </div>
             %s
-            <div class='block lg:hidden mb-6 bg-blue-50 border border-blue-100 rounded-lg p-4 shadow-sm'><h3 class='text-sm font-bold text-blue-900 mb-1'>Talk to me!</h3><p class='text-xs text-blue-800 mb-3 leading-relaxed'>For feature requests, ideas, critiques, if you are a Reddit mod and want to become a mod on the specular community here, or just to say hi!</p><a href='https://t.me/tolwiz' target='_blank' rel='noopener noreferrer' class='w-full flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold py-2 rounded-md transition-colors'>&#128172; Text me (the dev)!</a></div>
+            <div class='block lg:hidden mb-6 bg-blue-50 border border-blue-100 rounded-xl p-4 shadow-sm'><h3 class='text-sm font-bold text-blue-900 mb-1'>Talk to me!</h3><p class='text-xs text-blue-800 mb-3 leading-relaxed'>For feature requests, ideas, critiques, if you are a Reddit mod and want to become a mod on the specular community here, or just to say hi!</p><a href='https://t.me/tolwiz' target='_blank' rel='noopener noreferrer' class='w-full flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold py-2 rounded-xl transition-colors'>&#128172; Text me (the dev)!</a></div>
             %s <div>%s</div>
             <div class='flex justify-between items-center mt-8 mb-4'>
                 <div>%s</div><div class='text-sm text-gray-500 font-bold'>Page %d</div><div>%s</div>
             </div>
         </div>
-        <div class='w-full lg:w-1/4'><div class='bg-white p-5 rounded-lg border border-gray-200 sticky top-20'><h2 class='text-sm font-semibold text-gray-800 mb-1'>Earde</h2><p class='text-xs text-gray-500 mb-4'>Your personal frontpage.</p><div class='flex flex-col space-y-2'><a href='/new-post' class='w-full bg-[#0D9488] text-white text-center py-2 rounded-md font-semibold text-sm hover:bg-teal-700 transition'>Create Post</a><a href='/new-community' class='w-full bg-white text-[#0D9488] border border-[#0D9488] text-center py-2 rounded-md font-semibold text-sm hover:bg-teal-50 transition'>Create Community</a></div></div><div class='mt-6 bg-blue-50 border border-blue-100 rounded-lg p-4 shadow-sm'><h3 class='text-sm font-bold text-blue-900 mb-1'>Talk to me!</h3><p class='text-xs text-blue-800 mb-3 leading-relaxed'>For feature requests, ideas, critiques, if you are a Reddit mod and want to become a mod on the specular community here, or just to say hi!</p><a href='https://t.me/tolwiz' target='_blank' rel='noopener noreferrer' class='w-full flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold py-2 rounded-md transition-colors'>&#128172; Text me (the dev)!</a></div></div>
+        <div class='w-full lg:w-1/4'><div class='bg-white p-5 rounded-xl border border-[#E0D9CC] sticky top-20'><h2 class='text-sm font-semibold text-gray-800 mb-1'>Earde</h2><p class='text-xs text-gray-500 mb-4'>Your personal frontpage.</p><div class='flex flex-col space-y-2'><a href='/new-post' class='w-full bg-[#C94C4C] text-white text-center py-2 rounded-xl font-semibold text-sm hover:bg-[#A83A3A] transition'>Create Post</a><a href='/new-community' class='w-full bg-white text-[#C94C4C] border border-[#C94C4C] text-center py-2 rounded-xl font-semibold text-sm hover:bg-[#F0EDE4] transition'>Create Community</a></div></div><div class='mt-6 bg-blue-50 border border-blue-100 rounded-xl p-4 shadow-sm'><h3 class='text-sm font-bold text-blue-900 mb-1'>Talk to me!</h3><p class='text-xs text-blue-800 mb-3 leading-relaxed'>For feature requests, ideas, critiques, if you are a Reddit mod and want to become a mod on the specular community here, or just to say hi!</p><a href='https://t.me/tolwiz' target='_blank' rel='noopener noreferrer' class='w-full flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold py-2 rounded-xl transition-colors'>&#128172; Text me (the dev)!</a></div></div>
     </div>"
     sidebar_html feed_title feed_tabs sort_menu posts_html prev_btn current_page next_btn
   in
@@ -64,10 +64,10 @@ let signup_form ?user ?error request =
   let csrf_token = Dream.csrf_tag request in
   let error_html = match error with
     | None -> ""
-    | Some msg -> Printf.sprintf "<p class='text-sm text-red-600 bg-red-50 border border-red-200 rounded-md p-3'>%s</p>" msg
+    | Some msg -> Printf.sprintf "<p class='text-sm text-red-600 bg-red-50 border border-red-200 rounded-xl p-3'>%s</p>" msg
   in
   let content = Printf.sprintf "
-    <div class='max-w-md mx-auto bg-white p-8 rounded-lg shadow-md mt-10'>
+    <div class='max-w-md mx-auto bg-white p-8 rounded-xl shadow-md mt-10'>
         <h1 class='text-2xl font-bold mb-6 text-gray-800 text-center'>Join Earde</h1>
 
         <form action='/signup' method='POST' class='space-y-4'>
@@ -77,42 +77,42 @@ let signup_form ?user ?error request =
             <div>
                 <label class='block text-sm font-medium text-gray-700'>Username</label>
                 <input type='text' name='username' required
-                       class='mt-1 block w-full rounded-md border-gray-300 focus:border-[#0D9488] focus:ring-1 focus:ring-[#0D9488]/20 focus:outline-none p-2 border'
+                       class='mt-1 block w-full rounded-xl border-[#D0C9BC] focus:border-[#C94C4C] focus:ring-1 focus:ring-[#C94C4C]/20 focus:outline-none p-2 border'
                        placeholder='Choose a unique username'>
             </div>
 
             <div>
                 <label class='block text-sm font-medium text-gray-700'>Email Address</label>
                 <input type='email' name='email' required
-                       class='mt-1 block w-full rounded-md border-gray-300 focus:border-[#0D9488] focus:ring-1 focus:ring-[#0D9488]/20 focus:outline-none p-2 border'
+                       class='mt-1 block w-full rounded-xl border-[#D0C9BC] focus:border-[#C94C4C] focus:ring-1 focus:ring-[#C94C4C]/20 focus:outline-none p-2 border'
                        placeholder='you@example.com'>
             </div>
 
             <div>
                 <label class='block text-sm font-medium text-gray-700'>Password</label>
                 <input type='password' name='password' required
-                       class='mt-1 block w-full rounded-md border-gray-300 focus:border-[#0D9488] focus:ring-1 focus:ring-[#0D9488]/20 focus:outline-none p-2 border'
+                       class='mt-1 block w-full rounded-xl border-[#D0C9BC] focus:border-[#C94C4C] focus:ring-1 focus:ring-[#C94C4C]/20 focus:outline-none p-2 border'
                        placeholder='Minimum 8 characters'>
             </div>
 
             <div class='flex items-start mt-4 mb-6'>
                 <div class='flex items-center h-5'>
                     <input id='privacy' name='privacy' type='checkbox' required
-                           class='w-4 h-4 border border-gray-300 rounded bg-gray-50 focus:ring-2 focus:ring-[#0D9488] cursor-pointer'>
+                           class='w-4 h-4 border border-[#D0C9BC] rounded bg-gray-50 focus:ring-2 focus:ring-[#C94C4C] cursor-pointer'>
                 </div>
                 <label for='privacy' class='ml-2 text-sm font-medium text-gray-700 cursor-pointer'>
-                    I agree to the <a href='/privacy' target='_blank' class='text-[#0D9488] hover:underline font-bold'>Privacy Policy</a> and consent to data processing.
+                    I agree to the <a href='/privacy' target='_blank' class='text-[#C94C4C] hover:underline font-bold'>Privacy Policy</a> and consent to data processing.
                 </label>
             </div>
 
-            <button type='submit' class='w-full bg-[#0D9488] text-white py-2 px-4 rounded-md hover:bg-teal-700 font-semibold transition'>
+            <button type='submit' class='w-full bg-[#C94C4C] text-white py-2 px-4 rounded-xl hover:bg-[#A83A3A] font-semibold transition'>
                 Sign Up
             </button>
         </form>
 
         <div class='mt-6 text-center text-sm'>
             <p class='text-gray-600'>Already have an account?</p>
-            <a href='/login' class='font-medium text-[#0D9488] hover:text-[#0D9488]'>Log in</a>
+            <a href='/login' class='font-medium text-[#C94C4C] hover:text-[#C94C4C]'>Log in</a>
         </div>
     </div>"
     csrf_token error_html
@@ -122,25 +122,25 @@ let signup_form ?user ?error request =
 let login_form ?user request =
   let csrf_token = Dream.csrf_tag request in
   let content = Printf.sprintf "
-    <div class='max-w-md mx-auto bg-white p-8 rounded-lg shadow-sm border border-gray-200 mt-10'>
+    <div class='max-w-md mx-auto bg-white p-8 rounded-xl shadow-[0_2px_8px_rgba(60,54,48,0.06)] border border-[#E0D9CC] mt-10'>
         <h1 class='text-2xl font-bold mb-6 text-gray-900 text-center'>Welcome back</h1>
         <form action='/login' method='POST' class='space-y-4'>
             %s
             <div>
                 <label class='block text-sm font-medium text-gray-700 mb-1'>Username or Email</label>
-                <input type='text' name='identifier' required class='block w-full rounded-md border-gray-300 focus:border-[#0D9488] focus:ring-1 focus:ring-[#0D9488]/20 focus:outline-none p-2 border' placeholder='tolwiz or tolwiz@example.com'>
+                <input type='text' name='identifier' required class='block w-full rounded-xl border-[#D0C9BC] focus:border-[#C94C4C] focus:ring-1 focus:ring-[#C94C4C]/20 focus:outline-none p-2 border' placeholder='tolwiz or tolwiz@example.com'>
             </div>
             <div>
                 <div class='flex justify-between items-center mb-1'>
                     <label class='block text-sm font-medium text-gray-700'>Password</label>
-                    <a href='/forgot-password' class='text-xs text-[#0D9488] hover:text-indigo-800 hover:underline tabindex='-1'>Forgot password?</a>
+                    <a href='/forgot-password' class='text-xs text-[#C94C4C] hover:text-indigo-800 hover:underline tabindex='-1'>Forgot password?</a>
                 </div>
-                <input type='password' name='password' required class='block w-full rounded-md border-gray-300 focus:border-[#0D9488] focus:ring-1 focus:ring-[#0D9488]/20 focus:outline-none p-2 border'>
+                <input type='password' name='password' required class='block w-full rounded-xl border-[#D0C9BC] focus:border-[#C94C4C] focus:ring-1 focus:ring-[#C94C4C]/20 focus:outline-none p-2 border'>
             </div>
-            <button type='submit' class='w-full bg-[#0D9488] text-white py-2 px-4 rounded font-bold hover:bg-teal-700 transition shadow-sm'>Log In</button>
+            <button type='submit' class='w-full bg-[#C94C4C] text-white py-2 px-4 rounded font-bold hover:bg-[#A83A3A] transition shadow-sm'>Log In</button>
         </form>
         <div class='mt-6 text-center text-sm text-gray-600'>
-            Don't have an account? <a href='/signup' class='text-[#0D9488] font-bold hover:underline'>Sign up</a>
+            Don't have an account? <a href='/signup' class='text-[#C94C4C] font-bold hover:underline'>Sign up</a>
         </div>
     </div>" csrf_token
   in
@@ -149,19 +149,19 @@ let login_form ?user request =
 let forgot_password_page request =
   let csrf_token = Dream.csrf_tag request in
   let content = Printf.sprintf "
-    <div class='max-w-md mx-auto bg-white p-8 rounded-lg shadow-sm border border-gray-200 mt-10'>
+    <div class='max-w-md mx-auto bg-white p-8 rounded-xl shadow-[0_2px_8px_rgba(60,54,48,0.06)] border border-[#E0D9CC] mt-10'>
         <h1 class='text-2xl font-bold mb-2 text-gray-900 text-center'>Forgot Password?</h1>
         <p class='text-gray-600 text-sm text-center mb-6'>Enter your email address and we'll send you a reset link.</p>
         <form action='/forgot-password' method='POST' class='space-y-4'>
             %s
             <div>
                 <label class='block text-sm font-medium text-gray-700 mb-1'>Email address</label>
-                <input type='email' name='email' required class='block w-full rounded-md border-gray-300 focus:border-[#0D9488] focus:ring-1 focus:ring-[#0D9488]/20 focus:outline-none p-2 border' placeholder='you@example.com'>
+                <input type='email' name='email' required class='block w-full rounded-xl border-[#D0C9BC] focus:border-[#C94C4C] focus:ring-1 focus:ring-[#C94C4C]/20 focus:outline-none p-2 border' placeholder='you@example.com'>
             </div>
-            <button type='submit' class='w-full bg-[#0D9488] text-white py-2 px-4 rounded font-bold hover:bg-teal-700 transition shadow-sm'>Send Reset Link</button>
+            <button type='submit' class='w-full bg-[#C94C4C] text-white py-2 px-4 rounded font-bold hover:bg-[#A83A3A] transition shadow-sm'>Send Reset Link</button>
         </form>
         <div class='mt-4 text-center text-sm text-gray-500'>
-            <a href='/login' class='text-[#0D9488] hover:underline'>Back to login</a>
+            <a href='/login' class='text-[#C94C4C] hover:underline'>Back to login</a>
         </div>
     </div>" csrf_token
   in Components.layout ~noindex:true ~request ~title:"Forgot Password" content
@@ -173,7 +173,7 @@ let reset_password_page ~token ?error request =
     | Some msg -> Printf.sprintf "<div class='bg-red-50 border border-red-200 text-red-700 rounded p-3 text-sm mb-4'>%s</div>" msg
   in
   let content = Printf.sprintf "
-    <div class='max-w-md mx-auto bg-white p-8 rounded-lg shadow-sm border border-gray-200 mt-10'>
+    <div class='max-w-md mx-auto bg-white p-8 rounded-xl shadow-[0_2px_8px_rgba(60,54,48,0.06)] border border-[#E0D9CC] mt-10'>
         <h1 class='text-2xl font-bold mb-2 text-gray-900 text-center'>Set New Password</h1>
         <p class='text-gray-600 text-sm text-center mb-6'>Enter a new password for your account.</p>
         %s
@@ -182,13 +182,13 @@ let reset_password_page ~token ?error request =
             <input type='hidden' name='token' value='%s'>
             <div>
                 <label class='block text-sm font-medium text-gray-700 mb-1'>New password</label>
-                <input type='password' name='password' required minlength='8' class='block w-full rounded-md border-gray-300 focus:border-[#0D9488] focus:ring-1 focus:ring-[#0D9488]/20 focus:outline-none p-2 border'>
+                <input type='password' name='password' required minlength='8' class='block w-full rounded-xl border-[#D0C9BC] focus:border-[#C94C4C] focus:ring-1 focus:ring-[#C94C4C]/20 focus:outline-none p-2 border'>
             </div>
             <div>
                 <label class='block text-sm font-medium text-gray-700 mb-1'>Confirm new password</label>
-                <input type='password' name='confirm_password' required minlength='8' class='block w-full rounded-md border-gray-300 focus:border-[#0D9488] focus:ring-1 focus:ring-[#0D9488]/20 focus:outline-none p-2 border'>
+                <input type='password' name='confirm_password' required minlength='8' class='block w-full rounded-xl border-[#D0C9BC] focus:border-[#C94C4C] focus:ring-1 focus:ring-[#C94C4C]/20 focus:outline-none p-2 border'>
             </div>
-            <button type='submit' class='w-full bg-[#0D9488] text-white py-2 px-4 rounded font-bold hover:bg-teal-700 transition shadow-sm'>Reset Password</button>
+            <button type='submit' class='w-full bg-[#C94C4C] text-white py-2 px-4 rounded font-bold hover:bg-[#A83A3A] transition shadow-sm'>Reset Password</button>
         </form>
     </div>" error_html csrf_token token
   in Components.layout ~noindex:true ~request ~title:"Reset Password" content
@@ -198,7 +198,7 @@ let reset_password_page ~token ?error request =
 let new_community_form ?user request =
   let csrf_token = Dream.csrf_tag request in
   let content = Printf.sprintf "
-    <div class='max-w-2xl mx-auto bg-white p-8 rounded-lg shadow-md border border-gray-200'>
+    <div class='max-w-2xl mx-auto bg-white p-8 rounded-xl shadow-md border border-[#E0D9CC]'>
         <h1 class='text-2xl font-bold mb-6 text-gray-800'>Create a New Community</h1>
 
         <form action='/communities' method='POST' class='space-y-6'>
@@ -207,18 +207,18 @@ let new_community_form ?user request =
             <div>
                 <label class='block text-sm font-medium text-gray-700 mb-1'>Community Name</label>
                 <input type='text' name='name' required
-                       class='block w-full rounded-md border-gray-300 focus:border-[#0D9488] focus:ring-1 focus:ring-[#0D9488]/20 focus:outline-none p-2 border'
+                       class='block w-full rounded-xl border-[#D0C9BC] focus:border-[#C94C4C] focus:ring-1 focus:ring-[#C94C4C]/20 focus:outline-none p-2 border'
                        placeholder='e.g., Italian Cuisine'>
             </div>
 
             <div>
                 <label class='block text-sm font-medium text-gray-700 mb-1'>URL Slug</label>
-                <div class='flex rounded-md shadow-sm'>
-                    <span class='inline-flex items-center px-3 rounded-l-md border border-r-0 border-gray-300 bg-gray-50 text-gray-500 text-sm'>
+                <div class='flex rounded-xl shadow-sm'>
+                    <span class='inline-flex items-center px-3 rounded-l-md border border-r-0 border-[#D0C9BC] bg-gray-50 text-gray-500 text-sm'>
                         /c/
                     </span>
                     <input type='text' name='slug' required
-                           class='flex-1 block w-full rounded-none rounded-r-md border-gray-300 focus:border-[#0D9488] focus:ring-[#0D9488] p-2 border'
+                           class='flex-1 block w-full rounded-none rounded-r-md border-[#D0C9BC] focus:border-[#C94C4C] focus:ring-[#C94C4C] p-2 border'
                            placeholder='italian-cuisine'>
                 </div>
                 <p class='mt-1 text-xs text-gray-500'>Lowercase, no spaces.</p>
@@ -227,10 +227,10 @@ let new_community_form ?user request =
             <div>
                 <label class='block text-sm font-medium text-gray-700 mb-1'>Description</label>
                 <textarea name='description' rows='3'
-                          class='block w-full rounded-md border-gray-300 focus:border-[#0D9488] focus:ring-1 focus:ring-[#0D9488]/20 focus:outline-none p-2 border'></textarea>
+                          class='block w-full rounded-xl border-[#D0C9BC] focus:border-[#C94C4C] focus:ring-1 focus:ring-[#C94C4C]/20 focus:outline-none p-2 border'></textarea>
             </div>
 
-            <button type='submit' class='w-full bg-[#0D9488] text-white py-2 px-4 rounded-md hover:bg-teal-700 font-semibold transition'>
+            <button type='submit' class='w-full bg-[#C94C4C] text-white py-2 px-4 rounded-xl hover:bg-[#A83A3A] font-semibold transition'>
                 Create Community
             </button>
         </form>
@@ -245,16 +245,16 @@ let community_page ?user ~is_member ~is_current_user_mod ~is_current_user_top_mo
   let has_next = List.length posts = 20 in
 
   let posts_html =
-    if posts = [] then "<div class='bg-gray-50 p-12 text-center rounded-lg border border-dashed border-gray-300 text-gray-500'>No posts yet. Be the first to share something!</div>"
+    if posts = [] then "<div class='bg-gray-50 p-12 text-center rounded-xl border border-dashed border-[#D0C9BC] text-gray-500'>No posts yet. Be the first to share something!</div>"
     else String.concat "\n" (List.map (Components.render_post ~is_current_user_mod ~mod_usernames ~admin_usernames ~banned_usernames request user_votes) posts)
   in
 
-  let prev_btn = if current_page <= 1 then "" else Printf.sprintf "<a href='/c/%s?sort=%s&page=%d' class='bg-white border border-gray-300 text-gray-700 px-4 py-2 rounded font-bold hover:bg-gray-50 transition'>&larr; Previous</a>" community.slug sort_mode (current_page - 1) in
-  let next_btn = if not has_next then "" else Printf.sprintf "<a href='/c/%s?sort=%s&page=%d' class='bg-white border border-gray-300 text-gray-700 px-4 py-2 rounded font-bold hover:bg-gray-50 transition'>Next &rarr;</a>" community.slug sort_mode (current_page + 1) in
+  let prev_btn = if current_page <= 1 then "" else Printf.sprintf "<a href='/c/%s?sort=%s&page=%d' class='bg-white border border-[#D0C9BC] text-gray-700 px-4 py-2 rounded font-bold hover:bg-[#EDE9DF] transition'>&larr; Previous</a>" community.slug sort_mode (current_page - 1) in
+  let next_btn = if not has_next then "" else Printf.sprintf "<a href='/c/%s?sort=%s&page=%d' class='bg-white border border-[#D0C9BC] text-gray-700 px-4 py-2 rounded font-bold hover:bg-[#EDE9DF] transition'>Next &rarr;</a>" community.slug sort_mode (current_page + 1) in
 
-  let get_sort_class s = if s = sort_mode then "text-[#0D9488] border-b-2 border-[#0D9488] pb-1" else "text-gray-500 hover:text-gray-800 transition" in
+  let get_sort_class s = if s = sort_mode then "text-[#C94C4C] border-b-2 border-[#C94C4C] pb-1" else "text-gray-500 hover:text-gray-800 transition" in
   let sort_menu = Printf.sprintf "
-    <div class='flex space-x-6 mb-6 px-2 border-b border-gray-200 mt-6'>
+    <div class='flex space-x-6 mb-6 px-2 border-b border-[#E0D9CC] mt-6'>
         <a href='/c/%s?sort=hot' class='font-bold text-sm tracking-wide uppercase %s'>🔥 Hot</a>
         <a href='/c/%s?sort=new' class='font-bold text-sm tracking-wide uppercase %s'>✨ New</a>
         <a href='/c/%s?sort=top' class='font-bold text-sm tracking-wide uppercase %s'>🏆 Top</a>
@@ -265,14 +265,14 @@ let community_page ?user ~is_member ~is_current_user_mod ~is_current_user_top_mo
     match user with
     | None -> ""
     | Some _ ->
-        if is_member then Printf.sprintf "<form action='/leave' method='POST' class='m-0 p-0'>%s<input type='hidden' name='community_id' value='%d'><input type='hidden' name='redirect_to' value='/c/%s'><button type='submit' class='rounded-full px-5 py-1.5 border border-gray-300 hover:bg-gray-50 text-sm font-medium text-gray-700 transition'>Leave</button></form>" csrf_token community.id community.slug
-        else Printf.sprintf "<form action='/join' method='POST' class='m-0 p-0'>%s<input type='hidden' name='community_id' value='%d'><input type='hidden' name='redirect_to' value='/c/%s'><button type='submit' class='rounded-full px-5 py-1.5 bg-[#0D9488] text-white text-sm font-semibold hover:bg-teal-700 transition'>Join</button></form>" csrf_token community.id community.slug
+        if is_member then Printf.sprintf "<form action='/leave' method='POST' class='m-0 p-0'>%s<input type='hidden' name='community_id' value='%d'><input type='hidden' name='redirect_to' value='/c/%s'><button type='submit' class='rounded-full px-5 py-1.5 border border-[#D0C9BC] hover:bg-gray-50 text-sm font-medium text-gray-700 transition'>Leave</button></form>" csrf_token community.id community.slug
+        else Printf.sprintf "<form action='/join' method='POST' class='m-0 p-0'>%s<input type='hidden' name='community_id' value='%d'><input type='hidden' name='redirect_to' value='/c/%s'><button type='submit' class='rounded-full px-5 py-1.5 bg-[#C94C4C] text-white text-sm font-semibold hover:bg-[#A83A3A] transition'>Join</button></form>" csrf_token community.id community.slug
   in
 
   (* Admins see the edit button without needing mod status — global authority. *)
   let settings_btn =
     if is_current_user_mod || is_admin then
-      Printf.sprintf "<a href='/c/%s/settings' class='rounded-full px-4 py-1.5 border border-gray-300 hover:bg-gray-50 text-sm font-medium text-gray-700 transition'>Edit Community</a>" community.slug
+      Printf.sprintf "<a href='/c/%s/settings' class='rounded-full px-4 py-1.5 border border-[#D0C9BC] hover:bg-gray-50 text-sm font-medium text-gray-700 transition'>Edit Community</a>" community.slug
     else ""
   in
 
@@ -281,7 +281,7 @@ let community_page ?user ~is_member ~is_current_user_mod ~is_current_user_top_mo
     match user with
     | None -> ""
     | Some _ ->
-        Printf.sprintf "<a href='/new-post?community=%s' class='rounded-full px-5 py-1.5 bg-[#0D9488] text-white text-sm font-semibold hover:bg-teal-700 transition'>+ Post</a>" community.slug
+        Printf.sprintf "<a href='/new-post?community=%s' class='rounded-full px-5 py-1.5 bg-[#C94C4C] text-white text-sm font-semibold hover:bg-[#A83A3A] transition'>+ Post</a>" community.slug
   in
 
   let banner_html =
@@ -289,7 +289,7 @@ let community_page ?user ~is_member ~is_current_user_mod ~is_current_user_top_mo
     | Some url when url <> "" ->
         Printf.sprintf "<div class='h-24 md:h-40 w-full bg-gray-100 rounded-2xl overflow-hidden'><img src='%s' class='w-full h-full object-cover' alt='banner'></div>" url
     | _ ->
-        "<div class='h-24 md:h-40 w-full bg-gradient-to-r from-teal-50 to-gray-100 rounded-2xl'></div>"
+        "<div class='h-24 md:h-40 w-full bg-gradient-to-r from-[#EDE9DF] to-[#E8E2D9] rounded-2xl'></div>"
   in
 
   let avatar_html =
@@ -297,7 +297,7 @@ let community_page ?user ~is_member ~is_current_user_mod ~is_current_user_top_mo
     | Some url when url <> "" ->
         Printf.sprintf "<img src='%s' class='w-20 h-20 md:w-24 md:h-24 rounded-full border-4 border-white bg-white shadow-sm object-cover'>" url
     | _ ->
-        Printf.sprintf "<div class='w-20 h-20 md:w-24 md:h-24 rounded-full border-4 border-white bg-[#0D9488] flex items-center justify-center text-white text-2xl font-bold shadow-sm'>%s</div>"
+        Printf.sprintf "<div class='w-20 h-20 md:w-24 md:h-24 rounded-full border-4 border-white bg-[#69C3D2] flex items-center justify-center text-white text-2xl font-bold shadow-sm'>%s</div>"
           (String.uppercase_ascii (String.sub community.name 0 1))
   in
 
@@ -305,16 +305,16 @@ let community_page ?user ~is_member ~is_current_user_mod ~is_current_user_top_mo
     if mod_usernames = [] then "<p class='text-xs text-gray-400 italic'>No moderators yet.</p>"
     else
       let links = String.concat "\n" (List.map (fun u ->
-        Printf.sprintf "<li><a href='/u/%s' class='text-sm text-gray-700 hover:text-[#0D9488] transition'>u/%s</a></li>" (Components.html_escape u) (Components.html_escape u)
+        Printf.sprintf "<li><a href='/u/%s' class='text-sm text-gray-700 hover:text-[#C94C4C] transition'>u/%s</a></li>" (Components.html_escape u) (Components.html_escape u)
       ) mod_usernames) in
       Printf.sprintf "<ul class='space-y-1'>%s</ul>" links
   in
 
   (* Three separate sidebar cards: clearer hierarchy than one combined card. *)
   let community_info_card = Printf.sprintf "
-    <div class='bg-white border border-gray-200 rounded-xl shadow-sm p-5'>
+    <div class='bg-white border border-[#E0D9CC] rounded-xl shadow-sm p-5'>
         <h2 class='font-bold text-gray-900 mb-1'>%s</h2>
-        <div class='text-xs text-[#0D9488] font-mono mb-3'>/c/%s</div>
+        <div class='text-xs text-[#C94C4C] font-mono mb-3'>/c/%s</div>
         <p class='text-sm text-gray-600'>%s</p>
         <a href='/c/%s/modlog' class='mt-4 flex items-center gap-2 text-sm text-gray-400 hover:text-gray-600 transition-colors'>
             <span>&#128220;</span><span>Public Modlog</span>
@@ -329,7 +329,7 @@ let community_page ?user ~is_member ~is_current_user_mod ~is_current_user_top_mo
     match community.rules with
     | Some rules when rules <> "" ->
         Printf.sprintf "
-    <div class='bg-white border border-gray-200 rounded-xl shadow-sm p-5'>
+    <div class='bg-white border border-[#E0D9CC] rounded-xl shadow-sm p-5'>
         <h3 class='text-xs font-bold text-gray-500 uppercase tracking-wider mb-3'>Rules</h3>
         <p class='text-xs text-gray-600 whitespace-pre-wrap'>%s</p>
     </div>" (Components.html_escape rules)
@@ -340,7 +340,7 @@ let community_page ?user ~is_member ~is_current_user_mod ~is_current_user_top_mo
      cannot appoint or demote peers, preventing collusion against the council. *)
   let manage_mods_link =
     if is_current_user_top_mod || is_admin then
-      Printf.sprintf "<div class='mt-3'><a href='/c/%s/manage-mods' class='text-xs text-[#0D9488] hover:underline font-semibold'>Manage Moderators &rarr;</a></div>" (Components.html_escape community.slug)
+      Printf.sprintf "<div class='mt-3'><a href='/c/%s/manage-mods' class='text-xs text-[#C94C4C] hover:underline font-semibold'>Manage Moderators &rarr;</a></div>" (Components.html_escape community.slug)
     else ""
   in
 
@@ -353,7 +353,7 @@ let community_page ?user ~is_member ~is_current_user_mod ~is_current_user_top_mo
         else ("🟢", "true", "Enable Downvotes")
       in
       Printf.sprintf "
-    <div class='bg-white border border-gray-200 rounded-xl shadow-sm p-5'>
+    <div class='bg-white border border-[#E0D9CC] rounded-xl shadow-sm p-5'>
         <h3 class='text-xs font-bold text-gray-500 uppercase tracking-wider mb-3'>Mod Tools</h3>
         <form action='/c/%s/toggle_downvotes' method='POST' class='m-0 p-0'>
             %s
@@ -366,7 +366,7 @@ let community_page ?user ~is_member ~is_current_user_mod ~is_current_user_top_mo
   in
 
   let mods_card = Printf.sprintf "
-    <div class='bg-white border border-gray-200 rounded-xl shadow-sm p-5'>
+    <div class='bg-white border border-[#E0D9CC] rounded-xl shadow-sm p-5'>
         <h3 class='text-xs font-bold text-gray-500 uppercase tracking-wider mb-3'>Moderators</h3>
         %s
         %s
@@ -437,7 +437,7 @@ let community_settings_page ?user ~(community : community) ~(mods : user list) ~
       let rows = String.concat "\n" (List.map (fun (b : user) ->
         Printf.sprintf "
           <li class='flex items-center justify-between py-3 border-b border-gray-100 last:border-0'>
-            <a href='/u/%s' class='font-medium text-gray-800 hover:text-[#0D9488] hover:underline'>u/%s</a>
+            <a href='/u/%s' class='font-medium text-gray-800 hover:text-[#C94C4C] hover:underline'>u/%s</a>
             <form action='/unban-community-user' method='POST' class='inline m-0 p-0'>
               %s
               <input type='hidden' name='target_user_id' value='%d'>
@@ -455,10 +455,10 @@ let community_settings_page ?user ~(community : community) ~(mods : user list) ~
     <div class='max-w-2xl mx-auto'>
       <div class='flex items-center justify-between mb-6'>
         <h1 class='text-2xl font-bold text-gray-900'>&#x2699;&#xFE0F; /c/%s Settings</h1>
-        <a href='/c/%s' class='text-sm text-[#0D9488] hover:underline'>&larr; Back to Community</a>
+        <a href='/c/%s' class='text-sm text-[#C94C4C] hover:underline'>&larr; Back to Community</a>
       </div>
 
-      <div class='bg-white rounded-lg shadow-sm border border-gray-200 p-6 mb-6'>
+      <div class='bg-white rounded-xl shadow-[0_2px_8px_rgba(60,54,48,0.06)] border border-[#E0D9CC] p-6 mb-6'>
         <h2 class='text-lg font-bold text-gray-800 mb-4'>Edit Community</h2>
         <form action='/update-community' method='POST' class='space-y-4'>
           %s
@@ -467,48 +467,48 @@ let community_settings_page ?user ~(community : community) ~(mods : user list) ~
           <div>
             <label class='block text-sm font-medium text-gray-700 mb-1'>Description</label>
             <textarea name='description' rows='3'
-                      class='w-full rounded-md border border-gray-300 p-2 text-sm focus:border-[#0D9488] focus:ring-1 focus:ring-[#0D9488]/20 focus:outline-none'>%s</textarea>
+                      class='w-full rounded-xl border border-[#D0C9BC] p-2 text-sm focus:border-[#C94C4C] focus:ring-1 focus:ring-[#C94C4C]/20 focus:outline-none'>%s</textarea>
           </div>
           <div>
             <label class='block text-sm font-medium text-gray-700 mb-1'>Community Rules</label>
             <textarea name='rules' rows='5'
-                      class='w-full rounded-md border border-gray-300 p-2 text-sm focus:border-[#0D9488] focus:ring-1 focus:ring-[#0D9488]/20 focus:outline-none'>%s</textarea>
+                      class='w-full rounded-xl border border-[#D0C9BC] p-2 text-sm focus:border-[#C94C4C] focus:ring-1 focus:ring-[#C94C4C]/20 focus:outline-none'>%s</textarea>
           </div>
           <div>
             <label class='block text-sm font-medium text-gray-700 mb-1'>Avatar URL</label>
             <input type='url' name='avatar_url' value='%s'
                    placeholder='https://example.com/avatar.png'
-                   class='w-full rounded-md border border-gray-300 p-2 text-sm focus:border-[#0D9488] focus:ring-1 focus:ring-[#0D9488]/20 focus:outline-none'>
+                   class='w-full rounded-xl border border-[#D0C9BC] p-2 text-sm focus:border-[#C94C4C] focus:ring-1 focus:ring-[#C94C4C]/20 focus:outline-none'>
           </div>
           <div>
             <label class='block text-sm font-medium text-gray-700 mb-1'>Banner URL</label>
             <input type='url' name='banner_url' value='%s'
                    placeholder='https://example.com/banner.png'
-                   class='w-full rounded-md border border-gray-300 p-2 text-sm focus:border-[#0D9488] focus:ring-1 focus:ring-[#0D9488]/20 focus:outline-none'>
+                   class='w-full rounded-xl border border-[#D0C9BC] p-2 text-sm focus:border-[#C94C4C] focus:ring-1 focus:ring-[#C94C4C]/20 focus:outline-none'>
           </div>
-          <button type='submit' class='bg-[#0D9488] text-white px-4 py-2 rounded-md font-semibold text-sm hover:bg-teal-700 transition'>
+          <button type='submit' class='bg-[#C94C4C] text-white px-4 py-2 rounded-xl font-semibold text-sm hover:bg-[#A83A3A] transition'>
             Save Changes
           </button>
         </form>
       </div>
 
       <a href='/c/%s/manage-mods'
-         class='flex items-center justify-between bg-white rounded-lg shadow-sm border border-[#0D9488] p-5 mb-6 group hover:bg-teal-50 transition'>
+         class='flex items-center justify-between bg-white rounded-xl shadow-sm border border-[#C94C4C] p-5 mb-6 group hover:bg-[#F0EDE4] transition'>
         <div>
-          <p class='text-base font-bold text-gray-900 group-hover:text-[#0D9488] transition'>Manage Moderators Team</p>
+          <p class='text-base font-bold text-gray-900 group-hover:text-[#C94C4C] transition'>Manage Moderators Team</p>
           <p class='text-sm text-gray-500 mt-0.5'>Add, promote, and remove moderators &mdash; Council of Equals governance.</p>
         </div>
-        <span class='text-[#0D9488] text-xl font-bold'>&rarr;</span>
+        <span class='text-[#C94C4C] text-xl font-bold'>&rarr;</span>
       </a>
 
-      <div class='bg-white rounded-lg shadow-sm border border-gray-200 p-6'>
+      <div class='bg-white rounded-xl shadow-[0_2px_8px_rgba(60,54,48,0.06)] border border-[#E0D9CC] p-6'>
         <h2 class='text-lg font-bold text-gray-800 mb-4'>Banned Users</h2>
         %s
         <form action='/ban-community-user' method='POST' class='flex items-center space-x-3 mt-4'>
           %s
           <input type='hidden' name='community_id' value='%d'>
           <input type='text' name='target_username' required placeholder='Username to ban'
-                 class='flex-1 rounded-md border-gray-300 shadow-sm focus:border-[#0D9488] p-2 border text-sm'>
+                 class='flex-1 rounded-xl border-[#D0C9BC] shadow-sm focus:border-[#C94C4C] p-2 border text-sm'>
           <button type='submit' class='bg-red-600 text-white px-4 py-2 rounded font-bold text-sm hover:bg-red-700 transition shadow-sm'>
             Ban User
           </button>
@@ -552,8 +552,8 @@ let manage_mods_page ?user ~is_admin ~current_user_role ~(community : community)
     in
     Printf.sprintf "
       <li class='flex items-center justify-between py-3 border-b border-gray-100 last:border-0'>
-        <div><a href='/u/%s' class='font-medium text-gray-800 hover:text-[#0D9488] hover:underline'>u/%s</a>
-        <span class='ml-2 text-xs bg-teal-100 text-teal-700 px-1.5 py-0.5 rounded font-semibold'>Top Mod</span></div>
+        <div><a href='/u/%s' class='font-medium text-gray-800 hover:text-[#C94C4C] hover:underline'>u/%s</a>
+        <span class='ml-2 text-xs bg-[#DFF5F8] text-[#69C3D2] px-1.5 py-0.5 rounded font-semibold'>Top Mod</span></div>
         %s
       </li>"
       (Components.html_escape m.username) (Components.html_escape m.username) action_btn
@@ -567,7 +567,7 @@ let manage_mods_page ?user ~is_admin ~current_user_role ~(community : community)
             <form action='/c/%s/manage-mods/promote' method='POST' class='inline m-0 p-0'>
               %s
               <input type='hidden' name='target_user_id' value='%d'>
-              <button type='submit' class='text-xs text-teal-600 hover:text-teal-800 font-bold border border-teal-200 px-2 py-1 rounded transition'>Promote to Top Mod</button>
+              <button type='submit' class='text-xs text-[#69C3D2] hover:text-[#4BA8B8] font-bold border border-[#A8DDE8] px-2 py-1 rounded transition'>Promote to Top Mod</button>
             </form>
             <form action='/c/%s/manage-mods/remove' method='POST' class='inline m-0 p-0' onsubmit=\"confirmModal(event, 'Remove this moderator?')\">
               %s
@@ -581,7 +581,7 @@ let manage_mods_page ?user ~is_admin ~current_user_role ~(community : community)
     in
     Printf.sprintf "
       <li class='flex items-center justify-between py-3 border-b border-gray-100 last:border-0'>
-        <a href='/u/%s' class='font-medium text-gray-800 hover:text-[#0D9488] hover:underline'>u/%s</a>
+        <a href='/u/%s' class='font-medium text-gray-800 hover:text-[#C94C4C] hover:underline'>u/%s</a>
         %s
       </li>"
       (Components.html_escape m.username) (Components.html_escape m.username) action_btns
@@ -590,7 +590,7 @@ let manage_mods_page ?user ~is_admin ~current_user_role ~(community : community)
   let render_legacy_row (m : moderator_entry) =
     Printf.sprintf "
       <li class='flex items-center justify-between py-3 border-b border-gray-100 last:border-0'>
-        <div><a href='/u/%s' class='font-medium text-gray-500 hover:text-[#0D9488] hover:underline'>u/%s</a>
+        <div><a href='/u/%s' class='font-medium text-gray-500 hover:text-[#C94C4C] hover:underline'>u/%s</a>
         <span class='ml-2 text-xs bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded'>Legacy</span></div>
         <span class='text-xs text-gray-400 italic'>No active powers</span>
       </li>"
@@ -608,7 +608,7 @@ let manage_mods_page ?user ~is_admin ~current_user_role ~(community : community)
   let legacy_section =
     if legacy_mods = [] then ""
     else Printf.sprintf "
-      <div class='bg-white rounded-lg shadow-sm border border-gray-200 p-6 mb-6'>
+      <div class='bg-white rounded-xl shadow-[0_2px_8px_rgba(60,54,48,0.06)] border border-[#E0D9CC] p-6 mb-6'>
         <h2 class='text-lg font-bold text-gray-800 mb-1'>Legacy Moderators</h2>
         <p class='text-xs text-gray-400 mb-4'>Demoted due to inactivity. No permissions granted.</p>
         <ul>%s</ul>
@@ -617,13 +617,13 @@ let manage_mods_page ?user ~is_admin ~current_user_role ~(community : community)
 
   let add_mod_form =
     if can_manage then Printf.sprintf "
-      <div class='bg-white rounded-lg shadow-sm border border-gray-200 p-6 mb-6'>
+      <div class='bg-white rounded-xl shadow-[0_2px_8px_rgba(60,54,48,0.06)] border border-[#E0D9CC] p-6 mb-6'>
         <h2 class='text-lg font-bold text-gray-800 mb-4'>Add New Moderator</h2>
         <form action='/c/%s/manage-mods/add' method='POST' class='flex items-center space-x-3'>
           %s
           <input type='text' name='username' required placeholder='Username'
-                 class='flex-1 rounded-md border-gray-300 shadow-sm focus:border-[#0D9488] p-2 border text-sm'>
-          <button type='submit' class='bg-[#0D9488] text-white px-4 py-2 rounded font-bold text-sm hover:bg-teal-700 transition shadow-sm'>
+                 class='flex-1 rounded-xl border-[#D0C9BC] shadow-sm focus:border-[#C94C4C] p-2 border text-sm'>
+          <button type='submit' class='bg-[#C94C4C] text-white px-4 py-2 rounded font-bold text-sm hover:bg-[#A83A3A] transition shadow-sm'>
             Add Mod
           </button>
         </form>
@@ -635,18 +635,18 @@ let manage_mods_page ?user ~is_admin ~current_user_role ~(community : community)
     <div class='max-w-2xl mx-auto'>
       <div class='flex items-center justify-between mb-6'>
         <h1 class='text-2xl font-bold text-gray-900'>Council of Mods &mdash; /c/%s</h1>
-        <a href='/c/%s' class='text-sm text-[#0D9488] hover:underline'>&larr; Back to Community</a>
+        <a href='/c/%s' class='text-sm text-[#C94C4C] hover:underline'>&larr; Back to Community</a>
       </div>
 
       %s
 
-      <div class='bg-white rounded-lg shadow-sm border border-gray-200 p-6 mb-6'>
+      <div class='bg-white rounded-xl shadow-[0_2px_8px_rgba(60,54,48,0.06)] border border-[#E0D9CC] p-6 mb-6'>
         <h2 class='text-lg font-bold text-gray-800 mb-1'>Top Mods</h2>
         <p class='text-xs text-gray-400 mb-4'>Council seats (max 3). Only admins can remove Top Mods.</p>
         %s
       </div>
 
-      <div class='bg-white rounded-lg shadow-sm border border-gray-200 p-6 mb-6'>
+      <div class='bg-white rounded-xl shadow-[0_2px_8px_rgba(60,54,48,0.06)] border border-[#E0D9CC] p-6 mb-6'>
         <h2 class='text-lg font-bold text-gray-800 mb-4'>Moderators</h2>
         %s
       </div>
@@ -666,12 +666,12 @@ let manage_mods_page ?user ~is_admin ~current_user_role ~(community : community)
 let choose_community_page ?user (communities : community list) =
   let render_option (community : community) =
     Printf.sprintf "
-    <a href='/new-post?community=%s' class='block bg-white p-4 rounded-lg border border-gray-200 hover:border-[#0D9488] hover:shadow-md transition flex justify-between items-center group'>
+    <a href='/new-post?community=%s' class='block bg-white p-4 rounded-xl border border-[#E0D9CC] hover:border-[#C94C4C] hover:shadow-md transition flex justify-between items-center group'>
         <div>
-            <span class='font-bold text-lg text-gray-800 group-hover:text-[#0D9488]'>%s</span>
+            <span class='font-bold text-lg text-gray-800 group-hover:text-[#C94C4C]'>%s</span>
             <span class='text-sm text-gray-500 ml-2'>/c/%s</span>
         </div>
-        <div class='bg-gray-100 text-gray-600 px-3 py-1 rounded text-sm group-hover:bg-[#0D9488] group-hover:text-white transition'>
+        <div class='bg-gray-100 text-gray-600 px-3 py-1 rounded text-sm group-hover:bg-[#C94C4C] group-hover:text-white transition'>
             Post here &rarr;
         </div>
     </a>"
@@ -691,7 +691,7 @@ let choose_community_page ?user (communities : community list) =
 
         <div class='mt-8 text-center pt-6 border-t'>
             <p class='text-gray-500'>Can't find the right place?</p>
-            <a href='/new-community' class='text-[#0D9488] font-bold hover:underline'>Create a new Community</a>
+            <a href='/new-community' class='text-[#C94C4C] font-bold hover:underline'>Create a new Community</a>
         </div>
     </div>"
     list_html
@@ -701,11 +701,11 @@ let choose_community_page ?user (communities : community list) =
 let join_to_post_page ?user (community : community) request =
   let csrf_token = Dream.csrf_tag request in
   let content = Printf.sprintf "
-    <div class='max-w-md mx-auto mt-10 p-8 bg-white rounded-lg shadow-md border border-gray-200 text-center'>
+    <div class='max-w-md mx-auto mt-10 p-8 bg-white rounded-xl shadow-md border border-[#E0D9CC] text-center'>
         <div class='text-6xl mb-4'>🔒</div>
         <h1 class='text-2xl font-bold text-gray-800 mb-2'>Members Only</h1>
         <p class='text-gray-600 mb-6'>
-            You must be a member of <span class='font-bold text-[#0D9488]'>/c/%s</span> to create a post here.
+            You must be a member of <span class='font-bold text-[#C94C4C]'>/c/%s</span> to create a post here.
         </p>
 
         <form action='/join' method='POST'>
@@ -713,7 +713,7 @@ let join_to_post_page ?user (community : community) request =
             <input type='hidden' name='community_id' value='%d'>
             <input type='hidden' name='redirect_to' value='/new-post?community=%s'>
 
-            <button type='submit' class='w-full bg-[#0D9488] text-white font-bold py-3 px-4 rounded-lg hover:bg-teal-700 transition shadow-lg transform hover:-translate-y-0.5'>
+            <button type='submit' class='w-full bg-[#C94C4C] text-white font-bold py-3 px-4 rounded-xl hover:bg-[#A83A3A] transition shadow-lg transform hover:-translate-y-0.5'>
                 Join Community & Post
             </button>
         </form>
@@ -729,8 +729,8 @@ let join_to_post_page ?user (community : community) request =
 let new_post_form ?user (community : community) request =
   let csrf_token = Dream.csrf_tag request in
   let content = Printf.sprintf "
-    <div class='max-w-2xl mx-auto bg-white p-8 rounded-lg shadow-md border border-gray-200'>
-        <h1 class='text-2xl font-bold mb-6 text-gray-800'>Post to <span class='text-[#0D9488]'>/c/%s</span></h1>
+    <div class='max-w-2xl mx-auto bg-white p-8 rounded-xl shadow-md border border-[#E0D9CC]'>
+        <h1 class='text-2xl font-bold mb-6 text-gray-800'>Post to <span class='text-[#C94C4C]'>/c/%s</span></h1>
 
         <form action='/posts' method='POST' class='space-y-6'>
             %s
@@ -739,25 +739,25 @@ let new_post_form ?user (community : community) request =
             <div>
                 <label class='block text-sm font-medium text-gray-700 mb-1'>Title</label>
                 <input type='text' name='title' required
-                       class='block w-full rounded-md border-gray-300 focus:border-[#0D9488] focus:ring-1 focus:ring-[#0D9488]/20 focus:outline-none p-2 border'
+                       class='block w-full rounded-xl border-[#D0C9BC] focus:border-[#C94C4C] focus:ring-1 focus:ring-[#C94C4C]/20 focus:outline-none p-2 border'
                        placeholder='An interesting title'>
             </div>
 
             <div>
                 <label class='block text-sm font-medium text-gray-700 mb-1'>URL (Optional)</label>
                 <input type='url' name='url'
-                       class='block w-full rounded-md border-gray-300 focus:border-[#0D9488] focus:ring-1 focus:ring-[#0D9488]/20 focus:outline-none p-2 border'
+                       class='block w-full rounded-xl border-[#D0C9BC] focus:border-[#C94C4C] focus:ring-1 focus:ring-[#C94C4C]/20 focus:outline-none p-2 border'
                        placeholder='https://example.com'>
             </div>
 
             <div>
                 <label class='block text-sm font-medium text-gray-700 mb-1'>Text (Optional)</label>
                 <textarea name='content' rows='6'
-                          class='block w-full rounded-md border-gray-300 focus:border-[#0D9488] focus:ring-1 focus:ring-[#0D9488]/20 focus:outline-none p-2 border'
+                          class='block w-full rounded-xl border-[#D0C9BC] focus:border-[#C94C4C] focus:ring-1 focus:ring-[#C94C4C]/20 focus:outline-none p-2 border'
                           placeholder='Share your thoughts...'></textarea>
             </div>
 
-            <button type='submit' class='w-full bg-[#0D9488] text-white py-2 px-4 rounded-md hover:bg-teal-700 font-semibold transition'>
+            <button type='submit' class='w-full bg-[#C94C4C] text-white py-2 px-4 rounded-xl hover:bg-[#A83A3A] font-semibold transition'>
                 Submit Post
             </button>
         </form>
@@ -797,10 +797,10 @@ let post_page ?user ~is_member ~is_current_user_mod ~mod_usernames ~admin_userna
                 %s
                 <input type='hidden' name='post_id' value='%d'>
                 <input type='hidden' name='parent_id' value='%d'>
-                <textarea name='content' required rows='3' class='w-full p-3 border border-gray-200 rounded-lg shadow-sm focus:outline-none focus:ring-1 focus:ring-[#0D9488] focus:border-[#0D9488] text-sm' placeholder='Write a reply...'></textarea>
+                <textarea name='content' required rows='3' class='w-full p-3 border border-[#E0D9CC] rounded-xl shadow-sm focus:outline-none focus:ring-1 focus:ring-[#C94C4C] focus:border-[#C94C4C] text-sm' placeholder='Write a reply...'></textarea>
                 <div class='flex justify-end gap-2 mt-2'>
                     <button type='button' onclick=\"document.getElementById('reply-form-%d').classList.toggle('hidden')\" class='text-sm text-gray-500 font-medium hover:text-gray-700 px-3 py-1.5'>Cancel</button>
-                    <button type='submit' class='bg-[#0D9488] text-white text-sm font-medium px-4 py-1.5 rounded-full hover:bg-teal-700 transition'>Post Reply</button>
+                    <button type='submit' class='bg-[#C94C4C] text-white text-sm font-medium px-4 py-1.5 rounded-full hover:bg-[#A83A3A] transition'>Post Reply</button>
                 </div>
             </form>" c.id csrf_token post.id c.id c.id
           else ""
@@ -809,7 +809,7 @@ let post_page ?user ~is_member ~is_current_user_mod ~mod_usernames ~admin_userna
         let current_vote = Option.value ~default:0 (List.assoc_opt c.id user_comment_votes) in
 
         let up_color = if current_vote = 1 then "text-orange-500" else "text-gray-400 hover:text-orange-500" in
-        let down_color = if current_vote = -1 then "text-[#0D9488]" else "text-gray-400 hover:text-[#0D9488]" in
+        let down_color = if current_vote = -1 then "text-[#69C3D2]" else "text-gray-400 hover:text-[#69C3D2]" in
 
         let up_action = if current_vote = 1 then 0 else 1 in
         let down_action = if current_vote = -1 then 0 else -1 in
@@ -854,13 +854,13 @@ let post_page ?user ~is_member ~is_current_user_mod ~mod_usernames ~admin_userna
                           <span class='text-sm font-semibold text-gray-700'>Reason <span class='text-red-500'>*</span></span>
                           <textarea name='reason' required maxlength='255' rows='4'
                             placeholder='Explain why this comment is being removed (visible to the community)...'
-                            class='w-full rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400 resize-none'></textarea>
+                            class='w-full rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400 resize-none'></textarea>
                         </label>
                         <div class='flex justify-end gap-2 pt-1'>
                           <button type='button' onclick=\"document.getElementById('mod-modal-comment-%d').close()\"
-                            class='px-4 py-2 rounded-lg text-sm font-semibold text-gray-600 bg-gray-100 hover:bg-gray-200 transition-colors'>Cancel</button>
+                            class='px-4 py-2 rounded-xl text-sm font-semibold text-gray-600 bg-gray-100 hover:bg-gray-200 transition-colors'>Cancel</button>
                           <button type='submit'
-                            class='px-4 py-2 rounded-lg text-sm font-bold text-white bg-red-600 hover:bg-red-700 transition-colors shadow-sm'>Confirm Removal</button>
+                            class='px-4 py-2 rounded-xl text-sm font-bold text-white bg-red-600 hover:bg-red-700 transition-colors shadow-sm'>Confirm Removal</button>
                         </div>
                       </form>
                     </div>
@@ -882,13 +882,13 @@ let post_page ?user ~is_member ~is_current_user_mod ~mod_usernames ~admin_userna
                           <span class='text-sm font-semibold text-gray-700'>Reason <span class='text-red-500'>*</span></span>
                           <textarea name='reason' required maxlength='255' rows='4'
                             placeholder='Explain the admin intervention reason (visible to the community)...'
-                            class='w-full rounded-lg border border-red-300 bg-red-50 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-400 resize-none'></textarea>
+                            class='w-full rounded-xl border border-red-300 bg-red-50 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-400 resize-none'></textarea>
                         </label>
                         <div class='flex justify-end gap-2 pt-1'>
                           <button type='button' onclick=\"document.getElementById('mod-modal-comment-%d').close()\"
-                            class='px-4 py-2 rounded-lg text-sm font-semibold text-gray-600 bg-gray-100 hover:bg-gray-200 transition-colors'>Cancel</button>
+                            class='px-4 py-2 rounded-xl text-sm font-semibold text-gray-600 bg-gray-100 hover:bg-gray-200 transition-colors'>Cancel</button>
                           <button type='submit'
-                            class='px-4 py-2 rounded-lg text-sm font-bold text-white bg-red-600 hover:bg-red-700 transition-colors shadow-sm'>Confirm Removal</button>
+                            class='px-4 py-2 rounded-xl text-sm font-bold text-white bg-red-600 hover:bg-red-700 transition-colors shadow-sm'>Confirm Removal</button>
                         </div>
                       </form>
                     </div>
@@ -924,13 +924,13 @@ let post_page ?user ~is_member ~is_current_user_mod ~mod_usernames ~admin_userna
                             <span class='text-sm font-semibold text-gray-700'>Reason <span class='text-red-500'>*</span></span>
                             <textarea name='reason' required rows='4'
                               placeholder='Explain why this user is being banned (visible to the community)...'
-                              class='w-full rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400 resize-none'></textarea>
+                              class='w-full rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400 resize-none'></textarea>
                           </label>
                           <div class='flex justify-end gap-2 pt-1'>
                             <button type='button' onclick=\"document.getElementById('ban-modal-comment-%d').close()\"
-                              class='px-4 py-2 rounded-lg text-sm font-semibold text-gray-600 bg-gray-100 hover:bg-gray-200 transition-colors'>Cancel</button>
+                              class='px-4 py-2 rounded-xl text-sm font-semibold text-gray-600 bg-gray-100 hover:bg-gray-200 transition-colors'>Cancel</button>
                             <button type='submit'
-                              class='px-4 py-2 rounded-lg text-sm font-bold text-white bg-amber-600 hover:bg-amber-700 transition-colors shadow-sm'>Confirm Ban</button>
+                              class='px-4 py-2 rounded-xl text-sm font-bold text-white bg-amber-600 hover:bg-amber-700 transition-colors shadow-sm'>Confirm Ban</button>
                           </div>
                         </form>
                       </div>
@@ -954,13 +954,13 @@ let post_page ?user ~is_member ~is_current_user_mod ~mod_usernames ~admin_userna
                             <span class='text-sm font-semibold text-gray-700'>Reason <span class='text-red-500'>*</span></span>
                             <textarea name='reason' required rows='4'
                               placeholder='Explain the admin intervention reason (visible to the community)...'
-                              class='w-full rounded-lg border border-red-300 bg-red-50 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-400 resize-none'></textarea>
+                              class='w-full rounded-xl border border-red-300 bg-red-50 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-400 resize-none'></textarea>
                           </label>
                           <div class='flex justify-end gap-2 pt-1'>
                             <button type='button' onclick=\"document.getElementById('ban-modal-comment-%d').close()\"
-                              class='px-4 py-2 rounded-lg text-sm font-semibold text-gray-600 bg-gray-100 hover:bg-gray-200 transition-colors'>Cancel</button>
+                              class='px-4 py-2 rounded-xl text-sm font-semibold text-gray-600 bg-gray-100 hover:bg-gray-200 transition-colors'>Cancel</button>
                             <button type='submit'
-                              class='px-4 py-2 rounded-lg text-sm font-bold text-white bg-red-600 hover:bg-red-700 transition-colors shadow-sm'>Confirm Ban</button>
+                              class='px-4 py-2 rounded-xl text-sm font-bold text-white bg-red-600 hover:bg-red-700 transition-colors shadow-sm'>Confirm Ban</button>
                           </div>
                         </form>
                       </div>
@@ -971,8 +971,8 @@ let post_page ?user ~is_member ~is_current_user_mod ~mod_usernames ~admin_userna
         in
 
         let avatar_html = match c.avatar_url with
-          | Some url when url <> "" -> Printf.sprintf "<img src='%s' alt='Avatar' class='w-5 h-5 rounded-full object-cover shadow-sm border border-gray-200'>" url
-          | _ -> Printf.sprintf "<div class='w-5 h-5 bg-teal-100 rounded-full flex items-center justify-center text-[10px] text-[#0D9488] font-bold shadow-sm border border-teal-200'>%s</div>" (String.sub c.username 0 1 |> String.uppercase_ascii)
+          | Some url when url <> "" -> Printf.sprintf "<img src='%s' alt='Avatar' class='w-5 h-5 rounded-full object-cover shadow-[0_2px_8px_rgba(60,54,48,0.06)] border border-[#E0D9CC]'>" url
+          | _ -> Printf.sprintf "<div class='w-5 h-5 bg-[#DFF5F8] rounded-full flex items-center justify-center text-[10px] text-[#C94C4C] font-bold shadow-sm border border-[#A8DDE8]'>%s</div>" (String.sub c.username 0 1 |> String.uppercase_ascii)
         in
 
         let upvote_html = match current_user with
@@ -983,12 +983,12 @@ let post_page ?user ~is_member ~is_current_user_mod ~mod_usernames ~admin_userna
           if not post.allow_downvotes then ""
           else match current_user with
           | Some _ -> Printf.sprintf "<form action='/vote-comment' method='POST' class='m-0 p-0'>%s<input type='hidden' name='comment_id' value='%d'><input type='hidden' name='direction' value='%d'><button type='submit' class='%s text-xs font-bold leading-none'>▼</button></form>" csrf_token c.id down_action down_color
-          | None -> "<a href='/login' class='text-gray-400 hover:text-[#0D9488] text-xs font-bold leading-none'>▼</a>"
+          | None -> "<a href='/login' class='text-gray-400 hover:text-[#69C3D2] text-xs font-bold leading-none'>▼</a>"
         in
 
         let op_badge =
           if c.username = post.username then
-            "<span class='ml-1.5 font-bold text-[10px] bg-teal-100 text-teal-700 px-1.5 py-0.5 rounded'>OP</span>"
+            "<span class='ml-1.5 font-bold text-[10px] bg-[#DFF5F8] text-[#69C3D2] px-1.5 py-0.5 rounded'>OP</span>"
           else ""
         in
 
@@ -1003,12 +1003,12 @@ let post_page ?user ~is_member ~is_current_user_mod ~mod_usernames ~admin_userna
         let comment_children_div =
           if nested_html = "" then ""
           else Printf.sprintf
-            "<div id='comment-children-%d' class='pl-3 border-l-2 border-gray-200 ml-2.5 mt-2'>%s</div>"
+            "<div id='comment-children-%d' class='pl-3 border-l-2 border-[#E0D9CC] ml-2.5 mt-2'>%s</div>"
             c.id nested_html
         in
 
         Printf.sprintf "
-        <div class='mt-3 hover:bg-gray-50 transition rounded-r pr-2 py-1'>
+        <div class='mt-3 hover:bg-[#EDE9DF] transition rounded-r pr-2 py-1'>
             <div class='flex items-center gap-2 text-xs text-gray-500 mb-1'>
                 %s
                 %s
@@ -1021,7 +1021,7 @@ let post_page ?user ~is_member ~is_current_user_mod ~mod_usernames ~admin_userna
             <div id='comment-content-%d'>
                 <div class='text-sm text-gray-900 whitespace-pre-wrap break-words'>%s</div>
                 <div class='flex items-center gap-3 mt-2'>
-                    <div class='flex items-center gap-1.5 bg-gray-50 border border-gray-200 rounded-full px-2 py-0.5'>
+                    <div class='flex items-center gap-1.5 bg-gray-50 border border-[#E0D9CC] rounded-full px-2 py-0.5'>
                         %s
                         <span class='text-xs font-semibold text-gray-700'>%d</span>
                         %s
@@ -1056,21 +1056,21 @@ let post_page ?user ~is_member ~is_current_user_mod ~mod_usernames ~admin_userna
       <form action='/comments' method='POST' class='mt-0'>
           %s
           <input type='hidden' name='post_id' value='%d'>
-          <textarea name='content' required rows='2' class='w-full border border-gray-200 rounded-lg px-4 py-3 text-sm bg-gray-50 focus:bg-white focus:ring-1 focus:ring-[#0D9488] focus:border-[#0D9488] resize-y transition-colors placeholder-gray-400' placeholder='Add a comment...'></textarea>
+          <textarea name='content' required rows='2' class='w-full border border-[#E0D9CC] rounded-xl px-4 py-3 text-sm bg-gray-50 focus:bg-white focus:ring-1 focus:ring-[#C94C4C] focus:border-[#C94C4C] resize-y transition-colors placeholder-gray-400' placeholder='Add a comment...'></textarea>
           <div class='flex justify-end mt-2 mb-8'>
-              <button type='submit' class='px-4 py-1.5 text-sm font-medium bg-[#0D9488] text-white rounded-full hover:bg-teal-700 transition-colors shadow-sm'>Comment</button>
+              <button type='submit' class='px-4 py-1.5 text-sm font-medium bg-[#C94C4C] text-white rounded-full hover:bg-[#A83A3A] transition-colors shadow-sm'>Comment</button>
           </div>
       </form>" csrf_token post.id
     else
       Printf.sprintf "
-      <div class='mt-6 mb-8 p-6 bg-teal-50 rounded-lg border border-teal-100 text-center'>
+      <div class='mt-6 mb-8 p-6 bg-[#F0EDE4] rounded-xl border border-[#E8E2D9] text-center'>
           <h3 class='text-gray-900 font-bold mb-2'>Join the discussion</h3>
-          <p class='text-teal-700 text-sm mb-4'>You must be a member of /c/%s to comment.</p>
+          <p class='text-[#69C3D2] text-sm mb-4'>You must be a member of /c/%s to comment.</p>
           <form action='/join' method='POST'>
               %s
               <input type='hidden' name='community_id' value='%d'>
               <input type='hidden' name='redirect_to' value='/p/%d'>
-              <button type='submit' class='bg-[#0D9488] text-white px-6 py-2 rounded-full font-bold hover:bg-teal-700 transition shadow-sm'>Join /c/%s</button>
+              <button type='submit' class='bg-[#C94C4C] text-white px-6 py-2 rounded-full font-bold hover:bg-[#A83A3A] transition shadow-sm'>Join /c/%s</button>
           </form>
       </div>" post.community_slug csrf_token post.community_id post.id post.community_slug
   in
@@ -1080,7 +1080,7 @@ let post_page ?user ~is_member ~is_current_user_mod ~mod_usernames ~admin_userna
 
   let current_vote_direction = match List.assoc_opt post.id user_post_votes with Some d -> d | None -> 0 in
   let up_color = if current_vote_direction = 1 then "text-orange-500" else "text-gray-400 hover:text-orange-500" in
-  let down_color = if current_vote_direction = -1 then "text-[#0D9488]" else "text-gray-400 hover:text-[#0D9488]" in
+  let down_color = if current_vote_direction = -1 then "text-[#69C3D2]" else "text-gray-400 hover:text-[#69C3D2]" in
   let up_action = if current_vote_direction = 1 then 0 else 1 in
   let down_action = if current_vote_direction = -1 then 0 else -1 in
   (* Voting pill mirrors the pattern in components.ml render_post: toggle by sending
@@ -1088,11 +1088,11 @@ let post_page ?user ~is_member ~is_current_user_mod ~mod_usernames ~admin_userna
      Comments and Share pills share the same action bar to keep post metadata
      actions cohesive and avoid redundant top-of-post share button placement. *)
   let comments_pill =
-    Printf.sprintf "<div class='flex items-center gap-1.5 bg-gray-50 border border-gray-200 rounded-full px-3 py-1.5 text-sm font-medium text-gray-700'><svg xmlns='http://www.w3.org/2000/svg' class='w-4 h-4' fill='none' viewBox='0 0 24 24' stroke='currentColor' stroke-width='2'><path stroke-linecap='round' stroke-linejoin='round' d='M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z'/></svg>%d</div>"
+    Printf.sprintf "<div class='flex items-center gap-1.5 bg-gray-50 border border-[#E0D9CC] rounded-full px-3 py-1.5 text-sm font-medium text-gray-700'><svg xmlns='http://www.w3.org/2000/svg' class='w-4 h-4' fill='none' viewBox='0 0 24 24' stroke='currentColor' stroke-width='2'><path stroke-linecap='round' stroke-linejoin='round' d='M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z'/></svg>%d</div>"
       post.comment_count
   in
   let share_pill =
-    Printf.sprintf "<button type='button' onclick='copyPostLink(\"/p/%d\", this)' class='flex items-center gap-1.5 bg-gray-50 border border-gray-200 rounded-full px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-100 transition-colors cursor-pointer'><svg xmlns='http://www.w3.org/2000/svg' class='w-4 h-4' fill='none' viewBox='0 0 24 24' stroke='currentColor' stroke-width='2'><path stroke-linecap='round' stroke-linejoin='round' d='M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z'/></svg>Share</button>"
+    Printf.sprintf "<button type='button' onclick='copyPostLink(\"/p/%d\", this)' class='flex items-center gap-1.5 bg-gray-50 border border-[#E0D9CC] rounded-full px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-100 transition-colors cursor-pointer'><svg xmlns='http://www.w3.org/2000/svg' class='w-4 h-4' fill='none' viewBox='0 0 24 24' stroke='currentColor' stroke-width='2'><path stroke-linecap='round' stroke-linejoin='round' d='M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z'/></svg>Share</button>"
       post.id
   in
   let voting_pill =
@@ -1103,15 +1103,15 @@ let post_page ?user ~is_member ~is_current_user_mod ~mod_usernames ~admin_userna
       else ""
     in
     let downvote_btn_logged_out =
-      if post.allow_downvotes then "<a href='/login' class='text-gray-400 hover:text-[#0D9488] text-sm font-bold leading-none'>▼</a>"
+      if post.allow_downvotes then "<a href='/login' class='text-gray-400 hover:text-[#69C3D2] text-sm font-bold leading-none'>▼</a>"
       else ""
     in
     match current_user with
     | Some _ ->
-        Printf.sprintf "<div class='flex items-center gap-3 mt-2 mb-6'><div class='flex items-center gap-2 bg-gray-50 border border-gray-200 rounded-full px-3 py-1.5'><form action='/vote' method='POST' class='m-0 p-0 flex'>%s<input type='hidden' name='post_id' value='%d'><input type='hidden' name='direction' value='%d'><button type='submit' class='%s text-sm font-bold leading-none'>▲</button></form><span class='text-sm font-semibold text-gray-700'>%d</span>%s</div>%s%s</div>"
+        Printf.sprintf "<div class='flex items-center gap-3 mt-2 mb-6'><div class='flex items-center gap-2 bg-gray-50 border border-[#E0D9CC] rounded-full px-3 py-1.5'><form action='/vote' method='POST' class='m-0 p-0 flex'>%s<input type='hidden' name='post_id' value='%d'><input type='hidden' name='direction' value='%d'><button type='submit' class='%s text-sm font-bold leading-none'>▲</button></form><span class='text-sm font-semibold text-gray-700'>%d</span>%s</div>%s%s</div>"
           csrf_token post.id up_action up_color post.score downvote_btn_logged_in comments_pill share_pill
     | None ->
-        Printf.sprintf "<div class='flex items-center gap-3 mt-2 mb-6'><div class='flex items-center gap-2 bg-gray-50 border border-gray-200 rounded-full px-3 py-1.5'><a href='/login' class='text-gray-400 hover:text-orange-500 text-sm font-bold leading-none'>▲</a><span class='text-sm font-semibold text-gray-700'>%d</span>%s</div>%s%s</div>"
+        Printf.sprintf "<div class='flex items-center gap-3 mt-2 mb-6'><div class='flex items-center gap-2 bg-gray-50 border border-[#E0D9CC] rounded-full px-3 py-1.5'><a href='/login' class='text-gray-400 hover:text-orange-500 text-sm font-bold leading-none'>▲</a><span class='text-sm font-semibold text-gray-700'>%d</span>%s</div>%s%s</div>"
           post.score downvote_btn_logged_out comments_pill share_pill
   in
 
@@ -1156,13 +1156,13 @@ let post_page ?user ~is_member ~is_current_user_mod ~mod_usernames ~admin_userna
                     <span class='text-sm font-semibold text-gray-700'>Reason <span class='text-red-500'>*</span></span>
                     <textarea name='reason' required maxlength='255' rows='4'
                       placeholder='Explain why this post is being removed (visible to the community)...'
-                      class='w-full rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400 resize-none'></textarea>
+                      class='w-full rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400 resize-none'></textarea>
                   </label>
                   <div class='flex justify-end gap-2 pt-1'>
                     <button type='button' onclick=\"document.getElementById('mod-modal-%d').close()\"
-                      class='px-4 py-2 rounded-lg text-sm font-semibold text-gray-600 bg-gray-100 hover:bg-gray-200 transition-colors'>Cancel</button>
+                      class='px-4 py-2 rounded-xl text-sm font-semibold text-gray-600 bg-gray-100 hover:bg-gray-200 transition-colors'>Cancel</button>
                     <button type='submit'
-                      class='px-4 py-2 rounded-lg text-sm font-bold text-white bg-red-600 hover:bg-red-700 transition-colors shadow-sm'>Confirm Removal</button>
+                      class='px-4 py-2 rounded-xl text-sm font-bold text-white bg-red-600 hover:bg-red-700 transition-colors shadow-sm'>Confirm Removal</button>
                   </div>
                 </form>
               </div>
@@ -1184,13 +1184,13 @@ let post_page ?user ~is_member ~is_current_user_mod ~mod_usernames ~admin_userna
                     <span class='text-sm font-semibold text-gray-700'>Reason <span class='text-red-500'>*</span></span>
                     <textarea name='reason' required maxlength='255' rows='4'
                       placeholder='Explain the admin intervention reason (visible to the community)...'
-                      class='w-full rounded-lg border border-red-300 bg-red-50 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-400 resize-none'></textarea>
+                      class='w-full rounded-xl border border-red-300 bg-red-50 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-400 resize-none'></textarea>
                   </label>
                   <div class='flex justify-end gap-2 pt-1'>
                     <button type='button' onclick=\"document.getElementById('mod-modal-%d').close()\"
-                      class='px-4 py-2 rounded-lg text-sm font-semibold text-gray-600 bg-gray-100 hover:bg-gray-200 transition-colors'>Cancel</button>
+                      class='px-4 py-2 rounded-xl text-sm font-semibold text-gray-600 bg-gray-100 hover:bg-gray-200 transition-colors'>Cancel</button>
                     <button type='submit'
-                      class='px-4 py-2 rounded-lg text-sm font-bold text-white bg-red-600 hover:bg-red-700 transition-colors shadow-sm'>Confirm Removal</button>
+                      class='px-4 py-2 rounded-xl text-sm font-bold text-white bg-red-600 hover:bg-red-700 transition-colors shadow-sm'>Confirm Removal</button>
                   </div>
                 </form>
               </div>
@@ -1228,13 +1228,13 @@ let post_page ?user ~is_member ~is_current_user_mod ~mod_usernames ~admin_userna
                       <span class='text-sm font-semibold text-gray-700'>Reason <span class='text-red-500'>*</span></span>
                       <textarea name='reason' required rows='4'
                         placeholder='Explain why this user is being banned (visible to the community)...'
-                        class='w-full rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400 resize-none'></textarea>
+                        class='w-full rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400 resize-none'></textarea>
                     </label>
                     <div class='flex justify-end gap-2 pt-1'>
                       <button type='button' onclick=\"document.getElementById('ban-modal-postpage-%d').close()\"
-                        class='px-4 py-2 rounded-lg text-sm font-semibold text-gray-600 bg-gray-100 hover:bg-gray-200 transition-colors'>Cancel</button>
+                        class='px-4 py-2 rounded-xl text-sm font-semibold text-gray-600 bg-gray-100 hover:bg-gray-200 transition-colors'>Cancel</button>
                       <button type='submit'
-                        class='px-4 py-2 rounded-lg text-sm font-bold text-white bg-amber-600 hover:bg-amber-700 transition-colors shadow-sm'>Confirm Ban</button>
+                        class='px-4 py-2 rounded-xl text-sm font-bold text-white bg-amber-600 hover:bg-amber-700 transition-colors shadow-sm'>Confirm Ban</button>
                     </div>
                   </form>
                 </div>
@@ -1258,13 +1258,13 @@ let post_page ?user ~is_member ~is_current_user_mod ~mod_usernames ~admin_userna
                       <span class='text-sm font-semibold text-gray-700'>Reason <span class='text-red-500'>*</span></span>
                       <textarea name='reason' required rows='4'
                         placeholder='Explain the admin intervention reason (visible to the community)...'
-                        class='w-full rounded-lg border border-red-300 bg-red-50 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-400 resize-none'></textarea>
+                        class='w-full rounded-xl border border-red-300 bg-red-50 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-400 resize-none'></textarea>
                     </label>
                     <div class='flex justify-end gap-2 pt-1'>
                       <button type='button' onclick=\"document.getElementById('ban-modal-postpage-%d').close()\"
-                        class='px-4 py-2 rounded-lg text-sm font-semibold text-gray-600 bg-gray-100 hover:bg-gray-200 transition-colors'>Cancel</button>
+                        class='px-4 py-2 rounded-xl text-sm font-semibold text-gray-600 bg-gray-100 hover:bg-gray-200 transition-colors'>Cancel</button>
                       <button type='submit'
-                        class='px-4 py-2 rounded-lg text-sm font-bold text-white bg-red-600 hover:bg-red-700 transition-colors shadow-sm'>Confirm Ban</button>
+                        class='px-4 py-2 rounded-xl text-sm font-bold text-white bg-red-600 hover:bg-red-700 transition-colors shadow-sm'>Confirm Ban</button>
                     </div>
                   </form>
                 </div>
@@ -1285,18 +1285,18 @@ let post_page ?user ~is_member ~is_current_user_mod ~mod_usernames ~admin_userna
     if mod_usernames = [] then "<p class='text-xs text-gray-400 italic'>No moderators yet.</p>"
     else
       let links = String.concat "\n" (List.map (fun u ->
-        Printf.sprintf "<li><a href='/u/%s' class='text-sm text-gray-700 hover:text-[#0D9488] transition'>u/%s</a></li>" (Components.html_escape u) (Components.html_escape u)
+        Printf.sprintf "<li><a href='/u/%s' class='text-sm text-gray-700 hover:text-[#C94C4C] transition'>u/%s</a></li>" (Components.html_escape u) (Components.html_escape u)
       ) mod_usernames) in
       Printf.sprintf "<ul class='space-y-1'>%s</ul>" links
   in
 
   let post_right_sidebar = Printf.sprintf "
-    <div class='bg-white border border-gray-200 rounded-xl shadow-sm p-5'>
+    <div class='bg-white border border-[#E0D9CC] rounded-xl shadow-sm p-5'>
         <h2 class='font-bold text-gray-900 mb-1'>%s</h2>
-        <div class='text-xs text-[#0D9488] font-mono mb-3'>/c/%s</div>
+        <div class='text-xs text-[#C94C4C] font-mono mb-3'>/c/%s</div>
         <p class='text-sm text-gray-600'>%s</p>
         %s
-        <a href='/new-post?community=%s' class='bg-[#0D9488] text-white rounded-lg px-4 py-2 w-full block text-center mt-4 hover:bg-teal-700 transition text-sm font-semibold'>+ Create Post</a>
+        <a href='/new-post?community=%s' class='bg-[#C94C4C] text-white rounded-xl px-4 py-2 w-full block text-center mt-4 hover:bg-[#A83A3A] transition text-sm font-semibold'>+ Create Post</a>
         <a href='/c/%s/modlog' class='mt-2 flex items-center gap-2 text-sm text-gray-400 hover:text-gray-600 transition-colors'>
             <span>&#128220;</span><span>Public Modlog</span>
         </a>
@@ -1316,9 +1316,9 @@ let post_page ?user ~is_member ~is_current_user_mod ~mod_usernames ~admin_userna
             %s
         </div>
         <div class='w-full lg:w-2/4 min-w-0'>
-            <div class='bg-white border border-gray-200 rounded-xl shadow-sm p-6 mb-6'>
+            <div class='bg-white border border-[#E0D9CC] rounded-xl shadow-sm p-6 mb-6'>
                 <div class='mb-4'>
-                    <a href='/c/%s' class='text-sm font-bold text-[#0D9488] hover:underline'>/c/%s</a>
+                    <a href='/c/%s' class='text-sm font-bold text-[#C94C4C] hover:underline'>/c/%s</a>
                     <span class='text-gray-400 mx-2'>•</span>
                     <span class='text-sm text-gray-500'>Posted by %s</span>
                     <span class='text-gray-400 mx-1'>•</span>
@@ -1403,7 +1403,7 @@ let user_profile_page ?user ~is_admin ~is_globally_banned ~profile_id ~admin_use
   let edit_profile_btn =
     match user with
     | Some logged_in when logged_in = username ->
-      "<a href='/settings' class='inline-flex items-center gap-1.5 mt-3 bg-[#0D9488] text-white text-sm font-semibold px-4 py-1.5 rounded-md hover:bg-teal-700 transition shadow-sm'>✏️ Edit Profile</a>"
+      "<a href='/settings' class='inline-flex items-center gap-1.5 mt-3 bg-[#C94C4C] text-white text-sm font-semibold px-4 py-1.5 rounded-xl hover:bg-[#A83A3A] transition shadow-sm'>✏️ Edit Profile</a>"
     | _ -> ""
   in
   (* Admin Panel: only render for the logged-in admin on their own profile.
@@ -1412,7 +1412,7 @@ let user_profile_page ?user ~is_admin ~is_globally_banned ~profile_id ~admin_use
   let admin_panel_btn =
     match user with
     | Some logged_in when logged_in = username && is_admin ->
-      "<a href='/admin' class='inline-flex items-center gap-1.5 mt-3 bg-red-600 text-white text-sm font-semibold px-4 py-1.5 rounded-md hover:bg-red-700 transition shadow-sm'>🛡️ Admin Panel</a>"
+      "<a href='/admin' class='inline-flex items-center gap-1.5 mt-3 bg-red-600 text-white text-sm font-semibold px-4 py-1.5 rounded-xl hover:bg-red-700 transition shadow-sm'>🛡️ Admin Panel</a>"
     | _ -> ""
   in
 
@@ -1446,12 +1446,12 @@ let user_profile_page ?user ~is_admin ~is_globally_banned ~profile_id ~admin_use
 
   let tab_class active =
     if active_tab = active then
-      "text-[#0D9488] border-b-2 border-[#0D9488] pb-3 text-sm font-medium"
+      "text-[#C94C4C] border-b-2 border-[#C94C4C] pb-3 text-sm font-medium"
     else
-      "text-gray-500 hover:text-gray-700 border-b-2 border-transparent hover:border-gray-300 pb-3 text-sm font-medium transition-colors"
+      "text-gray-500 hover:text-gray-700 border-b-2 border-transparent hover:border-[#D0C9BC] pb-3 text-sm font-medium transition-colors"
   in
   let tab_nav = Printf.sprintf "
-    <div class='flex items-center gap-6 border-b border-gray-200 mb-6'>
+    <div class='flex items-center gap-6 border-b border-[#E0D9CC] mb-6'>
         <a href='/u/%s?tab=posts' class='%s'>Posts</a>
         <a href='/u/%s?tab=comments' class='%s'>Comments</a>
     </div>" username (tab_class "posts") username (tab_class "comments")
@@ -1470,14 +1470,14 @@ let user_profile_page ?user ~is_admin ~is_globally_banned ~profile_id ~admin_use
     else
       String.concat "\n" (List.map (fun (_id, content, created_at, post_id, post_title, score) ->
         Printf.sprintf "
-          <div class='bg-white border border-gray-200 rounded-xl shadow-sm p-4 mb-4'>
+          <div class='bg-white border border-[#E0D9CC] rounded-xl shadow-sm p-4 mb-4'>
               <div class='flex items-center gap-3 text-xs text-gray-400 mb-2'>
                   <span>%s</span>
                   <span class='text-gray-300'>·</span>
                   <span class='font-medium text-gray-500'>%d points</span>
               </div>
               <p class='text-sm text-gray-800 leading-relaxed'>%s</p>
-              <a href='/p/%d' class='text-xs text-[#0D9488] hover:underline mt-2 inline-block'>&#8618; Commented on: %s</a>
+              <a href='/p/%d' class='text-xs text-[#C94C4C] hover:underline mt-2 inline-block'>&#8618; Commented on: %s</a>
           </div>" created_at score content post_id post_title
       ) user_comments)
   in
@@ -1488,7 +1488,7 @@ let user_profile_page ?user ~is_admin ~is_globally_banned ~profile_id ~admin_use
 
   let content = Printf.sprintf "
     <div class='max-w-4xl mx-auto mt-8'>
-        <div class='bg-white p-8 rounded-lg shadow-sm border border-gray-200 mb-8'>
+        <div class='bg-white p-8 rounded-xl shadow-[0_2px_8px_rgba(60,54,48,0.06)] border border-[#E0D9CC] mb-8'>
             <div class='flex items-center space-x-6'>
                 <img src='%s' alt='%s avatar' class='w-24 h-24 rounded-full border-4 border-gray-50 object-cover shadow-sm'>
                 <div>
@@ -1502,7 +1502,7 @@ let user_profile_page ?user ~is_admin ~is_globally_banned ~profile_id ~admin_use
                 </div>
             </div>
 
-            <div class='mt-6 bg-gray-50 p-4 rounded-md border border-gray-100 text-gray-800 whitespace-pre-wrap text-sm'>%s</div>
+            <div class='mt-6 bg-[#EDE9DF] p-4 rounded-xl border border-[#E0D9CC] text-gray-800 whitespace-pre-wrap text-sm'>%s</div>
 
             %s </div>
 
@@ -1520,52 +1520,52 @@ let settings_page ?user bio avatar_url request =
   let current_avatar = Option.value ~default:"" avatar_url in
 
   let content = Printf.sprintf "
-    <div class='max-w-2xl mx-auto bg-white p-8 rounded-lg shadow-sm border border-gray-200 mt-8'>
+    <div class='max-w-2xl mx-auto bg-white p-8 rounded-xl shadow-[0_2px_8px_rgba(60,54,48,0.06)] border border-[#E0D9CC] mt-8'>
         <h1 class='text-3xl font-extrabold text-gray-900 mb-8'>Account Settings</h1>
 
-        <div class='mb-10 pb-8 border-b border-gray-200'>
+        <div class='mb-10 pb-8 border-b border-[#E0D9CC]'>
             <h2 class='text-xl font-bold text-gray-800 mb-4'>Profile Information</h2>
             <form action='/settings' method='POST' class='space-y-6'>
                 %s
                 <div>
                     <label class='block text-sm font-medium text-gray-700 mb-1'>Avatar URL (Optional)</label>
-                    <input type='url' name='avatar_url' value='%s' class='block w-full rounded-md border-gray-300 focus:border-[#0D9488] focus:ring-1 focus:ring-[#0D9488]/20 focus:outline-none p-2 border' placeholder='https://example.com/my-face.jpg'>
+                    <input type='url' name='avatar_url' value='%s' class='block w-full rounded-xl border-[#D0C9BC] focus:border-[#C94C4C] focus:ring-1 focus:ring-[#C94C4C]/20 focus:outline-none p-2 border' placeholder='https://example.com/my-face.jpg'>
                 </div>
                 <div>
                     <label class='block text-sm font-medium text-gray-700 mb-1'>Bio</label>
-                    <textarea name='bio' rows='4' class='block w-full rounded-md border-gray-300 focus:border-[#0D9488] focus:ring-1 focus:ring-[#0D9488]/20 focus:outline-none p-2 border' placeholder='Tell the community a bit about yourself...'>%s</textarea>
+                    <textarea name='bio' rows='4' class='block w-full rounded-xl border-[#D0C9BC] focus:border-[#C94C4C] focus:ring-1 focus:ring-[#C94C4C]/20 focus:outline-none p-2 border' placeholder='Tell the community a bit about yourself...'>%s</textarea>
                 </div>
-                <button type='submit' class='bg-[#0D9488] text-white font-bold py-2 px-6 rounded hover:bg-teal-700 transition shadow-sm'>Save Profile</button>
+                <button type='submit' class='bg-[#C94C4C] text-white font-bold py-2 px-6 rounded hover:bg-[#A83A3A] transition shadow-sm'>Save Profile</button>
             </form>
         </div>
 
-        <div class='mb-10 pb-8 border-b border-gray-200'>
+        <div class='mb-10 pb-8 border-b border-[#E0D9CC]'>
             <h2 class='text-xl font-bold text-gray-800 mb-4'>Change Password</h2>
             <form action='/settings/password' method='POST' class='space-y-4'>
                 %s
                 <div>
                     <label class='block text-sm font-medium text-gray-700 mb-1'>Current Password</label>
-                    <input type='password' name='old_password' required class='block w-full rounded-md border-gray-300 focus:border-[#0D9488] focus:ring-1 focus:ring-[#0D9488]/20 focus:outline-none p-2 border'>
+                    <input type='password' name='old_password' required class='block w-full rounded-xl border-[#D0C9BC] focus:border-[#C94C4C] focus:ring-1 focus:ring-[#C94C4C]/20 focus:outline-none p-2 border'>
                 </div>
                 <div>
                     <label class='block text-sm font-medium text-gray-700 mb-1'>New Password</label>
-                    <input type='password' name='new_password' required minlength='8' class='block w-full rounded-md border-gray-300 focus:border-[#0D9488] focus:ring-1 focus:ring-[#0D9488]/20 focus:outline-none p-2 border'>
+                    <input type='password' name='new_password' required minlength='8' class='block w-full rounded-xl border-[#D0C9BC] focus:border-[#C94C4C] focus:ring-1 focus:ring-[#C94C4C]/20 focus:outline-none p-2 border'>
                 </div>
                 <div>
                     <label class='block text-sm font-medium text-gray-700 mb-1'>Confirm New Password</label>
-                    <input type='password' name='confirm_password' required minlength='8' class='block w-full rounded-md border-gray-300 focus:border-[#0D9488] focus:ring-1 focus:ring-[#0D9488]/20 focus:outline-none p-2 border'>
+                    <input type='password' name='confirm_password' required minlength='8' class='block w-full rounded-xl border-[#D0C9BC] focus:border-[#C94C4C] focus:ring-1 focus:ring-[#C94C4C]/20 focus:outline-none p-2 border'>
                 </div>
                 <button type='submit' class='bg-gray-800 text-white font-bold py-2 px-6 rounded hover:bg-gray-900 transition shadow-sm'>Update Password</button>
             </form>
         </div>
 
-        <div class='mb-10 pb-8 border-b border-gray-200'>
+        <div class='mb-10 pb-8 border-b border-[#E0D9CC]'>
             <h2 class='text-xl font-bold text-gray-900 mb-2'>Data Portability (GDPR Art. 20)</h2>
             <p class='text-gray-600 text-sm mb-4'>Download a complete machine-readable copy (JSON) of your personal data, including your profile information, posts, and comments.</p>
-            <a href='/export-data' class='inline-block bg-teal-50 text-teal-700 border border-teal-200 font-bold py-2 px-6 rounded hover:bg-teal-100 transition shadow-sm'>↓ Download My Data</a>
+            <a href='/export-data' class='inline-block bg-[#F0EDE4] text-[#69C3D2] border border-[#A8DDE8] font-bold py-2 px-6 rounded hover:bg-[#DFF5F8] transition shadow-sm'>↓ Download My Data</a>
         </div>
 
-        <div class='mt-8 pt-6 border border-red-200 bg-red-50 p-6 rounded-lg'>
+        <div class='mt-8 pt-6 border border-red-200 bg-red-50 p-6 rounded-xl'>
             <h2 class='text-xl font-bold text-red-700 mb-2'>Danger Zone</h2>
             <p class='text-red-600 text-sm mb-6'>Permanently delete your account and personal data. Your posts and comments will remain, but their author will be anonymized as <strong>[deleted]</strong>. This action is irreversible.</p>
             <form action='/delete-account' method='POST' onsubmit=\"confirmModal(event, 'WARNING: Permanently delete your personal data? This action is irreversible.')\">
@@ -1580,7 +1580,7 @@ let settings_page ?user bio avatar_url request =
 
 let notifications_page ?user (notifs : Db.notification list) request =
   let render_notif (n : Db.notification) =
-    let bg_color = if n.is_read then "bg-white" else "bg-teal-50 border-l-4 border-[#0D9488]" in
+    let bg_color = if n.is_read then "bg-white" else "bg-[#F0EDE4] border-l-4 border-[#C94C4C]" in
     let icon = match n.notif_type with
       | "mention"    -> "&#64;"   (* @ symbol — avoids mojibake in Printf *)
       | "mod_action" -> "&#9888;" (* ⚠ warning sign *)
@@ -1603,11 +1603,11 @@ let notifications_page ?user (notifs : Db.notification list) request =
     match n.post_id with
     | Some pid ->
         Printf.sprintf "
-    <a href='/p/%d' onclick=\"this.classList.remove('bg-teal-50','border-l-4','border-[#0D9488]');this.classList.add('bg-white');\" class='block %s p-4 rounded-lg border border-gray-200 hover:shadow-md transition mb-3'>%s
+    <a href='/p/%d' onclick=\"this.classList.remove('bg-[#F0EDE4]','border-l-4','border-[#C94C4C]');this.classList.add('bg-white');\" class='block %s p-4 rounded-xl border border-[#E0D9CC] hover:shadow-md transition mb-3'>%s
     </a>" pid bg_color inner
     | None ->
         Printf.sprintf "
-    <div class='block %s p-4 rounded-lg border border-gray-200 mb-3'>%s
+    <div class='block %s p-4 rounded-xl border border-[#E0D9CC] mb-3'>%s
     </div>" bg_color inner
   in
   let list_html =
@@ -1629,7 +1629,7 @@ let search_results_page ?user ~admin_usernames user_votes current_page active_ta
   let query = Components.html_escape query in
 
   let render_community (a: community) =
-    Printf.sprintf "<a href='/c/%s' class='block p-4 bg-white border border-gray-200 rounded-lg hover:border-[#0D9488] mb-3 shadow-sm'><h3 class='font-bold text-lg text-gray-900'>%s</h3><p class='text-xs text-[#0D9488] mb-1'>/c/%s</p><p class='text-gray-700 text-sm'>%s</p></a>"
+    Printf.sprintf "<a href='/c/%s' class='block p-4 bg-white border border-[#E0D9CC] rounded-xl hover:border-[#C94C4C] mb-3 shadow-sm'><h3 class='font-bold text-lg text-gray-900'>%s</h3><p class='text-xs text-[#C94C4C] mb-1'>/c/%s</p><p class='text-gray-700 text-sm'>%s</p></a>"
       (Components.html_escape a.slug) (Components.html_escape a.name)
       (Components.html_escape a.slug) (Components.html_escape (Option.value ~default:"No description" a.description))
   in
@@ -1638,42 +1638,42 @@ let search_results_page ?user ~admin_usernames user_votes current_page active_ta
     let eu = Components.html_escape username in
     let avatar_html = match avatar with
       | Some url when url <> "" -> Printf.sprintf "<img src='%s' class='w-12 h-12 rounded-full object-cover mr-4'>" (Components.html_escape url)
-      | _ -> Printf.sprintf "<div class='w-12 h-12 bg-teal-100 rounded-full flex items-center justify-center text-[#0D9488] font-bold mr-4'>%s</div>" (String.sub username 0 1 |> String.uppercase_ascii)
+      | _ -> Printf.sprintf "<div class='w-12 h-12 bg-[#DFF5F8] rounded-full flex items-center justify-center text-[#C94C4C] font-bold mr-4'>%s</div>" (String.sub username 0 1 |> String.uppercase_ascii)
     in
-    Printf.sprintf "<a href='/u/%s' class='block p-4 bg-white border border-gray-200 rounded-lg hover:border-[#0D9488] mb-3 shadow-sm flex items-center'>%s <div><h3 class='font-bold text-lg text-gray-900'>u/%s</h3><p class='text-sm text-gray-500'>%s</p></div></a>"
+    Printf.sprintf "<a href='/u/%s' class='block p-4 bg-white border border-[#E0D9CC] rounded-xl hover:border-[#C94C4C] mb-3 shadow-sm flex items-center'>%s <div><h3 class='font-bold text-lg text-gray-900'>u/%s</h3><p class='text-sm text-gray-500'>%s</p></div></a>"
       eu avatar_html eu (Components.html_escape (Option.value ~default:"" bio))
   in
 
   let render_search_comment (_, content, username, created_at, post_id, score) =
-    Printf.sprintf "<div class='p-4 bg-white border border-gray-200 rounded-lg mb-3 shadow-sm'><div class='text-xs text-gray-500 mb-2'>%s • %s • Score: %d</div><div class='text-gray-800 text-sm mb-3'>%s</div><a href='/p/%d' class='text-xs font-bold text-[#0D9488] hover:underline bg-teal-50 px-2 py-1 rounded'>Go to Thread &rarr;</a></div>"
+    Printf.sprintf "<div class='p-4 bg-white border border-[#E0D9CC] rounded-xl mb-3 shadow-sm'><div class='text-xs text-gray-500 mb-2'>%s • %s • Score: %d</div><div class='text-gray-800 text-sm mb-3'>%s</div><a href='/p/%d' class='text-xs font-bold text-[#C94C4C] hover:underline bg-[#F0EDE4] px-2 py-1 rounded'>Go to Thread &rarr;</a></div>"
       (Components.render_author ~admin_usernames username) (Components.time_ago created_at) score (Components.html_escape content) post_id
   in
 
   let content_html, has_next =
     match active_tab with
     | "communities" ->
-        if communities = [] then ("<div class='text-center py-16 text-gray-500 bg-white rounded-lg border border-dashed border-gray-300'>No communities found for this search.</div>", false)
+        if communities = [] then ("<div class='text-center py-16 text-gray-500 bg-white rounded-xl border border-dashed border-[#D0C9BC]'>No communities found for this search.</div>", false)
         else (String.concat "\n" (List.map render_community communities), List.length communities = 20)
     | "people" ->
-        if users = [] then ("<div class='text-center py-16 text-gray-500 bg-white rounded-lg border border-dashed border-gray-300'>No people found for this search.</div>", false)
+        if users = [] then ("<div class='text-center py-16 text-gray-500 bg-white rounded-xl border border-dashed border-[#D0C9BC]'>No people found for this search.</div>", false)
         else (String.concat "\n" (List.map render_user users), List.length users = 20)
     | "comments" ->
-        if comments = [] then ("<div class='text-center py-16 text-gray-500 bg-white rounded-lg border border-dashed border-gray-300'>No comments found for this search.</div>", false)
+        if comments = [] then ("<div class='text-center py-16 text-gray-500 bg-white rounded-xl border border-dashed border-[#D0C9BC]'>No comments found for this search.</div>", false)
         else (String.concat "\n" (List.map render_search_comment comments), List.length comments = 20)
     | _ ->
-        if posts = [] then ("<div class='text-center py-16 text-gray-500 bg-white rounded-lg border border-dashed border-gray-300'>No posts found for this search.</div>", false)
+        if posts = [] then ("<div class='text-center py-16 text-gray-500 bg-white rounded-xl border border-dashed border-[#D0C9BC]'>No posts found for this search.</div>", false)
         else (String.concat "\n" (List.map (Components.render_post ~admin_usernames request user_votes) posts), List.length posts = 20)
   in
 
   let get_tab_class tab_name =
     if tab_name = active_tab then
-      "font-bold text-sm tracking-wide uppercase text-[#0D9488] pb-3 border-b-2 border-[#0D9488]"
+      "font-bold text-sm tracking-wide uppercase text-[#C94C4C] pb-3 border-b-2 border-[#C94C4C]"
     else
-      "font-bold text-sm tracking-wide uppercase text-gray-500 hover:text-[#0D9488] pb-3 border-b-2 border-transparent hover:border-[#0D9488] transition"
+      "font-bold text-sm tracking-wide uppercase text-gray-500 hover:text-[#C94C4C] pb-3 border-b-2 border-transparent hover:border-[#C94C4C] transition"
   in
 
   let tabs_html = Printf.sprintf "
-    <div class='bg-gray-50 pt-4 mb-6 border-b border-gray-200 flex space-x-8 overflow-x-auto'>
+    <div class='bg-gray-50 pt-4 mb-6 border-b border-[#E0D9CC] flex space-x-8 overflow-x-auto'>
         <a href='/search?q=%s&t=posts' class='%s'>Posts</a>
         <a href='/search?q=%s&t=communities' class='%s'>Communities</a>
         <a href='/search?q=%s&t=comments' class='%s'>Comments</a>
@@ -1685,8 +1685,8 @@ let search_results_page ?user ~admin_usernames user_votes current_page active_ta
     query (get_tab_class "people")
   in
 
-  let prev_btn = if current_page <= 1 then "" else Printf.sprintf "<a href='/search?q=%s&t=%s&page=%d' class='bg-white border border-gray-300 text-gray-700 px-4 py-2 rounded font-bold hover:bg-gray-50'>&larr; Prev</a>" query active_tab (current_page - 1) in
-  let next_btn = if not has_next then "" else Printf.sprintf "<a href='/search?q=%s&t=%s&page=%d' class='bg-white border border-gray-300 text-gray-700 px-4 py-2 rounded font-bold hover:bg-gray-50'>Next &rarr;</a>" query active_tab (current_page + 1) in
+  let prev_btn = if current_page <= 1 then "" else Printf.sprintf "<a href='/search?q=%s&t=%s&page=%d' class='bg-white border border-[#D0C9BC] text-gray-700 px-4 py-2 rounded font-bold hover:bg-gray-50'>&larr; Prev</a>" query active_tab (current_page - 1) in
+  let next_btn = if not has_next then "" else Printf.sprintf "<a href='/search?q=%s&t=%s&page=%d' class='bg-white border border-[#D0C9BC] text-gray-700 px-4 py-2 rounded font-bold hover:bg-gray-50'>Next &rarr;</a>" query active_tab (current_page + 1) in
 
   let content = Printf.sprintf "
     <div class='max-w-5xl mx-auto'>
@@ -1715,22 +1715,22 @@ let privacy_page ?user request =
       <p class='text-sm text-gray-400 mb-10'>Last updated: March 2026 &mdash; Written by Dami</p>
 
       <!-- Short version: intentionally blunt, no corporate hedging. -->
-      <div class='bg-[#F0FDF9] border border-[#0D9488]/20 rounded-xl p-6 mb-12'>
-        <p class='text-xs font-bold text-[#0D9488] uppercase tracking-widest mb-4'>The Short Version (Plain English)</p>
+      <div class='bg-[#F0FDF9] border border-[#C94C4C]/20 rounded-xl p-6 mb-12'>
+        <p class='text-xs font-bold text-[#C94C4C] uppercase tracking-widest mb-4'>The Short Version (Plain English)</p>
         <div class='space-y-4 text-gray-800 leading-relaxed'>
           <p class='text-base font-semibold'>Everything Earde collects about you:</p>
           <ul class='list-none space-y-2 text-sm'>
-            <li class='flex items-start gap-2'><span class='text-[#0D9488] font-bold mt-0.5'>&#10003;</span><span><strong>Your username.</strong> Public. Your identity on the platform.</span></li>
-            <li class='flex items-start gap-2'><span class='text-[#0D9488] font-bold mt-0.5'>&#10003;</span><span><strong>Your email address.</strong> Private. Used only to verify your account and send password resets.</span></li>
-            <li class='flex items-start gap-2'><span class='text-[#0D9488] font-bold mt-0.5'>&#10003;</span><span><strong>Your password &mdash; hashed, immediately.</strong> The raw password is discarded the instant it is received. Only an Argon2id hash is stored. We cannot recover or read your password.</span></li>
-            <li class='flex items-start gap-2'><span class='text-[#0D9488] font-bold mt-0.5'>&#10003;</span><span><strong>Your posts, comments, and votes.</strong> The content you choose to contribute.</span></li>
-            <li class='flex items-start gap-2'><span class='text-[#0D9488] font-bold mt-0.5'>&#10003;</span><span><strong>Your IP address, for security.</strong> Temporarily stored in the database to enforce rate limiting on login and signup. Not used for anything else.</span></li>
-            <li class='flex items-start gap-2'><span class='text-[#0D9488] font-bold mt-0.5'>&#10003;</span><span><strong>Anonymous daily page-view counts.</strong> We count visits per page using a daily-resetting hash of your IP, browser string, and the current date. The hash is one-way: the original IP cannot be recovered from it.</span></li>
+            <li class='flex items-start gap-2'><span class='text-[#C94C4C] font-bold mt-0.5'>&#10003;</span><span><strong>Your username.</strong> Public. Your identity on the platform.</span></li>
+            <li class='flex items-start gap-2'><span class='text-[#C94C4C] font-bold mt-0.5'>&#10003;</span><span><strong>Your email address.</strong> Private. Used only to verify your account and send password resets.</span></li>
+            <li class='flex items-start gap-2'><span class='text-[#C94C4C] font-bold mt-0.5'>&#10003;</span><span><strong>Your password &mdash; hashed, immediately.</strong> The raw password is discarded the instant it is received. Only an Argon2id hash is stored. We cannot recover or read your password.</span></li>
+            <li class='flex items-start gap-2'><span class='text-[#C94C4C] font-bold mt-0.5'>&#10003;</span><span><strong>Your posts, comments, and votes.</strong> The content you choose to contribute.</span></li>
+            <li class='flex items-start gap-2'><span class='text-[#C94C4C] font-bold mt-0.5'>&#10003;</span><span><strong>Your IP address, for security.</strong> Temporarily stored in the database to enforce rate limiting on login and signup. Not used for anything else.</span></li>
+            <li class='flex items-start gap-2'><span class='text-[#C94C4C] font-bold mt-0.5'>&#10003;</span><span><strong>Anonymous daily page-view counts.</strong> We count visits per page using a daily-resetting hash of your IP, browser string, and the current date. The hash is one-way: the original IP cannot be recovered from it.</span></li>
           </ul>
-          <div class='border-t border-[#0D9488]/20 pt-4 mt-4 space-y-2 text-sm text-gray-700'>
+          <div class='border-t border-[#C94C4C]/20 pt-4 mt-4 space-y-2 text-sm text-gray-700'>
             <p><strong>No advertising. No tracking pixels. No Google Analytics. No Meta Pixel. No data brokers. No behavioural profiling. No selling your data. Ever.</strong></p>
             <p>We set exactly one cookie: a session cookie that keeps you logged in. It is deleted when you log out. No cookie banner is shown because this cookie is strictly necessary for the service to function &mdash; consent is not legally required for it.</p>
-            <p>You can <a href='/export-data' class='text-[#0D9488] underline hover:text-teal-700 font-medium'>download all your data</a> as JSON at any time. You can <a href='/settings' class='text-[#0D9488] underline hover:text-teal-700 font-medium'>delete your account</a> instantly from Settings.</p>
+            <p>You can <a href='/export-data' class='text-[#C94C4C] underline hover:text-[#A83A3A] font-medium'>download all your data</a> as JSON at any time. You can <a href='/settings' class='text-[#C94C4C] underline hover:text-[#A83A3A] font-medium'>delete your account</a> instantly from Settings.</p>
           </div>
         </div>
       </div>
@@ -1740,33 +1740,33 @@ let privacy_page ?user request =
       <div class='space-y-10 text-gray-700 leading-relaxed'>
 
         <section>
-          <h2 class='text-lg font-bold text-gray-900 mb-3 pb-1 border-b border-gray-200'>1. Who I Am</h2>
-          <p class='mb-3'>I am Dami, a developer based in Italy. I built and run Earde alone. There is no company, no legal team, no DPO, and no dedicated privacy email address &mdash; just me. Contact me for all data protection matters: <a href='mailto:dami@earde.com' class='text-[#0D9488] underline hover:text-teal-700'>dami@earde.com</a>.</p>
+          <h2 class='text-lg font-bold text-gray-900 mb-3 pb-1 border-b border-[#E0D9CC]'>1. Who I Am</h2>
+          <p class='mb-3'>I am Dami, a developer based in Italy. I built and run Earde alone. There is no company, no legal team, no DPO, and no dedicated privacy email address &mdash; just me. Contact me for all data protection matters: <a href='mailto:dami@earde.com' class='text-[#C94C4C] underline hover:text-[#A83A3A]'>dami@earde.com</a>.</p>
           <p class='mb-3'>This policy reflects the actual source code.  If anything here contradicts the code, the code is the ground truth &mdash; and I want to know so I can fix the policy.</p>
           <ul class='list-disc list-inside space-y-2 text-sm mt-3'>
-            <li><strong>Earde is fully open-source.</strong> You do not have to trust this policy. Read the code and verify it yourself: <a href='https://github.com/earde-social/earde' class='text-[#0D9488] underline hover:text-teal-700' target='_blank' rel='noopener noreferrer'>https://github.com/earde-social/earde</a></li>
+            <li><strong>Earde is fully open-source.</strong> You do not have to trust this policy. Read the code and verify it yourself: <a href='https://github.com/earde-social/earde' class='text-[#C94C4C] underline hover:text-[#A83A3A]' target='_blank' rel='noopener noreferrer'>https://github.com/earde-social/earde</a></li>
             <li>I collect the minimum data needed to run this.</li>
             <li>No third-party services receive your data. Your browser makes no requests to any external server when you use Earde.</li>
           </ul>
         </section>
 
         <section>
-          <h2 class='text-lg font-bold text-gray-900 mb-3 pb-1 border-b border-gray-200'>2. Infrastructure &amp; Hosting</h2>
+          <h2 class='text-lg font-bold text-gray-900 mb-3 pb-1 border-b border-[#E0D9CC]'>2. Infrastructure &amp; Hosting</h2>
           <p class='mb-3'>Earde runs on servers provided by <strong>Hetzner</strong>, a German hosting company. All servers are located physically inside the European Union &mdash; either in Germany (Nuremberg/Falkenstein) or Finland (Helsinki).</p>
           <p class='mb-3'>Your data never leaves EU jurisdiction. I do not use Amazon Web Services, Google Cloud, Microsoft Azure, or any comparable US-based cloud platform. There is no CDN routing your traffic through non-EU nodes. The infrastructure is a bespoke setup &mdash; server, PostgreSQL database, application &mdash; with no intermediary black boxes. The entire data pipeline is subject to EU law, including the GDPR, from end to end.</p>
         </section>
 
         <section>
-          <h2 class='text-lg font-bold text-gray-900 mb-3 pb-1 border-b border-gray-200'>3. Data Collected &amp; Legal Basis (Art. 6)</h2>
+          <h2 class='text-lg font-bold text-gray-900 mb-3 pb-1 border-b border-[#E0D9CC]'>3. Data Collected &amp; Legal Basis (Art. 6)</h2>
           <p class='mb-4 text-sm'>Every category of personal data, its exact storage location, retention period, and GDPR legal basis:</p>
           <div class='overflow-x-auto'>
-            <table class='w-full text-sm border border-gray-200 rounded-lg overflow-hidden'>
+            <table class='w-full text-sm border border-[#E0D9CC] rounded-xl overflow-hidden'>
               <thead class='bg-gray-50 text-gray-600 font-semibold'>
                 <tr>
-                  <th class='text-left px-4 py-2 border-b border-gray-200'>Data</th>
-                  <th class='text-left px-4 py-2 border-b border-gray-200'>Storage</th>
-                  <th class='text-left px-4 py-2 border-b border-gray-200'>Retention</th>
-                  <th class='text-left px-4 py-2 border-b border-gray-200'>Basis</th>
+                  <th class='text-left px-4 py-2 border-b border-[#E0D9CC]'>Data</th>
+                  <th class='text-left px-4 py-2 border-b border-[#E0D9CC]'>Storage</th>
+                  <th class='text-left px-4 py-2 border-b border-[#E0D9CC]'>Retention</th>
+                  <th class='text-left px-4 py-2 border-b border-[#E0D9CC]'>Basis</th>
                 </tr>
               </thead>
               <tbody class='divide-y divide-gray-100'>
@@ -1831,9 +1831,9 @@ let privacy_page ?user request =
         </section>
 
         <section>
-          <h2 class='text-lg font-bold text-gray-900 mb-3 pb-1 border-b border-gray-200'>4. Password Security (Art. 32)</h2>
+          <h2 class='text-lg font-bold text-gray-900 mb-3 pb-1 border-b border-[#E0D9CC]'>4. Password Security (Art. 32)</h2>
           <p class='mb-3'>When you set a password, the server runs the following logic (from <code class='bg-gray-100 px-1 rounded text-sm'>auth.ml</code>):</p>
-          <pre class='bg-gray-900 text-green-300 rounded-lg p-4 text-sm overflow-x-auto leading-relaxed'>let salt = Dream.random 16  (* 16 bytes from the framework CSPRNG *)
+          <pre class='bg-gray-900 text-green-300 rounded-xl p-4 text-sm overflow-x-auto leading-relaxed'>let salt = Dream.random 16  (* 16 bytes from the framework CSPRNG *)
 Argon2.hash
   ~t_cost:2           (* 2 iterations *)
   ~m_cost:65536       (* 64 MB of RAM required per hash attempt *)
@@ -1849,7 +1849,7 @@ Argon2.hash
 
         <!-- ePrivacy Directive 2002/58/EC, Recital 25 -->
         <section>
-          <h2 class='text-lg font-bold text-gray-900 mb-3 pb-1 border-b border-gray-200'>5. Cookies &amp; Tracking</h2>
+          <h2 class='text-lg font-bold text-gray-900 mb-3 pb-1 border-b border-[#E0D9CC]'>5. Cookies &amp; Tracking</h2>
           <p class='mb-3'>Earde sets <strong>exactly one cookie</strong>: a session cookie issued by the Dream web framework. It carries only an opaque session identifier. The session data (user ID, username) is stored server-side in the <code class='bg-gray-100 px-1 rounded text-sm'>dream_session</code> PostgreSQL table &mdash; nothing personal is embedded in the cookie itself.</p>
           <p class='mb-3'>This cookie is strictly necessary for the service to function. Under ePrivacy Directive 2002/58/EC, Art. 5(3) and Recital 25, strictly-necessary cookies are exempt from prior-consent requirements. This is why there is no cookie consent banner.</p>
           <p class='mb-3'>The cookie is cleared immediately on logout. It does not persist across devices or browser profiles.</p>
@@ -1865,41 +1865,41 @@ Argon2.hash
 
         <!-- Art. 17 GDPR: right to erasure — exact SQL from the codebase -->
         <section>
-          <h2 class='text-lg font-bold text-gray-900 mb-3 pb-1 border-b border-gray-200'>6. Account Deletion &amp; Right to Erasure (Art. 17)</h2>
+          <h2 class='text-lg font-bold text-gray-900 mb-3 pb-1 border-b border-[#E0D9CC]'>6. Account Deletion &amp; Right to Erasure (Art. 17)</h2>
           <p class='mb-3'>When you delete your account, the server calls <code class='bg-gray-100 px-1 rounded text-sm'>Db.anonymize_user</code>, which executes this SQL:</p>
-          <pre class='bg-gray-900 text-green-300 rounded-lg p-4 text-sm overflow-x-auto leading-relaxed'>UPDATE users
+          <pre class='bg-gray-900 text-green-300 rounded-xl p-4 text-sm overflow-x-auto leading-relaxed'>UPDATE users
 SET username      = \'[deleted_\' || id || \']\',
     email         = \'deleted_\' || id || \'@earde.local\',
     password_hash = \'\'
 WHERE id = $1</pre>
           <p class='mt-3 mb-3'>Your email is overwritten with an inert placeholder. Your password hash is wiped. Your username becomes an anonymous tombstone like <code class='bg-gray-100 px-1 rounded text-sm'>[deleted_42]</code>. Your votes, community memberships, moderator roles, bans, and notifications are hard-deleted by <code class='bg-gray-100 px-1 rounded text-sm'>ON DELETE CASCADE</code> constraints. Your session is immediately invalidated.</p>
           <p class='mb-3'><strong>Your posts and comments are not deleted.</strong> They remain in the database attributed to the <code class='bg-gray-100 px-1 rounded text-sm'>[deleted_N]</code> tombstone. This is an intentional design choice: hard-deleting your user row would cascade and destroy every reply ever written to your comments, breaking discussion threads for everyone else. The tombstone cannot be linked back to you &mdash; your email and credentials are gone &mdash; satisfying the pseudonymisation threshold of GDPR Art. 4(5) and Recital 26.</p>
-          <p class='mb-3 text-sm bg-amber-50 border border-amber-200 rounded-lg p-3 text-amber-800'>If you also want your posts and comments deleted, email me at <a href='mailto:dami@earde.com' class='underline font-medium'>dami@earde.com</a> and I will remove them manually.</p>
-          <p>Before deleting, you can export your posts and comments as JSON from the <a href='/settings' class='text-[#0D9488] underline hover:text-teal-700'>Settings page</a>.</p>
+          <p class='mb-3 text-sm bg-amber-50 border border-amber-200 rounded-xl p-3 text-amber-800'>If you also want your posts and comments deleted, email me at <a href='mailto:dami@earde.com' class='underline font-medium'>dami@earde.com</a> and I will remove them manually.</p>
+          <p>Before deleting, you can export your posts and comments as JSON from the <a href='/settings' class='text-[#C94C4C] underline hover:text-[#A83A3A]'>Settings page</a>.</p>
         </section>
 
         <!-- Art. 15-21 GDPR -->
         <section>
-          <h2 class='text-lg font-bold text-gray-900 mb-3 pb-1 border-b border-gray-200'>7. Your GDPR Rights</h2>
-          <p class='mb-4 text-sm'>To exercise any right, email <a href='mailto:dami@earde.com' class='text-[#0D9488] underline hover:text-teal-700 font-medium'>dami@earde.com</a>. I will respond within 30 days (Art. 12(3)), at no charge (Art. 12(5)). Many rights are also exercisable directly in the product:</p>
+          <h2 class='text-lg font-bold text-gray-900 mb-3 pb-1 border-b border-[#E0D9CC]'>7. Your GDPR Rights</h2>
+          <p class='mb-4 text-sm'>To exercise any right, email <a href='mailto:dami@earde.com' class='text-[#C94C4C] underline hover:text-[#A83A3A] font-medium'>dami@earde.com</a>. I will respond within 30 days (Art. 12(3)), at no charge (Art. 12(5)). Many rights are also exercisable directly in the product:</p>
           <ul class='space-y-3'>
-            <li><span class='font-semibold text-gray-900'>Access (Art. 15)</span> &mdash; Request a copy of all data held about you. <span class='text-[#0D9488]'>In-product: <a href='/export-data' class='underline hover:text-teal-700'>Export data (JSON)</a>.</span></li>
-            <li><span class='font-semibold text-gray-900'>Rectification (Art. 16)</span> &mdash; Correct inaccurate data. <span class='text-[#0D9488]'>In-product: <a href='/settings' class='underline hover:text-teal-700'>Settings &rarr; Edit profile</a>.</span></li>
-            <li><span class='font-semibold text-gray-900'>Erasure (Art. 17)</span> &mdash; Delete your account and anonymise your data. <span class='text-[#0D9488]'>In-product: <a href='/settings' class='underline hover:text-teal-700'>Settings &rarr; Delete account</a>.</span> Or email me to also remove post/comment content.</li>
+            <li><span class='font-semibold text-gray-900'>Access (Art. 15)</span> &mdash; Request a copy of all data held about you. <span class='text-[#C94C4C]'>In-product: <a href='/export-data' class='underline hover:text-[#A83A3A]'>Export data (JSON)</a>.</span></li>
+            <li><span class='font-semibold text-gray-900'>Rectification (Art. 16)</span> &mdash; Correct inaccurate data. <span class='text-[#C94C4C]'>In-product: <a href='/settings' class='underline hover:text-[#A83A3A]'>Settings &rarr; Edit profile</a>.</span></li>
+            <li><span class='font-semibold text-gray-900'>Erasure (Art. 17)</span> &mdash; Delete your account and anonymise your data. <span class='text-[#C94C4C]'>In-product: <a href='/settings' class='underline hover:text-[#A83A3A]'>Settings &rarr; Delete account</a>.</span> Or email me to also remove post/comment content.</li>
             <li><span class='font-semibold text-gray-900'>Restriction (Art. 18)</span> &mdash; Request restriction of processing pending a dispute. Email me.</li>
-            <li><span class='font-semibold text-gray-900'>Portability (Art. 20)</span> &mdash; Receive your data in a machine-readable format. <span class='text-[#0D9488]'>In-product: <a href='/export-data' class='underline hover:text-teal-700'>Export data (JSON)</a>.</span></li>
+            <li><span class='font-semibold text-gray-900'>Portability (Art. 20)</span> &mdash; Receive your data in a machine-readable format. <span class='text-[#C94C4C]'>In-product: <a href='/export-data' class='underline hover:text-[#A83A3A]'>Export data (JSON)</a>.</span></li>
             <li><span class='font-semibold text-gray-900'>Object (Art. 21)</span> &mdash; Object to processing based on legitimate interest. Email me.</li>
           </ul>
         </section>
 
         <!-- Art. 13(2)(d) GDPR: supervisory authority -->
         <section>
-          <h2 class='text-lg font-bold text-gray-900 mb-3 pb-1 border-b border-gray-200'>8. Supervisory Authority (Art. 13(2)(d))</h2>
-          <p>If you believe your rights under the GDPR have been violated, you have the right to lodge a complaint with a supervisory authority. As I am based in Italy, the lead authority is the <strong>Garante per la protezione dei dati personali</strong> (<a href='https://www.garanteprivacy.it' class='text-[#0D9488] underline hover:text-teal-700' target='_blank' rel='noopener noreferrer'>garanteprivacy.it</a>). You may also contact the authority in your own EU member state of residence.</p>
+          <h2 class='text-lg font-bold text-gray-900 mb-3 pb-1 border-b border-[#E0D9CC]'>8. Supervisory Authority (Art. 13(2)(d))</h2>
+          <p>If you believe your rights under the GDPR have been violated, you have the right to lodge a complaint with a supervisory authority. As I am based in Italy, the lead authority is the <strong>Garante per la protezione dei dati personali</strong> (<a href='https://www.garanteprivacy.it' class='text-[#C94C4C] underline hover:text-[#A83A3A]' target='_blank' rel='noopener noreferrer'>garanteprivacy.it</a>). You may also contact the authority in your own EU member state of residence.</p>
         </section>
 
         <section>
-          <h2 class='text-lg font-bold text-gray-900 mb-3 pb-1 border-b border-gray-200'>9. Changes to This Policy</h2>
+          <h2 class='text-lg font-bold text-gray-900 mb-3 pb-1 border-b border-[#E0D9CC]'>9. Changes to This Policy</h2>
           <p>If the code changes in a way that affects data handling, this document will be updated and the date at the top of the page will reflect it. The source code remains the authoritative reference at all times.</p>
         </section>
 
@@ -1922,7 +1922,7 @@ let about_page ?user request =
         <section>
           <h2 class='text-xl font-bold text-gray-900 mb-4'>Why we built this (and who we are)</h2>
           <p class='mb-3'>The internet&rsquo;s largest communities are almost exclusively hosted in the US, run by US corporations, and subject to US data practices. We believe Europe needs its own digital public square.</p>
-          <p class='mb-3'>Earde is an <a href='https://github.com/earde-social/earde' class='text-[#0D9488] underline hover:text-teal-700' target='_blank' rel='noopener noreferrer'>open-source</a>, deeply european discussion platform. We built this to be a GDPR-compliant sanctuary: hosted entirely on european servers, free from data harvesting, and strictly moderated against hate speech. We want to prove that a modern social aggregator can be incredibly fast, privacy-respecting, and community-driven without treating its users as products.</p>
+          <p class='mb-3'>Earde is an <a href='https://github.com/earde-social/earde' class='text-[#C94C4C] underline hover:text-[#A83A3A]' target='_blank' rel='noopener noreferrer'>open-source</a>, deeply european discussion platform. We built this to be a GDPR-compliant sanctuary: hosted entirely on european servers, free from data harvesting, and strictly moderated against hate speech. We want to prove that a modern social aggregator can be incredibly fast, privacy-respecting, and community-driven without treating its users as products.</p>
         </section>
 
         <section>
@@ -1937,7 +1937,7 @@ let about_page ?user request =
           <h2 class='text-xl font-bold text-gray-900 mb-4'>The Alternatives (And why we are different)</h2>
           <p class='mb-4'>We aren&rsquo;t the first to try building a text-based community platform. Here is exactly where we stand compared to the rest of the landscape:</p>
           <ul class='list-disc list-outside pl-5 space-y-3'>
-            <li><strong>How is it different from Reddit?</strong> Aside from being hosted in the EU, Earde is fully <a href='https://github.com/earde-social/earde' class='text-[#0D9488] underline hover:text-teal-700' target='_blank' rel='noopener noreferrer'>open-source</a>. We retain zero unnecessary data, run as little JavaScript as humanly possible, and our code is built for speed, not for tracking your every click.</li>
+            <li><strong>How is it different from Reddit?</strong> Aside from being hosted in the EU, Earde is fully <a href='https://github.com/earde-social/earde' class='text-[#C94C4C] underline hover:text-[#A83A3A]' target='_blank' rel='noopener noreferrer'>open-source</a>. We retain zero unnecessary data, run as little JavaScript as humanly possible, and our code is built for speed, not for tracking your every click.</li>
             <li><strong>How is it different from Lemmy or Mastodon?</strong> We are fully centralized. We believe the fediverse is a fantastic technical experiment, but it is fundamentally hostile to the average user. Earde is designed to be frictionless: you sign up in three seconds and start reading. No instances, no federation delays, no confusing server rules.</li>
             <li><strong>How is it different from Discuit?</strong> We actively want to raise capital to hire a real team, invest in marketing, and genuinely compete on a global scale (read our Investment Strategy below to see how we plan to do this without ruining the site).</li>
             <li><strong>How is it different from Squabbles?</strong> Squabbles launched with a &ldquo;free speech absolutist&rdquo; approach that quickly spiraled into toxic community management. We take a firm stance: we will enforce the deletion of hate speech, racism, and harassment. Freedom of discussion requires a safe environment to discuss in.</li>
@@ -1946,7 +1946,7 @@ let about_page ?user request =
 
         <section>
           <h2 class='text-xl font-bold text-gray-900 mb-4'>Transparency &amp; Privacy Policy</h2>
-          <p>We believe in radical data minimalism. We do not track your off-site activity, we do not sell your email, and we permanently delete what needs to be deleted. For the exact technical details of how your data flows through our EU servers, read our <a href='/privacy' class='text-[#0D9488] underline hover:text-teal-700'>Technical Privacy Policy here</a>.</p>
+          <p>We believe in radical data minimalism. We do not track your off-site activity, we do not sell your email, and we permanently delete what needs to be deleted. For the exact technical details of how your data flows through our EU servers, read our <a href='/privacy' class='text-[#C94C4C] underline hover:text-[#A83A3A]'>Technical Privacy Policy here</a>.</p>
         </section>
 
         <section>
@@ -1977,7 +1977,7 @@ let about_page ?user request =
           <h2 class='text-xl font-bold text-gray-900 mb-4'>Our investment strategy (The &ldquo;Enshittification&rdquo; dilemma)</h2>
           <p class='mb-3'>Let&rsquo;s address the elephant in the room. Most tech startups raise massive venture capital, which forces them to chase infinite hyper-growth. This inevitably leads to the &ldquo;enshittification&rdquo; of the product: aggressive ads, dark patterns, and algorithm manipulation just to satisfy a $400M valuation.</p>
           <p class='mb-3'>However, building a genuine Reddit competitor requires serious money for servers, legal compliance, and marketing. We believe funding is not a black-and-white issue. There is a massive difference between raising $400M from predatory Silicon Valley VCs and raising $2M from EU-aligned funds, angel investors, or european tech grants. A smaller, sensible funding round could allow us to hire a dedicated team and reach break-even profitability gracefully, without ever needing to sell out our users to hit impossible revenue targets.</p>
-          <p>Furthermore, given Earde&rsquo;s explicitly pro-european, privacy-first political stance, we are entirely open to philanthropic funding models. So if you are an EU-aligned philanthropist, give us money! :) Let&rsquo;s build the european internet together. Reach out: <a href='mailto:dami@earde.com' class='text-[#0D9488] underline hover:text-teal-700'>dami@earde.com</a>.</p>
+          <p>Furthermore, given Earde&rsquo;s explicitly pro-european, privacy-first political stance, we are entirely open to philanthropic funding models. So if you are an EU-aligned philanthropist, give us money! :) Let&rsquo;s build the european internet together. Reach out: <a href='mailto:dami@earde.com' class='text-[#C94C4C] underline hover:text-[#A83A3A]'>dami@earde.com</a>.</p>
         </section>
 
         <section>
@@ -2015,11 +2015,11 @@ let msg_page ?user ~title ~message ~alert_type ~return_url request =
   in
   let content = Printf.sprintf "
     <div class='min-h-[70vh] flex items-center justify-center p-4'>
-      <div class='bg-white border border-gray-200 rounded-2xl shadow-sm p-8 max-w-md w-full text-center'>
+      <div class='bg-white border border-[#E0D9CC] rounded-2xl shadow-sm p-8 max-w-md w-full text-center'>
         %s
         <h1 class='text-2xl font-bold text-gray-900 mb-2'>%s</h1>
         <p class='text-gray-500 mb-6'>%s</p>
-        <a href='%s' class='inline-block bg-[#0D9488] text-white rounded-lg px-6 py-2.5 font-medium hover:bg-teal-700 transition-colors'>Go Back</a>
+        <a href='%s' class='inline-block bg-[#C94C4C] text-white rounded-xl px-6 py-2.5 font-medium hover:bg-[#A83A3A] transition-colors'>Go Back</a>
       </div>
     </div>"
     icon_html (Components.html_escape title) (Components.html_escape message) return_url
@@ -2040,7 +2040,7 @@ let admin_dashboard_page ?user ~(banned_users : user list) request =
         Printf.sprintf "
           <li class='flex items-center justify-between py-3 border-b border-gray-100 last:border-0'>
             <div>
-              <a href='/u/%s' class='font-medium text-gray-900 hover:text-[#0D9488] hover:underline'>u/%s</a>
+              <a href='/u/%s' class='font-medium text-gray-900 hover:text-[#C94C4C] hover:underline'>u/%s</a>
               <span class='text-xs text-gray-400 ml-2'>%s</span>
             </div>
             <form action='/admin/unban/user/%d' method='POST' class='inline m-0 p-0' onsubmit=\"confirmModal(event, 'Lift global ban on u/%s?')\">
@@ -2056,9 +2056,9 @@ let admin_dashboard_page ?user ~(banned_users : user list) request =
     <div class='max-w-3xl mx-auto mt-8'>
       <div class='flex items-center justify-between mb-6'>
         <h1 class='text-3xl font-extrabold text-gray-900'>🛡️ Admin Dashboard</h1>
-        <a href='/earde-hq-dashboard' class='text-sm text-[#0D9488] hover:underline font-bold'>📊 KPI Dashboard &rarr;</a>
+        <a href='/earde-hq-dashboard' class='text-sm text-[#C94C4C] hover:underline font-bold'>📊 KPI Dashboard &rarr;</a>
       </div>
-      <div class='bg-white rounded-lg shadow-sm border border-gray-200 p-6'>
+      <div class='bg-white rounded-xl shadow-[0_2px_8px_rgba(60,54,48,0.06)] border border-[#E0D9CC] p-6'>
         <h2 class='text-lg font-bold text-gray-800 mb-1'>Globally Banned Users</h2>
         <p class='text-xs text-gray-500 mb-4'>These accounts are blocked from logging in and posting anywhere on Earde.</p>
         %s
@@ -2078,7 +2078,7 @@ let mod_log_page ?user ~(community : Db.community) (actions : Db.mod_action list
     Printf.sprintf "
     <tr class='border-b border-gray-100 hover:bg-gray-50'>
         <td class='py-3 px-4 text-sm text-gray-500 whitespace-nowrap'>%s</td>
-        <td class='py-3 px-4 text-sm font-medium text-gray-900'><a href='/u/%s' class='text-[#0D9488] hover:underline'>%s</a></td>
+        <td class='py-3 px-4 text-sm font-medium text-gray-900'><a href='/u/%s' class='text-[#C94C4C] hover:underline'>%s</a></td>
         <td class='py-3 px-4 text-sm'><span class='inline-block px-2 py-0.5 rounded bg-gray-100 text-gray-700 font-mono text-xs'>%s</span>%s</td>
         <td class='py-3 px-4 text-sm text-gray-600'>%s</td>
     </tr>"
@@ -2095,13 +2095,13 @@ let mod_log_page ?user ~(community : Db.community) (actions : Db.mod_action list
   let content = Printf.sprintf "
     <div class='max-w-4xl mx-auto'>
         <div class='mb-6'>
-            <a href='/c/%s' class='text-sm text-[#0D9488] hover:underline'>&larr; Back to %s</a>
+            <a href='/c/%s' class='text-sm text-[#C94C4C] hover:underline'>&larr; Back to %s</a>
             <h1 class='text-2xl font-bold text-gray-900 mt-2'>Moderation Log</h1>
             <p class='text-sm text-gray-500 mt-1'>Public record of moderator actions in this community.</p>
         </div>
-        <div class='bg-white border border-gray-200 rounded-lg shadow-sm overflow-hidden'>
+        <div class='bg-white border border-[#E0D9CC] rounded-xl shadow-sm overflow-hidden'>
             <table class='w-full'>
-                <thead class='bg-gray-50 border-b border-gray-200'>
+                <thead class='bg-gray-50 border-b border-[#E0D9CC]'>
                     <tr>
                         <th class='py-3 px-4 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide'>When</th>
                         <th class='py-3 px-4 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide'>Moderator</th>
@@ -2143,7 +2143,7 @@ let hq_dashboard_page ((views, unique_visitors, signups), (content, active)) ~st
             </div>
         </header>
 
-        <form method='GET' action='/earde-hq-dashboard' class='mb-8 bg-gray-900 border border-green-900 rounded-lg p-4'>
+        <form method='GET' action='/earde-hq-dashboard' class='mb-8 bg-gray-900 border border-green-900 rounded-xl p-4'>
             <div class='flex flex-wrap gap-2 items-end'>
                 <div class='flex gap-2 flex-wrap'>
                     <button type='button' onclick='setRange(0,0)'
@@ -2180,7 +2180,7 @@ let hq_dashboard_page ((views, unique_visitors, signups), (content, active)) ~st
 
         <div class='grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-6'>
 
-            <div class='bg-gray-900 border border-green-900 p-6 rounded-lg shadow-[0_0_15px_rgba(34,197,94,0.1)]'>
+            <div class='bg-gray-900 border border-green-900 p-6 rounded-xl shadow-[0_0_15px_rgba(34,197,94,0.1)]'>
                 <h2 class='text-green-600 text-sm font-bold mb-4 tracking-widest'>PAGE VIEWS</h2>
                 <div class='text-5xl font-bold text-white mb-2'>%d</div>
                 <div class='text-xs text-green-700 mb-3'>TOTAL IN RANGE</div>
@@ -2191,21 +2191,21 @@ let hq_dashboard_page ((views, unique_visitors, signups), (content, active)) ~st
                 <p class='text-xs text-gray-500 mt-3 leading-relaxed'>Total number of pages loaded. Measures raw traffic volume and top-of-funnel reach.</p>
             </div>
 
-            <div class='bg-gray-900 border border-green-900 p-6 rounded-lg shadow-[0_0_15px_rgba(34,197,94,0.1)]'>
+            <div class='bg-gray-900 border border-green-900 p-6 rounded-xl shadow-[0_0_15px_rgba(34,197,94,0.1)]'>
                 <h2 class='text-green-600 text-sm font-bold mb-4 tracking-widest'>NEW SIGNUPS</h2>
                 <div class='text-5xl font-bold text-white mb-2'>%d</div>
                 <div class='text-xs text-green-700'>TOTAL IN RANGE</div>
                 <p class='text-xs text-gray-500 mt-3 leading-relaxed'>Total registered users. Measures our ability to convert casual visitors into community members.</p>
             </div>
 
-            <div class='bg-gray-900 border border-green-900 p-6 rounded-lg shadow-[0_0_15px_rgba(34,197,94,0.1)]'>
+            <div class='bg-gray-900 border border-green-900 p-6 rounded-xl shadow-[0_0_15px_rgba(34,197,94,0.1)]'>
                 <h2 class='text-green-600 text-sm font-bold mb-4 tracking-widest'>CONTENT ACTIVITY</h2>
                 <div class='text-5xl font-bold text-white mb-2'>%d</div>
                 <div class='text-xs text-green-700'>POSTS + COMMENTS IN RANGE</div>
                 <p class='text-xs text-gray-500 mt-3 leading-relaxed'>Total posts and comments created. Indicates if the platform is actively generating discussion or if it&apos;s read-only.</p>
             </div>
 
-            <div class='bg-gray-900 border border-green-900 p-6 rounded-lg shadow-[0_0_15px_rgba(34,197,94,0.1)] relative overflow-hidden'>
+            <div class='bg-gray-900 border border-green-900 p-6 rounded-xl shadow-[0_0_15px_rgba(34,197,94,0.1)] relative overflow-hidden'>
                 <div class='absolute top-0 right-0 w-16 h-16 bg-green-500 opacity-10 rounded-bl-full'></div>
                 <h2 class='text-green-500 text-sm font-bold mb-4 tracking-widest'>ACTIVE CONTRIBUTORS</h2>
                 <div class='text-5xl font-bold text-white mb-2'>%d</div>
