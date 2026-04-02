@@ -4,7 +4,7 @@
 # avoids storing passwords in plaintext or in .pgpass.
 set -euo pipefail
 
-DB_NAME="earde_db"
+DB_NAME="earde_prod"
 BACKUP_DIR="/var/backups/earde"
 TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
 BACKUP_FILE="${BACKUP_DIR}/earde_db_backup_${TIMESTAMP}.sql.gz"
