@@ -301,7 +301,8 @@ CREATE TABLE public.posts (
     content text,
     community_id integer NOT NULL,
     user_id integer NOT NULL,
-    created_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP NOT NULL
+    created_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    image_url text
 );
 
 
@@ -778,4 +779,5 @@ INSERT INTO public.schema_migrations (version) VALUES
     ('20260317142357'),
     ('20260317170540'),
     ('20260318120000'),
-    ('20260323140417');
+    ('20260323140417'),
+    ('20260402000000');

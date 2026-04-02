@@ -732,7 +732,7 @@ let new_post_form ?user (community : community) request =
     <div class='max-w-2xl mx-auto bg-white p-8 rounded-xl shadow-md border border-[#E0D9CC]'>
         <h1 class='text-2xl font-bold mb-6 text-gray-800'>Post to <span class='text-[#C94C4C]'>/c/%s</span></h1>
 
-        <form action='/posts' method='POST' class='space-y-6'>
+        <form action='/posts' method='POST' enctype='multipart/form-data' class='space-y-6'>
             %s
             <input type='hidden' name='community_id' value='%d'>
 
@@ -748,6 +748,13 @@ let new_post_form ?user (community : community) request =
                 <input type='url' name='url'
                        class='block w-full rounded-xl border-[#D0C9BC] focus:border-[#C94C4C] focus:ring-1 focus:ring-[#C94C4C]/20 focus:outline-none p-2 border'
                        placeholder='https://example.com'>
+            </div>
+
+            <div>
+                <label class='block text-sm font-medium text-gray-700 mb-1'>Image (Optional, max 5 MB)</label>
+                <input type='file' name='image' accept='image/*'
+                       class='block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-xl file:border-0 file:text-sm file:font-semibold file:bg-[#F7F0E8] file:text-[#C94C4C] hover:file:bg-[#EDE5D8]'>
+                <p class='text-xs text-gray-400 mt-1'>Converted to WebP automatically. Leave blank for a text or link post.</p>
             </div>
 
             <div>
@@ -1077,6 +1084,12 @@ let post_page ?user ~is_member ~is_current_user_mod ~mod_usernames ~admin_userna
 
   let post_content = match post.content with | Some c -> Printf.sprintf "<div class='text-sm text-gray-800 leading-relaxed whitespace-pre-wrap break-words mt-2 mb-3'>%s</div>" (Components.html_escape c) | None -> "" in
   let link_content = match post.url with | Some u -> Printf.sprintf "<div class='mb-6'><a href='%s' target='_blank' class='text-blue-600 hover:underline break-all'>🔗 %s</a></div>" (Components.safe_url u) (Components.html_escape u) | None -> "" in
+  (* Image stored as /static/uploads/<uuid>.webp — served directly by Dream.static. *)
+  let image_content = match post.image_url with
+    | None -> ""
+    | Some img -> Printf.sprintf "<div class='mb-4'><img src='%s' alt='Post image' class='max-w-full rounded-xl border border-[#E0D9CC] max-h-[600px] object-contain'></div>"
+        (Components.html_escape img)
+  in
 
   let current_vote_direction = match List.assoc_opt post.id user_post_votes with Some d -> d | None -> 0 in
   let up_color = if current_vote_direction = 1 then "text-orange-500" else "text-gray-400 hover:text-orange-500" in
@@ -1330,6 +1343,7 @@ let post_page ?user ~is_member ~is_current_user_mod ~mod_usernames ~admin_userna
                 %s
                 %s
                 %s
+                %s
                 <div>%s</div>
             </div>
         </div>
@@ -1341,7 +1355,7 @@ let post_page ?user ~is_member ~is_current_user_mod ~mod_usernames ~admin_userna
     post.community_slug post.community_slug
     (Components.render_author ~mod_usernames ~admin_usernames post.username) (Components.time_ago post.created_at) (post_action_btn ^ ban_post_btn)
     post.title
-    link_content post_content voting_pill
+    image_content link_content post_content voting_pill
     action_section comments_html
     post_right_sidebar
   in

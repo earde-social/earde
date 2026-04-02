@@ -492,6 +492,13 @@ let render_post ?(is_current_user_mod=false) ?(mod_usernames=[]) ?(admin_usernam
     | None -> "<a href='/login' class='text-gray-400 hover:text-[#69C3D2] font-bold text-sm leading-none'>▼</a>"
   in
 
+  (* Image thumbnail: capped at 320 px wide in the card — full resolution served from
+     static/uploads/; no second resize needed because the file is already ≤1920x1080. *)
+  let image_html = match post.image_url with
+    | None -> ""
+    | Some img -> Printf.sprintf "<a href='/p/%d' class='block mt-2 mb-1'><img src='%s' alt='Post image' class='rounded-lg max-h-48 max-w-xs object-cover border border-[#E0D9CC]'></a>"
+        post.id (html_escape img)
+  in
   Printf.sprintf "
   <div onclick=\"if(!event.target.closest('a, button, form')) window.location='/p/%d'\" class='cursor-pointer border-b border-[#E8E2D9] py-4 flex gap-4 hover:bg-[#F0EBE0] transition-colors'>
 
@@ -517,6 +524,7 @@ let render_post ?(is_current_user_mod=false) ?(mod_usernames=[]) ?(admin_usernam
           </h3>
 
           <div class='relative z-10 text-xs'>%s</div>
+          %s
           <p class='text-sm text-gray-600 mt-2 break-words line-clamp-6'>%s</p>
 
           <div class='flex items-center mt-2 text-xs text-gray-400'>
@@ -530,7 +538,7 @@ let render_post ?(is_current_user_mod=false) ?(mod_usernames=[]) ?(admin_usernam
   post.id
   upvote_html post.score downvote_html
   (html_escape post.community_slug) (html_escape post.community_slug) (render_author ~mod_usernames ~admin_usernames post.username) (time_ago post.created_at) (action_btn ^ ban_btn)
-  post.id (html_escape post.title) link_part (html_escape content_preview) post.id post.comment_count post.id
+  post.id (html_escape post.title) link_part image_html (html_escape content_preview) post.id post.comment_count post.id
 
 let community_card (community : community) =
   Printf.sprintf "

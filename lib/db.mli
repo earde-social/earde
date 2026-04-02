@@ -8,6 +8,7 @@ type post = {
   id : int; title : string; url : string option; content : string option;
   community_id : int; user_id : int; username : string; community_slug : string;
   created_at : string; score : int; comment_count : int; allow_downvotes : bool;
+  image_url : string option;
 }
 
 type community = {
@@ -65,7 +66,7 @@ module User : sig
 end
 
 module Post : sig
-  val create_post : (module Caqti_lwt.CONNECTION) -> string -> string option -> string option -> int -> int -> (int, string) result Lwt.t
+  val create_post : (module Caqti_lwt.CONNECTION) -> string -> string option -> string option -> string option -> int -> int -> (int, string) result Lwt.t
   val get_all_posts : (module Caqti_lwt.CONNECTION) -> string -> int -> int -> (post list, string) result Lwt.t
   val get_personalized_feed : (module Caqti_lwt.CONNECTION) -> int -> string -> int -> int -> (post list, string) result Lwt.t
   val get_posts_by_community : (module Caqti_lwt.CONNECTION) -> int -> string -> int -> int -> (post list, string) result Lwt.t
@@ -194,7 +195,7 @@ val community_unban_user : (module Caqti_lwt.CONNECTION) -> int -> int -> (unit,
 val community_is_banned : (module Caqti_lwt.CONNECTION) -> int -> int -> (bool, string) result Lwt.t
 val community_get_banned_users : (module Caqti_lwt.CONNECTION) -> int -> (user list, string) result Lwt.t
 
-val create_post : (module Caqti_lwt.CONNECTION) -> string -> string option -> string option -> int -> int -> (int, string) result Lwt.t
+val create_post : (module Caqti_lwt.CONNECTION) -> string -> string option -> string option -> string option -> int -> int -> (int, string) result Lwt.t
 val get_all_posts : (module Caqti_lwt.CONNECTION) -> string -> int -> int -> (post list, string) result Lwt.t
 val get_personalized_feed : (module Caqti_lwt.CONNECTION) -> int -> string -> int -> int -> (post list, string) result Lwt.t
 val get_posts_by_community : (module Caqti_lwt.CONNECTION) -> int -> string -> int -> int -> (post list, string) result Lwt.t

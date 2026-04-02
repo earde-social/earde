@@ -776,23 +776,83 @@ let create_post_handler request =
       let user_id = int_of_string user_id_str in
       let username = Option.value (Dream.session_field request "username") ~default:"Someone" in
 
-      match%lwt Dream.form request with
+      (* multipart/form-data: required for file upload; replaces form which only handles
+         application/x-www-form-urlencoded. Dream.multipart returns
+         (field_name * (filename_opt * content) list) list — extract the first part value. *)
+      match%lwt Dream.multipart request with
       | `Ok form_data ->
-          let title = String.trim (List.assoc_opt "title" form_data |> Option.value ~default:"") in
-          let community_id_str = List.assoc_opt "community_id" form_data |> Option.value ~default:"" in
-          let url = match List.assoc_opt "url" form_data with Some "" | None -> None | Some u -> Some u in
-          let content = match List.assoc_opt "content" form_data with Some "" | None -> None | Some c -> Some c in
+          let get_field name =
+            match List.assoc_opt name form_data with
+            | Some ((_, v) :: _) -> v
+            | _ -> ""
+          in
+          let title = String.trim (get_field "title") in
+          let community_id_str = get_field "community_id" in
+          let url = match get_field "url" with "" -> None | u -> Some u in
+          let content = match get_field "content" with "" -> None | c -> Some c in
+          (* File bytes: empty string when no file is selected (browser sends empty part). *)
+          let image_bytes = get_field "image" in
 
           if title = "" then
             Dream.html (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Validation Error" ~message:"Post title cannot be empty." ~alert_type:"error" ~return_url:"/" request)
           else if String.length title > 300 then
             Dream.html (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Validation Error" ~message:"Post title cannot exceed 300 characters." ~alert_type:"error" ~return_url:"/" request)
+          else if image_bytes <> "" && String.length image_bytes > 5 * 1024 * 1024 then
+            Dream.html (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Validation Error" ~message:"Image exceeds the 5 MB limit." ~alert_type:"error" ~return_url:"/" request)
           else
 
           let community_id = try int_of_string community_id_str with _ -> 0 in
           if community_id = 0 then
             Dream.respond ~status:`Bad_Request (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Form Error" ~message:"Invalid community selection." ~alert_type:"error" ~return_url:"/" request)
           else
+
+          (* Process the uploaded image if present.
+             Sys.command shells out to ImageMagick instead of using OCaml C-bindings:
+             trade-off is ~10 ms process-spawn latency and Lwt event-loop blocking vs.
+             zero native library maintenance burden on the Hetzner instance.
+             Acceptable for a low-traffic community server where image posts are rare. *)
+          let image_result =
+            if image_bytes = "" then Ok None
+            else begin
+              let ts = Int64.of_float (Unix.gettimeofday () *. 1000.0) in
+              let rand = Random.int 999999 in
+              let base = Printf.sprintf "earde_%Ld_%06d" ts rand in
+              let tmp_path = "/tmp/" ^ base ^ ".tmp" in
+              let webp_path = "/tmp/" ^ base ^ ".webp" in
+              let dest_name = base ^ ".webp" in
+              let dest_path = "static/uploads/" ^ dest_name in
+              let url_path = "/static/uploads/" ^ dest_name in
+              (try
+                let oc = open_out_bin tmp_path in
+                output_string oc image_bytes;
+                close_out oc;
+                (* Filename.quote prevents shell injection from the timestamp/random basename.
+                   -resize '1920x1080>' uses ImageMagick's '>' flag: only shrink, never upscale. *)
+                let cmd = Printf.sprintf
+                  "mogrify -format webp -quality 80 -resize '1920x1080>' %s 2>/dev/null"
+                  (Filename.quote tmp_path) in
+                let exit_code = Sys.command cmd in
+                (try Sys.remove tmp_path with _ -> ());
+                if exit_code <> 0 then
+                  Error "Image processing failed. Please upload a valid image (JPEG, PNG, GIF, WebP)."
+                else begin
+                  let mv_exit = Sys.command (Printf.sprintf "mv %s %s"
+                    (Filename.quote webp_path) (Filename.quote dest_path)) in
+                  if mv_exit <> 0 then
+                    Error "Failed to store the processed image."
+                  else
+                    Ok (Some url_path)
+                end
+              with exn ->
+                (try Sys.remove tmp_path with _ -> ());
+                Error ("Image write error: " ^ Printexc.to_string exn))
+            end
+          in
+
+          (match image_result with
+          | Error img_err ->
+              Dream.html (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Image Error" ~message:img_err ~alert_type:"error" ~return_url:"/" request)
+          | Ok image_url ->
 
           Dream.sql request (fun db ->
             (* Global ban gate: checked first — a globally banned user's session may
@@ -811,7 +871,7 @@ let create_post_handler request =
                   | Ok true ->
                       Dream.respond ~status:`Forbidden (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Banned from Community" ~message:"You are banned from posting in this community." ~alert_type:"error" ~return_url:"/" request)
                   | _ ->
-                      (match%lwt Db.create_post db title url content community_id user_id with
+                      (match%lwt Db.create_post db title url content image_url community_id user_id with
                       | Ok new_post_id ->
                           (* Fan-out @mention notifications — best-effort, skips self-mentions. *)
                           let text = title ^ " " ^ (Option.value ~default:"" content) in
@@ -830,7 +890,7 @@ let create_post_handler request =
               | Ok false ->
                   Dream.html (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Not a Member" ~message:"You must join this community before you can post in it." ~alert_type:"error" ~return_url:"/" request)
               | Error err -> Dream.html (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Error" ~message:("Database error: " ^ err) ~alert_type:"error" ~return_url:"/" request)
-          )
+          ))
       | _ -> Dream.html (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Form Error" ~message:"There was a problem with your form submission. Please try again." ~alert_type:"error" ~return_url:"/" request)
 
 let view_post_handler request =

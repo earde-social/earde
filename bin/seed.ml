@@ -133,7 +133,7 @@ let seed_body (module C : Caqti_lwt.CONNECTION) =
   (* --- Posts ------------------------------------------------------------ *)
   let mkpost title community_id user_id content =
     (* create_post now returns the new post id; discard it here since seed only cares about success. *)
-    Earde.Db.create_post db title None (Some content) community_id user_id >>= ok_or_fail >>= fun _ -> Lwt.return ()
+    Earde.Db.create_post db title None (Some content) None community_id user_id >>= ok_or_fail >>= fun _ -> Lwt.return ()
   in
   let%lwt () = mkpost "Scientists discover new deep-sea bioluminescent species"
                  science_id alice_id

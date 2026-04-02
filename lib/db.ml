@@ -24,6 +24,7 @@ type post = {
   score : int;
   comment_count : int;
   allow_downvotes : bool;
+  image_url : string option;
 }
 
 type comment = {
@@ -63,17 +64,18 @@ type moderator_entry = {
   role : string;
 }
 
-(* post has 12 SELECT columns; Caqti tN stops at t7, so nest tuples to stay within arity. *)
+(* post has 13 SELECT columns; allow_downvotes absorbed into the third t4,
+   freeing the fourth slot for image_url. Caqti tN stops at t7 so nesting is mandatory. *)
 let post_row_type =
   let open Caqti_type in
   t4
     (t4 int string (option string) (option string))
     (t4 int int string string)
-    (t3 string int int)
-    bool
+    (t4 string int int bool)
+    (option string)
 
-let map_post_row ((id, title, url, content), (community_id, user_id, username, community_slug), (created_at, score, comment_count), allow_downvotes) =
-  { id; title; url; content; community_id; user_id; username; community_slug; created_at; score; comment_count; allow_downvotes }
+let map_post_row ((id, title, url, content), (community_id, user_id, username, community_slug), (created_at, score, comment_count, allow_downvotes), image_url) =
+  { id; title; url; content; community_id; user_id; username; community_slug; created_at; score; comment_count; allow_downvotes; image_url }
 
 (* 8-column community row: nest into t2(t4, t4) to stay within Caqti's per-tuple arity limit. *)
 let community_row_type =
@@ -377,11 +379,11 @@ module Post = struct
     let open Caqti_request.Infix in
     (* RETURNING id lets the handler fan-out @mention notifications without a
        second query — avoids a race between INSERT and SELECT MAX(id). *)
-    (Caqti_type.(t4 string (option string) (option string) (t2 int int)) ->! Caqti_type.int)
-    "INSERT INTO posts (title, url, content, community_id, user_id) VALUES ($1, $2, $3, $4, $5) RETURNING id"
+    (Caqti_type.(t4 string (option string) (option string) (t3 (option string) int int)) ->! Caqti_type.int)
+    "INSERT INTO posts (title, url, content, image_url, community_id, user_id) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id"
 
-  let create_post (module C : Caqti_lwt.CONNECTION) title url content community_id user_id =
-    C.find create_post_query (title, url, content, (community_id, user_id)) >>= function
+  let create_post (module C : Caqti_lwt.CONNECTION) title url content image_url community_id user_id =
+    C.find create_post_query (title, url, content, (image_url, community_id, user_id)) >>= function
     | Ok id -> Lwt.return (Ok id)
     | Error err -> Lwt.return (Error (Caqti_error.show err))
 
@@ -391,7 +393,7 @@ module Post = struct
     "SELECT p.id, p.title, p.url, p.content, p.community_id, p.user_id, u.username, a.slug, p.created_at::text,
             COALESCE((SELECT SUM(direction) FROM post_votes WHERE post_id = p.id), 0) AS score,
             (SELECT COUNT(*) FROM comments WHERE post_id = p.id) AS comment_count,
-            a.allow_downvotes
+            a.allow_downvotes, p.image_url
      FROM posts p JOIN users u ON p.user_id = u.id JOIN communities a ON p.community_id = a.id
      WHERE p.id = $1"
 
@@ -417,7 +419,7 @@ module Post = struct
         "SELECT p.id, p.title, p.url, p.content, p.community_id, p.user_id, u.username, a.slug, p.created_at::text,
                 COALESCE(SUM(v.direction), 0) as score,
                 (SELECT COUNT(*) FROM comments c WHERE c.post_id = p.id) as comment_count,
-                a.allow_downvotes
+                a.allow_downvotes, p.image_url
          FROM posts p
          JOIN users u ON p.user_id = u.id
          JOIN communities a ON p.community_id = a.id
@@ -447,7 +449,7 @@ module Post = struct
       "SELECT p.id, p.title, p.url, p.content, p.community_id, p.user_id, u.username, a.slug, p.created_at::text,
               COALESCE(SUM(v.direction), 0) as score,
               (SELECT COUNT(*) FROM comments c WHERE c.post_id = p.id) as comment_count,
-              a.allow_downvotes
+              a.allow_downvotes, p.image_url
        FROM posts p
        JOIN users u ON p.user_id = u.id
        JOIN communities a ON p.community_id = a.id
@@ -472,7 +474,7 @@ module Post = struct
     "SELECT p.id, p.title, p.url, p.content, p.community_id, p.user_id, u.username, a.slug, p.created_at::text,
             COALESCE((SELECT SUM(direction) FROM post_votes WHERE post_id = p.id), 0) AS score,
             (SELECT COUNT(*) FROM comments WHERE post_id = p.id) AS comment_count,
-            a.allow_downvotes
+            a.allow_downvotes, p.image_url
      FROM posts p JOIN users u ON p.user_id = u.id JOIN communities a ON p.community_id = a.id
      WHERE p.user_id = $1 ORDER BY score DESC, p.created_at DESC"
 
@@ -520,7 +522,7 @@ module Post = struct
     "SELECT p.id, p.title, p.url, p.content, p.community_id, p.user_id, u.username, a.slug, p.created_at::text,
             COALESCE(SUM(v.direction), 0) AS score,
             (SELECT COUNT(*) FROM comments WHERE post_id = p.id) AS comment_count,
-            a.allow_downvotes
+            a.allow_downvotes, p.image_url
      FROM posts p
      JOIN users u ON p.user_id = u.id
      JOIN communities a ON p.community_id = a.id
@@ -549,7 +551,7 @@ module Post = struct
         "SELECT p.id, p.title, p.url, p.content, p.community_id, p.user_id, u.username, a.slug, p.created_at::text,
                 COALESCE(SUM(v.direction), 0) as score,
                 (SELECT COUNT(*) FROM comments c WHERE c.post_id = p.id) as comment_count,
-                a.allow_downvotes
+                a.allow_downvotes, p.image_url
          FROM posts p
          JOIN users u ON p.user_id = u.id
          JOIN communities a ON p.community_id = a.id
