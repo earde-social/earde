@@ -460,7 +460,7 @@ let community_settings_page ?user ~(community : community) ~(mods : user list) ~
 
       <div class='bg-white rounded-xl shadow-[0_2px_8px_rgba(60,54,48,0.06)] border border-[#E0D9CC] p-6 mb-6'>
         <h2 class='text-lg font-bold text-gray-800 mb-4'>Edit Community</h2>
-        <form action='/update-community' method='POST' class='space-y-4'>
+        <form action='/update-community' method='POST' enctype='multipart/form-data' class='space-y-4'>
           %s
           <input type='hidden' name='community_id' value='%d'>
           <input type='hidden' name='community_slug' value='%s'>
@@ -475,15 +475,15 @@ let community_settings_page ?user ~(community : community) ~(mods : user list) ~
                       class='w-full rounded-xl border border-[#D0C9BC] p-2 text-sm focus:border-[#C94C4C] focus:ring-1 focus:ring-[#C94C4C]/20 focus:outline-none'>%s</textarea>
           </div>
           <div>
-            <label class='block text-sm font-medium text-gray-700 mb-1'>Avatar URL</label>
-            <input type='url' name='avatar_url' value='%s'
-                   placeholder='https://example.com/avatar.png'
+            <label class='block text-sm font-medium text-gray-700 mb-1'>Avatar Image</label>
+            <input type='hidden' name='existing_avatar_url' value='%s'>
+            <input type='file' name='avatar_url' accept='image/*'
                    class='w-full rounded-xl border border-[#D0C9BC] p-2 text-sm focus:border-[#C94C4C] focus:ring-1 focus:ring-[#C94C4C]/20 focus:outline-none'>
           </div>
           <div>
-            <label class='block text-sm font-medium text-gray-700 mb-1'>Banner URL</label>
-            <input type='url' name='banner_url' value='%s'
-                   placeholder='https://example.com/banner.png'
+            <label class='block text-sm font-medium text-gray-700 mb-1'>Banner Image</label>
+            <input type='hidden' name='existing_banner_url' value='%s'>
+            <input type='file' name='banner_url' accept='image/*'
                    class='w-full rounded-xl border border-[#D0C9BC] p-2 text-sm focus:border-[#C94C4C] focus:ring-1 focus:ring-[#C94C4C]/20 focus:outline-none'>
           </div>
           <button type='submit' class='bg-[#C94C4C] text-white px-4 py-2 rounded-xl font-semibold text-sm hover:bg-[#A83A3A] transition'>
@@ -1539,11 +1539,12 @@ let settings_page ?user bio avatar_url request =
 
         <div class='mb-10 pb-8 border-b border-[#E0D9CC]'>
             <h2 class='text-xl font-bold text-gray-800 mb-4'>Profile Information</h2>
-            <form action='/settings' method='POST' class='space-y-6'>
+            <form action='/settings' method='POST' enctype='multipart/form-data' class='space-y-6'>
                 %s
                 <div>
-                    <label class='block text-sm font-medium text-gray-700 mb-1'>Avatar URL (Optional)</label>
-                    <input type='url' name='avatar_url' value='%s' class='block w-full rounded-xl border-[#D0C9BC] focus:border-[#C94C4C] focus:ring-1 focus:ring-[#C94C4C]/20 focus:outline-none p-2 border' placeholder='https://example.com/my-face.jpg'>
+                    <label class='block text-sm font-medium text-gray-700 mb-1'>Avatar Image (Optional)</label>
+                    <input type='hidden' name='existing_avatar_url' value='%s'>
+                    <input type='file' name='avatar_url' accept='image/*' class='block w-full rounded-xl border-[#D0C9BC] focus:border-[#C94C4C] focus:ring-1 focus:ring-[#C94C4C]/20 focus:outline-none p-2 border'>
                 </div>
                 <div>
                     <label class='block text-sm font-medium text-gray-700 mb-1'>Bio</label>

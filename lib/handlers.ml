@@ -30,6 +30,49 @@ let extract_mentions text =
   done;
   List.sort_uniq String.compare !mentions
 
+(* Reusable image-upload pipeline: write bytes to /tmp, invoke ImageMagick mogrify
+   to convert+resize to WebP, then mv to static/uploads/.
+   ~resize uses ImageMagick geometry syntax; '>' suffix means only-shrink-never-upscale.
+   Returns Ok None when image_bytes is empty (no file selected by the user). *)
+let process_image_upload ~max_bytes ~resize image_bytes =
+  if image_bytes = "" then Ok None
+  else if String.length image_bytes > max_bytes then
+    Error (Printf.sprintf "Image exceeds the %d MB limit." (max_bytes / (1024 * 1024)))
+  else begin
+    let ts = Int64.of_float (Unix.gettimeofday () *. 1000.0) in
+    let rand = Random.int 999999 in
+    let base = Printf.sprintf "earde_%Ld_%06d" ts rand in
+    let tmp_path = "/tmp/" ^ base ^ ".tmp" in
+    let webp_path = "/tmp/" ^ base ^ ".webp" in
+    let dest_name = base ^ ".webp" in
+    let dest_path = "static/uploads/" ^ dest_name in
+    let url_path = "/static/uploads/" ^ dest_name in
+    (try
+      let oc = open_out_bin tmp_path in
+      output_string oc image_bytes;
+      close_out oc;
+      (* Filename.quote prevents shell injection from the timestamp/random basename.
+         The resize geometry is a compile-time constant, not user input. *)
+      let cmd = Printf.sprintf
+        "mogrify -format webp -quality 80 -resize '%s' %s 2>/dev/null"
+        resize (Filename.quote tmp_path) in
+      let exit_code = Sys.command cmd in
+      (try Sys.remove tmp_path with _ -> ());
+      if exit_code <> 0 then
+        Error "Image processing failed. Please upload a valid image (JPEG, PNG, GIF, WebP)."
+      else begin
+        let mv_exit = Sys.command (Printf.sprintf "mv %s %s"
+          (Filename.quote webp_path) (Filename.quote dest_path)) in
+        if mv_exit <> 0 then
+          Error "Failed to store the processed image."
+        else
+          Ok (Some url_path)
+      end
+    with exn ->
+      (try Sys.remove tmp_path with _ -> ());
+      Error ("Image write error: " ^ Printexc.to_string exn))
+  end
+
 (* === RATE LIMITING === *)
 
 (* DB-backed rate limit trades a synchronous Hashtbl lookup for a round-trip to
@@ -546,18 +589,35 @@ let update_community_handler request =
   | Some uid_str ->
       let user_id = int_of_string uid_str in
       let is_admin = Dream.session_field request "is_admin" = Some "true" in
-      match%lwt Dream.form request with
+      match%lwt Dream.multipart request with
       | `Ok form_data ->
-          let community_id = try int_of_string (List.assoc_opt "community_id" form_data |> Option.value ~default:"") with _ -> 0 in
-          let community_slug = List.assoc_opt "community_slug" form_data |> Option.value ~default:"" in
+          let get_field name =
+            match List.assoc_opt name form_data with
+            | Some ((_, v) :: _) -> v
+            | _ -> ""
+          in
+          let community_id = try int_of_string (get_field "community_id") with _ -> 0 in
+          let community_slug = get_field "community_slug" in
           if community_id = 0 then Dream.respond ~status:`Bad_Request (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Form Error" ~message:"Invalid community reference." ~alert_type:"error" ~return_url:"/" request)
           else
           (* Empty string → None: lets mods clear a field without sending NULL hacks. *)
           let str_opt s = let t = String.trim s in if t = "" then None else Some t in
-          let description = str_opt (List.assoc_opt "description" form_data |> Option.value ~default:"") in
-          let rules      = str_opt (List.assoc_opt "rules"      form_data |> Option.value ~default:"") in
-          let avatar_url = str_opt (List.assoc_opt "avatar_url" form_data |> Option.value ~default:"") in
-          let banner_url = str_opt (List.assoc_opt "banner_url" form_data |> Option.value ~default:"") in
+          let description = str_opt (get_field "description") in
+          let rules       = str_opt (get_field "rules") in
+          (* If no new file uploaded, fall back to the existing URL submitted via hidden input. *)
+          let avatar_bytes = get_field "avatar_url" in
+          let banner_bytes = get_field "banner_url" in
+          let existing_avatar = str_opt (get_field "existing_avatar_url") in
+          let existing_banner = str_opt (get_field "existing_banner_url") in
+          let avatar_result = process_image_upload ~max_bytes:(5 * 1024 * 1024) ~resize:"512x512>" avatar_bytes in
+          let banner_result = process_image_upload ~max_bytes:(5 * 1024 * 1024) ~resize:"1920x480>" banner_bytes in
+          (match avatar_result, banner_result with
+          | Error e, _ | _, Error e ->
+              Dream.html (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Image Error" ~message:e ~alert_type:"error" ~return_url:("/c/" ^ community_slug ^ "/settings") request)
+          | Ok new_avatar, Ok new_banner ->
+          (* new_avatar/new_banner are None when no file was submitted; fall back to existing. *)
+          let avatar_url = if new_avatar <> None then new_avatar else existing_avatar in
+          let banner_url = if new_banner <> None then new_banner else existing_banner in
           Dream.sql request (fun db ->
             (* Re-verify authority on every mutation — same TOCTOU guard as add_mod. *)
             let%lwt authorized =
@@ -572,7 +632,7 @@ let update_community_handler request =
               (match%lwt Db.update_community_details db community_id description rules avatar_url banner_url with
               | Ok () -> Dream.redirect request ("/c/" ^ community_slug ^ "/settings")
               | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Error" ~message:("Database error: " ^ e) ~alert_type:"error" ~return_url:("/c/" ^ community_slug ^ "/settings") request))
-          )
+          ))
       | _ -> Dream.respond ~status:`Bad_Request (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Form Error" ~message:"Invalid form submission." ~alert_type:"error" ~return_url:"/" request)
 
 let add_mod_handler request =
@@ -806,48 +866,11 @@ let create_post_handler request =
             Dream.respond ~status:`Bad_Request (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Form Error" ~message:"Invalid community selection." ~alert_type:"error" ~return_url:"/" request)
           else
 
-          (* Process the uploaded image if present.
-             Sys.command shells out to ImageMagick instead of using OCaml C-bindings:
-             trade-off is ~10 ms process-spawn latency and Lwt event-loop blocking vs.
+          (* Sys.command shells out to ImageMagick instead of OCaml C-bindings:
+             ~10 ms process-spawn latency and Lwt event-loop blocking vs.
              zero native library maintenance burden on the Hetzner instance.
              Acceptable for a low-traffic community server where image posts are rare. *)
-          let image_result =
-            if image_bytes = "" then Ok None
-            else begin
-              let ts = Int64.of_float (Unix.gettimeofday () *. 1000.0) in
-              let rand = Random.int 999999 in
-              let base = Printf.sprintf "earde_%Ld_%06d" ts rand in
-              let tmp_path = "/tmp/" ^ base ^ ".tmp" in
-              let webp_path = "/tmp/" ^ base ^ ".webp" in
-              let dest_name = base ^ ".webp" in
-              let dest_path = "static/uploads/" ^ dest_name in
-              let url_path = "/static/uploads/" ^ dest_name in
-              (try
-                let oc = open_out_bin tmp_path in
-                output_string oc image_bytes;
-                close_out oc;
-                (* Filename.quote prevents shell injection from the timestamp/random basename.
-                   -resize '1920x1080>' uses ImageMagick's '>' flag: only shrink, never upscale. *)
-                let cmd = Printf.sprintf
-                  "mogrify -format webp -quality 80 -resize '1920x1080>' %s 2>/dev/null"
-                  (Filename.quote tmp_path) in
-                let exit_code = Sys.command cmd in
-                (try Sys.remove tmp_path with _ -> ());
-                if exit_code <> 0 then
-                  Error "Image processing failed. Please upload a valid image (JPEG, PNG, GIF, WebP)."
-                else begin
-                  let mv_exit = Sys.command (Printf.sprintf "mv %s %s"
-                    (Filename.quote webp_path) (Filename.quote dest_path)) in
-                  if mv_exit <> 0 then
-                    Error "Failed to store the processed image."
-                  else
-                    Ok (Some url_path)
-                end
-              with exn ->
-                (try Sys.remove tmp_path with _ -> ());
-                Error ("Image write error: " ^ Printexc.to_string exn))
-            end
-          in
+          let image_result = process_image_upload ~max_bytes:(5 * 1024 * 1024) ~resize:"1920x1080>" image_bytes in
 
           (match image_result with
           | Error img_err ->
@@ -1434,15 +1457,29 @@ let update_profile_handler request =
   | None -> Dream.redirect request "/login"
   | Some uid_str ->
       let user_id = int_of_string uid_str in
-      match%lwt Dream.form request with
+      match%lwt Dream.multipart request with
       | `Ok form_data ->
-          let bio = match List.assoc_opt "bio" form_data with Some "" | None -> None | Some b -> Some b in
-          let avatar_url = match List.assoc_opt "avatar_url" form_data with Some "" | None -> None | Some a -> Some a in
+          let get_field name =
+            match List.assoc_opt name form_data with
+            | Some ((_, v) :: _) -> v
+            | _ -> ""
+          in
+          let bio = match get_field "bio" with "" -> None | b -> Some b in
+          let avatar_bytes = get_field "avatar_url" in
+          let existing_avatar =
+            match get_field "existing_avatar_url" with "" -> None | a -> Some a
+          in
+          (match process_image_upload ~max_bytes:(5 * 1024 * 1024) ~resize:"512x512>" avatar_bytes with
+          | Error e ->
+              Dream.html (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Image Error" ~message:e ~alert_type:"error" ~return_url:"/settings" request)
+          | Ok new_avatar ->
+          (* Keep existing avatar when no new file submitted. *)
+          let avatar_url = if new_avatar <> None then new_avatar else existing_avatar in
           Dream.sql request (fun db ->
             match%lwt Db.update_user_profile db bio avatar_url user_id with
             | Ok () -> Dream.redirect request "/settings"
             | Error err -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Error" ~message:("Database error: " ^ err) ~alert_type:"error" ~return_url:"/settings" request)
-          )
+          ))
       | _ -> Dream.respond ~status:`Bad_Request (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Form Error" ~message:"Invalid form submission." ~alert_type:"error" ~return_url:"/settings" request)
 
 (* Re-authenticate with old password before rotating the secret — prevents session
