@@ -556,7 +556,7 @@ let community_card (community : community) =
 let left_sidebar ?user ~moderated_communities (user_communities : community list) =
   match user with
   | None ->
-      "<div class='bg-[#EDE9DF] p-4 rounded-xl border border-[#D8D0C0]'><h3 class='font-semibold text-[#3C3630] mb-1 text-sm'>Join Earde</h3><p class='text-xs text-[#5C5248] mb-3'>Create an account to follow communities and join the conversation.</p><a href='/signup' class='block w-full bg-[#C94C4C] text-[#F7F3E8] text-center py-2 rounded-xl font-semibold text-sm hover:bg-[#A83A3A] transition'>Sign Up</a></div>"
+      "<div class='bg-[#EDE9DF] p-4 rounded-xl border border-[#D8D0C0]'><h3 class='font-semibold text-[#3C3630] mb-1 text-sm'>Join Earde</h3><p class='text-xs text-[#5C5248] mb-3'>Create an account to follow communities and join the conversation.</p><a href='/signup' class='block w-full bg-[#C94C4C] text-[#F7F3E8] text-center py-2 rounded-xl font-semibold text-sm hover:bg-[#A83A3A] transition'>Sign Up</a></div><div class='mt-4 bg-stone-50 border border-stone-200 rounded-xl p-4'><h3 class='text-xs font-semibold text-stone-500 uppercase tracking-wider mb-2'>Learn More</h3><ul class='space-y-2'><li><a href='/about' class='flex items-center gap-2 text-sm text-stone-700 hover:underline transition'><span>&#8505;&#65039;</span><span>About Earde</span></a></li><li><a href='/privacy' class='flex items-center gap-2 text-sm text-stone-700 hover:underline transition'><span>&#128737;&#65039;</span><span>Privacy Policy</span></a></li></ul></div>"
   | Some _ ->
       if user_communities = [] && moderated_communities = [] then
         "<div class='p-4 bg-white rounded-xl border border-[#E0D9CC] shadow-[0_2px_8px_rgba(60,54,48,0.06)]'><p class='text-sm text-gray-500 mb-3'>You haven't joined any communities yet.</p><a href='/new-community' class='text-[#C94C4C] font-bold text-sm hover:underline'>Create one &rarr;</a></div>"
@@ -565,6 +565,8 @@ let left_sidebar ?user ~moderated_communities (user_communities : community list
         let mod_ids = List.map (fun (a : community) -> a.id) moderated_communities in
         let following_communities = List.filter (fun (a : community) -> not (List.mem a.id mod_ids)) user_communities in
         let home_link = "<li><a href='/' class='flex items-center space-x-2 p-2 rounded-xl hover:bg-gray-50 text-gray-700 font-medium transition'><span class='text-gray-400 mr-1'>🏠</span><span class='truncate'>Home</span></a></li>" in
+        let about_link = "<li><a href='/about' class='flex items-center space-x-2 p-2 rounded-xl hover:bg-gray-50 text-gray-700 font-medium transition'><span class='text-gray-400 mr-1'>&#8505;&#65039;</span><span class='truncate'>About Earde</span></a></li>" in
+        let privacy_link = "<li><a href='/privacy' class='flex items-center space-x-2 p-2 rounded-xl hover:bg-gray-50 text-gray-700 font-medium transition'><span class='text-gray-400 mr-1'>&#128737;&#65039;</span><span class='truncate'>Privacy Policy</span></a></li>" in
         let mod_section =
           if moderated_communities = [] then ""
           else
@@ -583,5 +585,5 @@ let left_sidebar ?user ~moderated_communities (user_communities : community list
             ) following_communities in
             Printf.sprintf "<h3 class='px-2 mb-1 text-xs font-semibold text-gray-500 uppercase tracking-wider mt-3'>Following</h3><ul class='space-y-1'>%s</ul>" (String.concat "\n" items)
         in
-        Printf.sprintf "<div class='bg-white p-4 rounded-xl border border-[#E0D9CC] shadow-sm'><ul class='space-y-1'>%s</ul>%s%s</div>"
-          home_link mod_section follow_section
+        Printf.sprintf "<div class='bg-white p-4 rounded-xl border border-[#E0D9CC] shadow-sm'><ul class='space-y-1'>%s%s%s</ul>%s%s</div>"
+          home_link about_link privacy_link mod_section follow_section

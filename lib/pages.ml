@@ -1743,8 +1743,8 @@ let privacy_page ?user request =
             <li class='flex items-start gap-2'><span class='text-[#C94C4C] font-bold mt-0.5'>&#10003;</span><span><strong>Anonymous daily page-view counts.</strong> We count visits per page using a daily-resetting hash of your IP, browser string, and the current date. The hash is one-way: the original IP cannot be recovered from it.</span></li>
           </ul>
           <div class='border-t border-[#C94C4C]/20 pt-4 mt-4 space-y-2 text-sm text-gray-700'>
-            <p><strong>No advertising. No tracking pixels. No Google Analytics. No Meta Pixel. No data brokers. No behavioural profiling. No selling your data. Ever.</strong></p>
-            <p>We set exactly one cookie: a session cookie that keeps you logged in. It is deleted when you log out. No cookie banner is shown because this cookie is strictly necessary for the service to function &mdash; consent is not legally required for it.</p>
+            <p><strong>No advertising. No tracking pixels. No Google Analytics. No Meta Pixel. No data brokers. No behavioural profiling. No selling your data.</strong></p>
+            <p>We set exactly one cookie: a session cookie that keeps you logged in. It is deleted when you log out. No cookie banner is shown because this cookie is strictly necessary for the service to function, so consent is not legally required for it.</p>
             <p>You can <a href='/export-data' class='text-[#C94C4C] underline hover:text-[#A83A3A] font-medium'>download all your data</a> as JSON at any time. You can <a href='/settings' class='text-[#C94C4C] underline hover:text-[#A83A3A] font-medium'>delete your account</a> instantly from Settings.</p>
           </div>
         </div>
@@ -1756,8 +1756,8 @@ let privacy_page ?user request =
 
         <section>
           <h2 class='text-lg font-bold text-gray-900 mb-3 pb-1 border-b border-[#E0D9CC]'>1. Who I Am</h2>
-          <p class='mb-3'>I am Dami, a developer based in Italy. I built and run Earde alone. There is no company, no legal team, no DPO, and no dedicated privacy email address &mdash; just me. Contact me for all data protection matters: <a href='mailto:dami@earde.com' class='text-[#C94C4C] underline hover:text-[#A83A3A]'>dami@earde.com</a>.</p>
-          <p class='mb-3'>This policy reflects the actual source code.  If anything here contradicts the code, the code is the ground truth &mdash; and I want to know so I can fix the policy.</p>
+          <p class='mb-3'>I am Dami, a developer based in Italy. I built and run Earde alone. There is no company, no legal team, no DPO, and no dedicated privacy email address, just me. Contact me for all data protection matters: <a href='mailto:dami@earde.com' class='text-[#C94C4C] underline hover:text-[#A83A3A]'>dami@earde.com</a>.</p>
+          <p class='mb-3'>This policy reflects the actual source code.  If anything here contradicts the code, the code is the ground truth, and I want to know so I can fix the policy.</p>
           <ul class='list-disc list-inside space-y-2 text-sm mt-3'>
             <li><strong>Earde is fully open-source.</strong> You do not have to trust this policy. Read the code and verify it yourself: <a href='https://github.com/earde-social/earde' class='text-[#C94C4C] underline hover:text-[#A83A3A]' target='_blank' rel='noopener noreferrer'>https://github.com/earde-social/earde</a></li>
             <li>I collect the minimum data needed to run this.</li>
@@ -1767,8 +1767,8 @@ let privacy_page ?user request =
 
         <section>
           <h2 class='text-lg font-bold text-gray-900 mb-3 pb-1 border-b border-[#E0D9CC]'>2. Infrastructure &amp; Hosting</h2>
-          <p class='mb-3'>Earde runs on servers provided by <strong>Hetzner</strong>, a German hosting company. All servers are located physically inside the European Union &mdash; either in Germany (Nuremberg/Falkenstein) or Finland (Helsinki).</p>
-          <p class='mb-3'>Your data never leaves EU jurisdiction. I do not use Amazon Web Services, Google Cloud, Microsoft Azure, or any comparable US-based cloud platform. There is no CDN routing your traffic through non-EU nodes. The infrastructure is a bespoke setup &mdash; server, PostgreSQL database, application &mdash; with no intermediary black boxes. The entire data pipeline is subject to EU law, including the GDPR, from end to end.</p>
+          <p class='mb-3'>Earde runs on servers provided by <strong>Hetzner</strong>, a German hosting company. All servers are located physically inside the European Union, either in Germany (Nuremberg/Falkenstein) or Finland (Helsinki).</p>
+          <p class='mb-3'>Your data never leaves EU jurisdiction. I do not use Amazon Web Services, Google Cloud, Microsoft Azure, or any comparable US-based cloud platform. There is no CDN routing your traffic through non-EU nodes. The infrastructure is a bespoke setup (server, PostgreSQL database, application) with no intermediary black boxes. The entire data pipeline is subject to EU law, including the GDPR, from end to end.</p>
         </section>
 
         <section>
@@ -1857,7 +1857,7 @@ Argon2.hash
   ~version:Argon2.VERSION_13
   ~hash_len:32
   ...</pre>
-          <p class='mt-3 mb-3'><strong>Argon2id</strong> is the algorithm recommended by OWASP and selected by the Password Hashing Competition. The <code class='bg-gray-100 px-1 rounded text-sm'>ID</code> variant provides resistance against both side-channel and GPU brute-force attacks. The 64 MB memory requirement means cracking a single password requires 64 MB of RAM per attempt &mdash; making large-scale GPU attacks economically prohibitive.</p>
+          <p class='mt-3 mb-3'><strong>Argon2id</strong> is the algorithm recommended by OWASP and selected by the Password Hashing Competition. The <code class='bg-gray-100 px-1 rounded text-sm'>ID</code> variant provides resistance against both side-channel and GPU brute-force attacks. The 64 MB memory requirement means cracking a single password requires 64 MB of RAM per attempt, making large-scale GPU attacks prohibitive.</p>
           <p>A fresh 16-byte random salt is generated for every password, so two users with identical passwords will have completely different hashes. Only the encoded hash string is written to the database. The plaintext password is never stored, logged, or accessible after the request completes.</p>
           <p class='mt-3 text-sm text-gray-500'>Additional security measures: CSRF tokens on all state-mutating forms; HTML output escaping preventing XSS; rate limiting on auth endpoints; session cookie with <code class='bg-gray-100 px-1 rounded'>Secure</code>, <code class='bg-gray-100 px-1 rounded'>HttpOnly</code>, and <code class='bg-gray-100 px-1 rounded'>SameSite=Strict</code> attributes.</p>
         </section>
@@ -1865,7 +1865,7 @@ Argon2.hash
         <!-- ePrivacy Directive 2002/58/EC, Recital 25 -->
         <section>
           <h2 class='text-lg font-bold text-gray-900 mb-3 pb-1 border-b border-[#E0D9CC]'>5. Cookies &amp; Tracking</h2>
-          <p class='mb-3'>Earde sets <strong>exactly one cookie</strong>: a session cookie issued by the Dream web framework. It carries only an opaque session identifier. The session data (user ID, username) is stored server-side in the <code class='bg-gray-100 px-1 rounded text-sm'>dream_session</code> PostgreSQL table &mdash; nothing personal is embedded in the cookie itself.</p>
+          <p class='mb-3'>Earde sets <strong>exactly one cookie</strong>: a session cookie issued by the Dream web framework. It carries only an opaque session identifier. The session data (user ID, username) is stored server-side in the <code class='bg-gray-100 px-1 rounded text-sm'>dream_session</code> PostgreSQL table, nothing personal is embedded in the cookie itself.</p>
           <p class='mb-3'>This cookie is strictly necessary for the service to function. Under ePrivacy Directive 2002/58/EC, Art. 5(3) and Recital 25, strictly-necessary cookies are exempt from prior-consent requirements. This is why there is no cookie consent banner.</p>
           <p class='mb-3'>The cookie is cleared immediately on logout. It does not persist across devices or browser profiles.</p>
           <p class='font-medium text-gray-900'>What we do <em>not</em> use:</p>
@@ -1888,7 +1888,7 @@ SET username      = \'[deleted_\' || id || \']\',
     password_hash = \'\'
 WHERE id = $1</pre>
           <p class='mt-3 mb-3'>Your email is overwritten with an inert placeholder. Your password hash is wiped. Your username becomes an anonymous tombstone like <code class='bg-gray-100 px-1 rounded text-sm'>[deleted_42]</code>. Your votes, community memberships, moderator roles, bans, and notifications are hard-deleted by <code class='bg-gray-100 px-1 rounded text-sm'>ON DELETE CASCADE</code> constraints. Your session is immediately invalidated.</p>
-          <p class='mb-3'><strong>Your posts and comments are not deleted.</strong> They remain in the database attributed to the <code class='bg-gray-100 px-1 rounded text-sm'>[deleted_N]</code> tombstone. This is an intentional design choice: hard-deleting your user row would cascade and destroy every reply ever written to your comments, breaking discussion threads for everyone else. The tombstone cannot be linked back to you &mdash; your email and credentials are gone &mdash; satisfying the pseudonymisation threshold of GDPR Art. 4(5) and Recital 26.</p>
+          <p class='mb-3'><strong>Your posts and comments are not deleted.</strong> They remain in the database attributed to the <code class='bg-gray-100 px-1 rounded text-sm'>[deleted_N]</code> tombstone. This is an intentional design choice: hard-deleting your user row would cascade and destroy every reply ever written to your comments, breaking discussion threads for everyone else. The tombstone cannot be linked back to you (your email and credentials are gone) satisfying the pseudonymisation threshold of GDPR Art. 4(5) and Recital 26.</p>
           <p class='mb-3 text-sm bg-amber-50 border border-amber-200 rounded-xl p-3 text-amber-800'>If you also want your posts and comments deleted, email me at <a href='mailto:dami@earde.com' class='underline font-medium'>dami@earde.com</a> and I will remove them manually.</p>
           <p>Before deleting, you can export your posts and comments as JSON from the <a href='/settings' class='text-[#C94C4C] underline hover:text-[#A83A3A]'>Settings page</a>.</p>
         </section>
@@ -1935,25 +1935,25 @@ let about_page ?user request =
       <div class='space-y-10 text-gray-700 leading-7'>
 
         <section>
-          <h2 class='text-xl font-bold text-gray-900 mb-4'>Why we built this (and who we are)</h2>
+          <h2 class='text-xl font-bold text-gray-900 mb-4'>Why we built this</h2>
           <p class='mb-3'>The internet&rsquo;s largest communities are almost exclusively hosted in the US, run by US corporations, and subject to US data practices. We believe Europe needs its own digital public square.</p>
           <p class='mb-3'>Earde is an <a href='https://github.com/earde-social/earde' class='text-[#C94C4C] underline hover:text-[#A83A3A]' target='_blank' rel='noopener noreferrer'>open-source</a>, deeply european discussion platform. We built this to be a GDPR-compliant sanctuary: hosted entirely on european servers, free from data harvesting, and strictly moderated against hate speech. We want to prove that a modern social aggregator can be incredibly fast, privacy-respecting, and community-driven without treating its users as products.</p>
         </section>
 
         <section>
-          <h2 class='text-xl font-bold text-gray-900 mb-4'>Who is building this? (The team)</h2>
-          <p class='mb-3'>Earde isn&rsquo;t a product of a Silicon Valley incubator &mdash; it&rsquo;s being built from the italian alps.</p>
+          <h2 class='text-xl font-bold text-gray-900 mb-4'>Who is building this?</h2>
+          <p class='mb-3'>Earde isn&rsquo;t a product of a Silicon Valley incubator, it&rsquo;s being built from the italian alps.</p>
           <p class='mb-3'>I&rsquo;m Dami, the developer. I have a degree in philosophy and a deep interest in formal logic. I also love to write code.</p>
-          <p class='mb-3'>The name <em>Earde</em> comes from cimbrian, an ancient germanic language still spoken in a few isolated villages here in the alps. It means &ldquo;earth&rdquo;. We chose it because we want to build something grounded &mdash; a solid foundation for real human connection, far removed from the hyper-commercialized &ldquo;clouds&rdquo; of modern big tech.</p>
+          <p class='mb-3'>The name <em>Earde</em> comes from cimbrian, an ancient germanic language still spoken in a few isolated villages here in the alps. It means &ldquo;earth&rdquo;. We chose it because we want to build something grounded, a solid foundation for real human connection, far removed from the hyper-commercialized &ldquo;clouds&rdquo; of modern big tech.</p>
           <p>I am not doing this alone. My friend Nico is the other half of the brain behind Earde. He doesn&rsquo;t write a single line of code, and that is exactly why he is essential. Nico acts as the product manager. He ensures the platform is built for actual human beings, focusing on user experience, community dynamics, and keeping my engineering decisions aligned with our core philosophy.</p>
         </section>
 
         <section>
-          <h2 class='text-xl font-bold text-gray-900 mb-4'>The Alternatives (And why we are different)</h2>
-          <p class='mb-4'>We aren&rsquo;t the first to try building a text-based community platform. Here is exactly where we stand compared to the rest of the landscape:</p>
+          <h2 class='text-xl font-bold text-gray-900 mb-4'>The Alternatives (and why we are different)</h2>
+          <p class='mb-4'>We aren&rsquo;t the first to try building a community platform. Here is exactly where we stand compared to the rest of the landscape:</p>
           <ul class='list-disc list-outside pl-5 space-y-3'>
-            <li><strong>How is it different from Reddit?</strong> Aside from being hosted in the EU, Earde is fully <a href='https://github.com/earde-social/earde' class='text-[#C94C4C] underline hover:text-[#A83A3A]' target='_blank' rel='noopener noreferrer'>open-source</a>. We retain zero unnecessary data, run as little JavaScript as humanly possible, and our code is built for speed, not for tracking your every click.</li>
-            <li><strong>How is it different from Lemmy or Mastodon?</strong> We are fully centralized. We believe the fediverse is a fantastic technical experiment, but it is fundamentally hostile to the average user. Earde is designed to be frictionless: you sign up in three seconds and start reading. No instances, no federation delays, no confusing server rules.</li>
+            <li><strong>How is it different from Reddit?</strong> Aside from being hosted in the EU, Earde is fully <a href='https://github.com/earde-social/earde' class='text-[#C94C4C] underline hover:text-[#A83A3A]' target='_blank' rel='noopener noreferrer'>open-source</a>. We retain zero unnecessary data, run as little JavaScript as possible, and we try to build our code for speed, not for tracking your every click.</li>
+            <li><strong>How is it different from Lemmy or Mastodon?</strong> We are fully centralized. We believe the Fediverse is a fantastic technical experiment, but it is fundamentally hostile to the average user. Earde is designed to be frictionless: you sign up in three seconds and start reading. No instances, no delays, no confusing server rules.</li>
             <li><strong>How is it different from Discuit?</strong> We actively want to raise capital to hire a real team, invest in marketing, and genuinely compete on a global scale (read our Investment Strategy below to see how we plan to do this without ruining the site).</li>
             <li><strong>How is it different from Squabbles?</strong> Squabbles launched with a &ldquo;free speech absolutist&rdquo; approach that quickly spiraled into toxic community management. We take a firm stance: we will enforce the deletion of hate speech, racism, and harassment. Freedom of discussion requires a safe environment to discuss in.</li>
           </ul>
@@ -1965,15 +1965,15 @@ let about_page ?user request =
         </section>
 
         <section>
-          <h2 class='text-xl font-bold text-gray-900 mb-4'>Core features (the anti-toxicity engine)</h2>
+          <h2 class='text-xl font-bold text-gray-900 mb-4'>Core features</h2>
           <p class='mb-4'>We baked our philosophy directly into the code.</p>
           <ul class='list-disc list-outside pl-5 space-y-3'>
             <li><strong>Public moderation logs:</strong> every ban, deleted post, and rule change made by moderators is visible in a public log.</li>
-            <li><strong>The council of equals:</strong> there is no single &ldquo;dictator&rdquo; for a community. The top tier of moderation is shared by a council of up to 3 top mods with equal permissions.</li>
-            <li><strong>The anti-squatter rule (3-month expiry):</strong> if a top mod is inactive on Earde for 3 months, they automatically lose their status. Communities belong to active users, not absentee landlords.</li>
+            <li><strong>The <em>Council of Equals</em>:</strong> there is no single &ldquo;dictator&rdquo; for a community. The top tier of moderation is shared by a council of up to 3 top mods with equal permissions.</li>
+            <li><strong>The anti-squatter rule (3-month expiry):</strong> if a top mod is inactive on Earde for 3 months, they automatically lose their status.</li>
             <li><strong>Optional downvote shadowing:</strong> for highly sensitive communities, founders can enable downvote shadowing to prevent dogpiling and toxicity, while keeping the platform democratic.</li>
-            <li><strong>No infinite scrolling:</strong> by default, Earde uses pagination. When you reach the bottom, it stops. We want you to read intentionally, not doomscroll.</li>
-            <li><strong>No gamification:</strong> no awards, no paid badges, no gimmicks designed to artificially drum up engagement. Just upvotes, downvotes, and words.</li>
+            <li><strong>No infinite scrolling:</strong> by default, Earde uses pagination. When you reach the bottom, it stops. We want to prevent doomscrolling.</li>
+            <li><strong>No gamification:</strong> no awards, no paid badges, no gimmicks designed to artificially drum up engagement.</li>
           </ul>
         </section>
 
@@ -1989,9 +1989,9 @@ let about_page ?user request =
         </section>
 
         <section>
-          <h2 class='text-xl font-bold text-gray-900 mb-4'>Our investment strategy (The &ldquo;Enshittification&rdquo; dilemma)</h2>
+          <h2 class='text-xl font-bold text-gray-900 mb-4'>Our investment strategy (The &ldquo;enshittification&rdquo; dilemma)</h2>
           <p class='mb-3'>Let&rsquo;s address the elephant in the room. Most tech startups raise massive venture capital, which forces them to chase infinite hyper-growth. This inevitably leads to the &ldquo;enshittification&rdquo; of the product: aggressive ads, dark patterns, and algorithm manipulation just to satisfy a $400M valuation.</p>
-          <p class='mb-3'>However, building a genuine Reddit competitor requires serious money for servers, legal compliance, and marketing. We believe funding is not a black-and-white issue. There is a massive difference between raising $400M from predatory Silicon Valley VCs and raising $2M from EU-aligned funds, angel investors, or european tech grants. A smaller, sensible funding round could allow us to hire a dedicated team and reach break-even profitability gracefully, without ever needing to sell out our users to hit impossible revenue targets.</p>
+          <p class='mb-3'>However, building a genuine Reddit competitor requires serious money for servers, legal compliance, and marketing. We believe funding is not a black-and-white issue. There is a difference between raising $400M from predatory Silicon Valley VCs and raising $2M from EU-aligned funds, angel investors, or european tech grants. A smaller, sensible funding round could allow us to hire a dedicated team and reach break-even profitability gracefully, without ever needing to sell out our users to hit impossible revenue targets.</p>
           <p>Furthermore, given Earde&rsquo;s explicitly pro-european, privacy-first political stance, we are entirely open to philanthropic funding models. So if you are an EU-aligned philanthropist, give us money! :) Let&rsquo;s build the european internet together. Reach out: <a href='mailto:dami@earde.com' class='text-[#C94C4C] underline hover:text-[#A83A3A]'>dami@earde.com</a>.</p>
         </section>
 
@@ -2001,11 +2001,11 @@ let about_page ?user request =
             <li><strong>Free public API:</strong> we want to build a free, robust API so developers can build third-party apps and moderation bots.</li>
             <li><strong>Toggleable infinite scroll:</strong> while we believe pagination is healthier, we will add an account-level toggle for users who prefer continuous scrolling.</li>
             <li><strong>Saved content:</strong> a private bookmarking system so you can save insightful posts and comments to read later, without relying on browser bookmarks.</li>
-            <li><strong>Private messaging (done right):</strong> we will implement user-to-user direct messages, but with a strict anti-abuse philosophy. It will be an opt-in system where you completely control who can reach your inbox, preventing the spam and harassment common on other platforms.</li>
-            <li><strong>Modmail &amp; council tools:</strong> to make the &ldquo;council of equals&rdquo; work smoothly, we want to build internal communication tools for moderators to coordinate, and a transparent &ldquo;modmail&rdquo; system for users to appeal decisions or contact the moderation team securely.</li>
+            <li><strong>Private messaging:</strong> we will implement user-to-user direct messages, but with a strict anti-abuse philosophy. It will be an opt-in system where you completely control who can reach your inbox, preventing the spam and harassment common on other platforms.</li>
+            <li><strong>Modmail &amp; council tools:</strong> to make the Council of Equals work smoothly, we want to build internal communication tools for moderators to coordinate, and a transparent &ldquo;modmail&rdquo; system for users to appeal decisions or contact the moderation team securely.</li>
             <li><strong>Custom feeds:</strong> since we refuse to use algorithms to guess what you want to read, we will build a feature allowing you to group specific communities together (e.g., a custom &ldquo;tech &amp; science&rdquo; feed) for pure, chronological reading.</li>
           </ul>
-          <p class='mt-4 text-sm text-gray-500'>While we have our baseline goals, Earde belongs to its users. The features we prioritize and build next will ultimately be the ones most requested by you. We build what the community actually asks for.
+          <p class='mt-4 text-sm text-gray-500'>While we have our baseline goals, Earde belongs to its users. The features we prioritize and build next will ultimately be the ones most requested by you. We build what the community actually asks for. So if you have any idea or feature request, please text me at dami@earde.com!
 </p>
         
         </section>
