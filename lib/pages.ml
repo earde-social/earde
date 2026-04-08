@@ -1087,7 +1087,7 @@ let post_page ?user ~is_member ~is_current_user_mod ~mod_usernames ~admin_userna
   (* Image stored as /static/uploads/<uuid>.webp — served directly by Dream.static. *)
   let image_content = match post.image_url with
     | None -> ""
-    | Some img -> Printf.sprintf "<div class='mb-4'><img src='%s' alt='Post image' class='max-w-full rounded-xl border border-[#E0D9CC] max-h-[600px] object-contain'></div>"
+    | Some img -> Printf.sprintf "<div class='mb-4'><img src='%s' alt='Post image' class='w-full max-h-[700px] object-contain bg-stone-900 rounded-xl border border-[#E0D9CC]'></div>"
         (Components.html_escape img)
   in
 

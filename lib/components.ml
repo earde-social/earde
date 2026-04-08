@@ -496,7 +496,7 @@ let render_post ?(is_current_user_mod=false) ?(mod_usernames=[]) ?(admin_usernam
      static/uploads/; no second resize needed because the file is already ≤1920x1080. *)
   let image_html = match post.image_url with
     | None -> ""
-    | Some img -> Printf.sprintf "<a href='/p/%d' class='block mt-2 mb-1'><img src='%s' alt='Post image' class='rounded-lg max-h-48 max-w-xs object-cover border border-[#E0D9CC]'></a>"
+    | Some img -> Printf.sprintf "<a href='/p/%d' class='block mt-2 mb-1'><img src='%s' alt='Post image' class='w-full max-h-[512px] object-contain bg-stone-900 rounded-lg border border-[#E0D9CC]'></a>"
         post.id (html_escape img)
   in
   Printf.sprintf "
