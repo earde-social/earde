@@ -508,7 +508,7 @@ module Post = struct
   let soft_delete_post_query =
     let open Caqti_request.Infix in
     (Caqti_type.t2 Caqti_type.int Caqti_type.int ->. Caqti_type.unit)
-    "UPDATE posts SET content = '[deleted]', url = NULL WHERE id = $1 AND user_id = $2"
+    "UPDATE posts SET content = '[deleted]', url = NULL, image_url = NULL WHERE id = $1 AND user_id = $2"
 
   let soft_delete_post (module C : Caqti_lwt.CONNECTION) post_id user_id =
     C.exec soft_delete_post_query (post_id, user_id)
@@ -1129,7 +1129,7 @@ module Admin = struct
   let admin_delete_post_query =
     let open Caqti_request.Infix in
     (Caqti_type.t2 Caqti_type.string Caqti_type.int ->. Caqti_type.unit)
-    "UPDATE posts SET content = $1, url = NULL WHERE id = $2"
+    "UPDATE posts SET content = $1, url = NULL, image_url = NULL WHERE id = $2"
 
   let admin_delete_post (module C: Caqti_lwt.CONNECTION) ~label post_id =
     C.exec admin_delete_post_query (label, post_id) >>= function

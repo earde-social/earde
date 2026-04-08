@@ -1019,6 +1019,24 @@ let delete_post_handler request =
             if blocked_by_immunity then
               Dream.respond ~status:`Forbidden "⛔ You cannot moderate an Admin."
             else
+            (* Delete image from disk before nulling image_url in DB — prevents
+               orphaned files that would still be served by the static file handler. *)
+            let () =
+              match post_opt with
+              | Some post
+                when is_admin || is_mod || post.user_id = user_id ->
+                  (match post.image_url with
+                  | Some image_url ->
+                      (* Basename extraction avoids /static/uploads/... prefix mismatch
+                         between the URL path stored in DB and the local filesystem. *)
+                      let filename = Filename.basename image_url in
+                      let physical_path = Filename.concat "static/uploads" filename in
+                      Dream.log "Attempting to delete physical file: %s" physical_path;
+                      (try Sys.remove physical_path
+                       with Sys_error e -> Dream.log "Failed to delete file: %s" e)
+                  | None -> ())
+              | _ -> ()
+            in
             let%lwt db_action =
               if is_admin || is_mod then Db.admin_delete_post db ~label:"[removed by admin]" post_id
               else Db.soft_delete_post db post_id user_id
@@ -1067,6 +1085,20 @@ let mod_delete_post_handler request =
                 if not (is_admin || is_community_mod) then
                     Dream.respond ~status:`Forbidden (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Forbidden" ~message:"You are not a moderator of this community." ~alert_type:"error" ~return_url:("/c/" ^ slug) request)
                 else
+                    (* Fetch post image before the DB tombstone so we can clean the disk. *)
+                    let%lwt post_img_opt =
+                      match%lwt Db.get_post_by_id db post_id with
+                      | Ok (Some post) -> Lwt.return post.image_url | _ -> Lwt.return None
+                    in
+                    let () = match post_img_opt with
+                      | Some image_url ->
+                          let filename = Filename.basename image_url in
+                          let physical_path = Filename.concat "static/uploads" filename in
+                          Dream.log "Attempting to delete physical file: %s" physical_path;
+                          (try Sys.remove physical_path
+                           with Sys_error e -> Dream.log "Failed to delete file: %s" e)
+                      | None -> ()
+                    in
                     let%lwt delete_res = Db.mod_delete_post db post_id in
                     (match delete_res with
                     | Error err ->
