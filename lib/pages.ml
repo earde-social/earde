@@ -1755,12 +1755,12 @@ let privacy_page ?user request =
       <div class='space-y-10 text-gray-700 leading-relaxed'>
 
         <section>
-          <h2 class='text-lg font-bold text-gray-900 mb-3 pb-1 border-b border-[#E0D9CC]'>1. Who I Am</h2>
-          <p class='mb-3'>I am Dami, a developer based in Italy. I built and run Earde alone. There is no company, no legal team, no DPO, and no dedicated privacy email address, just me. Contact me for all data protection matters: <a href='mailto:dami@earde.com' class='text-[#C94C4C] underline hover:text-[#A83A3A]'>dami@earde.com</a>.</p>
+          <h2 class='text-lg font-bold text-gray-900 mb-3 pb-1 border-b border-[#E0D9CC]'>1. Who we are</h2>
+          <p class='mb-3'>I am Dami, a developer based in Italy. With my friend Nico, we built and run Earde. At the moment there is no company, no legal team, no DPO, just us. You can contact me for all data protection matters: <a href='mailto:dami@earde.com' class='text-[#C94C4C] underline hover:text-[#A83A3A]'>dami@earde.com</a>.</p>
           <p class='mb-3'>This policy reflects the actual source code.  If anything here contradicts the code, the code is the ground truth, and I want to know so I can fix the policy.</p>
           <ul class='list-disc list-inside space-y-2 text-sm mt-3'>
             <li><strong>Earde is fully open-source.</strong> You do not have to trust this policy. Read the code and verify it yourself: <a href='https://github.com/earde-social/earde' class='text-[#C94C4C] underline hover:text-[#A83A3A]' target='_blank' rel='noopener noreferrer'>https://github.com/earde-social/earde</a></li>
-            <li>I collect the minimum data needed to run this.</li>
+            <li>We collect the minimum data needed to run this.</li>
             <li>No third-party services receive your data. Your browser makes no requests to any external server when you use Earde.</li>
           </ul>
         </section>
@@ -1768,7 +1768,7 @@ let privacy_page ?user request =
         <section>
           <h2 class='text-lg font-bold text-gray-900 mb-3 pb-1 border-b border-[#E0D9CC]'>2. Infrastructure &amp; Hosting</h2>
           <p class='mb-3'>Earde runs on servers provided by <strong>Hetzner</strong>, a German hosting company. All servers are located physically inside the European Union, either in Germany (Nuremberg/Falkenstein) or Finland (Helsinki).</p>
-          <p class='mb-3'>Your data never leaves EU jurisdiction. I do not use Amazon Web Services, Google Cloud, Microsoft Azure, or any comparable US-based cloud platform. There is no CDN routing your traffic through non-EU nodes. The infrastructure is a bespoke setup (server, PostgreSQL database, application) with no intermediary black boxes. The entire data pipeline is subject to EU law, including the GDPR, from end to end.</p>
+          <p class='mb-3'>Your data never leaves EU jurisdiction. We do not use Amazon Web Services, Google Cloud, Microsoft Azure, or any comparable US-based cloud platform. There is no CDN routing your traffic through non-EU nodes. The infrastructure is a bespoke setup (server, PostgreSQL database, application) with no intermediary black boxes. The entire data pipeline is subject to EU law, including the GDPR, from end to end.</p>
         </section>
 
         <section>
@@ -1937,24 +1937,24 @@ let about_page ?user request =
         <section>
           <h2 class='text-xl font-bold text-gray-900 mb-4'>Why we built this</h2>
           <p class='mb-3'>The internet&rsquo;s largest communities are almost exclusively hosted in the US, run by US corporations, and subject to US data practices. We believe Europe needs its own digital public square.</p>
-          <p class='mb-3'>Earde is an <a href='https://github.com/earde-social/earde' class='text-[#C94C4C] underline hover:text-[#A83A3A]' target='_blank' rel='noopener noreferrer'>open-source</a>, deeply european discussion platform. We built this to be a GDPR-compliant sanctuary: hosted entirely on european servers, free from data harvesting, and strictly moderated against hate speech. We want to prove that a modern social aggregator can be incredibly fast, privacy-respecting, and community-driven without treating its users as products.</p>
+          <p class='mb-3'>Earde is an <a href='https://github.com/earde-social/earde' class='text-[#C94C4C] underline hover:text-[#A83A3A]' target='_blank' rel='noopener noreferrer'>open-source</a>, proudly european discussion platform. We built this to be GDPR-compliant by design, hosted entirely on european servers, free from data harvesting, and strictly moderated against hate speech. We want to prove that a modern social aggregator can be privacy-respecting and community-driven without treating its users as products.</p>
         </section>
 
         <section>
           <h2 class='text-xl font-bold text-gray-900 mb-4'>Who is building this?</h2>
-          <p class='mb-3'>Earde isn&rsquo;t a product of a Silicon Valley incubator, it&rsquo;s being built from the italian alps.</p>
+          <p class='mb-3'>Earde isn&rsquo;t a product of Silicon Valley, it&rsquo;s being built from the italian alps.</p>
           <p class='mb-3'>I&rsquo;m Dami, the developer. I have a degree in philosophy and a deep interest in formal logic. I also love to write code.</p>
-          <p class='mb-3'>The name <em>Earde</em> comes from cimbrian, an ancient germanic language still spoken in a few isolated villages here in the alps. It means &ldquo;earth&rdquo;. We chose it because we want to build something grounded, a solid foundation for real human connection, far removed from the hyper-commercialized &ldquo;clouds&rdquo; of modern big tech.</p>
-          <p>I am not doing this alone. My friend Nico is the other half of the brain behind Earde. He doesn&rsquo;t write a single line of code, and that is exactly why he is essential. Nico acts as the product manager. He ensures the platform is built for actual human beings, focusing on user experience, community dynamics, and keeping my engineering decisions aligned with our core philosophy.</p>
+          <p class='mb-3'>The name <em>Earde</em> comes from cimbrian, an ancient germanic language still spoken in a few isolated villages here in the alps. It means &ldquo;earth&rdquo, &ldquo;soil&rdquo, &ldquo;land&rdquo;. We chose it because we want to build something grounded and far removed from the hyper-commercialized &ldquo;clouds&rdquo; of modern big tech.</p>
+          <p>I am not doing this alone. My friend Nico is the other half of the brain behind Earde. He doesn&rsquo;t write a single line of code, and that is exactly why he is essential. Nico acts as the product manager. He ensures the platform is built for human beings, focusing on user experience, community dynamics, and keeping my engineering decisions aligned with our core philosophy.</p>
         </section>
 
         <section>
-          <h2 class='text-xl font-bold text-gray-900 mb-4'>The Alternatives (and why we are different)</h2>
+          <h2 class='text-xl font-bold text-gray-900 mb-4'>The alternatives (and why we are different)</h2>
           <p class='mb-4'>We aren&rsquo;t the first to try building a community platform. Here is exactly where we stand compared to the rest of the landscape:</p>
           <ul class='list-disc list-outside pl-5 space-y-3'>
             <li><strong>How is it different from Reddit?</strong> Aside from being hosted in the EU, Earde is fully <a href='https://github.com/earde-social/earde' class='text-[#C94C4C] underline hover:text-[#A83A3A]' target='_blank' rel='noopener noreferrer'>open-source</a>. We retain zero unnecessary data, run as little JavaScript as possible, and we try to build our code for speed, not for tracking your every click.</li>
-            <li><strong>How is it different from Lemmy or Mastodon?</strong> We are fully centralized. We believe the Fediverse is a fantastic technical experiment, but it is fundamentally hostile to the average user. Earde is designed to be frictionless: you sign up in three seconds and start reading. No instances, no delays, no confusing server rules.</li>
-            <li><strong>How is it different from Discuit?</strong> We actively want to raise capital to hire a real team, invest in marketing, and genuinely compete on a global scale (read our Investment Strategy below to see how we plan to do this without ruining the site).</li>
+            <li><strong>How is it different from Lemmy or Mastodon?</strong> We are fully centralized. We believe the Fediverse is a fantastic technical experiment, but it is fundamentally hostile to the average user. Earde is designed to be frictionless: you sign up in three seconds and start using it. No instances, no delays, no confusing server rules.</li>
+            <li><strong>How is it different from Discuit?</strong> We actively want to raise capital to hire a real team, invest in marketing, and genuinely compete on a global scale (read our investment strategy below to see how we plan to do this without ruining the site).</li>
             <li><strong>How is it different from Squabbles?</strong> Squabbles launched with a &ldquo;free speech absolutist&rdquo; approach that quickly spiraled into toxic community management. We take a firm stance: we will enforce the deletion of hate speech, racism, and harassment. Freedom of discussion requires a safe environment to discuss in.</li>
           </ul>
         </section>
@@ -1966,7 +1966,7 @@ let about_page ?user request =
 
         <section>
           <h2 class='text-xl font-bold text-gray-900 mb-4'>Core features</h2>
-          <p class='mb-4'>We baked our philosophy directly into the code.</p>
+          <p class='mb-4'>We baked our philosophy directly into the code:</p>
           <ul class='list-disc list-outside pl-5 space-y-3'>
             <li><strong>Public moderation logs:</strong> every ban, deleted post, and rule change made by moderators is visible in a public log.</li>
             <li><strong>The <em>Council of Equals</em>:</strong> there is no single &ldquo;dictator&rdquo; for a community. The top tier of moderation is shared by a council of up to 3 top mods with equal permissions.</li>
@@ -1991,7 +1991,7 @@ let about_page ?user request =
         <section>
           <h2 class='text-xl font-bold text-gray-900 mb-4'>Our investment strategy (The &ldquo;enshittification&rdquo; dilemma)</h2>
           <p class='mb-3'>Let&rsquo;s address the elephant in the room. Most tech startups raise massive venture capital, which forces them to chase infinite hyper-growth. This inevitably leads to the &ldquo;enshittification&rdquo; of the product: aggressive ads, dark patterns, and algorithm manipulation just to satisfy a $400M valuation.</p>
-          <p class='mb-3'>However, building a genuine Reddit competitor requires serious money for servers, legal compliance, and marketing. We believe funding is not a black-and-white issue. There is a difference between raising $400M from predatory Silicon Valley VCs and raising $2M from EU-aligned funds, angel investors, or european tech grants. A smaller, sensible funding round could allow us to hire a dedicated team and reach break-even profitability gracefully, without ever needing to sell out our users to hit impossible revenue targets.</p>
+          <p class='mb-3'>However, building a real Reddit competitor requires serious money for servers, legal compliance, and marketing. We believe funding is not a black-and-white issue. There is a difference between raising $400M from predatory Silicon Valley VCs and raising $2M from EU-aligned funds, angel investors, or european tech grants. A smaller, sensible funding round could allow us to hire a dedicated team and reach break-even profitability gracefully, without ever needing to sell out our users to hit impossible revenue targets.</p>
           <p>Furthermore, given Earde&rsquo;s explicitly pro-european, privacy-first political stance, we are entirely open to philanthropic funding models. So if you are an EU-aligned philanthropist, give us money! :) Let&rsquo;s build the european internet together. Reach out: <a href='mailto:dami@earde.com' class='text-[#C94C4C] underline hover:text-[#A83A3A]'>dami@earde.com</a>.</p>
         </section>
 
