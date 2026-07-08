@@ -1,0 +1,203 @@
+/* ===========================================================================
+   search.css — focused in-product search layout for Earde.
+
+   Same cool-grey / IBM Plex / sharp-bordered language as the app shell
+   (shell.css), the account pages (account.css) and the community-home
+   (community-home.css), tuned for the knowledge-retrieval surface at /search:
+   a header query box, result tabs (Threads / Communities / Comments / People),
+   and compact result rows. The mono command bar is supplied by layout's `App
+   chrome; everything here lives under .search-shell so it can never leak into
+   the legacy `Site pages, which still style themselves with inline Tailwind.
+   =========================================================================== */
+
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap');
+
+.search-shell {
+  /* cool-grey neutrals + accents, ported from shell.css / account.css */
+  --paper:      oklch(0.948 0.004 250);
+  --panel:      oklch(0.995 0.002 250);
+  --panel-2:    oklch(0.972 0.004 250);
+  --panel-3:    oklch(0.958 0.005 250);
+  --ink:        oklch(0.255 0.012 262);
+  --ink-2:      oklch(0.430 0.011 262);
+  --ink-3:      oklch(0.580 0.009 262);
+  --line:       oklch(0.866 0.006 255);
+  --line-2:     oklch(0.800 0.007 255);
+  --red:        oklch(0.555 0.155 27);
+  --red-strong: oklch(0.490 0.165 27);
+
+  --cs-mono: 'IBM Plex Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace;
+  --cs-sans: 'IBM Plex Sans', system-ui, -apple-system, sans-serif;
+  --cs-nav-h: 54px;   /* height of the .app-topbar command bar (see shell.css) */
+
+  /* shell.css (loaded for .app-topbar) sets html,body{overflow:hidden}, so the document
+     never scrolls. Like an account page, the search surface owns its OWN vertical scroll,
+     sized to the viewport minus the topbar; top-aligned so tall result lists scroll. */
+  box-sizing: border-box;
+  height: calc(100dvh - var(--cs-nav-h));
+  overflow-y: auto;
+  padding: 28px 18px 56px;
+  background-color: var(--paper);
+  /* faint hairline grid — same idiom as the account / community-home body */
+  background-image:
+    linear-gradient(var(--line) 1px, transparent 1px),
+    linear-gradient(90deg, var(--line) 1px, transparent 1px);
+  background-size: 32px 32px;
+  background-position: -1px -1px;
+  font-family: var(--cs-sans);
+  color: var(--ink);
+  letter-spacing: normal;
+}
+.search-shell *,
+.search-shell *::before,
+.search-shell *::after { box-sizing: border-box; }
+
+.search-shell a { color: inherit; text-decoration: none; }
+.search-shell a:hover { color: var(--red); }
+
+/* centered column */
+.search-shell .sr-wrap { width: 100%; max-width: 760px; margin: 0 auto; }
+
+/* --------------------------------------------------------------------------
+   search header (label + query box)
+   -------------------------------------------------------------------------- */
+.search-shell .sr-head { margin: 0 0 18px; }
+.search-shell .sr-label {
+  display: block; font-family: var(--cs-mono); font-size: 13px; font-weight: 600;
+  letter-spacing: 0.02em; text-transform: uppercase; color: var(--ink-3); margin: 0 0 8px;
+}
+.search-shell .sr-inputrow {
+  display: flex; align-items: stretch;
+  border: 1px solid var(--line-2); border-radius: 2px;
+  background: var(--panel); overflow: hidden;
+}
+.search-shell .sr-inputrow:focus-within { border-color: var(--red); }
+.search-shell .sr-sigil {
+  display: grid; place-items: center; padding: 0 12px;
+  font-family: var(--cs-mono); font-size: 15px; color: var(--ink-3);
+  border-right: 1px solid var(--line); background: var(--panel-2);
+}
+.search-shell .sr-input {
+  flex: 1; border: 0; outline: none; background: transparent;
+  font-family: var(--cs-sans); font-size: 16px; color: var(--ink); padding: 11px 12px;
+}
+.search-shell .sr-input::placeholder { color: var(--ink-3); }
+.search-shell .sr-go {
+  border: 0; border-left: 1px solid var(--line);
+  background: var(--panel-3); color: var(--ink-2); cursor: pointer;
+  font-family: var(--cs-mono); font-size: 12.5px; letter-spacing: 0.03em; padding: 0 16px;
+}
+.search-shell .sr-go:hover { background: var(--red); color: #fff; }
+
+/* --------------------------------------------------------------------------
+   result tabs
+   -------------------------------------------------------------------------- */
+.search-shell .sr-tabs {
+  display: flex; gap: 22px; align-items: center; flex-wrap: wrap;
+  border-bottom: 1px solid var(--line); margin: 0 0 16px;
+}
+.search-shell .sr-tab {
+  font-family: var(--cs-mono); font-size: 12.5px; font-weight: 600;
+  letter-spacing: 0.02em; color: var(--ink-3);
+  padding: 0 0 10px; border-bottom: 2px solid transparent; margin-bottom: -1px;
+}
+.search-shell .sr-tab:hover { color: var(--ink); }
+.search-shell .sr-tab.is-active { color: var(--red); border-bottom-color: var(--red); }
+
+/* --------------------------------------------------------------------------
+   result rows (shared compact card)
+   -------------------------------------------------------------------------- */
+.search-shell .sr-results { display: flex; flex-direction: column; gap: 10px; }
+.search-shell .sr-row {
+  display: flex; gap: 14px; align-items: flex-start;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 2px;
+  padding: 13px 15px;
+}
+.search-shell a.sr-row--link:hover { border-color: var(--line-2); color: inherit; }
+.search-shell .sr-row-main { flex: 1; min-width: 0; }
+
+.search-shell .sr-row-title {
+  font-family: var(--cs-sans); font-size: 15.5px; font-weight: 600;
+  line-height: 1.35; color: var(--ink); margin: 0 0 4px; overflow-wrap: anywhere;
+}
+.search-shell .sr-row-title a:hover { color: var(--red); }
+
+.search-shell .sr-row-meta {
+  font-family: var(--cs-mono); font-size: 12px; color: var(--ink-3);
+  line-height: 1.5; margin: 0 0 4px; overflow-wrap: anywhere;
+}
+.search-shell .sr-row-meta .sr-c,
+.search-shell .sr-row-meta .sr-s { color: var(--ink-2); font-weight: 600; }
+.search-shell .sr-row-meta .sr-c:hover,
+.search-shell .sr-row-meta .sr-s:hover { color: var(--red); }
+.search-shell .sr-dot { color: var(--line-2); padding: 0 1px; }
+.search-shell .sr-sep { color: var(--line-2); }
+
+.search-shell .sr-row-excerpt {
+  font-size: 13.5px; color: var(--ink-2); line-height: 1.5; margin: 4px 0 0;
+  overflow-wrap: anywhere;
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden;
+}
+
+/* started-from-chat provenance marker — mirrors the thread page's .th-source accent */
+.search-shell .sr-row-src {
+  font-family: var(--cs-mono); font-size: 12px; color: var(--ink-2);
+  border-left: 2px solid var(--red); padding-left: 8px; margin: 6px 0 2px;
+}
+.search-shell .sr-row-src a { color: var(--red); font-weight: 600; }
+
+.search-shell .sr-row-stats {
+  font-family: var(--cs-mono); font-size: 12px; color: var(--ink-3); margin-top: 6px;
+}
+.search-shell .sr-row-stats .sr-score { color: var(--ink-2); font-weight: 600; }
+.search-shell .sr-row-stats a:hover { color: var(--red); }
+.search-shell .sr-score::before { content: '\2191 '; color: var(--ink-3); }
+
+.search-shell .sr-row-link {
+  display: inline-block; margin-top: 8px;
+  font-family: var(--cs-mono); font-size: 12px; font-weight: 600; color: var(--red);
+}
+
+/* people row avatar */
+.search-shell .sr-avatar {
+  width: 40px; height: 40px; border-radius: 2px; object-fit: cover; flex-shrink: 0;
+  border: 1px solid var(--line);
+}
+.search-shell .sr-avatar--mono {
+  display: grid; place-items: center; background: var(--panel-3);
+  font-family: var(--cs-mono); font-weight: 600; color: var(--ink-2);
+}
+
+/* compact secondary strip for admin/mod actions — must never dominate the row.
+   The buttons/dialogs keep their original (Tailwind) styling; this just isolates and
+   right-aligns them, dims them at rest, and reveals on hover. */
+.search-shell .sr-row-admin {
+  flex-shrink: 0; display: flex; align-items: flex-start; gap: 4px;
+  padding-left: 10px; margin-left: auto;
+  opacity: 0.7; transition: opacity 0.12s ease;
+}
+.search-shell .sr-row:hover .sr-row-admin,
+.search-shell .sr-row-admin:focus-within { opacity: 1; }
+
+/* --------------------------------------------------------------------------
+   empty / prompt / pagination
+   -------------------------------------------------------------------------- */
+.search-shell .sr-empty {
+  background: var(--panel); border: 1px dashed var(--line-2); border-radius: 2px;
+  padding: 36px 20px; text-align: center;
+  font-family: var(--cs-mono); font-size: 13px; color: var(--ink-3);
+}
+.search-shell .sr-empty--prompt { padding: 56px 24px; }
+
+.search-shell .sr-pager {
+  display: flex; justify-content: space-between; align-items: center; gap: 12px;
+  margin-top: 18px;
+}
+.search-shell .sr-pager:empty { display: none; }
+.search-shell .sr-page {
+  font-family: var(--cs-mono); font-size: 12.5px; font-weight: 600; color: var(--ink-2);
+  border: 1px solid var(--line-2); border-radius: 2px; padding: 7px 14px; background: var(--panel);
+}
+.search-shell .sr-page:hover { border-color: var(--red); color: var(--red); }
+/* keep Next pinned right when Prev is absent on page 1 */
+.search-shell .sr-page:only-child { margin-left: auto; }

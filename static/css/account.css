@@ -1,0 +1,370 @@
+/* ===========================================================================
+   account.css — focused in-product account layout for Earde.
+
+   Same cool-grey / IBM Plex / sharp-bordered language as the app shell
+   (shell.css), the auth layout (auth.css), and the creation layout
+   (create.css), but tuned for the personal account pages: profile
+   (/u/:username), settings (/settings), and notifications (/notifications).
+   The mono command bar is supplied by layout's `App chrome; everything here
+   lives under .account-shell so it can never leak into the legacy `Site pages,
+   which still style themselves with inline Tailwind.
+   =========================================================================== */
+
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap');
+
+.account-shell {
+  /* cool-grey neutrals + accents, ported from shell.css / auth.css / create.css */
+  --paper:      oklch(0.948 0.004 250);
+  --panel:      oklch(0.995 0.002 250);
+  --panel-2:    oklch(0.972 0.004 250);
+  --panel-3:    oklch(0.958 0.005 250);
+  --ink:        oklch(0.255 0.012 262);
+  --ink-2:      oklch(0.430 0.011 262);
+  --ink-3:      oklch(0.580 0.009 262);
+  --line:       oklch(0.866 0.006 255);
+  --line-2:     oklch(0.800 0.007 255);
+  --red:        oklch(0.555 0.155 27);
+  --red-strong: oklch(0.490 0.165 27);
+  --ok:         oklch(0.620 0.130 150);
+
+  --cs-mono: 'IBM Plex Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace;
+  --cs-sans: 'IBM Plex Sans', system-ui, -apple-system, sans-serif;
+  --cs-nav-h: 54px;   /* height of the .app-topbar command bar (see shell.css) */
+
+  /* shell.css (loaded for .app-topbar) sets html,body{overflow:hidden}, so the document
+     never scrolls. Like a creation page, an account page owns its OWN vertical scroll,
+     sized to the viewport minus the topbar; top-aligned so tall content scrolls. */
+  box-sizing: border-box;
+  height: calc(100dvh - var(--cs-nav-h));
+  overflow-y: auto;
+  padding: 28px 18px 56px;
+  background-color: var(--paper);
+  /* faint hairline grid — same idiom as the auth / create / community-home body */
+  background-image:
+    linear-gradient(var(--line) 1px, transparent 1px),
+    linear-gradient(90deg, var(--line) 1px, transparent 1px);
+  background-size: 32px 32px;
+  background-position: -1px -1px;
+  font-family: var(--cs-sans);
+  color: var(--ink);
+  letter-spacing: normal;
+}
+.account-shell *,
+.account-shell *::before,
+.account-shell *::after { box-sizing: border-box; }
+
+.account-shell a { color: inherit; text-decoration: none; }
+
+/* centered column */
+.account-wrap { width: 100%; max-width: 720px; margin: 0 auto; }
+.account-wrap--narrow { max-width: 620px; }
+
+/* generic panel + section dividers */
+.account-panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 2px;
+  padding: 24px 24px 26px;
+}
+.account-panel + .account-panel { margin-top: 16px; }
+.account-section { padding-bottom: 22px; margin-bottom: 22px; border-bottom: 1px solid var(--line); }
+.account-section:last-child { padding-bottom: 0; margin-bottom: 0; border-bottom: 0; }
+.account-section-title {
+  font-family: var(--cs-mono); font-size: 14px; font-weight: 600;
+  letter-spacing: -0.01em; color: var(--ink); margin: 0 0 14px;
+}
+.account-section-desc { font-size: 13px; color: var(--ink-2); line-height: 1.5; margin: 0 0 14px; }
+
+/* page heading (settings / notifications) */
+.account-head { margin-bottom: 18px; }
+.account-h1 {
+  font-family: var(--cs-mono); font-size: 21px; font-weight: 700;
+  letter-spacing: -0.01em; color: var(--ink); margin: 0;
+}
+.account-h1 .accent { color: var(--red); }
+
+/* --------------------------------------------------------------------------
+   account nav (cross-links between the owner's own account pages)
+   -------------------------------------------------------------------------- */
+.account-nav {
+  display: flex; align-items: center; gap: 4px; flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+.account-nav-link {
+  font-family: var(--cs-mono); font-size: 12.5px; font-weight: 500;
+  color: var(--ink-2);
+  background: var(--panel); border: 1px solid var(--line); border-radius: 2px;
+  padding: 6px 11px; transition: border-color .12s ease, color .12s ease, background .12s ease;
+}
+.account-nav-link:hover { color: var(--ink); border-color: var(--line-2); }
+.account-nav-link--active {
+  color: #fff; background: var(--red); border-color: var(--red-strong);
+}
+.account-nav-link--active:hover { color: #fff; }
+
+/* --------------------------------------------------------------------------
+   profile header
+   -------------------------------------------------------------------------- */
+.account-prof {
+  display: flex; align-items: flex-start; gap: 18px;
+}
+.account-avatar {
+  width: 76px; height: 76px; flex-shrink: 0;
+  border-radius: 2px; object-fit: cover;
+  border: 1px solid var(--line-2); background: var(--panel-2);
+}
+.account-prof-body { min-width: 0; flex: 1 1 auto; }
+.account-name {
+  font-family: var(--cs-mono); font-size: 22px; font-weight: 700;
+  letter-spacing: -0.01em; color: var(--ink); margin: 0; word-break: break-word;
+}
+.account-stats {
+  display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+  font-size: 13px; color: var(--ink-2); margin-top: 6px;
+}
+.account-stats strong { color: var(--ink); font-weight: 600; }
+
+/* role badges */
+.account-badges { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 8px; }
+.account-badge {
+  font-family: var(--cs-mono); font-size: 10.5px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.04em;
+  padding: 2px 7px; border-radius: 2px; border: 1px solid var(--line-2);
+  color: var(--ink-2); background: var(--panel-2);
+}
+.account-badge--admin { color: var(--red); border-color: var(--red); }
+.account-badge--mod { color: var(--ok); border-color: var(--ok); }
+.account-badge--banned { color: #fff; background: var(--ink); border-color: var(--ink); }
+
+/* bio block */
+.account-bio {
+  margin-top: 16px; padding: 12px 14px;
+  background: var(--panel-2); border: 1px solid var(--line); border-radius: 2px;
+  font-size: 13.5px; line-height: 1.55; color: var(--ink); white-space: pre-wrap;
+}
+
+/* header action buttons (edit profile / admin panel) */
+.account-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+
+/* admin controls block on a profile */
+.account-admin {
+  margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--line);
+}
+.account-admin-title {
+  font-family: var(--cs-mono); font-size: 11.5px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.04em; color: var(--red); margin: 0 0 10px;
+}
+
+/* --------------------------------------------------------------------------
+   profile tabs
+   -------------------------------------------------------------------------- */
+.account-tabs {
+  display: flex; align-items: center; gap: 4px; flex-wrap: wrap;
+  margin: 18px 0 16px;
+  border-bottom: 1px solid var(--line);
+}
+.account-tab {
+  font-family: var(--cs-mono); font-size: 13px; font-weight: 500;
+  color: var(--ink-2);
+  padding: 8px 12px 9px; margin-bottom: -1px;
+  border-bottom: 2px solid transparent;
+  transition: color .12s ease, border-color .12s ease;
+}
+.account-tab:hover { color: var(--ink); }
+.account-tab--active { color: var(--red); border-bottom-color: var(--red); }
+
+/* --------------------------------------------------------------------------
+   forms (settings) — same idiom as create.css
+   -------------------------------------------------------------------------- */
+.account-form { display: flex; flex-direction: column; gap: 16px; }
+.account-field { display: flex; flex-direction: column; gap: 6px; }
+.account-label {
+  font-family: var(--cs-mono); font-size: 11.5px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.04em; color: var(--ink-3);
+}
+.account-label-opt { font-weight: 400; text-transform: none; letter-spacing: 0; color: var(--ink-3); }
+
+.account-input,
+.account-textarea {
+  width: 100%;
+  font-family: var(--cs-sans); font-size: 14px; color: var(--ink);
+  background: var(--panel-2);
+  border: 1px solid var(--line-2); border-radius: 2px;
+  padding: 9px 11px;
+  transition: border-color .12s ease, background .12s ease;
+}
+.account-textarea { resize: vertical; min-height: 84px; line-height: 1.5; }
+.account-input::placeholder,
+.account-textarea::placeholder { color: var(--ink-3); }
+.account-input:focus,
+.account-textarea:focus { outline: none; border-color: var(--red); background: var(--panel); }
+
+.account-file {
+  width: 100%; font-size: 13px; color: var(--ink-2);
+  background: var(--panel-2);
+  border: 1px solid var(--line-2); border-radius: 2px;
+  padding: 8px 10px;
+}
+.account-file::file-selector-button {
+  font-family: var(--cs-mono); font-size: 12px; font-weight: 600;
+  color: var(--ink); background: var(--panel-3);
+  border: 1px solid var(--line-2); border-radius: 2px;
+  padding: 6px 10px; margin-right: 12px; cursor: pointer;
+}
+.account-file::file-selector-button:hover { border-color: var(--ink-3); }
+
+/* buttons */
+.account-btn {
+  align-self: flex-start;
+  font-family: var(--cs-mono); font-size: 13.5px; font-weight: 600;
+  color: #fff; background: var(--red);
+  border: 1px solid var(--red-strong); border-radius: 2px;
+  padding: 9px 16px; cursor: pointer; text-decoration: none;
+  display: inline-flex; align-items: center; gap: 7px;
+  transition: background .12s ease, border-color .12s ease, color .12s ease;
+}
+.account-btn:hover { background: var(--red-strong); }
+.account-btn--secondary {
+  color: var(--ink); background: var(--panel-2); border: 1px solid var(--line-2);
+}
+.account-btn--secondary:hover { background: var(--panel-3); border-color: var(--ink-3); }
+.account-btn--danger { background: var(--ink); border-color: var(--ink); }
+.account-btn--danger:hover { background: #000; }
+
+/* danger zone panel */
+.account-danger {
+  background: var(--panel-2);
+  border: 1px solid var(--red);
+  border-radius: 2px;
+  padding: 18px 20px;
+}
+.account-danger .account-section-title { color: var(--red); }
+
+/* --------------------------------------------------------------------------
+   profile thread list — account-scoped rows (the shell's .cs-thread/.ft-* rules
+   only apply under .community-shell, so the profile renders its own compact row).
+   The vote column keeps the optimistic-vote DOM contract: direct children are the
+   upvote <form>, the score <span>, then the optional downvote <form>.
+   -------------------------------------------------------------------------- */
+.account-threads { display: flex; flex-direction: column; gap: 8px; }
+.account-thread {
+  display: flex; align-items: flex-start; gap: 12px;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 2px;
+  padding: 12px 14px;
+  transition: border-color .12s ease, background .12s ease;
+}
+.account-thread:hover { border-color: var(--line-2); background: var(--panel-2); }
+.account-thread-vote {
+  display: flex; flex-direction: column; align-items: center;
+  width: 30px; flex-shrink: 0; padding-top: 1px;
+}
+.account-thread-vote form { margin: 0; padding: 0; display: flex; }
+.account-thread-vote button,
+.account-thread-vote a {
+  background: none; border: 0; padding: 0; cursor: pointer; line-height: 1;
+}
+.account-thread-score {
+  font-family: var(--cs-mono); font-weight: 600; font-size: 13px;
+  color: var(--ink); margin: 2px 0;
+}
+.account-thread-main { flex: 1 1 auto; min-width: 0; }
+.account-thread-ctx { font-family: var(--cs-mono); font-size: 11.5px; color: var(--ink-3); margin-bottom: 3px; }
+.account-thread-ctx .sec { color: var(--red); font-weight: 700; }
+.account-thread-ctx a { color: var(--ink-2); }
+.account-thread-ctx a:hover { color: var(--red); }
+.account-thread-ctx .dot { color: var(--ink-3); margin: 0 3px; }
+.account-thread-title { font-weight: 600; font-size: 15px; line-height: 1.35; }
+.account-thread-title a { color: var(--ink); }
+.account-thread-title a:hover { color: var(--red); }
+.account-thread-preview {
+  font-size: 13px; color: var(--ink-2); line-height: 1.45; margin-top: 3px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.account-thread-meta {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 10px;
+  font-size: 12px; color: var(--ink-3); margin-top: 6px;
+}
+.account-thread-meta a { color: var(--ink-3); }
+.account-thread-meta a:hover { color: var(--red); }
+.account-thread-domain {
+  font-family: var(--cs-mono); font-size: 11px; color: var(--ink-3);
+  background: var(--panel-3); border: 1px solid var(--line); border-radius: 2px;
+  padding: 1px 6px;
+}
+
+/* --------------------------------------------------------------------------
+   profile comments tab
+   -------------------------------------------------------------------------- */
+.account-comment {
+  background: var(--panel); border: 1px solid var(--line); border-radius: 2px;
+  padding: 14px 16px; margin-bottom: 10px;
+}
+.account-comment-meta {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  font-size: 12px; color: var(--ink-3); margin-bottom: 6px;
+}
+.account-comment-meta .dot { color: var(--line-2); }
+.account-comment-body { font-size: 13.5px; line-height: 1.55; color: var(--ink); }
+.account-comment-link {
+  display: inline-block; margin-top: 8px;
+  font-family: var(--cs-mono); font-size: 12px; color: var(--red);
+}
+.account-comment-link:hover { text-decoration: underline; }
+
+/* --------------------------------------------------------------------------
+   profile communities tab
+   -------------------------------------------------------------------------- */
+.account-comm-grid {
+  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px;
+}
+.account-comm-card {
+  display: block;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 2px;
+  padding: 14px 16px;
+  transition: border-color .12s ease, background .12s ease;
+}
+.account-comm-card:hover { border-color: var(--red); background: var(--panel-2); }
+.account-comm-name { font-size: 14.5px; font-weight: 600; color: var(--ink); }
+.account-comm-slug { font-family: var(--cs-mono); font-size: 12px; color: var(--ink-3); margin-top: 1px; }
+.account-comm-stat { font-size: 13px; color: var(--ink-2); margin-top: 8px; }
+.account-comm-stat strong { color: var(--ink); font-weight: 600; }
+.account-comm-sub { font-size: 12px; color: var(--ink-3); margin-top: 2px; }
+
+/* --------------------------------------------------------------------------
+   notifications list
+   -------------------------------------------------------------------------- */
+.account-notifs { display: flex; flex-direction: column; gap: 8px; }
+.account-notif {
+  display: flex; align-items: flex-start; gap: 12px;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 2px;
+  padding: 13px 15px;
+  transition: border-color .12s ease, background .12s ease;
+}
+a.account-notif:hover { border-color: var(--line-2); background: var(--panel-2); }
+.account-notif--unread {
+  border-left: 3px solid var(--red);
+  background: var(--panel-2);
+}
+.account-notif-icon {
+  font-size: 18px; line-height: 1.3; flex-shrink: 0; color: var(--ink-2);
+}
+.account-notif-body { min-width: 0; flex: 1 1 auto; }
+.account-notif-msg { font-size: 13.5px; line-height: 1.5; color: var(--ink); }
+.account-notif-time { font-size: 11.5px; color: var(--ink-3); margin-top: 3px; }
+
+/* empty state */
+.account-empty {
+  text-align: center; padding: 40px 20px;
+  font-size: 13.5px; color: var(--ink-3);
+  background: var(--panel); border: 1px dashed var(--line-2); border-radius: 2px;
+}
+
+/* --------------------------------------------------------------------------
+   responsive
+   -------------------------------------------------------------------------- */
+@media (max-width: 620px) {
+  .account-comm-grid { grid-template-columns: 1fr; }
+  .account-prof { gap: 14px; }
+  .account-avatar { width: 60px; height: 60px; }
+  .account-name { font-size: 19px; }
+}

@@ -1,0 +1,92 @@
+/* ==========================================================================
+   EARDE — Desktop-only gate.
+   MVP is desktop-first: instead of making the multi-pane app shell responsive,
+   a phone-width viewport is shown a centered "open on desktop" panel. Pure CSS,
+   no JS, no user-agent detection — the gate is just SSR HTML that this stylesheet
+   hides above the breakpoint and reveals below it. Loaded only on `App surfaces
+   (Components.layout), so these rules never reach Site/auth pages.
+   Cool-grey / IBM Plex idiom, matching the rest of the app shell.
+   ========================================================================== */
+
+/* Desktop / tablet-wide: the panel does not exist visually. No change to any page. */
+.mobile-gate { display: none; }
+
+/* Phone-width: suppress the entire app (command bar + main content) and float the gate
+   over the viewport. A fixed overlay sidesteps the shell's own overflow/grid model, so
+   there is no broken sidebar and no horizontal-scroll mess regardless of which `App
+   surface (feed, channel, search, settings, …) rendered underneath. */
+@media (max-width: 800px) {
+  /* Hide the app chrome. mobile-gate.css loads only on `App pages, so targeting the
+     bare <header.app-topbar> and <main> can't affect Site/auth layouts. */
+  body > header.app-topbar,
+  body > main { display: none !important; }
+
+  .mobile-gate {
+    /* cool-grey neutrals (subset ported from shell.css; tokens there are scoped to
+       .community-shell/.app-topbar, so they're redeclared on the local container). */
+    --mg-paper:   oklch(0.948 0.004 250);
+    --mg-panel:   oklch(0.995 0.002 250);
+    --mg-panel-3: oklch(0.958 0.005 250);
+    --mg-ink:     oklch(0.255 0.012 262);
+    --mg-ink-2:   oklch(0.430 0.011 262);
+    --mg-ink-3:   oklch(0.580 0.009 262);
+    --mg-line-2:  oklch(0.800 0.007 255);
+    --mg-frame:   oklch(0.300 0.012 262);
+    --mg-red:     oklch(0.555 0.155 27);
+    --mg-mono: 'IBM Plex Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace;
+    --mg-sans: 'IBM Plex Sans', system-ui, -apple-system, sans-serif;
+
+    position: fixed; inset: 0; z-index: 9999;
+    display: flex; align-items: center; justify-content: center;
+    /* The body may be overflow:hidden (shell pages); let the gate itself scroll so the
+       panel is never clipped on a very short viewport. */
+    overflow-y: auto;
+    padding: 24px;
+    background: var(--mg-paper);
+    font-family: var(--mg-sans);
+    color: var(--mg-ink);
+    -webkit-text-size-adjust: 100%;
+  }
+
+  .mobile-gate-card {
+    width: 100%; max-width: 360px;
+    background: var(--mg-panel);
+    border: 1px solid var(--mg-line-2);
+    border-radius: 4px;
+    box-shadow: 0 6px 24px oklch(0.30 0.01 262 / 0.12);
+    padding: 28px 24px;
+    text-align: center;
+  }
+
+  /* Brand mark mirrors the app command bar's image logo pair. */
+  .mobile-gate-brand {
+    display: inline-flex; align-items: center; gap: 9px; margin-bottom: 22px; min-width: 0;
+  }
+  .mobile-gate-logo-mark {
+    display: block;
+    height: 36px;
+    width: 36px;
+    object-fit: contain;
+    flex: 0 0 auto;
+  }
+  .mobile-gate-logo-wordmark {
+    display: block;
+    height: 29px;
+    width: auto;
+    max-width: 136px;
+    object-fit: contain;
+    flex: 0 1 auto;
+  }
+
+  .mobile-gate-title {
+    font-family: var(--mg-mono); font-weight: 700; font-size: 18px;
+    color: var(--mg-ink); margin: 0 0 10px;
+  }
+  .mobile-gate-body {
+    font-size: 14px; line-height: 1.6; color: var(--mg-ink-2); margin: 0;
+  }
+  .mobile-gate-note {
+    font-family: var(--mg-mono); font-size: 11.5px; color: var(--mg-ink-3);
+    margin: 16px 0 0; padding-top: 14px; border-top: 1px solid var(--mg-panel-3);
+  }
+}

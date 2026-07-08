@@ -1,0 +1,8 @@
+(executable
+ (public_name earde_server)
+ (name main)
+ (libraries earde dream dream-pure uri lwt.unix caqti-lwt.unix caqti-driver-postgresql)
+ (link_flags
+  (:standard -cclib -largon2))
+ (preprocess
+  (pps lwt_ppx)))

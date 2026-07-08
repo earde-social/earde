@@ -1,0 +1,334 @@
+/* ===========================================================================
+   community-manage.css — focused cool-grey "operator console" for one
+   community's private management surfaces in Earde.
+
+   Shared by /c/:slug/settings, /c/:slug/manage-mods, and /c/:slug/modlog.
+   Same cool-grey / IBM Plex / sharp-bordered language as the app shell
+   (shell.css), auth.css, create.css, account.css, and admin.css. The mono
+   command bar is supplied by layout's `App chrome; everything here lives under
+   .cm-shell so it can never leak into the legacy `Site pages that still style
+   themselves with inline Tailwind.
+
+   Tokens are ported verbatim from admin.css / account.css so the management
+   surfaces read as one console. Destructive controls (section delete, ban,
+   mod remove) get an explicit .cm-danger / .cm-btn--danger treatment, kept
+   visually apart from read-only and edit panels.
+   =========================================================================== */
+
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap');
+
+.cm-shell {
+  --paper:      oklch(0.948 0.004 250);
+  --panel:      oklch(0.995 0.002 250);
+  --panel-2:    oklch(0.972 0.004 250);
+  --panel-3:    oklch(0.958 0.005 250);
+  --ink:        oklch(0.255 0.012 262);
+  --ink-2:      oklch(0.430 0.011 262);
+  --ink-3:      oklch(0.580 0.009 262);
+  --line:       oklch(0.866 0.006 255);
+  --line-2:     oklch(0.800 0.007 255);
+  --red:        oklch(0.555 0.155 27);
+  --red-strong: oklch(0.490 0.165 27);
+  --red-soft:   oklch(0.555 0.155 27 / 0.10);
+  --ok:         oklch(0.620 0.130 150);
+  --ok-strong:  oklch(0.540 0.130 150);
+  --warn:       oklch(0.680 0.140 70);
+  --teal:       oklch(0.640 0.090 220);
+
+  --cs-mono: 'IBM Plex Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace;
+  --cs-sans: 'IBM Plex Sans', system-ui, -apple-system, sans-serif;
+  --cs-nav-h: 54px;   /* height of the .app-topbar command bar (see shell.css) */
+
+  /* shell.css (loaded for .app-topbar) sets html,body{overflow:hidden}; this
+     console owns its OWN vertical scroll, sized to the viewport minus topbar. */
+  box-sizing: border-box;
+  height: calc(100dvh - var(--cs-nav-h));
+  overflow-y: auto;
+  padding: 28px 18px 56px;
+  background-color: var(--paper);
+  background-image:
+    linear-gradient(var(--line) 1px, transparent 1px),
+    linear-gradient(90deg, var(--line) 1px, transparent 1px);
+  background-size: 32px 32px;
+  background-position: -1px -1px;
+  font-family: var(--cs-sans);
+  color: var(--ink);
+  letter-spacing: normal;
+}
+.cm-shell *,
+.cm-shell *::before,
+.cm-shell *::after { box-sizing: border-box; }
+.cm-shell a { color: inherit; text-decoration: none; }
+
+/* centered column */
+.cm-wrap { width: 100%; max-width: 820px; margin: 0 auto; }
+
+/* --------------------------------------------------------------------------
+   page heading + cross-surface nav
+   -------------------------------------------------------------------------- */
+.cm-head {
+  display: flex; align-items: flex-end; justify-content: space-between;
+  gap: 16px; margin-bottom: 6px; flex-wrap: wrap;
+}
+.cm-h1 {
+  font-family: var(--cs-mono); font-size: 21px; font-weight: 700;
+  letter-spacing: -0.01em; color: var(--ink); margin: 0;
+}
+.cm-h1 .accent { color: var(--red); }
+.cm-back {
+  font-family: var(--cs-mono); font-size: 12.5px; font-weight: 500;
+  color: var(--ink-2);
+  background: var(--panel); border: 1px solid var(--line); border-radius: 2px;
+  padding: 6px 11px; transition: border-color .12s ease, color .12s ease;
+}
+.cm-back:hover { color: var(--ink); border-color: var(--line-2); }
+
+/* nav link row to the sibling management routes */
+.cm-nav {
+  display: flex; flex-wrap: wrap; gap: 6px;
+  margin: 14px 0 20px;
+}
+.cm-nav-link {
+  font-family: var(--cs-mono); font-size: 12px; font-weight: 500;
+  color: var(--ink-2);
+  background: var(--panel); border: 1px solid var(--line); border-radius: 2px;
+  padding: 6px 11px; transition: border-color .12s ease, color .12s ease, background .12s ease;
+}
+.cm-nav-link:hover { color: var(--ink); border-color: var(--line-2); background: var(--panel-2); }
+/* Current status tab in the reports queue — the only stateful nav in the console. */
+.cm-nav-link--active { color: #fff; background: var(--ink); border-color: var(--ink); }
+.cm-nav-link--active:hover { color: #fff; background: var(--ink); border-color: var(--ink); }
+
+/* Reports queue: compact per-row resolution form (open reports only). Secondary to the
+   row content — a small note field over two inline submit buttons (reusing .cm-btn-sm),
+   no JS, no modal. .cm-report-meta renders resolved-row history on the closed tabs. */
+.cm-report-actions { display: flex; flex-direction: column; gap: 6px; margin: 0; min-width: 150px; }
+.cm-report-note {
+  font-family: var(--cs-mono); font-size: 11px; color: var(--ink); background: var(--panel);
+  border: 1px solid var(--line-2); border-radius: 2px; padding: 4px 6px; width: 100%;
+  resize: vertical; min-height: 32px;
+}
+.cm-report-note:focus { outline: none; border-color: var(--ink-3); }
+.cm-report-btns { display: flex; gap: 6px; flex-wrap: wrap; }
+.cm-report-meta { font-family: var(--cs-mono); font-size: 11px; color: var(--ink-3); line-height: 1.6; }
+
+/* --------------------------------------------------------------------------
+   generic panel
+   -------------------------------------------------------------------------- */
+.cm-panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 2px;
+  padding: 20px 22px 22px;
+}
+.cm-panel + .cm-panel { margin-top: 16px; }
+.cm-panel-title {
+  font-family: var(--cs-mono); font-size: 14px; font-weight: 600;
+  letter-spacing: -0.01em; color: var(--ink); margin: 0 0 4px;
+}
+.cm-panel-desc { font-size: 12.5px; color: var(--ink-2); line-height: 1.5; margin: 0 0 14px; }
+.cm-subhead {
+  font-family: var(--cs-mono); font-size: 11.5px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.04em; color: var(--ink-3);
+  margin: 18px 0 10px;
+}
+.cm-empty { font-size: 13px; color: var(--ink-3); font-style: italic; padding: 6px 0; }
+
+/* --------------------------------------------------------------------------
+   overview stat strip (read-only; ported from admin-stats)
+   -------------------------------------------------------------------------- */
+.cm-stats { display: flex; flex-direction: column; gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: 2px; }
+.cm-stat {
+  display: flex; align-items: center; justify-content: space-between; gap: 14px;
+  background: var(--panel); padding: 10px 14px;
+}
+.cm-stat-label { font-family: var(--cs-mono); font-size: 12.5px; color: var(--ink-2); }
+.cm-stat-val {
+  font-family: var(--cs-mono); font-size: 11.5px; font-weight: 600;
+  letter-spacing: 0.02em; text-transform: uppercase;
+  padding: 3px 9px; border-radius: 2px; border: 1px solid var(--line-2);
+  color: var(--ink-2); background: var(--panel-2); min-width: 34px; text-align: center;
+}
+.cm-stat-val--ok  { color: #fff; background: var(--ok);  border-color: var(--ok); }
+.cm-stat-val--off { color: var(--ink-3); background: var(--panel-3); border-color: var(--line-2); }
+
+/* --------------------------------------------------------------------------
+   forms (profile, sections, ban, add-mod) — same idiom as account.css
+   -------------------------------------------------------------------------- */
+.cm-form { display: flex; flex-direction: column; gap: 16px; }
+.cm-field { display: flex; flex-direction: column; gap: 6px; }
+.cm-label {
+  font-family: var(--cs-mono); font-size: 11.5px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.04em; color: var(--ink-3);
+}
+.cm-input,
+.cm-select,
+.cm-textarea {
+  width: 100%;
+  font-family: var(--cs-sans); font-size: 14px; color: var(--ink);
+  background: var(--panel-2);
+  border: 1px solid var(--line-2); border-radius: 2px;
+  padding: 9px 11px;
+  transition: border-color .12s ease, background .12s ease;
+}
+.cm-textarea { resize: vertical; min-height: 76px; line-height: 1.5; }
+.cm-input::placeholder,
+.cm-textarea::placeholder { color: var(--ink-3); }
+.cm-input:focus,
+.cm-select:focus,
+.cm-textarea:focus { outline: none; border-color: var(--red); background: var(--panel); }
+.cm-select { appearance: none; background-color: var(--panel-2); cursor: pointer; }
+
+.cm-file {
+  width: 100%; font-size: 13px; color: var(--ink-2);
+  background: var(--panel-2);
+  border: 1px solid var(--line-2); border-radius: 2px;
+  padding: 8px 10px;
+}
+.cm-file::file-selector-button {
+  font-family: var(--cs-mono); font-size: 12px; font-weight: 600;
+  color: var(--ink); background: var(--panel-3);
+  border: 1px solid var(--line-2); border-radius: 2px;
+  padding: 6px 10px; margin-right: 12px; cursor: pointer;
+}
+.cm-file::file-selector-button:hover { border-color: var(--ink-3); }
+
+/* two-column row for compact section name + sort */
+.cm-row2 { display: grid; grid-template-columns: 1fr minmax(120px, 0.5fr); gap: 10px; }
+@media (max-width: 520px) { .cm-row2 { grid-template-columns: 1fr; } }
+
+/* inline form (ban / add-mod: text input + button on one line) */
+.cm-inline-form { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.cm-inline-form .cm-input { flex: 1; min-width: 180px; }
+.cm-form-inline { display: inline; margin: 0; padding: 0; }
+
+/* --------------------------------------------------------------------------
+   buttons
+   -------------------------------------------------------------------------- */
+.cm-btn {
+  font-family: var(--cs-mono); font-size: 13.5px; font-weight: 600;
+  color: #fff; background: var(--red);
+  border: 1px solid var(--red-strong); border-radius: 2px;
+  padding: 9px 16px; cursor: pointer; text-decoration: none;
+  display: inline-flex; align-items: center; gap: 7px; align-self: flex-start;
+  transition: background .12s ease, border-color .12s ease, color .12s ease;
+}
+.cm-btn:hover { background: var(--red-strong); }
+.cm-btn--secondary {
+  color: var(--ink); background: var(--panel-2); border: 1px solid var(--line-2);
+}
+.cm-btn--secondary:hover { background: var(--panel-3); border-color: var(--ink-3); }
+
+/* small inline action buttons used in list rows */
+.cm-btn-sm {
+  font-family: var(--cs-mono); font-size: 11px; font-weight: 600; cursor: pointer;
+  color: var(--ink-2); background: var(--panel); border: 1px solid var(--line-2);
+  border-radius: 2px; padding: 4px 10px; text-decoration: none;
+  display: inline-flex; align-items: center;
+  transition: color .12s ease, border-color .12s ease, background .12s ease;
+}
+.cm-btn-sm:hover { color: var(--ink); border-color: var(--ink-3); }
+.cm-btn-sm--danger { color: var(--red-strong); border-color: oklch(0.555 0.155 27 / 0.35); }
+.cm-btn-sm--danger:hover { color: #fff; background: var(--red); border-color: var(--red-strong); }
+.cm-btn-sm--ok { color: var(--ok-strong); border-color: oklch(0.620 0.130 150 / 0.40); }
+.cm-btn-sm--ok:hover { color: #fff; background: var(--ok); border-color: var(--ok); }
+.cm-btn-sm--promote { color: var(--teal); border-color: oklch(0.640 0.090 220 / 0.45); }
+.cm-btn-sm--promote:hover { color: #fff; background: var(--teal); border-color: var(--teal); }
+
+/* --------------------------------------------------------------------------
+   list rows (banned users, moderators, sections)
+   -------------------------------------------------------------------------- */
+.cm-list { display: flex; flex-direction: column; gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: 2px; }
+.cm-list-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  background: var(--panel); padding: 10px 14px;
+}
+.cm-user-link { font-family: var(--cs-mono); font-weight: 600; color: var(--ink); }
+.cm-user-link:hover { color: var(--red); text-decoration: underline; }
+.cm-user-link--muted { color: var(--ink-3); font-weight: 500; }
+.cm-row-actions { display: flex; align-items: center; gap: 8px; }
+
+/* role / status badges (mirror admin badge vocabulary) */
+.cm-badge {
+  display: inline-block; font-family: var(--cs-mono); font-size: 10px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.03em;
+  padding: 1px 6px; border-radius: 2px; border: 1px solid var(--line-2);
+  color: var(--ink-2); background: var(--panel-2); margin-left: 6px;
+}
+.cm-badge--top    { color: #fff; background: var(--teal); border-color: var(--teal); }
+.cm-badge--legacy { color: var(--ink-3); background: var(--panel-3); border-color: var(--line-2); }
+.cm-badge--active   { color: #fff; background: var(--ok); border-color: var(--ok); }
+.cm-badge--archived { color: var(--ink-3); background: var(--panel-3); border-color: var(--line-2); }
+.cm-muted-note { font-family: var(--cs-mono); font-size: 11px; color: var(--ink-3); font-style: italic; }
+
+/* active channel name links to its live view */
+.cm-channel-link:hover { color: var(--red); text-decoration: underline; }
+
+/* --------------------------------------------------------------------------
+   section cards (each section has its own edit form + delete control)
+   -------------------------------------------------------------------------- */
+.cm-sections { display: flex; flex-direction: column; gap: 12px; }
+.cm-section-card {
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 2px;
+  padding: 14px 16px;
+}
+.cm-section-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  margin-bottom: 12px;
+}
+.cm-section-name { font-family: var(--cs-mono); font-weight: 600; color: var(--ink); font-size: 13.5px; }
+.cm-section-slug { font-family: var(--cs-mono); font-size: 11.5px; color: var(--ink-3); margin-left: 8px; }
+.cm-section-add { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--line); }
+
+/* --------------------------------------------------------------------------
+   card link (Members & roles → manage-mods)
+   -------------------------------------------------------------------------- */
+.cm-cardlink {
+  display: flex; align-items: center; justify-content: space-between; gap: 16px;
+  background: var(--panel); border: 1px solid var(--line-2); border-radius: 2px;
+  padding: 16px 18px;
+  transition: border-color .12s ease, background .12s ease;
+}
+.cm-cardlink:hover { border-color: var(--ink-3); background: var(--panel-2); }
+.cm-cardlink-title { font-family: var(--cs-mono); font-weight: 600; color: var(--ink); font-size: 13.5px; }
+.cm-cardlink-desc { font-size: 12.5px; color: var(--ink-2); margin: 3px 0 0; }
+.cm-cardlink-go { font-family: var(--cs-mono); font-size: 18px; color: var(--ink-3); }
+.cm-cardlink:hover .cm-cardlink-go { color: var(--red); }
+
+/* --------------------------------------------------------------------------
+   danger zone (ban panel, destructive groupings)
+   -------------------------------------------------------------------------- */
+.cm-danger { border-color: var(--red); }
+.cm-danger .cm-panel-title { color: var(--red); }
+
+/* --------------------------------------------------------------------------
+   mod log table (read-only audit; ported from admin-table)
+   -------------------------------------------------------------------------- */
+.cm-table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 2px; }
+.cm-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.cm-table thead th {
+  font-family: var(--cs-mono); font-size: 10.5px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.04em; color: var(--ink-3);
+  text-align: left; padding: 8px 12px; background: var(--panel-2);
+  border-bottom: 1px solid var(--line); white-space: nowrap;
+}
+.cm-table tbody td {
+  padding: 9px 12px; border-bottom: 1px solid var(--line);
+  color: var(--ink); vertical-align: middle;
+}
+.cm-table tbody tr:last-child td { border-bottom: 0; }
+.cm-table tbody tr:nth-child(even) td { background: var(--panel-2); }
+.cm-table-when { color: var(--ink-3); white-space: nowrap; font-family: var(--cs-mono); }
+.cm-table-actor { font-family: var(--cs-mono); font-weight: 600; color: var(--ink); }
+.cm-table-actor:hover { color: var(--red); text-decoration: underline; }
+.cm-action-tag {
+  display: inline-block; font-family: var(--cs-mono); font-size: 10.5px; font-weight: 600;
+  padding: 2px 7px; border-radius: 2px;
+  color: var(--ink-2); background: var(--panel-3); border: 1px solid var(--line-2);
+}
+.cm-action-tag--admin { color: var(--red-strong); background: var(--red-soft); border-color: oklch(0.555 0.155 27 / 0.30); }
+.cm-table-target { color: var(--ink-3); font-family: var(--cs-mono); font-size: 11.5px; }
+.cm-table-reason { color: var(--ink-2); }
+.cm-table-empty { padding: 28px 12px !important; text-align: center; color: var(--ink-3); font-style: italic; }

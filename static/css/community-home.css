@@ -1,0 +1,281 @@
+/* ==========================================================================
+   EARDE — Community home (/c/:slug).
+   The overview / entry page for a community. NOT the persistent in-app shell
+   (that is shell.css / .community-shell). Flat, cool-grey, IBM Plex, rectangular
+   panels — the canonical Earde direction, deliberately scoped under
+   .community-home so it can't touch the rest of the (still-warm) site.
+   Hand-written, no build step — loaded only on this page via layout's head_extra.
+   ========================================================================== */
+
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap');
+
+/* --------------------------------------------------------------------------
+   ROOT — tokens declared on the page root (not :root) so they stay contained.
+   Cool-grey subset ported from the prototype / shell.css.
+   -------------------------------------------------------------------------- */
+.community-home {
+  --panel:   oklch(0.995 0.002 250);
+  --panel-2: oklch(0.972 0.004 250);
+  --panel-3: oklch(0.958 0.005 250);
+  --paper:   oklch(0.948 0.004 250);
+  --ink:     oklch(0.255 0.012 262);
+  --ink-2:   oklch(0.430 0.011 262);
+  --ink-3:   oklch(0.580 0.009 262);
+  --line:    oklch(0.866 0.006 255);
+  --line-2:  oklch(0.800 0.007 255);
+  --frame:   oklch(0.300 0.012 262);
+  --frame-ink: oklch(0.965 0.003 250);
+  --red:        oklch(0.555 0.155 27);
+  --red-strong: oklch(0.490 0.165 27);
+
+  --ch-mono: 'IBM Plex Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace;
+  --ch-sans: 'IBM Plex Sans', system-ui, -apple-system, sans-serif;
+  --cs-nav-h: 54px;   /* height of the .app-topbar command bar (see shell.css) */
+
+  /* Rendered full-bleed: own the whole page as a flex column so the topband (white) and the
+     body (checkered grey) can each paint their own full-width surface, like the prototype. */
+  box-sizing: border-box;
+  height: calc(100dvh - var(--cs-nav-h));
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+  font-family: var(--ch-sans);
+  color: var(--ink);
+}
+/* Internal max-width gutter — horizontal only. Shared by the hero (inside the topband) and
+   the body, so both columns line up. Vertical padding is applied per-section below. */
+.community-home .ch-wrap {
+  max-width: 1320px;
+  margin: 0 auto;
+  width: 100%;
+  padding-left: 24px;
+  padding-right: 24px;
+}
+
+/* --------------------------------------------------------------------------
+   TOP BAND — distinct white community header, full width, strong dark divider.
+   -------------------------------------------------------------------------- */
+.community-home .ch-topband {
+  background: var(--panel);
+  border-bottom: 2px solid var(--frame);
+}
+.community-home .ch-topband .ch-hero { padding-top: 26px; padding-bottom: 26px; }
+
+/* Optional community banner — slim, cropped strip inside the top band, aligned to .ch-wrap.
+   Only emitted when a banner_url is set, so banner-less communities are visually unchanged.
+   Modest fixed height keeps it a sober header accent, never a social-media hero takeover. */
+.community-home .ch-banner { padding-top: 22px; }
+.community-home .ch-banner-img {
+  display: block; width: 100%; height: 150px; object-fit: cover;
+  border: 1px solid var(--line-2); border-radius: 4px;
+}
+@media (max-width: 640px) {
+  .community-home .ch-banner-img { height: 110px; }
+}
+
+/* --------------------------------------------------------------------------
+   BODY — checkered grey surface (faint 32px hairline grid), fills remaining height.
+   -------------------------------------------------------------------------- */
+.community-home .ch-body {
+  flex: 1;
+  background-color: var(--paper);
+  /* very subtle graph-paper texture — two low-opacity 1px gradients, never noisy */
+  background-image:
+    linear-gradient(oklch(0.30 0.01 262 / 0.02) 1px, transparent 1px),
+    linear-gradient(90deg, oklch(0.30 0.01 262 / 0.02) 1px, transparent 1px);
+  background-size: 32px 32px;
+}
+.community-home .ch-body .ch-wrap { padding-top: 28px; padding-bottom: 56px; }
+.community-home a { color: var(--red); text-decoration: none; }
+.community-home a:hover { text-decoration: underline; }
+.community-home .ch-mono { font-family: var(--ch-mono); }
+
+/* --------------------------------------------------------------------------
+   HERO — community identity band.
+   -------------------------------------------------------------------------- */
+.community-home .ch-hero {
+  display: flex; gap: 22px; align-items: flex-start;
+}
+.community-home .ch-crest {
+  width: 64px; height: 64px; flex-shrink: 0;
+  display: grid; place-items: center;
+  font-family: var(--ch-mono); font-weight: 700; font-size: 26px;
+  color: #fff; background: var(--red); border-radius: 3px;
+  overflow: hidden;
+}
+/* Avatar image fills the crest tile, keeping the same square + sharp corners as the letter
+   fallback. object-fit:cover crops to square so non-square uploads don't distort. */
+.community-home .ch-crest-img {
+  width: 100%; height: 100%; object-fit: cover; display: block;
+}
+.community-home .ch-id { flex: 1; min-width: 0; }
+.community-home .ch-titlerow {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+}
+.community-home .ch-name {
+  font-family: var(--ch-mono); font-size: 24px; font-weight: 700; color: var(--ink);
+}
+.community-home .ch-slug {
+  font-family: var(--ch-mono); font-size: 13px; color: var(--ink-3);
+}
+.community-home .ch-desc {
+  color: var(--ink-2); margin-top: 8px; max-width: 64ch; line-height: 1.55;
+}
+.community-home .ch-meta {
+  display: flex; gap: 16px; margin-top: 12px; flex-wrap: wrap;
+}
+.community-home .ch-meta .item {
+  font-family: var(--ch-mono); font-size: 12.5px; color: var(--ink-3);
+}
+.community-home .ch-meta .item b { color: var(--ink); font-weight: 700; }
+.community-home .ch-actions {
+  display: flex; flex-direction: column; gap: 8px; flex-shrink: 0;
+}
+
+/* --------------------------------------------------------------------------
+   BUTTONS — flat, rectangular, mono.
+   -------------------------------------------------------------------------- */
+.community-home .ch-btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+  font-family: var(--ch-mono); font-size: 12.5px; font-weight: 500;
+  padding: 8px 14px; white-space: nowrap; cursor: pointer;
+  border: 1px solid var(--line-2); border-radius: 2px;
+  background: var(--panel-2); color: var(--ink);
+  transition: background 0.12s, border-color 0.12s, color 0.12s;
+}
+.community-home .ch-btn:hover { background: var(--panel-3); border-color: var(--ink-3); text-decoration: none; }
+.community-home .ch-btn.primary { background: var(--red); border-color: var(--red-strong); color: #fff; }
+.community-home .ch-btn.primary:hover { background: var(--red-strong); }
+.community-home .ch-actions form { margin: 0; }
+.community-home .ch-actions .ch-btn { width: 100%; }
+
+/* --------------------------------------------------------------------------
+   LAYOUT GRID — main column + secondary column.
+   -------------------------------------------------------------------------- */
+.community-home .ch-grid {
+  display: grid; grid-template-columns: 1fr 320px; gap: 20px; align-items: start;
+}
+@media (max-width: 960px) {
+  .community-home .ch-grid { grid-template-columns: 1fr; }
+  .community-home .ch-hero { flex-wrap: wrap; }
+}
+
+/* --------------------------------------------------------------------------
+   PANELS — flat rectangular containers (no rounded warm cards, no shadows).
+   -------------------------------------------------------------------------- */
+.community-home .ch-panel {
+  background: var(--panel);
+  border: 1px solid var(--line-2);
+  border-radius: 2px;
+}
+.community-home .ch-panel + .ch-panel { margin-top: 16px; }
+.community-home .ch-panel-head {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 12px;
+  background: var(--panel-2);
+  border-bottom: 1px solid var(--line-2);
+}
+.community-home .ch-label {
+  font-family: var(--ch-mono); font-size: 11px; font-weight: 600;
+  letter-spacing: 0.09em; text-transform: uppercase; color: var(--ink-2);
+}
+.community-home .ch-panel-head .spacer { flex: 1; }
+.community-home .ch-panel-head .ch-label.muted { color: var(--ink-3); }
+.community-home .ch-panel-body { padding: 14px 16px; }
+
+/* Dark/inked panel header — high-contrast rectangular bar (mirrors the prototype's
+   dark "archive highlights" block). Header only; the panel body stays light. */
+.community-home .ch-panel-head.ink {
+  background: var(--frame);
+  border-bottom-color: var(--frame);
+}
+.community-home .ch-panel-head.ink .ch-label { color: var(--frame-ink); }
+.community-home .ch-panel-head.ink .ch-label.muted { color: oklch(0.78 0.01 255); }
+
+/* --------------------------------------------------------------------------
+   FORUM SECTIONS — compact 2-up grid.
+   -------------------------------------------------------------------------- */
+.community-home .ch-secgrid { display: grid; grid-template-columns: 1fr 1fr; }
+@media (max-width: 560px) { .community-home .ch-secgrid { grid-template-columns: 1fr; } }
+.community-home .ch-secgrid > a {
+  padding: 13px 16px;
+  border-bottom: 1px solid var(--line);
+  border-right: 1px solid var(--line);
+  color: var(--ink); display: flex; gap: 10px; align-items: flex-start;
+}
+.community-home .ch-secgrid > a:nth-child(2n) { border-right: 0; }
+.community-home .ch-secgrid > a:hover { background: var(--panel-2); text-decoration: none; }
+.community-home .ch-sec-sigil { font-family: var(--ch-mono); color: var(--red); font-weight: 700; }
+.community-home .ch-sname { font-weight: 600; }
+.community-home .ch-sdesc { color: var(--ink-3); font-size: 12.5px; margin-top: 2px; }
+.community-home .ch-scount {
+  margin-left: auto; font-family: var(--ch-mono); font-size: 11px; color: var(--ink-3);
+}
+.community-home .ch-empty {
+  padding: 20px 16px; color: var(--ink-3); font-size: 13px; text-align: center;
+}
+
+/* --------------------------------------------------------------------------
+   CHANNELS — static rows (no chat route yet, no live/online counts).
+   -------------------------------------------------------------------------- */
+.community-home .ch-chanrow {
+  display: flex; align-items: baseline; gap: 10px;
+  padding: 10px 16px; border-bottom: 1px solid var(--line); font-size: 14px;
+}
+.community-home .ch-chanrow:last-child { border-bottom: 0; }
+a.ch-chanrow { text-decoration: none; transition: background .12s; }
+a.ch-chanrow:hover { background: var(--panel-2); }
+.community-home .ch-hash { font-family: var(--ch-mono); font-weight: 700; color: var(--red); }
+.community-home .ch-cn { font-weight: 600; color: var(--ink); }
+.community-home .ch-ct { color: var(--ink-3); font-size: 13px; }
+.community-home .ch-chan-note {
+  padding: 8px 12px; font-family: var(--ch-mono); font-size: 11px; color: var(--ink-3);
+}
+
+/* --------------------------------------------------------------------------
+   RECENT DISCUSSIONS — compact linear list.
+   -------------------------------------------------------------------------- */
+.community-home .ch-postrow {
+  display: flex; gap: 12px; align-items: baseline;
+  padding: 11px 16px; border-bottom: 1px solid var(--line);
+}
+.community-home .ch-postrow:last-child { border-bottom: 0; }
+.community-home .ch-pscore {
+  font-family: var(--ch-mono); font-size: 12px; font-weight: 700; color: var(--ink-2);
+  flex-shrink: 0; min-width: 34px; text-align: right;
+}
+.community-home .ch-ptitle { font-weight: 600; font-size: 14.5px; line-height: 1.35; }
+.community-home .ch-ptitle a { color: var(--ink); }
+.community-home .ch-ptitle a:hover { color: var(--red); }
+.community-home .ch-pmeta {
+  font-family: var(--ch-mono); font-size: 11px; color: var(--ink-3);
+  margin-top: 4px; display: flex; gap: 10px; flex-wrap: wrap;
+}
+
+/* --------------------------------------------------------------------------
+   SECONDARY COLUMN — info / rules / moderators / mod tools.
+   -------------------------------------------------------------------------- */
+.community-home .ch-info-name { font-family: var(--ch-mono); font-weight: 700; color: var(--ink); }
+.community-home .ch-info-slug {
+  font-family: var(--ch-mono); font-size: 12px; color: var(--red); margin-top: 2px;
+}
+.community-home .ch-info-desc { color: var(--ink-2); font-size: 13.5px; margin-top: 10px; line-height: 1.55; }
+.community-home .ch-rules {
+  margin: 0; padding-left: 18px; font-family: var(--ch-mono);
+  font-size: 12.5px; line-height: 1.9; color: var(--ink-2); white-space: pre-wrap;
+}
+.community-home .ch-mods { list-style: none; margin: 0; padding: 0; }
+.community-home .ch-mods li { padding: 3px 0; font-size: 13.5px; }
+.community-home .ch-mods a { color: var(--ink-2); }
+.community-home .ch-mods a:hover { color: var(--red); }
+.community-home .ch-mods-empty { color: var(--ink-3); font-size: 13px; font-style: italic; }
+
+/* Public moderation-log card — a transparency link to /c/:slug/modlog, not an embedded log. */
+.community-home .ch-modlog-desc {
+  margin: 0 0 10px; font-size: 12.5px; line-height: 1.55; color: var(--ink-2);
+}
+.community-home .ch-modlog-link {
+  display: inline-block;
+  font-family: var(--ch-mono); font-size: 12px; font-weight: 600; color: var(--red);
+}

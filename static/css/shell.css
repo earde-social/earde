@@ -1,0 +1,848 @@
+/* ==========================================================================
+   EARDE — Persistent community shell.
+   Cool-grey, IBM Plex, "Slackware-ish" layout for in-app community pages.
+   This is the canonical Earde visual direction; on this branch every rule is
+   deliberately scoped under .community-shell so it can't touch the rest of the
+   (still-warm) site. Hand-written, no build step — loaded only on shell pages.
+   ========================================================================== */
+
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap');
+
+/* --------------------------------------------------------------------------
+   VIEWPORT LOCK (App chrome only). shell.css loads ONLY on shell pages (via
+   global_shell's head_extra), so these top-level html/body rules can never
+   reach Site pages — no body class threading needed. The body is exactly the
+   viewport and clips any residual overflow, so the document never scrolls and
+   no far-right page scrollbar appears: only the intended inner pane scrolls.
+   -------------------------------------------------------------------------- */
+html, body { height: 100%; overflow: hidden; }
+
+/* Thin, subtle scrollbars for the inner App-shell scroll panes — keeps scrolling
+   fully functional but removes the heavy scrollbar clutter in the middle of the layout. */
+.community-shell .cs-main-body,
+.community-shell .thread-shell-main,
+.community-shell .cs-side-scroll,
+.community-shell .cs-aside {
+  scrollbar-width: thin;
+  scrollbar-color: var(--line-2) transparent;
+}
+.community-shell .cs-main-body::-webkit-scrollbar,
+.community-shell .thread-shell-main::-webkit-scrollbar,
+.community-shell .cs-side-scroll::-webkit-scrollbar,
+.community-shell .cs-aside::-webkit-scrollbar { width: 8px; height: 8px; }
+.community-shell .cs-main-body::-webkit-scrollbar-thumb,
+.community-shell .thread-shell-main::-webkit-scrollbar-thumb,
+.community-shell .cs-side-scroll::-webkit-scrollbar-thumb,
+.community-shell .cs-aside::-webkit-scrollbar-thumb { background: var(--line-2); border-radius: 8px; }
+.community-shell .cs-main-body::-webkit-scrollbar-track,
+.community-shell .thread-shell-main::-webkit-scrollbar-track,
+.community-shell .cs-side-scroll::-webkit-scrollbar-track,
+.community-shell .cs-aside::-webkit-scrollbar-track { background: transparent; }
+
+/* --------------------------------------------------------------------------
+   ROOT — tokens declared on the shell (not :root) so they stay contained,
+   plus the multi-pane grid. Sized to the viewport minus the top command bar.
+   -------------------------------------------------------------------------- */
+.community-shell {
+  /* cool-grey neutrals + accents (subset ported from the prototype) */
+  --paper:   oklch(0.948 0.004 250);
+  --panel:   oklch(0.995 0.002 250);
+  --panel-2: oklch(0.972 0.004 250);
+  --panel-3: oklch(0.958 0.005 250);
+  --ink:     oklch(0.255 0.012 262);
+  --ink-2:   oklch(0.430 0.011 262);
+  --ink-3:   oklch(0.580 0.009 262);
+  --line:    oklch(0.866 0.006 255);
+  --line-2:  oklch(0.800 0.007 255);
+  --frame:   oklch(0.300 0.012 262);
+  --frame-ink: oklch(0.965 0.003 250);
+  --red:     oklch(0.555 0.155 27);
+
+  --cs-mono: 'IBM Plex Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace;
+  --cs-sans: 'IBM Plex Sans', system-ui, -apple-system, sans-serif;
+  --cs-rail-w: 232px;
+  --cs-aside-w: 320px;
+  --cs-nav-h: 54px;   /* height of the .app-topbar command bar — keep in sync with it */
+
+  display: grid;
+  grid-template-columns: 64px var(--cs-rail-w) 1fr;
+  height: calc(100dvh - var(--cs-nav-h));
+  overflow: hidden;
+  font-family: var(--cs-sans);
+  color: var(--ink);
+  background: var(--paper);
+}
+.community-shell.with-aside {
+  grid-template-columns: 64px var(--cs-rail-w) 1fr var(--cs-aside-w);
+}
+.community-shell a { color: var(--red); text-decoration: none; }
+.community-shell a:hover { text-decoration: none; }
+
+/* --------------------------------------------------------------------------
+   APP COMMAND BAR (.app-topbar) — the mono topbar for every shell surface.
+   It is a SIBLING of .community-shell (rendered by layout, outside the grid),
+   so it can't inherit the tokens declared on .community-shell — they're
+   redeclared here. Safe to be unscoped: shell.css loads only on shell pages.
+   Keep min-height in sync with --cs-nav-h (54px) so the grid fits the viewport.
+   -------------------------------------------------------------------------- */
+.app-topbar {
+  --paper:   oklch(0.948 0.004 250);
+  --panel:   oklch(0.995 0.002 250);
+  --panel-2: oklch(0.972 0.004 250);
+  --panel-3: oklch(0.958 0.005 250);
+  --ink:     oklch(0.255 0.012 262);
+  --ink-2:   oklch(0.430 0.011 262);
+  --ink-3:   oklch(0.580 0.009 262);
+  --line:    oklch(0.866 0.006 255);
+  --line-2:  oklch(0.800 0.007 255);
+  --frame:   oklch(0.300 0.012 262);
+  --red:     oklch(0.555 0.155 27);
+  --cs-mono: 'IBM Plex Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace;
+  --cs-sans: 'IBM Plex Sans', system-ui, -apple-system, sans-serif;
+
+  flex-shrink: 0;
+  position: sticky; top: 0; z-index: 50;
+  background: var(--panel);
+  border-bottom: 1px solid var(--frame);
+  box-shadow: 0 1px 0 oklch(0.30 0.01 262 / 0.06);
+  font-family: var(--cs-sans);
+}
+.app-topbar-inner {
+  display: grid; align-items: center; gap: 18px;
+  grid-template-columns: minmax(150px, 1fr) minmax(260px, 460px) minmax(150px, 1fr);
+  width: 100%; padding: 0 18px;
+  /* -1px so the inner content + the 1px border-bottom = exactly --cs-nav-h. Otherwise the bar is
+     55px while the shell reserves only calc(100dvh - 54px) → 1px of document overflow. */
+  min-height: calc(var(--cs-nav-h, 54px) - 1px);
+}
+.app-topbar a { text-decoration: none; }
+
+/* brand: mark + wordmark logo pair, -> /feed */
+.app-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  justify-self: start;
+  min-width: 0;
+  flex-shrink: 0;
+  color: var(--ink);
+}
+.app-brand:hover { text-decoration: none; }
+.app-logo-mark {
+  display: block;
+  height: 30px;
+  width: 30px;
+  object-fit: contain;
+  flex: 0 0 auto;
+}
+.app-logo-wordmark {
+  display: block;
+  height: 24px;
+  width: auto;
+  max-width: 120px;
+  object-fit: contain;
+  flex: 0 1 auto;
+}
+
+/* nav: single Feed item (active by path) */
+.app-nav { display: flex; align-items: center; gap: 2px; }
+.app-nav a {
+  font-family: var(--cs-mono); font-size: 12.5px; font-weight: 500; letter-spacing: 0.02em;
+  color: var(--ink-2); padding: 7px 11px;
+  border: 1px solid transparent; border-radius: 2px;
+}
+.app-nav a:hover { color: var(--ink); background: var(--panel-2); }
+.app-nav a.active { color: var(--ink); border-color: var(--line-2); background: var(--panel-2); }
+
+/* grep-like search — same /search?q= route, tool-styled */
+.app-search {
+  width: 100%; justify-self: center;
+  display: flex; align-items: stretch;
+  border: 1px solid var(--line-2); border-radius: 2px;
+  background: var(--panel-2); overflow: hidden;
+}
+.app-search .app-sigil {
+  font-family: var(--cs-mono); color: var(--ink-3);
+  display: grid; place-items: center; padding: 0 10px;
+  border-right: 1px solid var(--line); font-size: 13px;
+}
+.app-search input {
+  flex: 1; border: 0; background: transparent; outline: none;
+  font-family: var(--cs-sans); font-size: 13.5px; color: var(--ink); padding: 7px 10px;
+}
+.app-search input::placeholder { color: var(--ink-3); }
+.app-search button {
+  border: 0; border-left: 1px solid var(--line);
+  background: var(--panel-3); color: var(--ink-2);
+  font-family: var(--cs-mono); font-size: 12px; padding: 0 12px; cursor: pointer;
+}
+.app-search button:hover { background: var(--red); color: #fff; }
+.app-search:focus-within { border-color: var(--red); }
+
+/* right cluster */
+.app-right { display: flex; align-items: center; gap: 10px; justify-self: end; min-width: 0; flex-shrink: 0; }
+
+/* logged-out auth */
+.app-login {
+  font-family: var(--cs-mono); font-size: 12.5px; color: var(--ink-2);
+  padding: 6px 8px; border-radius: 2px;
+}
+.app-login:hover { color: var(--ink); }
+.app-cta {
+  font-family: var(--cs-mono); font-size: 12.5px; font-weight: 600;
+  background: var(--red); color: #fff; border: 1px solid var(--red);
+  padding: 6px 14px; border-radius: 2px;
+}
+.app-cta:hover { filter: brightness(1.06); }
+
+/* compact "+ Start community" → /new-community */
+.app-start {
+  font-family: var(--cs-mono); font-size: 11.5px; font-weight: 500;
+  color: var(--ink-2); background: var(--panel-2);
+  border: 1px solid var(--line-2); border-radius: 2px;
+  padding: 6px 10px; white-space: nowrap;
+}
+.app-start:hover { color: var(--ink); background: var(--panel-3); border-color: var(--ink-3); }
+
+/* notifications — mono text glyph (no colorful emoji); badge keeps id='notif-badge', and
+   .app-badge sets no display so the layout JS's toggle of the Tailwind .hidden class still
+   drives visibility. */
+.app-bell {
+  position: relative;
+  display: flex; align-items: center;
+  color: var(--ink-2); padding: 6px 8px; border: 1px solid transparent; border-radius: 2px;
+}
+.app-bell:hover { color: var(--ink); background: var(--panel-2); }
+.app-bell .app-icon { display: block; width: 15px; height: 15px; stroke: currentColor; }
+.app-bell .app-badge {
+  position: absolute; top: -3px; right: -5px;
+  background: var(--red); color: #fff;
+  font-family: var(--cs-mono); font-size: 10px; font-weight: 700; line-height: 1;
+  padding: 1px 4px; border-radius: 8px;
+}
+
+/* user menu — pure-CSS <details>, modeled on .cs-row-mod */
+.app-user { position: relative; }
+.app-user > summary {
+  list-style: none; cursor: pointer;
+  display: flex; align-items: center; gap: 7px;
+  padding: 3px 6px; border: 1px solid transparent; border-radius: 2px;
+}
+.app-user > summary::-webkit-details-marker { display: none; }
+.app-user > summary:hover { background: var(--panel-2); }
+.app-user[open] > summary { background: var(--panel-3); border-color: var(--line-2); }
+.app-avatar {
+  width: 24px; height: 24px; flex-shrink: 0;
+  display: grid; place-items: center;
+  font-family: var(--cs-mono); font-weight: 700; font-size: 11px;
+  color: var(--ink); background: var(--panel-3);
+  border: 1px solid var(--line-2); border-radius: 2px;
+}
+.app-uname { font-family: var(--cs-mono); font-size: 12.5px; color: var(--ink-2); }
+.app-user-menu {
+  position: absolute; right: 0; top: calc(100% + 6px); z-index: 60;
+  min-width: 184px;
+  background: var(--panel); border: 1px solid var(--line-2); border-radius: 2px;
+  box-shadow: 0 6px 20px oklch(0.30 0.01 262 / 0.16);
+  padding: 4px 0;
+}
+.app-user-menu a,
+.app-user-menu button {
+  display: block; width: 100%; text-align: left; box-sizing: border-box;
+  font-family: var(--cs-mono); font-size: 12px; color: var(--ink-2);
+  padding: 7px 14px; background: none; border: 0; cursor: pointer;
+}
+.app-user-menu a:hover,
+.app-user-menu button:hover { background: var(--panel-2); color: var(--ink); }
+.app-user-menu .app-logout { margin: 4px 0 0; padding: 0; border-top: 1px solid var(--line); }
+
+@media (max-width: 980px) {
+  .app-topbar-inner { grid-template-columns: auto minmax(180px, 1fr) auto; }
+}
+@media (max-width: 820px) {
+  .app-topbar-inner { display: flex; }
+  .app-search, .app-uname, .app-start { display: none; }
+}
+
+/* --------------------------------------------------------------------------
+   COL 1 — community / server rail
+   -------------------------------------------------------------------------- */
+.community-shell .cs-rail {
+  background: var(--frame);
+  border-right: 1px solid var(--frame);
+  display: flex; flex-direction: column; align-items: center;
+  gap: 8px; padding: 12px 0; overflow-y: auto;
+}
+.community-shell .cs-rail-item {
+  width: 42px; height: 42px; flex-shrink: 0;
+  display: grid; place-items: center;
+  font-family: var(--cs-mono); font-weight: 700; font-size: 14px;
+  color: oklch(0.85 0.01 255); background: oklch(0.36 0.012 262);
+  border: 1px solid oklch(0.42 0.012 262); border-radius: 3px;
+  position: relative;
+}
+.community-shell .cs-rail-item:hover { background: oklch(0.42 0.012 262); color: #fff; }
+.community-shell .cs-rail-item.active { border-color: var(--red); color: #fff; }
+.community-shell .cs-rail-item.active::before {
+  content: ''; position: absolute; left: -12px; top: 50%; transform: translateY(-50%);
+  width: 3px; height: 26px; background: var(--red); border-radius: 0 2px 2px 0;
+}
+/* Avatar face fills the fixed tile, so an image tile and a glyph tile are the same size (no
+   layout shift). The img rounds its own corners (not overflow:hidden on the item, which would clip
+   the active marker that sits at left:-12px outside the tile). 2px = tile radius minus the border. */
+.community-shell .cs-rail-img {
+  width: 100%; height: 100%; object-fit: cover; display: block; border-radius: 2px;
+}
+
+/* --------------------------------------------------------------------------
+   COL 2 — community sidebar (channel + forum-section lists)
+   -------------------------------------------------------------------------- */
+.community-shell .cs-side {
+  background: var(--panel-2);
+  border-right: 1px solid var(--line-2);
+  display: flex; flex-direction: column; overflow: hidden;
+}
+.community-shell .cs-side-head {
+  padding: 12px 14px; border-bottom: 1px solid var(--line-2); background: var(--panel);
+}
+.community-shell .cs-side-head-link {
+  display: flex; align-items: center; gap: 10px; min-width: 0;
+  color: var(--ink);
+}
+.community-shell .cs-side-head-link:hover .cs-side-name { color: var(--red); }
+/* Small fixed avatar beside the name; min-width:0 lets the text column ellipsize, not the tile. */
+.community-shell .cs-side-avatar {
+  width: 30px; height: 30px; flex-shrink: 0; border-radius: 3px;
+  object-fit: cover; border: 1px solid var(--line-2);
+}
+.community-shell .cs-side-avatar--mono {
+  display: grid; place-items: center; background: var(--panel-3);
+  font-family: var(--cs-mono); font-weight: 700; font-size: 13px; color: var(--ink-2);
+}
+.community-shell .cs-side-head-text { min-width: 0; display: block; }
+.community-shell .cs-side-name {
+  display: block; font-family: var(--cs-mono); font-weight: 700; font-size: 15px; color: var(--ink);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.community-shell .cs-side-slug { display: block; font-size: 11.5px; color: var(--ink-3); margin-top: 2px; }
+.community-shell .cs-side-scroll { flex: 1; overflow-y: auto; padding: 10px 8px; }
+
+.community-shell .cs-group { margin-bottom: 14px; }
+.community-shell .cs-group-label {
+  font-family: var(--cs-mono); font-size: 11px; font-weight: 600;
+  letter-spacing: 0.09em; text-transform: uppercase; color: var(--ink-3);
+  padding: 4px 8px;
+}
+.community-shell .cs-item {
+  display: flex; align-items: center; gap: 8px;
+  padding: 5px 8px; border-radius: 2px;
+  font-size: 14px; color: var(--ink-2);
+  border: 1px solid transparent;
+}
+.community-shell .cs-item:hover { background: var(--panel-3); color: var(--ink); }
+.community-shell .cs-item.active {
+  background: var(--panel); border-color: var(--line-2); color: var(--ink); font-weight: 600;
+}
+.community-shell .cs-item-sigil { font-family: var(--cs-mono); color: var(--ink-3); font-weight: 600; }
+.community-shell .cs-item.active .cs-item-sigil { color: var(--red); }
+.community-shell .cs-item-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.community-shell .cs-item-badge {
+  margin-left: auto; font-family: var(--cs-mono); font-size: 10px; font-weight: 600;
+  background: var(--red); color: #fff; padding: 0 5px; border-radius: 7px;
+  min-width: 16px; text-align: center;
+}
+
+/* --------------------------------------------------------------------------
+   COL 3 — main pane. The shell provides the column; pages fill it. .cs-main-head
+   / .cs-main-body are optional slots a page can use for a sticky header + a
+   scrolling body.
+   -------------------------------------------------------------------------- */
+.community-shell .cs-main {
+  display: flex; flex-direction: column; overflow: hidden; background: var(--panel);
+  /* min-width:0 lets this 1fr grid cell shrink below the intrinsic width of wide children
+     (long <pre>/code in threads), so they scroll inside the pane instead of widening the grid. */
+  min-width: 0;
+}
+.community-shell .cs-main-head {
+  flex-shrink: 0; display: flex; align-items: center; gap: 12px;
+  padding: 10px 16px; border-bottom: 1px solid var(--line-2); background: var(--panel);
+  font-family: var(--cs-mono); font-weight: 700; font-size: 16px; color: var(--ink);
+}
+.community-shell .cs-main-body { flex: 1; overflow-y: auto; padding: 14px 18px; }
+
+/* --------------------------------------------------------------------------
+   COL 4 — optional right pane
+   -------------------------------------------------------------------------- */
+.community-shell .cs-aside {
+  background: var(--panel-2); border-left: 1px solid var(--line-2);
+  display: flex; flex-direction: column; overflow-y: auto;
+  /* min-height:0 so tall rail content scrolls inside the rail instead of growing the grid row
+     past the viewport (grid/flex children default to min-height:auto). */
+  min-height: 0;
+}
+
+/* --------------------------------------------------------------------------
+   RESPONSIVE — drop the aside, then the sidebar, on narrow viewports.
+   -------------------------------------------------------------------------- */
+@media (max-width: 1180px) {
+  .community-shell.with-aside { grid-template-columns: 64px var(--cs-rail-w) 1fr; }
+  .community-shell .cs-aside { display: none; }
+}
+@media (max-width: 820px) {
+  .community-shell,
+  .community-shell.with-aside { grid-template-columns: 56px 1fr; }
+  .community-shell .cs-side { display: none; }
+}
+
+/* --------------------------------------------------------------------------
+   CHAT CHANNEL — message stream + composer filling the main pane. Ported from
+   the prototype's .chat-head/.msg/.composer, renamed cs-* and scoped here.
+   SSR only on this branch: no presence/typing/live styling.
+   -------------------------------------------------------------------------- */
+.community-shell .cs-hash { color: var(--red); }
+.community-shell .cs-ch-topic {
+  font-family: var(--cs-sans); font-weight: 400; font-size: 12.5px; color: var(--ink-3);
+  border-left: 1px solid var(--line-2); padding-left: 12px;
+}
+
+/* The chat body packs rows tighter than the default cs-main-body padding and pins the
+   stream to the bottom when it is shorter than the viewport (newest message visible).
+   margin-top:auto on the first row (not justify-content:flex-end) keeps the top of an
+   overflowing stream scrollable — flex-end clips it in some engines. */
+.community-shell .cs-chat-body {
+  padding: 10px 0; display: flex; flex-direction: column;
+}
+.community-shell .cs-chat-body > :first-child { margin-top: auto; }
+.community-shell .cs-msg {
+  display: flex; gap: 11px; padding: 5px 18px;
+}
+.community-shell .cs-msg:hover { background: var(--panel-2); }
+.community-shell .cs-msg-avatar {
+  width: 30px; height: 30px; flex-shrink: 0;
+  display: grid; place-items: center; border-radius: 3px;
+  font-family: var(--cs-mono); font-weight: 700; font-size: 13px;
+  background: var(--panel-3); color: var(--ink-2); border: 1px solid var(--line);
+}
+.community-shell .cs-msg-body { flex: 1; min-width: 0; }
+.community-shell .cs-msg-meta { display: flex; align-items: baseline; gap: 8px; }
+.community-shell .cs-msg-author { font-weight: 600; font-size: 13.5px; color: var(--ink); }
+.community-shell .cs-msg-time { font-family: var(--cs-mono); font-size: 11px; color: var(--ink-3); }
+.community-shell .cs-msg-time-slot { display: inline-grid; align-items: baseline; position: relative; }
+.community-shell .cs-msg-time-slot .cs-msg-time,
+.community-shell .cs-msg-time-slot .cs-msg-start { grid-area: 1 / 1; }
+.community-shell .cs-msg-time-slot .cs-msg-time { pointer-events: none; }
+.community-shell .cs-msg-time-slot .cs-msg-start { position: relative; z-index: 1; }
+.community-shell .cs-msg-text {
+  font-size: 14.5px; line-height: 1.55; color: var(--ink);
+  white-space: pre-wrap; overflow-wrap: anywhere;
+}
+.community-shell .cs-msg-deleted { font-style: italic; color: var(--ink-3); }
+/* Per-message thread markers shown below message text. */
+.community-shell .cs-msg-actions {
+  display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 10px;
+  margin-top: 3px;
+}
+.community-shell .cs-msg-start,
+.community-shell .cs-msg-thread,
+.community-shell .cs-msg-ref {
+  font-family: var(--cs-mono); font-size: 11px; text-decoration: none;
+  white-space: nowrap; max-width: 260px; overflow: hidden; text-overflow: ellipsis;
+}
+/* Provenance markers are always visible. */
+.community-shell .cs-msg-thread { color: var(--red); }
+.community-shell .cs-msg-thread:hover { text-decoration: underline; }
+.community-shell .cs-msg-ref { color: var(--ink-3); }
+.community-shell .cs-msg-ref:hover { color: var(--ink); text-decoration: underline; }
+.community-shell .cs-msg-refmore { font-family: var(--cs-mono); font-size: 11px; color: var(--ink-3); margin-left: -6px; }
+
+/* "Start thread" replaces the timestamp inside the same reserved slot. */
+.community-shell .cs-msg-start { color: var(--red); opacity: 0; pointer-events: none; cursor: pointer; transition: opacity .12s ease; }
+.community-shell .cs-msg-time-slot .cs-msg-time { transition: opacity .12s ease; }
+.community-shell .cs-msg:hover .cs-msg-time-slot .cs-msg-time,
+.community-shell .cs-msg:focus-within .cs-msg-time-slot .cs-msg-time { opacity: 0; }
+.community-shell .cs-msg:hover .cs-msg-start,
+.community-shell .cs-msg:focus-within .cs-msg-start { opacity: 1; pointer-events: auto; }
+.community-shell .cs-msg-start:hover { text-decoration: underline; }
+
+/* Touch / no-hover devices: keep the actions visible (no hover to reveal them). */
+@media (hover: none) {
+  .community-shell .cs-msg-time-slot .cs-msg-time { opacity: 0; }
+  .community-shell .cs-msg-start { opacity: 1; pointer-events: auto; }
+}
+.community-shell .cs-msg-empty { padding: 24px 18px; color: var(--ink-3); font-size: 14px; }
+
+.community-shell .cs-composer {
+  flex-shrink: 0; border-top: 1px solid var(--line-2); background: var(--panel); padding: 12px 16px;
+}
+.community-shell .cs-composer form { display: flex; gap: 10px; align-items: flex-end; }
+.community-shell .cs-composer textarea {
+  flex: 1; border: 1px solid var(--line-2); border-radius: 2px; background: var(--panel-2);
+  font-family: var(--cs-sans); font-size: 14.5px; color: var(--ink);
+  padding: 9px 12px; min-height: 22px; resize: vertical; outline: none;
+}
+.community-shell .cs-composer textarea:focus { border-color: var(--red); }
+.community-shell .cs-send {
+  flex-shrink: 0; cursor: pointer; border: 1px solid var(--red); border-radius: 2px;
+  background: var(--red); color: #fff; font-family: var(--cs-sans); font-weight: 600;
+  font-size: 14px; padding: 9px 18px;
+}
+.community-shell .cs-send:hover { filter: brightness(1.05); }
+.community-shell .cs-composer-note {
+  margin-top: 6px; font-family: var(--cs-mono); font-size: 11px; color: var(--ink-3);
+}
+/* Anon / non-member prompt reuses the composer frame but lays out inline. */
+.community-shell .cs-composer-prompt {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  font-size: 14px; color: var(--ink-2);
+}
+.community-shell .cs-composer-prompt form { display: inline-flex; }
+
+/* --------------------------------------------------------------------------
+   FORUM SECTION — thread-first feed filling the main pane + section context
+   aside. Ported from the prototype's forum-section view (.forum-head/.ftabs/
+   .fthread/.context-aside), renamed/scoped here. SSR-only; no fabricated data.
+   -------------------------------------------------------------------------- */
+
+/* Header sits outside .cs-main-body so it stays put while the thread list scrolls. */
+.community-shell .forum-head {
+  flex-shrink: 0; border-bottom: 1px solid var(--line-2); background: var(--panel);
+  padding: 12px 22px 0;
+}
+.community-shell .fh-crumb { font-family: var(--cs-mono); font-size: 11.5px; color: var(--ink-3); margin-bottom: 8px; }
+.community-shell .fh-crumb a { color: var(--ink-2); }
+.community-shell .fh-crumb b { color: var(--ink); }
+.community-shell .fh-top { display: flex; align-items: flex-start; gap: 14px; }
+.community-shell .fh-title {
+  font-family: var(--cs-mono); font-weight: 700; font-size: 19px; color: var(--ink);
+  display: flex; align-items: center; gap: 9px;
+}
+.community-shell .fh-title .sec { color: var(--red); }
+.community-shell .fh-desc { color: var(--ink-2); font-size: 13.5px; margin-top: 4px; max-width: 70ch; }
+.community-shell .fh-actions { margin-left: auto; display: flex; gap: 8px; flex-shrink: 0; }
+
+.community-shell .ftabs { display: flex; gap: 2px; margin-top: 14px; }
+.community-shell .ftabs a {
+  font-family: var(--cs-mono); font-size: 12px; padding: 8px 13px;
+  color: var(--ink-3); border-bottom: 2px solid transparent;
+}
+.community-shell .ftabs a:hover { color: var(--ink); }
+.community-shell .ftabs a.active { color: var(--ink); border-bottom-color: var(--red); }
+
+/* Shared button (header + rail actions). */
+.community-shell .btn {
+  display: inline-flex; align-items: center; gap: 5px; cursor: pointer;
+  font-family: var(--cs-sans); font-weight: 600; font-size: 13px; padding: 7px 13px;
+  border: 1px solid var(--line-2); border-radius: 2px; background: var(--panel); color: var(--ink-2);
+}
+.community-shell .btn:hover { background: var(--panel-3); border-color: var(--ink-3); }
+.community-shell .btn.sm { padding: 5px 10px; font-size: 11.5px; }
+.community-shell .btn.primary { background: var(--red); border-color: var(--red); color: #fff; }
+.community-shell .btn.primary:hover { filter: brightness(1.05); }
+.community-shell .btn.block { display: flex; width: 100%; justify-content: center; }
+
+/* Thread list — cs-flush zeroes the .cs-main-body gutter so rows go edge-to-edge. */
+.community-shell .cs-flush { padding: 0; }
+.community-shell .cs-empty { padding: 40px 22px; color: var(--ink-3); font-size: 14px; text-align: center; }
+
+.community-shell .cs-thread {
+  display: flex; gap: 14px; padding: 13px 22px;
+  border-bottom: 1px solid var(--line); position: relative;
+}
+.community-shell .cs-thread:hover { background: var(--panel-2); }
+
+/* Vote control: layout ONLY — colours stay on the buttons (Tailwind) so the optimistic-vote JS
+   keeps winning. Its direct children must remain upvote-form / score <span> / downvote-form. */
+.community-shell .cs-vote {
+  display: flex; flex-direction: column; align-items: center;
+  width: 30px; flex-shrink: 0; padding-top: 1px;
+}
+.community-shell .cs-vote-score { font-family: var(--cs-mono); font-weight: 600; font-size: 13px; color: var(--ink); margin: 2px 0; }
+
+.community-shell .ft-main { flex: 1; min-width: 0; }
+.community-shell .ft-title { font-weight: 600; font-size: 15.5px; line-height: 1.35; }
+.community-shell .ft-title a { color: var(--ink); }
+.community-shell .ft-title a:hover { color: var(--red); }
+.community-shell .ft-preview {
+  font-size: 12.5px; color: var(--ink-3); margin-top: 4px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.community-shell .ft-meta {
+  font-family: var(--cs-mono); font-size: 11px; color: var(--ink-3);
+  margin-top: 7px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+}
+.community-shell .ft-meta a { color: var(--ink-3); }
+.community-shell .ft-meta a:hover { color: var(--red); }
+.community-shell .ft-domain {
+  background: var(--panel-3); border: 1px solid var(--line); border-radius: 2px;
+  padding: 0 6px; color: var(--ink-2) !important;
+}
+
+/* ⋯ moderation menu — SSR <details>; the panel floats so it doesn't reflow the row. */
+.community-shell .cs-row-mod { flex-shrink: 0; position: relative; }
+.community-shell .cs-row-mod > summary {
+  list-style: none; cursor: pointer; color: var(--ink-3); font-size: 16px; line-height: 1;
+  padding: 2px 7px; border: 1px solid transparent; border-radius: 2px;
+}
+.community-shell .cs-row-mod > summary::-webkit-details-marker { display: none; }
+.community-shell .cs-row-mod[open] > summary { background: var(--panel-3); border-color: var(--line-2); color: var(--ink); }
+.community-shell .cs-row-mod-menu {
+  position: absolute; right: 0; top: 28px; z-index: 30;
+  display: flex; flex-direction: column; gap: 6px; align-items: flex-end;
+  background: var(--panel); border: 1px solid var(--line-2); border-radius: 3px;
+  padding: 8px; box-shadow: 0 6px 20px rgba(0,0,0,0.14);
+}
+
+/* Pager. */
+.community-shell .cs-pager {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 16px 22px; border-top: 1px solid var(--line-2); background: var(--panel-2);
+}
+.community-shell .cs-pager-n { font-family: var(--cs-mono); font-size: 12px; color: var(--ink-3); }
+
+/* --------------------------------------------------------------------------
+   COL 4 content — section context blocks inside .cs-aside.
+   -------------------------------------------------------------------------- */
+.community-shell .ca-block { border-bottom: 1px solid var(--line); padding: 14px 16px; }
+.community-shell .ca-label {
+  font-family: var(--cs-mono); font-size: 11px; font-weight: 600; letter-spacing: 0.09em;
+  text-transform: uppercase; color: var(--ink-3); margin-bottom: 10px;
+}
+.community-shell .ca-grid { width: 100%; border-collapse: collapse; font-size: 13px; }
+.community-shell .ca-grid td { padding: 4px 0; color: var(--ink-2); }
+.community-shell .ca-grid td.num { text-align: right; font-family: var(--cs-mono); color: var(--ink); }
+.community-shell .ca-cta { margin-top: 10px; }
+.community-shell .ca-secondary-link { margin-top: 8px; font-size: 12.5px; text-align: center; }
+.community-shell .ca-secondary-link a { color: var(--ink-3); }
+.community-shell .ca-rules { font-size: 12.5px; color: var(--ink-2); white-space: pre-wrap; line-height: 1.6; }
+.community-shell .ca-note { font-size: 12.5px; color: var(--ink-3); line-height: 1.5; margin: 0; }
+.community-shell .member { display: flex; align-items: center; gap: 9px; padding: 4px 0; font-size: 13.5px; color: var(--ink-2); }
+.community-shell .member a { color: var(--ink-2); }
+.community-shell .member .role { margin-left: auto; }
+.community-shell .role {
+  font-family: var(--cs-mono); font-size: 9.5px; font-weight: 700; letter-spacing: 0.06em;
+  padding: 1px 5px; border-radius: 2px;
+}
+.community-shell .role.mod {
+  color: oklch(0.40 0.10 150); background: oklch(0.95 0.03 150); border: 1px solid oklch(0.80 0.07 150);
+}
+
+/* ==========================================================================
+   THREAD VIEW — /c/:slug/t/:id-:slug (Pages.thread_shell_page).
+   Scoped under .community-shell; reuses .btn/.cs-vote/.ca-* from the section view.
+   Vote buttons are sized here but NEVER coloured — the optimistic-vote JS owns colour via
+   Tailwind classes on the buttons, so we leave `color` untouched.
+   Tracks prototype/app-thread.html: a readable DOCUMENT inside the shell, not an app pane.
+   ========================================================================== */
+
+/* --- Viewport-locked app-pane mode (scroll containment) ---
+   The thread page uses the SAME containment model as feed/section/chat: the base .community-shell
+   rule locks the shell to calc(100dvh - --cs-nav-h) with overflow:hidden, so the rail, community
+   sidebar and right rail stay fixed grid cells and the document never scrolls. .cs-main keeps the
+   base overflow:hidden and .thread-shell-main is the ONLY scroll pane — it mirrors .cs-main-body
+   (flex:1 + overflow-y:auto). min-height:0 lets the flex child shrink below its content so the
+   scroll happens inside the pane instead of growing the document and pushing the topbar away. */
+.community-shell .thread-shell-main {
+  flex: 1; min-height: 0; overflow-y: auto;
+  /* Fill the full central column (no max-width cap) so content aligns naturally between the
+     sidebar and the right rail; the 32px gutters supply the breathing room. */
+  padding: 0 32px 96px; width: 100%;
+}
+
+/* --- Topbar: breadcrumb + back-to-section, then the local tab row --- */
+.community-shell .th-topbar { padding-top: 18px; border-bottom: 1px solid var(--line-2); margin-bottom: 24px; }
+.community-shell .th-topbar-row { display: flex; align-items: center; gap: 14px; }
+.community-shell .th-topbar-row .fh-crumb { margin-bottom: 0; flex: 1; min-width: 0; }
+.community-shell .th-back { flex-shrink: 0; }
+.community-shell .th-tabs { display: flex; gap: 2px; margin-top: 14px; }
+.community-shell .th-tab {
+  font-family: var(--cs-mono); font-size: 12px; padding: 8px 13px;
+  color: var(--ink-3); border-bottom: 2px solid transparent;
+}
+.community-shell .th-tab.active { color: var(--ink); border-bottom-color: var(--red); }
+.community-shell .th-tab.is-disabled { opacity: 0.45; cursor: default; }
+
+/* --- Main post: vote column on the left, title/meta/actions/body stacked beside it --- */
+.community-shell .th-head { display: flex; gap: 16px; align-items: flex-start; }
+.community-shell .th-headmain { flex: 1; min-width: 0; }
+.community-shell .th-title {
+  font-family: var(--cs-sans); font-weight: 700; font-size: 24px; line-height: 1.25; color: var(--ink); margin: 1px 0 0;
+}
+.community-shell .th-meta {
+  font-family: var(--cs-mono); font-size: 11.5px; color: var(--ink-3);
+  margin-top: 11px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+}
+.community-shell .th-meta a { color: var(--ink-3); }
+.community-shell .th-meta a:hover { color: var(--red); }
+.community-shell .th-meta .ft-domain {
+  background: var(--panel-3); border: 1px solid var(--line); border-radius: 2px;
+  padding: 0 6px; color: var(--ink-2) !important;
+}
+/* Post mod/owner actions: their own compact left-aligned row under the meta (no far-right float). */
+.community-shell .th-actions { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-top: 12px; }
+
+/* Source attribution for threads started from chat. Compact panel under the meta:
+   the "Started from #channel" line plus the ordered source messages. */
+.community-shell .th-source {
+  margin-top: 16px; border: 1px solid var(--line-2); border-left: 2px solid var(--red);
+  background: var(--panel-2); border-radius: 2px; padding: 12px 14px;
+}
+.community-shell .th-source-head { font-family: var(--cs-mono); font-size: 12.5px; color: var(--ink-2); }
+.community-shell .th-source-head a { color: var(--red); text-decoration: none; }
+.community-shell .th-source-head a:hover { text-decoration: underline; }
+.community-shell .th-source-msg { display: flex; gap: 8px; margin-top: 8px; font-size: 13px; line-height: 1.5; }
+.community-shell .th-source-author { font-family: var(--cs-mono); font-weight: 600; color: var(--ink); flex-shrink: 0; }
+.community-shell .th-source-text { color: var(--ink-2); white-space: pre-wrap; overflow-wrap: anywhere; }
+
+/* Body: post content / image / external link, aligned under the title. */
+.community-shell .th-body {
+  font-size: 15px; line-height: 1.72; color: var(--ink);
+  margin-top: 18px; white-space: pre-wrap; overflow-wrap: anywhere;
+}
+.community-shell .th-img { margin-top: 18px; }
+.community-shell .th-img img {
+  max-width: 100%; max-height: 700px; object-fit: contain;
+  border: 1px solid var(--line-2); border-radius: 3px; background: var(--panel-3);
+}
+.community-shell .th-linkrow { margin-top: 16px; }
+
+/* Vote control: layout only; colour stays on the buttons (Tailwind) for the optimistic-vote JS.
+   Larger in the post head, tighter in comments — both keep the upvote/score/downvote child order. */
+.community-shell .th-head .cs-vote button, .community-shell .th-head .cs-vote a,
+.community-shell .cmt .cs-vote button, .community-shell .cmt .cs-vote a {
+  font-family: var(--cs-mono); font-weight: 700; line-height: 1; cursor: pointer; padding: 1px 2px;
+}
+.community-shell .th-head .cs-vote { width: 34px; padding-top: 2px; }
+.community-shell .th-head .cs-vote button, .community-shell .th-head .cs-vote a { font-size: 16px; }
+.community-shell .th-head .cs-vote-score { font-size: 14px; }
+.community-shell .cmt .cs-vote { width: 22px; }
+.community-shell .cmt .cs-vote button, .community-shell .cmt .cs-vote a { font-size: 13px; }
+.community-shell .cmt .cs-vote-score { font-size: 11.5px; }
+.community-shell .cs-vote form { margin: 0; padding: 0; display: flex; }
+
+/* --- Discussion: divided from the post, with its own header rhythm --- */
+.community-shell .th-discussion { margin-top: 28px; border-top: 1px solid var(--line-2); padding-top: 22px; }
+.community-shell .th-comments-label {
+  font-family: var(--cs-mono); font-size: 12px; color: var(--ink-2);
+  letter-spacing: 0.03em; margin: 0 0 14px;
+}
+
+/* Composer (top-level + inline reply): a framed block with a borderless textarea and a
+   footer action bar, so it reads as a structured input rather than a flat empty box. */
+.community-shell .ct-composer {
+  margin: 0 0 22px; border: 1px solid var(--line-2); border-radius: 3px;
+  background: var(--panel); overflow: hidden;
+}
+.community-shell .ct-composer:focus-within { border-color: var(--ink-3); }
+.community-shell .ct-composer textarea {
+  display: block; width: 100%; box-sizing: border-box; resize: vertical; min-height: 62px;
+  font-family: var(--cs-sans); font-size: 13.5px; line-height: 1.55; color: var(--ink);
+  background: transparent; border: 0; padding: 12px 14px;
+}
+.community-shell .ct-composer textarea:focus { outline: none; }
+.community-shell .ct-composer-actions {
+  display: flex; justify-content: flex-end; align-items: center; gap: 8px;
+  padding: 8px 10px; border-top: 1px solid var(--line); background: var(--panel-2);
+}
+.community-shell .ct-reply { margin: 10px 0 6px; }
+.community-shell .ct-join {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  background: var(--panel-2); border: 1px solid var(--line-2); border-radius: 3px;
+  padding: 13px 15px; margin-bottom: 22px; font-size: 13.5px; color: var(--ink-2);
+}
+.community-shell .ct-join a { color: var(--red); }
+.community-shell .ct-join form.inline { display: inline; margin: 0; }
+
+/* --- Comment rows --- */
+.community-shell .cmt { display: flex; gap: 12px; padding: 13px 0; border-top: 1px solid var(--line); }
+.community-shell .cmt .cbody { flex: 1; min-width: 0; }
+.community-shell .cmeta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12.5px; color: var(--ink-2); }
+.community-shell .ctime { font-family: var(--cs-mono); font-size: 10.5px; color: var(--ink-3); }
+.community-shell .ctext {
+  font-size: 14px; line-height: 1.62; color: var(--ink);
+  margin-top: 5px; white-space: pre-wrap; overflow-wrap: anywhere;
+}
+.community-shell .cactions {
+  display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+  margin-top: 8px; font-family: var(--cs-mono); font-size: 11px; color: var(--ink-3);
+}
+/* Inline action buttons — small mono text; Tailwind Preflight already zeroes border/bg. */
+.community-shell .ct-act, .community-shell .ct-collapse {
+  font-family: var(--cs-mono); font-size: 11px; cursor: pointer; color: var(--ink-3);
+  background: none; padding: 0; line-height: 1;
+}
+.community-shell .ct-collapse { flex-shrink: 0; font-size: 11px; color: var(--ink-3); }
+.community-shell .ct-act:hover, .community-shell .ct-collapse:hover { color: var(--ink); }
+.community-shell .ct-act-danger { color: var(--red); }
+.community-shell .ct-act-mod { color: oklch(0.52 0.12 70); }
+.community-shell .ct-act-admin { color: var(--red); }
+
+/* Nested replies — one light guide line, small fixed indent, capped after depth 3
+   (markup adds .cmt-flat) so deep chains stay readable and never staircase off-screen. */
+.community-shell .cmt-children { margin-left: 4px; border-left: 1px solid var(--line); padding-left: 14px; }
+.community-shell .cmt-children.cmt-flat { margin-left: 0; border-left: 0; padding-left: 0; }
+
+/* OP badge (mirrors .role.mod but in the cyan accent). */
+.community-shell .role.op {
+  color: oklch(0.45 0.07 220); background: oklch(0.95 0.03 220); border: 1px solid oklch(0.82 0.06 220);
+}
+
+/* ==========================================================================
+   GLOBAL FEED (/feed) — reuses the whole .community-shell vocabulary. Feed is
+   global, so it drops the col-2 community sidebar: the grid is rail · main ·
+   aside (3 cols) instead of rail · side · main · aside (4). Everything else
+   (rail tiles, forum-head, ftabs, thread rows, ca-blocks, btn) is inherited.
+   ========================================================================== */
+.community-shell.feed-shell { grid-template-columns: 64px 1fr; }
+.community-shell.feed-shell.with-aside { grid-template-columns: 64px 1fr var(--cs-aside-w); }
+
+/* Centered reading lane. The main column fills the space between rail and aside; the lane keeps
+   the actual feed content to a readable width, centered, so it neither glues to the icon rail
+   nor stretches edge-to-edge. The header band/background stays full width; the lane supplies the
+   horizontal gutter, and header + rows + pager share it so dividers align to the lane. */
+.community-shell.feed-shell .feed-lane {
+  width: 100%; max-width: 1040px; margin: 0 auto;
+  padding-left: 32px; padding-right: 32px; box-sizing: border-box;
+}
+/* Hand the horizontal gutter to .feed-lane so header text and row content align to one column. */
+.community-shell.feed-shell .forum-head { padding-left: 0; padding-right: 0; }
+.community-shell.feed-shell .cs-thread { padding-left: 0; padding-right: 0; }
+.community-shell.feed-shell .cs-pager { padding-left: 0; padding-right: 0; }
+
+/* Rail head/foot tiles: the Feed home glyph and the join/create +. They inherit
+   .cs-rail-item; the + is outlined to read as an action, not a community. */
+.community-shell .cs-rail-home { font-size: 18px; }
+.community-shell .cs-rail-add {
+  background: transparent; border-style: dashed; color: oklch(0.72 0.01 255); font-size: 20px;
+}
+.community-shell .cs-rail-add:hover { background: oklch(0.42 0.012 262); color: #fff; }
+
+/* Per-row origin line — only rendered in the global feed (render_forum_row ~show_context). */
+.community-shell .ft-ctx {
+  font-family: var(--cs-mono); font-size: 11.5px; color: var(--ink-3); margin-bottom: 3px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.community-shell .ft-ctx .sec { color: var(--red); font-weight: 700; }
+.community-shell .ft-ctx a { color: var(--ink-2); }
+.community-shell .ft-ctx a:hover { color: var(--red); }
+.community-shell .ft-ctx-dot { color: var(--ink-3); margin: 0 2px; }
+.community-shell .ft-ctx-c { color: var(--ink-3); }
+
+/* Scope toggle (Following / All) sits above the sort tabs; both reuse .ftabs. */
+.community-shell .fh-scope { margin-top: 12px; margin-bottom: 0; }
+
+/* Following-empty state — title + CTA row, on top of the shared .cs-empty box. */
+.community-shell .feed-empty { text-align: left; max-width: 56ch; margin: 0 auto; }
+.community-shell .feed-empty .fe-title {
+  font-family: var(--cs-mono); font-weight: 700; font-size: 16px; color: var(--ink); margin-bottom: 8px;
+}
+.community-shell .feed-empty p { color: var(--ink-2); font-size: 13.5px; line-height: 1.6; margin: 0 0 16px; }
+.community-shell .feed-empty .fe-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+
+@media (max-width: 1180px) {
+  /* drop the aside — same as the community shell, but feed has no sidebar to keep */
+  .community-shell.feed-shell.with-aside { grid-template-columns: 64px 1fr; }
+}
+@media (max-width: 820px) {
+  .community-shell.feed-shell,
+  .community-shell.feed-shell.with-aside { grid-template-columns: 56px 1fr; }
+}

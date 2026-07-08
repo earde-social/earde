@@ -1,0 +1,96 @@
+# === OCaml / Dune build artefacts ===========================================
+_build/
+*.install
+.merlin
+
+# === opam local switch ======================================================
+_opam/
+.opam-switch/
+
+# === Stray OCaml object files (belt-and-braces; normally inside _build) =====
+*.annot
+*.cmi
+*.cmo
+*.cmx
+*.cmt
+*.cmti
+*.cma
+*.cmxa
+*.cmxs
+*.o
+*.a
+*.so
+*.byte
+*.native
+
+# === Environment / secrets ==================================================
+.env
+.env.*
+*.env
+.envrc
+.direnv/
+!.env.example
+!.env.sample
+!.env.template
+
+# === Credential / key material ==============================================
+*.pem
+*.key
+*.crt
+*.cer
+*.p12
+*.pfx
+*.jks
+*.keystore
+*.gpg
+*.asc
+id_rsa
+id_rsa.pub
+id_ed25519
+id_ed25519.pub
+id_ecdsa
+id_dsa
+.netrc
+.pgpass
+
+secrets/
+secrets.*
+*.secret
+*.secrets
+config.local.*
+local.config.*
+*.local.json
+*.local.toml
+
+# === Database dumps & local DBs =============================================
+*.sql.gz
+*.sql.bz2
+*.dump
+*.bak
+*.sqlite
+*.sqlite3
+*.db
+dump.rdb
+
+# === User uploads & generated assets ========================================
+static/uploads/*
+!static/uploads/.gitkeep
+
+# === Logs ===================================================================
+*.log
+logs/
+
+# === Editor / OS noise ======================================================
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+*.tmp
+.cache/
+
+node_modules/
+.pytest_cache/
+__pycache__/
