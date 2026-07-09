@@ -1,6 +1,6 @@
 # Earde
 
-Earde is a prototype community platform for technical communities. It pairs live
+Earde is a community platform for technical communities. It pairs live
 text chat with durable, structured forum threads and a server-rendered, searchable
 archive, so discussions that matter can be kept and found later instead of scrolling
 away.
