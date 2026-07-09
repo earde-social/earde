@@ -83,21 +83,24 @@
 }
 .cm-back:hover { color: var(--ink); border-color: var(--line-2); }
 
-/* nav link row to the sibling management routes */
+/* reports queue status-filter tabs (Open / Action taken / Dismissed) */
 .cm-nav {
-  display: flex; flex-wrap: wrap; gap: 6px;
+  display: flex; flex-wrap: wrap; gap: 8px;
   margin: 14px 0 20px;
 }
-.cm-nav-link {
+/* Prefixed with .cm-shell so these outrank `.cm-shell a { color: inherit }` (specificity
+   0,1,1) — without the prefix the active tab's white text loses to the inherited dark ink
+   and vanishes on the dark background. min-width/padding keep "Action taken" from squeezing. */
+.cm-shell .cm-nav-link {
   font-family: var(--cs-mono); font-size: 12px; font-weight: 500;
   color: var(--ink-2);
   background: var(--panel); border: 1px solid var(--line); border-radius: 2px;
-  padding: 6px 11px; transition: border-color .12s ease, color .12s ease, background .12s ease;
+  padding: 7px 16px; min-width: 108px; text-align: center;
+  transition: border-color .12s ease, color .12s ease, background .12s ease;
 }
-.cm-nav-link:hover { color: var(--ink); border-color: var(--line-2); background: var(--panel-2); }
-/* Current status tab in the reports queue — the only stateful nav in the console. */
-.cm-nav-link--active { color: #fff; background: var(--ink); border-color: var(--ink); }
-.cm-nav-link--active:hover { color: #fff; background: var(--ink); border-color: var(--ink); }
+.cm-shell .cm-nav-link:hover { color: var(--ink); border-color: var(--line-2); background: var(--panel-2); }
+.cm-shell .cm-nav-link--active { color: #fff; background: var(--ink); border-color: var(--ink); }
+.cm-shell .cm-nav-link--active:hover { color: #fff; background: var(--ink); border-color: var(--ink); }
 
 /* Reports queue: compact per-row resolution form (open reports only). Secondary to the
    row content — a small note field over two inline submit buttons (reusing .cm-btn-sm),
@@ -223,7 +226,7 @@
 .cm-btn-sm {
   font-family: var(--cs-mono); font-size: 11px; font-weight: 600; cursor: pointer;
   color: var(--ink-2); background: var(--panel); border: 1px solid var(--line-2);
-  border-radius: 2px; padding: 4px 10px; text-decoration: none;
+  border-radius: 2px; padding: 4px 10px; text-decoration: none; white-space: nowrap;
   display: inline-flex; align-items: center;
   transition: color .12s ease, border-color .12s ease, background .12s ease;
 }
@@ -332,3 +335,121 @@
 .cm-table-target { color: var(--ink-3); font-family: var(--cs-mono); font-size: 11.5px; }
 .cm-table-reason { color: var(--ink-2); }
 .cm-table-empty { padding: 28px 12px !important; text-align: center; color: var(--ink-3); font-style: italic; }
+
+/* --------------------------------------------------------------------------
+   settings control panel — two-column /c/:slug/settings layout.
+   Left: sticky anchor index into the page's sections (pure anchors, no JS).
+   Right: the settings sections. Only /settings opts in via .cm-wrap--settings;
+   manage-mods / modlog / reports keep the narrow single column.
+   -------------------------------------------------------------------------- */
+.cm-wrap--settings { max-width: 1200px; }
+/* single-column pages that still need room for a wide table + tab row (reports queue) */
+.cm-wrap--wide { max-width: 1040px; }
+.cm-cols { display: grid; grid-template-columns: 188px minmax(0, 1fr); gap: 18px; align-items: start; }
+.cm-index {
+  position: sticky; top: 4px;
+  display: flex; flex-direction: column; gap: 2px;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 2px;
+  padding: 8px;
+}
+.cm-index-title {
+  font-family: var(--cs-mono); font-size: 10.5px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.05em; color: var(--ink-3);
+  padding: 4px 10px 8px;
+}
+.cm-shell .cm-index-link {
+  font-family: var(--cs-mono); font-size: 12px; font-weight: 500; color: var(--ink-2);
+  padding: 6px 10px; border-left: 2px solid transparent; border-radius: 0 2px 2px 0;
+  transition: color .12s ease, background .12s ease, border-color .12s ease;
+}
+.cm-shell .cm-index-link:hover { color: var(--ink); background: var(--panel-2); border-left-color: var(--red); }
+.cm-shell .cm-index-link--active { color: #fff; background: var(--ink); border-left-color: var(--ink); }
+.cm-shell .cm-index-link--active:hover { color: #fff; background: var(--ink); border-left-color: var(--ink); }
+.cm-shell .cm-index-link--danger { color: var(--red-strong); }
+.cm-shell .cm-index-link--danger:hover { color: var(--red-strong); background: var(--red-soft); border-left-color: var(--red); }
+.cm-shell .cm-index-link--danger.cm-index-link--active { color: #fff; background: var(--red); border-left-color: var(--red); }
+.cm-shell .cm-index-link--danger.cm-index-link--active:hover { color: #fff; background: var(--red); border-left-color: var(--red); }
+
+.cm-main { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+.cm-main .cm-panel + .cm-panel { margin-top: 0; }
+/* anchor targets land just below the shell's own scroll edge */
+.cm-main section[id] { scroll-margin-top: 8px; }
+
+/* two panels side by side (Overview + Visibility) */
+.cm-grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: start; }
+.cm-grid2 .cm-panel + .cm-panel { margin-top: 0; }
+
+/* compact channel/section rows — the edit form collapses into <details> */
+.cm-items { display: flex; flex-direction: column; gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: 2px; }
+.cm-item { background: var(--panel); }
+/* Fixed columns (pos | name+path | badges | meta/edit) so the ACTIVE/INDEXABLE badges and
+   the edit affordance line up across rows regardless of channel/section name length. The name
+   column is the only flexible one, so the badge column always starts at the same x. */
+.cm-item > summary {
+  list-style: none; display: grid;
+  grid-template-columns: 26px minmax(0, 1fr) 176px 150px;
+  align-items: center; gap: 12px; padding: 9px 14px; cursor: pointer;
+}
+.cm-item > summary::-webkit-details-marker { display: none; }
+.cm-item > summary:hover { background: var(--panel-2); }
+.cm-item[open] > summary { background: var(--panel-2); border-bottom: 1px dashed var(--line); }
+.cm-item-pos { font-family: var(--cs-mono); font-size: 10.5px; color: var(--ink-3); }
+.cm-item-name { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.cm-item-name .cm-section-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.cm-item-name .cm-section-slug { margin-left: 0; flex: none; white-space: nowrap; }
+.cm-item-badges { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.cm-item-badges .cm-badge { margin-left: 0; }
+.cm-item-meta { display: flex; align-items: center; justify-content: flex-end; gap: 10px; min-width: 0; }
+.cm-item-note { font-family: var(--cs-mono); font-size: 11px; color: var(--ink-3); font-style: italic; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cm-item-hint { font-family: var(--cs-mono); font-size: 11px; color: var(--ink-3); white-space: nowrap; flex: none; }
+.cm-item-hint::after { content: ' \25B8'; }
+.cm-item[open] .cm-item-hint::after { content: ' \25BE'; }
+.cm-item > summary:hover .cm-item-hint { color: var(--ink); }
+.cm-item-body { padding: 14px 14px 14px 44px; display: flex; flex-direction: column; gap: 12px; }
+.cm-item-ops { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding-top: 12px; border-top: 1px solid var(--line); }
+.cm-item-ops .cm-muted-note { font-style: normal; }
+
+/* collapsed add-channel / add-section forms */
+.cm-add { border: 1px dashed var(--line-2); border-radius: 2px; margin-top: 10px; background: var(--panel); }
+.cm-add > summary {
+  list-style: none; font-family: var(--cs-mono); font-size: 12px; font-weight: 600;
+  color: var(--ink-2); padding: 9px 14px; cursor: pointer;
+  transition: color .12s ease, background .12s ease;
+}
+.cm-add > summary::-webkit-details-marker { display: none; }
+.cm-add > summary:hover { color: var(--ink); background: var(--panel-2); }
+.cm-add[open] > summary { color: var(--ink); border-bottom: 1px dashed var(--line); }
+.cm-add-body { padding: 14px; }
+
+/* moderation quick links: compact three-up cardlink row */
+.cm-modlinks { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; margin-bottom: 16px; }
+.cm-cardlink--sm { padding: 12px 14px; }
+.cm-cardlink--sm .cm-cardlink-title { font-size: 12.5px; }
+.cm-cardlink--sm .cm-cardlink-desc { font-size: 11.5px; }
+
+/* segmented submit controls (visibility / discovery / downvotes) — each segment is its
+   own one-input POST form, so the control stays fully server-rendered */
+.cm-seg { display: inline-flex; align-self: flex-start; width: fit-content; border: 1px solid var(--line-2); border-radius: 2px; overflow: hidden; background: var(--panel); }
+.cm-seg .cm-form-inline + .cm-form-inline .cm-seg-btn { border-left: 1px solid var(--line-2); }
+.cm-seg-btn {
+  font-family: var(--cs-mono); font-size: 12px; font-weight: 600;
+  color: var(--ink-2); background: var(--panel); border: 0; border-radius: 0;
+  padding: 7px 14px; cursor: pointer; min-width: 96px; text-align: center;
+  transition: color .12s ease, background .12s ease;
+}
+.cm-seg-btn:hover { color: var(--ink); background: var(--panel-2); }
+.cm-seg-btn--active { color: #fff; background: var(--ink); cursor: default; }
+.cm-seg-btn--active:hover { color: #fff; background: var(--ink); }
+
+/* current avatar/banner state row above the file inputs */
+.cm-assets2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; align-items: start; }
+.cm-asset { display: flex; align-items: center; gap: 10px; min-height: 48px; }
+.cm-asset-note { font-family: var(--cs-mono); font-size: 11px; color: var(--ink-3); }
+.cm-asset-avatar {
+  width: 40px; height: 40px; border-radius: 2px; border: 1px solid var(--line-2);
+  object-fit: cover; background: var(--panel-2); flex: none;
+  display: flex; align-items: center; justify-content: center;
+  font-family: var(--cs-mono); font-weight: 600; color: var(--ink-2); font-size: 15px;
+}
+.cm-asset-banner { width: 180px; height: 44px; border: 1px solid var(--line-2); border-radius: 2px; overflow: hidden; background: var(--panel-2); flex: none; }
+.cm-asset-banner-img { width: 100%; height: 100%; object-fit: cover; display: block; }

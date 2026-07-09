@@ -1488,7 +1488,7 @@ let add_section_handler request =
                   Dream.respond ~status:`Forbidden (Pages.msg_page ?user ~title:"Access Denied" ~message:"Moderators only." ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/settings") request)
                 else
                   (match%lwt Db.create_section db community.id name description position default_sort false with
-                   | Ok () -> Dream.redirect request ("/c/" ^ slug ^ "/settings")
+                   | Ok () -> Dream.redirect request ("/c/" ^ slug ^ "/settings?panel=channels")
                    | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:e ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/settings") request)))
       | _ -> Dream.respond ~status:`Bad_Request (Pages.msg_page ?user ~title:"Form Error" ~message:"Invalid form submission." ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/settings") request)
 
@@ -1530,7 +1530,7 @@ let update_section_handler request =
                    | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:e ~alert_type:"error" ~return_url:"/" request)
                    | Ok (Some _) ->
                        (match%lwt Db.update_section db section_id name description default_sort with
-                        | Ok () -> Dream.redirect request ("/c/" ^ slug ^ "/settings")
+                        | Ok () -> Dream.redirect request ("/c/" ^ slug ^ "/settings?panel=channels")
                         | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:e ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/settings") request))))
       | _ -> Dream.respond ~status:`Bad_Request (Pages.msg_page ?user ~title:"Form Error" ~message:"Invalid form submission." ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/settings") request)
 
@@ -1560,7 +1560,7 @@ let delete_section_handler request =
                   Dream.respond ~status:`Forbidden (Pages.msg_page ?user ~title:"Access Denied" ~message:"Moderators only." ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/settings") request)
                 else
                   (match%lwt Db.delete_section db section_id community.id with
-                   | Ok () -> Dream.redirect request ("/c/" ^ slug ^ "/settings")
+                   | Ok () -> Dream.redirect request ("/c/" ^ slug ^ "/settings?panel=channels")
                    | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:e ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/settings") request)))
       | _ -> Dream.respond ~status:`Bad_Request (Pages.msg_page ?user ~title:"Form Error" ~message:"Invalid form submission." ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/settings") request)
 
@@ -1602,7 +1602,7 @@ let add_channel_handler request =
                   let%lwt position = match%lwt Db.get_channels_by_community db community.id with
                     | Ok cs -> Lwt.return (List.length cs) | Error _ -> Lwt.return 0 in
                   (match%lwt Db.create_channel db community.id name topic position with
-                   | Ok _slug -> Dream.redirect request ("/c/" ^ slug ^ "/settings")
+                   | Ok _slug -> Dream.redirect request ("/c/" ^ slug ^ "/settings?panel=channels")
                    | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:e ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/settings") request)))
       | _ -> Dream.respond ~status:`Bad_Request (Pages.msg_page ?user ~title:"Form Error" ~message:"Invalid form submission." ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/settings") request)
 
@@ -1644,7 +1644,7 @@ let update_channel_handler request =
                    | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:e ~alert_type:"error" ~return_url:"/" request)
                    | Ok (Some _) ->
                        (match%lwt Db.update_channel db channel_id community.id name topic with
-                        | Ok () -> Dream.redirect request ("/c/" ^ slug ^ "/settings")
+                        | Ok () -> Dream.redirect request ("/c/" ^ slug ^ "/settings?panel=channels")
                         | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:e ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/settings") request))))
       | _ -> Dream.respond ~status:`Bad_Request (Pages.msg_page ?user ~title:"Form Error" ~message:"Invalid form submission." ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/settings") request)
 
@@ -1689,7 +1689,7 @@ let archive_channel_handler request =
                               Dream.respond ~status:`Bad_Request (Pages.msg_page ?user ~title:"Not Allowed" ~message:"You cannot archive the last active channel — a community needs at least one." ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/settings") request)
                             else
                               (match%lwt Db.set_channel_archived db channel_id community.id true with
-                               | Ok () -> Dream.redirect request ("/c/" ^ slug ^ "/settings")
+                               | Ok () -> Dream.redirect request ("/c/" ^ slug ^ "/settings?panel=channels")
                                | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:e ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/settings") request)))))
       | _ -> Dream.respond ~status:`Bad_Request (Pages.msg_page ?user ~title:"Form Error" ~message:"Invalid form submission." ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/settings") request)
 
@@ -1724,7 +1724,7 @@ let unarchive_channel_handler request =
                    | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:e ~alert_type:"error" ~return_url:"/" request)
                    | Ok (Some _) ->
                        (match%lwt Db.set_channel_archived db channel_id community.id false with
-                        | Ok () -> Dream.redirect request ("/c/" ^ slug ^ "/settings")
+                        | Ok () -> Dream.redirect request ("/c/" ^ slug ^ "/settings?panel=channels")
                         | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:e ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/settings") request))))
       | _ -> Dream.respond ~status:`Bad_Request (Pages.msg_page ?user ~title:"Form Error" ~message:"Invalid form submission." ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/settings") request)
 
@@ -1739,8 +1739,16 @@ let modlog_handler request =
         let%lwt authorized = can_view_community db ~user_id ~is_admin community in
         if not authorized then community_not_found ?user request
         else
+        (* Settings access mirrors community_settings_handler's gate (admin || moderator); it only
+           picks the back-link target, so a failed lookup safely degrades to "Back to community". *)
+        let%lwt can_access_settings =
+          if is_admin then Lwt.return true
+          else (match%lwt Db.is_moderator db user_id community.id with
+            | Ok b -> Lwt.return b
+            | _ -> Lwt.return false)
+        in
         (match%lwt Db.get_modlog db community.id with
-         | Ok actions -> Dream.html (Pages.mod_log_page ?user ~noindex:(community_noindex community) ~community actions request)
+         | Ok actions -> Dream.html (Pages.mod_log_page ?user ~noindex:(community_noindex community) ~can_access_settings ~community actions request)
          | Error err -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:("Database error: " ^ err) ~alert_type:"error" ~return_url:("/c/" ^ slug) request))
     | Ok None -> Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"Not Found" ~message:"This community does not exist." ~alert_type:"error" ~return_url:"/" request)
     | Error err -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:("Database error: " ^ err) ~alert_type:"error" ~return_url:"/" request)
@@ -1920,7 +1928,7 @@ let ban_community_user_handler request =
                     (* Notify banned user — no post_id since a ban is not tied to a single post. *)
                     let ban_msg = "You have been banned from a community. Reason: " ^ reason in
                     let%lwt _ = Db.create_notif db target_user.id None "mod_action" ban_msg in
-                    let target = match community_res with Ok (Some c) -> "/c/" ^ c.slug | _ -> "/" in
+                    let target = match community_res with Ok (Some c) -> "/c/" ^ c.slug ^ "/settings?panel=bans" | _ -> "/" in
                     Dream.redirect request target
                   end
               | Ok None -> Dream.html (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"User Not Found" ~message:("No user was found with the username u/" ^ target_username ^ ".") ~alert_type:"error" ~return_url:"/" request)
@@ -1954,7 +1962,7 @@ let unban_community_user_handler request =
               Dream.respond ~status:`Forbidden (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Access Denied" ~message:"You are not a moderator of this community." ~alert_type:"error" ~return_url:"/" request)
             else begin
               let%lwt _ = Db.community_unban_user db target_user_id community_id in
-              Dream.redirect request ("/c/" ^ community_slug ^ "/settings")
+              Dream.redirect request ("/c/" ^ community_slug ^ "/settings?panel=bans")
             end
           )
       | _ -> Dream.html (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Form Error" ~message:"There was a problem with your form submission. Please try again." ~alert_type:"error" ~return_url:"/" request)
@@ -2999,7 +3007,7 @@ let toggle_downvotes_handler request =
                   Dream.respond ~status:`Forbidden "Only the Top Moderator can change this setting."
                 else
                   match%lwt Db.toggle_community_downvotes db community.id new_val with
-                  | Ok () -> Dream.redirect request ("/c/" ^ slug)
+                  | Ok () -> Dream.redirect request ("/c/" ^ slug ^ "/settings?panel=moderation")
                   | Error err -> Dream.respond ~status:`Internal_Server_Error ("DB Error: " ^ err)
           )
       | _ -> Dream.respond ~status:`Bad_Request "Invalid form submission."
@@ -3037,7 +3045,7 @@ let update_community_visibility_handler request =
                         Dream.respond ~status:`Forbidden (Pages.msg_page ?user ~title:"Access Denied" ~message:"Only Top Mods and admins can change visibility." ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/settings") request)
                       else
                         match%lwt Db.update_community_visibility db community.id visibility with
-                        | Ok () -> Dream.redirect request ("/c/" ^ slug ^ "/settings")
+                        | Ok () -> Dream.redirect request ("/c/" ^ slug ^ "/settings?panel=visibility")
                         | Error err -> Dream.respond ~status:`Internal_Server_Error ("DB Error: " ^ err)))
        | _ -> Dream.respond ~status:`Bad_Request "Invalid form submission.")
 
@@ -3065,7 +3073,7 @@ let update_community_indexability_handler request =
                    Dream.respond ~status:`Forbidden (Pages.msg_page ?user ~title:"Access Denied" ~message:"Only Top Mods and admins can change discovery settings." ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/settings") request)
                  else
                    match%lwt Db.update_community_indexable db community.id indexable with
-                   | Ok () -> Dream.redirect request ("/c/" ^ slug ^ "/settings")
+                   | Ok () -> Dream.redirect request ("/c/" ^ slug ^ "/settings?panel=visibility")
                    | Error err -> Dream.respond ~status:`Internal_Server_Error ("DB Error: " ^ err))
        | _ -> Dream.respond ~status:`Bad_Request "Invalid form submission.")
 
@@ -3108,7 +3116,7 @@ let update_channel_indexability_handler request =
                     | Error err -> Dream.respond ~status:`Internal_Server_Error ("DB Error: " ^ err)
                     | Ok (Some _) ->
                         match%lwt Db.update_channel_indexable db channel_id community.id indexable with
-                        | Ok () -> Dream.redirect request ("/c/" ^ slug ^ "/settings")
+                        | Ok () -> Dream.redirect request ("/c/" ^ slug ^ "/settings?panel=channels")
                         | Error err -> Dream.respond ~status:`Internal_Server_Error ("DB Error: " ^ err)))
        | _ -> Dream.respond ~status:`Bad_Request "Invalid form submission.")
 
@@ -3143,7 +3151,7 @@ let update_section_indexability_handler request =
                     | Error err -> Dream.respond ~status:`Internal_Server_Error ("DB Error: " ^ err)
                     | Ok (Some _) ->
                         match%lwt Db.update_section_indexable db section_id community.id indexable with
-                        | Ok () -> Dream.redirect request ("/c/" ^ slug ^ "/settings")
+                        | Ok () -> Dream.redirect request ("/c/" ^ slug ^ "/settings?panel=channels")
                         | Error err -> Dream.respond ~status:`Internal_Server_Error ("DB Error: " ^ err)))
        | _ -> Dream.respond ~status:`Bad_Request "Invalid form submission.")
 
@@ -3187,7 +3195,7 @@ let add_member_handler request =
                     | Ok (Some target) ->
                         (* Idempotent: re-adding an existing member is a no-op (ON CONFLICT DO NOTHING). *)
                         match%lwt Db.join_community db target.id community.id with
-                        | Ok () -> Dream.redirect request ("/c/" ^ slug ^ "/settings")
+                        | Ok () -> Dream.redirect request ("/c/" ^ slug ^ "/settings?panel=members")
                         | Error err -> Dream.respond ~status:`Internal_Server_Error ("DB Error: " ^ err)))
        | _ -> Dream.respond ~status:`Bad_Request "Invalid form submission.")
 
@@ -3220,7 +3228,7 @@ let remove_member_handler request =
                         (* Idempotent: removing a non-member deletes zero rows (no error). Only the
                            community_members row is touched — moderator/admin rows are untouched. *)
                         match%lwt Db.leave_community db target_user_id community.id with
-                        | Ok () -> Dream.redirect request ("/c/" ^ slug ^ "/settings")
+                        | Ok () -> Dream.redirect request ("/c/" ^ slug ^ "/settings?panel=members")
                         | Error err -> Dream.respond ~status:`Internal_Server_Error ("DB Error: " ^ err)))
        | _ -> Dream.respond ~status:`Bad_Request "Invalid form submission.")
 

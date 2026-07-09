@@ -1921,59 +1921,28 @@ let community_settings_page ?user ~is_admin ~is_top_mod ~open_reports_count ~(co
   let csrf_token = Dream.csrf_tag request in
   let esc = Components.html_escape in
   let slug = esc community.slug in
-  (* Active (non-archived) channel count — used both in the Overview and to gate the
+  (* Active (non-archived) channel count — used both in the status strip and to gate the
      archive control in the UI (the server enforces the same guards regardless). *)
   let active_channels = List.filter (fun (c : Db.channel) -> not c.is_archived) channels in
   let active_channel_count = List.length active_channels in
 
-  (* Read-only Overview — every value is derived from data the handler already
-     passes (no fabricated metric). *)
+  (* The settings surface is a control panel: a left nav of panels, one panel rendered
+     at a time. The selected panel comes from ?panel=…; unknown or missing values fall
+     back to visibility. Pure server-side rendering — each nav link is a normal GET back
+     to this same route with a different query value. *)
+  let panel =
+    match Dream.query request "panel" with
+    | Some ("profile" | "channels" | "members" | "moderation" | "bans" as p) -> p
+    | _ -> "visibility"
+  in
+
+  let is_private = community.visibility = Db.Community_private in
+  let can_edit_vis = is_top_mod || is_admin in
+
   let stat label cls value =
     Printf.sprintf
       "<div class='cm-stat'><span class='cm-stat-label'>%s</span><span class='cm-stat-val %s'>%s</span></div>"
       label cls value
-  in
-  let overview_panel =
-    let downvotes_row =
-      if community.allow_downvotes then stat "downvotes" "cm-stat-val--ok" "enabled"
-      else stat "downvotes" "cm-stat-val--off" "disabled"
-    in
-    let channels_row = stat "live channels" "" (string_of_int active_channel_count) in
-    let sections_row =
-      if community.sections_enabled
-      then stat "sections" "" (string_of_int (List.length sections))
-      else stat "sections" "cm-stat-val--off" "off"
-    in
-    let mods_row   = stat "moderators" "" (string_of_int (List.length mods)) in
-    let banned_row = stat "banned users" "" (string_of_int (List.length banned_users)) in
-    Printf.sprintf
-      "<section class='cm-panel'>\
-         <h2 class='cm-panel-title'>Overview</h2>\
-         <p class='cm-panel-desc'>Current status of this community. Read-only.</p>\
-         <div class='cm-stats'>%s%s%s%s%s</div>\
-       </section>"
-      downvotes_row channels_row sections_row mods_row banned_row
-  in
-
-  let banned_section =
-    if banned_users = [] then
-      "<p class='cm-empty'>No users are currently banned from this community.</p>"
-    else
-      let rows = String.concat "\n" (List.map (fun (b : user) ->
-        Printf.sprintf "
-          <div class='cm-list-row'>
-            <a href='/u/%s' class='cm-user-link'>u/%s</a>
-            <form action='/unban-community-user' method='POST' class='cm-form-inline'>
-              %s
-              <input type='hidden' name='target_user_id' value='%d'>
-              <input type='hidden' name='community_id' value='%d'>
-              <input type='hidden' name='community_slug' value='%s'>
-              <button type='submit' class='cm-btn-sm cm-btn-sm--ok'>Unban</button>
-            </form>
-          </div>"
-          (esc b.username) (esc b.username) csrf_token b.id community.id slug
-      ) banned_users) in
-      Printf.sprintf "<div class='cm-list'>%s</div>" rows
   in
 
   let sort_option value label selected_val =
@@ -1982,380 +1951,149 @@ let community_settings_page ?user ~is_admin ~is_top_mod ~open_reports_count ~(co
   in
 
   (* Slice H: per-child indexability state + (TM/A only) toggle. Indexability is sensitive
-     (it governs public discovery + chat provenance leakage), so the editing button renders only
+     (it governs public discovery + chat provenance leakage), so the editing form renders only
      for top_mod/admin — regular mods get the read-only badge. The matching POST handlers re-check
-     TM/A regardless. The hidden field carries the explicit next state. *)
+     TM/A regardless. The hidden field carries the explicit next state. In the compact-row layout
+     the badge lives in the always-visible summary and the toggle in the expanded ops strip. *)
   let can_edit_idx = is_top_mod || is_admin in
-  (* Community-level private / non-indexable dominates child flags (Slice G effective_indexable_child):
-     while dominated, a child's stored flag has no public effect. We still allow toggling so the flag
-     is ready when the community becomes public+indexable; the note below says so plainly. *)
-  let community_dominates_children =
-    community.visibility = Db.Community_private || not community.indexable in
-  let dominated_note =
-    if not community_dominates_children then ""
-    else if community.visibility = Db.Community_private then
-      "<p class='cm-muted-note'>This community is private, so everything in it is non-indexable no matter what these flags say. They take effect only once the community is public and indexable.</p>"
-    else
-      "<p class='cm-muted-note'>This community is public but excluded from discovery (noindex), so everything in it is non-indexable no matter what these flags say. They take effect only once the community is also indexable.</p>"
+  let idx_badge ~indexable =
+    if indexable then "<span class='cm-badge cm-badge--active'>Indexable</span>"
+    else "<span class='cm-badge cm-badge--archived'>Not indexable</span>"
   in
-  let indexability_control ~action ~indexable =
-    let state_badge =
-      if indexable then "<span class='cm-badge cm-badge--active'>Indexable</span>"
-      else "<span class='cm-badge cm-badge--archived'>Not indexable</span>"
-    in
-    if not can_edit_idx then state_badge
+  let idx_toggle_form ~action ~indexable =
+    if not can_edit_idx then ""
     else
       let (next_val, label) =
         if indexable then ("false", "Make non-indexable") else ("true", "Make indexable")
       in
-      Printf.sprintf "%s<form action='%s' method='POST' class='cm-form-inline' style='margin-left:8px'>%s<input type='hidden' name='indexable' value='%s'><button type='submit' class='cm-btn-sm'>%s</button></form>"
-        state_badge action csrf_token next_val label
+      Printf.sprintf "<form action='%s' method='POST' class='cm-form-inline'>%s<input type='hidden' name='indexable' value='%s'><button type='submit' class='cm-btn-sm'>%s</button></form>"
+        action csrf_token next_val label
   in
-
-  (* ---- Live chat channels subsection ---- *)
-  let render_channel_card (c : Db.channel) =
-    let status_badge =
-      if c.is_archived then "<span class='cm-badge cm-badge--archived'>Archived</span>"
-      else "<span class='cm-badge cm-badge--active'>Active</span>"
-    in
-    (* Active channels link to their live view; archived ones are not navigable. *)
-    let name_html =
-      if c.is_archived then Printf.sprintf "<span class='cm-section-name'>%s</span>" (esc c.name)
-      else Printf.sprintf "<a class='cm-section-name cm-channel-link' href='/c/%s/ch/%s'>%s</a>" slug (esc c.slug) (esc c.name)
-    in
-    (* Archive is reversible (never a hard-delete). The default #general channel and the
-       last remaining active channel cannot be archived — shown as a note here, enforced
-       server-side in archive_channel_handler either way. *)
-    let archive_control =
-      if c.is_archived then
-        Printf.sprintf "
-          <form action='/c/%s/channels/%d/unarchive' method='POST' class='cm-form-inline'>
-            %s
-            <button type='submit' class='cm-btn-sm cm-btn-sm--ok'>Unarchive</button>
-          </form>"
-          slug c.id csrf_token
-      else if c.slug = "general" then "<span class='cm-muted-note'>Default channel</span>"
-      else if active_channel_count <= 1 then "<span class='cm-muted-note'>Last active channel</span>"
-      else
-        Printf.sprintf "
-          <form action='/c/%s/channels/%d/archive' method='POST' class='cm-form-inline'
-                onsubmit=\"confirmModal(event, 'Archive this channel? Members will no longer see it. You can unarchive it later.')\">
-            %s
-            <button type='submit' class='cm-btn-sm cm-btn-sm--danger'>Archive</button>
-          </form>"
-          slug c.id csrf_token
-    in
-    let idx_control =
-      indexability_control
-        ~action:(Printf.sprintf "/c/%s/channels/%d/indexability" slug c.id)
-        ~indexable:c.indexable
-    in
-    Printf.sprintf "
-      <div class='cm-section-card'>
-        <div class='cm-section-head'>
-          <div>%s<span class='cm-section-slug'>/ch/%s</span>%s %s</div>
-          %s
-        </div>
-        <form action='/c/%s/channels/%d/update' method='POST' class='cm-form'>
-          %s
-          <div class='cm-field'>
-            <input type='text' name='name' value='%s' required placeholder='Channel name' class='cm-input'>
-          </div>
-          <div class='cm-field'>
-            <input type='text' name='topic' value='%s' placeholder='Topic (optional)' class='cm-input'>
-          </div>
-          <button type='submit' class='cm-btn cm-btn--secondary'>Save</button>
-        </form>
-      </div>"
-      name_html (esc c.slug) status_badge idx_control
-      archive_control
-      slug c.id csrf_token
-      (esc c.name)
-      (esc (Option.value ~default:"" c.topic))
-  in
-  let channels_block =
-    let cards =
-      if channels = [] then "<p class='cm-empty'>No channels yet.</p>"
-      else String.concat "\n" (List.map render_channel_card channels)
-    in
-    Printf.sprintf "
-      <h3 class='cm-subhead'>Live chat channels</h3>
-      <p class='cm-panel-desc'>Indexable channels can have their public archive (<code>/ch/&hellip;</code>) indexed and discovered. Non-indexable channels stay readable by direct link but are marked <code>noindex</code> and their chat is dropped from public discovery and thread provenance. This is not privacy &mdash; it does not restrict who can read the channel.</p>
-      %s
-      <div class='cm-sections'>%s</div>
-      <div class='cm-section-add'>
-        <h4 class='cm-subhead'>Add channel</h4>
-        <form action='/c/%s/channels/add' method='POST' class='cm-form'>
-          %s
-          <input type='text' name='name' required placeholder='Channel name' class='cm-input'>
-          <input type='text' name='topic' placeholder='Topic (optional)' class='cm-input'>
-          <button type='submit' class='cm-btn'>Add channel</button>
-        </form>
-      </div>"
-      dominated_note cards slug csrf_token
-  in
-
-  (* ---- Forum sections subsection (CRUD unchanged) ---- *)
-  let sections_inner =
-    if not community.sections_enabled then ""
-    else begin
-      let render_section_row (s : community_section) =
-        let idx_control =
-          indexability_control
-            ~action:(Printf.sprintf "/c/%s/sections/%d/indexability" slug s.section_id)
-            ~indexable:s.indexable
-        in
-        Printf.sprintf "
-          <div class='cm-section-card'>
-            <div class='cm-section-head'>
-              <div>
-                <span class='cm-section-name'>%s</span>
-                <span class='cm-section-slug'>/s/%s</span>
-                %s
-              </div>
-              <form action='/c/%s/sections/%d/delete' method='POST' class='cm-form-inline'
-                    onsubmit=\"return confirm('Delete this section? Posts will not be deleted. They will be moved to Uncategorized.')\">
-                %s
-                <button type='submit' class='cm-btn-sm cm-btn-sm--danger'>Delete</button>
-              </form>
-            </div>
-            <form action='/c/%s/sections/%d/update' method='POST' class='cm-form'>
-              %s
-              <div class='cm-row2'>
-                <input type='text' name='name' value='%s' required class='cm-input'>
-                <select name='default_sort' class='cm-select'>
-                  %s%s%s%s
-                </select>
-              </div>
-              <textarea name='description' rows='2' placeholder='Description (optional)' class='cm-textarea'>%s</textarea>
-              <button type='submit' class='cm-btn cm-btn--secondary'>Save</button>
-            </form>
-          </div>"
-          (esc s.name) (esc s.slug) idx_control
-          slug s.section_id csrf_token
-          slug s.section_id csrf_token
-          (esc s.name)
-          (sort_option "hot" "Hot" s.default_sort)
-          (sort_option "new" "New" s.default_sort)
-          (sort_option "top" "Top" s.default_sort)
-          (sort_option "active" "Active" s.default_sort)
-          (esc (Option.value ~default:"" s.description))
-      in
-      let next_position = List.length sections + 1 in
-      Printf.sprintf "
-        <h3 class='cm-subhead' style='margin-top:24px'>Forum sections</h3>
-        <p class='cm-panel-desc'>Organize posts into sections. Deleting a section moves its posts to Uncategorized.</p>
-        <p class='cm-panel-desc'>Indexable sections and their threads can appear in the public feed, search, and discovery. Non-indexable sections and their threads are marked <code>noindex</code> and excluded from public discovery.</p>
-        %s
-        <div class='cm-sections'>%s</div>
-        <div class='cm-section-add'>
-          <h4 class='cm-subhead'>Add section</h4>
-          <form action='/c/%s/sections/add' method='POST' class='cm-form'>
-            %s
-            <div class='cm-row2'>
-              <input type='text' name='name' required placeholder='Section name' class='cm-input'>
-              <select name='default_sort' class='cm-select'>
-                <option value='hot'>Hot</option>
-                <option value='new'>New</option>
-                <option value='top'>Top</option>
-                <option value='active'>Active</option>
-              </select>
-            </div>
-            <textarea name='description' rows='2' placeholder='Description (optional)' class='cm-textarea'></textarea>
-            <input type='hidden' name='position' value='%d'>
-            <button type='submit' class='cm-btn'>Add section</button>
-          </form>
-        </div>"
-      dominated_note
-      (String.concat "\n" (List.map render_section_row sections))
-      slug csrf_token next_position
-    end
-  in
-
-  let channels_sections_panel =
-    Printf.sprintf "
-      <section class='cm-panel'>
-        <h2 class='cm-panel-title'>Channels &amp; sections</h2>
-        <p class='cm-panel-desc'>Live chat channels and forum sections for this community.</p>
-        %s
-        %s
-      </section>"
-      channels_block sections_inner
-  in
-
-  (* Moderation tools — the downvote enable/disable, relocated here from the public /c/:slug home.
-     Display-gated to top_mod/admin to match the toggle's prior visibility; toggle_downvotes_handler
-     remains the authority and re-checks top_mod/admin. Route, POST method, CSRF, and the
-     allow_downvotes input name/values are preserved exactly. *)
-  let modtools_panel =
-    if not (is_top_mod || is_admin) then ""
+  (* Community-level private / non-indexable dominates child flags (Slice G effective_indexable_child):
+     while dominated, a child's stored flag has no public effect. We still allow toggling so the flag
+     is ready when the community becomes public+indexable; the note below says so plainly. *)
+  let community_dominates_children = is_private || not community.indexable in
+  let dominated_note =
+    if not community_dominates_children then ""
+    else if is_private then
+      "<p class='cm-muted-note' style='margin:0 0 10px'>This community is private, so everything in it is non-indexable no matter what these flags say. They take effect only once the community is public and indexable.</p>"
     else
-      let (next_val, label, state) =
-        if community.allow_downvotes then ("false", "Disable downvotes", "enabled")
-        else ("true", "Enable downvotes", "disabled")
-      in
-      Printf.sprintf "
-      <section class='cm-panel'>
-        <h2 class='cm-panel-title'>Moderation tools</h2>
-        <p class='cm-panel-desc'>Downvotes are currently <strong>%s</strong> for this community. Only Top Mods and admins can change this.</p>
-        <form action='/c/%s/toggle_downvotes' method='POST' class='cm-inline-form'>
-          %s
-          <input type='hidden' name='allow_downvotes' value='%s'>
-          <button type='submit' class='cm-btn'>%s</button>
-        </form>
-      </section>"
-        state slug csrf_token next_val label
+      "<p class='cm-muted-note' style='margin:0 0 10px'>This community is public but excluded from discovery (noindex), so everything in it is non-indexable no matter what these flags say. They take effect only once the community is also indexable.</p>"
   in
 
-  (* Slice E: Visibility & Discovery card. Visibility/indexability changes are TM/A-only (they
-     govern who can read a private community), so the editing controls render only for top_mod/admin;
-     the matching POST handlers re-check TM/A regardless. Regular mods see read-only state + a note.
-     The effective copy makes the privacy-vs-noindex distinction explicit, and because private
-     communities are always effectively non-indexable, the indexable control is replaced by an
-     explanatory note while private (the stored flag is preserved and reappears when public again). *)
+  (* ---- Panel: Visibility & discovery (default) ---- *)
+  (* Replaces the old Overview + Visibility pair. The status strip is read-only and derived
+     from data the handler already passes (no fabricated metric). While private, indexability
+     is never an actionable control — private communities are never indexed, so the stored
+     flag is shown only as inactive secondary copy. Slice E routes/inputs are unchanged. *)
   let visibility_panel =
-    let is_private = community.visibility = Db.Community_private in
-    let can_edit = is_top_mod || is_admin in
-    let current_vis = if is_private then "Private" else "Public" in
-    let current_idx = if community.indexable then "Indexable" else "Not indexable" in
+    let downvotes_row =
+      if community.allow_downvotes then stat "downvotes" "cm-stat-val--ok" "enabled"
+      else stat "downvotes" "cm-stat-val--off" "disabled"
+    in
+    let discovery_row =
+      if is_private then stat "discovery" "cm-stat-val--off" "noindex &middot; private"
+      else if community.indexable then stat "discovery" "cm-stat-val--ok" "indexable"
+      else stat "discovery" "cm-stat-val--off" "noindex"
+    in
+    let status_strip =
+      Printf.sprintf "<div class='cm-stats' style='margin-bottom:14px'>%s%s%s%s%s%s</div>"
+        (stat "visibility" "" (if is_private then "Private" else "Public"))
+        discovery_row
+        (stat "live channels" "" (string_of_int active_channel_count))
+        (if community.sections_enabled
+         then stat "sections" "" (string_of_int (List.length sections))
+         else stat "sections" "cm-stat-val--off" "off")
+        (stat "moderators" "" (string_of_int (List.length mods)))
+        downvotes_row
+    in
     let explanation =
       if is_private then
         "<p class='cm-panel-desc'>Private communities are only readable by members, moderators, and admins. \
-         Private communities are <strong>never indexable</strong>, regardless of the indexable setting.</p>"
+         <strong>Private communities are never indexed.</strong></p>"
       else if community.indexable then
         "<p class='cm-panel-desc'>This community can appear in the public feed, search, and discovery, and may be indexed by search engines.</p>"
       else
         "<p class='cm-panel-desc'>This community is public by link, but <strong>excluded from the public feed, search, and discovery</strong>, and marked <code>noindex</code>.</p>"
     in
     let visibility_control =
-      if not can_edit then ""
+      if not can_edit_vis then ""
       else
-        Printf.sprintf "
-          <form action='/c/%s/settings/visibility' method='POST' class='cm-form'>
-            %s
-            <div class='cm-field'>
-              <label class='cm-label'>Visibility</label>
-              <select name='visibility' class='cm-select'>
-                <option value='public'%s>Public</option>
-                <option value='private'%s>Private</option>
-              </select>
-            </div>
-            <button type='submit' class='cm-btn'>Save visibility</button>
-          </form>"
-          slug csrf_token
-          (if is_private then "" else " selected")
-          (if is_private then " selected" else "")
-    in
-    let indexable_control =
-      if not can_edit then ""
-      else if is_private then
-        "<p class='cm-muted-note'>The indexable setting is ignored while this community is private &mdash; private communities are never indexed. It applies only when the community is public.</p>"
-      else
-        let (next_val, label) =
-          if community.indexable then ("false", "Exclude from search &amp; discovery")
-          else ("true", "Allow search &amp; discovery")
+        (* Segmented submit control: each segment is its own one-input POST form to the
+           existing route, so the control stays fully server-rendered. Clicking the
+           already-active segment re-submits the current value (idempotent). *)
+        let seg value label active =
+          Printf.sprintf "<form action='/c/%s/settings/visibility' method='POST' class='cm-form-inline'>%s<input type='hidden' name='visibility' value='%s'><button type='submit' class='cm-seg-btn%s'>%s</button></form>"
+            slug csrf_token value (if active then " cm-seg-btn--active" else "") label
         in
         Printf.sprintf "
-          <form action='/c/%s/settings/indexability' method='POST' class='cm-inline-form' style='margin-top:12px'>
-            %s
-            <input type='hidden' name='indexable' value='%s'>
-            <button type='submit' class='cm-btn cm-btn--secondary'>%s</button>
-          </form>"
-          slug csrf_token next_val label
+          <div class='cm-field' style='margin-top:2px'>
+            <label class='cm-label'>Visibility</label>
+            <div class='cm-seg'>%s%s</div>
+          </div>"
+          (seg "public" "Public" (not is_private))
+          (seg "private" "Private" is_private)
+    in
+    let indexable_control =
+      if not can_edit_vis then ""
+      else if is_private then
+        (* No actionable indexability control while private; surface the stored flag as
+           inactive copy so it doesn't look clickable. *)
+        Printf.sprintf
+          "<p class='cm-muted-note' style='margin-top:12px'>Private communities are never indexed. The stored indexability flag is <strong>%s</strong> &mdash; it takes effect only if the community becomes public.</p>"
+          (if community.indexable then "indexable" else "non-indexable")
+      else
+        let seg value label active =
+          Printf.sprintf "<form action='/c/%s/settings/indexability' method='POST' class='cm-form-inline'>%s<input type='hidden' name='indexable' value='%s'><button type='submit' class='cm-seg-btn%s'>%s</button></form>"
+            slug csrf_token value (if active then " cm-seg-btn--active" else "") label
+        in
+        Printf.sprintf "
+          <div class='cm-field' style='margin-top:14px'>
+            <label class='cm-label'>Discovery</label>
+            <div class='cm-seg'>%s%s</div>
+            <p class='cm-muted-note' style='margin:6px 0 0'>Non-indexable keeps the community readable by link but marked <code>noindex</code> and out of the public feed, search, and discovery.</p>
+          </div>"
+          (seg "true" "Indexable" community.indexable)
+          (seg "false" "Non-indexable" (not community.indexable))
     in
     let editor_note =
-      if can_edit then ""
+      if can_edit_vis then ""
       else "<p class='cm-muted-note'>Only Top Mods and admins can change visibility and discovery settings.</p>"
     in
     Printf.sprintf "
       <section class='cm-panel'>
         <h2 class='cm-panel-title'>Visibility &amp; discovery</h2>
-        <div class='cm-stats'>
-          <div class='cm-stat'><span class='cm-stat-label'>visibility</span><span class='cm-stat-val'>%s</span></div>
-          <div class='cm-stat'><span class='cm-stat-label'>indexability</span><span class='cm-stat-val'>%s</span></div>
-        </div>
+        <p class='cm-panel-desc'>Who can read this community, and whether it appears in the public feed, search, and discovery.</p>
+        %s
         %s
         %s
         %s
         %s
       </section>"
-      current_vis current_idx explanation visibility_control indexable_control editor_note
+      status_strip explanation visibility_control indexable_control editor_note
   in
 
-  (* Slice F: member allow-list management. Adding/removing members is TM/A-only (same gate as
-     visibility/indexability), so the controls render only for top_mod/admin; the matching POST
-     handlers re-check TM/A. Regular mods see a read-only list + a note. This manages ONLY
-     community_members — moderators/admins keep read access through their role, so they may not
-     appear here. Shown for public communities too, but the copy notes it matters for private ones. *)
-  let members_panel =
-    let can_edit = is_top_mod || is_admin in
-    let member_rows =
-      if members = [] then
-        "<p class='cm-empty'>No members in the allow-list yet.</p>"
-      else
-        let rows = String.concat "\n" (List.map (fun (m : user) ->
-          let remove_btn =
-            if not can_edit then ""
-            else
-              Printf.sprintf "
-                <form action='/c/%s/settings/members/remove' method='POST' class='cm-form-inline'>
-                  %s
-                  <input type='hidden' name='target_user_id' value='%d'>
-                  <button type='submit' class='cm-btn-sm cm-btn-sm--danger'>Remove</button>
-                </form>"
-                slug csrf_token m.id
-          in
-          Printf.sprintf "
-            <div class='cm-list-row'>
-              <a href='/u/%s' class='cm-user-link'>u/%s</a>
-              %s
-            </div>"
-            (esc m.username) (esc m.username) remove_btn
-        ) members) in
-        Printf.sprintf "<div class='cm-list'>%s</div>" rows
-    in
-    let add_form =
-      if not can_edit then
-        "<p class='cm-muted-note'>Only Top Mods and admins can manage members.</p>"
-      else
-        Printf.sprintf "
-          <form action='/c/%s/settings/members/add' method='POST' class='cm-inline-form' style='margin-top:16px'>
-            %s
-            <input type='text' name='username' required placeholder='Username to add' class='cm-input'>
-            <button type='submit' class='cm-btn'>Add member</button>
-          </form>"
-          slug csrf_token
-    in
+  (* ---- Panel: Profile ---- *)
+  (* Native file inputs can't reflect an existing upload ("No file chosen" even when an
+     avatar exists), so each upload field gets an explicit current-state row: a preview via
+     the shared safe_img_src helpers when an asset exists, or a "none yet" note. Upload
+     behavior (multipart /update-community + existing_* fallbacks) is unchanged. *)
+  let avatar_status =
+    match community.avatar_url with
+    | Some u when String.trim u <> "" ->
+        Printf.sprintf "<div class='cm-asset'>%s<span class='cm-asset-note'>Current avatar uploaded &mdash; choose a file to replace it.</span></div>"
+          (Components.community_avatar ~img_class:"cm-asset-avatar" ~tile_class:"cm-asset-avatar" ~name:community.name (Some u))
+    | _ -> "<div class='cm-asset'><span class='cm-asset-note'>No avatar uploaded yet.</span></div>"
+  in
+  let banner_status =
+    match community.banner_url with
+    | Some u when String.trim u <> "" ->
+        Printf.sprintf "<div class='cm-asset'>%s<span class='cm-asset-note'>Current banner uploaded &mdash; choose a file to replace it.</span></div>"
+          (Components.community_banner ~wrap_class:"cm-asset-banner" ~img_class:"cm-asset-banner-img" ~fallback_class:"cm-asset-banner" (Some u))
+    | _ -> "<div class='cm-asset'><span class='cm-asset-note'>No banner uploaded yet.</span></div>"
+  in
+  let profile_panel =
     Printf.sprintf "
-      <section class='cm-panel'>
-        <h2 class='cm-panel-title'>Members</h2>
-        <p class='cm-panel-desc'>Members can read private communities. Top Mods and admins can add or remove members. \
-          Moderators and admins may still have access through their role, so they may not appear in this list.</p>
-        %s
-        %s
-      </section>"
-      member_rows add_form
-  in
-
-  let content = Printf.sprintf "
-    <div class='cm-wrap'>
-      <div class='cm-head'>
-        <h1 class='cm-h1'>&#x2699;&#xFE0F; /c/%s <span class='accent'>settings</span></h1>
-        <a href='/c/%s' class='cm-back'>&larr; Back to community</a>
-      </div>
-      <nav class='cm-nav'>
-        <a href='/c/%s' class='cm-nav-link'>Public home</a>
-        <a href='/c/%s/manage-mods' class='cm-nav-link'>Manage moderators</a>
-        <a href='/c/%s/reports' class='cm-nav-link'>Reports</a>
-        <a href='/c/%s/modlog' class='cm-nav-link'>Mod log</a>
-      </nav>
-
-      %s
-
-      %s
-
-      %s
-
       <section class='cm-panel'>
         <h2 class='cm-panel-title'>Profile</h2>
         <p class='cm-panel-desc'>Description, rules, and imagery shown on the public community page.</p>
@@ -2371,69 +2109,439 @@ let community_settings_page ?user ~is_admin ~is_top_mod ~open_reports_count ~(co
             <label class='cm-label'>Community rules</label>
             <textarea name='rules' rows='5' class='cm-textarea'>%s</textarea>
           </div>
-          <div class='cm-field'>
-            <label class='cm-label'>Avatar image</label>
-            <input type='hidden' name='existing_avatar_url' value='%s'>
-            <input type='file' name='avatar_url' accept='image/*' class='cm-file'>
-          </div>
-          <div class='cm-field'>
-            <label class='cm-label'>Banner image</label>
-            <input type='hidden' name='existing_banner_url' value='%s'>
-            <input type='file' name='banner_url' accept='image/*' class='cm-file'>
+          <div class='cm-assets2'>
+            <div class='cm-field'>
+              <label class='cm-label'>Avatar image</label>
+              %s
+              <input type='hidden' name='existing_avatar_url' value='%s'>
+              <input type='file' name='avatar_url' accept='image/*' class='cm-file'>
+            </div>
+            <div class='cm-field'>
+              <label class='cm-label'>Banner image</label>
+              %s
+              <input type='hidden' name='existing_banner_url' value='%s'>
+              <input type='file' name='banner_url' accept='image/*' class='cm-file'>
+            </div>
           </div>
           <button type='submit' class='cm-btn'>Save changes</button>
         </form>
-      </section>
+      </section>"
+      csrf_token community.id slug
+      (esc (Option.value ~default:"" community.description))
+      (esc (Option.value ~default:"" community.rules))
+      avatar_status
+      (esc (Option.value ~default:"" community.avatar_url))
+      banner_status
+      (esc (Option.value ~default:"" community.banner_url))
+  in
 
-      %s
-
-      <a href='/c/%s/manage-mods' class='cm-cardlink'>
-        <div>
-          <p class='cm-cardlink-title'>Members &amp; roles</p>
-          <p class='cm-cardlink-desc'>Add, promote, and remove moderators &mdash; Council of Equals governance.</p>
+  (* ---- Panel: Channels & sections ---- *)
+  (* One compact <details> row per channel/section: current order, name, slug, badges in the
+     always-visible summary; the update form and the indexability/archive/delete actions in the
+     collapsed body. All routes, methods, and input names are unchanged from the old
+     always-expanded cards. idx is the 0-based list index — the position columns exist in the
+     schema but have no reorder endpoint, so we only SHOW the current order here; explicit
+     reordering is a follow-up. *)
+  let render_channel_item idx (c : Db.channel) =
+    let status_badge =
+      if c.is_archived then "<span class='cm-badge cm-badge--archived'>Archived</span>"
+      else "<span class='cm-badge cm-badge--active'>Active</span>"
+    in
+    (* Active channels link to their live view; archived ones are not navigable. *)
+    let name_html =
+      if c.is_archived then Printf.sprintf "<span class='cm-section-name'>%s</span>" (esc c.name)
+      else Printf.sprintf "<a class='cm-section-name cm-channel-link' href='/c/%s/ch/%s'>%s</a>" slug (esc c.slug) (esc c.name)
+    in
+    let row_note =
+      if c.slug = "general" then "<span class='cm-item-note'>Default channel</span>" else ""
+    in
+    (* Archive is reversible (never a hard-delete). The default #general channel and the
+       last remaining active channel cannot be archived — noted in the ops strip, enforced
+       server-side in archive_channel_handler either way. *)
+    let archive_control =
+      if c.is_archived then
+        Printf.sprintf "
+          <form action='/c/%s/channels/%d/unarchive' method='POST' class='cm-form-inline'>
+            %s
+            <button type='submit' class='cm-btn-sm cm-btn-sm--ok'>Unarchive</button>
+          </form>"
+          slug c.id csrf_token
+      else if c.slug = "general" then "<span class='cm-muted-note'>The default #general channel cannot be archived.</span>"
+      else if active_channel_count <= 1 then "<span class='cm-muted-note'>The last active channel cannot be archived.</span>"
+      else
+        Printf.sprintf "
+          <form action='/c/%s/channels/%d/archive' method='POST' class='cm-form-inline'
+                onsubmit=\"confirmModal(event, 'Archive this channel? Members will no longer see it. You can unarchive it later.')\">
+            %s
+            <button type='submit' class='cm-btn-sm cm-btn-sm--danger'>Archive</button>
+          </form>"
+          slug c.id csrf_token
+    in
+    Printf.sprintf "
+      <details class='cm-item'>
+        <summary>
+          <span class='cm-item-pos'>%02d</span>
+          <span class='cm-item-name'>%s<span class='cm-section-slug'>/ch/%s</span></span>
+          <span class='cm-item-badges'>%s</span>
+          <span class='cm-item-meta'>%s<span class='cm-item-hint'>edit</span></span>
+        </summary>
+        <div class='cm-item-body'>
+          <form action='/c/%s/channels/%d/update' method='POST' class='cm-form'>
+            %s
+            <div class='cm-field'>
+              <input type='text' name='name' value='%s' required placeholder='Channel name' class='cm-input'>
+            </div>
+            <div class='cm-field'>
+              <input type='text' name='topic' value='%s' placeholder='Topic (optional)' class='cm-input'>
+            </div>
+            <button type='submit' class='cm-btn cm-btn--secondary'>Save</button>
+          </form>
+          <div class='cm-item-ops'>
+            %s
+          </div>
         </div>
-        <span class='cm-cardlink-go'>&rarr;</span>
-      </a>
-
-      <a href='/c/%s/reports' class='cm-cardlink'>
-        <div>
-          <p class='cm-cardlink-title'>Reports%s</p>
-          <p class='cm-cardlink-desc'>Review posts and comments flagged by members &mdash; spam, abuse, and rule-breaking content.</p>
-        </div>
-        <span class='cm-cardlink-go'>&rarr;</span>
-      </a>
-
+      </details>"
+      (idx + 1)
+      name_html (esc c.slug)
+      status_badge
+      row_note
+      slug c.id csrf_token
+      (esc c.name)
+      (esc (Option.value ~default:"" c.topic))
+      archive_control
+  in
+  let channels_block =
+    let rows =
+      if channels = [] then "<p class='cm-empty'>No channels yet.</p>"
+      else Printf.sprintf "<div class='cm-items'>%s</div>"
+        (String.concat "\n" (List.mapi render_channel_item channels))
+    in
+    Printf.sprintf "
+      <h3 class='cm-subhead'>Live chat channels</h3>
+      <p class='cm-panel-desc'>Live chat channels for real-time discussion in this community. Archive a channel to remove it from the live channel list; you can unarchive it later. The default <code>#general</code> channel and the last active channel cannot be archived.</p>
       %s
+      %s
+      <details class='cm-add'>
+        <summary>+ Add channel</summary>
+        <div class='cm-add-body'>
+          <form action='/c/%s/channels/add' method='POST' class='cm-form'>
+            %s
+            <input type='text' name='name' required placeholder='Channel name' class='cm-input'>
+            <input type='text' name='topic' placeholder='Topic (optional)' class='cm-input'>
+            <button type='submit' class='cm-btn'>Add channel</button>
+          </form>
+        </div>
+      </details>"
+      dominated_note rows slug csrf_token
+  in
+  let sections_inner =
+    if not community.sections_enabled then ""
+    else begin
+      let render_section_item idx (s : community_section) =
+        Printf.sprintf "
+          <details class='cm-item'>
+            <summary>
+              <span class='cm-item-pos'>%02d</span>
+              <span class='cm-item-name'><span class='cm-section-name'>%s</span><span class='cm-section-slug'>/s/%s</span></span>
+              <span class='cm-item-badges'>%s</span>
+              <span class='cm-item-meta'><span class='cm-item-note'>sort: %s</span><span class='cm-item-hint'>edit</span></span>
+            </summary>
+            <div class='cm-item-body'>
+              <form action='/c/%s/sections/%d/update' method='POST' class='cm-form'>
+                %s
+                <div class='cm-row2'>
+                  <input type='text' name='name' value='%s' required class='cm-input'>
+                  <select name='default_sort' class='cm-select'>
+                    %s%s%s%s
+                  </select>
+                </div>
+                <textarea name='description' rows='2' placeholder='Description (optional)' class='cm-textarea'>%s</textarea>
+                <button type='submit' class='cm-btn cm-btn--secondary'>Save</button>
+              </form>
+              <div class='cm-item-ops'>
+                %s
+                <form action='/c/%s/sections/%d/delete' method='POST' class='cm-form-inline'
+                      onsubmit=\"return confirm('Delete this section? Posts will not be deleted. They will be moved to Uncategorized.')\">
+                  %s
+                  <button type='submit' class='cm-btn-sm cm-btn-sm--danger'>Delete section</button>
+                </form>
+                <span class='cm-muted-note'>Posts move to Uncategorized on delete.</span>
+              </div>
+            </div>
+          </details>"
+          (idx + 1)
+          (esc s.name) (esc s.slug)
+          (idx_badge ~indexable:s.indexable)
+          (esc s.default_sort)
+          slug s.section_id csrf_token
+          (esc s.name)
+          (sort_option "hot" "Hot" s.default_sort)
+          (sort_option "new" "New" s.default_sort)
+          (sort_option "top" "Top" s.default_sort)
+          (sort_option "active" "Active" s.default_sort)
+          (esc (Option.value ~default:"" s.description))
+          (idx_toggle_form ~action:(Printf.sprintf "/c/%s/sections/%d/indexability" slug s.section_id) ~indexable:s.indexable)
+          slug s.section_id csrf_token
+      in
+      let next_position = List.length sections + 1 in
+      let rows =
+        if sections = [] then "<p class='cm-empty'>No sections yet.</p>"
+        else Printf.sprintf "<div class='cm-items'>%s</div>"
+          (String.concat "\n" (List.mapi render_section_item sections))
+      in
+      Printf.sprintf "
+        <h3 class='cm-subhead' style='margin-top:24px'>Forum sections</h3>
+        <p class='cm-panel-desc'>Organize posts into sections. Deleting a section moves its posts to Uncategorized. Indexable sections and their threads can appear in the public feed, search, and discovery; non-indexable ones are marked <code>noindex</code> and excluded from public discovery.</p>
+        %s
+        %s
+        <details class='cm-add'>
+          <summary>+ Add section</summary>
+          <div class='cm-add-body'>
+            <form action='/c/%s/sections/add' method='POST' class='cm-form'>
+              %s
+              <div class='cm-row2'>
+                <input type='text' name='name' required placeholder='Section name' class='cm-input'>
+                <select name='default_sort' class='cm-select'>
+                  <option value='hot'>Hot</option>
+                  <option value='new'>New</option>
+                  <option value='top'>Top</option>
+                  <option value='active'>Active</option>
+                </select>
+              </div>
+              <textarea name='description' rows='2' placeholder='Description (optional)' class='cm-textarea'></textarea>
+              <input type='hidden' name='position' value='%d'>
+              <button type='submit' class='cm-btn'>Add section</button>
+            </form>
+          </div>
+        </details>"
+      dominated_note
+      rows
+      slug csrf_token next_position
+    end
+  in
+  let channels_panel =
+    Printf.sprintf "
+      <section class='cm-panel'>
+        <h2 class='cm-panel-title'>Channels &amp; sections</h2>
+        <p class='cm-panel-desc'>Live chat channels and forum sections for this community. Rows are shown in their current order.</p>
+        %s
+        %s
+      </section>"
+      channels_block sections_inner
+  in
 
+  (* ---- Panel: Members ---- *)
+  (* Slice F: member allow-list management. Adding/removing members is TM/A-only (same gate as
+     visibility/indexability), so the controls render only for top_mod/admin; the matching POST
+     handlers re-check TM/A. Regular mods see a read-only list + a note. This manages ONLY
+     community_members — moderators/admins keep read access through their role, so they may not
+     appear here. The add form renders only while the community is private: for a public
+     community the allow-list has no access effect, so offering an active add control would be
+     misleading. Existing rows keep their remove action either way (same route/inputs). *)
+  let members_panel =
+    let can_edit = is_top_mod || is_admin in
+    let desc =
+      if is_private then
+        "<p class='cm-panel-desc'>Members can read this private community. Top Mods and admins can add or remove members. \
+          Removing a member is not a ban &mdash; it only removes them from the member list. \
+          Moderators and admins may still have access through their role, so they may not appear in this list.</p>"
+      else
+        "<p class='cm-panel-desc'>This community is public. Members listed here are saved community members, but access is not restricted while the community is public. \
+          Removing a member only deletes the saved member entry &mdash; it does not ban them. \
+          The member list takes effect again if the community becomes private.</p>"
+    in
+    let member_rows =
+      if members = [] then
+        "<p class='cm-empty'>No members in the allow-list yet.</p>"
+      else
+        let rows = String.concat "\n" (List.map (fun (m : user) ->
+          let remove_btn =
+            if not can_edit then ""
+            else
+              Printf.sprintf "
+                <form action='/c/%s/settings/members/remove' method='POST' class='cm-form-inline'>
+                  %s
+                  <input type='hidden' name='target_user_id' value='%d'>
+                  <button type='submit' class='cm-btn-sm cm-btn-sm--danger'>Remove member</button>
+                </form>"
+                slug csrf_token m.id
+          in
+          Printf.sprintf "
+            <div class='cm-list-row'>
+              <a href='/u/%s' class='cm-user-link'>u/%s</a>
+              %s
+            </div>"
+            (esc m.username) (esc m.username) remove_btn
+        ) members) in
+        Printf.sprintf "<div class='cm-list'>%s</div>" rows
+    in
+    let add_form =
+      if not is_private then ""
+      else if not can_edit then
+        "<p class='cm-muted-note'>Only Top Mods and admins can manage members.</p>"
+      else
+        Printf.sprintf "
+          <form action='/c/%s/settings/members/add' method='POST' class='cm-inline-form' style='margin-top:16px'>
+            %s
+            <input type='text' name='username' required placeholder='Username to add' class='cm-input'>
+            <button type='submit' class='cm-btn'>Add member</button>
+          </form>"
+          slug csrf_token
+    in
+    Printf.sprintf "
+      <section class='cm-panel'>
+        <h2 class='cm-panel-title'>Members</h2>
+        %s
+        %s
+        %s
+      </section>"
+      desc member_rows add_form
+  in
+
+  (* ---- Panel: Moderation ---- *)
+  (* The cross-surface cardlinks (manage-mods, reports, modlog) plus the downvote
+     enable/disable, grouped as one moderation area. The toggle is display-gated to
+     top_mod/admin as before; toggle_downvotes_handler remains the authority and re-checks
+     top_mod/admin. Route, POST method, CSRF, and the allow_downvotes input name/values are
+     preserved exactly. *)
+  let moderation_panel =
+    let modtools_block =
+      if not (is_top_mod || is_admin) then ""
+      else
+        (* Same segmented idiom as visibility/discovery; each segment POSTs the explicit
+           allow_downvotes value to the existing route. *)
+        let seg value label active =
+          Printf.sprintf "<form action='/c/%s/toggle_downvotes' method='POST' class='cm-form-inline'>%s<input type='hidden' name='allow_downvotes' value='%s'><button type='submit' class='cm-seg-btn%s'>%s</button></form>"
+            slug csrf_token value (if active then " cm-seg-btn--active" else "") label
+        in
+        Printf.sprintf "
+          <h3 class='cm-subhead' style='margin-top:0'>Moderation tools</h3>
+          <div class='cm-field'>
+            <label class='cm-label'>Downvotes</label>
+            <div class='cm-seg'>%s%s</div>
+            <p class='cm-muted-note' style='margin:6px 0 0'>Only Top Mods and admins can change this.</p>
+          </div>"
+          (seg "true" "Enabled" community.allow_downvotes)
+          (seg "false" "Disabled" (not community.allow_downvotes))
+    in
+    Printf.sprintf "
+      <section class='cm-panel'>
+        <h2 class='cm-panel-title'>Moderation</h2>
+        <p class='cm-panel-desc'>Governance, flagged content, and the public audit trail for this community.</p>
+        <div class='cm-modlinks'>
+          <a href='/c/%s/manage-mods' class='cm-cardlink cm-cardlink--sm'>
+            <div>
+              <p class='cm-cardlink-title'>Manage moderators</p>
+              <p class='cm-cardlink-desc'>Add, promote, and remove moderators &mdash; Council of Equals governance.</p>
+            </div>
+            <span class='cm-cardlink-go'>&rarr;</span>
+          </a>
+          <a href='/c/%s/reports' class='cm-cardlink cm-cardlink--sm'>
+            <div>
+              <p class='cm-cardlink-title'>Reports%s</p>
+              <p class='cm-cardlink-desc'>Review posts and comments flagged by members &mdash; spam, abuse, and rule-breaking content.</p>
+            </div>
+            <span class='cm-cardlink-go'>&rarr;</span>
+          </a>
+          <a href='/c/%s/modlog' class='cm-cardlink cm-cardlink--sm'>
+            <div>
+              <p class='cm-cardlink-title'>Mod log</p>
+              <p class='cm-cardlink-desc'>Public audit trail of moderation actions in this community.</p>
+            </div>
+            <span class='cm-cardlink-go'>&rarr;</span>
+          </a>
+        </div>
+        %s
+      </section>"
+      slug
+      slug
+      (if open_reports_count > 0
+       then Printf.sprintf " <span class='cm-badge cm-badge--active'>%d open</span>" open_reports_count
+       else "")
+      slug
+      modtools_block
+  in
+
+  (* ---- Panel: Bans ---- *)
+  let bans_panel =
+    let banned_section =
+      if banned_users = [] then
+        "<p class='cm-empty'>No users are currently banned from this community.</p>"
+      else
+        let rows = String.concat "\n" (List.map (fun (b : user) ->
+          Printf.sprintf "
+            <div class='cm-list-row'>
+              <a href='/u/%s' class='cm-user-link'>u/%s</a>
+              <form action='/unban-community-user' method='POST' class='cm-form-inline'>
+                %s
+                <input type='hidden' name='target_user_id' value='%d'>
+                <input type='hidden' name='community_id' value='%d'>
+                <input type='hidden' name='community_slug' value='%s'>
+                <button type='submit' class='cm-btn-sm cm-btn-sm--ok'>Unban</button>
+              </form>
+            </div>"
+            (esc b.username) (esc b.username) csrf_token b.id community.id slug
+        ) banned_users) in
+        Printf.sprintf "<div class='cm-list'>%s</div>" rows
+    in
+    Printf.sprintf "
       <section class='cm-panel cm-danger'>
         <h2 class='cm-panel-title'>Bans</h2>
         <p class='cm-panel-desc'>Banned users cannot post or comment in this community. Bans are logged to the mod log.</p>
-        %s
-        <form action='/ban-community-user' method='POST' class='cm-inline-form' style='margin-top:16px'>
+        <form action='/ban-community-user' method='POST' class='cm-inline-form'>
           %s
           <input type='hidden' name='community_id' value='%d'>
           <input type='text' name='target_username' required placeholder='Username to ban' class='cm-input'>
           <button type='submit' class='cm-btn'>Ban user</button>
         </form>
-      </section>
+        <h3 class='cm-subhead'>Banned users</h3>
+        %s
+      </section>"
+      csrf_token community.id banned_section
+  in
+
+  let main_panel =
+    match panel with
+    | "profile" -> profile_panel
+    | "channels" -> channels_panel
+    | "members" -> members_panel
+    | "moderation" -> moderation_panel
+    | "bans" -> bans_panel
+    | _ -> visibility_panel
+  in
+
+  (* Left nav: real panel navigation (GET links back to this route), not on-page anchors. *)
+  let nav_item ?(danger=false) key label =
+    let active_cls = if panel = key then " cm-index-link--active" else "" in
+    let danger_cls = if danger then " cm-index-link--danger" else "" in
+    Printf.sprintf "<a class='cm-index-link%s%s' href='/c/%s/settings?panel=%s'>%s</a>"
+      danger_cls active_cls slug key label
+  in
+  let content = Printf.sprintf "
+    <div class='cm-wrap cm-wrap--settings'>
+      <div class='cm-head'>
+        <h1 class='cm-h1'>&#x2699;&#xFE0F; /c/%s <span class='accent'>settings</span></h1>
+        <a href='/c/%s' class='cm-back'>&larr; Back to community</a>
+      </div>
+
+      <div class='cm-cols'>
+        <nav class='cm-index'>
+          <div class='cm-index-title'>Settings</div>
+          %s%s%s%s%s%s
+        </nav>
+        <div class='cm-main'>
+          %s
+        </div>
+      </div>
     </div>"
     slug slug
-    slug slug slug slug
-    overview_panel
-    visibility_panel
-    members_panel
-    csrf_token community.id slug
-    (esc (Option.value ~default:"" community.description))
-    (esc (Option.value ~default:"" community.rules))
-    (esc (Option.value ~default:"" community.avatar_url))
-    (esc (Option.value ~default:"" community.banner_url))
-    channels_sections_panel slug
-    slug
-    (if open_reports_count > 0
-     then Printf.sprintf " <span class='cm-badge cm-badge--active'>%d open</span>" open_reports_count
-     else "")
-    modtools_panel
-    banned_section csrf_token community.id
+    (nav_item "visibility" "Visibility &amp; discovery")
+    (nav_item "profile" "Profile")
+    (nav_item "channels" "Channels &amp; sections")
+    (nav_item "members" "Members")
+    (nav_item "moderation" "Moderation")
+    (nav_item ~danger:true "bans" "Bans")
+    main_panel
   in
   Components.community_manage_page ?user ~request ~title:(Printf.sprintf "Settings — /c/%s" community.slug) ~body:content ()
 
@@ -2543,13 +2651,8 @@ let manage_mods_page ?user ~is_admin ~current_user_role ~(community : community)
     <div class='cm-wrap'>
       <div class='cm-head'>
         <h1 class='cm-h1'>Council of Mods <span class='accent'>&mdash; /c/%s</span></h1>
-        <a href='/c/%s' class='cm-back'>&larr; Back to community</a>
+        <a href='/c/%s/settings?panel=moderation' class='cm-back'>&larr; Back to settings</a>
       </div>
-      <nav class='cm-nav'>
-        <a href='/c/%s/settings' class='cm-nav-link'>Settings</a>
-        <a href='/c/%s' class='cm-nav-link'>Public home</a>
-        <a href='/c/%s/modlog' class='cm-nav-link'>Mod log</a>
-      </nav>
 
       %s
 
@@ -2567,7 +2670,6 @@ let manage_mods_page ?user ~is_admin ~current_user_role ~(community : community)
       %s
     </div>"
     slug slug
-    slug slug slug
     add_mod_form
     top_mod_section
     mod_section
@@ -3003,16 +3105,11 @@ let reports_queue_page ?user ~(community : community) ~(status : Db.report_statu
     then "<p class='cm-panel-desc'>Context previews are shown for the most recent reports; older rows link from their target type where available.</p>"
     else "" in
   let content = Printf.sprintf "
-    <div class='cm-wrap'>
+    <div class='cm-wrap cm-wrap--wide'>
         <div class='cm-head'>
             <h1 class='cm-h1'>Reports <span class='accent'>queue</span></h1>
-            <a href='/c/%s' class='cm-back'>&larr; Back to %s</a>
+            <a href='/c/%s/settings?panel=moderation' class='cm-back'>&larr; Back to settings</a>
         </div>
-        <nav class='cm-nav'>
-            <a href='/c/%s/settings' class='cm-nav-link'>Settings</a>
-            <a href='/c/%s/manage-mods' class='cm-nav-link'>Manage moderators</a>
-            <a href='/c/%s/modlog' class='cm-nav-link'>Mod log</a>
-        </nav>
         <section class='cm-panel'>
             <h2 class='cm-panel-title'>Member reports</h2>
             <p class='cm-panel-desc'>Content flagged by members of this community, newest first. Private to moderators.</p>
@@ -3034,8 +3131,7 @@ let reports_queue_page ?user ~(community : community) ~(status : Db.report_statu
             </div>
         </section>
     </div>"
-    slug (esc community.name)
-    slug slug slug
+    slug
     tabs
     preview_note
     table_body
@@ -4600,8 +4696,16 @@ let admin_dashboard_page ?user ~signups_enabled
 
 (* === MODERATION LOG === *)
 
-let mod_log_page ?user ?(noindex=false) ~(community : Db.community) (actions : Db.mod_action list) request =
+let mod_log_page ?user ?(noindex=false) ~(can_access_settings : bool) ~(community : Db.community) (actions : Db.mod_action list) request =
   let esc = Components.html_escape in
+  (* Mod log is member-visible, not mod-only. Send viewers who can reach settings back into the
+     moderation panel; send everyone else back to the community home. *)
+  let back_link =
+    if can_access_settings then
+      Printf.sprintf "<a href='/c/%s/settings?panel=moderation' class='cm-back'>&larr; Back to settings</a>" (esc community.slug)
+    else
+      Printf.sprintf "<a href='/c/%s' class='cm-back'>&larr; Back to community</a>" (esc community.slug)
+  in
   let render_action (a : Db.mod_action) =
     let target_html = match a.target_id with
       | None -> ""
@@ -4634,13 +4738,8 @@ let mod_log_page ?user ?(noindex=false) ~(community : Db.community) (actions : D
     <div class='cm-wrap'>
         <div class='cm-head'>
             <h1 class='cm-h1'>Moderation <span class='accent'>log</span></h1>
-            <a href='/c/%s' class='cm-back'>&larr; Back to %s</a>
+            %s
         </div>
-        <nav class='cm-nav'>
-            <a href='/c/%s/settings' class='cm-nav-link'>Settings</a>
-            <a href='/c/%s/manage-mods' class='cm-nav-link'>Manage moderators</a>
-            <a href='/c/%s' class='cm-nav-link'>Public home</a>
-        </nav>
         <section class='cm-panel'>
             <h2 class='cm-panel-title'>Action history</h2>
             <p class='cm-panel-desc'>Public record of moderator actions in this community.</p>
@@ -4659,8 +4758,7 @@ let mod_log_page ?user ?(noindex=false) ~(community : Db.community) (actions : D
             </div>
         </section>
     </div>"
-    (esc community.slug) (esc community.name)
-    (esc community.slug) (esc community.slug) (esc community.slug)
+    back_link
     table_body
   in
   Components.community_manage_page ?user ~noindex ~request ~title:(community.name ^ " — Mod Log") ~body:content ()

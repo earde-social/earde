@@ -79,7 +79,7 @@ val privacy_page : ?user:string -> Dream.request -> string
 val msg_page : ?user:string -> ?auth:bool -> title:string -> message:string -> alert_type:string -> return_url:string -> Dream.request -> string
 
 (** === MODERATION LOG === *)
-val mod_log_page : ?user:string -> ?noindex:bool -> community:Db.community -> Db.mod_action list -> Dream.request -> string
+val mod_log_page : ?user:string -> ?noindex:bool -> can_access_settings:bool -> community:Db.community -> Db.mod_action list -> Dream.request -> string
 
 (** === ADMIN === *)
 (** Display-only heuristic: [true] when a username looks bot-generated (digit-heavy,
