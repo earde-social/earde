@@ -3962,53 +3962,63 @@ let settings_page ?user bio avatar_url request =
       ~username:(Option.value ~default:"" user) avatar_url
   in
 
-  (* Cross-links between the owner's own account pages — real routes only. Shown here
-     (and on /notifications) because both are inherently the logged-in user's pages; the
-     public profile deliberately omits these private links. *)
-  let account_nav =
-    match user with
-    | Some u ->
-        Printf.sprintf "
+  (* Account-area nav links to the private account pages only; the public profile is
+     reached through the separate "View public profile" link. *)
+  let account_nav = "
     <nav class='account-nav'>
-        <a class='account-nav-link' href='/u/%s'>Profile</a>
         <a class='account-nav-link account-nav-link--active' href='/settings'>Settings</a>
         <a class='account-nav-link' href='/notifications'>Notifications</a>
-    </nav>" u
+    </nav>"
+  in
+  let view_profile_link =
+    match user with
+    | Some u ->
+        Printf.sprintf
+          "<a class='account-view-profile' href='/u/%s'>View public profile &#8599;</a>"
+          (Components.html_escape u)
     | None -> ""
   in
 
   let body = Printf.sprintf "
     <div class='account-wrap account-wrap--narrow'>
         %s
-        <div class='account-head'><h1 class='account-h1'>Account <span class='accent'>settings</span></h1></div>
+        <div class='account-head account-head--row'>
+            <h1 class='account-h1'>Account <span class='accent'>settings</span></h1>
+            %s
+        </div>
 
-        <div class='account-panel'>
-            <div class='account-section'>
-                <h2 class='account-section-title'>Profile information</h2>
-                <form action='/settings' method='POST' enctype='multipart/form-data' class='account-form'>
-                    %s
-                    <div class='account-field'>
-                        <label class='account-label'>Avatar image <span class='account-label-opt'>(optional)</span></label>
+        <div class='account-panel account-panel--card'>
+            <h2 class='account-section-title'>Profile information</h2>
+            <form action='/settings' method='POST' enctype='multipart/form-data' class='account-form'>
+                %s
+                <div class='account-field'>
+                    <label class='account-label'>Avatar <span class='account-label-opt'>(optional)</span></label>
+                    <div class='account-avatar-row'>
                         %s
-                        <input type='hidden' name='existing_avatar_url' value='%s'>
-                        <input type='file' name='avatar_url' accept='image/*' class='account-file'>
+                        <div class='account-avatar-ctl'>
+                            <input type='hidden' name='existing_avatar_url' value='%s'>
+                            <input type='file' name='avatar_url' accept='image/*' class='account-file'>
+                            <span class='account-hint'>PNG or JPG &middot; square images look best</span>
+                        </div>
                     </div>
-                    <div class='account-field'>
-                        <label class='account-label'>Bio</label>
-                        <textarea name='bio' rows='4' class='account-textarea' placeholder='Tell the community a bit about yourself...'>%s</textarea>
-                    </div>
-                    <button type='submit' class='account-btn'>Save profile</button>
-                </form>
-            </div>
+                </div>
+                <div class='account-field'>
+                    <label class='account-label'>Bio</label>
+                    <textarea name='bio' rows='4' class='account-textarea' placeholder='Tell the community a bit about yourself...'>%s</textarea>
+                </div>
+                <button type='submit' class='account-btn'>Save profile</button>
+            </form>
+        </div>
 
-            <div class='account-section'>
-                <h2 class='account-section-title'>Change password</h2>
-                <form action='/settings/password' method='POST' class='account-form'>
-                    %s
-                    <div class='account-field'>
-                        <label class='account-label'>Current password</label>
-                        <input type='password' name='old_password' required class='account-input'>
-                    </div>
+        <div class='account-panel account-panel--card'>
+            <h2 class='account-section-title'>Change password</h2>
+            <form action='/settings/password' method='POST' class='account-form'>
+                %s
+                <div class='account-field'>
+                    <label class='account-label'>Current password</label>
+                    <input type='password' name='old_password' required class='account-input'>
+                </div>
+                <div class='account-field-pair'>
                     <div class='account-field'>
                         <label class='account-label'>New password</label>
                         <input type='password' name='new_password' required minlength='8' class='account-input'>
@@ -4017,15 +4027,15 @@ let settings_page ?user bio avatar_url request =
                         <label class='account-label'>Confirm new password</label>
                         <input type='password' name='confirm_password' required minlength='8' class='account-input'>
                     </div>
-                    <button type='submit' class='account-btn account-btn--secondary'>Update password</button>
-                </form>
-            </div>
+                </div>
+                <button type='submit' class='account-btn account-btn--secondary'>Update password</button>
+            </form>
+        </div>
 
-            <div class='account-section'>
-                <h2 class='account-section-title'>Data portability (GDPR Art. 20)</h2>
-                <p class='account-section-desc'>Download a complete machine-readable copy (JSON) of your personal data, including your profile information, posts, and comments.</p>
-                <a href='/export-data' class='account-btn account-btn--secondary'>&#8595; Download my data</a>
-            </div>
+        <div class='account-panel account-panel--card'>
+            <h2 class='account-section-title'>Your data</h2>
+            <p class='account-section-desc'>Export your account data as JSON.</p>
+            <a href='/export-data' class='account-btn account-btn--secondary'>&#8595; Download my data</a>
         </div>
 
         <div class='account-panel account-danger'>
@@ -4037,7 +4047,7 @@ let settings_page ?user bio avatar_url request =
             </form>
         </div>
     </div>"
-    account_nav csrf_token avatar_preview current_avatar current_bio csrf_token csrf_token
+    account_nav view_profile_link csrf_token avatar_preview current_avatar current_bio csrf_token csrf_token
   in
   Components.account_page ~noindex:true ?user ~request ~title:"Settings" ~body ()
 
@@ -4075,13 +4085,11 @@ let notifications_page ?user (notifs : Db.notification list) request =
   in
   let account_nav =
     match user with
-    | Some u ->
-        Printf.sprintf "
+    | Some _ -> "
     <nav class='account-nav'>
-        <a class='account-nav-link' href='/u/%s'>Profile</a>
         <a class='account-nav-link' href='/settings'>Settings</a>
         <a class='account-nav-link account-nav-link--active' href='/notifications'>Notifications</a>
-    </nav>" u
+    </nav>"
     | None -> ""
   in
   let list_html =
