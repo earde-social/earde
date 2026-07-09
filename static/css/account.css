@@ -368,3 +368,35 @@ a.account-notif:hover { border-color: var(--line-2); background: var(--panel-2);
   .account-avatar { width: 60px; height: 60px; }
   .account-name { font-size: 19px; }
 }
+
+/* --------------------------------------------------------------------------
+   settings cards
+   -------------------------------------------------------------------------- */
+.account-head--row {
+  display: flex; align-items: baseline; justify-content: space-between;
+  gap: 12px; flex-wrap: wrap;
+}
+.account-view-profile {
+  font-family: var(--cs-mono); font-size: 12px; font-weight: 500;
+  color: var(--ink-2); background: var(--panel);
+  border: 1px solid var(--line); border-radius: 2px;
+  padding: 5px 10px; display: inline-flex; align-items: center; gap: 6px;
+  transition: border-color .12s ease, color .12s ease;
+}
+.account-view-profile:hover { color: var(--ink); border-color: var(--line-2); }
+
+.account-panel--card { padding: 20px 22px 22px; }
+
+.account-avatar-row {
+  display: flex; align-items: center; gap: 14px;
+  padding: 12px 14px;
+  background: var(--panel-2); border: 1px solid var(--line); border-radius: 2px;
+}
+.account-avatar-row .account-avatar { width: 56px; height: 56px; }
+.account-avatar-ctl { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.account-avatar-row .account-file { background: var(--panel); }
+.account-hint { font-family: var(--cs-mono); font-size: 11px; color: var(--ink-3); }
+
+.account-field-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+
+.account-panel + .account-danger { margin-top: 28px; }
