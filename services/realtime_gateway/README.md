@@ -10,7 +10,7 @@ and stores nothing — it only fans messages out over WebSocket.
 ## Run (local)
 
 ```sh
-export $(grep -v '^#' ../../.env | xargs) && gleam run
+gleam run
 ```
 
 ## Build
