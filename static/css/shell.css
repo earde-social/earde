@@ -6,7 +6,7 @@
    (still-warm) site. Hand-written, no build step — loaded only on shell pages.
    ========================================================================== */
 
-@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap');
+/* Design tokens + IBM Plex come from base.css / the layout's font <link>. */
 
 /* --------------------------------------------------------------------------
    VIEWPORT LOCK (App chrome only). shell.css loads ONLY on shell pages (via
@@ -40,29 +40,12 @@ html, body { height: 100%; overflow: hidden; }
 .community-shell .cs-aside::-webkit-scrollbar-track { background: transparent; }
 
 /* --------------------------------------------------------------------------
-   ROOT — tokens declared on the shell (not :root) so they stay contained,
-   plus the multi-pane grid. Sized to the viewport minus the top command bar.
+   ROOT — the multi-pane grid, sized to the viewport minus the top command bar.
+   Colour/font tokens come from base.css (:root); only layout vars live here.
    -------------------------------------------------------------------------- */
 .community-shell {
-  /* cool-grey neutrals + accents (subset ported from the prototype) */
-  --paper:   oklch(0.948 0.004 250);
-  --panel:   oklch(0.995 0.002 250);
-  --panel-2: oklch(0.972 0.004 250);
-  --panel-3: oklch(0.958 0.005 250);
-  --ink:     oklch(0.255 0.012 262);
-  --ink-2:   oklch(0.430 0.011 262);
-  --ink-3:   oklch(0.580 0.009 262);
-  --line:    oklch(0.866 0.006 255);
-  --line-2:  oklch(0.800 0.007 255);
-  --frame:   oklch(0.300 0.012 262);
-  --frame-ink: oklch(0.965 0.003 250);
-  --red:     oklch(0.555 0.155 27);
-
-  --cs-mono: 'IBM Plex Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace;
-  --cs-sans: 'IBM Plex Sans', system-ui, -apple-system, sans-serif;
   --cs-rail-w: 232px;
   --cs-aside-w: 320px;
-  --cs-nav-h: 54px;   /* height of the .app-topbar command bar — keep in sync with it */
 
   display: grid;
   grid-template-columns: 64px var(--cs-rail-w) 1fr;
@@ -80,28 +63,14 @@ html, body { height: 100%; overflow: hidden; }
 
 /* --------------------------------------------------------------------------
    APP COMMAND BAR (.app-topbar) — the mono topbar for every shell surface.
-   It is a SIBLING of .community-shell (rendered by layout, outside the grid),
-   so it can't inherit the tokens declared on .community-shell — they're
-   redeclared here. Safe to be unscoped: shell.css loads only on shell pages.
+   It is a SIBLING of .community-shell (rendered by layout, outside the grid);
+   tokens resolve from :root (base.css). Safe to be unscoped: shell.css loads
+   only on shell pages.
    Keep min-height in sync with --cs-nav-h (54px) so the grid fits the viewport.
    -------------------------------------------------------------------------- */
 .app-topbar {
-  --paper:   oklch(0.948 0.004 250);
-  --panel:   oklch(0.995 0.002 250);
-  --panel-2: oklch(0.972 0.004 250);
-  --panel-3: oklch(0.958 0.005 250);
-  --ink:     oklch(0.255 0.012 262);
-  --ink-2:   oklch(0.430 0.011 262);
-  --ink-3:   oklch(0.580 0.009 262);
-  --line:    oklch(0.866 0.006 255);
-  --line-2:  oklch(0.800 0.007 255);
-  --frame:   oklch(0.300 0.012 262);
-  --red:     oklch(0.555 0.155 27);
-  --cs-mono: 'IBM Plex Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace;
-  --cs-sans: 'IBM Plex Sans', system-ui, -apple-system, sans-serif;
-
   flex-shrink: 0;
-  position: sticky; top: 0; z-index: 50;
+  position: sticky; top: 0; z-index: var(--z-sticky);
   background: var(--panel);
   border-bottom: 1px solid var(--frame);
   box-shadow: 0 1px 0 oklch(0.30 0.01 262 / 0.06);
@@ -217,7 +186,7 @@ html, body { height: 100%; overflow: hidden; }
 .app-bell .app-badge {
   position: absolute; top: -3px; right: -5px;
   background: var(--red); color: #fff;
-  font-family: var(--cs-mono); font-size: 10px; font-weight: 700; line-height: 1;
+  font-family: var(--cs-mono); font-size: 11px; font-weight: 700; line-height: 1;
   padding: 1px 4px; border-radius: 8px;
 }
 
@@ -240,7 +209,7 @@ html, body { height: 100%; overflow: hidden; }
 }
 .app-uname { font-family: var(--cs-mono); font-size: 12.5px; color: var(--ink-2); }
 .app-user-menu {
-  position: absolute; right: 0; top: calc(100% + 6px); z-index: 60;
+  position: absolute; right: 0; top: calc(100% + 6px); z-index: var(--z-menu);
   min-width: 184px;
   background: var(--panel); border: 1px solid var(--line-2); border-radius: 2px;
   box-shadow: 0 6px 20px oklch(0.30 0.01 262 / 0.16);
@@ -347,7 +316,7 @@ html, body { height: 100%; overflow: hidden; }
 .community-shell .cs-item.active .cs-item-sigil { color: var(--red); }
 .community-shell .cs-item-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .community-shell .cs-item-badge {
-  margin-left: auto; font-family: var(--cs-mono); font-size: 10px; font-weight: 600;
+  margin-left: auto; font-family: var(--cs-mono); font-size: 11px; font-weight: 600;
   background: var(--red); color: #fff; padding: 0 5px; border-radius: 7px;
   min-width: 16px; text-align: center;
 }
@@ -512,9 +481,10 @@ html, body { height: 100%; overflow: hidden; }
 .community-shell .fh-crumb a { color: var(--ink-2); }
 .community-shell .fh-crumb b { color: var(--ink); }
 .community-shell .fh-top { display: flex; align-items: flex-start; gap: 14px; }
+/* Rendered as the page's <h1>; margin zeroed against the UA heading default. */
 .community-shell .fh-title {
-  font-family: var(--cs-mono); font-weight: 700; font-size: 19px; color: var(--ink);
-  display: flex; align-items: center; gap: 9px;
+  font-family: var(--cs-mono); font-weight: 700; font-size: 21px; color: var(--ink);
+  display: flex; align-items: center; gap: 9px; margin: 0;
 }
 .community-shell .fh-title .sec { color: var(--red); }
 .community-shell .fh-desc { color: var(--ink-2); font-size: 13.5px; margin-top: 4px; max-width: 70ch; }
@@ -550,8 +520,9 @@ html, body { height: 100%; overflow: hidden; }
 }
 .community-shell .cs-thread:hover { background: var(--panel-2); }
 
-/* Vote control: layout ONLY — colours stay on the buttons (Tailwind) so the optimistic-vote JS
-   keeps winning. Its direct children must remain upvote-form / score <span> / downvote-form. */
+/* Vote control: layout ONLY — state colour lives on the .vote-up/.vote-down classes
+   (base.css) that the optimistic-vote JS toggles. Its direct children must remain
+   upvote-form / score <span> / downvote-form. */
 .community-shell .cs-vote {
   display: flex; flex-direction: column; align-items: center;
   width: 30px; flex-shrink: 0; padding-top: 1px;
@@ -586,7 +557,7 @@ html, body { height: 100%; overflow: hidden; }
 .community-shell .cs-row-mod > summary::-webkit-details-marker { display: none; }
 .community-shell .cs-row-mod[open] > summary { background: var(--panel-3); border-color: var(--line-2); color: var(--ink); }
 .community-shell .cs-row-mod-menu {
-  position: absolute; right: 0; top: 28px; z-index: 30;
+  position: absolute; right: 0; top: 28px; z-index: var(--z-dropdown);
   display: flex; flex-direction: column; gap: 6px; align-items: flex-end;
   background: var(--panel); border: 1px solid var(--line-2); border-radius: 3px;
   padding: 8px; box-shadow: 0 6px 20px rgba(0,0,0,0.14);
@@ -618,19 +589,14 @@ html, body { height: 100%; overflow: hidden; }
 .community-shell .member { display: flex; align-items: center; gap: 9px; padding: 4px 0; font-size: 13.5px; color: var(--ink-2); }
 .community-shell .member a { color: var(--ink-2); }
 .community-shell .member .role { margin-left: auto; }
-.community-shell .role {
-  font-family: var(--cs-mono); font-size: 9.5px; font-weight: 700; letter-spacing: 0.06em;
-  padding: 1px 5px; border-radius: 2px;
-}
-.community-shell .role.mod {
-  color: oklch(0.40 0.10 150); background: oklch(0.95 0.03 150); border: 1px solid oklch(0.80 0.07 150);
-}
+/* .role badge baseline (mod/admin/op variants) lives in base.css — shared by every
+   surface render_author touches, not just the shell. */
 
 /* ==========================================================================
    THREAD VIEW — /c/:slug/t/:id-:slug (Pages.thread_shell_page).
    Scoped under .community-shell; reuses .btn/.cs-vote/.ca-* from the section view.
-   Vote buttons are sized here but NEVER coloured — the optimistic-vote JS owns colour via
-   Tailwind classes on the buttons, so we leave `color` untouched.
+   Vote buttons are sized here but NEVER coloured — state colour lives on the
+   .vote-up/.vote-down classes (base.css) the optimistic-vote JS toggles.
    Tracks prototype/app-thread.html: a readable DOCUMENT inside the shell, not an app pane.
    ========================================================================== */
 
@@ -681,9 +647,10 @@ html, body { height: 100%; overflow: hidden; }
 .community-shell .th-actions { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-top: 12px; }
 
 /* Source attribution for threads started from chat. Compact panel under the meta:
-   the "Started from #channel" line plus the ordered source messages. */
+   the "Started from #channel" line plus the ordered source messages. Identity comes
+   from the red channel link in the head line — no colored side-stripe (DESIGN.md §6). */
 .community-shell .th-source {
-  margin-top: 16px; border: 1px solid var(--line-2); border-left: 2px solid var(--red);
+  margin-top: 16px; border: 1px solid var(--line-2);
   background: var(--panel-2); border-radius: 2px; padding: 12px 14px;
 }
 .community-shell .th-source-head { font-family: var(--cs-mono); font-size: 12.5px; color: var(--ink-2); }
@@ -693,9 +660,10 @@ html, body { height: 100%; overflow: hidden; }
 .community-shell .th-source-author { font-family: var(--cs-mono); font-weight: 600; color: var(--ink); flex-shrink: 0; }
 .community-shell .th-source-text { color: var(--ink-2); white-space: pre-wrap; overflow-wrap: anywhere; }
 
-/* Body: post content / image / external link, aligned under the title. */
+/* Body: post content / image / external link, aligned under the title.
+   72ch measure cap keeps long-form prose in the readable band on wide panes. */
 .community-shell .th-body {
-  font-size: 15px; line-height: 1.72; color: var(--ink);
+  font-size: 15px; line-height: 1.72; color: var(--ink); max-width: 72ch;
   margin-top: 18px; white-space: pre-wrap; overflow-wrap: anywhere;
 }
 .community-shell .th-img { margin-top: 18px; }
@@ -705,7 +673,7 @@ html, body { height: 100%; overflow: hidden; }
 }
 .community-shell .th-linkrow { margin-top: 16px; }
 
-/* Vote control: layout only; colour stays on the buttons (Tailwind) for the optimistic-vote JS.
+/* Vote control: layout only; colour lives on .vote-up/.vote-down (base.css).
    Larger in the post head, tighter in comments — both keep the upvote/score/downvote child order. */
 .community-shell .th-head .cs-vote button, .community-shell .th-head .cs-vote a,
 .community-shell .cmt .cs-vote button, .community-shell .cmt .cs-vote a {
@@ -714,7 +682,7 @@ html, body { height: 100%; overflow: hidden; }
 .community-shell .th-head .cs-vote { width: 34px; padding-top: 2px; }
 .community-shell .th-head .cs-vote button, .community-shell .th-head .cs-vote a { font-size: 16px; }
 .community-shell .th-head .cs-vote-score { font-size: 14px; }
-.community-shell .cmt .cs-vote { width: 22px; }
+.community-shell .cmt .cs-vote { width: 26px; }
 .community-shell .cmt .cs-vote button, .community-shell .cmt .cs-vote a { font-size: 13px; }
 .community-shell .cmt .cs-vote-score { font-size: 11.5px; }
 .community-shell .cs-vote form { margin: 0; padding: 0; display: flex; }
@@ -732,7 +700,8 @@ html, body { height: 100%; overflow: hidden; }
   margin: 0 0 22px; border: 1px solid var(--line-2); border-radius: 3px;
   background: var(--panel); overflow: hidden;
 }
-.community-shell .ct-composer:focus-within { border-color: var(--ink-3); }
+/* Focus cue matches every other input in the system: Signal Red, not a grey shift. */
+.community-shell .ct-composer:focus-within { border-color: var(--red); }
 .community-shell .ct-composer textarea {
   display: block; width: 100%; box-sizing: border-box; resize: vertical; min-height: 62px;
   font-family: var(--cs-sans); font-size: 13.5px; line-height: 1.55; color: var(--ink);
@@ -756,9 +725,9 @@ html, body { height: 100%; overflow: hidden; }
 .community-shell .cmt { display: flex; gap: 12px; padding: 13px 0; border-top: 1px solid var(--line); }
 .community-shell .cmt .cbody { flex: 1; min-width: 0; }
 .community-shell .cmeta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12.5px; color: var(--ink-2); }
-.community-shell .ctime { font-family: var(--cs-mono); font-size: 10.5px; color: var(--ink-3); }
+.community-shell .ctime { font-family: var(--cs-mono); font-size: 11px; color: var(--ink-3); }
 .community-shell .ctext {
-  font-size: 14px; line-height: 1.62; color: var(--ink);
+  font-size: 14px; line-height: 1.62; color: var(--ink); max-width: 72ch;
   margin-top: 5px; white-space: pre-wrap; overflow-wrap: anywhere;
 }
 .community-shell .cactions {
@@ -780,11 +749,6 @@ html, body { height: 100%; overflow: hidden; }
    (markup adds .cmt-flat) so deep chains stay readable and never staircase off-screen. */
 .community-shell .cmt-children { margin-left: 4px; border-left: 1px solid var(--line); padding-left: 14px; }
 .community-shell .cmt-children.cmt-flat { margin-left: 0; border-left: 0; padding-left: 0; }
-
-/* OP badge (mirrors .role.mod but in the cyan accent). */
-.community-shell .role.op {
-  color: oklch(0.45 0.07 220); background: oklch(0.95 0.03 220); border: 1px solid oklch(0.82 0.06 220);
-}
 
 /* ==========================================================================
    GLOBAL FEED (/feed) — reuses the whole .community-shell vocabulary. Feed is
@@ -833,7 +797,7 @@ html, body { height: 100%; overflow: hidden; }
 /* Following-empty state — title + CTA row, on top of the shared .cs-empty box. */
 .community-shell .feed-empty { text-align: left; max-width: 56ch; margin: 0 auto; }
 .community-shell .feed-empty .fe-title {
-  font-family: var(--cs-mono); font-weight: 700; font-size: 16px; color: var(--ink); margin-bottom: 8px;
+  font-family: var(--cs-mono); font-weight: 700; font-size: 16px; color: var(--ink); margin: 0 0 8px;
 }
 .community-shell .feed-empty p { color: var(--ink-2); font-size: 13.5px; line-height: 1.6; margin: 0 0 16px; }
 .community-shell .feed-empty .fe-actions { display: flex; flex-wrap: wrap; gap: 8px; }
@@ -845,4 +809,65 @@ html, body { height: 100%; overflow: hidden; }
 @media (max-width: 820px) {
   .community-shell.feed-shell,
   .community-shell.feed-shell.with-aside { grid-template-columns: 56px 1fr; }
+}
+
+/* --------------------------------------------------------------------------
+   PHONE-WIDTH READ MODE — public read surfaces (feed, section feeds, threads)
+   opt OUT of the desktop-only gate, so below it they collapse to a single
+   usable column: the icon rail drops and the horizontal gutters tighten.
+   Gated surfaces (chat, settings, admin) are hidden by the gate before these
+   rules matter, so applying them to every shell is safe.
+   -------------------------------------------------------------------------- */
+@media (max-width: 640px) {
+  .community-shell, .community-shell.with-aside,
+  .community-shell.feed-shell, .community-shell.feed-shell.with-aside {
+    grid-template-columns: 1fr;
+  }
+  .community-shell .cs-rail { display: none; }
+  .community-shell .thread-shell-main { padding: 0 16px 64px; }
+  .community-shell .cs-thread { padding: 13px 16px; }
+  .community-shell .forum-head { padding: 12px 16px 0; }
+  .community-shell .cs-pager { padding: 14px 16px; }
+  .community-shell.feed-shell .feed-lane { padding-left: 16px; padding-right: 16px; }
+  .community-shell .th-topbar { padding-top: 12px; }
+}
+
+/* --------------------------------------------------------------------------
+   MOBILE COMMUNITY NAV (.cs-mobile-nav) — the sidebar's replacement when the
+   col-2 column is gone (<820px on un-gated read surfaces). An SSR <details>
+   disclosure pinned to the top of the main pane: summary = community identity,
+   panel = the same .cs-group/.cs-item nav the sidebar renders. Hidden entirely
+   on desktop, where the sidebar owns navigation.
+   -------------------------------------------------------------------------- */
+.community-shell .cs-mobile-nav { display: none; }
+
+@media (max-width: 820px) {
+  .community-shell .cs-mobile-nav {
+    display: block; flex-shrink: 0;
+    background: var(--panel-2);
+    border-bottom: 1px solid var(--line-2);
+  }
+  .community-shell .cs-mobile-nav > summary {
+    list-style: none; cursor: pointer;
+    display: flex; align-items: baseline; gap: 8px;
+    padding: 12px 16px;   /* comfortable touch target (~44px tall) */
+    font-family: var(--cs-mono);
+  }
+  .community-shell .cs-mobile-nav > summary::-webkit-details-marker { display: none; }
+  .community-shell .cs-mobile-nav-name {
+    font-weight: 700; font-size: 14px; color: var(--ink);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0;
+  }
+  .community-shell .cs-mobile-nav-slug { font-size: 11.5px; color: var(--ink-3); flex-shrink: 0; }
+  .community-shell .cs-mobile-nav-caret {
+    margin-left: auto; color: var(--ink-3); font-size: 13px;
+    transition: transform .12s ease;
+  }
+  .community-shell .cs-mobile-nav[open] > summary .cs-mobile-nav-caret { transform: rotate(180deg); }
+  .community-shell .cs-mobile-nav[open] > summary { border-bottom: 1px solid var(--line); }
+  .community-shell .cs-mobile-nav-panel {
+    padding: 10px 8px; max-height: 55dvh; overflow-y: auto;
+  }
+  /* Roomier rows than the desktop sidebar: coarse pointers need the space. */
+  .community-shell .cs-mobile-nav-panel .cs-item { padding: 10px 8px; }
 }

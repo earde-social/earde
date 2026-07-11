@@ -19,39 +19,27 @@
   /* Hide the app chrome. mobile-gate.css loads only on `App pages, so targeting the
      bare <header.app-topbar> and <main> can't affect Site/auth layouts. */
   body > header.app-topbar,
+  body > a.skip-link,
   body > main { display: none !important; }
 
   .mobile-gate {
-    /* cool-grey neutrals (subset ported from shell.css; tokens there are scoped to
-       .community-shell/.app-topbar, so they're redeclared on the local container). */
-    --mg-paper:   oklch(0.948 0.004 250);
-    --mg-panel:   oklch(0.995 0.002 250);
-    --mg-panel-3: oklch(0.958 0.005 250);
-    --mg-ink:     oklch(0.255 0.012 262);
-    --mg-ink-2:   oklch(0.430 0.011 262);
-    --mg-ink-3:   oklch(0.580 0.009 262);
-    --mg-line-2:  oklch(0.800 0.007 255);
-    --mg-frame:   oklch(0.300 0.012 262);
-    --mg-red:     oklch(0.555 0.155 27);
-    --mg-mono: 'IBM Plex Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace;
-    --mg-sans: 'IBM Plex Sans', system-ui, -apple-system, sans-serif;
-
-    position: fixed; inset: 0; z-index: 9999;
+    /* Tokens come from base.css (:root); --z-gate tops the semantic scale. */
+    position: fixed; inset: 0; z-index: var(--z-gate);
     display: flex; align-items: center; justify-content: center;
     /* The body may be overflow:hidden (shell pages); let the gate itself scroll so the
        panel is never clipped on a very short viewport. */
     overflow-y: auto;
     padding: 24px;
-    background: var(--mg-paper);
-    font-family: var(--mg-sans);
-    color: var(--mg-ink);
+    background: var(--paper);
+    font-family: var(--cs-sans);
+    color: var(--ink);
     -webkit-text-size-adjust: 100%;
   }
 
   .mobile-gate-card {
     width: 100%; max-width: 360px;
-    background: var(--mg-panel);
-    border: 1px solid var(--mg-line-2);
+    background: var(--panel);
+    border: 1px solid var(--line-2);
     border-radius: 4px;
     box-shadow: 0 6px 24px oklch(0.30 0.01 262 / 0.12);
     padding: 28px 24px;
@@ -79,14 +67,14 @@
   }
 
   .mobile-gate-title {
-    font-family: var(--mg-mono); font-weight: 700; font-size: 18px;
-    color: var(--mg-ink); margin: 0 0 10px;
+    font-family: var(--cs-mono); font-weight: 700; font-size: 18px;
+    color: var(--ink); margin: 0 0 10px;
   }
   .mobile-gate-body {
-    font-size: 14px; line-height: 1.6; color: var(--mg-ink-2); margin: 0;
+    font-size: 14px; line-height: 1.6; color: var(--ink-2); margin: 0;
   }
   .mobile-gate-note {
-    font-family: var(--mg-mono); font-size: 11.5px; color: var(--mg-ink-3);
-    margin: 16px 0 0; padding-top: 14px; border-top: 1px solid var(--mg-panel-3);
+    font-family: var(--cs-mono); font-size: 11.5px; color: var(--ink-3);
+    margin: 16px 0 0; padding-top: 14px; border-top: 1px solid var(--panel-3);
   }
 }

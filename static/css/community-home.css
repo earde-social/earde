@@ -7,30 +7,15 @@
    Hand-written, no build step — loaded only on this page via layout's head_extra.
    ========================================================================== */
 
-@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap');
+/* Design tokens + IBM Plex come from base.css / the layout's font <link>. */
 
 /* --------------------------------------------------------------------------
-   ROOT — tokens declared on the page root (not :root) so they stay contained.
-   Cool-grey subset ported from the prototype / shell.css.
+   ROOT — colour/font tokens come from base.css (:root); the --ch-* names are
+   kept as local aliases so this file's existing rules stay untouched.
    -------------------------------------------------------------------------- */
 .community-home {
-  --panel:   oklch(0.995 0.002 250);
-  --panel-2: oklch(0.972 0.004 250);
-  --panel-3: oklch(0.958 0.005 250);
-  --paper:   oklch(0.948 0.004 250);
-  --ink:     oklch(0.255 0.012 262);
-  --ink-2:   oklch(0.430 0.011 262);
-  --ink-3:   oklch(0.580 0.009 262);
-  --line:    oklch(0.866 0.006 255);
-  --line-2:  oklch(0.800 0.007 255);
-  --frame:   oklch(0.300 0.012 262);
-  --frame-ink: oklch(0.965 0.003 250);
-  --red:        oklch(0.555 0.155 27);
-  --red-strong: oklch(0.490 0.165 27);
-
-  --ch-mono: 'IBM Plex Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace;
-  --ch-sans: 'IBM Plex Sans', system-ui, -apple-system, sans-serif;
-  --cs-nav-h: 54px;   /* height of the .app-topbar command bar (see shell.css) */
+  --ch-mono: var(--cs-mono);
+  --ch-sans: var(--cs-sans);
 
   /* Rendered full-bleed: own the whole page as a flex column so the topband (white) and the
      body (checkered grey) can each paint their own full-width surface, like the prototype. */
@@ -114,7 +99,9 @@
   display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
 }
 .community-home .ch-name {
-  font-family: var(--ch-mono); font-size: 24px; font-weight: 700; color: var(--ink);
+  /* Rendered as the page's <h1>; margin zeroed against the UA heading default. */
+  font-family: var(--ch-mono); font-size: 21px; font-weight: 700; color: var(--ink);
+  margin: 0;
 }
 .community-home .ch-slug {
   font-family: var(--ch-mono); font-size: 13px; color: var(--ink-3);

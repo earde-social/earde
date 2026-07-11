@@ -95,7 +95,7 @@ let user_avatar ?(alt="") ~img_class ~tile_class ~username avatar_url =
   | Some url when String.trim url <> "" ->
       let src = safe_img_src url in
       if src = "#" then initial_tile ~class_:tile_class username
-      else Printf.sprintf "<img src='%s' class='%s' alt='%s'>" src img_class (html_escape alt)
+      else Printf.sprintf "<img src='%s' class='%s' alt='%s' loading='lazy' decoding='async'>" src img_class (html_escape alt)
   | _ -> initial_tile ~class_:tile_class username
 
 (* Community counterpart of user_avatar; the tile glyph is the community name's first letter. *)
@@ -104,7 +104,7 @@ let community_avatar ?(alt="") ~img_class ~tile_class ~name avatar_url =
   | Some url when String.trim url <> "" ->
       let src = safe_img_src url in
       if src = "#" then initial_tile ~class_:tile_class name
-      else Printf.sprintf "<img src='%s' class='%s' alt='%s'>" src img_class (html_escape alt)
+      else Printf.sprintf "<img src='%s' class='%s' alt='%s' loading='lazy' decoding='async'>" src img_class (html_escape alt)
   | _ -> initial_tile ~class_:tile_class name
 
 (* Banner image when present & safe, else the caller's existing fallback element (e.g. a
@@ -126,18 +126,15 @@ let post_thumbnail ?(alt="Post image") ~img_class image_url =
   | Some url when String.trim url <> "" ->
       let src = safe_img_src url in
       if src = "#" then ""
-      else Printf.sprintf "<img src='%s' class='%s' alt='%s'>" src img_class (html_escape alt)
+      else Printf.sprintf "<img src='%s' class='%s' alt='%s' loading='lazy' decoding='async'>" src img_class (html_escape alt)
   | _ -> ""
 
 (* === LAYOUT === *)
 
-(* CDN Tailwind avoids a build step — acceptable for dev/staging; swap for a
-   bundled stylesheet before serving under high traffic to remove the round-trip. *)
 (* request is optional so callers without session context (e.g. choose_community_page)
    can omit it and get is_admin=false by default — no forced parameter threading. *)
-(* head_extra/full_bleed are opt-in per page (default to today's behavior) so feature
-   pages — e.g. the community shell — can pull in their own stylesheet and go edge-to-edge
-   without affecting any existing call site. See docs/earde-frontend-architecture.md. *)
+(* head_extra is opt-in per page so feature pages — e.g. the community shell — can pull
+   in their own stylesheet without affecting any other call site. *)
 
 (* The App command bar: the mono, app-like topbar used by every shell surface (feed + community
    channel/section/thread). It is deliberately distinct from the warm Site navbar so the in-app
@@ -150,8 +147,8 @@ let render_app_topbar ?user ?request:_ ~is_admin () =
   let search =
     "<form class='app-search' action='/search' method='GET'>\
        <span class='app-sigil'>/</span>\
-       <input type='text' name='q' required placeholder='grep public threads · communities…'>\
-       <button type='submit' title='Search'>&#8629;</button>\
+       <input type='text' name='q' required placeholder='grep public threads · communities…' aria-label='Search threads and communities'>\
+       <button type='submit' title='Search' aria-label='Search'>&#8629;</button>\
      </form>"
   in
   let right =
@@ -215,106 +212,32 @@ let mobile_desktop_gate =
      </div>\
    </div>"
 
-(* chrome selects the page furniture: `Site = the warm Tailwind navbar + Privacy footer
-   (every legacy/marketing/private page); `App = the mono command bar and NO footer, for the
-   in-app shell. The shell surfaces (feed, section/channel/thread, account, admin, community
-   management, and the public /c/:slug community-home) opt into `App via their wrappers; the
-   remaining legacy/marketing pages keep `Site, byte-for-byte unchanged. *)
-let layout ?(noindex=false) ?user ?request ?(head_extra="") ?(full_bleed=false) ?(chrome=`Site) ~title content =
+(* chrome selects the page furniture: `App = the mono command bar over a page that owns
+   its own full-bleed layout (every shell/account/admin/creation surface plus the public
+   read pages); `Auth = no chrome at all (the focused centered-card pages). The warm
+   Tailwind `Site chrome — Nunito, the CDN runtime, navbar, footer — is fully retired. *)
+let layout ?(noindex=false) ?user ?request ?(head_extra="") ?(chrome=`App) ?(gate=true) ~title content =
   let is_admin = match request with
     | Some req -> Dream.session_field req "is_admin" = Some "true"
     | None -> false
   in
-  let auth_menu =
-    match user with
-    | Some username ->
-        (* Admin link: shown only in-session to keep the navbar uncluttered for
-           non-admins; linking to /admin exposes no data on its own — the handler
-           re-checks is_admin before rendering anything sensitive. *)
-        let admin_link =
-          if is_admin then
-            "<a href='/admin' class='text-red-600 hover:text-red-800 font-semibold text-xs border border-red-200 px-2 py-1 rounded-xl hover:bg-red-50 transition' title='Admin Dashboard'>🛡️ Admin</a>"
-          else ""
-        in
-        Printf.sprintf "
-          <div class='flex flex-row items-center gap-2 sm:gap-3'>
-            <a href='/u/%s' class='hidden sm:block text-[#3C3630] hover:text-[#C94C4C] font-medium text-sm transition'>u/%s</a>
-            %s
-            <a href='/notifications' class='relative text-gray-400 hover:text-gray-600 text-base' title='Notifications'>
-                🔔 <span id='notif-badge' class='hidden absolute -top-1 -right-2 bg-red-500 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full'>0</span>
-            </a>
-            <form action='/logout' method='POST' class='m-0 p-0 flex items-center'>
-               <button type='submit' class='text-xs text-gray-500 hover:text-red-600 font-medium border border-[#E0D9CC] px-3 py-1 rounded-xl hover:border-red-200 transition'>
-                 Log out
-               </button>
-            </form>
-          </div>"
-        (html_escape username) (html_escape username) admin_link
-    | None ->
-        "<div class='flex items-center space-x-3'>
-           <a href='/login' class='text-[#3C3630] hover:text-[#C94C4C] font-medium text-sm transition'>Log in</a>
-           <a href='/signup' class='bg-[#C94C4C] text-[#F7F3E8] px-4 py-1.5 rounded-xl hover:bg-[#A83A3A] font-semibold text-sm transition'>Sign up</a>
-         </div>"
-  in
-
   let robots_meta = if noindex then "<meta name='robots' content='noindex'>" else "" in
 
   (* `App surfaces carry the desktop-only gate: the stylesheet in <head> plus the panel in
      <body>. mobile-gate.css hides the app chrome and reveals the panel under the breakpoint;
-     above it the panel stays display:none. `Site/`Auth (legal/marketing, focused auth card)
-     are left usable, so they get neither. *)
+     above it the panel stays display:none. ~gate:false lets PUBLIC read surfaces (feed,
+     section feeds, threads, community home, search, privacy) opt out: gating archived
+     knowledge off phones would break the product's "find it later" promise. *)
   let gate_css, gate_html = match chrome with
-    | `App -> mobile_gate_css_link, mobile_desktop_gate
-    | `Site | `Auth -> "", ""
+    | `App when gate -> mobile_gate_css_link, mobile_desktop_gate
+    | `App | `Auth -> "", ""
   in
 
-  (* full_bleed hands width/height control to the page (the community shell sizes its own
-     fixed multi-pane grid); the default keeps the capped, padded content column. *)
-  let main_class =
-    if full_bleed then "flex-grow w-full"
-    else "flex-grow max-w-[1600px] w-full mx-auto px-6 sm:px-8 py-6"
-  in
-
-  (* Topbar + footer are chosen together by chrome. `App drops the footer entirely (the shell fills
-     the viewport) and swaps in the mono command bar; `Site keeps the existing navbar + footer. *)
-  let topbar_html, footer_html =
-    match chrome with
-    | `App -> render_app_topbar ?user ?request ~is_admin (), ""
+  let topbar_html = match chrome with
+    | `App -> render_app_topbar ?user ?request ~is_admin ()
     (* `Auth: focused auth/account-lifecycle pages own the full viewport with their
-       own centered card (auth.css) — no command bar, no navbar, no footer. *)
-    | `Auth -> "", ""
-    | `Site ->
-        let site_topbar = Printf.sprintf "
-      <nav class='bg-[#F7F3E8] border-b border-[#E0D9CC] sticky top-0 z-50'>
-          <div class='w-full px-4 md:px-6 py-3 flex items-center justify-between'>
-              <div class='flex-shrink-0 flex items-center'>
-                  <a href='/' class='app-brand flex items-center gap-[9px] py-1' aria-label='Earde home'><img src='/static/images/logo-mark.svg' alt='' class='app-logo-mark block h-8 w-8 shrink-0 object-contain'><img src='/static/images/logo-wordmark.svg' alt='Earde' class='app-logo-wordmark block h-7 w-auto max-w-[130px] shrink object-contain mr-4'></a>
-              </div>
-              <div class='flex-1 flex justify-center max-w-2xl px-4'>
-                  <form action='/search' method='GET' class='hidden md:flex items-center w-full'>
-                      <div class='relative w-full'>
-                          <div class='absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none'>
-                              <span class='text-gray-400 text-sm'>🔍</span>
-                          </div>
-                          <input type='text' name='q' placeholder='Search communities, users, posts...' required
-                                 class='w-full pl-9 pr-4 py-1.5 bg-[#EDE9DF] border border-transparent text-[#3C3630] text-sm rounded-xl focus:bg-white focus:border-[#C94C4C] focus:ring-1 focus:outline-none transition'>
-                      </div>
-                  </form>
-              </div>
-              <div class='flex flex-row items-center justify-end gap-2 sm:gap-4 shrink-0'>
-                  %s
-              </div>
-          </div>
-      </nav>" auth_menu
-        in
-        let site_footer = "
-      <footer class='border-t border-[#E0D9CC] mt-auto'>
-          <div class='max-w-screen-2xl mx-auto py-4 px-6 sm:px-8'>
-              <p class='text-center text-[#8C7E6E] text-xs'>&copy; 2026 Earde &middot; <a href='/privacy' class='hover:text-[#C94C4C] transition'>Privacy</a></p>
-          </div>
-      </footer>"
-        in
-        site_topbar, site_footer
+       own centered card (auth.css) — no command bar. *)
+    | `Auth -> ""
   in
 
   Printf.sprintf "
@@ -325,57 +248,49 @@ let layout ?(noindex=false) ?user ?request ?(head_extra="") ?(full_bleed=false) 
       <meta name='viewport' content='width=device-width, initial-scale=1.0'>
       <title>%s - Earde</title>
       %s
-      %s
-      %s
       <link rel='preconnect' href='https://fonts.googleapis.com'>
       <link rel='preconnect' href='https://fonts.gstatic.com' crossorigin>
-      <link href='https://fonts.googleapis.com/css2?family=Nunito:wght@400;500;600;700;800&display=swap' rel='stylesheet'>
-      <script src='https://cdn.tailwindcss.com'></script>
-      <style>body { font-family: 'Nunito', sans-serif; letter-spacing: 0.015em; }</style>
-  </head>
-  <body class='bg-[#F7F3E8] text-[#3C3630] min-h-screen flex flex-col'>
+      <link href='https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap' rel='stylesheet'>
+      <link rel='stylesheet' href='/static/css/base.css'>
       %s
-      <main class='%s'>
+      %s
+  </head>
+  <body>
+      <a class='skip-link' href='#main'>Skip to content</a>
+      %s
+      <main id='main'>
           %s
       </main>
       %s
-      %s
 
       <script>
-        /* Custom confirmation modal: replaces native window.confirm() — the browser's
-           built-in dialog is synchronous, unstyled, and blocks the JS thread. */
+        /* Confirmation dialog: a native <dialog> + showModal(), which gives keyboard
+           users focus trapping and Escape-to-cancel for free (the old hand-rolled
+           overlay had neither). Styled by .mdlg in base.css — no framework classes. */
         function confirmModal(event, message) {
           event.preventDefault();
           const form = event.target;
-          const overlay = document.createElement('div');
-          overlay.className = 'fixed inset-0 bg-gray-900/40 backdrop-blur-sm z-50 flex items-center justify-center opacity-0 transition-opacity duration-200';
-          const modal = document.createElement('div');
-          modal.className = 'bg-white rounded-2xl shadow-xl p-6 max-w-sm w-full mx-4 transform scale-95 transition-transform duration-200';
-          modal.innerHTML = `
-            <h3 class='text-lg font-semibold text-gray-900 mb-2'>Are you sure?</h3>
-            <p class='text-sm text-gray-500 mb-6' id='modal-confirm-msg'></p>
-            <div class='flex justify-end gap-3'>
-              <button type='button' class='px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-xl hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-[#C94C4C]' id='cancel-btn'>Cancel</button>
-              <button type='button' class='px-4 py-2 text-sm font-medium text-white bg-red-600 border border-transparent rounded-xl hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-600' id='confirm-btn'>Confirm</button>
-            </div>`;
+          let dlg = document.getElementById('confirm-dialog');
+          if (!dlg) {
+            dlg = document.createElement('dialog');
+            dlg.id = 'confirm-dialog';
+            dlg.className = 'mdlg mdlg--confirm';
+            dlg.innerHTML = `
+              <div class='mdlg-head'><h3>Are you sure?</h3><p id='confirm-dialog-msg'></p></div>
+              <div class='mdlg-actions'>
+                <button type='button' class='mdlg-btn' data-act='cancel'>Cancel</button>
+                <button type='button' class='mdlg-btn mdlg-confirm' data-act='confirm'>Confirm</button>
+              </div>`;
+            document.body.appendChild(dlg);
+          }
           /* textContent prevents innerHTML XSS — message may contain user-supplied
              usernames (e.g., ban dialog). Using textContent treats the value as
              plain text regardless of what it contains. */
-          modal.querySelector('#modal-confirm-msg').textContent = message;
-          overlay.appendChild(modal);
-          document.body.appendChild(overlay);
-          requestAnimationFrame(() => {
-            overlay.classList.remove('opacity-0');
-            modal.classList.remove('scale-95');
-          });
-          const close = () => {
-            overlay.classList.add('opacity-0');
-            modal.classList.add('scale-95');
-            setTimeout(() => overlay.remove(), 200);
-          };
-          document.getElementById('cancel-btn').onclick = close;
+          dlg.querySelector('#confirm-dialog-msg').textContent = message;
+          dlg.querySelector(\"[data-act='cancel']\").onclick = () => dlg.close();
           /* form.submit() bypasses the submit event so onsubmit won't re-fire. */
-          document.getElementById('confirm-btn').onclick = () => { close(); form.submit(); };
+          dlg.querySelector(\"[data-act='confirm']\").onclick = () => { dlg.close(); form.submit(); };
+          dlg.showModal();
         }
         /* Clipboard write is async; we optimistically swap innerHTML and class list
            rather than disabling the button — avoids layout shift on fast connections. */
@@ -427,36 +342,31 @@ let layout ?(noindex=false) ?user ?request ?(head_extra="") ?(full_bleed=false) 
                 const action = parseInt(formData.get(\"direction\"));
                 const isUpvoteBtn = form === upForm;
 
-                const resetColors = () => {
-                    upBtn?.classList.remove(\"text-orange-500\");
-                    upBtn?.classList.add(\"text-gray-400\", \"hover:text-orange-500\");
-                    downBtn?.classList.remove(\"text-[#69C3D2]\");
-                    downBtn?.classList.add(\"text-gray-400\", \"hover:text-[#69C3D2]\");
+                /* State colour is semantic: .is-active on .vote-up/.vote-down (base.css). */
+                const setVote = (upActive, downActive) => {
+                    upBtn?.classList.toggle(\"is-active\", upActive);
+                    downBtn?.classList.toggle(\"is-active\", downActive);
                 };
 
                 if (action === 1) {
                     /* downInput===null means downvotes disabled → no prior downvote possible */
                     if (downInput && parseInt(downInput.value) === 0) score += 2;
                     else score += 1;
-                    resetColors();
-                    upBtn?.classList.remove(\"text-gray-400\", \"hover:text-orange-500\");
-                    upBtn?.classList.add(\"text-orange-500\");
+                    setVote(true, false);
                     if (upInput) upInput.value = \"0\";
                     if (downInput) downInput.value = \"-1\";
                 }
                 else if (action === -1) {
                     if (upInput && parseInt(upInput.value) === 0) score -= 2;
                     else score -= 1;
-                    resetColors();
-                    downBtn?.classList.remove(\"text-gray-400\", \"hover:text-[#69C3D2]\");
-                    downBtn?.classList.add(\"text-[#69C3D2]\");
+                    setVote(false, true);
                     if (upInput) upInput.value = \"1\";
                     if (downInput) downInput.value = \"0\";
                 }
                 else if (action === 0) {
                     if (isUpvoteBtn) score -= 1;
                     else score += 1;
-                    resetColors();
+                    setVote(false, false);
                     if (upInput) upInput.value = \"1\";
                     if (downInput) downInput.value = \"-1\";
                 }
@@ -480,11 +390,11 @@ let layout ?(noindex=false) ?user ?request ?(head_extra="") ?(full_bleed=false) 
       </script>
   </body>
   </html>"
-  title robots_meta head_extra gate_css topbar_html main_class content footer_html gate_html
+  title robots_meta head_extra gate_css topbar_html content gate_html
 
 (* Focused auth/account-lifecycle layout: a single centered card in the cool-grey
    shell idiom (auth.css), with no rail/sidebar/command bar. Uses `Auth chrome (no
-   topbar, no footer) and full_bleed so .auth-shell can own the whole viewport. The
+   topbar, no footer) so .auth-shell can own the whole viewport. The
    brand mark mirrors render_app_topbar's and links to /feed. [card] is the inner
    card HTML the caller renders (form or message panel). *)
 let auth_css_link = "<link rel='stylesheet' href='/static/css/auth.css'>"
@@ -498,7 +408,7 @@ let auth_page ?user ?(noindex=false) ?request ~title ~card () =
        </div>"
       card
   in
-  layout ?user ?request ~noindex ~full_bleed:true ~chrome:`Auth ~head_extra:auth_css_link ~title body
+  layout ?user ?request ~noindex ~chrome:`Auth ~head_extra:auth_css_link ~title body
 
 (* === HELPERS === *)
 
@@ -509,21 +419,19 @@ let is_deleted_user u = String.length u >= 9 && String.sub u 0 9 = "[deleted_"
    callers without context omit the params, defaulting to [] so badge logic is a no-op. *)
 let render_author ?(mod_usernames=[]) ?(admin_usernames=[]) username =
   if is_deleted_user username then
-    "<span class='text-gray-400 italic'>[deleted]</span>"
+    "<span class='role-deleted'>[deleted]</span>"
   else
     let mod_badge =
-      if List.mem username mod_usernames then
-        "<span class='mod-badge ml-1 text-[10px] font-semibold bg-green-100 text-green-700 px-1.5 py-0.5 rounded'>[MOD]</span>"
+      if List.mem username mod_usernames then " <span class='role mod'>MOD</span>"
       else ""
     in
     (* Admin badge is always site-wide; rendered after MOD so both appear side-by-side
        for the rare case where a site admin is also a local moderator. *)
     let admin_badge =
-      if List.mem username admin_usernames then
-        "<span class='mod-badge ml-1 text-[10px] font-semibold bg-red-100 text-red-700 px-1.5 py-0.5 rounded'>[ADMIN]</span>"
+      if List.mem username admin_usernames then " <span class='role admin'>ADMIN</span>"
       else ""
     in
-    Printf.sprintf "<a href='/u/%s' class='hover:text-[#C94C4C] hover:underline font-medium transition'>u/%s</a>%s%s" (html_escape username) (html_escape username) mod_badge admin_badge
+    Printf.sprintf "<a href='/u/%s' class='author-link'>u/%s</a>%s%s" (html_escape username) (html_escape username) mod_badge admin_badge
 
 (* Parse and diff in OCaml rather than casting in SQL to keep DB queries generic
    and avoid timezone drift when the DB and app server are in different locales. *)
@@ -563,15 +471,42 @@ let format_month_year date_str =
 
 (* === CARDS === *)
 
+(* One renderer for every moderation reason-dialog (mod/admin remove + ban): a native
+   <dialog> styled by .mdlg in base.css, opened with showModal() so focus trapping and
+   Escape-to-cancel come from the platform. [variant] tints the heading by authority
+   (`Mod = warning ochre ink, `Admin = signal red). [action] and [fields] are built by
+   the caller (fields pre-escaped); the reason <textarea> is labelled via for/id. *)
+let reason_dialog ~dialog_id ~variant ~heading ~note ~action ?maxlength ~placeholder ~confirm_label ~csrf_token ~fields () =
+  let variant_cls = match variant with `Mod -> " mdlg--mod" | `Admin -> " mdlg--admin" in
+  let maxlength_attr = match maxlength with
+    | Some n -> Printf.sprintf " maxlength='%d'" n
+    | None -> ""
+  in
+  Printf.sprintf
+    "<dialog id='%s' class='mdlg%s'>\
+       <div class='mdlg-head'><h3>%s</h3><p>%s</p></div>\
+       <form action='%s' method='POST' class='mdlg-form'>\
+         %s%s\
+         <label class='mdlg-label' for='%s-reason'>Reason <span class='req'>*</span></label>\
+         <textarea id='%s-reason' name='reason' required%s rows='4' placeholder='%s'></textarea>\
+         <div class='mdlg-actions'>\
+           <button type='button' class='mdlg-btn' onclick=\"document.getElementById('%s').close()\">Cancel</button>\
+           <button type='submit' class='mdlg-btn mdlg-confirm'>%s</button>\
+         </div>\
+       </form>\
+     </dialog>"
+    dialog_id variant_cls heading note action csrf_token fields
+    dialog_id dialog_id maxlength_attr placeholder dialog_id confirm_label
+
 (* Session reads (current user, is_admin) happen inside a render function to avoid
    threading extra parameters through every call site — coupling is contained here. *)
 (* is_current_user_mod and mod_usernames are optional — callers without community context
    (home feed, profile, search) omit them; they default to false/[] so delete
    visibility and author badges behave identically to before on those pages. *)
 (* Shared post moderation/admin action markup: own-post Delete (Rule A), Mod/Admin Remove
-   dialog (Rule B/C), and Mod/Admin Ban dialog. Lifted verbatim out of render_post so the
-   exact same forms, routes, CSRF tags, confirm/dialog behavior, required-reason fields and
-   Rule A/B/C visibility can be reused by other surfaces (e.g. search results) with zero
+   dialog (Rule B/C), and Mod/Admin Ban dialog. One renderer so the exact same forms, routes,
+   CSRF tags, confirm/dialog behavior, required-reason fields and Rule A/B/C visibility are
+   reused by every surface (e.g. search results, the legacy post-page fallback) with zero
    drift. Returns "" when the viewer has no actionable controls. csrf_token is passed in so
    the caller computes it once and shares it with its other forms. *)
 let post_admin_actions ?(is_current_user_mod=false) ?(admin_usernames=[]) ?(banned_usernames=[]) ~csrf_token request (post : post) =
@@ -591,6 +526,20 @@ let post_admin_actions ?(is_current_user_mod=false) ?(admin_usernames=[]) ?(bann
      personal Delete path to avoid the public mod log (admin spoofing).
      Rule A: own post → personal Delete. Rule B: mod/top_mod (not own post, not admin-only)
      → Mod Remove dialog. Rule C: admin acting without mod role → Admin Remove dialog. *)
+  let remove_dialog variant =
+    reason_dialog
+      ~dialog_id:(Printf.sprintf "mod-modal-%d" post.id) ~variant
+      ~heading:(match variant with `Mod -> "Moderator removal" | `Admin -> "Admin intervention")
+      ~note:(match variant with
+             | `Mod -> "This action is logged publicly in the mod log."
+             | `Admin -> "This action is logged publicly as an admin override.")
+      ~action:(Printf.sprintf "/c/%s/posts/%d/mod_delete" post.community_slug post.id)
+      ~maxlength:255
+      ~placeholder:(match variant with
+                    | `Mod -> "Explain why this post is being removed (visible to the community)..."
+                    | `Admin -> "Explain the admin intervention reason (visible to the community)...")
+      ~confirm_label:"Confirm removal" ~csrf_token ~fields:"" ()
+  in
   let action_btn =
     if is_already_deleted then ""
     else match current_user with
@@ -598,66 +547,20 @@ let post_admin_actions ?(is_current_user_mod=false) ?(admin_usernames=[]) ?(bann
     | Some u ->
         if u = post.username then
           (* Rule A: personal delete — no audit required *)
-          Printf.sprintf "<form action='/delete-post' method='POST' class='inline m-0 p-0 ml-2' onsubmit=\"confirmModal(event, 'Do you really want to delete this post? This action cannot be undone.')\">
+          Printf.sprintf "<form action='/delete-post' method='POST' class='act-form' onsubmit=\"confirmModal(event, 'Do you really want to delete this post? This action cannot be undone.')\">
               %s <input type='hidden' name='post_id' value='%d'>
-              <button type='submit' class='text-xs text-gray-400 hover:text-red-700 opacity-50 hover:opacity-100 transition'>🗑️</button>
+              <button type='submit' class='act-btn act-btn--danger'>Delete</button>
           </form>" csrf_token post.id
         else if is_current_user_mod && not target_is_admin then
           (* Rule B: mod/top_mod removal — dialog enforces public reason *)
-          Printf.sprintf "
-            <button onclick=\"document.getElementById('mod-modal-%d').showModal()\" class='text-xs font-bold text-amber-700 hover:text-amber-900 border border-amber-300 bg-amber-50 hover:bg-amber-100 rounded px-2 py-0.5 transition-colors ml-2'>🛡️ Mod Remove</button>
-            <dialog id='mod-modal-%d' class='rounded-2xl shadow-2xl p-0 w-full max-w-md backdrop:bg-black/60 backdrop:backdrop-blur-sm border-0'>
-              <div class='bg-white rounded-2xl overflow-hidden'>
-                <div class='bg-amber-50 border-b border-amber-200 px-6 py-4'>
-                  <h3 class='text-base font-bold text-amber-900'>🛡️ Moderator Removal</h3>
-                  <p class='text-xs text-amber-700 mt-0.5'>This action is logged publicly in the mod log.</p>
-                </div>
-                <form action='/c/%s/posts/%d/mod_delete' method='POST' class='px-6 py-5 flex flex-col gap-4'>
-                  %s
-                  <label class='flex flex-col gap-1.5'>
-                    <span class='text-sm font-semibold text-gray-700'>Reason <span class='text-red-500'>*</span></span>
-                    <textarea name='reason' required maxlength='255' rows='4'
-                      placeholder='Explain why this post is being removed (visible to the community)...'
-                      class='w-full rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400 resize-none'></textarea>
-                  </label>
-                  <div class='flex justify-end gap-2 pt-1'>
-                    <button type='button' onclick=\"document.getElementById('mod-modal-%d').close()\"
-                      class='px-4 py-2 rounded-xl text-sm font-semibold text-gray-600 bg-gray-100 hover:bg-gray-200 transition-colors'>Cancel</button>
-                    <button type='submit'
-                      class='px-4 py-2 rounded-xl text-sm font-bold text-white bg-red-600 hover:bg-red-700 transition-colors shadow-sm'>Confirm Removal</button>
-                  </div>
-                </form>
-              </div>
-            </dialog>"
-            post.id post.id post.community_slug post.id csrf_token post.id
+          Printf.sprintf
+            "<button type='button' onclick=\"document.getElementById('mod-modal-%d').showModal()\" class='act-btn act-btn--mod'>Mod remove</button>%s"
+            post.id (remove_dialog `Mod)
         else if is_admin && not target_is_admin then
           (* Rule C: admin override (not a mod of this community) — logged as admin_delete_post *)
-          Printf.sprintf "
-            <button onclick=\"document.getElementById('mod-modal-%d').showModal()\" class='text-xs font-bold text-red-700 hover:text-red-900 border border-red-300 bg-red-50 hover:bg-red-100 rounded px-2 py-0.5 transition-colors ml-2'>⚡ Admin Remove</button>
-            <dialog id='mod-modal-%d' class='rounded-2xl shadow-2xl p-0 w-full max-w-md backdrop:bg-black/60 backdrop:backdrop-blur-sm border-0'>
-              <div class='bg-white rounded-2xl overflow-hidden'>
-                <div class='bg-red-50 border-b border-red-200 px-6 py-4'>
-                  <h3 class='text-base font-bold text-red-900'>⚡ Admin Intervention</h3>
-                  <p class='text-xs text-red-700 mt-0.5'>This action is logged publicly as an admin override.</p>
-                </div>
-                <form action='/c/%s/posts/%d/mod_delete' method='POST' class='px-6 py-5 flex flex-col gap-4'>
-                  %s
-                  <label class='flex flex-col gap-1.5'>
-                    <span class='text-sm font-semibold text-gray-700'>Reason <span class='text-red-500'>*</span></span>
-                    <textarea name='reason' required maxlength='255' rows='4'
-                      placeholder='Explain the admin intervention reason (visible to the community)...'
-                      class='w-full rounded-xl border border-red-300 bg-red-50 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-400 resize-none'></textarea>
-                  </label>
-                  <div class='flex justify-end gap-2 pt-1'>
-                    <button type='button' onclick=\"document.getElementById('mod-modal-%d').close()\"
-                      class='px-4 py-2 rounded-xl text-sm font-semibold text-gray-600 bg-gray-100 hover:bg-gray-200 transition-colors'>Cancel</button>
-                    <button type='submit'
-                      class='px-4 py-2 rounded-xl text-sm font-bold text-white bg-red-600 hover:bg-red-700 transition-colors shadow-sm'>Confirm Removal</button>
-                  </div>
-                </form>
-              </div>
-            </dialog>"
-            post.id post.id post.community_slug post.id csrf_token post.id
+          Printf.sprintf
+            "<button type='button' onclick=\"document.getElementById('mod-modal-%d').showModal()\" class='act-btn act-btn--admin'>Admin remove</button>%s"
+            post.id (remove_dialog `Admin)
         else ""
   in
 
@@ -666,164 +569,43 @@ let post_admin_actions ?(is_current_user_mod=false) ?(admin_usernames=[]) ?(bann
      banned_usernames replaces the hammer with a badge — prevents double-ban confusion.
      Rule B (mod) and Rule C (admin-only) are mutually exclusive — mod role takes priority
      so an admin who is also a mod doesn't bypass the public mod log via admin path. *)
+  let ban_dialog variant =
+    reason_dialog
+      ~dialog_id:(Printf.sprintf "ban-modal-post-%d" post.id) ~variant
+      ~heading:(match variant with `Mod -> "Mod ban" | `Admin -> "Admin ban")
+      ~note:(match variant with
+             | `Mod -> "This action is logged publicly in the mod log."
+             | `Admin -> "This action is logged publicly as an admin override.")
+      ~action:"/ban-community-user"
+      ~placeholder:(match variant with
+                    | `Mod -> "Explain why this user is being banned (visible to the community)..."
+                    | `Admin -> "Explain the admin intervention reason (visible to the community)...")
+      ~confirm_label:"Confirm ban" ~csrf_token
+      ~fields:(Printf.sprintf
+                 "<input type='hidden' name='target_username' value='%s'><input type='hidden' name='community_id' value='%d'>"
+                 (html_escape post.username) post.community_id)
+      ()
+  in
   let ban_btn =
     if (is_current_user_mod || is_admin) && not (target_is_admin && not is_admin) then
       match current_user with
       | Some u when u <> post.username && not (is_deleted_user post.username) ->
           if List.mem post.username banned_usernames then
-            "<span class='text-xs text-red-500 font-semibold ml-2'>🚫 Banned</span>"
+            "<span class='act-badge-banned'>Banned</span>"
           else if is_current_user_mod then
             (* Rule B: mod/top_mod ban — dialog enforces a public reason *)
-            Printf.sprintf "
-              <button onclick=\"document.getElementById('ban-modal-post-%d').showModal()\" class='text-xs font-bold text-amber-700 hover:text-amber-900 border border-amber-300 bg-amber-50 hover:bg-amber-100 rounded px-2 py-0.5 transition-colors ml-1'>🔨 Mod Ban</button>
-              <dialog id='ban-modal-post-%d' class='rounded-2xl shadow-2xl p-0 w-full max-w-md backdrop:bg-black/60 backdrop:backdrop-blur-sm border-0'>
-                <div class='bg-white rounded-2xl overflow-hidden'>
-                  <div class='bg-amber-50 border-b border-amber-200 px-6 py-4'>
-                    <h3 class='text-base font-bold text-amber-900'>🔨 Mod Ban</h3>
-                    <p class='text-xs text-amber-700 mt-0.5'>This action is logged publicly in the mod log.</p>
-                  </div>
-                  <form action='/ban-community-user' method='POST' class='px-6 py-5 flex flex-col gap-4'>
-                    %s
-                    <input type='hidden' name='target_username' value='%s'>
-                    <input type='hidden' name='community_id' value='%d'>
-                    <label class='flex flex-col gap-1.5'>
-                      <span class='text-sm font-semibold text-gray-700'>Reason <span class='text-red-500'>*</span></span>
-                      <textarea name='reason' required rows='4'
-                        placeholder='Explain why this user is being banned (visible to the community)...'
-                        class='w-full rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400 resize-none'></textarea>
-                    </label>
-                    <div class='flex justify-end gap-2 pt-1'>
-                      <button type='button' onclick=\"document.getElementById('ban-modal-post-%d').close()\"
-                        class='px-4 py-2 rounded-xl text-sm font-semibold text-gray-600 bg-gray-100 hover:bg-gray-200 transition-colors'>Cancel</button>
-                      <button type='submit'
-                        class='px-4 py-2 rounded-xl text-sm font-bold text-white bg-amber-600 hover:bg-amber-700 transition-colors shadow-sm'>Confirm Ban</button>
-                    </div>
-                  </form>
-                </div>
-              </dialog>"
-              post.id post.id csrf_token (html_escape post.username) post.community_id post.id
+            Printf.sprintf
+              "<button type='button' onclick=\"document.getElementById('ban-modal-post-%d').showModal()\" class='act-btn act-btn--mod'>Mod ban</button>%s"
+              post.id (ban_dialog `Mod)
           else
             (* Rule C: admin acting without mod role — handler prefixes reason as admin override *)
-            Printf.sprintf "
-              <button onclick=\"document.getElementById('ban-modal-post-%d').showModal()\" class='text-xs font-bold text-red-700 hover:text-red-900 border border-red-300 bg-red-50 hover:bg-red-100 rounded px-2 py-0.5 transition-colors ml-1'>⚡ Admin Ban</button>
-              <dialog id='ban-modal-post-%d' class='rounded-2xl shadow-2xl p-0 w-full max-w-md backdrop:bg-black/60 backdrop:backdrop-blur-sm border-0'>
-                <div class='bg-white rounded-2xl overflow-hidden'>
-                  <div class='bg-red-50 border-b border-red-200 px-6 py-4'>
-                    <h3 class='text-base font-bold text-red-900'>⚡ Admin Ban</h3>
-                    <p class='text-xs text-red-700 mt-0.5'>This action is logged publicly as an admin override.</p>
-                  </div>
-                  <form action='/ban-community-user' method='POST' class='px-6 py-5 flex flex-col gap-4'>
-                    %s
-                    <input type='hidden' name='target_username' value='%s'>
-                    <input type='hidden' name='community_id' value='%d'>
-                    <label class='flex flex-col gap-1.5'>
-                      <span class='text-sm font-semibold text-gray-700'>Reason <span class='text-red-500'>*</span></span>
-                      <textarea name='reason' required rows='4'
-                        placeholder='Explain the admin intervention reason (visible to the community)...'
-                        class='w-full rounded-xl border border-red-300 bg-red-50 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-400 resize-none'></textarea>
-                    </label>
-                    <div class='flex justify-end gap-2 pt-1'>
-                      <button type='button' onclick=\"document.getElementById('ban-modal-post-%d').close()\"
-                        class='px-4 py-2 rounded-xl text-sm font-semibold text-gray-600 bg-gray-100 hover:bg-gray-200 transition-colors'>Cancel</button>
-                      <button type='submit'
-                        class='px-4 py-2 rounded-xl text-sm font-bold text-white bg-red-600 hover:bg-red-700 transition-colors shadow-sm'>Confirm Ban</button>
-                    </div>
-                  </form>
-                </div>
-              </dialog>"
-              post.id post.id csrf_token (html_escape post.username) post.community_id post.id
+            Printf.sprintf
+              "<button type='button' onclick=\"document.getElementById('ban-modal-post-%d').showModal()\" class='act-btn act-btn--admin'>Admin ban</button>%s"
+              post.id (ban_dialog `Admin)
       | _ -> ""
     else ""
   in
   action_btn ^ ban_btn
-
-let render_post ?(is_current_user_mod=false) ?(mod_usernames=[]) ?(admin_usernames=[]) ?(banned_usernames=[]) request user_votes (post : post) =
-  let csrf_token = Dream.csrf_tag request in
-  let content_preview = Option.value ~default:"" post.content in
-  let link_part = match post.url with | Some u -> Printf.sprintf "<a href='%s' class='text-xs text-[#C94C4C] hover:underline' target='_blank'>%s ↗</a>" (safe_url u) (html_escape u) | None -> "" in
-
-  let current_vote = Option.value ~default:0 (List.assoc_opt post.id user_votes) in
-
-  let up_color = if current_vote = 1 then "text-orange-500" else "text-gray-400 hover:text-orange-500" in
-  let down_color = if current_vote = -1 then "text-[#69C3D2]" else "text-gray-400 hover:text-[#69C3D2]" in
-  let up_action = if current_vote = 1 then 0 else 1 in
-  let down_action = if current_vote = -1 then 0 else -1 in
-
-  let current_user = Dream.session_field request "username" in
-  (* Mod/admin action markup (own-post Delete, Mod/Admin Remove, Mod/Admin Ban) is built by
-     the shared post_admin_actions helper so search results reuse the exact same forms. *)
-  let admin_actions =
-    post_admin_actions ~is_current_user_mod ~admin_usernames ~banned_usernames ~csrf_token request post
-  in
-
-  let upvote_html = match current_user with
-    | Some _ -> Printf.sprintf "<form action='/vote' method='POST' class='m-0 p-0'>%s<input type='hidden' name='post_id' value='%d'><input type='hidden' name='direction' value='%d'><button type='submit' class='%s font-bold text-sm leading-none'>▲</button></form>" csrf_token post.id up_action up_color
-    | None -> "<a href='/login' class='text-gray-400 hover:text-orange-500 font-bold text-sm leading-none'>▲</a>"
-  in
-  let downvote_html =
-    if not post.allow_downvotes then ""
-    else match current_user with
-    | Some _ -> Printf.sprintf "<form action='/vote' method='POST' class='m-0 p-0'>%s<input type='hidden' name='post_id' value='%d'><input type='hidden' name='direction' value='%d'><button type='submit' class='%s font-bold text-sm leading-none'>▼</button></form>" csrf_token post.id down_action down_color
-    | None -> "<a href='/login' class='text-gray-400 hover:text-[#69C3D2] font-bold text-sm leading-none'>▼</a>"
-  in
-
-  (* Image thumbnail: capped at 320 px wide in the card — full resolution served from
-     static/uploads/; no second resize needed because the file is already ≤1920x1080. *)
-  let image_html = match post.image_url with
-    | None -> ""
-    | Some img -> Printf.sprintf "<a href='/p/%d' class='block mt-2 mb-1'><img src='%s' alt='Post image' class='w-full max-h-[512px] object-contain bg-stone-900 rounded-lg border border-[#E0D9CC]'></a>"
-        post.id (html_escape img)
-  in
-  Printf.sprintf "
-  <div onclick=\"if(!event.target.closest('a, button, form')) window.location='/p/%d'\" class='cursor-pointer border-b border-[#E8E2D9] py-4 flex gap-4 hover:bg-[#F0EBE0] transition-colors'>
-
-      <div class='flex flex-col items-center pt-0.5 w-7 shrink-0 cursor-default' onclick=\"event.stopPropagation()\">
-          %s
-          <span class='font-semibold text-gray-600 text-xs my-0.5'>%d</span>
-          %s
-      </div>
-
-      <div class='flex-1 min-w-0'>
-          <div class='flex flex-wrap items-center gap-x-1.5 text-xs text-gray-500 mb-1'>
-              <a href='/c/%s' class='font-semibold text-gray-700 hover:text-[#C94C4C] transition relative z-10'>/c/%s</a>
-              %s
-              <span class='text-gray-300'>•</span>
-              <span>by</span>
-              <span class='relative z-10'>%s</span>
-              <span class='text-gray-300'>•</span>
-              <span>%s</span>
-              <span class='relative z-10'>%s</span>
-          </div>
-
-          <h3 class='text-base font-semibold text-gray-900 leading-snug mb-1'>
-              <a href='/p/%d' class='hover:text-[#C94C4C] transition break-words'>%s</a>
-          </h3>
-
-          <div class='relative z-10 text-xs'>%s</div>
-          %s
-          <p class='text-sm text-gray-600 mt-2 break-words line-clamp-6'>%s</p>
-
-          <div class='flex items-center mt-2 text-xs text-gray-400'>
-              <a href='/p/%d' class='hover:text-[#C94C4C] flex items-center gap-1 transition relative z-10'>
-                  <span>💬</span><span>%d comments</span>
-              </a>
-              <button type='button' onclick='copyPostLink(\"/p/%d\", this)' class='text-xs font-medium text-gray-500 hover:text-gray-900 flex items-center transition-colors cursor-pointer ml-4'>🔗 Share</button>
-          </div>
-      </div>
-  </div>"
-  post.id
-  upvote_html post.score downvote_html
-  (html_escape post.community_slug) (html_escape post.community_slug)
-  (match post.section_name, post.section_slug with
-   | Some sn, Some ss ->
-       Printf.sprintf "<span class='text-gray-300'>›</span><a href='/c/%s/s/%s' class='font-medium text-[#C94C4C] hover:underline transition relative z-10'>%s</a>"
-         (html_escape post.community_slug) (html_escape ss) (html_escape sn)
-   | _ when post.community_sections_enabled ->
-       Printf.sprintf "<span class='text-gray-300'>›</span><a href='/c/%s/s/uncategorized' class='font-medium text-[#C94C4C] hover:underline transition relative z-10'>Uncategorized</a>"
-         (html_escape post.community_slug)
-   | _ -> "")
-  (render_author ~mod_usernames ~admin_usernames post.username) (time_ago post.created_at) admin_actions
-  post.id (html_escape post.title) link_part image_html (html_escape content_preview) post.id post.comment_count post.id
 
 (* Compact host for a link post's domain chip: strip scheme + a leading www. and cut at the
    first path/query/fragment. None when it doesn't look like an http(s) URL, so the row shows
@@ -878,13 +660,11 @@ let canonical_thread_path community_slug post_id title =
   if s = "" then Printf.sprintf "/c/%s/t/%d" community_slug post_id
   else Printf.sprintf "/c/%s/t/%d-%s" community_slug post_id s
 
-(* The section row's ⋯ menu reuses the EXACT moderation UI render_post builds — identical routes,
-   CSRF, dialog ids and Rule A/B/C permission logic — so the forum feed can't drift from the
-   warm-card feed. render_post is deliberately NOT refactored to call this; it keeps its own inline
-   copy so warm-card pages stay byte-for-byte unchanged (a conservative duplication, by request).
-   Returns "" when the viewer has no available action (anon, or a tombstoned / admin-protected
-   target) so the caller can omit the menu entirely. Dialog ids are keyed by post.id and never
-   collide with render_post because the two renderers never appear on the same page. *)
+(* The feed row's ⋯ menu: the same moderation UI as post_admin_actions — identical routes,
+   CSRF, dialog ids (via reason_dialog) and Rule A/B/C permission logic — packaged for the
+   compact row context. Returns "" when the viewer has no available action (anon, or a
+   tombstoned / admin-protected target) so the caller can omit the menu entirely. Dialog ids
+   are keyed by post.id; the two renderers never appear on the same page. *)
 let mod_action_controls ~is_current_user_mod ~admin_usernames ~banned_usernames request (post : post) =
   let csrf_token = Dream.csrf_tag request in
   let current_user = Dream.session_field request "username" in
@@ -897,147 +677,83 @@ let mod_action_controls ~is_current_user_mod ~admin_usernames ~banned_usernames 
   in
   let target_is_admin = List.mem post.username admin_usernames in
   (* Rule A: own post → personal Delete (labelled in the menu, route/CSRF identical to the card).
-     Rule B: mod/top_mod → Mod Remove dialog. Rule C: admin without mod role → Admin Remove. *)
+     Rule B: mod/top_mod → Mod Remove dialog. Rule C: admin without mod role → Admin Remove.
+     Dialogs come from the shared reason_dialog renderer (same ids as before). *)
+  let remove_dialog variant =
+    reason_dialog
+      ~dialog_id:(Printf.sprintf "mod-modal-%d" post.id) ~variant
+      ~heading:(match variant with `Mod -> "Moderator removal" | `Admin -> "Admin intervention")
+      ~note:(match variant with
+             | `Mod -> "This action is logged publicly in the mod log."
+             | `Admin -> "This action is logged publicly as an admin override.")
+      ~action:(Printf.sprintf "/c/%s/posts/%d/mod_delete" post.community_slug post.id)
+      ~maxlength:255
+      ~placeholder:(match variant with
+                    | `Mod -> "Explain why this post is being removed (visible to the community)..."
+                    | `Admin -> "Explain the admin intervention reason (visible to the community)...")
+      ~confirm_label:"Confirm removal" ~csrf_token ~fields:"" ()
+  in
   let action_btn =
     if is_already_deleted then ""
     else match current_user with
     | None -> ""
     | Some u ->
         if u = post.username then
-          Printf.sprintf "<form action='/delete-post' method='POST' class='m-0 p-0' onsubmit=\"confirmModal(event, 'Do you really want to delete this post? This action cannot be undone.')\">
+          Printf.sprintf "<form action='/delete-post' method='POST' class='act-form' onsubmit=\"confirmModal(event, 'Do you really want to delete this post? This action cannot be undone.')\">
               %s <input type='hidden' name='post_id' value='%d'>
-              <button type='submit' class='text-xs font-bold text-gray-600 hover:text-red-700 border border-gray-300 bg-gray-50 hover:bg-red-50 rounded px-2 py-0.5 transition-colors'>🗑️ Delete</button>
+              <button type='submit' class='act-btn act-btn--danger'>Delete</button>
           </form>" csrf_token post.id
         else if is_current_user_mod && not target_is_admin then
-          Printf.sprintf "
-            <button onclick=\"document.getElementById('mod-modal-%d').showModal()\" class='text-xs font-bold text-amber-700 hover:text-amber-900 border border-amber-300 bg-amber-50 hover:bg-amber-100 rounded px-2 py-0.5 transition-colors'>🛡️ Mod Remove</button>
-            <dialog id='mod-modal-%d' class='rounded-2xl shadow-2xl p-0 w-full max-w-md backdrop:bg-black/60 backdrop:backdrop-blur-sm border-0'>
-              <div class='bg-white rounded-2xl overflow-hidden'>
-                <div class='bg-amber-50 border-b border-amber-200 px-6 py-4'>
-                  <h3 class='text-base font-bold text-amber-900'>🛡️ Moderator Removal</h3>
-                  <p class='text-xs text-amber-700 mt-0.5'>This action is logged publicly in the mod log.</p>
-                </div>
-                <form action='/c/%s/posts/%d/mod_delete' method='POST' class='px-6 py-5 flex flex-col gap-4'>
-                  %s
-                  <label class='flex flex-col gap-1.5'>
-                    <span class='text-sm font-semibold text-gray-700'>Reason <span class='text-red-500'>*</span></span>
-                    <textarea name='reason' required maxlength='255' rows='4'
-                      placeholder='Explain why this post is being removed (visible to the community)...'
-                      class='w-full rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400 resize-none'></textarea>
-                  </label>
-                  <div class='flex justify-end gap-2 pt-1'>
-                    <button type='button' onclick=\"document.getElementById('mod-modal-%d').close()\"
-                      class='px-4 py-2 rounded-xl text-sm font-semibold text-gray-600 bg-gray-100 hover:bg-gray-200 transition-colors'>Cancel</button>
-                    <button type='submit'
-                      class='px-4 py-2 rounded-xl text-sm font-bold text-white bg-red-600 hover:bg-red-700 transition-colors shadow-sm'>Confirm Removal</button>
-                  </div>
-                </form>
-              </div>
-            </dialog>"
-            post.id post.id post.community_slug post.id csrf_token post.id
+          Printf.sprintf
+            "<button type='button' onclick=\"document.getElementById('mod-modal-%d').showModal()\" class='act-btn act-btn--mod'>Mod remove</button>%s"
+            post.id (remove_dialog `Mod)
         else if is_admin && not target_is_admin then
-          Printf.sprintf "
-            <button onclick=\"document.getElementById('mod-modal-%d').showModal()\" class='text-xs font-bold text-red-700 hover:text-red-900 border border-red-300 bg-red-50 hover:bg-red-100 rounded px-2 py-0.5 transition-colors'>⚡ Admin Remove</button>
-            <dialog id='mod-modal-%d' class='rounded-2xl shadow-2xl p-0 w-full max-w-md backdrop:bg-black/60 backdrop:backdrop-blur-sm border-0'>
-              <div class='bg-white rounded-2xl overflow-hidden'>
-                <div class='bg-red-50 border-b border-red-200 px-6 py-4'>
-                  <h3 class='text-base font-bold text-red-900'>⚡ Admin Intervention</h3>
-                  <p class='text-xs text-red-700 mt-0.5'>This action is logged publicly as an admin override.</p>
-                </div>
-                <form action='/c/%s/posts/%d/mod_delete' method='POST' class='px-6 py-5 flex flex-col gap-4'>
-                  %s
-                  <label class='flex flex-col gap-1.5'>
-                    <span class='text-sm font-semibold text-gray-700'>Reason <span class='text-red-500'>*</span></span>
-                    <textarea name='reason' required maxlength='255' rows='4'
-                      placeholder='Explain the admin intervention reason (visible to the community)...'
-                      class='w-full rounded-xl border border-red-300 bg-red-50 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-400 resize-none'></textarea>
-                  </label>
-                  <div class='flex justify-end gap-2 pt-1'>
-                    <button type='button' onclick=\"document.getElementById('mod-modal-%d').close()\"
-                      class='px-4 py-2 rounded-xl text-sm font-semibold text-gray-600 bg-gray-100 hover:bg-gray-200 transition-colors'>Cancel</button>
-                    <button type='submit'
-                      class='px-4 py-2 rounded-xl text-sm font-bold text-white bg-red-600 hover:bg-red-700 transition-colors shadow-sm'>Confirm Removal</button>
-                  </div>
-                </form>
-              </div>
-            </dialog>"
-            post.id post.id post.community_slug post.id csrf_token post.id
+          Printf.sprintf
+            "<button type='button' onclick=\"document.getElementById('mod-modal-%d').showModal()\" class='act-btn act-btn--admin'>Admin remove</button>%s"
+            post.id (remove_dialog `Admin)
         else ""
   in
   (* Ban: mods exile per-community; admins (without mod role) act via the override path. Mutually
      exclusive with the mod path so an admin who is also a mod still goes through the public mod
      log. A banned account shows a badge instead of a button to prevent double-ban confusion. *)
+  let ban_dialog variant =
+    reason_dialog
+      ~dialog_id:(Printf.sprintf "ban-modal-post-%d" post.id) ~variant
+      ~heading:(match variant with `Mod -> "Mod ban" | `Admin -> "Admin ban")
+      ~note:(match variant with
+             | `Mod -> "This action is logged publicly in the mod log."
+             | `Admin -> "This action is logged publicly as an admin override.")
+      ~action:"/ban-community-user"
+      ~placeholder:(match variant with
+                    | `Mod -> "Explain why this user is being banned (visible to the community)..."
+                    | `Admin -> "Explain the admin intervention reason (visible to the community)...")
+      ~confirm_label:"Confirm ban" ~csrf_token
+      ~fields:(Printf.sprintf
+                 "<input type='hidden' name='target_username' value='%s'><input type='hidden' name='community_id' value='%d'>"
+                 (html_escape post.username) post.community_id)
+      ()
+  in
   let ban_btn =
     if (is_current_user_mod || is_admin) && not (target_is_admin && not is_admin) then
       match current_user with
       | Some u when u <> post.username && not (is_deleted_user post.username) ->
           if List.mem post.username banned_usernames then
-            "<span class='text-xs text-red-500 font-semibold'>🚫 Banned</span>"
+            "<span class='act-badge-banned'>Banned</span>"
           else if is_current_user_mod then
-            Printf.sprintf "
-              <button onclick=\"document.getElementById('ban-modal-post-%d').showModal()\" class='text-xs font-bold text-amber-700 hover:text-amber-900 border border-amber-300 bg-amber-50 hover:bg-amber-100 rounded px-2 py-0.5 transition-colors'>🔨 Mod Ban</button>
-              <dialog id='ban-modal-post-%d' class='rounded-2xl shadow-2xl p-0 w-full max-w-md backdrop:bg-black/60 backdrop:backdrop-blur-sm border-0'>
-                <div class='bg-white rounded-2xl overflow-hidden'>
-                  <div class='bg-amber-50 border-b border-amber-200 px-6 py-4'>
-                    <h3 class='text-base font-bold text-amber-900'>🔨 Mod Ban</h3>
-                    <p class='text-xs text-amber-700 mt-0.5'>This action is logged publicly in the mod log.</p>
-                  </div>
-                  <form action='/ban-community-user' method='POST' class='px-6 py-5 flex flex-col gap-4'>
-                    %s
-                    <input type='hidden' name='target_username' value='%s'>
-                    <input type='hidden' name='community_id' value='%d'>
-                    <label class='flex flex-col gap-1.5'>
-                      <span class='text-sm font-semibold text-gray-700'>Reason <span class='text-red-500'>*</span></span>
-                      <textarea name='reason' required rows='4'
-                        placeholder='Explain why this user is being banned (visible to the community)...'
-                        class='w-full rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400 resize-none'></textarea>
-                    </label>
-                    <div class='flex justify-end gap-2 pt-1'>
-                      <button type='button' onclick=\"document.getElementById('ban-modal-post-%d').close()\"
-                        class='px-4 py-2 rounded-xl text-sm font-semibold text-gray-600 bg-gray-100 hover:bg-gray-200 transition-colors'>Cancel</button>
-                      <button type='submit'
-                        class='px-4 py-2 rounded-xl text-sm font-bold text-white bg-amber-600 hover:bg-amber-700 transition-colors shadow-sm'>Confirm Ban</button>
-                    </div>
-                  </form>
-                </div>
-              </dialog>"
-              post.id post.id csrf_token (html_escape post.username) post.community_id post.id
+            Printf.sprintf
+              "<button type='button' onclick=\"document.getElementById('ban-modal-post-%d').showModal()\" class='act-btn act-btn--mod'>Mod ban</button>%s"
+              post.id (ban_dialog `Mod)
           else
-            Printf.sprintf "
-              <button onclick=\"document.getElementById('ban-modal-post-%d').showModal()\" class='text-xs font-bold text-red-700 hover:text-red-900 border border-red-300 bg-red-50 hover:bg-red-100 rounded px-2 py-0.5 transition-colors'>⚡ Admin Ban</button>
-              <dialog id='ban-modal-post-%d' class='rounded-2xl shadow-2xl p-0 w-full max-w-md backdrop:bg-black/60 backdrop:backdrop-blur-sm border-0'>
-                <div class='bg-white rounded-2xl overflow-hidden'>
-                  <div class='bg-red-50 border-b border-red-200 px-6 py-4'>
-                    <h3 class='text-base font-bold text-red-900'>⚡ Admin Ban</h3>
-                    <p class='text-xs text-red-700 mt-0.5'>This action is logged publicly as an admin override.</p>
-                  </div>
-                  <form action='/ban-community-user' method='POST' class='px-6 py-5 flex flex-col gap-4'>
-                    %s
-                    <input type='hidden' name='target_username' value='%s'>
-                    <input type='hidden' name='community_id' value='%d'>
-                    <label class='flex flex-col gap-1.5'>
-                      <span class='text-sm font-semibold text-gray-700'>Reason <span class='text-red-500'>*</span></span>
-                      <textarea name='reason' required rows='4'
-                        placeholder='Explain the admin intervention reason (visible to the community)...'
-                        class='w-full rounded-xl border border-red-300 bg-red-50 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-400 resize-none'></textarea>
-                    </label>
-                    <div class='flex justify-end gap-2 pt-1'>
-                      <button type='button' onclick=\"document.getElementById('ban-modal-post-%d').close()\"
-                        class='px-4 py-2 rounded-xl text-sm font-semibold text-gray-600 bg-gray-100 hover:bg-gray-200 transition-colors'>Cancel</button>
-                      <button type='submit'
-                        class='px-4 py-2 rounded-xl text-sm font-bold text-white bg-red-600 hover:bg-red-700 transition-colors shadow-sm'>Confirm Ban</button>
-                    </div>
-                  </form>
-                </div>
-              </dialog>"
-              post.id post.id csrf_token (html_escape post.username) post.community_id post.id
+            Printf.sprintf
+              "<button type='button' onclick=\"document.getElementById('ban-modal-post-%d').showModal()\" class='act-btn act-btn--admin'>Admin ban</button>%s"
+              post.id (ban_dialog `Admin)
       | _ -> ""
     else ""
   in
   action_btn ^ ban_btn
 
-(* Section-feed thread row — the cool-grey, thread-first counterpart to render_post (warm card).
-   Used only by community_section_shell_page. Vote markup is reused verbatim from the card so the
+(* Thread-first feed row in the cool-grey shell idiom. Used by the section feed, the flat
+   community feed, and the global feed. Vote markup follows the shared contract so the
    optimistic-vote JS (see layout) keeps working: the .cs-vote control's only direct children are
    the upvote form, the score <span>, and the downvote form, with the same Tailwind colour classes
    the JS toggles. The body is intentionally lighter than the card: strong title, an optional
@@ -1046,19 +762,20 @@ let render_forum_row ?(is_current_user_mod=false) ?(mod_usernames=[]) ?(admin_us
   let csrf_token = Dream.csrf_tag request in
   let current_user = Dream.session_field request "username" in
   let current_vote = Option.value ~default:0 (List.assoc_opt post.id user_votes) in
-  let up_color = if current_vote = 1 then "text-orange-500" else "text-gray-400 hover:text-orange-500" in
-  let down_color = if current_vote = -1 then "text-[#69C3D2]" else "text-gray-400 hover:text-[#69C3D2]" in
+  (* Semantic vote classes (base.css); the optimistic-vote JS toggles .is-active. *)
+  let up_color = if current_vote = 1 then "vote-up is-active" else "vote-up" in
+  let down_color = if current_vote = -1 then "vote-down is-active" else "vote-down" in
   let up_action = if current_vote = 1 then 0 else 1 in
   let down_action = if current_vote = -1 then 0 else -1 in
   let upvote_html = match current_user with
-    | Some _ -> Printf.sprintf "<form action='/vote' method='POST' class='m-0 p-0'>%s<input type='hidden' name='post_id' value='%d'><input type='hidden' name='direction' value='%d'><button type='submit' class='%s font-bold text-sm leading-none'>▲</button></form>" csrf_token post.id up_action up_color
-    | None -> "<a href='/login' class='text-gray-400 hover:text-orange-500 font-bold text-sm leading-none'>▲</a>"
+    | Some _ -> Printf.sprintf "<form action='/vote' method='POST' class='m-0 p-0'>%s<input type='hidden' name='post_id' value='%d'><input type='hidden' name='direction' value='%d'><button type='submit' class='%s' aria-label='Upvote'>▲</button></form>" csrf_token post.id up_action up_color
+    | None -> "<a href='/login' class='vote-up' aria-label='Log in to upvote'>▲</a>"
   in
   let downvote_html =
     if not post.allow_downvotes then ""
     else match current_user with
-    | Some _ -> Printf.sprintf "<form action='/vote' method='POST' class='m-0 p-0'>%s<input type='hidden' name='post_id' value='%d'><input type='hidden' name='direction' value='%d'><button type='submit' class='%s font-bold text-sm leading-none'>▼</button></form>" csrf_token post.id down_action down_color
-    | None -> "<a href='/login' class='text-gray-400 hover:text-[#69C3D2] font-bold text-sm leading-none'>▼</a>"
+    | Some _ -> Printf.sprintf "<form action='/vote' method='POST' class='m-0 p-0'>%s<input type='hidden' name='post_id' value='%d'><input type='hidden' name='direction' value='%d'><button type='submit' class='%s' aria-label='Downvote'>▼</button></form>" csrf_token post.id down_action down_color
+    | None -> "<a href='/login' class='vote-down' aria-label='Log in to downvote'>▼</a>"
   in
   (* Domain chip: only for link posts with a parseable host; external link opens in a new tab. *)
   let domain_html = match post.url with
@@ -1113,53 +830,6 @@ let render_forum_row ?(is_current_user_mod=false) ?(mod_usernames=[]) ?(admin_us
     preview_html
     domain_html (render_author ~mod_usernames ~admin_usernames post.username) (time_ago post.created_at) thread_href post.comment_count
     mod_menu
-
-let community_card (community : community) =
-  Printf.sprintf "
-  <div class='bg-white rounded-xl p-5 border border-[#E0D9CC] hover:border-[#C94C4C] transition border-l-4 border-l-[#C94C4C] shadow-[0_2px_8px_rgba(60,54,48,0.06)]'>
-      <h2 class='text-base font-semibold text-gray-900 mb-1'>%s</h2>
-      <div class='text-xs text-[#C94C4C] mb-2 font-mono'>/c/%s</div>
-      <p class='text-gray-500 text-sm'>%s</p>
-  </div>"
-    (html_escape community.name)
-    (html_escape community.slug)
-    (html_escape (Option.value ~default:"No description." community.description))
-
-(* Shared left nav: drives the "Your Communities" list on index, community, and post pages.
-   Extracted to avoid divergent copies of the same community list markup. *)
-let left_sidebar ?user ~moderated_communities (user_communities : community list) =
-  match user with
-  | None ->
-      "<div class='bg-[#EDE9DF] p-4 rounded-xl border border-[#D8D0C0]'><h3 class='font-semibold text-[#3C3630] mb-1 text-sm'>Join Earde</h3><p class='text-xs text-[#5C5248] mb-3'>Create an account to follow communities and join the conversation.</p><a href='/signup' class='block w-full bg-[#C94C4C] text-[#F7F3E8] text-center py-2 rounded-xl font-semibold text-sm hover:bg-[#A83A3A] transition'>Sign Up</a></div><div class='mt-4 bg-stone-50 border border-stone-200 rounded-xl p-4'><h3 class='text-xs font-semibold text-stone-500 uppercase tracking-wider mb-2'>Learn More</h3><ul class='space-y-2'><li><a href='/privacy' class='flex items-center gap-2 text-sm text-stone-700 hover:underline transition'><span>&#128737;&#65039;</span><span>Privacy Policy</span></a></li></ul></div>"
-  | Some _ ->
-      if user_communities = [] && moderated_communities = [] then
-        "<div class='p-4 bg-white rounded-xl border border-[#E0D9CC] shadow-[0_2px_8px_rgba(60,54,48,0.06)]'><p class='text-sm text-gray-500 mb-3'>You haven't joined any communities yet.</p><a href='/new-community' class='text-[#C94C4C] font-bold text-sm hover:underline'>Create one &rarr;</a></div>"
-      else
-        (* Dedup: following list excludes communities the user already moderates. *)
-        let mod_ids = List.map (fun (a : community) -> a.id) moderated_communities in
-        let following_communities = List.filter (fun (a : community) -> not (List.mem a.id mod_ids)) user_communities in
-        let home_link = "<li><a href='/' class='flex items-center space-x-2 p-2 rounded-xl hover:bg-gray-50 text-gray-700 font-medium transition'><span class='text-gray-400 mr-1'>🏠</span><span class='truncate'>Home</span></a></li>" in
-        let privacy_link = "<li><a href='/privacy' class='flex items-center space-x-2 p-2 rounded-xl hover:bg-gray-50 text-gray-700 font-medium transition'><span class='text-gray-400 mr-1'>&#128737;&#65039;</span><span class='truncate'>Privacy Policy</span></a></li>" in
-        let mod_section =
-          if moderated_communities = [] then ""
-          else
-            let mod_items = List.map (fun (a : community) ->
-              Printf.sprintf "<li><a href='/c/%s' class='flex items-center space-x-2 p-2 rounded-xl hover:bg-gray-50 text-gray-700 font-medium transition'><span class='text-[#69C3D2] font-bold'>/c/</span><span class='truncate'>%s</span><span class='ml-auto text-xs' title='Moderating'>🛡️</span></a></li>"
-                (html_escape a.slug) (html_escape a.name)
-            ) moderated_communities in
-            Printf.sprintf "<h3 class='px-2 mb-1 text-xs font-semibold text-gray-500 uppercase tracking-wider mt-3'>Moderating</h3><ul class='space-y-1'>%s</ul>" (String.concat "\n" mod_items)
-        in
-        let follow_section =
-          if following_communities = [] then ""
-          else
-            let items = List.map (fun (a : community) ->
-              Printf.sprintf "<li><a href='/c/%s' class='flex items-center space-x-2 p-2 rounded-xl hover:bg-gray-50 text-gray-700 font-medium transition'><span class='text-[#69C3D2] font-bold'>/c/</span><span class='truncate'>%s</span></a></li>"
-                (html_escape a.slug) (html_escape a.name)
-            ) following_communities in
-            Printf.sprintf "<h3 class='px-2 mb-1 text-xs font-semibold text-gray-500 uppercase tracking-wider mt-3'>Following</h3><ul class='space-y-1'>%s</ul>" (String.concat "\n" items)
-        in
-        Printf.sprintf "<div class='bg-white p-4 rounded-xl border border-[#E0D9CC] shadow-sm'><ul class='space-y-1'>%s%s</ul>%s%s</div>"
-          home_link privacy_link mod_section follow_section
 
 (* === COMMUNITY SHELL === *)
 
@@ -1245,7 +915,7 @@ let render_global_rail ~(active : rail_active) (communities : community list) =
       | Some url when String.trim url <> "" ->
           let src = safe_img_src url in
           if src = "#" then html_escape (rail_glyph c.slug)
-          else Printf.sprintf "<img class='cs-rail-img' src='%s' alt=''>" src
+          else Printf.sprintf "<img class='cs-rail-img' src='%s' alt='' loading='lazy' decoding='async'>" src
       | _ -> html_escape (rail_glyph c.slug)
     in
     (* The rail is a workspace switcher: a tile means "enter this community", so it targets the
@@ -1288,13 +958,13 @@ let render_sidebar (community : community) (nav_groups : nav_group list) =
 
 (* === GLOBAL APP SHELL ===
    The base shell for every in-app surface (feed, channel, section, thread). It owns the layout
-   wrapper (full_bleed + shell stylesheet), the global icon rail, the main pane, an OPTIONAL
+   wrapper (shell stylesheet), the global icon rail, the main pane, an OPTIONAL
    local sidebar (community channels/sections), and an OPTIONAL right pane. The shell is NOT
    community-only: Feed is a shell surface too. community_shell / feed_shell are thin wrappers
    that differ only in the local sidebar and which rail tile is active.
    `main`/`sidebar`/`right_pane` are caller-rendered HTML fragments. *)
 let global_shell ?user ?request ?noindex ?(rail_communities=[]) ~(rail_active : rail_active)
-    ?sidebar ?right_pane ?(head_extra="") ~title ~main () =
+    ?sidebar ?right_pane ?(head_extra="") ?(gate=true) ~title ~main () =
   let rail = render_global_rail ~active:rail_active rail_communities in
   let sidebar_html = Option.value sidebar ~default:"" in
   let aside = match right_pane with
@@ -1308,30 +978,54 @@ let global_shell ?user ?request ?noindex ?(rail_communities=[]) ~(rail_active : 
   let base = "community-shell app-shell" in
   let base = if sidebar = None then base ^ " feed-shell" else base in
   let shell_cls = if right_pane = None then base else base ^ " with-aside" in
+  (* The centre pane is a <div>: layout already wraps the whole grid in the page's single
+     <main> landmark, and nested <main> elements are invalid HTML that confuses AT. *)
   let grid =
-    Printf.sprintf "<div class='%s'>%s%s<main class='cs-main'>%s</main>%s</div>"
+    Printf.sprintf "<div class='%s'>%s%s<div class='cs-main'>%s</div>%s</div>"
       shell_cls rail sidebar_html main aside
   in
   (* head_extra lets a shell page add per-page <head> tags (canonical, meta description, a
      page-scoped script) after the shell stylesheet; default "" keeps pages byte-for-byte
      unchanged. *)
-  layout ?noindex ?user ?request ~head_extra:(shell_css_link ^ head_extra) ~full_bleed:true ~chrome:`App ~title grid
+  layout ?noindex ?user ?request ~head_extra:(shell_css_link ^ head_extra) ~chrome:`App ~gate ~title grid
+
+(* Phone-width community navigation: the col-2 sidebar disappears under 820px, so
+   un-gated read surfaces (section feeds, threads) get an SSR <details> disclosure at
+   the top of the main pane instead — same nav_groups markup, so channels/sections
+   stay one render path. Pure CSS reveal (.cs-mobile-nav, hidden ≥821px); no JS. *)
+let render_mobile_community_nav (community : community) (nav_groups : nav_group list) =
+  let groups = String.concat "\n" (List.map render_nav_group nav_groups) in
+  Printf.sprintf
+    "<details class='cs-mobile-nav'>\
+       <summary>\
+         <span class='cs-mobile-nav-name'>%s</span>\
+         <span class='cs-mobile-nav-slug'>/c/%s</span>\
+         <span class='cs-mobile-nav-caret' aria-hidden='true'>&#9662;</span>\
+       </summary>\
+       <div class='cs-mobile-nav-panel'>%s</div>\
+     </details>"
+    (html_escape community.name) (html_escape community.slug) groups
 
 (* The community shell: global app shell + the local community sidebar (channels + forum
    sections). active_slug lights up this community's rail tile. Public signature unchanged so
    existing callers (section/channel/thread pages) need no edits. *)
 let community_shell ?user ?request ?noindex ?(rail_communities=[]) ?active_slug
-    ?right_pane ?(head_extra="") ~title ~community ~nav_groups ~main () =
+    ?right_pane ?(head_extra="") ?(gate=true) ~title ~community ~nav_groups ~main () =
   let sidebar = render_sidebar community nav_groups in
   let rail_active = match active_slug with Some s -> Rail_community s | None -> Rail_none in
+  (* The mobile nav rides inside the main pane (first child) so it never disturbs the
+     desktop grid; CSS reveals it only below the sidebar breakpoint. Gated surfaces
+     (chat) render it too, but the gate hides the whole app there before it matters. *)
+  let main = render_mobile_community_nav community nav_groups ^ main in
   global_shell ?user ?request ?noindex ~rail_communities ~rail_active
-    ~sidebar ?right_pane ~head_extra ~title ~main ()
+    ~sidebar ?right_pane ~head_extra ~gate ~title ~main ()
 
 (* The global Feed shell: the same app shell with NO community sidebar (Feed lives outside any
-   one community) and the Feed rail tile active. *)
+   one community) and the Feed rail tile active. Feed is a public read surface, so it opts
+   out of the desktop-only gate (shell.css collapses it to one column under 640px). *)
 let feed_shell ?user ?request ?noindex ?(rail_communities=[]) ?right_pane ?(head_extra="") ~title ~main () =
   global_shell ?user ?request ?noindex ~rail_communities ~rail_active:Rail_feed
-    ?right_pane ~head_extra ~title ~main ()
+    ?right_pane ~head_extra ~gate:false ~title ~main ()
 
 (* Focused in-product creation layout: the mono app command bar (so the page stays in
    the app, coherent with the topbar's "+ Start community" CTA) over a single centered
@@ -1345,7 +1039,7 @@ let create_page ?user ?request ?(noindex=false) ~title ~body () =
   let shell =
     Printf.sprintf "<div class='create-shell'>%s</div>" body
   in
-  layout ?user ?request ~noindex ~full_bleed:true ~chrome:`App
+  layout ?user ?request ~noindex ~chrome:`App
     ~head_extra:(shell_css_link ^ create_css_link) ~title shell
 
 (* Focused in-product account layout: the mono app command bar over a single centered
@@ -1357,11 +1051,11 @@ let create_page ?user ?request ?(noindex=false) ~title ~body () =
    .account-shell. [body] is the inner page HTML the caller renders. *)
 let account_css_link = "<link rel='stylesheet' href='/static/css/account.css'>"
 
-let account_page ?user ?request ?(noindex=false) ~title ~body () =
+let account_page ?user ?request ?(noindex=false) ?(gate=true) ~title ~body () =
   let shell =
     Printf.sprintf "<div class='account-shell'>%s</div>" body
   in
-  layout ?user ?request ~noindex ~full_bleed:true ~chrome:`App
+  layout ?user ?request ~noindex ~chrome:`App ~gate
     ~head_extra:(shell_css_link ^ account_css_link) ~title shell
 
 (* Focused in-product admin layout: the mono app command bar over a single centered
@@ -1375,7 +1069,7 @@ let admin_page ?user ?request ?(noindex=false) ~title ~body () =
   let shell =
     Printf.sprintf "<div class='admin-shell'>%s</div>" body
   in
-  layout ?user ?request ~noindex ~full_bleed:true ~chrome:`App
+  layout ?user ?request ~noindex ~chrome:`App
     ~head_extra:(shell_css_link ^ admin_css_link) ~title shell
 
 (* Focused in-product community-management layout: the mono app command bar over
@@ -1392,7 +1086,7 @@ let community_manage_page ?user ?request ?(noindex=false) ~title ~body () =
   let shell =
     Printf.sprintf "<div class='cm-shell'>%s</div>" body
   in
-  layout ?user ?request ~noindex ~full_bleed:true ~chrome:`App
+  layout ?user ?request ~noindex ~chrome:`App
     ~head_extra:(shell_css_link ^ community_manage_css_link) ~title shell
 
 (* The public community home (/c/:slug). Unlike the focused single-column wrappers above it
@@ -1403,7 +1097,9 @@ let community_manage_page ?user ?request ?(noindex=false) ~title ~body () =
 let community_home_css_link = "<link rel='stylesheet' href='/static/css/community-home.css'>"
 
 let community_home_page ?user ?request ?(noindex=false) ~title ~body () =
-  layout ?user ?request ~noindex ~full_bleed:true ~chrome:`App
+  (* Public archive surface: no desktop-only gate — the page is a single scrolling
+     column and already responsive at phone widths. *)
+  layout ?user ?request ~noindex ~chrome:`App ~gate:false
     ~head_extra:(shell_css_link ^ community_home_css_link) ~title body
 
 (* Focused in-product search layout: the mono app command bar over a single centered
@@ -1417,5 +1113,7 @@ let search_page ?user ?request ?(noindex=false) ~title ~body () =
   let shell =
     Printf.sprintf "<div class='search-shell'>%s</div>" body
   in
-  layout ?user ?request ~noindex ~full_bleed:true ~chrome:`App
+  (* Knowledge retrieval is the product promise: search stays usable on phones
+     (single centered column), so it opts out of the desktop-only gate. *)
+  layout ?user ?request ~noindex ~chrome:`App ~gate:false
     ~head_extra:(shell_css_link ^ search_css_link) ~title shell

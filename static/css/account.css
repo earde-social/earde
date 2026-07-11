@@ -10,27 +10,9 @@
    which still style themselves with inline Tailwind.
    =========================================================================== */
 
-@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap');
+/* Design tokens + IBM Plex come from base.css / the layout's font <link>. */
 
 .account-shell {
-  /* cool-grey neutrals + accents, ported from shell.css / auth.css / create.css */
-  --paper:      oklch(0.948 0.004 250);
-  --panel:      oklch(0.995 0.002 250);
-  --panel-2:    oklch(0.972 0.004 250);
-  --panel-3:    oklch(0.958 0.005 250);
-  --ink:        oklch(0.255 0.012 262);
-  --ink-2:      oklch(0.430 0.011 262);
-  --ink-3:      oklch(0.580 0.009 262);
-  --line:       oklch(0.866 0.006 255);
-  --line-2:     oklch(0.800 0.007 255);
-  --red:        oklch(0.555 0.155 27);
-  --red-strong: oklch(0.490 0.165 27);
-  --ok:         oklch(0.620 0.130 150);
-
-  --cs-mono: 'IBM Plex Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace;
-  --cs-sans: 'IBM Plex Sans', system-ui, -apple-system, sans-serif;
-  --cs-nav-h: 54px;   /* height of the .app-topbar command bar (see shell.css) */
-
   /* shell.css (loaded for .app-topbar) sets html,body{overflow:hidden}, so the document
      never scrolls. Like a creation page, an account page owns its OWN vertical scroll,
      sized to the viewport minus the topbar; top-aligned so tall content scrolls. */
@@ -115,7 +97,7 @@
 }
 .account-prof-body { min-width: 0; flex: 1 1 auto; }
 .account-name {
-  font-family: var(--cs-mono); font-size: 22px; font-weight: 700;
+  font-family: var(--cs-mono); font-size: 21px; font-weight: 700;
   letter-spacing: -0.01em; color: var(--ink); margin: 0; word-break: break-word;
 }
 .account-stats {
@@ -127,13 +109,13 @@
 /* role badges */
 .account-badges { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 8px; }
 .account-badge {
-  font-family: var(--cs-mono); font-size: 10.5px; font-weight: 600;
+  font-family: var(--cs-mono); font-size: 11px; font-weight: 600;
   text-transform: uppercase; letter-spacing: 0.04em;
   padding: 2px 7px; border-radius: 2px; border: 1px solid var(--line-2);
   color: var(--ink-2); background: var(--panel-2);
 }
-.account-badge--admin { color: var(--red); border-color: var(--red); }
-.account-badge--mod { color: var(--ok); border-color: var(--ok); }
+.account-badge--admin { color: var(--red-strong); border-color: var(--red); }
+.account-badge--mod { color: var(--ok-ink); border-color: var(--ok); }
 .account-badge--banned { color: #fff; background: var(--ink); border-color: var(--ink); }
 
 /* bio block */
@@ -244,7 +226,8 @@
    profile thread list — account-scoped rows (the shell's .cs-thread/.ft-* rules
    only apply under .community-shell, so the profile renders its own compact row).
    The vote column keeps the optimistic-vote DOM contract: direct children are the
-   upvote <form>, the score <span>, then the optional downvote <form>.
+   upvote <form>, the score <span>, then the optional downvote <form>; state colour
+   lives on .vote-up/.vote-down (base.css).
    -------------------------------------------------------------------------- */
 .account-threads { display: flex; flex-direction: column; gap: 8px; }
 .account-thread {
@@ -273,7 +256,7 @@
 .account-thread-ctx a { color: var(--ink-2); }
 .account-thread-ctx a:hover { color: var(--red); }
 .account-thread-ctx .dot { color: var(--ink-3); margin: 0 3px; }
-.account-thread-title { font-weight: 600; font-size: 15px; line-height: 1.35; }
+.account-thread-title { font-weight: 600; font-size: 15.5px; line-height: 1.35; }
 .account-thread-title a { color: var(--ink); }
 .account-thread-title a:hover { color: var(--red); }
 .account-thread-preview {
@@ -341,9 +324,17 @@
   transition: border-color .12s ease, background .12s ease;
 }
 a.account-notif:hover { border-color: var(--line-2); background: var(--panel-2); }
+/* Unread = full red border + tint + the textual NEW marker (never colour alone,
+   never a side-stripe — DESIGN.md §6). */
 .account-notif--unread {
-  border-left: 3px solid var(--red);
+  border-color: var(--red);
   background: var(--panel-2);
+}
+.account-notif-new {
+  font-family: var(--cs-mono); font-size: 11px; font-weight: 700;
+  letter-spacing: 0.04em; flex-shrink: 0; align-self: flex-start;
+  color: #fff; background: var(--red);
+  padding: 2px 6px; border-radius: 2px; margin-top: 1px;
 }
 .account-notif-icon {
   font-size: 18px; line-height: 1.3; flex-shrink: 0; color: var(--ink-2);
@@ -351,6 +342,24 @@ a.account-notif:hover { border-color: var(--line-2); background: var(--panel-2);
 .account-notif-body { min-width: 0; flex: 1 1 auto; }
 .account-notif-msg { font-size: 13.5px; line-height: 1.5; color: var(--ink); }
 .account-notif-time { font-size: 11.5px; color: var(--ink-3); margin-top: 3px; }
+
+/* --------------------------------------------------------------------------
+   document prose — long-form pages rendered in the account shell (/privacy).
+   Semantic h2/p/ul markup; mono section headings, sans body, 70ch measure.
+   -------------------------------------------------------------------------- */
+.account-prose { max-width: 70ch; }
+.account-prose h2 {
+  font-family: var(--cs-mono); font-size: 14px; font-weight: 600;
+  letter-spacing: -0.01em; color: var(--ink);
+  margin: 24px 0 8px; padding-bottom: 6px; border-bottom: 1px solid var(--line);
+}
+.account-prose h2:first-child { margin-top: 0; }
+.account-prose p { font-size: 13.5px; line-height: 1.6; color: var(--ink-2); margin: 0 0 10px; }
+.account-prose ul { margin: 0 0 10px; padding-left: 20px; }
+.account-prose li { font-size: 13.5px; line-height: 1.6; color: var(--ink-2); margin-bottom: 4px; }
+.account-prose a { color: var(--red); }
+.account-prose a:hover { text-decoration: underline; }
+.account-prose-lede { font-size: 13px; color: var(--ink-3); margin: 0 0 18px; }
 
 /* empty state */
 .account-empty {

@@ -1,6 +1,7 @@
-(** Reusable HTML primitives. layout wraps every page; render_post and community_card
-    are the only components with non-trivial state (CSRF tokens, session reads).
-    All functions return raw HTML strings — no virtual DOM, no diffing overhead. *)
+(** Reusable HTML primitives. layout wraps every page; render_forum_row and the
+    moderation-action renderers are the only components with non-trivial state
+    (CSRF tokens, session reads). All functions return raw HTML strings — no
+    virtual DOM, no diffing overhead. *)
 
 (** === ESCAPING === *)
 val html_escape : string -> string
@@ -40,14 +41,13 @@ val community_banner : wrap_class:string -> img_class:string -> fallback_class:s
 val post_thumbnail : ?alt:string -> img_class:string -> string option -> string
 
 (** === LAYOUT === *)
-(** [head_extra] injects markup into <head> (e.g. a page-scoped stylesheet);
-    [full_bleed] drops the capped/padded <main> so a page can own its full-width
-    layout. [chrome] selects the page furniture: [`Site] (default) renders the warm
-    Tailwind navbar + Privacy footer; [`App] swaps in the mono command bar and
-    drops the footer, for the in-app shell; [`Auth] drops both (no navbar/command bar,
-    no footer) for the focused auth layout. All default to the prior behavior, so
-    existing callers are unaffected. *)
-val layout : ?noindex:bool -> ?user:string -> ?request:Dream.request -> ?head_extra:string -> ?full_bleed:bool -> ?chrome:[ `Site | `App | `Auth ] -> title:string -> string -> string
+(** [head_extra] injects markup into <head> (e.g. a page-scoped stylesheet).
+    [chrome] selects the page furniture: [`App] (default) renders the mono command
+    bar over a page that owns its own full-bleed layout; [`Auth] renders no chrome
+    for the focused centered-card pages. [gate] (default true) controls the
+    desktop-only mobile gate on [`App] surfaces: public read pages pass [false] so
+    archived knowledge stays reachable from phones. *)
+val layout : ?noindex:bool -> ?user:string -> ?request:Dream.request -> ?head_extra:string -> ?chrome:[ `App | `Auth ] -> ?gate:bool -> title:string -> string -> string
 
 (** Focused auth/account-lifecycle layout: a single centered card (auth.css) in the
     cool-grey shell idiom, with no rail/sidebar/command bar/footer. [card] is the inner
@@ -64,7 +64,7 @@ val create_page : ?user:string -> ?request:Dream.request -> ?noindex:bool -> tit
     cool-grey column (account.css), with no rail/sidebar/footer. Used by the personal
     account pages (profile, settings, notifications). [body] is the inner page HTML; the
     outer .account-shell and topbar are supplied. *)
-val account_page : ?user:string -> ?request:Dream.request -> ?noindex:bool -> title:string -> body:string -> unit -> string
+val account_page : ?user:string -> ?request:Dream.request -> ?noindex:bool -> ?gate:bool -> title:string -> body:string -> unit -> string
 
 (** Focused in-product admin layout: the mono app command bar over a single centered
     cool-grey column (admin.css), with no rail/sidebar/footer. Used by the admin-only
@@ -100,16 +100,24 @@ val time_ago : string -> string
 val format_month_year : string -> string
 
 (** === CARDS === *)
+(** [reason_dialog] → one canonical moderation reason-dialog (native [<dialog>], .mdlg
+    styling from base.css, labelled textarea, Cancel/close wiring). [variant] tints the
+    heading by authority; [fields] is extra pre-escaped hidden-input HTML. Shared by every
+    remove/ban dialog so markup and behavior cannot drift between surfaces. *)
+val reason_dialog :
+  dialog_id:string -> variant:[ `Mod | `Admin ] -> heading:string -> note:string ->
+  action:string -> ?maxlength:int -> placeholder:string -> confirm_label:string ->
+  csrf_token:string -> fields:string -> unit -> string
+
 (** [post_admin_actions ~csrf_token request post] → the post's mod/admin action markup
     (own-post Delete, Mod/Admin Remove dialog, Mod/Admin Ban dialog), or "" when the viewer has
-    no controls. Shared by [render_post] and the search results page so both emit identical
-    forms/routes/CSRF/dialogs/reason fields with the same Rule A/B/C visibility. *)
+    no controls. Used by the search results page (and the legacy post-page fallback) so every
+    surface emits identical forms/routes/CSRF/dialogs/reason fields with the same Rule A/B/C
+    visibility. *)
 val post_admin_actions : ?is_current_user_mod:bool -> ?admin_usernames:string list -> ?banned_usernames:string list -> csrf_token:string -> Dream.request -> Db.post -> string
-val render_post : ?is_current_user_mod:bool -> ?mod_usernames:string list -> ?admin_usernames:string list -> ?banned_usernames:string list -> Dream.request -> (int * int) list -> Db.post -> string
-(** Thread-first section-feed row (cool-grey shell idiom). Same call shape as [render_post];
-    used by [Pages.community_section_shell_page]. Preserves the optimistic-vote DOM contract. *)
+(** Thread-first feed row (cool-grey shell idiom). Used by the section feed, the flat
+    community feed, and the global feed. Preserves the optimistic-vote DOM contract. *)
 val render_forum_row : ?is_current_user_mod:bool -> ?mod_usernames:string list -> ?admin_usernames:string list -> ?banned_usernames:string list -> ?show_context:bool -> Dream.request -> (int * int) list -> Db.post -> string
-val community_card : Db.community -> string
 
 (** [slugify title] → a URL-safe, descriptive thread slug (lowercase, non-alphanumerics
     collapsed to single dashes, trimmed, length-capped). Descriptive only — [post_id] is
@@ -118,7 +126,6 @@ val slugify : string -> string
 (** [canonical_thread_path community_slug post_id title] → the canonical thread path
     [/c/:community_slug/t/:post_id-:post_slug]. Slug omitted when empty. *)
 val canonical_thread_path : string -> int -> string -> string
-val left_sidebar : ?user:string -> moderated_communities:Db.community list -> Db.community list -> string
 
 (** === COMMUNITY SHELL === *)
 
@@ -145,7 +152,7 @@ type nav_group = {
 val community_shell :
   ?user:string -> ?request:Dream.request -> ?noindex:bool ->
   ?rail_communities:Db.community list -> ?active_slug:string -> ?right_pane:string ->
-  ?head_extra:string ->
+  ?head_extra:string -> ?gate:bool ->
   title:string -> community:Db.community -> nav_groups:nav_group list -> main:string -> unit -> string
 
 (** The global Feed shell (rail · main · optional right pane). Unlike [community_shell] it has

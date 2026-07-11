@@ -10,26 +10,9 @@
    the legacy `Site pages, which still style themselves with inline Tailwind.
    =========================================================================== */
 
-@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap');
+/* Design tokens + IBM Plex come from base.css / the layout's font <link>. */
 
 .search-shell {
-  /* cool-grey neutrals + accents, ported from shell.css / account.css */
-  --paper:      oklch(0.948 0.004 250);
-  --panel:      oklch(0.995 0.002 250);
-  --panel-2:    oklch(0.972 0.004 250);
-  --panel-3:    oklch(0.958 0.005 250);
-  --ink:        oklch(0.255 0.012 262);
-  --ink-2:      oklch(0.430 0.011 262);
-  --ink-3:      oklch(0.580 0.009 262);
-  --line:       oklch(0.866 0.006 255);
-  --line-2:     oklch(0.800 0.007 255);
-  --red:        oklch(0.555 0.155 27);
-  --red-strong: oklch(0.490 0.165 27);
-
-  --cs-mono: 'IBM Plex Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace;
-  --cs-sans: 'IBM Plex Sans', system-ui, -apple-system, sans-serif;
-  --cs-nav-h: 54px;   /* height of the .app-topbar command bar (see shell.css) */
-
   /* shell.css (loaded for .app-topbar) sets html,body{overflow:hidden}, so the document
      never scrolls. Like an account page, the search surface owns its OWN vertical scroll,
      sized to the viewport minus the topbar; top-aligned so tall result lists scroll. */
@@ -139,10 +122,11 @@
   display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden;
 }
 
-/* started-from-chat provenance marker — mirrors the thread page's .th-source accent */
+/* started-from-chat provenance marker — the red channel link carries the accent
+   (no colored side-stripe, DESIGN.md §6) */
 .search-shell .sr-row-src {
   font-family: var(--cs-mono); font-size: 12px; color: var(--ink-2);
-  border-left: 2px solid var(--red); padding-left: 8px; margin: 6px 0 2px;
+  margin: 6px 0 2px;
 }
 .search-shell .sr-row-src a { color: var(--red); font-weight: 600; }
 

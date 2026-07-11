@@ -1,0 +1,198 @@
+/* ===========================================================================
+   base.css — the single shared foundation for every Earde page.
+
+   Owns exactly four things so the per-surface stylesheets can't drift:
+
+   1. The design tokens (DESIGN.md §2) — declared ONCE on :root. Custom
+      properties are inert until referenced, so exposing them globally cannot
+      restyle the remaining legacy Tailwind pages.
+   2. Cross-cutting accessibility rules: the keyboard focus ring and the
+      prefers-reduced-motion override (DESIGN.md commits to both).
+   3. The canonical moderation-dialog (.mdlg) and small action-button (.act-*)
+      components, shared by every surface that renders mod/admin controls —
+      including <dialog> elements promoted to the top layer, which is why they
+      are class-scoped rather than shell-scoped.
+   4. The semantic vote-state classes the optimistic-vote script toggles
+      (.vote-up/.vote-down + .is-active) and the .hidden utility that script
+      and the reply/notification toggles rely on.
+
+   Loaded on every chrome (Site, App, Auth) before any per-page stylesheet.
+   =========================================================================== */
+
+:root {
+  /* --- Workshop Grey neutrals + accents (single source of truth) --- */
+  --paper:      oklch(0.948 0.004 250);
+  --panel:      oklch(0.995 0.002 250);
+  --panel-2:    oklch(0.972 0.004 250);
+  --panel-3:    oklch(0.958 0.005 250);
+  --ink:        oklch(0.255 0.012 262);
+  --ink-2:      oklch(0.430 0.011 262);
+  /* Muted ink darkened from L 0.580: at 0.580 it measured 3.7–4.2:1 against the
+     panel/paper surfaces — under the WCAG AA 4.5:1 floor for the small meta text
+     it labels. 0.510 clears 4.9:1 on paper while staying clearly lighter than
+     --ink-2 (The Contrast Rule, DESIGN.md §2). */
+  --ink-3:      oklch(0.510 0.010 262);
+  --line:       oklch(0.866 0.006 255);
+  --line-2:     oklch(0.800 0.007 255);
+  --frame:      oklch(0.300 0.012 262);
+  --frame-ink:  oklch(0.965 0.003 250);
+  --red:        oklch(0.555 0.155 27);
+  --red-strong: oklch(0.490 0.165 27);
+  --ok:         oklch(0.620 0.130 150);
+  --warn:       oklch(0.680 0.140 70);
+  /* Darker ink-on-tint variants for text/badges — --ok/--warn themselves are
+     fills too light to carry white text (2.9–3.4:1). */
+  --ok-ink:     oklch(0.400 0.110 150);
+  --ok-tint:    oklch(0.950 0.030 150);
+  --warn-ink:   oklch(0.450 0.120 70);
+  --warn-tint:  oklch(0.960 0.040 70);
+  --down-ink:   oklch(0.450 0.070 220);   /* downvote-active; mirrors .role.op */
+
+  --cs-mono: 'IBM Plex Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace;
+  --cs-sans: 'IBM Plex Sans', system-ui, -apple-system, sans-serif;
+  --cs-nav-h: 54px;   /* height of the .app-topbar command bar */
+
+  /* Semantic z-index scale: dropdown < sticky chrome < floating menu < gate.
+     Native <dialog> uses the top layer and needs no z-index. */
+  --z-dropdown: 30;
+  --z-sticky:   50;
+  --z-menu:     60;
+  --z-gate:     100;
+}
+
+/* --------------------------------------------------------------------------
+   Accessibility foundations
+   -------------------------------------------------------------------------- */
+
+/* Keyboard focus is Signal Red and unmissable (DESIGN.md: ":focus-visible must
+   remain obvious"). Inputs whose surfaces already swap their border to red on
+   :focus keep their own treatment; this covers links, buttons, summaries, tabs. */
+:focus-visible {
+  outline: 2px solid var(--red);
+  outline-offset: 1px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto !important; }
+  *, *::before, *::after {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}
+
+/* Utility the layout script (notif badge), reply forms, and comment collapse
+   toggle. Previously supplied by the Tailwind CDN runtime. */
+.hidden { display: none !important; }
+
+/* Skip link: first focusable element on every page; visually hidden until a
+   keyboard user reaches it, then a small Signal Red pill above all chrome. */
+.skip-link {
+  position: absolute; left: -9999px; top: 0;
+  z-index: var(--z-gate);
+  font-family: var(--cs-mono); font-size: 12.5px; font-weight: 600;
+  color: #fff; background: var(--red);
+  padding: 8px 14px; border-radius: 0 0 2px 0; text-decoration: none;
+}
+.skip-link:focus { left: 0; }
+
+/* --------------------------------------------------------------------------
+   Moderation dialog (.mdlg) — one component for every remove/ban/confirm
+   dialog. Native <dialog> + showModal(): focus trapping and Escape for free.
+   Flat panel, sharp corners, floating-exception shadow only (DESIGN.md §4).
+   -------------------------------------------------------------------------- */
+.mdlg {
+  width: calc(100% - 32px); max-width: 430px;
+  padding: 0; border: 1px solid var(--line-2); border-radius: 3px;
+  background: var(--panel); color: var(--ink);
+  font-family: var(--cs-sans); font-size: 14px;
+  box-shadow: 0 6px 24px oklch(0.30 0.01 262 / 0.16);
+}
+.mdlg::backdrop { background: oklch(0.255 0.012 262 / 0.45); }
+.mdlg-head {
+  padding: 14px 18px; background: var(--panel-2);
+  border-bottom: 1px solid var(--line);
+}
+.mdlg-head h3 {
+  margin: 0; font-family: var(--cs-mono); font-size: 14px; font-weight: 700;
+  color: var(--ink);
+}
+.mdlg-head p { margin: 4px 0 0; font-size: 12.5px; line-height: 1.45; color: var(--ink-2); }
+.mdlg--mod .mdlg-head h3 { color: var(--warn-ink); }
+.mdlg--admin .mdlg-head h3 { color: var(--red-strong); }
+.mdlg-form { padding: 16px 18px 18px; display: flex; flex-direction: column; gap: 8px; }
+.mdlg-label {
+  font-family: var(--cs-mono); font-size: 11.5px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.04em; color: var(--ink-3);
+}
+.mdlg-label .req { color: var(--red); }
+.mdlg textarea {
+  width: 100%; box-sizing: border-box; resize: vertical; min-height: 84px;
+  font-family: var(--cs-sans); font-size: 13.5px; line-height: 1.5; color: var(--ink);
+  background: var(--panel-2); border: 1px solid var(--line-2); border-radius: 2px;
+  padding: 9px 11px;
+}
+.mdlg textarea:focus { outline: none; border-color: var(--red); background: var(--panel); }
+.mdlg-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 6px; }
+/* The plain confirm variant has no form; its action row carries its own padding. */
+.mdlg--confirm .mdlg-actions { padding: 14px 18px 16px; margin-top: 0; }
+.mdlg-btn {
+  font-family: var(--cs-mono); font-size: 12px; font-weight: 600; cursor: pointer;
+  padding: 7px 13px; border-radius: 2px;
+  background: var(--panel-2); color: var(--ink); border: 1px solid var(--line-2);
+}
+.mdlg-btn:hover { background: var(--panel-3); border-color: var(--ink-3); }
+.mdlg-confirm { background: var(--red); border-color: var(--red-strong); color: #fff; }
+.mdlg-confirm:hover { background: var(--red-strong); }
+
+/* Compact mod/admin action buttons that OPEN the dialogs (and the inline own-post
+   delete). Mono, bordered, tinted by authority — no emoji, no Tailwind. */
+.act-btn {
+  display: inline-block; cursor: pointer;
+  font-family: var(--cs-mono); font-size: 11px; font-weight: 600;
+  padding: 3px 9px; border-radius: 2px;
+  background: var(--panel-2); color: var(--ink-2); border: 1px solid var(--line-2);
+  text-decoration: none;
+}
+.act-btn:hover { color: var(--ink); background: var(--panel-3); border-color: var(--ink-3); }
+.act-btn--mod { color: var(--warn-ink); }
+.act-btn--mod:hover { color: var(--warn-ink); border-color: var(--warn-ink); }
+.act-btn--admin, .act-btn--danger { color: var(--red-strong); }
+.act-btn--admin:hover, .act-btn--danger:hover { color: var(--red-strong); border-color: var(--red-strong); }
+.act-badge-banned {
+  font-family: var(--cs-mono); font-size: 11px; font-weight: 600; color: var(--red-strong);
+}
+/* Inline wrapper for single-button POST forms (delete/ban rows) so the control
+   sits in the surrounding text flow. Previously Tailwind's `inline m-0 p-0`. */
+.act-form { display: inline; margin: 0; padding: 0; }
+
+/* --------------------------------------------------------------------------
+   Author + role badges — rendered by render_author on every surface (feed rows,
+   comments, search results, member lists), so styled here rather than per-shell.
+   Shell stylesheets may refine .role variants; these are the shared baseline.
+   -------------------------------------------------------------------------- */
+.author-link { font-weight: 500; }
+.author-link:hover { color: var(--red); text-decoration: underline; }
+.role {
+  font-family: var(--cs-mono); font-size: 11px; font-weight: 700;
+  letter-spacing: 0.06em; padding: 1px 5px; border-radius: 2px;
+}
+.role.mod   { color: var(--ok-ink); background: var(--ok-tint); border: 1px solid oklch(0.80 0.07 150); }
+.role.admin { color: var(--red-strong); background: oklch(0.965 0.013 27); border: 1px solid oklch(0.80 0.07 27); }
+.role.op    { color: var(--down-ink); background: oklch(0.95 0.03 220); border: 1px solid oklch(0.82 0.06 220); }
+.role-deleted { color: var(--ink-3); font-style: italic; }
+
+/* --------------------------------------------------------------------------
+   Vote controls — semantic state classes the optimistic-vote script toggles.
+   Surface stylesheets may resize these; state colour lives only here.
+   min 24px hit area per WCAG 2.2 target-size minimum.
+   -------------------------------------------------------------------------- */
+.vote-up, .vote-down {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 24px; min-height: 22px;
+  font-weight: 700; font-size: 14px; line-height: 1; cursor: pointer;
+  color: var(--ink-3); background: none; border: 0; padding: 1px 2px;
+  text-decoration: none;
+}
+.vote-up:hover,   .vote-up.is-active   { color: var(--red); }
+.vote-down:hover, .vote-down.is-active { color: var(--down-ink); }

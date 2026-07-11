@@ -9,26 +9,9 @@
    legacy `Site pages, which still style themselves with inline Tailwind.
    =========================================================================== */
 
-@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap');
+/* Design tokens + IBM Plex come from base.css / the layout's font <link>. */
 
 .create-shell {
-  /* cool-grey neutrals + accents, ported from shell.css / auth.css */
-  --paper:      oklch(0.948 0.004 250);
-  --panel:      oklch(0.995 0.002 250);
-  --panel-2:    oklch(0.972 0.004 250);
-  --panel-3:    oklch(0.958 0.005 250);
-  --ink:        oklch(0.255 0.012 262);
-  --ink-2:      oklch(0.430 0.011 262);
-  --ink-3:      oklch(0.580 0.009 262);
-  --line:       oklch(0.866 0.006 255);
-  --line-2:     oklch(0.800 0.007 255);
-  --red:        oklch(0.555 0.155 27);
-  --red-strong: oklch(0.490 0.165 27);
-
-  --cs-mono: 'IBM Plex Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace;
-  --cs-sans: 'IBM Plex Sans', system-ui, -apple-system, sans-serif;
-  --cs-nav-h: 54px;   /* height of the .app-topbar command bar (see shell.css) */
-
   /* shell.css (loaded for the .app-topbar styles) sets html,body{overflow:hidden},
      so the document never scrolls. Unlike the multi-pane app shell, a creation page
      is a single long form: it must own its OWN vertical scroll, sized to the viewport
@@ -279,7 +262,7 @@
 .st-msg-author { font-family: var(--cs-mono); font-size: 12.5px; font-weight: 600; color: var(--ink); }
 .st-msg-time { font-family: var(--cs-mono); font-size: 11px; color: var(--ink-3); }
 .st-seed-tag {
-  font-family: var(--cs-mono); font-size: 10px; text-transform: uppercase;
+  font-family: var(--cs-mono); font-size: 11px; text-transform: uppercase;
   letter-spacing: .04em; color: var(--red); border: 1px solid var(--line-2);
   border-radius: 2px; padding: 1px 5px;
 }

@@ -2,9 +2,6 @@
     page-specific content. hq_dashboard_page is the only exception — it emits
     standalone HTML with no shared nav, intentionally isolated from the main shell. *)
 
-(** === CORE FEED === *)
-val index : ?user:string -> (int * int) list -> int -> string -> feed_type:string -> admin_usernames:string list -> moderated_communities:Db.community list -> Db.post list -> Db.community list -> Dream.request -> string
-
 (** === AUTHENTICATION === *)
 val signup_form : ?user:string -> ?error:string -> ?turnstile_site_key:string -> Dream.request -> string
 val login_form : ?user:string -> Dream.request -> string
@@ -13,7 +10,10 @@ val reset_password_page : token:string -> ?error:string -> Dream.request -> stri
 
 (** === COMMUNITY === *)
 val new_community_form : ?user:string -> Dream.request -> string
-val community_page : ?user:string -> ?noindex:bool -> ?section:Db.community_section -> is_member:bool -> is_current_user_mod:bool -> is_current_user_top_mod:bool -> mod_usernames:string list -> admin_usernames:string list -> banned_usernames:string list -> user_communities:Db.community list -> moderated_communities:Db.community list -> (int * int) list -> int -> string -> Db.community -> Db.post list -> Dream.request -> string
+(** [/c/:slug] for an UNSTRUCTURED community (sections disabled): one flat thread feed in
+    the shell idiom — channels sidebar, sort tabs, render_forum_row rows, pager, and an
+    about/rules/mods/modlog right rail. Un-gated (public read surface). *)
+val community_threads_shell_page : ?user:string -> ?noindex:bool -> is_member:bool -> is_current_user_mod:bool -> is_current_user_top_mod:bool -> mod_usernames:string list -> admin_usernames:string list -> banned_usernames:string list -> rail_communities:Db.community list -> channels:Db.channel list -> user_votes:(int * int) list -> current_page:int -> sort_mode:string -> community:Db.community -> posts:Db.post list -> Dream.request -> string
 val community_section_shell_page : ?user:string -> ?noindex:bool -> ?thread_count:int -> ?last_activity:string -> is_current_user_mod:bool -> mod_usernames:string list -> admin_usernames:string list -> banned_usernames:string list -> rail_communities:Db.community list -> channels:Db.channel list -> sections:Db.community_section list -> section:Db.community_section -> user_votes:(int * int) list -> current_page:int -> sort_mode:string -> community:Db.community -> posts:Db.post list -> Dream.request -> string
 
 (** [/feed] — global Feed surface. [scope] is "following" | "all"; logged-out callers must pass
@@ -60,7 +60,6 @@ module Start_thread : sig
 end
 (** GET form to start a durable thread from a seed chat message + nearby context. *)
 val start_thread_form : ?user:string -> ?error:string -> community:Db.community -> channel:Db.channel -> seed_id:int64 -> candidates:(Db.chat_message * string option) list -> sections:Db.community_section list -> default_section_id:int -> default_title:string -> default_body:string -> Dream.request -> string
-val post_page : ?user:string -> ?noindex:bool -> is_member:bool -> is_current_user_mod:bool -> mod_usernames:string list -> admin_usernames:string list -> banned_usernames:string list -> community:Db.community -> user_communities:Db.community list -> moderated_communities:Db.community list -> (int * int) list -> (int * int) list -> Db.post -> Db.comment list -> Dream.request -> string
 
 (** === USER === *)
 val user_profile_page : ?user:string -> is_admin:bool -> is_globally_banned:bool -> profile_id:int -> admin_usernames:string list -> moderated_communities:Db.community list -> active_tab:string -> (int * int) list -> string -> string -> string option -> string option -> int -> Db.post list -> (int * string * string * int * string * int) list -> Db.community_user_stat list -> Dream.request -> string
@@ -74,9 +73,9 @@ val search_results_page : ?user:string -> admin_usernames:string list -> ?chat_s
 val privacy_page : ?user:string -> Dream.request -> string
 
 (** === MESSAGE PAGE === *)
-(** [auth:true] renders the focused auth panel (auth.css) for account-lifecycle
-    flows; the default keeps the warm `Site card for every other caller. *)
-val msg_page : ?user:string -> ?auth:bool -> title:string -> message:string -> alert_type:string -> return_url:string -> Dream.request -> string
+(** One focused cool-grey message panel (auth.css) for every error/success/info
+    caller; the brand mark links to /feed and [return_url] returns to context. *)
+val msg_page : ?user:string -> title:string -> message:string -> alert_type:string -> return_url:string -> Dream.request -> string
 
 (** === MODERATION LOG === *)
 val mod_log_page : ?user:string -> ?noindex:bool -> can_access_settings:bool -> community:Db.community -> Db.mod_action list -> Dream.request -> string

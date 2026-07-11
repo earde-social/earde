@@ -21,7 +21,6 @@ val reset_password_page_handler : Dream.handler
 val reset_password_handler : Dream.handler
 
 (** === CORE FEED === *)
-val home_handler : Dream.handler
 val feed_handler : Dream.handler
 val search_handler : Dream.handler
 

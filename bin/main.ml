@@ -99,9 +99,8 @@ let () =
   @@ Earde.Handlers.analytics_middleware
   @@ restore_token_target_middleware
   @@ Dream.router [
-    (* / now redirects to the new global Feed. home_handler is kept (still in
-       handlers.mli) so / can become a real landing page later — hence a
-       temporary redirect, not a 301. *)
+    (* / redirects to the global Feed. Temporary redirect (not a 301) so / can
+       become a real landing page later. *)
     Dream.get "/" (fun request -> Dream.redirect request "/feed");
     (* Legacy /all is superseded by /feed. Redirect (not 404) to preserve old
        bookmarks. Temporary redirect to match the existing /-> /feed style above;

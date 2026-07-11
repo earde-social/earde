@@ -85,7 +85,7 @@ module Rate_limit = struct
     match%lwt Dream.sql request (fun db -> Db.Rate_limit.check db ip endpoint) with
     | Ok `Blocked ->
         let user = Dream.session_field request "username" in
-        Dream.html (Pages.msg_page ~auth:true ?user ~title:"Too Many Attempts"
+        Dream.html (Pages.msg_page ?user ~title:"Too Many Attempts"
           ~message:"Too many attempts. Please try again later."
           ~alert_type:"error" ~return_url:(Dream.target request) request)
     | Ok `Allowed -> inner_handler request
@@ -182,7 +182,7 @@ let signups_enabled () =
 
 let signups_closed_page request =
   let user = Dream.session_field request "username" in
-  Pages.msg_page ~auth:true ?user ~title:"Signups are closed"
+  Pages.msg_page ?user ~title:"Signups are closed"
     ~message:"Earde is in private alpha and public signups are temporarily closed. Check back soon."
     ~alert_type:"info" ~return_url:"/" request
 
@@ -190,7 +190,7 @@ let signups_closed_page request =
    path renders the SAME page so a bot can't tell from the response that it was caught. *)
 let check_your_email_page request =
   let user = Dream.session_field request "username" in
-  Pages.msg_page ~auth:true ?user ~title:"Check your email"
+  Pages.msg_page ?user ~title:"Check your email"
     ~message:"If everything looks good, we've sent a confirmation link to your email address. Click it within 24 hours to finish creating your account."
     ~alert_type:"info" ~return_url:"/login" request
 
@@ -199,7 +199,7 @@ let check_your_email_page request =
    protection, fail closed. Copy is generic so it doesn't reveal the misconfig. *)
 let turnstile_unavailable_page request =
   let user = Dream.session_field request "username" in
-  Pages.msg_page ~auth:true ?user ~title:"Signup temporarily unavailable"
+  Pages.msg_page ?user ~title:"Signup temporarily unavailable"
     ~message:"Signups are temporarily unavailable. Please try again later."
     ~alert_type:"info" ~return_url:"/" request
 
@@ -257,13 +257,13 @@ let signup_handler request =
 
       (* Validate before hashing — argon2 is expensive, reject obvious bad input early. *)
       if username = "" || email = "" || password = "" then
-        Dream.html (Pages.msg_page ~auth:true ~title:"Validation Error" ~message:"Username, email, and password are all required." ~alert_type:"error" ~return_url:"/signup" request)
+        Dream.html (Pages.msg_page ~title:"Validation Error" ~message:"Username, email, and password are all required." ~alert_type:"error" ~return_url:"/signup" request)
       else if String.length username < 3 || String.length username > 30 then
-        Dream.html (Pages.msg_page ~auth:true ~title:"Validation Error" ~message:"Username must be between 3 and 30 characters." ~alert_type:"error" ~return_url:"/signup" request)
+        Dream.html (Pages.msg_page ~title:"Validation Error" ~message:"Username must be between 3 and 30 characters." ~alert_type:"error" ~return_url:"/signup" request)
       else if not (String.contains email '@') then
-        Dream.html (Pages.msg_page ~auth:true ~title:"Validation Error" ~message:"Please enter a valid email address." ~alert_type:"error" ~return_url:"/signup" request)
+        Dream.html (Pages.msg_page ~title:"Validation Error" ~message:"Please enter a valid email address." ~alert_type:"error" ~return_url:"/signup" request)
       else if String.length password < 8 then
-        Dream.html (Pages.msg_page ~auth:true ~title:"Validation Error" ~message:"Password must be at least 8 characters long." ~alert_type:"error" ~return_url:"/signup" request)
+        Dream.html (Pages.msg_page ~title:"Validation Error" ~message:"Password must be at least 8 characters long." ~alert_type:"error" ~return_url:"/signup" request)
       else
 
       (* Pre-checks before the expensive argon2 hash (mirrors the old user_exists pattern,
@@ -281,7 +281,7 @@ let signup_handler request =
       ) in
       (match precheck with
       | Error err ->
-          Dream.html (Pages.msg_page ~auth:true ~title:"Registration Failed" ~message:("Registration failed: " ^ err) ~alert_type:"error" ~return_url:"/signup" request)
+          Dream.html (Pages.msg_page ~title:"Registration Failed" ~message:("Registration failed: " ^ err) ~alert_type:"error" ~return_url:"/signup" request)
       | Ok `User_taken ->
           let user = Dream.session_field request "username" in
           Dream.html (Pages.signup_form ?user ?turnstile_site_key ~error:"This username or email is already taken." request)
@@ -313,22 +313,22 @@ let signup_handler request =
               let%lwt () = Email.send_pending_signup_confirmation_email ~to_email:email ~token in
               Dream.html (check_your_email_page request)
           | Error err ->
-              Dream.html (Pages.msg_page ~auth:true ~title:"Registration Failed" ~message:("Registration failed: " ^ err) ~alert_type:"error" ~return_url:"/signup" request))
-      | Error err -> Dream.html (Pages.msg_page ~auth:true ~title:"Security Error" ~message:("Security error: " ^ err) ~alert_type:"error" ~return_url:"/signup" request))))
+              Dream.html (Pages.msg_page ~title:"Registration Failed" ~message:("Registration failed: " ^ err) ~alert_type:"error" ~return_url:"/signup" request))
+      | Error err -> Dream.html (Pages.msg_page ~title:"Security Error" ~message:("Security error: " ^ err) ~alert_type:"error" ~return_url:"/signup" request))))
 
-  | _ -> Dream.html (Pages.msg_page ~auth:true ~title:"Form Error" ~message:"Your form submission failed. The CSRF token was invalid or your session expired. Please try again." ~alert_type:"error" ~return_url:"/signup" request)
+  | _ -> Dream.html (Pages.msg_page ~title:"Form Error" ~message:"Your form submission failed. The CSRF token was invalid or your session expired. Please try again." ~alert_type:"error" ~return_url:"/signup" request)
 
 let verify_email_handler request =
   match Dream.query request "token" with
-  | None -> Dream.html (Pages.msg_page ~auth:true ~title:"Verification Error" ~message:"The verification token is missing from the URL." ~alert_type:"error" ~return_url:"/signup" request)
+  | None -> Dream.html (Pages.msg_page ~title:"Verification Error" ~message:"The verification token is missing from the URL." ~alert_type:"error" ~return_url:"/signup" request)
   | Some token ->
       Dream.sql request (fun db ->
         match%lwt Db.verify_email db token with
         | Ok (Some username) ->
-            Dream.html (Pages.msg_page ~auth:true ~title:"Email Verified!" ~message:(Printf.sprintf "Your account u/%s is now verified. You can log in." username) ~alert_type:"success" ~return_url:"/login" request)
+            Dream.html (Pages.msg_page ~title:"Email Verified!" ~message:(Printf.sprintf "Your account u/%s is now verified. You can log in." username) ~alert_type:"success" ~return_url:"/login" request)
         | Ok None ->
-            Dream.html (Pages.msg_page ~auth:true ~title:"Verification Failed" ~message:"This link is invalid or your email has already been verified." ~alert_type:"error" ~return_url:"/signup" request)
-        | Error err -> Dream.html (Pages.msg_page ~auth:true ~title:"Error" ~message:("A database error occurred: " ^ err) ~alert_type:"error" ~return_url:"/" request)
+            Dream.html (Pages.msg_page ~title:"Verification Failed" ~message:"This link is invalid or your email has already been verified." ~alert_type:"error" ~return_url:"/signup" request)
+        | Error err -> Dream.html (Pages.msg_page ~title:"Error" ~message:("A database error occurred: " ^ err) ~alert_type:"error" ~return_url:"/" request)
       )
 
 (* Pending-signup confirmation: hashing the URL token and matching it is what creates the
@@ -338,19 +338,19 @@ let verify_email_handler request =
 let confirm_email_handler request =
   match Dream.query request "token" with
   | None ->
-      Dream.html (Pages.msg_page ~auth:true ~title:"Confirmation Error" ~message:"The confirmation token is missing from the URL." ~alert_type:"error" ~return_url:"/signup" request)
+      Dream.html (Pages.msg_page ~title:"Confirmation Error" ~message:"The confirmation token is missing from the URL." ~alert_type:"error" ~return_url:"/signup" request)
   | Some token ->
       let token_hash = Db.pending_signup_hash_token token in
       Dream.sql request (fun db ->
         match%lwt Db.pending_signup_confirm db token_hash with
         | Ok (`Confirmed username) ->
-            Dream.html (Pages.msg_page ~auth:true ~title:"Email Confirmed!" ~message:(Printf.sprintf "Your account u/%s is now active. You can log in." username) ~alert_type:"success" ~return_url:"/login" request)
+            Dream.html (Pages.msg_page ~title:"Email Confirmed!" ~message:(Printf.sprintf "Your account u/%s is now active. You can log in." username) ~alert_type:"success" ~return_url:"/login" request)
         | Ok `Invalid ->
-            Dream.html (Pages.msg_page ~auth:true ~title:"Confirmation Failed" ~message:"This confirmation link is invalid or has expired. Please sign up again." ~alert_type:"error" ~return_url:"/signup" request)
+            Dream.html (Pages.msg_page ~title:"Confirmation Failed" ~message:"This confirmation link is invalid or has expired. Please sign up again." ~alert_type:"error" ~return_url:"/signup" request)
         | Ok `Conflict ->
-            Dream.html (Pages.msg_page ~auth:true ~title:"Already Registered" ~message:"An account with this username or email already exists. Please log in." ~alert_type:"error" ~return_url:"/login" request)
+            Dream.html (Pages.msg_page ~title:"Already Registered" ~message:"An account with this username or email already exists. Please log in." ~alert_type:"error" ~return_url:"/login" request)
         | Error err ->
-            Dream.html (Pages.msg_page ~auth:true ~title:"Error" ~message:("A database error occurred: " ^ err) ~alert_type:"error" ~return_url:"/" request)
+            Dream.html (Pages.msg_page ~title:"Error" ~message:("A database error occurred: " ^ err) ~alert_type:"error" ~return_url:"/" request)
       )
 
 let login_page request =
@@ -372,17 +372,17 @@ let login_handler request =
             (match%lwt Auth.verify_password ~password ~hash with
             | Ok true ->
                 if is_banned then
-                  Dream.html (Pages.msg_page ~auth:true ~title:"Account Banned" ~message:"Your account has been permanently banned from Earde." ~alert_type:"error" ~return_url:"/login" request)
+                  Dream.html (Pages.msg_page ~title:"Account Banned" ~message:"Your account has been permanently banned from Earde." ~alert_type:"error" ~return_url:"/login" request)
                 else
                   let%lwt () = Dream.set_session_field request "user_id" (string_of_int id) in
                   let%lwt () = Dream.set_session_field request "username" user in
                   let%lwt () = if is_admin then Dream.set_session_field request "is_admin" "true" else Lwt.return () in
                   Dream.redirect request "/"
-              | _ -> Dream.html (Pages.msg_page ~auth:true ~title:"Login Failed" ~message:"Invalid username or password." ~alert_type:"error" ~return_url:"/login" request))
-        | Ok None -> Dream.html (Pages.msg_page ~auth:true ~title:"Login Failed" ~message:"Invalid username or password." ~alert_type:"error" ~return_url:"/login" request)
-        | Error err -> Dream.html (Pages.msg_page ~auth:true ~title:"Error" ~message:("Database error: " ^ err) ~alert_type:"error" ~return_url:"/login" request)
+              | _ -> Dream.html (Pages.msg_page ~title:"Login Failed" ~message:"Invalid username or password." ~alert_type:"error" ~return_url:"/login" request))
+        | Ok None -> Dream.html (Pages.msg_page ~title:"Login Failed" ~message:"Invalid username or password." ~alert_type:"error" ~return_url:"/login" request)
+        | Error err -> Dream.html (Pages.msg_page ~title:"Error" ~message:("Database error: " ^ err) ~alert_type:"error" ~return_url:"/login" request)
       )
-  | _ -> Dream.html (Pages.msg_page ~auth:true ~title:"Form Error" ~message:"There was a problem with your form submission. Your session may have expired." ~alert_type:"error" ~return_url:"/login" request)
+  | _ -> Dream.html (Pages.msg_page ~title:"Form Error" ~message:"There was a problem with your form submission. Your session may have expired." ~alert_type:"error" ~return_url:"/login" request)
 
 let logout_handler request =
   let%lwt () = Dream.invalidate_session request in
@@ -397,7 +397,7 @@ let forgot_password_handler request =
   | `Ok form_data ->
       let email = String.trim (List.assoc_opt "email" form_data |> Option.value ~default:"") in
       if email = "" then
-        Dream.html (Pages.msg_page ~auth:true ~title:"Validation Error" ~message:"Email address is required." ~alert_type:"error" ~return_url:"/forgot-password" request)
+        Dream.html (Pages.msg_page ~title:"Validation Error" ~message:"Email address is required." ~alert_type:"error" ~return_url:"/forgot-password" request)
       else begin
         let token = Dream.to_base64url (Dream.random 32) in
         (* DB connection released before Brevo call — same pattern as signup. *)
@@ -407,26 +407,26 @@ let forgot_password_handler request =
         (match result with
         | Ok true ->
             let%lwt () = Email.send_password_reset_email ~to_email:email ~token in
-            Dream.html (Pages.msg_page ~auth:true ~title:"Check your email" ~message:"If an account with that email exists, a reset link has been sent. Check your inbox (and spam folder)." ~alert_type:"info" ~return_url:"/login" request)
+            Dream.html (Pages.msg_page ~title:"Check your email" ~message:"If an account with that email exists, a reset link has been sent. Check your inbox (and spam folder)." ~alert_type:"info" ~return_url:"/login" request)
         | Ok false ->
-            Dream.html (Pages.msg_page ~auth:true ~title:"Check your email" ~message:"If an account with that email exists, a reset link has been sent. Check your inbox (and spam folder)." ~alert_type:"info" ~return_url:"/login" request)
+            Dream.html (Pages.msg_page ~title:"Check your email" ~message:"If an account with that email exists, a reset link has been sent. Check your inbox (and spam folder)." ~alert_type:"info" ~return_url:"/login" request)
         | Error err ->
             Dream.log "forgot_password DB error: %s" err;
-            Dream.html (Pages.msg_page ~auth:true ~title:"Check your email" ~message:"If an account with that email exists, a reset link has been sent. Check your inbox (and spam folder)." ~alert_type:"info" ~return_url:"/login" request))
+            Dream.html (Pages.msg_page ~title:"Check your email" ~message:"If an account with that email exists, a reset link has been sent. Check your inbox (and spam folder)." ~alert_type:"info" ~return_url:"/login" request))
       end
-  | _ -> Dream.html (Pages.msg_page ~auth:true ~title:"Form Error" ~message:"Your form submission failed. Please try again." ~alert_type:"error" ~return_url:"/forgot-password" request)
+  | _ -> Dream.html (Pages.msg_page ~title:"Form Error" ~message:"Your form submission failed. Please try again." ~alert_type:"error" ~return_url:"/forgot-password" request)
 
 let reset_password_page_handler request =
   match Dream.query request "token" with
   | None ->
-      Dream.html (Pages.msg_page ~auth:true ~title:"Invalid Link" ~message:"This password reset link is missing a token. Please request a new one." ~alert_type:"error" ~return_url:"/forgot-password" request)
+      Dream.html (Pages.msg_page ~title:"Invalid Link" ~message:"This password reset link is missing a token. Please request a new one." ~alert_type:"error" ~return_url:"/forgot-password" request)
   | Some token ->
       (match%lwt Dream.sql request (fun db -> Db.password_reset_validate_token db token) with
       | Ok (Some _) -> Dream.html (Pages.reset_password_page ~token request)
       | Ok None ->
-          Dream.html (Pages.msg_page ~auth:true ~title:"Link Expired" ~message:"This password reset link is invalid or has expired. Please request a new one." ~alert_type:"error" ~return_url:"/forgot-password" request)
+          Dream.html (Pages.msg_page ~title:"Link Expired" ~message:"This password reset link is invalid or has expired. Please request a new one." ~alert_type:"error" ~return_url:"/forgot-password" request)
       | Error _ ->
-          Dream.html (Pages.msg_page ~auth:true ~title:"Error" ~message:"An error occurred. Please try again." ~alert_type:"error" ~return_url:"/forgot-password" request))
+          Dream.html (Pages.msg_page ~title:"Error" ~message:"An error occurred. Please try again." ~alert_type:"error" ~return_url:"/forgot-password" request))
 
 (* Argon2 hashing runs before the DB transaction — CPU-bound work must not hold
    a connection open. The token DELETE and password UPDATE are atomic: a hash or
@@ -438,7 +438,7 @@ let reset_password_handler request =
       let password = List.assoc_opt "password"         form_data |> Option.value ~default:"" in
       let confirm  = List.assoc_opt "confirm_password" form_data |> Option.value ~default:"" in
       if token = "" then
-        Dream.html (Pages.msg_page ~auth:true ~title:"Invalid Request" ~message:"Token is missing. Please use the link from your email." ~alert_type:"error" ~return_url:"/forgot-password" request)
+        Dream.html (Pages.msg_page ~title:"Invalid Request" ~message:"Token is missing. Please use the link from your email." ~alert_type:"error" ~return_url:"/forgot-password" request)
       else if password <> confirm then
         Dream.html (Pages.reset_password_page ~token ~error:"Passwords do not match." request)
       else if String.length password < 8 then
@@ -447,63 +447,19 @@ let reset_password_handler request =
         (match%lwt Auth.hash_password password with
         | Error err ->
             Dream.log "reset_password hash error: %s" err;
-            Dream.html (Pages.msg_page ~auth:true ~title:"Error" ~message:"An error occurred. Please try again." ~alert_type:"error" ~return_url:"/forgot-password" request)
+            Dream.html (Pages.msg_page ~title:"Error" ~message:"An error occurred. Please try again." ~alert_type:"error" ~return_url:"/forgot-password" request)
         | Ok new_hash ->
             Dream.sql request (fun db ->
               match%lwt Db.password_reset_atomically db token new_hash with
               | Ok false ->
-                  Dream.html (Pages.msg_page ~auth:true ~title:"Link Expired" ~message:"This reset link is invalid or has expired. Please request a new one." ~alert_type:"error" ~return_url:"/forgot-password" request)
+                  Dream.html (Pages.msg_page ~title:"Link Expired" ~message:"This reset link is invalid or has expired. Please request a new one." ~alert_type:"error" ~return_url:"/forgot-password" request)
               | Ok true ->
-                  Dream.html (Pages.msg_page ~auth:true ~title:"Password Updated" ~message:"Your password has been updated. You can now log in with your new password." ~alert_type:"success" ~return_url:"/login" request)
+                  Dream.html (Pages.msg_page ~title:"Password Updated" ~message:"Your password has been updated. You can now log in with your new password." ~alert_type:"success" ~return_url:"/login" request)
               | Error err ->
                   Dream.log "reset_password error: %s" err;
-                  Dream.html (Pages.msg_page ~auth:true ~title:"Error" ~message:"An error occurred. Please try again." ~alert_type:"error" ~return_url:"/forgot-password" request)))
-  | _ -> Dream.html (Pages.msg_page ~auth:true ~title:"Form Error" ~message:"Your form submission failed. Please try again." ~alert_type:"error" ~return_url:"/forgot-password" request)
+                  Dream.html (Pages.msg_page ~title:"Error" ~message:"An error occurred. Please try again." ~alert_type:"error" ~return_url:"/forgot-password" request)))
+  | _ -> Dream.html (Pages.msg_page ~title:"Form Error" ~message:"Your form submission failed. Please try again." ~alert_type:"error" ~return_url:"/forgot-password" request)
 
-(* === CORE FEED === *)
-
-let home_handler request =
-  let user = Dream.session_field request "username" in
-  let user_id = match Dream.session_field request "user_id" with Some id -> int_of_string id | None -> 0 in
-  let is_logged_in = user_id > 0 in
-
-  let page = match Dream.query request "page" with
-    | Some p_str -> (try int_of_string p_str with _ -> 1)
-    | None -> 1
-  in
-  let sort_mode = match Dream.query request "sort" with
-    | Some "new"    -> Db.Newest
-    | Some "top"    -> Db.Top
-    | Some "active" -> Db.Active
-    | _             -> Db.Hot
-  in
-  let sort_str = match sort_mode with Db.Newest -> "new" | Db.Top -> "top" | Db.Hot -> "hot" | Db.Active -> "active" in
-  let limit = 20 in
-  let offset = (max 1 page - 1) * limit in
-
-  Dream.sql request (fun db ->
-    (* Logged-in users get a personalised feed from their joined communities;
-       guests fall back to the global feed so the page is never empty. *)
-    let%lwt posts =
-      if is_logged_in then Db.get_personalized_feed db user_id sort_mode limit offset
-      else Db.get_all_posts db sort_mode limit offset
-    in
-    let feed_type = if is_logged_in then "home" else "all" in
-    let%lwt user_votes =
-      if user_id > 0 then Db.get_user_post_votes db user_id else Lwt.return_ok []
-    in
-    let%lwt user_communities =
-      if user_id > 0 then Db.get_user_communities db user_id else Lwt.return_ok []
-    in
-    let%lwt admin_usernames_res = Db.get_admin_usernames db in
-    let admin_usernames = match admin_usernames_res with Ok l -> l | Error _ -> [] in
-    let%lwt moderated_communities_res = if user_id > 0 then Db.get_moderated_communities db user_id else Lwt.return_ok [] in
-    let moderated_communities = match moderated_communities_res with Ok l -> l | Error _ -> [] in
-
-    match posts, user_votes, user_communities with
-    | Ok p, Ok v, Ok a -> Dream.html (Pages.index ?user v page sort_str ~feed_type ~admin_usernames ~moderated_communities p a request)
-    | Error e, _, _ | _, Error e, _ | _, _, Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:("Database error: " ^ e) ~alert_type:"error" ~return_url:"/" request)
-  )
 
 (* /feed — the global Feed surface (shell-language, outside any one community). Reuses the same
    feed queries as home/all: "following" → personalized feed from joined communities, "all" →
@@ -769,14 +725,16 @@ let community_page_handler request =
         let%lwt authorized = can_view_community db ~user_id ~is_admin community in
         if not authorized then community_not_found ?user request
         else
-        (* Simple community feed *)
+        (* Unstructured community: one flat thread feed in the shell idiom. *)
         let sort_mode = match sort_str_opt with
           | Some "new" -> Db.Newest | Some "top" -> Db.Top | Some "hot" -> Db.Hot | _ -> Db.Hot
         in
         let sort_str = match sort_mode with Db.Newest -> "new" | Db.Top -> "top" | Db.Hot -> "hot" | Db.Active -> "active" in
         let%lwt posts = Db.get_posts_by_community db community.id sort_mode limit offset in
         let%lwt user_votes = if user_id > 0 then Db.get_user_post_votes db user_id else Lwt.return_ok [] in
-        let%lwt (mods_res, admin_usernames, banned_usernames, user_communities, moderated_communities, is_mem) =
+        let%lwt channels_res = Db.get_channels_by_community db community.id in
+        let channels = match channels_res with Ok cs -> cs | Error _ -> [] in
+        let%lwt (mods_res, admin_usernames, banned_usernames, user_communities, _moderated_communities, is_mem) =
           shared_sidebar_data db community
         in
         (match posts, user_votes, is_mem with
@@ -785,7 +743,7 @@ let community_page_handler request =
              let mod_usernames = List.map (fun (e: Db.moderator_entry) -> e.username) mods in
              let is_mod = user_id > 0 && List.exists (fun (e: Db.moderator_entry) -> e.user_id = user_id) mods in
              let is_top_mod = user_id > 0 && List.exists (fun (e: Db.moderator_entry) -> e.user_id = user_id && e.role = "top_mod") mods in
-             Dream.html (Pages.community_page ?user ~noindex:(community_noindex community) ~is_member:m ~is_current_user_mod:is_mod ~is_current_user_top_mod:is_top_mod ~mod_usernames ~admin_usernames ~banned_usernames ~user_communities ~moderated_communities v page sort_str community p request)
+             Dream.html (Pages.community_threads_shell_page ?user ~noindex:(community_noindex community) ~is_member:m ~is_current_user_mod:is_mod ~is_current_user_top_mod:is_top_mod ~mod_usernames ~admin_usernames ~banned_usernames ~rail_communities:user_communities ~channels ~user_votes:v ~current_page:page ~sort_mode:sort_str ~community ~posts:p request)
          | _ -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:"Failed to load community data." ~alert_type:"error" ~return_url:"/" request))
     | Ok None -> Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"Not Found" ~message:"This community does not exist." ~alert_type:"error" ~return_url:"/" request)
     | Error err -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:("Database error: " ^ err) ~alert_type:"error" ~return_url:"/" request)
@@ -2163,56 +2121,15 @@ let view_post_handler request =
              post_id stays authoritative; the canonical route renders the shell. *)
           Dream.redirect ~status:`Moved_Permanently request
             (Components.canonical_thread_path post.community_slug post.id post.title)
-        else begin
-        (* Safe fallback for the pathological unmappable post (no community slug): render the
-           legacy warm-card page rather than 500. In practice community_slug is always set. *)
-        let%lwt comments_result = Db.get_comments db post.id in
-
-        let%lwt is_member_result =
-          match user_id_opt with
-          | Some uid -> Db.is_member db (int_of_string uid) post.community_id
-          | None -> Lwt.return (Ok false)
-        in
-
-        let%lwt user_post_votes = get_current_user_votes db request in
-        let%lwt user_comment_votes = get_current_user_comment_votes db request in
-        let%lwt is_mod_res =
-          match user_id_opt with
-          | Some uid -> Db.is_moderator db (int_of_string uid) post.community_id
-          | None -> Lwt.return_ok false
-        in
-        let%lwt mods_res = Db.get_community_moderators db post.community_id in
-
-        let%lwt admin_usernames_res = Db.get_admin_usernames db in
-        let admin_usernames = match admin_usernames_res with Ok l -> l | Error _ -> [] in
-        let%lwt banned_res = Db.community_get_banned_users db post.community_id in
-        let banned_usernames = match banned_res with Ok bs -> List.map (fun (u: Db.user) -> u.username) bs | _ -> [] in
-        let%lwt community_res = Db.get_community_by_slug db post.community_slug in
-        let%lwt user_communities_res = match user_id_opt with
-          | Some uid -> Db.get_user_communities db (int_of_string uid)
-          | None -> Lwt.return_ok []
-        in
-        let user_communities = match user_communities_res with Ok us -> us | _ -> [] in
-        let%lwt moderated_communities_res = match user_id_opt with
-          | Some uid -> Db.get_moderated_communities db (int_of_string uid)
-          | None -> Lwt.return_ok []
-        in
-        let moderated_communities = match moderated_communities_res with Ok l -> l | Error _ -> [] in
-        (* Fallback community: if the record is somehow missing, construct a minimal one
-           from post fields so the page can still render without a 500. *)
-        let community_for_page : Db.community = match community_res with
-          | Ok (Some a) -> a
-          | _ -> { id = post.community_id; slug = post.community_slug; name = post.community_slug;
-                   description = None; rules = None; avatar_url = None; banner_url = None; allow_downvotes = true; sections_enabled = false; visibility = Db.Community_public; indexable = true }
-        in
-        let%lwt noindex = thread_noindex db community_for_page post in
-        (match comments_result, is_member_result with
-        | Ok comments, Ok is_member ->
-            let is_mod = match is_mod_res with Ok b -> b | _ -> false in
-            let mod_usernames = match mods_res with Ok ms -> List.map (fun (u: Db.user) -> u.username) ms | _ -> [] in
-            Dream.html (Pages.post_page ?user:user_sess ~noindex ~is_member ~is_current_user_mod:is_mod ~mod_usernames ~admin_usernames ~banned_usernames ~community:community_for_page ~user_communities ~moderated_communities user_post_votes user_comment_votes post comments request)
-        | _ -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user:user_sess ~title:"Error" ~message:"Failed to load post data. Please try again later." ~alert_type:"error" ~return_url:"/" request))
-        end
+        else
+          (* Pathological unmappable post (no community slug — corrupt data): the legacy
+             warm-card fallback page is gone, so answer honestly with a 404 message page
+             rather than pretending the thread has a home. In practice community_slug is
+             always set and every real post 301s to its canonical thread URL above. *)
+          Dream.respond ~status:`Not_Found
+            (Pages.msg_page ?user:user_sess ~title:"Thread unavailable"
+               ~message:"This post is not attached to a community and cannot be displayed."
+               ~alert_type:"error" ~return_url:"/feed" request)
 
     | Ok None -> Dream.respond ~status:`Not_Found (Pages.msg_page ?user:user_sess ~title:"Not Found" ~message:"This post does not exist or has been deleted." ~alert_type:"error" ~return_url:"/" request)
     | Error err -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user:user_sess ~title:"Error" ~message:("Database error: " ^ err) ~alert_type:"error" ~return_url:"/" request)

@@ -9,35 +9,19 @@
    .cm-shell so it can never leak into the legacy `Site pages that still style
    themselves with inline Tailwind.
 
-   Tokens are ported verbatim from admin.css / account.css so the management
-   surfaces read as one console. Destructive controls (section delete, ban,
-   mod remove) get an explicit .cm-danger / .cm-btn--danger treatment, kept
-   visually apart from read-only and edit panels.
+   Shared design tokens + IBM Plex come from base.css / the layout's font
+   <link>; only console-specific accents are declared here. Destructive
+   controls (section delete, ban, mod remove) get an explicit .cm-danger /
+   .cm-btn--danger treatment, kept visually apart from read-only and edit
+   panels.
    =========================================================================== */
 
-@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap');
-
 .cm-shell {
-  --paper:      oklch(0.948 0.004 250);
-  --panel:      oklch(0.995 0.002 250);
-  --panel-2:    oklch(0.972 0.004 250);
-  --panel-3:    oklch(0.958 0.005 250);
-  --ink:        oklch(0.255 0.012 262);
-  --ink-2:      oklch(0.430 0.011 262);
-  --ink-3:      oklch(0.580 0.009 262);
-  --line:       oklch(0.866 0.006 255);
-  --line-2:     oklch(0.800 0.007 255);
-  --red:        oklch(0.555 0.155 27);
-  --red-strong: oklch(0.490 0.165 27);
+  /* console-local accents (not part of the shared palette). Teal darkened from
+     L 0.64 so it passes AA both as small text on panel and under white text. */
   --red-soft:   oklch(0.555 0.155 27 / 0.10);
-  --ok:         oklch(0.620 0.130 150);
   --ok-strong:  oklch(0.540 0.130 150);
-  --warn:       oklch(0.680 0.140 70);
-  --teal:       oklch(0.640 0.090 220);
-
-  --cs-mono: 'IBM Plex Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace;
-  --cs-sans: 'IBM Plex Sans', system-ui, -apple-system, sans-serif;
-  --cs-nav-h: 54px;   /* height of the .app-topbar command bar (see shell.css) */
+  --teal:       oklch(0.480 0.085 220);
 
   /* shell.css (loaded for .app-topbar) sets html,body{overflow:hidden}; this
      console owns its OWN vertical scroll, sized to the viewport minus topbar. */
@@ -111,7 +95,7 @@
   border: 1px solid var(--line-2); border-radius: 2px; padding: 4px 6px; width: 100%;
   resize: vertical; min-height: 32px;
 }
-.cm-report-note:focus { outline: none; border-color: var(--ink-3); }
+.cm-report-note:focus { outline: none; border-color: var(--red); }
 .cm-report-btns { display: flex; gap: 6px; flex-wrap: wrap; }
 .cm-report-meta { font-family: var(--cs-mono); font-size: 11px; color: var(--ink-3); line-height: 1.6; }
 
@@ -129,7 +113,7 @@
   font-family: var(--cs-mono); font-size: 14px; font-weight: 600;
   letter-spacing: -0.01em; color: var(--ink); margin: 0 0 4px;
 }
-.cm-panel-desc { font-size: 12.5px; color: var(--ink-2); line-height: 1.5; margin: 0 0 14px; }
+.cm-panel-desc { font-size: 13px; color: var(--ink-2); line-height: 1.5; margin: 0 0 14px; }
 .cm-subhead {
   font-family: var(--cs-mono); font-size: 11.5px; font-weight: 600;
   text-transform: uppercase; letter-spacing: 0.04em; color: var(--ink-3);
@@ -152,7 +136,8 @@
   padding: 3px 9px; border-radius: 2px; border: 1px solid var(--line-2);
   color: var(--ink-2); background: var(--panel-2); min-width: 34px; text-align: center;
 }
-.cm-stat-val--ok  { color: #fff; background: var(--ok);  border-color: var(--ok); }
+/* Dark ink on a tint — white on --ok is 3.4:1, under AA for this 11.5px label. */
+.cm-stat-val--ok  { color: var(--ok-ink); background: var(--ok-tint); border-color: var(--ok); }
 .cm-stat-val--off { color: var(--ink-3); background: var(--panel-3); border-color: var(--line-2); }
 
 /* --------------------------------------------------------------------------
@@ -234,7 +219,7 @@
 .cm-btn-sm--danger { color: var(--red-strong); border-color: oklch(0.555 0.155 27 / 0.35); }
 .cm-btn-sm--danger:hover { color: #fff; background: var(--red); border-color: var(--red-strong); }
 .cm-btn-sm--ok { color: var(--ok-strong); border-color: oklch(0.620 0.130 150 / 0.40); }
-.cm-btn-sm--ok:hover { color: #fff; background: var(--ok); border-color: var(--ok); }
+.cm-btn-sm--ok:hover { color: #fff; background: var(--ok-ink); border-color: var(--ok-ink); }
 .cm-btn-sm--promote { color: var(--teal); border-color: oklch(0.640 0.090 220 / 0.45); }
 .cm-btn-sm--promote:hover { color: #fff; background: var(--teal); border-color: var(--teal); }
 
@@ -253,14 +238,14 @@
 
 /* role / status badges (mirror admin badge vocabulary) */
 .cm-badge {
-  display: inline-block; font-family: var(--cs-mono); font-size: 10px; font-weight: 600;
+  display: inline-block; font-family: var(--cs-mono); font-size: 11px; font-weight: 600;
   text-transform: uppercase; letter-spacing: 0.03em;
   padding: 1px 6px; border-radius: 2px; border: 1px solid var(--line-2);
   color: var(--ink-2); background: var(--panel-2); margin-left: 6px;
 }
 .cm-badge--top    { color: #fff; background: var(--teal); border-color: var(--teal); }
 .cm-badge--legacy { color: var(--ink-3); background: var(--panel-3); border-color: var(--line-2); }
-.cm-badge--active   { color: #fff; background: var(--ok); border-color: var(--ok); }
+.cm-badge--active   { color: var(--ok-ink); background: var(--ok-tint); border-color: var(--ok); }
 .cm-badge--archived { color: var(--ink-3); background: var(--panel-3); border-color: var(--line-2); }
 .cm-muted-note { font-family: var(--cs-mono); font-size: 11px; color: var(--ink-3); font-style: italic; }
 
@@ -312,7 +297,7 @@
 .cm-table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 2px; }
 .cm-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
 .cm-table thead th {
-  font-family: var(--cs-mono); font-size: 10.5px; font-weight: 600;
+  font-family: var(--cs-mono); font-size: 11px; font-weight: 600;
   text-transform: uppercase; letter-spacing: 0.04em; color: var(--ink-3);
   text-align: left; padding: 8px 12px; background: var(--panel-2);
   border-bottom: 1px solid var(--line); white-space: nowrap;
@@ -327,7 +312,7 @@
 .cm-table-actor { font-family: var(--cs-mono); font-weight: 600; color: var(--ink); }
 .cm-table-actor:hover { color: var(--red); text-decoration: underline; }
 .cm-action-tag {
-  display: inline-block; font-family: var(--cs-mono); font-size: 10.5px; font-weight: 600;
+  display: inline-block; font-family: var(--cs-mono); font-size: 11px; font-weight: 600;
   padding: 2px 7px; border-radius: 2px;
   color: var(--ink-2); background: var(--panel-3); border: 1px solid var(--line-2);
 }
@@ -353,8 +338,8 @@
   padding: 8px;
 }
 .cm-index-title {
-  font-family: var(--cs-mono); font-size: 10.5px; font-weight: 600;
-  text-transform: uppercase; letter-spacing: 0.05em; color: var(--ink-3);
+  font-family: var(--cs-mono); font-size: 11.5px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.04em; color: var(--ink-3);
   padding: 4px 10px 8px;
 }
 .cm-shell .cm-index-link {
@@ -393,7 +378,7 @@
 .cm-item > summary::-webkit-details-marker { display: none; }
 .cm-item > summary:hover { background: var(--panel-2); }
 .cm-item[open] > summary { background: var(--panel-2); border-bottom: 1px dashed var(--line); }
-.cm-item-pos { font-family: var(--cs-mono); font-size: 10.5px; color: var(--ink-3); }
+.cm-item-pos { font-family: var(--cs-mono); font-size: 11px; color: var(--ink-3); }
 .cm-item-name { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
 .cm-item-name .cm-section-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .cm-item-name .cm-section-slug { margin-left: 0; flex: none; white-space: nowrap; }

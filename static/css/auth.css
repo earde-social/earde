@@ -10,26 +10,9 @@
    `Site pages, which still style themselves with inline Tailwind utilities.
    =========================================================================== */
 
-/* IBM Plex, loaded the same way shell.css / community-home.css load it. */
-@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap');
+/* Design tokens + IBM Plex come from base.css / the layout's font <link>. */
 
 .auth-shell {
-  /* cool-grey neutrals + accents, ported from shell.css .community-shell */
-  --paper:      oklch(0.948 0.004 250);
-  --panel:      oklch(0.995 0.002 250);
-  --panel-2:    oklch(0.972 0.004 250);
-  --ink:        oklch(0.255 0.012 262);
-  --ink-2:      oklch(0.430 0.011 262);
-  --ink-3:      oklch(0.580 0.009 262);
-  --line:       oklch(0.866 0.006 255);
-  --line-2:     oklch(0.800 0.007 255);
-  --red:        oklch(0.555 0.155 27);
-  --red-strong: oklch(0.490 0.165 27);
-  --ok:         oklch(0.620 0.130 150);
-
-  --cs-mono: 'IBM Plex Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace;
-  --cs-sans: 'IBM Plex Sans', system-ui, -apple-system, sans-serif;
-
   min-height: 100vh;
   display: flex;
   flex-direction: column;
@@ -83,7 +66,7 @@
 }
 
 .auth-title {
-  font-family: var(--cs-mono); font-size: 20px; font-weight: 700;
+  font-family: var(--cs-mono); font-size: 21px; font-weight: 700;
   letter-spacing: -0.01em; color: var(--ink); margin: 0 0 4px;
 }
 .auth-sub { font-size: 13.5px; color: var(--ink-2); margin: 0 0 22px; line-height: 1.5; }
