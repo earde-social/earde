@@ -13,14 +13,24 @@ colors:
   ink-muted: "oklch(0.510 0.010 262)"
   line: "oklch(0.866 0.006 255)"
   line-strong: "oklch(0.800 0.007 255)"
+  line-control: "oklch(0.640 0.010 255)"
   frame: "oklch(0.300 0.012 262)"
   frame-ink: "oklch(0.965 0.003 250)"
+  frame-fill: "oklch(0.360 0.012 262)"
+  frame-line: "oklch(0.420 0.012 262)"
+  frame-ink-muted: "oklch(0.850 0.010 255)"
   success: "oklch(0.620 0.130 150)"
   success-ink: "oklch(0.400 0.110 150)"
   success-tint: "oklch(0.950 0.030 150)"
+  success-line: "oklch(0.800 0.070 150)"
   warning: "oklch(0.680 0.140 70)"
   warning-ink: "oklch(0.450 0.120 70)"
   warning-tint: "oklch(0.960 0.040 70)"
+  signal-red-tint: "oklch(0.965 0.013 27)"
+  signal-red-line: "oklch(0.800 0.070 27)"
+  info-ink: "oklch(0.450 0.070 220)"
+  info-tint: "oklch(0.950 0.030 220)"
+  info-line: "oklch(0.820 0.060 220)"
 typography:
   headline:
     fontFamily: "IBM Plex Mono, ui-monospace, SFMono-Regular, Menlo, monospace"
@@ -144,7 +154,8 @@ Workshop Grey forms a quiet, durable neutral field; Signal Red is the sole prima
 - **Subtle Panel and Muted Panel:** Secondary navigation, grouped fields, alternate rows, and hover states.
 - **Primary Ink, Secondary Ink, and Muted Ink:** A three-step hierarchy for content, support text, and metadata.
 - **Line and Strong Line:** Structural separators and interactive boundaries.
-- **Frame and Frame Ink:** High-contrast structural bars and text placed on them.
+- **Control Line:** The darker boundary on text inputs, textareas, and selects — controls must be identifiable at ≥3:1 (WCAG 1.4.11); separators stay on Line/Strong Line.
+- **Frame and Frame Ink:** High-contrast structural bars and text placed on them; Frame Fill, Frame Line, and Muted Frame Ink are the tile fill, tile boundary, and secondary text used on Frame-dark surfaces (the global rail).
 
 ### Named Rules
 
@@ -174,8 +185,8 @@ Workshop Grey forms a quiet, durable neutral field; Signal Red is the sole prima
 
 ### Named Exceptions
 
-- **Thread document title** (`.th-title`, 24px sans): the one long-form document heading in the product; sans at a larger size is deliberate for sustained reading of the thread page.
-- **Tile and crest glyphs** (18px / 26px): single-letter identity tiles are display glyphs, not text, and size to their tile.
+- **Thread document title and body** (`.th-title` 24px sans, `.th-body` 15px): the one long-form document surface in the product; the larger title and body are deliberate for sustained reading of the thread page.
+- **Tile, crest, and affordance glyphs** (18px / 26px): single-letter identity tiles, rail glyphs, and arrow/close affordances are display glyphs, not text, and size to their tile.
 - **HQ dashboard** (`hq_dashboard_page`): standalone internal operator tool outside the shared chrome; not held to the product ramp.
 - **Prose line-heights** (1.6–1.72): long-form legal/privacy prose may exceed the 1.5 body cadence.
 - **Narrow-viewport downscales**: a media query may step a Headline down one notch (e.g. 21px → 19px) where the full size would wrap badly; it may not introduce new resting sizes.

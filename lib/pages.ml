@@ -126,7 +126,7 @@ let reset_password_page ~token ?error request =
             </div>
             <button type='submit' class='auth-btn'>Reset password</button>
         </form>"
-    error_html csrf_token token
+    error_html csrf_token (Components.html_escape token)
   in Components.auth_page ~noindex:true ~request ~title:"Reset Password" ~card ()
 
 (* === COMMUNITY === *)
@@ -336,7 +336,7 @@ let community_section_shell_page ?user ?(noindex=false) ?thread_count ?last_acti
   (* Sort tabs — Hot/New/Top/Active, active highlighted. No counts (they would be fabricated) and
      no Unanswered (no such state). Preserves the ?sort override + the section's default sort. *)
   let tab mode label =
-    let cls = if mode = sort_mode then " class='active'" else "" in
+    let cls = if mode = sort_mode then " class='active' aria-current='true'" else "" in
     Printf.sprintf "<a%s href='%s?sort=%s'>%s</a>" cls base_url mode label
   in
   let ftabs = Printf.sprintf "<div class='ftabs'>%s%s%s%s</div>"
@@ -426,6 +426,19 @@ let community_section_shell_page ?user ?(noindex=false) ?thread_count ?last_acti
    about/join/rules/mods/modlog. This replaced the last warm-Tailwind page (the old
    Pages.community_page); the community's choice not to use sections is respected — the
    feed is the community, so the header carries the community identity directly. *)
+(* Leave-community confirm copy, shared by every Leave form. Leaving is one click
+   but not always self-reversible: private communities are invite-managed, so the
+   dialog says so before the POST. Kept apostrophe-free — the message travels as a
+   single-quoted JS string literal inside onsubmit. *)
+let leave_confirm_message (community : community) =
+  if community.visibility = Db.Community_private then
+    Printf.sprintf
+      "Leave /c/%s? This is a private community, so you may not be able to rejoin without an invite."
+      (Components.html_escape community.slug)
+  else
+    Printf.sprintf "Leave /c/%s? You can rejoin at any time."
+      (Components.html_escape community.slug)
+
 let community_threads_shell_page ?user ?(noindex=false) ~is_member ~is_current_user_mod
     ~is_current_user_top_mod ~mod_usernames ~admin_usernames ~banned_usernames
     ~(rail_communities : community list) ~(channels : channel list)
@@ -453,7 +466,7 @@ let community_threads_shell_page ?user ?(noindex=false) ~is_member ~is_current_u
 
   (* Sort tabs — this feed's handler supports hot/new/top (no per-thread activity sort here). *)
   let tab mode label =
-    let cls = if mode = sort_mode then " class='active'" else "" in
+    let cls = if mode = sort_mode then " class='active' aria-current='true'" else "" in
     Printf.sprintf "<a%s href='%s?sort=%s'>%s</a>" cls base_url mode label
   in
   let ftabs = Printf.sprintf "<div class='ftabs'>%s%s%s</div>"
@@ -497,8 +510,8 @@ let community_threads_shell_page ?user ?(noindex=false) ~is_member ~is_current_u
     match user with
     | None -> Printf.sprintf "<div class='ca-note'><a href='/login'>Log in</a> to join /c/%s.</div>" (esc community.slug)
     | Some _ when is_member ->
-        Printf.sprintf "<form action='/leave' method='POST'>%s<input type='hidden' name='community_id' value='%d'><input type='hidden' name='redirect_to' value='%s'><button type='submit' class='btn sm block'>Leave community</button></form>"
-          csrf_token community.id base_url
+        Printf.sprintf "<form action='/leave' method='POST' onsubmit=\"confirmModal(event, '%s')\">%s<input type='hidden' name='community_id' value='%d'><input type='hidden' name='redirect_to' value='%s'><button type='submit' class='btn sm block'>Leave community</button></form>"
+          (leave_confirm_message community) csrf_token community.id base_url
     | Some _ when community.visibility = Db.Community_private ->
         (* Authorized non-member viewer (mod/admin): membership is invite-managed. *)
         "<div class='ca-note'>Membership in this private community is managed by its moderators.</div>"
@@ -568,7 +581,7 @@ let feed_page ?user ~scope ~sort_mode ~is_logged_in ~admin_usernames
     if not is_logged_in then ""
     else
       let tab s label =
-        let cls = if s = scope then " class='active'" else "" in
+        let cls = if s = scope then " class='active' aria-current='true'" else "" in
         Printf.sprintf "<a%s href='/feed?scope=%s&sort=%s'>%s</a>" cls s sort_mode label
       in
       Printf.sprintf "<div class='ftabs fh-scope'>%s%s</div>" (tab "following" "Following") (tab "all" "All")
@@ -576,7 +589,7 @@ let feed_page ?user ~scope ~sort_mode ~is_logged_in ~admin_usernames
 
   (* Sort tabs — keep the current scope. *)
   let tab mode label =
-    let cls = if mode = sort_mode then " class='active'" else "" in
+    let cls = if mode = sort_mode then " class='active' aria-current='true'" else "" in
     Printf.sprintf "<a%s href='/feed?scope=%s&sort=%s'>%s</a>" cls scope mode label
   in
   let ftabs = Printf.sprintf "<div class='ftabs'>%s%s%s%s</div>"
@@ -801,6 +814,19 @@ let community_channel_shell_page ?user ?realtime_token ?(noindex=false) ~is_memb
     (esc channel.name) topic_html
   in
 
+  (* Chat rows show wall-clock time, not the feed's relative "N ago": a stream is
+     read against the clock. DB strings are UTC ("YYYY-MM-DD HH:MM:SS[.ffffff]");
+     the <time datetime> carries the ISO instant so chat_live.js can localize it,
+     and the no-JS fallback text stays honest by naming the zone. *)
+  let chat_time_html created_at =
+    let s = if String.length created_at >= 19 then String.sub created_at 0 19 else created_at in
+    match String.split_on_char ' ' s with
+    | [ d; t ] when String.length t >= 5 ->
+        Printf.sprintf "<time class='cs-msg-time' datetime='%sT%sZ'>%s %s UTC</time>"
+          (esc d) (esc t) (esc d) (esc (String.sub t 0 5))
+    | _ -> Printf.sprintf "<span class='cs-msg-time'>%s</span>" (esc created_at)
+  in
+
   (* Stream oldest → newest (the DB read already returns ascending), so newest sits at the
      bottom. Deleted messages are masked; a NULL/unknown author (GDPR tombstone) shows
      "[deleted]". Avatar glyph = first letter of the resolved author. *)
@@ -832,14 +858,13 @@ let community_channel_shell_page ?user ?realtime_token ?(noindex=false) ~is_memb
     let promote_url = Printf.sprintf "/c/%s/ch/%s/messages/%Ld/start-thread" (esc community.slug) (esc channel.slug) m.id in
     let start_link =
       if can_start && m.deleted_at = None && m.user_id <> None && not already_promoted then
-        Printf.sprintf "<a class='cs-msg-start' href='%s' data-promote-url='%s'>Start thread</a>" promote_url promote_url
+        Printf.sprintf "<a class='cs-msg-start' href='%s' data-promote-url='%s'>+ Start thread</a>" promote_url promote_url
       else "" in
-    let time_html =
-      if start_link = "" then Printf.sprintf "<span class='cs-msg-time'>%s</span>" (esc m.created_at)
-      else Printf.sprintf "<span class='cs-msg-time-slot'><span class='cs-msg-time'>%s</span>%s</span>" (esc m.created_at) start_link
-    in
-    (* Provenance markers stay attached under the message text. Start thread is rendered
-       in the meta row beside the timestamp so hover never changes message height. *)
+    let time_html = chat_time_html m.created_at in
+    (* Provenance markers and "Start thread" share the actions row under the message
+       text. The promote affordance is the product's durable path, so it stays
+       persistently visible (quiet ink at rest) instead of hiding behind hover —
+       and row height never changes on hover because nothing appears or vanishes. *)
     let action =
       match marker with
       | Start_thread.Mk_seed (post_id, title) ->
@@ -851,7 +876,9 @@ let community_channel_shell_page ?user ?realtime_token ?(noindex=false) ~is_memb
             (Components.canonical_thread_path community.slug post_id title) (esc (short title)) extra
       | Start_thread.Mk_no_link -> ""
     in
-    let actions_row = if action = "" then "" else Printf.sprintf "<div class='cs-msg-actions'>%s</div>" action in
+    let actions_row =
+      if action = "" && start_link = "" then ""
+      else Printf.sprintf "<div class='cs-msg-actions'>%s%s</div>" action start_link in
     Printf.sprintf
       "<div class='cs-msg' data-message-id='%Ld' data-has-thread='%s'><div class='cs-msg-avatar'>%s</div><div class='cs-msg-body'><div class='cs-msg-meta'><span class='cs-msg-author'>%s</span>%s</div><div class='cs-msg-text'>%s</div>%s</div></div>"
       m.id (if already_promoted then "true" else "false") (esc initial) (esc name) time_html body actions_row
@@ -860,6 +887,30 @@ let community_channel_shell_page ?user ?realtime_token ?(noindex=false) ~is_memb
     if messages = [] then
       "<div class='cs-msg-empty'>No messages yet. Be the first to say something.</div>"
     else String.concat "\n" (List.map render_message messages)
+  in
+
+  let realtime_socket_url =
+    match Sys.getenv_opt "REALTIME_SOCKET_URL" with
+    | Some url when String.trim url <> "" -> String.trim url
+    | _ ->
+        Logs.warn (fun m ->
+            m "REALTIME_SOCKET_URL is not set; live chat websocket disabled for this page");
+        ""
+  in
+  let realtime_signed_token =
+    if realtime_socket_url = "" then ""
+    else Option.value realtime_token ~default:""
+  in
+
+  (* Connection-state chip under the member composer. SSR default is the honest
+     no-JS state ("reload to update"); chat_live.js upgrades it through
+     connecting → live / reconnecting. Omitted entirely when the websocket is
+     not configured — there is no live state to report. *)
+  let live_status_note =
+    if realtime_socket_url = "" then ""
+    else
+      "<div class='cs-composer-note'><span class='cs-live-status' id='cs-live-status' \
+       role='status' data-live-state='off'>live: off &mdash; reload to update</span></div>"
   in
 
   (* Composer is a real <form method=POST> (works with JS off). Three states:
@@ -878,26 +929,17 @@ let community_channel_shell_page ?user ?realtime_token ?(noindex=false) ~is_memb
         Printf.sprintf "<div class='cs-composer cs-composer-prompt'><span>Join this community to chat.</span><form action='/join' method='POST'>%s<input type='hidden' name='community_id' value='%d'><input type='hidden' name='redirect_to' value='%s'><button type='submit' class='cs-send'>Join &amp; chat</button></form></div>"
           csrf_token community.id channel_url
     | Some _ ->
-        Printf.sprintf "<div class='cs-composer'><form action='/messages' method='POST'>%s<input type='hidden' name='community_slug' value='%s'><input type='hidden' name='channel_slug' value='%s'><textarea name='content' rows='1' placeholder='Message #%s' aria-label='Message #%s' required></textarea><button type='submit' class='cs-send'>Send</button></form></div>"
+        Printf.sprintf "<div class='cs-composer'><form action='/messages' method='POST'>%s<input type='hidden' name='community_slug' value='%s'><input type='hidden' name='channel_slug' value='%s'><textarea name='content' rows='1' placeholder='Message #%s' aria-label='Message #%s' required></textarea><button type='submit' class='cs-send'>Send</button></form>%s</div>"
           csrf_token (esc community.slug) (esc channel.slug) (esc channel.slug) (esc channel.slug)
-  in
-
-  let realtime_socket_url =
-    match Sys.getenv_opt "REALTIME_SOCKET_URL" with
-    | Some url when String.trim url <> "" -> String.trim url
-    | _ ->
-        Logs.warn (fun m ->
-            m "REALTIME_SOCKET_URL is not set; live chat websocket disabled for this page");
-        ""
-  in
-  let realtime_signed_token =
-    if realtime_socket_url = "" then ""
-    else Option.value realtime_token ~default:""
+          live_status_note
   in
   let main =
+    (* role=log: implicit polite live region, so screen readers announce messages
+       appended by chat_live.js without re-reading the whole stream. *)
     Printf.sprintf
-      "%s<div id='chat-live-root' class='cs-main-body cs-chat-body' data-channel-id='%d' data-can-start='%s' data-socket-url='%s' data-signed-token='%s'>%s</div>%s"
+      "%s<div id='chat-live-root' class='cs-main-body cs-chat-body' role='log' aria-label='Messages in #%s' data-channel-id='%d' data-can-start='%s' data-socket-url='%s' data-signed-token='%s'>%s</div>%s"
       head
+      (esc channel.name)
       channel.id
       (if can_start then "true" else "false")
       (Components.html_escape realtime_socket_url)
@@ -953,16 +995,18 @@ let thread_shell_page ?user ?(noindex=false) ~is_member ~is_current_user_mod ~mo
   let current_vote = Option.value ~default:0 (List.assoc_opt post.id user_post_votes) in
   (* Semantic vote classes (base.css); the optimistic-vote JS toggles .is-active. *)
   let up_color = if current_vote = 1 then "vote-up is-active" else "vote-up" in
+  let up_pressed = if current_vote = 1 then "true" else "false" in
   let down_color = if current_vote = -1 then "vote-down is-active" else "vote-down" in
+  let down_pressed = if current_vote = -1 then "true" else "false" in
   let up_action = if current_vote = 1 then 0 else 1 in
   let down_action = if current_vote = -1 then 0 else -1 in
   let upvote_html = match current_user with
-    | Some _ -> Printf.sprintf "<form action='/vote' method='POST' class='m-0 p-0'>%s<input type='hidden' name='post_id' value='%d'><input type='hidden' name='direction' value='%d'><button type='submit' class='%s' aria-label='Upvote'>&#9650;</button></form>" csrf_token post.id up_action up_color
+    | Some _ -> Printf.sprintf "<form action='/vote' method='POST' class='act-form'>%s<input type='hidden' name='post_id' value='%d'><input type='hidden' name='direction' value='%d'><button type='submit' class='%s' aria-pressed='%s' aria-label='Upvote'>&#9650;</button></form>" csrf_token post.id up_action up_color up_pressed
     | None -> "<a href='/login' class='vote-up' aria-label='Log in to upvote'>&#9650;</a>" in
   let downvote_html =
     if not post.allow_downvotes then ""
     else match current_user with
-    | Some _ -> Printf.sprintf "<form action='/vote' method='POST' class='m-0 p-0'>%s<input type='hidden' name='post_id' value='%d'><input type='hidden' name='direction' value='%d'><button type='submit' class='%s' aria-label='Downvote'>&#9660;</button></form>" csrf_token post.id down_action down_color
+    | Some _ -> Printf.sprintf "<form action='/vote' method='POST' class='act-form'>%s<input type='hidden' name='post_id' value='%d'><input type='hidden' name='direction' value='%d'><button type='submit' class='%s' aria-pressed='%s' aria-label='Downvote'>&#9660;</button></form>" csrf_token post.id down_action down_color down_pressed
     | None -> "<a href='/login' class='vote-down' aria-label='Log in to downvote'>&#9660;</a>" in
   let vote_col = Printf.sprintf "<div class='cs-vote'>%s<span class='cs-vote-score'>%d</span>%s</div>" upvote_html post.score downvote_html in
 
@@ -1087,7 +1131,7 @@ let thread_shell_page ?user ?(noindex=false) ~is_member ~is_current_user_mod ~mo
         Printf.sprintf "<div class='th-source'><div class='th-source-head'>%s</div>%s</div>" head msgs_html in
   let body_html =
     let img = match post.image_url with
-      | Some i when i <> "" -> Printf.sprintf "<div class='th-img'><img src='%s' alt='Post image'></div>" (esc i)
+      | Some i when i <> "" -> Printf.sprintf "<div class='th-img'><img src='%s' alt='Post image'></div>" (Components.safe_img_src i)
       | _ -> "" in
     let txt = match post.content with
       | Some c when String.trim c <> "" -> Printf.sprintf "<div class='th-body'>%s</div>" (esc c)
@@ -1121,16 +1165,18 @@ let thread_shell_page ?user ?(noindex=false) ~is_member ~is_current_user_mod ~mo
       let nested = render_comment_tree all_comments (Some c.id) (depth + 1) in
       let cvote = Option.value ~default:0 (List.assoc_opt c.id user_comment_votes) in
       let up_color = if cvote = 1 then "vote-up is-active" else "vote-up" in
+      let up_pressed = if cvote = 1 then "true" else "false" in
       let down_color = if cvote = -1 then "vote-down is-active" else "vote-down" in
+      let down_pressed = if cvote = -1 then "true" else "false" in
       let up_action = if cvote = 1 then 0 else 1 in
       let down_action = if cvote = -1 then 0 else -1 in
       let upvote_html = match current_user with
-        | Some _ -> Printf.sprintf "<form action='/vote-comment' method='POST' class='m-0 p-0'>%s<input type='hidden' name='comment_id' value='%d'><input type='hidden' name='direction' value='%d'><button type='submit' class='%s' aria-label='Upvote'>&#9650;</button></form>" csrf_token c.id up_action up_color
+        | Some _ -> Printf.sprintf "<form action='/vote-comment' method='POST' class='act-form'>%s<input type='hidden' name='comment_id' value='%d'><input type='hidden' name='direction' value='%d'><button type='submit' class='%s' aria-pressed='%s' aria-label='Upvote'>&#9650;</button></form>" csrf_token c.id up_action up_color up_pressed
         | None -> "<a href='/login' class='vote-up' aria-label='Log in to upvote'>&#9650;</a>" in
       let downvote_html =
         if not post.allow_downvotes then ""
         else match current_user with
-        | Some _ -> Printf.sprintf "<form action='/vote-comment' method='POST' class='m-0 p-0'>%s<input type='hidden' name='comment_id' value='%d'><input type='hidden' name='direction' value='%d'><button type='submit' class='%s' aria-label='Downvote'>&#9660;</button></form>" csrf_token c.id down_action down_color
+        | Some _ -> Printf.sprintf "<form action='/vote-comment' method='POST' class='act-form'>%s<input type='hidden' name='comment_id' value='%d'><input type='hidden' name='direction' value='%d'><button type='submit' class='%s' aria-pressed='%s' aria-label='Downvote'>&#9660;</button></form>" csrf_token c.id down_action down_color down_pressed
         | None -> "<a href='/login' class='vote-down' aria-label='Log in to downvote'>&#9660;</a>" in
       let cvote_pill = Printf.sprintf "<div class='cs-vote'>%s<span class='cs-vote-score'>%d</span>%s</div>" upvote_html c.score downvote_html in
 
@@ -1440,7 +1486,7 @@ let community_overview_page ?user ?(noindex=false) ~is_member ~is_current_user_m
   let membership_btn =
     match user with
     | Some _ when is_member ->
-        Printf.sprintf "<form action='/leave' method='POST'>%s<input type='hidden' name='community_id' value='%d'><input type='hidden' name='redirect_to' value='/c/%s'><button type='submit' class='ch-btn'>Leave</button></form>" csrf_token community.id (esc community.slug)
+        Printf.sprintf "<form action='/leave' method='POST' onsubmit=\"confirmModal(event, '%s')\">%s<input type='hidden' name='community_id' value='%d'><input type='hidden' name='redirect_to' value='/c/%s'><button type='submit' class='ch-btn'>Leave</button></form>" (leave_confirm_message community) csrf_token community.id (esc community.slug)
     | _ -> ""
   in
 
@@ -1617,7 +1663,7 @@ let community_overview_page ?user ?(noindex=false) ~is_member ~is_current_user_m
   in
   Components.community_home_page ?user ~noindex ~request ~title:community.name ~body:content ()
 
-let community_settings_page ?user ~is_admin ~is_top_mod ~open_reports_count ~(community : community) ~(mods : user list) ~(banned_users : user list) ~(members : user list) ~(sections : community_section list) ~(channels : Db.channel list) request =
+let community_settings_page ?user ~is_admin ~is_current_user_mod ~is_top_mod ~open_reports_count ~(community : community) ~(mods : user list) ~(banned_users : user list) ~(members : user list) ~(sections : community_section list) ~(channels : Db.channel list) request =
   let csrf_token = Dream.csrf_tag request in
   let esc = Components.html_escape in
   let slug = esc community.slug in
@@ -1961,7 +2007,7 @@ let community_settings_page ?user ~is_admin ~is_top_mod ~open_reports_count ~(co
               <div class='cm-item-ops'>
                 %s
                 <form action='/c/%s/sections/%d/delete' method='POST' class='cm-form-inline'
-                      onsubmit=\"return confirm('Delete this section? Posts will not be deleted. They will be moved to Uncategorized.')\">
+                      onsubmit=\"confirmModal(event, 'Delete this section? Posts will not be deleted. They will be moved to Uncategorized.')\">
                   %s
                   <button type='submit' class='cm-btn-sm cm-btn-sm--danger'>Delete section</button>
                 </form>
@@ -2184,20 +2230,39 @@ let community_settings_page ?user ~is_admin ~is_top_mod ~open_reports_count ~(co
         ) banned_users) in
         Printf.sprintf "<div class='cm-list'>%s</div>" rows
     in
+    (* Same guarded path as banning from a post/comment: a reason_dialog with a
+       required public reason, so the "logged publicly" promise can't be bypassed
+       from settings. The username field lives inside the dialog form. *)
+    let variant = if is_current_user_mod then `Mod else `Admin in
+    let ban_dialog =
+      Components.reason_dialog
+        ~dialog_id:"ban-modal-settings" ~variant
+        ~heading:(match variant with `Mod -> "Mod ban" | `Admin -> "Admin ban")
+        ~note:(match variant with
+               | `Mod -> "This action is logged publicly in the mod log."
+               | `Admin -> "This action is logged publicly as an admin override.")
+        ~action:"/ban-community-user"
+        ~placeholder:(match variant with
+                      | `Mod -> "Explain why this user is being banned (visible to the community)..."
+                      | `Admin -> "Explain the admin intervention reason (visible to the community)...")
+        ~confirm_label:"Confirm ban" ~csrf_token
+        ~fields:(Printf.sprintf
+                   "<input type='hidden' name='community_id' value='%d'>\
+                    <label class='mdlg-label' for='ban-modal-settings-user'>Username <span class='req'>*</span></label>\
+                    <input id='ban-modal-settings-user' type='text' name='target_username' required placeholder='Exact username, without u/'>"
+                   community.id)
+        ()
+    in
     Printf.sprintf "
       <section class='cm-panel cm-danger'>
         <h2 class='cm-panel-title'>Bans</h2>
-        <p class='cm-panel-desc'>Banned users cannot post or comment in this community. Bans are logged to the mod log.</p>
-        <form action='/ban-community-user' method='POST' class='cm-inline-form'>
-          %s
-          <input type='hidden' name='community_id' value='%d'>
-          <input type='text' name='target_username' required placeholder='Username to ban' class='cm-input'>
-          <button type='submit' class='cm-btn'>Ban user</button>
-        </form>
+        <p class='cm-panel-desc'>Banned users cannot post or comment in this community. Every ban requires a reason and is logged publicly in the mod log.</p>
+        <button type='button' class='cm-btn' onclick=\"document.getElementById('ban-modal-settings').showModal()\">Ban a user&hellip;</button>
+        %s
         <h3 class='cm-subhead'>Banned users</h3>
         %s
       </section>"
-      csrf_token community.id banned_section
+      ban_dialog banned_section
   in
 
   let main_panel =
@@ -2230,7 +2295,7 @@ let community_settings_page ?user ~is_admin ~is_top_mod ~open_reports_count ~(co
           %s%s%s%s%s%s
         </nav>
         <div class='cm-main'>
-          %s
+          %s%s
         </div>
       </div>
     </div>"
@@ -2241,6 +2306,10 @@ let community_settings_page ?user ~is_admin ~is_top_mod ~open_reports_count ~(co
     (nav_item "members" "Members")
     (nav_item "moderation" "Moderation")
     (nav_item ~danger:true "bans" "Bans")
+    (Components.saved_notice request
+       ~messages:[ "profile", "Community profile saved.";
+                   "banned", "User banned. The reason is recorded in the mod log.";
+                   "unbanned", "Ban lifted." ])
     main_panel
   in
   Components.community_manage_page ?user ~request ~title:(Printf.sprintf "Settings — /c/%s" community.slug) ~body:content ()
@@ -2840,16 +2909,39 @@ let reports_queue_page ?user ~(community : community) ~(status : Db.report_statu
 
 (* === USER === *)
 
+(* One profile-page comment row. Top-level (and exposed in the .mli) so escaping is
+   regression-tested: content and post_title are user-supplied and once rendered raw
+   (stored XSS); created_at goes through time_ago like every other row surface. *)
+let profile_comment_html (_id, content, created_at, post_id, post_title, score) =
+  Printf.sprintf "
+    <div class='account-comment'>
+        <div class='account-comment-meta'>
+            <span>%s</span>
+            <span class='dot'>·</span>
+            <span>%d points</span>
+        </div>
+        <div class='account-comment-body'>%s</div>
+        <a href='/p/%d' class='account-comment-link'>&#8618; Commented on: %s</a>
+    </div>"
+    (Components.time_ago created_at) score (Components.html_escape content)
+    post_id (Components.html_escape post_title)
+
+(* The public-profile bio block. Top-level (and exposed in the .mli) so the escaping of
+   this user-supplied field is regression-tested, mirroring profile_comment_html. *)
+let profile_bio_html bio =
+  Printf.sprintf "<div class='account-bio'>%s</div>" (Components.html_escape bio)
+
 let user_profile_page ?user ~is_admin ~is_globally_banned ~profile_id ~admin_usernames ~moderated_communities ~active_tab user_votes username joined_at bio_opt avatar_url_opt karma posts user_comments community_stats request =
   let csrf_token = Dream.csrf_tag request in
   let bio = Option.value ~default:"This user hasn't written a bio yet." bio_opt in
+  let bio_html = profile_bio_html bio in
   (* Profile avatar: route the stored URL through Components.user_avatar (safe_img_src) instead
      of raw interpolation. Avatarless profiles now show a local letter tile rather than the old
      external Gravatar "mystery person" default — one fewer third-party image dependency. *)
   let avatar_html =
     Components.user_avatar ~alt:(username ^ " avatar")
       ~img_class:"account-avatar"
-      ~tile_class:"account-avatar flex items-center justify-center text-2xl font-bold"
+      ~tile_class:"account-avatar account-avatar--tile"
       ~username avatar_url_opt
   in
 
@@ -2946,17 +3038,19 @@ let user_profile_page ?user ~is_admin ~is_globally_banned ~profile_id ~admin_use
   let render_thread_row (post : Db.post) =
     let current_vote = Option.value ~default:0 (List.assoc_opt post.id user_votes) in
     let up_color = if current_vote = 1 then "vote-up is-active" else "vote-up" in
+    let up_pressed = if current_vote = 1 then "true" else "false" in
     let down_color = if current_vote = -1 then "vote-down is-active" else "vote-down" in
+    let down_pressed = if current_vote = -1 then "true" else "false" in
     let up_action = if current_vote = 1 then 0 else 1 in
     let down_action = if current_vote = -1 then 0 else -1 in
     let upvote_html = match user with
-      | Some _ -> Printf.sprintf "<form action='/vote' method='POST'>%s<input type='hidden' name='post_id' value='%d'><input type='hidden' name='direction' value='%d'><button type='submit' class='%s' aria-label='Upvote'>▲</button></form>" csrf_token post.id up_action up_color
+      | Some _ -> Printf.sprintf "<form action='/vote' method='POST'>%s<input type='hidden' name='post_id' value='%d'><input type='hidden' name='direction' value='%d'><button type='submit' class='%s' aria-pressed='%s' aria-label='Upvote'>▲</button></form>" csrf_token post.id up_action up_color up_pressed
       | None -> "<a href='/login' class='vote-up' aria-label='Log in to upvote'>▲</a>"
     in
     let downvote_html =
       if not post.allow_downvotes then ""
       else match user with
-      | Some _ -> Printf.sprintf "<form action='/vote' method='POST'>%s<input type='hidden' name='post_id' value='%d'><input type='hidden' name='direction' value='%d'><button type='submit' class='%s' aria-label='Downvote'>▼</button></form>" csrf_token post.id down_action down_color
+      | Some _ -> Printf.sprintf "<form action='/vote' method='POST'>%s<input type='hidden' name='post_id' value='%d'><input type='hidden' name='direction' value='%d'><button type='submit' class='%s' aria-pressed='%s' aria-label='Downvote'>▼</button></form>" csrf_token post.id down_action down_color down_pressed
       | None -> "<a href='/login' class='vote-down' aria-label='Log in to downvote'>▼</a>"
     in
     let domain_html = match post.url with
@@ -2988,7 +3082,7 @@ let user_profile_page ?user ~is_admin ~is_globally_banned ~profile_id ~admin_use
                 %s
                 <div class='account-thread-title'><a href='%s'>%s</a></div>
                 %s
-                <div class='account-thread-meta'>%s<span>by %s</span><span>%s</span><a href='%s'>💬 %d</a></div>
+                <div class='account-thread-meta'>%s<span>by %s</span><span>%s</span><a href='%s'>%d comments</a></div>
             </div>
         </div>"
       upvote_html post.score downvote_html
@@ -3010,18 +3104,7 @@ let user_profile_page ?user ~is_admin ~is_globally_banned ~profile_id ~admin_use
     if user_comments = [] then
       "<div class='account-empty'>This user hasn't commented anything yet.</div>"
     else
-      String.concat "\n" (List.map (fun (_id, content, created_at, post_id, post_title, score) ->
-        Printf.sprintf "
-          <div class='account-comment'>
-              <div class='account-comment-meta'>
-                  <span>%s</span>
-                  <span class='dot'>·</span>
-                  <span>%d points</span>
-              </div>
-              <div class='account-comment-body'>%s</div>
-              <a href='/p/%d' class='account-comment-link'>&#8618; Commented on: %s</a>
-          </div>" created_at score content post_id post_title
-      ) user_comments)
+      String.concat "\n" (List.map profile_comment_html user_comments)
   in
 
   let communities_html =
@@ -3082,13 +3165,13 @@ let user_profile_page ?user ~is_admin ~is_globally_banned ~profile_id ~admin_use
                     %s
                 </div>
             </div>
-            <div class='account-bio'>%s</div>
+            %s
             %s
         </div>
 
         %s
         %s
-    </div>" avatar_html username role_badges karma joined_at header_actions bio admin_controls tab_nav feed_html
+    </div>" avatar_html (Components.html_escape username) role_badges karma joined_at header_actions bio_html admin_controls tab_nav feed_html
   in
   Components.account_page ?user ~request ~title:(username ^ "'s Profile") ~body ()
 
@@ -3103,7 +3186,7 @@ let settings_page ?user bio avatar_url request =
   let avatar_preview =
     Components.user_avatar ~alt:"Current avatar"
       ~img_class:"account-avatar"
-      ~tile_class:"account-avatar flex items-center justify-center text-2xl font-bold"
+      ~tile_class:"account-avatar account-avatar--tile"
       ~username:(Option.value ~default:"" user) avatar_url
   in
 
@@ -3124,6 +3207,8 @@ let settings_page ?user bio avatar_url request =
     | None -> ""
   in
 
+  let saved = Components.saved_notice request
+    ~messages:[ "profile", "Profile saved."; "password", "Password updated." ] in
   let body = Printf.sprintf "
     <div class='account-wrap account-wrap--narrow'>
         %s
@@ -3131,6 +3216,7 @@ let settings_page ?user bio avatar_url request =
             <h1 class='account-h1'>Account <span class='accent'>settings</span></h1>
             %s
         </div>
+        %s
 
         <div class='account-panel account-panel--card'>
             <h2 class='account-section-title'>Profile information</h2>
@@ -3192,7 +3278,9 @@ let settings_page ?user bio avatar_url request =
             </form>
         </div>
     </div>"
-    account_nav view_profile_link csrf_token avatar_preview current_avatar current_bio csrf_token csrf_token
+    account_nav view_profile_link saved csrf_token avatar_preview
+    (Components.html_escape current_avatar) (Components.html_escape current_bio)
+    csrf_token csrf_token
   in
   Components.account_page ~noindex:true ?user ~request ~title:"Settings" ~body ()
 
@@ -3205,8 +3293,10 @@ let notifications_page ?user (notifs : Db.notification list) request =
       | _ ->
           (* Legacy comment_reply: distinguish post vs comment reply by message suffix. *)
           let len = String.length n.message in
-          if len >= 5 && String.sub n.message (len - 5) 5 = "post." then "&#128221;" (* 📝 *)
-          else "&#128172;" (* 💬 *)
+          (* Mono text glyphs, not emoji (DESIGN.md: no colourful emoji in chrome):
+             ¶ = reply on your post, ↩ = reply on your comment. *)
+          if len >= 5 && String.sub n.message (len - 5) 5 = "post." then "&#182;" (* ¶ *)
+          else "&#8617;" (* ↩ *)
     in
     (* Unread carries a textual NEW marker alongside the red border/tint so the
        state never depends on colour alone. *)
@@ -3387,8 +3477,10 @@ let search_results_page ?user ~admin_usernames ?(chat_sources=[]) _user_votes cu
   in
 
   let tab label tab_value =
-    let cls = if tab_value = active_tab then "sr-tab is-active" else "sr-tab" in
-    Printf.sprintf "<a class='%s' href='/search?q=%s&t=%s'>%s</a>" cls eq tab_value label
+    let is_current = tab_value = active_tab in
+    let cls = if is_current then "sr-tab is-active" else "sr-tab" in
+    Printf.sprintf "<a class='%s'%s href='/search?q=%s&t=%s'>%s</a>"
+      cls (if is_current then " aria-current='true'" else "") eq tab_value label
   in
   (* Visible "Threads" maps to the internal tab value "posts" (unchanged route semantics). *)
   let tabs_html = Printf.sprintf "<nav class='sr-tabs'>%s%s%s%s</nav>"
@@ -3509,7 +3601,8 @@ let msg_page ?user ~title ~message ~alert_type ~return_url request =
           <p class='auth-msg-text'>%s</p>
           <a href='%s' class='auth-btn auth-btn--inline'>Go back</a>
         </div>"
-    icon_html (Components.html_escape title) (Components.html_escape message) return_url
+    icon_html (Components.html_escape title) (Components.html_escape message)
+    (Components.safe_return_url return_url)
   in
   Components.auth_page ?user ~request ~title ~card ()
 

@@ -51,7 +51,7 @@
 }
 .search-shell .sr-inputrow {
   display: flex; align-items: stretch;
-  border: 1px solid var(--line-2); border-radius: 2px;
+  border: 1px solid var(--line-3); border-radius: 2px;
   background: var(--panel); overflow: hidden;
 }
 .search-shell .sr-inputrow:focus-within { border-color: var(--red); }

@@ -38,11 +38,33 @@ let check_marker name expected links =
   Alcotest.test_case name `Quick (fun () ->
       Alcotest.(check string) name expected (marker_str (ST.classify_message_links links)))
 
+(* Substring test shared by the stored-XSS regression checks. *)
+let contains ~needle hay =
+  let nl = String.length needle and hl = String.length hay in
+  let rec go i = i + nl <= hl && (String.sub hay i nl = needle || go (i + 1)) in
+  nl > 0 && go 0
+
 (* Image src gate — pure, no DB. Local upload paths and http(s) pass; everything dangerous
    collapses to "#"; passed values are always html-escaped so they can't break the attribute. *)
 let check_img name expected raw =
   Alcotest.test_case name `Quick (fun () ->
       Alcotest.(check string) name expected (Earde.Components.safe_img_src raw))
+
+(* Return-url gate for msg_page's "Go back" href: root "/" is preserved, rooted internal
+   paths pass, and anything that could execute or off-site redirect collapses to "/". *)
+let check_return name expected raw =
+  Alcotest.test_case name `Quick (fun () ->
+      Alcotest.(check string) name expected (Earde.Components.safe_return_url raw))
+
+(* Profile bio row (stored-XSS regression): the public profile renders user-supplied bio,
+   which must be escaped. *)
+let bio_contains name ~expects ~rejects raw =
+  Alcotest.test_case name `Quick (fun () ->
+      let html = Earde.Pages.profile_bio_html raw in
+      List.iter (fun n ->
+          Alcotest.(check bool) (name ^ " contains " ^ n) true (contains ~needle:n html)) expects;
+      List.iter (fun n ->
+          Alcotest.(check bool) (name ^ " must not contain " ^ n) false (contains ~needle:n html)) rejects)
 
 (* Report enum conversions (Slice A): pure, no DB. Closed variant -> string -> variant must
    round-trip, and any off-enum string must be rejected with None. [to_s]/[of_s] are the
@@ -83,6 +105,19 @@ let check_can_read name expected vis ~is_member ~is_mod ~is_admin =
       Alcotest.(check bool) name expected
         (D.can_read_community vis ~is_member ~is_mod ~is_admin))
 
+(* Profile comment row (stored-XSS regression): comment content and thread titles are
+   user-supplied and must render escaped; the timestamp must go through time_ago, not
+   appear as the raw DB string. Row tuple: (id, content, created_at, post_id, title, score). *)
+let check_comment_row name ~expects ~rejects row =
+  Alcotest.test_case name `Quick (fun () ->
+      let html = Earde.Pages.profile_comment_html row in
+      List.iter (fun needle ->
+          Alcotest.(check bool) (name ^ " contains " ^ needle) true
+            (contains ~needle html)) expects;
+      List.iter (fun needle ->
+          Alcotest.(check bool) (name ^ " must not contain " ^ needle) false
+            (contains ~needle html)) rejects)
+
 let () =
   Alcotest.run "earde"
     [ ( "smoke"
@@ -116,6 +151,46 @@ let () =
         ; check_random "no vowels" true "xkqjwzbf"
         ; check_random "long consonant run" true "bcdfghjk"
         ; check_random "mixed bot" true "tbvkxwlqz"
+        ] )
+      (* Return-url gate for msg_page's "Go back" href. *)
+    ; ( "safe_return_url"
+      , [ check_return "root preserved" "/" "/"
+        ; check_return "rooted internal path passes" "/c/europe" "/c/europe"
+        ; check_return "path with query passes" "/signup?x=1" "/signup?x=1"
+        ; check_return "javascript scheme rejected" "/" "javascript:alert(1)"
+        ; check_return "protocol-relative rejected" "/" "//evil.com"
+        ; check_return "backslash host rejected" "/" "/\\evil.com"
+        ; check_return "empty rejected" "/" ""
+        ; check_return "bare relative rejected" "/" "feed"
+        ] )
+      (* Stored-XSS regression for the profile bio. *)
+    ; ( "profile_bio"
+      , [ bio_contains "script tag escaped"
+            ~expects:["&lt;script&gt;alert(1)&lt;/script&gt;"] ~rejects:["<script>"]
+            "<script>alert(1)</script>"
+        ; bio_contains "textarea-breakout markup escaped"
+            ~expects:["&lt;/textarea&gt;"] ~rejects:["</textarea>"]
+            "</textarea><script>x</script>"
+        ; bio_contains "plain bio survives" ~expects:["hello world"] ~rejects:[] "hello world"
+        ] )
+      (* Stored-XSS regression for the profile Comments tab. *)
+    ; ( "profile_comment_row"
+      , [ check_comment_row "script tag in content is escaped"
+            ~expects:["&lt;script&gt;alert(1)&lt;/script&gt;"]
+            ~rejects:["<script>"]
+            (1, "<script>alert(1)</script>", "2026-01-01 00:00:00", 7, "Safe title", 3)
+        ; check_comment_row "html in thread title is escaped"
+            ~expects:["&lt;img src=x onerror=alert(1)&gt;"]
+            ~rejects:["<img"]
+            (2, "plain comment", "2026-01-01 00:00:00", 7, "<img src=x onerror=alert(1)>", 0)
+        ; check_comment_row "quotes cannot break out of markup"
+            ~expects:["&quot;q&quot; &amp; &#39;s&#39;"]
+            ~rejects:["\"q\""]
+            (3, {|"q" & 's'|}, "2026-01-01 00:00:00", 7, "t", 0)
+        ; check_comment_row "timestamp is humanized via time_ago"
+            ~expects:["ago"]
+            ~rejects:["2000-01-01 00:00:00"]
+            (4, "c", "2000-01-01 00:00:00", 7, "t", 0)
         ] )
       (* Title prefill: first sentence / newline, trimmed. *)
     ; ( "start_thread_title"

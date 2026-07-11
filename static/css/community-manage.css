@@ -22,6 +22,7 @@
   --red-soft:   oklch(0.555 0.155 27 / 0.10);
   --ok-strong:  oklch(0.540 0.130 150);
   --teal:       oklch(0.480 0.085 220);
+  --teal-line:  oklch(0.640 0.090 220 / 0.45);
 
   /* shell.css (loaded for .app-topbar) sets html,body{overflow:hidden}; this
      console owns its OWN vertical scroll, sized to the viewport minus topbar. */
@@ -92,7 +93,7 @@
 .cm-report-actions { display: flex; flex-direction: column; gap: 6px; margin: 0; min-width: 150px; }
 .cm-report-note {
   font-family: var(--cs-mono); font-size: 11px; color: var(--ink); background: var(--panel);
-  border: 1px solid var(--line-2); border-radius: 2px; padding: 4px 6px; width: 100%;
+  border: 1px solid var(--line-3); border-radius: 2px; padding: 4px 6px; width: 100%;
   resize: vertical; min-height: 32px;
 }
 .cm-report-note:focus { outline: none; border-color: var(--red); }
@@ -155,7 +156,7 @@
   width: 100%;
   font-family: var(--cs-sans); font-size: 14px; color: var(--ink);
   background: var(--panel-2);
-  border: 1px solid var(--line-2); border-radius: 2px;
+  border: 1px solid var(--line-3); border-radius: 2px;
   padding: 9px 11px;
   transition: border-color .12s ease, background .12s ease;
 }
@@ -193,19 +194,9 @@
 /* --------------------------------------------------------------------------
    buttons
    -------------------------------------------------------------------------- */
-.cm-btn {
-  font-family: var(--cs-mono); font-size: 13.5px; font-weight: 600;
-  color: #fff; background: var(--red);
-  border: 1px solid var(--red-strong); border-radius: 2px;
-  padding: 9px 16px; cursor: pointer; text-decoration: none;
-  display: inline-flex; align-items: center; gap: 7px; align-self: flex-start;
-  transition: background .12s ease, border-color .12s ease, color .12s ease;
-}
-.cm-btn:hover { background: var(--red-strong); }
-.cm-btn--secondary {
-  color: var(--ink); background: var(--panel-2); border: 1px solid var(--line-2);
-}
-.cm-btn--secondary:hover { background: var(--panel-3); border-color: var(--ink-3); }
+/* .cm-btn styling (incl. --secondary) lives in base.css (shared button
+   component); only the layout default is local. */
+.cm-btn { align-self: flex-start; }
 
 /* small inline action buttons used in list rows */
 .cm-btn-sm {
@@ -220,7 +211,7 @@
 .cm-btn-sm--danger:hover { color: #fff; background: var(--red); border-color: var(--red-strong); }
 .cm-btn-sm--ok { color: var(--ok-strong); border-color: oklch(0.620 0.130 150 / 0.40); }
 .cm-btn-sm--ok:hover { color: #fff; background: var(--ok-ink); border-color: var(--ok-ink); }
-.cm-btn-sm--promote { color: var(--teal); border-color: oklch(0.640 0.090 220 / 0.45); }
+.cm-btn-sm--promote { color: var(--teal); border-color: var(--teal-line); }
 .cm-btn-sm--promote:hover { color: #fff; background: var(--teal); border-color: var(--teal); }
 
 /* --------------------------------------------------------------------------

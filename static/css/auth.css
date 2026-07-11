@@ -82,7 +82,7 @@
   width: 100%;
   font-family: var(--cs-sans); font-size: 14px; color: var(--ink);
   background: var(--panel-2);
-  border: 1px solid var(--line-2);
+  border: 1px solid var(--line-3);
   border-radius: 2px;
   padding: 9px 11px;
   transition: border-color .12s ease, background .12s ease;
@@ -90,19 +90,10 @@
 .auth-input::placeholder { color: var(--ink-3); }
 .auth-input:focus { outline: none; border-color: var(--red); background: var(--panel); }
 
-/* primary button */
-.auth-btn {
-  width: 100%;
-  font-family: var(--cs-mono); font-size: 14px; font-weight: 600;
-  color: #fff; background: var(--red);
-  border: 1px solid var(--red-strong);
-  border-radius: 2px;
-  padding: 10px 14px;
-  cursor: pointer;
-  transition: background .12s ease;
-}
-.auth-btn:hover { background: var(--red-strong); }
-.auth-btn--inline { width: auto; display: inline-block; text-decoration: none; }
+/* primary button — styling lives in base.css (shared button component); auth
+   forms stretch it full-width. */
+.auth-btn { width: 100%; }
+.auth-btn--inline { width: auto; display: inline-flex; text-decoration: none; }
 
 /* footer line + links */
 .auth-foot { margin-top: 20px; text-align: center; font-size: 13px; color: var(--ink-2); }
@@ -116,7 +107,7 @@
 
 /* inline alerts (error states re-rendered on the form) */
 .auth-alert { font-size: 13px; border-radius: 2px; padding: 9px 11px; line-height: 1.45; border: 1px solid var(--line-2); }
-.auth-alert--error { color: var(--red-strong); border-color: oklch(0.80 0.07 27); background: oklch(0.965 0.013 27); }
+.auth-alert--error { color: var(--red-strong); border-color: var(--red-line); background: var(--red-tint); }
 
 /* message-page panel (confirm-email / verify / reset success & failure states) */
 .auth-msg { text-align: center; }
@@ -126,7 +117,7 @@
   border: 1px solid var(--line-2);
 }
 .auth-msg-icon svg { width: 24px; height: 24px; }
-.auth-msg-icon--success { color: var(--ok); border-color: oklch(0.82 0.07 150); }
+.auth-msg-icon--success { color: var(--ok); border-color: var(--ok-line); }
 .auth-msg-icon--info    { color: var(--ink-2); }
-.auth-msg-icon--error   { color: var(--red); border-color: oklch(0.80 0.07 27); }
+.auth-msg-icon--error   { color: var(--red); border-color: var(--red-line); }
 .auth-msg-text { font-size: 14px; color: var(--ink-2); line-height: 1.55; margin: 0 0 22px; }

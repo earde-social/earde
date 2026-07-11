@@ -34,6 +34,10 @@
   --ink-3:      oklch(0.510 0.010 262);
   --line:       oklch(0.866 0.006 255);
   --line-2:     oklch(0.800 0.007 255);
+  /* Control boundary: text inputs/textareas/selects must be identifiable by a
+     ≥3:1 edge (WCAG 1.4.11) — --line-2 measures only 1.84:1 against panel.
+     Separators and decorative frames stay on --line/--line-2. */
+  --line-3:     oklch(0.640 0.010 255);
   --frame:      oklch(0.300 0.012 262);
   --frame-ink:  oklch(0.965 0.003 250);
   --red:        oklch(0.555 0.155 27);
@@ -47,6 +51,18 @@
   --warn-ink:   oklch(0.450 0.120 70);
   --warn-tint:  oklch(0.960 0.040 70);
   --down-ink:   oklch(0.450 0.070 220);   /* downvote-active; mirrors .role.op */
+  /* Tint borders pairing with the tints above (role badges, auth alerts) plus
+     the red and info tint/line families those components share. */
+  --ok-line:    oklch(0.800 0.070 150);
+  --red-tint:   oklch(0.965 0.013 27);
+  --red-line:   oklch(0.800 0.070 27);
+  --info-tint:  oklch(0.950 0.030 220);
+  --info-line:  oklch(0.820 0.060 220);
+  /* Dark-frame surface variants: rail tile fill/boundary and muted text placed
+     on Frame-dark surfaces. */
+  --frame-2:     oklch(0.360 0.012 262);
+  --frame-3:     oklch(0.420 0.012 262);
+  --frame-ink-2: oklch(0.850 0.010 255);
 
   --cs-mono: 'IBM Plex Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace;
   --cs-sans: 'IBM Plex Sans', system-ui, -apple-system, sans-serif;
@@ -103,7 +119,7 @@
    -------------------------------------------------------------------------- */
 .mdlg {
   width: calc(100% - 32px); max-width: 430px;
-  padding: 0; border: 1px solid var(--line-2); border-radius: 3px;
+  padding: 0; border: 1px solid var(--line-2); border-radius: 2px;
   background: var(--panel); color: var(--ink);
   font-family: var(--cs-sans); font-size: 14px;
   box-shadow: 0 6px 24px oklch(0.30 0.01 262 / 0.16);
@@ -128,11 +144,20 @@
 .mdlg-label .req { color: var(--red); }
 .mdlg textarea {
   width: 100%; box-sizing: border-box; resize: vertical; min-height: 84px;
-  font-family: var(--cs-sans); font-size: 13.5px; line-height: 1.5; color: var(--ink);
-  background: var(--panel-2); border: 1px solid var(--line-2); border-radius: 2px;
+  font-family: var(--cs-sans); font-size: 14px; line-height: 1.5; color: var(--ink);
+  background: var(--panel-2); border: 1px solid var(--line-3); border-radius: 2px;
   padding: 9px 11px;
 }
 .mdlg textarea:focus { outline: none; border-color: var(--red); background: var(--panel); }
+/* Text fields inside a dialog form (e.g. the settings ban dialog's username)
+   share the textarea's control treatment. */
+.mdlg input[type='text'] {
+  width: 100%; box-sizing: border-box;
+  font-family: var(--cs-sans); font-size: 14px; line-height: 1.5; color: var(--ink);
+  background: var(--panel-2); border: 1px solid var(--line-3); border-radius: 2px;
+  padding: 9px 11px;
+}
+.mdlg input[type='text']:focus { outline: none; border-color: var(--red); background: var(--panel); }
 .mdlg-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 6px; }
 /* The plain confirm variant has no form; its action row carries its own padding. */
 .mdlg--confirm .mdlg-actions { padding: 14px 18px 16px; margin-top: 0; }
@@ -167,6 +192,59 @@
 .act-form { display: inline; margin: 0; padding: 0; }
 
 /* --------------------------------------------------------------------------
+   Buttons — the one shared control vocabulary (DESIGN.md §5). Secondary is the
+   resting default; primary carries Signal Red, and hover DEEPENS to Strong
+   Signal Red — never a brightness filter (The Signal Rule). The per-surface
+   class names are aliases kept for markup stability; surface sheets may add
+   layout (width, alignment, compact padding) but never re-declare colors,
+   typography, or hover behavior.
+   -------------------------------------------------------------------------- */
+.btn, .ch-btn, .auth-btn, .create-btn, .account-btn, .cm-btn, .app-cta, .cs-send {
+  display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+  font-family: var(--cs-mono); font-size: 11.5px; font-weight: 600;
+  letter-spacing: 0.04em; line-height: 1.3;
+  color: var(--ink); background: var(--panel-2);
+  border: 1px solid var(--line-2); border-radius: 2px;
+  padding: 8px 14px; cursor: pointer; text-decoration: none; white-space: nowrap;
+  transition: background .12s ease, border-color .12s ease, color .12s ease;
+}
+.btn:hover, .ch-btn:hover, .auth-btn:hover, .create-btn:hover,
+.account-btn:hover, .cm-btn:hover, .app-cta:hover, .cs-send:hover {
+  background: var(--panel-3); border-color: var(--ink-3); text-decoration: none;
+}
+/* Primary — the historically-primary surface classes stay primary by default. */
+.btn.primary, .ch-btn.primary, .auth-btn, .create-btn, .account-btn, .cm-btn, .app-cta, .cs-send {
+  color: #fff; background: var(--red); border-color: var(--red-strong);
+  padding: 9px 16px;
+}
+.btn.primary:hover, .ch-btn.primary:hover, .auth-btn:hover, .create-btn:hover,
+.account-btn:hover, .cm-btn:hover, .app-cta:hover, .cs-send:hover {
+  color: #fff; background: var(--red-strong); border-color: var(--red-strong);
+}
+/* Secondary modifiers return a historically-primary class to the resting default.
+   Declared after the primary rules so the modifier wins at equal specificity. */
+.account-btn--secondary, .cm-btn--secondary, .create-btn--secondary {
+  color: var(--ink); background: var(--panel-2); border-color: var(--line-2);
+  padding: 8px 14px;
+}
+.account-btn--secondary:hover, .cm-btn--secondary:hover, .create-btn--secondary:hover {
+  color: var(--ink); background: var(--panel-3); border-color: var(--ink-3);
+}
+
+/* --------------------------------------------------------------------------
+   Post-save confirmation line (Components.saved_notice) — the one success-feedback
+   surface, shared by account + community settings. Success Green tint, flat, sharp,
+   no shadow (DESIGN.md §4). Sits at the top of the panel it confirms.
+   -------------------------------------------------------------------------- */
+.saved-notice {
+  display: flex; align-items: center; gap: 8px;
+  margin-bottom: 16px; padding: 9px 13px;
+  font-family: var(--cs-sans); font-size: 13px; color: var(--ok-ink);
+  background: var(--ok-tint); border: 1px solid var(--ok-line); border-radius: 2px;
+}
+.saved-notice-check { font-weight: 700; line-height: 1; }
+
+/* --------------------------------------------------------------------------
    Author + role badges — rendered by render_author on every surface (feed rows,
    comments, search results, member lists), so styled here rather than per-shell.
    Shell stylesheets may refine .role variants; these are the shared baseline.
@@ -177,9 +255,9 @@
   font-family: var(--cs-mono); font-size: 11px; font-weight: 700;
   letter-spacing: 0.06em; padding: 1px 5px; border-radius: 2px;
 }
-.role.mod   { color: var(--ok-ink); background: var(--ok-tint); border: 1px solid oklch(0.80 0.07 150); }
-.role.admin { color: var(--red-strong); background: oklch(0.965 0.013 27); border: 1px solid oklch(0.80 0.07 27); }
-.role.op    { color: var(--down-ink); background: oklch(0.95 0.03 220); border: 1px solid oklch(0.82 0.06 220); }
+.role.mod   { color: var(--ok-ink); background: var(--ok-tint); border: 1px solid var(--ok-line); }
+.role.admin { color: var(--red-strong); background: var(--red-tint); border: 1px solid var(--red-line); }
+.role.op    { color: var(--down-ink); background: var(--info-tint); border: 1px solid var(--info-line); }
 .role-deleted { color: var(--ink-3); font-style: italic; }
 
 /* --------------------------------------------------------------------------
@@ -196,3 +274,6 @@
 }
 .vote-up:hover,   .vote-up.is-active   { color: var(--red); }
 .vote-down:hover, .vote-down.is-active { color: var(--down-ink); }
+/* Failed-vote rollback flash, toggled by the optimistic-vote script. The score
+   reverting is the signal; the warning ink only draws the eye to it. */
+.vote-score-error { color: var(--warn-ink); }

@@ -1364,13 +1364,15 @@ let community_settings_handler request =
         match%lwt Db.get_community_by_slug db slug with
         | Ok (Some community) ->
             (* Admins bypass the mod check — they have global authority over settings.
-               is_moderator is still consulted for non-admins to keep the ACL simple. *)
-            let%lwt is_authorized =
-              if is_admin then Lwt.return true
-              else (match%lwt Db.is_moderator db user_id community.id with
-                | Ok b -> Lwt.return b
-                | _ -> Lwt.return false)
+               is_moderator is still computed for everyone: the bans panel needs it to
+               pick the Mod vs Admin dialog variant (mirrors ban_community_user_handler,
+               which logs admin-without-mod-role bans as admin overrides). *)
+            let%lwt is_community_mod =
+              match%lwt Db.is_moderator db user_id community.id with
+              | Ok b -> Lwt.return b
+              | _ -> Lwt.return false
             in
+            let is_authorized = is_admin || is_community_mod in
             if not is_authorized then
               Dream.respond ~status:`Forbidden (Pages.msg_page ?user ~title:"Access Denied" ~message:"You must be a moderator to access this page." ~alert_type:"error" ~return_url:"/" request)
             else
@@ -1410,7 +1412,7 @@ let community_settings_handler request =
                         match%lwt Db.get_community_members db community.id with
                         | Ok m -> Lwt.return m | Error _ -> Lwt.return []
                       in
-                      Dream.html (Pages.community_settings_page ?user ~is_admin ~is_top_mod ~open_reports_count ~community ~mods ~banned_users ~members ~sections ~channels request)
+                      Dream.html (Pages.community_settings_page ?user ~is_admin ~is_current_user_mod:is_community_mod ~is_top_mod ~open_reports_count ~community ~mods ~banned_users ~members ~sections ~channels request)
                   | Error e -> Dream.html ("DB Error: " ^ e))
               | Error e -> Dream.html ("DB Error: " ^ e))
         | Ok None -> Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"Not Found" ~message:"This community does not exist." ~alert_type:"error" ~return_url:"/" request)
@@ -1759,7 +1761,7 @@ let update_community_handler request =
               Dream.respond ~status:`Forbidden (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Access Denied" ~message:"You must be a moderator to perform this action." ~alert_type:"error" ~return_url:"/" request)
             else
               (match%lwt Db.update_community_details db community_id description rules avatar_url banner_url with
-              | Ok () -> Dream.redirect request ("/c/" ^ community_slug ^ "/settings")
+              | Ok () -> Dream.redirect request ("/c/" ^ community_slug ^ "/settings?panel=profile&saved=profile")
               | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Error" ~message:("Database error: " ^ e) ~alert_type:"error" ~return_url:("/c/" ^ community_slug ^ "/settings") request))
           ))
       | _ -> Dream.respond ~status:`Bad_Request (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Form Error" ~message:"Invalid form submission." ~alert_type:"error" ~return_url:"/" request)
@@ -1886,7 +1888,7 @@ let ban_community_user_handler request =
                     (* Notify banned user — no post_id since a ban is not tied to a single post. *)
                     let ban_msg = "You have been banned from a community. Reason: " ^ reason in
                     let%lwt _ = Db.create_notif db target_user.id None "mod_action" ban_msg in
-                    let target = match community_res with Ok (Some c) -> "/c/" ^ c.slug ^ "/settings?panel=bans" | _ -> "/" in
+                    let target = match community_res with Ok (Some c) -> "/c/" ^ c.slug ^ "/settings?panel=bans&saved=banned" | _ -> "/" in
                     Dream.redirect request target
                   end
               | Ok None -> Dream.html (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"User Not Found" ~message:("No user was found with the username u/" ^ target_username ^ ".") ~alert_type:"error" ~return_url:"/" request)
@@ -1920,7 +1922,7 @@ let unban_community_user_handler request =
               Dream.respond ~status:`Forbidden (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Access Denied" ~message:"You are not a moderator of this community." ~alert_type:"error" ~return_url:"/" request)
             else begin
               let%lwt _ = Db.community_unban_user db target_user_id community_id in
-              Dream.redirect request ("/c/" ^ community_slug ^ "/settings?panel=bans")
+              Dream.redirect request ("/c/" ^ community_slug ^ "/settings?panel=bans&saved=unbanned")
             end
           )
       | _ -> Dream.html (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Form Error" ~message:"There was a problem with your form submission. Please try again." ~alert_type:"error" ~return_url:"/" request)
@@ -3305,7 +3307,7 @@ let update_profile_handler request =
           let avatar_url = if new_avatar <> None then new_avatar else existing_avatar in
           Dream.sql request (fun db ->
             match%lwt Db.update_user_profile db bio avatar_url user_id with
-            | Ok () -> Dream.redirect request "/settings"
+            | Ok () -> Dream.redirect request "/settings?saved=profile"
             | Error err -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Error" ~message:("Database error: " ^ err) ~alert_type:"error" ~return_url:"/settings" request)
           ))
       | _ -> Dream.respond ~status:`Bad_Request (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Form Error" ~message:"Invalid form submission." ~alert_type:"error" ~return_url:"/settings" request)
@@ -3335,7 +3337,7 @@ let change_password_handler request =
                       (match%lwt Auth.hash_password new_password with
                       | Ok new_hash ->
                           (match%lwt Db.update_password db user_id new_hash with
-                          | Ok () -> Dream.redirect request "/settings"
+                          | Ok () -> Dream.redirect request "/settings?saved=password"
                           | Error err -> Dream.html (Pages.msg_page ~user:username ~title:"Error" ~message:("Database error: " ^ err) ~alert_type:"error" ~return_url:"/settings" request))
                       | Error err -> Dream.html (Pages.msg_page ~user:username ~title:"Error" ~message:("Hashing error: " ^ err) ~alert_type:"error" ~return_url:"/settings" request))
                   | _ -> Dream.html (Pages.msg_page ~user:username ~title:"Wrong Password" ~message:"The current password you entered is incorrect. Please go back and try again." ~alert_type:"error" ~return_url:"/settings" request))

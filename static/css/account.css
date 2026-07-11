@@ -95,6 +95,13 @@
   border-radius: 2px; object-fit: cover;
   border: 1px solid var(--line-2); background: var(--panel-2);
 }
+/* Letter-tile fallback when no avatar image is set: center the monogram glyph
+   (26px per the DESIGN.md tile-glyph exception). Previously dead Tailwind
+   utilities, which left the glyph unsized in the tile's top-left corner. */
+.account-avatar--tile {
+  display: flex; align-items: center; justify-content: center;
+  font-size: 26px; font-weight: 700; color: var(--ink-2);
+}
 .account-prof-body { min-width: 0; flex: 1 1 auto; }
 .account-name {
   font-family: var(--cs-mono); font-size: 21px; font-weight: 700;
@@ -171,7 +178,7 @@
   width: 100%;
   font-family: var(--cs-sans); font-size: 14px; color: var(--ink);
   background: var(--panel-2);
-  border: 1px solid var(--line-2); border-radius: 2px;
+  border: 1px solid var(--line-3); border-radius: 2px;
   padding: 9px 11px;
   transition: border-color .12s ease, background .12s ease;
 }
@@ -195,23 +202,13 @@
 }
 .account-file::file-selector-button:hover { border-color: var(--ink-3); }
 
-/* buttons */
-.account-btn {
-  align-self: flex-start;
-  font-family: var(--cs-mono); font-size: 13.5px; font-weight: 600;
-  color: #fff; background: var(--red);
-  border: 1px solid var(--red-strong); border-radius: 2px;
-  padding: 9px 16px; cursor: pointer; text-decoration: none;
-  display: inline-flex; align-items: center; gap: 7px;
-  transition: background .12s ease, border-color .12s ease, color .12s ease;
-}
-.account-btn:hover { background: var(--red-strong); }
-.account-btn--secondary {
-  color: var(--ink); background: var(--panel-2); border: 1px solid var(--line-2);
-}
-.account-btn--secondary:hover { background: var(--panel-3); border-color: var(--ink-3); }
+/* buttons — styling (incl. --secondary) lives in base.css (shared button
+   component); only the layout default and the --danger variant are local. */
+.account-btn { align-self: flex-start; }
 .account-btn--danger { background: var(--ink); border-color: var(--ink); }
-.account-btn--danger:hover { background: #000; }
+/* Darken the ink fill without minting a colour below the --ink token. The hover
+   re-declares fill + border so the shared primary hover (red-strong) never wins. */
+.account-btn--danger:hover { background: var(--ink); border-color: var(--ink); filter: brightness(0.8); }
 
 /* danger zone panel */
 .account-danger {

@@ -19,6 +19,10 @@ val safe_internal_path : string -> string
     result. Do NOT use [safe_url] for image src — it rejects local upload paths. *)
 val safe_img_src : string -> string
 
+(** [safe_return_url path] gates a "go back" href: preserves root ["/"], passes
+    rooted internal paths (html-escaped), and collapses anything unsafe to ["/"]. *)
+val safe_return_url : string -> string
+
 (** [initial_tile ?class_ name] → the shared letter-tile fallback ([<div>] with the name's
     uppercased first letter, ["?"] when empty). [class_] carries the surface's existing
     utility classes so each call site keeps its look. *)
@@ -98,6 +102,10 @@ val extract_domain : string -> string option
 val render_author : ?mod_usernames:string list -> ?admin_usernames:string list -> string -> string
 val time_ago : string -> string
 val format_month_year : string -> string
+(** [saved_notice ?messages request] → an inline post-save confirmation line when the
+    request carries [?saved=<key>], keyed through [messages] (unknown key → generic text),
+    or [""] otherwise. SSR; survives the post-redirect-GET. *)
+val saved_notice : ?messages:(string * string) list -> Dream.request -> string
 
 (** === CARDS === *)
 (** [reason_dialog] → one canonical moderation reason-dialog (native [<dialog>], .mdlg

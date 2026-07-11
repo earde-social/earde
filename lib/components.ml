@@ -34,6 +34,18 @@ let safe_internal_path path =
      && path.[1] <> '/' && path.[1] <> '\\'
   then html_escape path else "#"
 
+(* Gate for a "return to where you were" href (msg_page's Go-back link). Like
+   safe_internal_path but also passes the bare root "/", which is the most common
+   return target and which safe_internal_path (length >= 2) would collapse. Anything
+   else — javascript:/data:, protocol-relative "//host", the "/\\host" variant, empty,
+   or a bare relative path — falls back to "/" so the link always lands somewhere safe
+   in-app rather than executing or redirecting off-site. *)
+let safe_return_url path =
+  if path = "/" then "/"
+  else match safe_internal_path path with
+    | "#" -> "/"
+    | escaped -> escaped
+
 (* === IMAGES ===
    One escaping gate + a few render primitives so every image surface treats stored URLs the
    same way. Before this, image src was rendered three different ways (raw, html_escape, and
@@ -142,7 +154,6 @@ let post_thumbnail ?(alt="Post image") ~img_class image_url =
    .topbar; styles live in shell.css (.app-topbar…), which is loaded only on shell pages, so these
    unscoped class names never leak to Site pages. Uses only real routes — no fake links. *)
 let render_app_topbar ?user ?request:_ ~is_admin () =
-  let nav = "" in
   (* Same /search route + ?q= contract as the Site search; only the styling is grep-like. *)
   let search =
     "<form class='app-search' action='/search' method='GET'>\
@@ -184,16 +195,23 @@ let render_app_topbar ?user ?request:_ ~is_admin () =
         "<a class='app-login' href='/login'>Log in</a>\
          <a class='app-cta' href='/signup'>Sign up</a>"
   in
+  (* Narrow viewports hide the grep field (shell.css ≤820px); this plain /search
+     link takes its place there so search never disappears on un-gated pages.
+     Hidden at desktop widths, where the full field renders. *)
+  let search_link =
+    "<a class='app-search-link' href='/search' title='Search' aria-label='Search'>\
+       <svg class='app-icon' aria-hidden='true' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'><circle cx='11' cy='11' r='7'></circle><path d='m21 21-4.35-4.35'></path></svg>\
+     </a>"
+  in
   Printf.sprintf "
       <header class='app-topbar'>
         <div class='app-topbar-inner'>
           <a class='app-brand' href='/feed' aria-label='Earde feed'><img src='/static/images/logo-mark.svg' alt='' class='app-logo-mark'><img src='/static/images/logo-wordmark.svg' alt='Earde' class='app-logo-wordmark'></a>
           %s
-          %s
-          <div class='app-right'>%s</div>
+          <div class='app-right'>%s%s</div>
         </div>
       </header>"
-    nav search right
+    search search_link right
 
 (* Desktop-only gate. MVP is desktop-first: rather than making the multi-pane app shell
    responsive, a phone-width viewport gets a centered "open on desktop" panel instead of the
@@ -202,12 +220,19 @@ let render_app_topbar ?user ?request:_ ~is_admin () =
    display:none and nothing changes. Injected only on `App surfaces (see layout); auth/legal/
    marketing pages are left usable. The HTML always renders, so crawlers/SSR are unaffected. *)
 let mobile_gate_css_link = "<link rel='stylesheet' href='/static/css/mobile-gate.css'>"
+(* No role='dialog': this is a static panel, not a focus-managed modal. The exit
+   links target the un-gated public read surfaces (~gate:false pages), so a phone
+   visitor is never dead-ended — "find it later" survives the gate. *)
 let mobile_desktop_gate =
-  "<div class='mobile-gate' role='dialog' aria-label='Desktop only'>\
+  "<div class='mobile-gate'>\
      <div class='mobile-gate-card'>\
        <div class='mobile-gate-brand'><img src='/static/images/logo-mark.svg' alt='' class='mobile-gate-logo-mark'><img src='/static/images/logo-wordmark.svg' alt='Earde' class='mobile-gate-logo-wordmark'></div>\
        <h1 class='mobile-gate-title'>Desktop only for now</h1>\
        <p class='mobile-gate-body'>Earde is currently built for laptop and desktop screens. Open this page on a larger screen to use the full app.</p>\
+       <div class='mobile-gate-actions'>\
+         <a class='mobile-gate-link' href='/feed'>Browse public threads &rarr;</a>\
+         <a class='mobile-gate-link' href='/search'>Search the archive &rarr;</a>\
+       </div>\
        <p class='mobile-gate-note'>Mobile support is coming later.</p>\
      </div>\
    </div>"
@@ -242,7 +267,7 @@ let layout ?(noindex=false) ?user ?request ?(head_extra="") ?(chrome=`App) ?(gat
 
   Printf.sprintf "
   <!DOCTYPE html>
-  <html lang='en' class='scroll-smooth'>
+  <html lang='en'>
   <head>
       <meta charset='UTF-8'>
       <meta name='viewport' content='width=device-width, initial-scale=1.0'>
@@ -292,36 +317,14 @@ let layout ?(noindex=false) ?user ?request ?(head_extra="") ?(chrome=`App) ?(gat
           dlg.querySelector(\"[data-act='confirm']\").onclick = () => { dlg.close(); form.submit(); };
           dlg.showModal();
         }
-        /* Clipboard write is async; we optimistically swap innerHTML and class list
-           rather than disabling the button — avoids layout shift on fast connections. */
-        function copyPostLink(path, btn) {
-          var fullUrl = window.location.origin + path;
-          navigator.clipboard.writeText(fullUrl).then(function() {
-            var originalHTML = btn.innerHTML;
-            btn.innerHTML = '<svg class=\"w-4 h-4 mr-1 inline\" fill=\"none\" stroke=\"currentColor\" viewBox=\"0 0 24 24\"><path stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"2\" d=\"M5 13l4 4L19 7\"></path></svg> Copied';
-            btn.classList.add('text-emerald-600');
-            btn.classList.remove('text-gray-500', 'hover:text-gray-900');
-            setTimeout(function() {
-              btn.innerHTML = originalHTML;
-              btn.classList.remove('text-emerald-600');
-              btn.classList.add('text-gray-500', 'hover:text-gray-900');
-            }, 2000);
-          }).catch(function(err) { console.error('Failed to copy: ', err); });
-        }
-        /* Optimistic vote update: mutate DOM immediately, then fire-and-forget XHR.
-           If the request fails the server state is authoritative on next page load —
-           acceptable UX trade-off for a forum where stale scores are low-stakes. */
+        /* Optimistic vote update: mutate the DOM immediately, then confirm with the
+           server. A failed request rolls the mutation back and flashes the score in
+           the warning ink, so the page never keeps a state the server rejected. */
         document.querySelectorAll(\"form[action='/vote'], form[action='/vote-comment']\").forEach(form => {
             form.addEventListener(\"submit\", async (e) => {
                 e.preventDefault();
                 const formData = new FormData(form);
                 const urlEncodedData = new URLSearchParams(formData).toString();
-
-                fetch(form.action, {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-                    body: urlEncodedData
-                });
 
                 const container = form.parentElement;
                 const scoreSpan = container.querySelector(\"span\");
@@ -342,10 +345,22 @@ let layout ?(noindex=false) ?user ?request ?(head_extra="") ?(chrome=`App) ?(gat
                 const action = parseInt(formData.get(\"direction\"));
                 const isUpvoteBtn = form === upForm;
 
-                /* State colour is semantic: .is-active on .vote-up/.vote-down (base.css). */
+                /* Snapshot the pre-click state so a failed request can be rolled back. */
+                const snapshot = {
+                    score: scoreSpan.innerText,
+                    upActive: upBtn ? upBtn.classList.contains(\"is-active\") : false,
+                    downActive: downBtn ? downBtn.classList.contains(\"is-active\") : false,
+                    upValue: upInput ? upInput.value : null,
+                    downValue: downInput ? downInput.value : null,
+                };
+
+                /* State colour is semantic: .is-active on .vote-up/.vote-down (base.css).
+                   aria-pressed tracks it so vote state is never colour-only. */
                 const setVote = (upActive, downActive) => {
                     upBtn?.classList.toggle(\"is-active\", upActive);
                     downBtn?.classList.toggle(\"is-active\", downActive);
+                    upBtn?.setAttribute(\"aria-pressed\", String(upActive));
+                    downBtn?.setAttribute(\"aria-pressed\", String(downActive));
                 };
 
                 if (action === 1) {
@@ -372,6 +387,24 @@ let layout ?(noindex=false) ?user ?request ?(head_extra="") ?(chrome=`App) ?(gat
                 }
 
                 scoreSpan.innerText = score;
+
+                try {
+                    const response = await fetch(form.action, {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+                        body: urlEncodedData
+                    });
+                    if (!response.ok) throw new Error('vote rejected: ' + response.status);
+                } catch (err) {
+                    /* Roll back and flash: the score reverting is the signal, the
+                       warning ink only draws the eye to it (no layout shift). */
+                    scoreSpan.innerText = snapshot.score;
+                    setVote(snapshot.upActive, snapshot.downActive);
+                    if (upInput && snapshot.upValue !== null) upInput.value = snapshot.upValue;
+                    if (downInput && snapshot.downValue !== null) downInput.value = snapshot.downValue;
+                    scoreSpan.classList.add(\"vote-score-error\");
+                    setTimeout(() => scoreSpan.classList.remove(\"vote-score-error\"), 1600);
+                }
             });
         });
       // Notif badge polling — fires once per page load to avoid repeated DB hits
@@ -460,6 +493,20 @@ let time_ago date_str =
     else Printf.sprintf "%d yr ago" (diff / 31536000)
   with _ ->
     date_str
+
+(* Post-redirect-GET success confirmation. Handlers redirect to `…?saved=<key>` after a
+   successful mutation; the target page calls this to render an inline status line (no JS,
+   survives the redirect). [messages] maps a key to its confirmation text; an unknown-but-
+   present key falls back to a generic message so a save never lands silently. role='status'
+   so assistive tech encounters it in reading order. Styled by .saved-notice in base.css. *)
+let saved_notice ?(messages=[]) request =
+  match Dream.query request "saved" with
+  | Some key ->
+      let msg = match List.assoc_opt key messages with Some m -> m | None -> "Changes saved." in
+      Printf.sprintf
+        "<div class='saved-notice' role='status'><span class='saved-notice-check' aria-hidden='true'>&#10003;</span>%s</div>"
+        (html_escape msg)
+  | None -> ""
 
 let format_month_year date_str =
   try
@@ -764,17 +811,19 @@ let render_forum_row ?(is_current_user_mod=false) ?(mod_usernames=[]) ?(admin_us
   let current_vote = Option.value ~default:0 (List.assoc_opt post.id user_votes) in
   (* Semantic vote classes (base.css); the optimistic-vote JS toggles .is-active. *)
   let up_color = if current_vote = 1 then "vote-up is-active" else "vote-up" in
+  let up_pressed = if current_vote = 1 then "true" else "false" in
   let down_color = if current_vote = -1 then "vote-down is-active" else "vote-down" in
+  let down_pressed = if current_vote = -1 then "true" else "false" in
   let up_action = if current_vote = 1 then 0 else 1 in
   let down_action = if current_vote = -1 then 0 else -1 in
   let upvote_html = match current_user with
-    | Some _ -> Printf.sprintf "<form action='/vote' method='POST' class='m-0 p-0'>%s<input type='hidden' name='post_id' value='%d'><input type='hidden' name='direction' value='%d'><button type='submit' class='%s' aria-label='Upvote'>▲</button></form>" csrf_token post.id up_action up_color
+    | Some _ -> Printf.sprintf "<form action='/vote' method='POST' class='act-form'>%s<input type='hidden' name='post_id' value='%d'><input type='hidden' name='direction' value='%d'><button type='submit' class='%s' aria-pressed='%s' aria-label='Upvote'>▲</button></form>" csrf_token post.id up_action up_color up_pressed
     | None -> "<a href='/login' class='vote-up' aria-label='Log in to upvote'>▲</a>"
   in
   let downvote_html =
     if not post.allow_downvotes then ""
     else match current_user with
-    | Some _ -> Printf.sprintf "<form action='/vote' method='POST' class='m-0 p-0'>%s<input type='hidden' name='post_id' value='%d'><input type='hidden' name='direction' value='%d'><button type='submit' class='%s' aria-label='Downvote'>▼</button></form>" csrf_token post.id down_action down_color
+    | Some _ -> Printf.sprintf "<form action='/vote' method='POST' class='act-form'>%s<input type='hidden' name='post_id' value='%d'><input type='hidden' name='direction' value='%d'><button type='submit' class='%s' aria-pressed='%s' aria-label='Downvote'>▼</button></form>" csrf_token post.id down_action down_color down_pressed
     | None -> "<a href='/login' class='vote-down' aria-label='Log in to downvote'>▼</a>"
   in
   (* Domain chip: only for link posts with a parseable host; external link opens in a new tab. *)
@@ -794,7 +843,7 @@ let render_forum_row ?(is_current_user_mod=false) ?(mod_usernames=[]) ?(admin_us
   let mod_controls = mod_action_controls ~is_current_user_mod ~admin_usernames ~banned_usernames request post in
   let mod_menu =
     if mod_controls = "" then ""
-    else Printf.sprintf "<details class='cs-row-mod'><summary>⋯</summary><div class='cs-row-mod-menu'>%s</div></details>" mod_controls
+    else Printf.sprintf "<details class='cs-row-mod'><summary aria-label='Moderation actions'>⋯</summary><div class='cs-row-mod-menu'>%s</div></details>" mod_controls
   in
   (* Internal links point at the canonical thread URL, not legacy /p/:id (which now 301s here). *)
   let thread_href = canonical_thread_path post.community_slug post.id post.title in
@@ -820,7 +869,7 @@ let render_forum_row ?(is_current_user_mod=false) ?(mod_usernames=[]) ?(admin_us
           %s
           <div class='ft-title'><a href='%s'>%s</a></div>
           %s
-          <div class='ft-meta'>%s<span>by %s</span><span>%s</span><a href='%s'>💬 %d</a></div>
+          <div class='ft-meta'>%s<span>by %s</span><span>%s</span><a href='%s'>%d comments</a></div>
       </div>
       %s
   </div>"
@@ -861,6 +910,8 @@ let shell_css_link = "<link rel='stylesheet' href='/static/css/shell.css'>"
    active state is a class the CSS highlights. *)
 let render_nav_item (it : nav_item) =
   let active = if it.ni_active then " active" else "" in
+  (* aria-current mirrors the visual active state for screen readers. *)
+  let aria_current = if it.ni_active then " aria-current='page'" else "" in
   let sigil =
     if it.ni_sigil = "" then ""
     else Printf.sprintf "<span class='cs-item-sigil'>%s</span>" (html_escape it.ni_sigil)
@@ -871,8 +922,8 @@ let render_nav_item (it : nav_item) =
   in
   (* Internal path, not an external URL — safe_internal_path keeps relative links navigable
      (safe_url would turn "/c/slug/ch/x" into "#"). *)
-  Printf.sprintf "<a class='cs-item%s' href='%s'>%s<span class='cs-item-label'>%s</span>%s</a>"
-    active (safe_internal_path it.ni_href) sigil (html_escape it.ni_label) badge
+  Printf.sprintf "<a class='cs-item%s'%s href='%s'>%s<span class='cs-item-label'>%s</span>%s</a>"
+    active aria_current (safe_internal_path it.ni_href) sigil (html_escape it.ni_label) badge
 
 let render_nav_group (g : nav_group) =
   let label =
@@ -900,8 +951,9 @@ let rail_glyph slug =
 let render_global_rail ~(active : rail_active) (communities : community list) =
   let feed_active = (match active with Rail_feed -> true | _ -> false) in
   let home =
-    Printf.sprintf "<a class='cs-rail-item cs-rail-home%s' href='/feed' title='Feed'>⌂</a>"
-      (if feed_active then " active" else "") in
+    Printf.sprintf "<a class='cs-rail-item cs-rail-home%s'%s href='/feed' title='Feed'>⌂</a>"
+      (if feed_active then " active" else "")
+      (if feed_active then " aria-current='page'" else "") in
   let tiles = List.map (fun (c : community) ->
     let is_active = (match active with Rail_community s -> s = c.slug | _ -> false) in
     let cls = if is_active then "cs-rail-item active" else "cs-rail-item" in
@@ -922,8 +974,9 @@ let render_global_rail ~(active : rail_active) (communities : community list) =
        default chat channel (every community has a "general" channel after the default-structure
        merge), NOT the legacy /c/:slug overview, which isn't a shell page yet. A future branch can
        swap this for a shell overview or last-visited destination. *)
-    Printf.sprintf "<a class='%s' href='/c/%s/ch/general' title='/c/%s'>%s</a>"
-      cls (html_escape c.slug) (html_escape c.slug) face
+    Printf.sprintf "<a class='%s'%s href='/c/%s/ch/general' title='/c/%s'>%s</a>"
+      cls (if is_active then " aria-current='page'" else "")
+      (html_escape c.slug) (html_escape c.slug) face
   ) communities in
   let add =
     "<a class='cs-rail-item cs-rail-add' href='/new-community' title='Join or start a community'>+</a>" in

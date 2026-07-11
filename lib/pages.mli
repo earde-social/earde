@@ -27,7 +27,7 @@ val community_channel_shell_page : ?user:string -> ?realtime_token:string -> ?no
     Preserves the optimistic-vote DOM contract and all comment/vote/mod/delete routes & CSRF. *)
 val thread_shell_page : ?user:string -> ?noindex:bool -> is_member:bool -> is_current_user_mod:bool -> mod_usernames:string list -> admin_usernames:string list -> banned_usernames:string list -> rail_communities:Db.community list -> channels:Db.channel list -> sections:Db.community_section list -> community:Db.community -> ?thread_source:((string * string) option * (int64 * string * string * string) list) -> user_post_votes:(int * int) list -> user_comment_votes:(int * int) list -> post:Db.post -> comments:Db.comment list -> Dream.request -> string
 val community_overview_page : ?user:string -> ?noindex:bool -> is_member:bool -> is_current_user_mod:bool -> is_current_user_top_mod:bool -> mod_usernames:string list -> orphaned:(int * string option) -> channels:Db.channel list -> recent_posts:Db.post list -> Db.community -> (Db.community_section * int * string option) list -> Dream.request -> string
-val community_settings_page : ?user:string -> is_admin:bool -> is_top_mod:bool -> open_reports_count:int -> community:Db.community -> mods:Db.user list -> banned_users:Db.user list -> members:Db.user list -> sections:Db.community_section list -> channels:Db.channel list -> Dream.request -> string
+val community_settings_page : ?user:string -> is_admin:bool -> is_current_user_mod:bool -> is_top_mod:bool -> open_reports_count:int -> community:Db.community -> mods:Db.user list -> banned_users:Db.user list -> members:Db.user list -> sections:Db.community_section list -> channels:Db.channel list -> Dream.request -> string
 val manage_mods_page : ?user:string -> is_admin:bool -> current_user_role:string option -> community:Db.community -> mods:Db.moderator_entry list -> Dream.request -> string
 
 (** === POST === *)
@@ -62,6 +62,12 @@ end
 val start_thread_form : ?user:string -> ?error:string -> community:Db.community -> channel:Db.channel -> seed_id:int64 -> candidates:(Db.chat_message * string option) list -> sections:Db.community_section list -> default_section_id:int -> default_title:string -> default_body:string -> Dream.request -> string
 
 (** === USER === *)
+(** One profile-page comment row: (id, content, created_at, post_id, post_title, score).
+    Pure; escapes user-supplied content and title. Exposed for stored-XSS regression tests. *)
+val profile_comment_html : int * string * string * int * string * int -> string
+(** The public-profile bio block. Pure; escapes the user-supplied bio. Exposed for
+    stored-XSS regression tests. *)
+val profile_bio_html : string -> string
 val user_profile_page : ?user:string -> is_admin:bool -> is_globally_banned:bool -> profile_id:int -> admin_usernames:string list -> moderated_communities:Db.community list -> active_tab:string -> (int * int) list -> string -> string -> string option -> string option -> int -> Db.post list -> (int * string * string * int * string * int) list -> Db.community_user_stat list -> Dream.request -> string
 val settings_page : ?user:string -> string option -> string option -> Dream.request -> string
 val notifications_page : ?user:string -> Db.notification list -> Dream.request -> string

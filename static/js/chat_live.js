@@ -7,6 +7,44 @@
 
   const bottomThresholdPx = 100;
 
+  // Connection-state chip rendered under the member composer (role=status, so
+  // screen readers hear transitions politely). Absent for non-members and when
+  // the websocket is not configured; every update must tolerate that.
+  const statusChip = document.getElementById("cs-live-status");
+
+  function setLiveStatus(state, text) {
+    root.dataset.liveStatus = state;
+    if (statusChip) {
+      statusChip.dataset.liveState = state;
+      statusChip.textContent = text;
+    }
+  }
+
+  const STATUS_LIVE = ["live", "live"];
+  const STATUS_CONNECTING = ["connecting", "live: connecting…"];
+  const STATUS_RECONNECTING = ["reconnecting", "live: reconnecting — messages still save"];
+  const STATUS_DEGRADED = ["degraded", "live: catch-up failed — retrying"];
+
+  // Localize the SSR "YYYY-MM-DD HH:MM UTC" fallbacks: today's messages show a
+  // bare local HH:MM, older ones keep a short date. Full local datetime in the
+  // tooltip. Runs against a row or the whole stream.
+  function formatMessageTimes(scope) {
+    scope.querySelectorAll("time.cs-msg-time[datetime]").forEach((el) => {
+      const date = new Date(el.getAttribute("datetime"));
+      if (Number.isNaN(date.getTime())) {
+        return;
+      }
+      const hm = date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+      el.textContent =
+        date.toDateString() === new Date().toDateString()
+          ? hm
+          : `${date.toLocaleDateString([], { month: "short", day: "numeric" })} ${hm}`;
+      el.title = date.toLocaleString();
+    });
+  }
+
+  formatMessageTimes(root);
+
   function getChatScroller() {
     if (root.matches(".cs-main-body, [data-chat-scroll-container]")) {
       return root;
@@ -132,11 +170,8 @@
 
   let lastMessageId = readLastMessageIdFromDom();
   let catchUpInFlight = false;
+  let catchUpRetryTimer = null;
   let hasJoined = false;
-
-  console.log("[chat_live] channel_id", channelId);
-  console.log("[chat_live] topic", topic);
-  console.log("[chat_live] connecting", socketUrl);
 
   const { Socket } = window.Phoenix;
 
@@ -144,20 +179,22 @@
     params: { token },
   });
 
-  socket.onOpen(() => {
-    console.log("[chat_live] socket open");
+  setLiveStatus(...STATUS_CONNECTING);
 
+  socket.onOpen(() => {
     if (hasJoined) {
+      setLiveStatus(...STATUS_LIVE);
       catchUp();
     }
   });
 
   socket.onError(() => {
     console.warn("[chat_live] socket error");
+    setLiveStatus(...STATUS_RECONNECTING);
   });
 
   socket.onClose(() => {
-    console.warn("[chat_live] socket closed");
+    setLiveStatus(...STATUS_RECONNECTING);
   });
 
   socket.connect();
@@ -168,13 +205,12 @@
     .join()
     .receive("ok", () => {
       hasJoined = true;
-      console.log("[chat_live] joined", topic);
-      root.dataset.liveStatus = "joined";
+      setLiveStatus(...STATUS_LIVE);
       catchUp();
     })
     .receive("error", (resp) => {
       console.warn("[chat_live] join failed", resp);
-      root.dataset.liveStatus = "error";
+      setLiveStatus(...STATUS_RECONNECTING);
     });
 
   function appendMessage(payload, options = {}) {
@@ -224,15 +260,21 @@
     author.className = "cs-msg-author";
     author.textContent = name;
 
-    const time = document.createElement("span");
+    // Same shape as the SSR rows: <time datetime> localized by formatMessageTimes.
+    const time = document.createElement("time");
     time.className = "cs-msg-time";
     time.textContent = payload.created_at || "";
+    const rawCreatedAt = String(payload.created_at || "").slice(0, 19);
+    if (/^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}$/.test(rawCreatedAt)) {
+      time.dateTime = rawCreatedAt.replace(" ", "T") + "Z";
+    }
 
     const text = document.createElement("div");
     text.className = "cs-msg-text";
     text.textContent = payload.content || "";
 
     meta.appendChild(author);
+    meta.appendChild(time);
 
     const hasId = payload.id !== undefined && payload.id !== null;
     const hasAuthor = payload.user_id !== undefined && payload.user_id !== null;
@@ -240,9 +282,13 @@
     const isPromoted = payload.thread_id !== undefined && payload.thread_id !== null;
     row.dataset.hasThread = isPromoted ? "true" : "false";
 
+    body.appendChild(meta);
+    body.appendChild(text);
+
+    // "Start thread" lives in the persistent actions row, matching the SSR markup.
     if (canStart && hasId && hasAuthor && !isDeleted && !isPromoted) {
-      const slot = document.createElement("span");
-      slot.className = "cs-msg-time-slot";
+      const actions = document.createElement("div");
+      actions.className = "cs-msg-actions";
 
       const startLink = document.createElement("a");
       startLink.className = "cs-msg-start";
@@ -251,25 +297,35 @@
       )}/start-thread`;
       startLink.dataset.promoteUrl = startLink.href;
       row.dataset.promoteUrl = startLink.href;
-      startLink.textContent = "Start thread";
+      startLink.textContent = "+ Start thread";
 
-      slot.appendChild(time);
-      slot.appendChild(startLink);
-      meta.appendChild(slot);
-    } else {
-      meta.appendChild(time);
+      actions.appendChild(startLink);
+      body.appendChild(actions);
     }
 
-    body.appendChild(meta);
-    body.appendChild(text);
     row.appendChild(avatar);
     row.appendChild(body);
+    formatMessageTimes(row);
 
     root.appendChild(row);
 
     if (shouldStayAtBottom) {
       scrollToBottomSoon(chatScroller);
     }
+  }
+
+  // A dropped catch-up means missed history, not just missed fanout, so it is
+  // surfaced on the status chip and retried on a timer (the socket's own
+  // reconnect also re-triggers catchUp via onOpen).
+  function scheduleCatchUpRetry() {
+    if (catchUpRetryTimer) {
+      return;
+    }
+
+    catchUpRetryTimer = window.setTimeout(() => {
+      catchUpRetryTimer = null;
+      catchUp();
+    }, 8000);
   }
 
   async function catchUp() {
@@ -292,6 +348,8 @@
 
       if (!response.ok) {
         console.warn("[chat_live] catch-up failed", response.status);
+        setLiveStatus(...STATUS_DEGRADED);
+        scheduleCatchUpRetry();
         return;
       }
 
@@ -304,15 +362,20 @@
       if (shouldStayAtBottom) {
         scrollToBottomSoon(chatScroller);
       }
+
+      if (socket.isConnected()) {
+        setLiveStatus(...STATUS_LIVE);
+      }
     } catch (err) {
       console.warn("[chat_live] catch-up exception", err);
+      setLiveStatus(...STATUS_DEGRADED);
+      scheduleCatchUpRetry();
     } finally {
       catchUpInFlight = false;
     }
   }
 
   channel.on("new_msg", (payload) => {
-    console.log("[chat_live] new_msg", payload);
     const shouldStayAtBottom = isNearBottom(chatScroller);
     appendMessage(payload, { wasNearBottom: shouldStayAtBottom });
   });

@@ -75,7 +75,7 @@
   width: 100%;
   font-family: var(--cs-sans); font-size: 14px; color: var(--ink);
   background: var(--panel-2);
-  border: 1px solid var(--line-2);
+  border: 1px solid var(--line-3);
   border-radius: 2px;
   padding: 9px 11px;
   transition: border-color .12s ease, background .12s ease;
@@ -94,7 +94,7 @@
   display: inline-flex; align-items: center;
   font-family: var(--cs-mono); font-size: 13px; color: var(--ink-3);
   background: var(--panel-3);
-  border: 1px solid var(--line-2); border-right: 0;
+  border: 1px solid var(--line-3); border-right: 0;
   border-radius: 2px 0 0 2px;
   padding: 0 10px; white-space: nowrap;
 }
@@ -104,7 +104,7 @@
 .create-file {
   width: 100%; font-size: 13px; color: var(--ink-2);
   background: var(--panel-2);
-  border: 1px solid var(--line-2); border-radius: 2px;
+  border: 1px solid var(--line-3); border-radius: 2px;
   padding: 8px 10px;
 }
 .create-file::file-selector-button {
@@ -181,20 +181,9 @@
 
 /* actions */
 .create-actions { display: flex; gap: 10px; margin-top: 4px; }
-.create-btn {
-  font-family: var(--cs-mono); font-size: 14px; font-weight: 600;
-  color: #fff; background: var(--red);
-  border: 1px solid var(--red-strong); border-radius: 2px;
-  padding: 10px 18px; cursor: pointer; text-decoration: none;
-  transition: background .12s ease;
-}
-.create-btn:hover { background: var(--red-strong); }
-.create-btn--block { width: 100%; text-align: center; }
-.create-btn--secondary {
-  color: var(--ink); background: var(--panel-2);
-  border: 1px solid var(--line-2);
-}
-.create-btn--secondary:hover { background: var(--panel-3); border-color: var(--ink-3); }
+/* .create-btn styling (incl. --secondary) lives in base.css (shared button
+   component); only the full-width layout variant is local. */
+.create-btn--block { width: 100%; }
 
 /* footer line + links */
 .create-foot { margin-top: 18px; text-align: center; font-size: 13px; color: var(--ink-2); }

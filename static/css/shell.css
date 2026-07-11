@@ -33,7 +33,7 @@ html, body { height: 100%; overflow: hidden; }
 .community-shell .cs-main-body::-webkit-scrollbar-thumb,
 .community-shell .thread-shell-main::-webkit-scrollbar-thumb,
 .community-shell .cs-side-scroll::-webkit-scrollbar-thumb,
-.community-shell .cs-aside::-webkit-scrollbar-thumb { background: var(--line-2); border-radius: 8px; }
+.community-shell .cs-aside::-webkit-scrollbar-thumb { background: var(--line-2); border-radius: 2px; }
 .community-shell .cs-main-body::-webkit-scrollbar-track,
 .community-shell .thread-shell-main::-webkit-scrollbar-track,
 .community-shell .cs-side-scroll::-webkit-scrollbar-track,
@@ -113,21 +113,11 @@ html, body { height: 100%; overflow: hidden; }
   flex: 0 1 auto;
 }
 
-/* nav: single Feed item (active by path) */
-.app-nav { display: flex; align-items: center; gap: 2px; }
-.app-nav a {
-  font-family: var(--cs-mono); font-size: 12.5px; font-weight: 500; letter-spacing: 0.02em;
-  color: var(--ink-2); padding: 7px 11px;
-  border: 1px solid transparent; border-radius: 2px;
-}
-.app-nav a:hover { color: var(--ink); background: var(--panel-2); }
-.app-nav a.active { color: var(--ink); border-color: var(--line-2); background: var(--panel-2); }
-
 /* grep-like search — same /search?q= route, tool-styled */
 .app-search {
   width: 100%; justify-self: center;
   display: flex; align-items: stretch;
-  border: 1px solid var(--line-2); border-radius: 2px;
+  border: 1px solid var(--line-3); border-radius: 2px;
   background: var(--panel-2); overflow: hidden;
 }
 .app-search .app-sigil {
@@ -137,7 +127,7 @@ html, body { height: 100%; overflow: hidden; }
 }
 .app-search input {
   flex: 1; border: 0; background: transparent; outline: none;
-  font-family: var(--cs-sans); font-size: 13.5px; color: var(--ink); padding: 7px 10px;
+  font-family: var(--cs-sans); font-size: 13px; color: var(--ink); padding: 7px 10px;
 }
 .app-search input::placeholder { color: var(--ink-3); }
 .app-search button {
@@ -157,12 +147,9 @@ html, body { height: 100%; overflow: hidden; }
   padding: 6px 8px; border-radius: 2px;
 }
 .app-login:hover { color: var(--ink); }
-.app-cta {
-  font-family: var(--cs-mono); font-size: 12.5px; font-weight: 600;
-  background: var(--red); color: #fff; border: 1px solid var(--red);
-  padding: 6px 14px; border-radius: 2px;
-}
-.app-cta:hover { filter: brightness(1.06); }
+/* .app-cta styling lives in base.css (shared button component); the compact
+   padding keeps it proportioned to the 54px command bar. */
+.app-cta { padding: 6px 14px; }
 
 /* compact "+ Start community" → /new-community */
 .app-start {
@@ -187,7 +174,7 @@ html, body { height: 100%; overflow: hidden; }
   position: absolute; top: -3px; right: -5px;
   background: var(--red); color: #fff;
   font-family: var(--cs-mono); font-size: 11px; font-weight: 700; line-height: 1;
-  padding: 1px 4px; border-radius: 8px;
+  padding: 1px 4px; border-radius: 2px;
 }
 
 /* user menu — pure-CSS <details>, modeled on .cs-row-mod */
@@ -228,9 +215,21 @@ html, body { height: 100%; overflow: hidden; }
 @media (max-width: 980px) {
   .app-topbar-inner { grid-template-columns: auto minmax(180px, 1fr) auto; }
 }
+/* Hidden at desktop widths; the ≤820px block below swaps it in for the grep field. */
+.app-search-link { display: none; }
+
 @media (max-width: 820px) {
   .app-topbar-inner { display: flex; }
   .app-search, .app-uname, .app-start { display: none; }
+  /* Search must survive the collapse: un-gated public pages are usable at phone
+     widths, and retrieval is the product promise. 40px box ≈ touch target. */
+  .app-search-link {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 40px; height: 40px; color: var(--ink-2);
+    border: 1px solid transparent; border-radius: 2px;
+  }
+  .app-search-link:hover { color: var(--ink); background: var(--panel-2); }
+  .app-search-link .app-icon { display: block; width: 16px; height: 16px; stroke: currentColor; }
 }
 
 /* --------------------------------------------------------------------------
@@ -246,8 +245,8 @@ html, body { height: 100%; overflow: hidden; }
   width: 42px; height: 42px; flex-shrink: 0;
   display: grid; place-items: center;
   font-family: var(--cs-mono); font-weight: 700; font-size: 14px;
-  color: oklch(0.85 0.01 255); background: oklch(0.36 0.012 262);
-  border: 1px solid oklch(0.42 0.012 262); border-radius: 3px;
+  color: var(--frame-ink-2); background: var(--frame-2);
+  border: 1px solid var(--frame-3); border-radius: 2px;
   position: relative;
 }
 .community-shell .cs-rail-item:hover { background: oklch(0.42 0.012 262); color: #fff; }
@@ -281,7 +280,7 @@ html, body { height: 100%; overflow: hidden; }
 .community-shell .cs-side-head-link:hover .cs-side-name { color: var(--red); }
 /* Small fixed avatar beside the name; min-width:0 lets the text column ellipsize, not the tile. */
 .community-shell .cs-side-avatar {
-  width: 30px; height: 30px; flex-shrink: 0; border-radius: 3px;
+  width: 30px; height: 30px; flex-shrink: 0; border-radius: 2px;
   object-fit: cover; border: 1px solid var(--line-2);
 }
 .community-shell .cs-side-avatar--mono {
@@ -290,7 +289,7 @@ html, body { height: 100%; overflow: hidden; }
 }
 .community-shell .cs-side-head-text { min-width: 0; display: block; }
 .community-shell .cs-side-name {
-  display: block; font-family: var(--cs-mono); font-weight: 700; font-size: 15px; color: var(--ink);
+  display: block; font-family: var(--cs-mono); font-weight: 600; font-size: 14px; color: var(--ink);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .community-shell .cs-side-slug { display: block; font-size: 11.5px; color: var(--ink-3); margin-top: 2px; }
@@ -317,7 +316,7 @@ html, body { height: 100%; overflow: hidden; }
 .community-shell .cs-item-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .community-shell .cs-item-badge {
   margin-left: auto; font-family: var(--cs-mono); font-size: 11px; font-weight: 600;
-  background: var(--red); color: #fff; padding: 0 5px; border-radius: 7px;
+  background: var(--red); color: #fff; padding: 0 5px; border-radius: 2px;
   min-width: 16px; text-align: center;
 }
 
@@ -335,7 +334,7 @@ html, body { height: 100%; overflow: hidden; }
 .community-shell .cs-main-head {
   flex-shrink: 0; display: flex; align-items: center; gap: 12px;
   padding: 10px 16px; border-bottom: 1px solid var(--line-2); background: var(--panel);
-  font-family: var(--cs-mono); font-weight: 700; font-size: 16px; color: var(--ink);
+  font-family: var(--cs-mono); font-weight: 600; font-size: 14px; color: var(--ink);
 }
 .community-shell .cs-main-body { flex: 1; overflow-y: auto; padding: 14px 18px; }
 
@@ -388,21 +387,16 @@ html, body { height: 100%; overflow: hidden; }
 .community-shell .cs-msg:hover { background: var(--panel-2); }
 .community-shell .cs-msg-avatar {
   width: 30px; height: 30px; flex-shrink: 0;
-  display: grid; place-items: center; border-radius: 3px;
+  display: grid; place-items: center; border-radius: 2px;
   font-family: var(--cs-mono); font-weight: 700; font-size: 13px;
   background: var(--panel-3); color: var(--ink-2); border: 1px solid var(--line);
 }
 .community-shell .cs-msg-body { flex: 1; min-width: 0; }
 .community-shell .cs-msg-meta { display: flex; align-items: baseline; gap: 8px; }
-.community-shell .cs-msg-author { font-weight: 600; font-size: 13.5px; color: var(--ink); }
+.community-shell .cs-msg-author { font-weight: 600; font-size: 13px; color: var(--ink); }
 .community-shell .cs-msg-time { font-family: var(--cs-mono); font-size: 11px; color: var(--ink-3); }
-.community-shell .cs-msg-time-slot { display: inline-grid; align-items: baseline; position: relative; }
-.community-shell .cs-msg-time-slot .cs-msg-time,
-.community-shell .cs-msg-time-slot .cs-msg-start { grid-area: 1 / 1; }
-.community-shell .cs-msg-time-slot .cs-msg-time { pointer-events: none; }
-.community-shell .cs-msg-time-slot .cs-msg-start { position: relative; z-index: 1; }
 .community-shell .cs-msg-text {
-  font-size: 14.5px; line-height: 1.55; color: var(--ink);
+  font-size: 14px; line-height: 1.55; color: var(--ink);
   white-space: pre-wrap; overflow-wrap: anywhere;
 }
 .community-shell .cs-msg-deleted { font-style: italic; color: var(--ink-3); }
@@ -424,20 +418,11 @@ html, body { height: 100%; overflow: hidden; }
 .community-shell .cs-msg-ref:hover { color: var(--ink); text-decoration: underline; }
 .community-shell .cs-msg-refmore { font-family: var(--cs-mono); font-size: 11px; color: var(--ink-3); margin-left: -6px; }
 
-/* "Start thread" replaces the timestamp inside the same reserved slot. */
-.community-shell .cs-msg-start { color: var(--red); opacity: 0; pointer-events: none; cursor: pointer; transition: opacity .12s ease; }
-.community-shell .cs-msg-time-slot .cs-msg-time { transition: opacity .12s ease; }
-.community-shell .cs-msg:hover .cs-msg-time-slot .cs-msg-time,
-.community-shell .cs-msg:focus-within .cs-msg-time-slot .cs-msg-time { opacity: 0; }
-.community-shell .cs-msg:hover .cs-msg-start,
-.community-shell .cs-msg:focus-within .cs-msg-start { opacity: 1; pointer-events: auto; }
-.community-shell .cs-msg-start:hover { text-decoration: underline; }
-
-/* Touch / no-hover devices: keep the actions visible (no hover to reveal them). */
-@media (hover: none) {
-  .community-shell .cs-msg-time-slot .cs-msg-time { opacity: 0; }
-  .community-shell .cs-msg-start { opacity: 1; pointer-events: auto; }
-}
+/* "Start thread" is the durable path — the product's flagship action — so it is
+   persistently visible on every eligible message: quiet ink at rest, Signal Red
+   on hover. No hover-reveal, so touch devices and keyboards get the same row. */
+.community-shell .cs-msg-start { color: var(--ink-3); }
+.community-shell .cs-msg-start:hover { color: var(--red); text-decoration: underline; }
 .community-shell .cs-msg-empty { padding: 24px 18px; color: var(--ink-3); font-size: 14px; }
 
 .community-shell .cs-composer {
@@ -445,20 +430,27 @@ html, body { height: 100%; overflow: hidden; }
 }
 .community-shell .cs-composer form { display: flex; gap: 10px; align-items: flex-end; }
 .community-shell .cs-composer textarea {
-  flex: 1; border: 1px solid var(--line-2); border-radius: 2px; background: var(--panel-2);
-  font-family: var(--cs-sans); font-size: 14.5px; color: var(--ink);
+  flex: 1; border: 1px solid var(--line-3); border-radius: 2px; background: var(--panel-2);
+  font-family: var(--cs-sans); font-size: 14px; color: var(--ink);
   padding: 9px 12px; min-height: 22px; resize: vertical; outline: none;
 }
 .community-shell .cs-composer textarea:focus { border-color: var(--red); }
-.community-shell .cs-send {
-  flex-shrink: 0; cursor: pointer; border: 1px solid var(--red); border-radius: 2px;
-  background: var(--red); color: #fff; font-family: var(--cs-sans); font-weight: 600;
-  font-size: 14px; padding: 9px 18px;
+/* .cs-send styling lives in base.css (shared button component). */
+.community-shell .cs-send { flex-shrink: 0; }
+/* Disabled while a submit is in flight: drop the Signal Red so the control reads
+   inactive, but keep readable text and a visible boundary (DESIGN.md §5). */
+.community-shell .cs-send:disabled {
+  cursor: default;
+  background: var(--panel-3); border-color: var(--line-2); color: var(--ink-3);
 }
-.community-shell .cs-send:hover { filter: brightness(1.05); }
 .community-shell .cs-composer-note {
   margin-top: 6px; font-family: var(--cs-mono); font-size: 11px; color: var(--ink-3);
 }
+/* Live-connection chip (chat_live.js). Text carries the state; colour only
+   reinforces it — off/connecting stay muted ink. */
+.community-shell .cs-live-status[data-live-state='live'] { color: var(--ok-ink); }
+.community-shell .cs-live-status[data-live-state='reconnecting'],
+.community-shell .cs-live-status[data-live-state='degraded'] { color: var(--warn-ink); }
 /* Anon / non-member prompt reuses the composer frame but lays out inline. */
 .community-shell .cs-composer-prompt {
   display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
@@ -487,7 +479,7 @@ html, body { height: 100%; overflow: hidden; }
   display: flex; align-items: center; gap: 9px; margin: 0;
 }
 .community-shell .fh-title .sec { color: var(--red); }
-.community-shell .fh-desc { color: var(--ink-2); font-size: 13.5px; margin-top: 4px; max-width: 70ch; }
+.community-shell .fh-desc { color: var(--ink-2); font-size: 13px; margin-top: 4px; max-width: 70ch; }
 .community-shell .fh-actions { margin-left: auto; display: flex; gap: 8px; flex-shrink: 0; }
 
 .community-shell .ftabs { display: flex; gap: 2px; margin-top: 14px; }
@@ -498,16 +490,9 @@ html, body { height: 100%; overflow: hidden; }
 .community-shell .ftabs a:hover { color: var(--ink); }
 .community-shell .ftabs a.active { color: var(--ink); border-bottom-color: var(--red); }
 
-/* Shared button (header + rail actions). */
-.community-shell .btn {
-  display: inline-flex; align-items: center; gap: 5px; cursor: pointer;
-  font-family: var(--cs-sans); font-weight: 600; font-size: 13px; padding: 7px 13px;
-  border: 1px solid var(--line-2); border-radius: 2px; background: var(--panel); color: var(--ink-2);
-}
-.community-shell .btn:hover { background: var(--panel-3); border-color: var(--ink-3); }
-.community-shell .btn.sm { padding: 5px 10px; font-size: 11.5px; }
-.community-shell .btn.primary { background: var(--red); border-color: var(--red); color: #fff; }
-.community-shell .btn.primary:hover { filter: brightness(1.05); }
+/* Shared button (header + rail actions) — styling lives in base.css; only the
+   compact and full-width layout variants are shell-specific. */
+.community-shell .btn.sm { padding: 5px 10px; }
 .community-shell .btn.block { display: flex; width: 100%; justify-content: center; }
 
 /* Thread list — cs-flush zeroes the .cs-main-body gutter so rows go edge-to-edge. */
@@ -543,9 +528,11 @@ html, body { height: 100%; overflow: hidden; }
 }
 .community-shell .ft-meta a { color: var(--ink-3); }
 .community-shell .ft-meta a:hover { color: var(--red); }
-.community-shell .ft-domain {
+/* a.ft-domain matches the .ft-meta link rules' specificity and sits later in the
+   file, so it wins by order — no !important. */
+.community-shell .ft-meta a.ft-domain {
   background: var(--panel-3); border: 1px solid var(--line); border-radius: 2px;
-  padding: 0 6px; color: var(--ink-2) !important;
+  padding: 0 6px; color: var(--ink-2);
 }
 
 /* ⋯ moderation menu — SSR <details>; the panel floats so it doesn't reflow the row. */
@@ -559,8 +546,8 @@ html, body { height: 100%; overflow: hidden; }
 .community-shell .cs-row-mod-menu {
   position: absolute; right: 0; top: 28px; z-index: var(--z-dropdown);
   display: flex; flex-direction: column; gap: 6px; align-items: flex-end;
-  background: var(--panel); border: 1px solid var(--line-2); border-radius: 3px;
-  padding: 8px; box-shadow: 0 6px 20px rgba(0,0,0,0.14);
+  background: var(--panel); border: 1px solid var(--line-2); border-radius: 2px;
+  padding: 8px; box-shadow: 0 6px 20px oklch(0.30 0.01 262 / 0.16);
 }
 
 /* Pager. */
@@ -586,7 +573,7 @@ html, body { height: 100%; overflow: hidden; }
 .community-shell .ca-secondary-link a { color: var(--ink-3); }
 .community-shell .ca-rules { font-size: 12.5px; color: var(--ink-2); white-space: pre-wrap; line-height: 1.6; }
 .community-shell .ca-note { font-size: 12.5px; color: var(--ink-3); line-height: 1.5; margin: 0; }
-.community-shell .member { display: flex; align-items: center; gap: 9px; padding: 4px 0; font-size: 13.5px; color: var(--ink-2); }
+.community-shell .member { display: flex; align-items: center; gap: 9px; padding: 4px 0; font-size: 13px; color: var(--ink-2); }
 .community-shell .member a { color: var(--ink-2); }
 .community-shell .member .role { margin-left: auto; }
 /* .role badge baseline (mod/admin/op variants) lives in base.css — shared by every
@@ -639,9 +626,9 @@ html, body { height: 100%; overflow: hidden; }
 }
 .community-shell .th-meta a { color: var(--ink-3); }
 .community-shell .th-meta a:hover { color: var(--red); }
-.community-shell .th-meta .ft-domain {
+.community-shell .th-meta a.ft-domain {
   background: var(--panel-3); border: 1px solid var(--line); border-radius: 2px;
-  padding: 0 6px; color: var(--ink-2) !important;
+  padding: 0 6px; color: var(--ink-2);
 }
 /* Post mod/owner actions: their own compact left-aligned row under the meta (no far-right float). */
 .community-shell .th-actions { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-top: 12px; }
@@ -669,7 +656,7 @@ html, body { height: 100%; overflow: hidden; }
 .community-shell .th-img { margin-top: 18px; }
 .community-shell .th-img img {
   max-width: 100%; max-height: 700px; object-fit: contain;
-  border: 1px solid var(--line-2); border-radius: 3px; background: var(--panel-3);
+  border: 1px solid var(--line-2); border-radius: 2px; background: var(--panel-3);
 }
 .community-shell .th-linkrow { margin-top: 16px; }
 
@@ -697,14 +684,14 @@ html, body { height: 100%; overflow: hidden; }
 /* Composer (top-level + inline reply): a framed block with a borderless textarea and a
    footer action bar, so it reads as a structured input rather than a flat empty box. */
 .community-shell .ct-composer {
-  margin: 0 0 22px; border: 1px solid var(--line-2); border-radius: 3px;
+  margin: 0 0 22px; border: 1px solid var(--line-3); border-radius: 2px;
   background: var(--panel); overflow: hidden;
 }
 /* Focus cue matches every other input in the system: Signal Red, not a grey shift. */
 .community-shell .ct-composer:focus-within { border-color: var(--red); }
 .community-shell .ct-composer textarea {
   display: block; width: 100%; box-sizing: border-box; resize: vertical; min-height: 62px;
-  font-family: var(--cs-sans); font-size: 13.5px; line-height: 1.55; color: var(--ink);
+  font-family: var(--cs-sans); font-size: 14px; line-height: 1.55; color: var(--ink);
   background: transparent; border: 0; padding: 12px 14px;
 }
 .community-shell .ct-composer textarea:focus { outline: none; }
@@ -715,8 +702,8 @@ html, body { height: 100%; overflow: hidden; }
 .community-shell .ct-reply { margin: 10px 0 6px; }
 .community-shell .ct-join {
   display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
-  background: var(--panel-2); border: 1px solid var(--line-2); border-radius: 3px;
-  padding: 13px 15px; margin-bottom: 22px; font-size: 13.5px; color: var(--ink-2);
+  background: var(--panel-2); border: 1px solid var(--line-2); border-radius: 2px;
+  padding: 13px 15px; margin-bottom: 22px; font-size: 13px; color: var(--ink-2);
 }
 .community-shell .ct-join a { color: var(--red); }
 .community-shell .ct-join form.inline { display: inline; margin: 0; }
@@ -734,15 +721,16 @@ html, body { height: 100%; overflow: hidden; }
   display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
   margin-top: 8px; font-family: var(--cs-mono); font-size: 11px; color: var(--ink-3);
 }
-/* Inline action buttons — small mono text; Tailwind Preflight already zeroes border/bg. */
+/* Inline action buttons — small mono text. Self-contained reset: no Tailwind
+   Preflight loads on App chrome, so zero the native <button> chrome here. */
 .community-shell .ct-act, .community-shell .ct-collapse {
   font-family: var(--cs-mono); font-size: 11px; cursor: pointer; color: var(--ink-3);
-  background: none; padding: 0; line-height: 1;
+  appearance: none; border: 0; background: none; padding: 0; line-height: 1;
 }
 .community-shell .ct-collapse { flex-shrink: 0; font-size: 11px; color: var(--ink-3); }
 .community-shell .ct-act:hover, .community-shell .ct-collapse:hover { color: var(--ink); }
 .community-shell .ct-act-danger { color: var(--red); }
-.community-shell .ct-act-mod { color: oklch(0.52 0.12 70); }
+.community-shell .ct-act-mod { color: var(--warn-ink); }
 .community-shell .ct-act-admin { color: var(--red); }
 
 /* Nested replies — one light guide line, small fixed indent, capped after depth 3
@@ -776,7 +764,7 @@ html, body { height: 100%; overflow: hidden; }
    .cs-rail-item; the + is outlined to read as an action, not a community. */
 .community-shell .cs-rail-home { font-size: 18px; }
 .community-shell .cs-rail-add {
-  background: transparent; border-style: dashed; color: oklch(0.72 0.01 255); font-size: 20px;
+  background: transparent; border-style: dashed; color: var(--frame-ink-2); font-size: 18px;
 }
 .community-shell .cs-rail-add:hover { background: oklch(0.42 0.012 262); color: #fff; }
 
@@ -797,9 +785,9 @@ html, body { height: 100%; overflow: hidden; }
 /* Following-empty state — title + CTA row, on top of the shared .cs-empty box. */
 .community-shell .feed-empty { text-align: left; max-width: 56ch; margin: 0 auto; }
 .community-shell .feed-empty .fe-title {
-  font-family: var(--cs-mono); font-weight: 700; font-size: 16px; color: var(--ink); margin: 0 0 8px;
+  font-family: var(--cs-mono); font-weight: 600; font-size: 14px; color: var(--ink); margin: 0 0 8px;
 }
-.community-shell .feed-empty p { color: var(--ink-2); font-size: 13.5px; line-height: 1.6; margin: 0 0 16px; }
+.community-shell .feed-empty p { color: var(--ink-2); font-size: 13px; line-height: 1.6; margin: 0 0 16px; }
 .community-shell .feed-empty .fe-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 
 @media (max-width: 1180px) {
