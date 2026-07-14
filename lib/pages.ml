@@ -1079,13 +1079,20 @@ let community_channel_shell_page ?user ?realtime_token ?(noindex=false) ~is_memb
       messages_html
       composer
   in
+  let presence_pane =
+    "<div class='cs-presence' id='chat-presence'>\
+       <div class='ca-label' id='chat-presence-heading'>In this channel</div>\
+       <div class='cs-presence-status' id='chat-presence-status'>Connecting&#8230;</div>\
+       <ul class='cs-presence-list' id='chat-presence-list'></ul>\
+     </div>"
+  in
   let title = Printf.sprintf "#%s · %s" channel.name community.name in
-  let head_extra = 
+  let head_extra =
     "<script src='/static/js/phoenix.js' defer></script>\
      <script src='/static/js/chat_live.js' defer></script>"
   in
   Components.community_shell ?user ~noindex ~request ~rail_communities ~active_slug:community.slug
-    ~title ~community ~nav_groups ~main ~head_extra ()
+    ~title ~community ~nav_groups ~main ~right_pane:presence_pane ~head_extra ()
 
 (* /c/:slug/t/:post_id-:post_slug — the canonical thread view, inside the persistent shell.
    Replaces the legacy warm-card post_page for normal threads (post_page stays only as the

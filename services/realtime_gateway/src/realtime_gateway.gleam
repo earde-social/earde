@@ -1,5 +1,6 @@
 import beryl
 import beryl/channel
+import beryl/presence
 import beryl/socket
 import beryl/transport/mist as ws
 import beryl/wire
@@ -16,6 +17,7 @@ import gleam/io
 import gleam/json
 import gleam/list
 import gleam/option.{None}
+import gleam/order
 import gleam/result
 import gleam/string
 import mist.{type Connection, type ResponseData}
@@ -44,6 +46,9 @@ fn unix_now() -> Int
 @external(erlang, "realtime_gateway_ffi", "getenv")
 fn getenv(name: String) -> Result(String, Nil)
 
+@external(erlang, "realtime_gateway_ffi", "safely")
+fn safely(operation: fn() -> Nil) -> Result(Nil, Nil)
+
 type PublishRequest {
   PublishRequest(topic: String, event: String, payload: json.Json)
 }
@@ -52,8 +57,12 @@ pub fn main() -> Nil {
   let assert Ok(channels) = beryl.start(beryl.config(wire.phoenix_codec()))
   io.println("beryl started")
 
+  let assert Ok(tracker) =
+    presence.start(presence.default_config("realtime_gateway"))
+  io.println("presence started")
+
   let assert Ok(_registration) =
-    beryl.register(channels, "chan:*", chat_channel())
+    beryl.register(channels, "chan:*", chat_channel(channels, tracker))
   io.println("registered channel pattern chan:*")
 
   let assert Ok(_server) =
@@ -69,13 +78,17 @@ pub fn main() -> Nil {
   process.sleep_forever()
 }
 
-fn chat_channel() -> channel.Channel(AuthClaims, Nil) {
+fn chat_channel(
+  channels: beryl.Channels,
+  tracker: presence.Presence,
+) -> channel.Channel(AuthClaims, Nil) {
   channel.new(fn(topic: String, _payload, socket: socket.Socket(AuthClaims)) {
     let claims = socket.get_assigns(socket)
 
     case claims.topic == topic {
       True -> {
         io.println("client joined topic " <> topic)
+        track_presence(channels, tracker, topic, claims, socket.id(socket))
         channel.JoinOk(reply: None, socket: socket)
       }
 
@@ -95,6 +108,127 @@ fn chat_channel() -> channel.Channel(AuthClaims, Nil) {
       }
     }
   })
+  |> channel.with_terminate(fn(_reason, socket: socket.Socket(AuthClaims)) {
+    let claims = socket.get_assigns(socket)
+    untrack_presence(channels, tracker, claims.topic, socket.id(socket))
+  })
+}
+
+pub type PresenceUser {
+  PresenceUser(user_id: Int, username: String)
+}
+
+fn track_presence(
+  channels: beryl.Channels,
+  tracker: presence.Presence,
+  topic: String,
+  claims: AuthClaims,
+  socket_id: String,
+) -> Nil {
+  case
+    safely(fn() {
+      let _ =
+        presence.track(
+          tracker,
+          topic,
+          int.to_string(claims.user_id),
+          socket_id,
+          json.object([#("username", json.string(claims.username))]),
+        )
+      broadcast_presence_list(channels, tracker, topic)
+    })
+  {
+    Ok(Nil) -> Nil
+    Error(Nil) -> io.println("presence track failed for topic " <> topic)
+  }
+}
+
+fn untrack_presence(
+  channels: beryl.Channels,
+  tracker: presence.Presence,
+  topic: String,
+  socket_id: String,
+) -> Nil {
+  case
+    safely(fn() {
+      presence.untrack_all(tracker, socket_id)
+      broadcast_presence_list(channels, tracker, topic)
+    })
+  {
+    Ok(Nil) -> Nil
+    Error(Nil) -> io.println("presence untrack failed for topic " <> topic)
+  }
+}
+
+fn broadcast_presence_list(
+  channels: beryl.Channels,
+  tracker: presence.Presence,
+  topic: String,
+) -> Nil {
+  let users =
+    presence.list(tracker, topic)
+    |> list.filter_map(presence_entry_user)
+    |> unique_presence_users
+
+  beryl.broadcast(
+    channels,
+    topic,
+    "presence_list",
+    presence_list_payload(users),
+  )
+}
+
+fn presence_entry_user(
+  entry: presence.PresenceEntry,
+) -> Result(PresenceUser, Nil) {
+  case int.parse(entry.key), decode_presence_username(entry.meta) {
+    Ok(user_id), Ok(username) -> Ok(PresenceUser(user_id, username))
+    _, _ -> Error(Nil)
+  }
+}
+
+fn decode_presence_username(meta: json.Json) -> Result(String, Nil) {
+  let decoder = {
+    use username <- decode.field("username", decode.string)
+    decode.success(username)
+  }
+
+  json.parse(from: json.to_string(meta), using: decoder)
+  |> result.map_error(fn(_) { Nil })
+}
+
+pub fn unique_presence_users(users: List(PresenceUser)) -> List(PresenceUser) {
+  users
+  |> list.fold([], fn(seen, user) {
+    case
+      list.any(seen, fn(kept: PresenceUser) { kept.user_id == user.user_id })
+    {
+      True -> seen
+      False -> [user, ..seen]
+    }
+  })
+  |> list.sort(fn(a, b) {
+    case
+      string.compare(string.lowercase(a.username), string.lowercase(b.username))
+    {
+      order.Eq -> int.compare(a.user_id, b.user_id)
+      username_order -> username_order
+    }
+  })
+}
+
+pub fn presence_list_payload(users: List(PresenceUser)) -> json.Json {
+  json.object([
+    #(
+      "users",
+      json.array(users, fn(user) {
+        json.object([
+          #("user_id", json.int(user.user_id)),
+          #("username", json.string(user.username)),
+        ])
+      }),
+    ),
+  ])
 }
 
 fn handle_request(

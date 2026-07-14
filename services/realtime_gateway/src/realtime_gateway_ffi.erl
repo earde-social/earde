@@ -1,5 +1,13 @@
 -module(realtime_gateway_ffi).
--export([unix_now/0, getenv/1]).
+-export([unix_now/0, getenv/1, safely/1]).
+
+safely(F) ->
+    try
+        F(),
+        {ok, nil}
+    catch
+        _:_ -> {error, nil}
+    end.
 
 unix_now() ->
     erlang:system_time(second).
