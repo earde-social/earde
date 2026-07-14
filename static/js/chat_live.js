@@ -87,15 +87,86 @@
     }
   }
 
+  const presenceHeading = document.getElementById("chat-presence-heading");
+  const presenceStatus = document.getElementById("chat-presence-status");
+  const presenceList = document.getElementById("chat-presence-list");
+  const hasPresencePane = Boolean(presenceHeading && presenceStatus && presenceList);
+
+  function setPresenceStatus(text) {
+    if (!hasPresencePane) {
+      return;
+    }
+
+    try {
+      presenceList.textContent = "";
+      presenceStatus.textContent = text;
+      presenceStatus.hidden = false;
+    } catch (err) {
+      console.warn("[chat_live] presence status failed", err);
+    }
+  }
+
+  function renderPresenceList(payload) {
+    if (!hasPresencePane) {
+      return;
+    }
+
+    try {
+      const users =
+        payload && Array.isArray(payload.users) ? payload.users : [];
+
+      presenceHeading.textContent = `In this channel — ${users.length}`;
+      presenceList.textContent = "";
+
+      if (users.length === 0) {
+        presenceStatus.textContent = "No one is here";
+        presenceStatus.hidden = false;
+        return;
+      }
+
+      presenceStatus.hidden = true;
+
+      users.forEach((user) => {
+        const username =
+          user && typeof user.username === "string" ? user.username : "";
+
+        if (username === "") {
+          return;
+        }
+
+        const row = document.createElement("li");
+        row.className = "cs-presence-user";
+
+        const avatar = document.createElement("span");
+        avatar.className = "cs-presence-avatar";
+        avatar.textContent = username[0].toUpperCase();
+
+        const link = document.createElement("a");
+        link.className = "cs-presence-name";
+        link.href = `/u/${encodeURIComponent(username)}`;
+        link.textContent = username;
+
+        row.appendChild(avatar);
+        row.appendChild(link);
+        presenceList.appendChild(row);
+      });
+    } catch (err) {
+      console.warn("[chat_live] presence render failed", err);
+      setPresenceStatus("Presence unavailable");
+    }
+  }
+
   const channelId = root.dataset.channelId;
 
   if (!channelId) {
     console.warn("[chat_live] missing data-channel-id");
+    setPresenceStatus("Presence unavailable");
     return;
   }
 
   if (!window.Phoenix || !window.Phoenix.Socket) {
     console.warn("[chat_live] phoenix.js not loaded");
+    setPresenceStatus("Presence unavailable");
     return;
   }
 
@@ -106,11 +177,13 @@
 
   if (!socketUrl) {
     console.warn("[chat_live] missing data-socket-url");
+    setPresenceStatus("Presence unavailable");
     return;
   }
 
   if (!token) {
     console.warn("[chat_live] missing data-signed-token");
+    setPresenceStatus("Presence unavailable");
     return;
   }
 
@@ -154,10 +227,12 @@
 
   socket.onError(() => {
     console.warn("[chat_live] socket error");
+    setPresenceStatus("Presence unavailable");
   });
 
   socket.onClose(() => {
     console.warn("[chat_live] socket closed");
+    setPresenceStatus("Presence unavailable");
   });
 
   socket.connect();
@@ -175,6 +250,7 @@
     .receive("error", (resp) => {
       console.warn("[chat_live] join failed", resp);
       root.dataset.liveStatus = "error";
+      setPresenceStatus("Presence unavailable");
     });
 
   function appendMessage(payload, options = {}) {
@@ -315,6 +391,10 @@
     console.log("[chat_live] new_msg", payload);
     const shouldStayAtBottom = isNearBottom(chatScroller);
     appendMessage(payload, { wasNearBottom: shouldStayAtBottom });
+  });
+
+  channel.on("presence_list", (payload) => {
+    renderPresenceList(payload);
   });
 
   window.eardeLiveChat = {
