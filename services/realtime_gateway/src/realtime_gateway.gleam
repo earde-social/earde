@@ -52,7 +52,8 @@ pub fn main() -> Nil {
   let assert Ok(channels) = beryl.start(beryl.config(wire.phoenix_codec()))
   io.println("beryl started")
 
-  let assert Ok(Nil) = beryl.register(channels, "chan:*", chat_channel())
+  let assert Ok(_registration) =
+    beryl.register(channels, "chan:*", chat_channel())
   io.println("registered channel pattern chan:*")
 
   let assert Ok(_server) =
@@ -122,7 +123,7 @@ fn ws_config() {
 
       Error(Nil) -> {
         io.println("realtime auth rejected: missing token")
-        Error(Nil)
+        Error(ws.ConnectRejected)
       }
     }
   })
@@ -319,9 +320,9 @@ fn auth_error_to_string(error: AuthError) -> String {
   }
 }
 
-fn reject_auth(error: AuthError) -> Result(AuthClaims, Nil) {
+fn reject_auth(error: AuthError) -> Result(AuthClaims, ws.ConnectError) {
   io.println("realtime auth rejected: " <> auth_error_to_string(error))
-  Error(Nil)
+  Error(ws.ConnectRejected)
 }
 
 fn text(status: Int, body: String) -> Response(ResponseData) {
