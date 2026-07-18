@@ -925,7 +925,39 @@ let community_channel_handler request =
         | Ok (Some channel) ->
             let%lwt channels = match%lwt Db.get_channels_by_community db community.id with Ok cs -> Lwt.return cs | Error _ -> Lwt.return [] in
             let%lwt sections = match%lwt Db.get_sections_by_community db community.id with Ok ss -> Lwt.return ss | Error _ -> Lwt.return [] in
-            let%lwt messages = match%lwt Db.get_recent_messages_with_authors db channel.id 50 with Ok ms -> Lwt.return ms | Error _ -> Lwt.return [] in
+            (* Reverse navigation (?source_thread=<post_id>): instead of the last-50 tail,
+               SSR a bounded window anchored on the promoted thread's earliest surviving
+               source message. Promotion only ever selects from a ±10-message window
+               around the seed, so 25-before + 60-after always covers the full span plus
+               tail context — deliberately NOT general chat-history pagination. Any
+               failure (bad id, unknown thread, thread from another channel, no surviving
+               sources) falls back silently to the normal page. *)
+            let%lwt source_focus, messages =
+              let normal () =
+                let%lwt ms = match%lwt Db.get_recent_messages_with_authors db channel.id 50 with Ok ms -> Lwt.return ms | Error _ -> Lwt.return [] in
+                Lwt.return (None, ms) in
+              match Pages.Start_thread.parse_source_thread (Dream.query request "source_thread") with
+              | None -> normal ()
+              | Some post_id ->
+                  (match%lwt Db.get_source_span_for_thread db post_id with
+                   | Ok (Some (source_channel_id, post_title, (first :: _ as ids))) when source_channel_id = channel.id ->
+                       let latest = List.fold_left (fun _ id -> id) first ids in
+                       let%lwt before = match%lwt Db.get_messages_before_id_with_authors db channel.id first 25 with Ok l -> Lwt.return l | Error _ -> Lwt.return [] in
+                       let%lwt after = match%lwt Db.get_messages_after_id_with_authors db channel.id (Int64.sub first 1L) 60 with Ok l -> Lwt.return l | Error _ -> Lwt.return [] in
+                       (* Trim the tail to ~25 rows past the last source message so the
+                          window stays tight even when the span sits deep in history. *)
+                       let rec trim_after kept = function
+                         | [] -> List.rev kept
+                         | ((m : Db.chat_message), _) as row :: rest ->
+                             if m.id <= latest then trim_after (row :: kept) rest
+                             else
+                               let rec take n acc = function
+                                 | [] -> List.rev acc
+                                 | _ when n <= 0 -> List.rev acc
+                                 | r :: rs -> take (n - 1) (r :: acc) rs in
+                               List.rev_append kept (row :: take 24 [] rest) in
+                       Lwt.return (Some (post_id, post_title, ids), before @ trim_after [] after)
+                   | _ -> normal ()) in
             let%lwt is_member = if user_id > 0 then (match%lwt Db.is_member db user_id community.id with Ok b -> Lwt.return b | Error _ -> Lwt.return false) else Lwt.return false in
             let%lwt rail_communities = if user_id > 0 then (match%lwt Db.get_user_communities db user_id with Ok cs -> Lwt.return cs | Error _ -> Lwt.return []) else Lwt.return [] in
             (* All thread-source links for the channel -> the renderer marks seeds
@@ -944,7 +976,7 @@ let community_channel_handler request =
                     ~topic:realtime_topic
               | _ -> None
             in
-            Dream.html (Pages.community_channel_shell_page ?user ?realtime_token ~noindex:(child_noindex community ~child_indexable:channel.Db.indexable) ~is_member ~can_start ~thread_links ~rail_communities ~channels ~sections ~channel ~messages ~community request)
+            Dream.html (Pages.community_channel_shell_page ?user ?realtime_token ~noindex:(child_noindex community ~child_indexable:channel.Db.indexable) ~is_member ~can_start ~thread_links ?source_focus ~rail_communities ~channels ~sections ~channel ~messages ~community request)
   )
 
 let int64_param_default name default request =
@@ -1243,11 +1275,12 @@ let start_thread_form_handler request =
                                        let%lwt sections = (match%lwt Db.get_sections_by_community db community.id with Ok ss -> Lwt.return ss | Error _ -> Lwt.return []) in
                                        (* Exclude soft-deleted from context; the seed is guaranteed non-deleted above. *)
                                        let candidates = List.filter (fun ((m : Db.chat_message), _) -> m.deleted_at = None) (before @ seed_and_after) in
-                                       let seed_author = match seed_and_after with ((m : Db.chat_message), a) :: _ when m.id = message_id -> a | _ -> None in
                                        let default_title = Pages.Start_thread.derive_title seed.content in
-                                       let default_body = Pages.Start_thread.derive_body ~channel_name:channel.name [(Option.value seed_author ~default:"", seed.content)] in
+                                       (* The introduction starts EMPTY — no generated transcript. The selected
+                                          messages render on the thread from their persisted relations; the
+                                          textarea carries only text the curator deliberately writes. *)
                                        let def_section_id = default_thread_section_id sections in
-                                       Dream.html (Pages.start_thread_form ?user ~community ~channel ~seed_id:message_id ~candidates ~sections ~default_section_id:def_section_id ~default_title ~default_body request)))))))
+                                       Dream.html (Pages.start_thread_form ?user ~community ~channel ~seed_id:message_id ~candidates ~sections ~default_section_id:def_section_id ~default_title ~default_body:"" request)))))))
 
 (* POST same path — validate everything server-side (never trust the client), force the
    seed into the source set, then create the thread + provenance atomically. *)
@@ -2280,9 +2313,30 @@ let view_thread_handler request =
           let%lwt sections = match%lwt Db.get_sections_with_stats db post.community_id with
             | Ok stats -> Lwt.return (List.map (fun ((s : Db.community_section), _, _) -> s) stats)
             | Error _ -> Lwt.return [] in
-          (* Source attribution for threads started from chat. Loaded for every thread;
-             the renderer shows nothing when there is no source (normal post). *)
-          let%lwt thread_source = match%lwt Db.get_thread_source db post.id with Ok ts -> Lwt.return (Some ts) | Error _ -> Lwt.return None in
+          (* Promoted-conversation provenance, viewer-scoped. The DB returns raw rows; the
+             VIEWER-visibility decision happens here: the source conversation is shown iff
+             this viewer may read the source channel's community (can_view_community — the
+             same predicate that gates the channel page itself), otherwise only a neutral
+             Ts_private notice renders. Indexability plays no role: it is SEO-only and the
+             thread's own noindex already follows the forum rules (thread_noindex above).
+             In practice the source community IS the thread's community (promotion never
+             crosses communities), and this viewer already passed that gate — the
+             cross-community branch is defensive and fails closed to Ts_private. *)
+          let%lwt thread_source =
+            match%lwt Db.get_thread_source db post.id with
+            | Error _ | Ok (None, []) -> Lwt.return None
+            | Ok (channel_opt, msgs) ->
+                (match channel_opt with
+                 | None -> Lwt.return (Some (Pages.Ts_visible (None, msgs)))
+                 | Some (cslug, cname, src_community_id) ->
+                     if src_community_id = post.community_id then
+                       Lwt.return (Some (Pages.Ts_visible (Some (cslug, cname), msgs)))
+                     else
+                       (match%lwt Db.get_community_by_id db src_community_id with
+                        | Ok (Some src_community) ->
+                            let%lwt src_ok = can_view_community db ~user_id:viewer_id ~is_admin src_community in
+                            Lwt.return (Some (if src_ok then Pages.Ts_visible (Some (cslug, cname), msgs) else Pages.Ts_private))
+                        | _ -> Lwt.return (Some Pages.Ts_private))) in
           (* Fallback community kept for parity with view_post_handler; in practice the record exists. *)
           let community_for_page : Db.community = match community_res with
             | Ok (Some a) -> a

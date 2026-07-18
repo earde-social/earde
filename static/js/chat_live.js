@@ -43,7 +43,59 @@
   }
 
   const chatScroller = getChatScroller();
-  scrollToBottomSoon(chatScroller);
+
+  // Reverse navigation (?source_thread=…): the server renders the anchored window plus
+  // data-source-anchor-id / data-source-highlight-ids. Scroll to the first source
+  // message instead of the bottom, flash every loaded source row as one group, then
+  // return to completely normal chat behavior. Rows missing from the window (deleted or
+  // out of range) are skipped silently.
+  const sourceAnchorId = root.dataset.sourceAnchorId || "";
+  let inSourceFocus = false;
+
+  if (sourceAnchorId !== "") {
+    const anchorRow = root.querySelector(
+      `[data-message-id="${sourceAnchorId}"]`
+    );
+
+    if (anchorRow) {
+      inSourceFocus = true;
+
+      const highlightIds = (root.dataset.sourceHighlightIds || "")
+        .split(",")
+        .filter(Boolean);
+
+      const highlighted = [];
+      highlightIds.forEach((id) => {
+        const row = root.querySelector(`[data-message-id="${id}"]`);
+        if (row) {
+          row.classList.add("cs-msg--source-flash");
+          highlighted.push(row);
+        }
+      });
+
+      // A per-message "view in chat" link carries #msg-<id>; honor that specific
+      // target when it is loaded, otherwise center the first source message.
+      let scrollTarget = anchorRow;
+      if (/^#msg-\d+$/.test(window.location.hash)) {
+        const hashRow = document.getElementById(window.location.hash.slice(1));
+        if (hashRow) {
+          scrollTarget = hashRow;
+        }
+      }
+
+      requestAnimationFrame(() => {
+        scrollTarget.scrollIntoView({ block: "center" });
+      });
+
+      window.setTimeout(() => {
+        highlighted.forEach((row) => row.classList.remove("cs-msg--source-flash"));
+      }, 4000);
+    }
+  }
+
+  if (!inSourceFocus) {
+    scrollToBottomSoon(chatScroller);
+  }
 
   const composerForm = document.querySelector(".cs-composer form[action='/messages']");
 

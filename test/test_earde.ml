@@ -14,10 +14,6 @@ let check_title name expected content =
   Alcotest.test_case name `Quick (fun () ->
       Alcotest.(check string) name expected (ST.derive_title content))
 
-let check_body name expected ~channel_name msgs =
-  Alcotest.test_case name `Quick (fun () ->
-      Alcotest.(check string) name expected (ST.derive_body ~channel_name msgs))
-
 let check_ids name expected form =
   Alcotest.test_case name `Quick (fun () ->
       Alcotest.(check (list int64)) name expected (ST.parse_selected_ids form))
@@ -37,6 +33,35 @@ let marker_str = function
 let check_marker name expected links =
   Alcotest.test_case name `Quick (fun () ->
       Alcotest.(check string) name expected (marker_str (ST.classify_message_links links)))
+
+(* Reverse-navigation query-parameter parse: strict positive ints only. *)
+let check_src_thread name expected raw =
+  Alcotest.test_case name `Quick (fun () ->
+      Alcotest.(check (option int)) name expected (ST.parse_source_thread raw))
+
+(* data-source-highlight-ids serialization: digits and commas only. *)
+let check_hl name expected ids =
+  Alcotest.test_case name `Quick (fun () ->
+      Alcotest.(check string) name expected (ST.highlight_ids_attr ids))
+
+(* Compact timestamp truncations of Postgres timestamp text. *)
+let check_ts name expected f raw =
+  Alcotest.test_case name `Quick (fun () ->
+      Alcotest.(check string) name expected (f raw))
+
+(* Promoted-conversation provenance summary — a source-row constructor keeps the cases
+   readable; summaries render as a stable string for a single assertion per case. *)
+let sm ?(seed = false) ?(deleted = false) ~id ~author ~at content : Earde.Db.thread_source_msg =
+  { Earde.Db.sm_id = Int64.of_int id; sm_author = author; sm_content = content;
+    sm_created_at = at; sm_is_seed = seed; sm_deleted = deleted }
+
+let summary_str (s : ST.source_summary) =
+  Printf.sprintf "avail:%d unavail:%d parts:%d range:%s"
+    s.ST.ss_available s.ST.ss_unavailable s.ST.ss_participants s.ST.ss_date_range
+
+let check_summary name expected msgs =
+  Alcotest.test_case name `Quick (fun () ->
+      Alcotest.(check string) name expected (summary_str (ST.summarize_source msgs)))
 
 (* Image src gate — pure, no DB. Local upload paths and http(s) pass; everything dangerous
    collapses to "#"; passed values are always html-escaped so they can't break the attribute. *)
@@ -125,12 +150,6 @@ let () =
         ; check_title "no boundary" "just a phrase" "just a phrase"
         ; check_title "trimmed" "spaced" "   spaced.   "
         ] )
-      (* Body prefill: header + markdown-ish quote block; tombstoned author -> [deleted]. *)
-    ; ( "start_thread_body"
-      , [ check_body "header only" "Started from a chat discussion in #general.\n" ~channel_name:"general" []
-        ; check_body "one quote" "Started from a chat discussion in #general.\n\nAlice:\n\n> hi" ~channel_name:"general" [("Alice", "hi")]
-        ; check_body "deleted author" "Started from a chat discussion in #x.\n\n[deleted]:\n\n> msg" ~channel_name:"x" [("", "msg")]
-        ] )
       (* Checkbox field parsing: msg_<id> only, deduped + sorted, bad ids dropped. *)
     ; ( "start_thread_parse_ids"
       , [ check_ids "basic" [10L; 20L] [("msg_10", "on"); ("msg_20", "on")]
@@ -146,12 +165,64 @@ let () =
         ; check_norm "caps to max-1" [1L; 2L; 3L; 4L] ~seed:99L ~max_total:5 ~valid:[1L; 2L; 3L; 4L; 5L; 6L] [6L; 5L; 4L; 3L; 2L; 1L]
         ; check_norm "dedup" [2L] ~seed:1L ~max_total:10 ~valid:[2L] [2L; 2L; 2L]
         ] )
-      (* Channel-row marker: seed wins; else most-recent reference is target with count. *)
+      (* Channel-row marker: seed wins; else most-recent reference is target with count.
+         (The visible copy — "Started thread →" / "Included in thread →" — lives in the
+         channel renderer; classification is what's pure and covered here.) *)
     ; ( "start_thread_marker"
       , [ check_marker "no links" "none" []
         ; check_marker "seed wins over refs" "seed:7:Seed thread" [(3, "Ctx thread", false); (7, "Seed thread", true)]
         ; check_marker "single reference" "ref:5:Only ref:1" [(5, "Only ref", false)]
         ; check_marker "multi reference picks highest post id" "ref:9:Recent:3" [(4, "Old", false); (9, "Recent", false); (6, "Mid", false)]
+        ] )
+      (* ?source_thread= parse: strict positive int; anything else means "no focus". *)
+    ; ( "source_thread_param"
+      , [ check_src_thread "absent" None None
+        ; check_src_thread "valid" (Some 42) (Some "42")
+        ; check_src_thread "trimmed" (Some 7) (Some " 7 ")
+        ; check_src_thread "zero rejected" None (Some "0")
+        ; check_src_thread "negative rejected" None (Some "-3")
+        ; check_src_thread "junk rejected" None (Some "abc")
+        ; check_src_thread "injection rejected" None (Some "42'/><script>")
+        ; check_src_thread "overflow rejected" None (Some "99999999999999999999999")
+        ] )
+      (* Highlight-id serialization: attribute-safe digits + commas, order preserved. *)
+    ; ( "highlight_ids_attr"
+      , [ check_hl "empty" "" []
+        ; check_hl "single" "12" [12L]
+        ; check_hl "ordered many" "3,7,20" [3L; 7L; 20L]
+        ] )
+      (* Timestamp truncations: date / minute prefixes; short input passes through. *)
+    ; ( "source_timestamps"
+      , [ check_ts "date" "2026-06-12" ST.date_of_ts "2026-06-12 10:04:56"
+        ; check_ts "minute" "2026-06-12 10:04" ST.minute_of_ts "2026-06-12 10:04:56.123"
+        ; check_ts "short date passthrough" "2026" ST.date_of_ts "2026"
+        ; check_ts "short minute passthrough" "2026-06-12" ST.minute_of_ts "2026-06-12"
+        ] )
+      (* Provenance summary: counts, distinct participants, tombstone/deleted handling,
+         same-day vs cross-day range. Derived from source rows only. *)
+    ; ( "source_summary"
+      , [ check_summary "empty" "avail:0 unavail:0 parts:0 range:"
+            []
+        ; check_summary "single message" "avail:1 unavail:0 parts:1 range:2026-06-12"
+            [ sm ~id:1 ~author:"alice" ~at:"2026-06-12 10:00:00" "hi" ~seed:true ]
+        ; check_summary "distinct participants, same day"
+            "avail:3 unavail:0 parts:2 range:2026-06-12"
+            [ sm ~id:1 ~author:"alice" ~at:"2026-06-12 10:00:00" "a"
+            ; sm ~id:2 ~author:"bob" ~at:"2026-06-12 10:01:00" "b"
+            ; sm ~id:3 ~author:"alice" ~at:"2026-06-12 10:02:00" "c" ]
+        ; check_summary "date range across days"
+            "avail:2 unavail:0 parts:2 range:2026-06-12 \xe2\x80\x93 2026-06-13"
+            [ sm ~id:1 ~author:"alice" ~at:"2026-06-12 23:59:00" "a"
+            ; sm ~id:2 ~author:"bob" ~at:"2026-06-13 00:01:00" "b" ]
+        ; check_summary "deleted rows counted unavailable, excluded from participants"
+            "avail:1 unavail:2 parts:1 range:2026-06-12"
+            [ sm ~id:1 ~author:"alice" ~at:"2026-06-12 10:00:00" "a"
+            ; sm ~id:2 ~author:"" ~at:"2026-06-12 10:01:00" "" ~deleted:true
+            ; sm ~id:3 ~author:"" ~at:"2026-06-12 10:02:00" "" ~deleted:true ]
+        ; check_summary "tombstoned author available but not a participant"
+            "avail:2 unavail:0 parts:1 range:2026-06-12"
+            [ sm ~id:1 ~author:"alice" ~at:"2026-06-12 10:00:00" "a"
+            ; sm ~id:2 ~author:"" ~at:"2026-06-12 10:01:00" "ghost message" ]
         ] )
       (* Image src gate: local uploads + http(s) pass (html-escaped); javascript:/data:/
          protocol-relative/injection/empty collapse to "#". *)
