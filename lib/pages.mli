@@ -21,11 +21,21 @@ val community_section_shell_page : ?user:string -> ?noindex:bool -> ?thread_coun
     string form (hot/new/top/active). [rail_communities] drives both the icon rail and the
     Following mini-list. *)
 val feed_page : ?user:string -> scope:string -> sort_mode:string -> is_logged_in:bool -> admin_usernames:string list -> rail_communities:Db.community list -> user_votes:(int * int) list -> current_page:int -> Db.post list -> Dream.request -> string
-val community_channel_shell_page : ?user:string -> ?realtime_token:string -> ?noindex:bool -> is_member:bool -> ?can_start:bool -> ?thread_links:(int64 * int * string * bool) list -> rail_communities:Db.community list -> channels:Db.channel list -> sections:Db.community_section list -> channel:Db.channel -> messages:(Db.chat_message * string option) list -> community:Db.community -> Dream.request -> string
+(** [source_focus] = (promoted post id, post title, chronological highlight message ids):
+    renders the reverse-navigation state — SSR context notice, anchor/highlight data
+    attributes, canonical link to the clean channel URL. Omitted → normal channel page. *)
+val community_channel_shell_page : ?user:string -> ?realtime_token:string -> ?noindex:bool -> is_member:bool -> ?can_start:bool -> ?thread_links:(int64 * int * string * bool) list -> ?source_focus:(int * string * int64 list) -> rail_communities:Db.community list -> channels:Db.channel list -> sections:Db.community_section list -> channel:Db.channel -> messages:(Db.chat_message * string option) list -> community:Db.community -> Dream.request -> string
+(** Viewer-scoped promoted-thread provenance, decided by the handler: [Ts_visible] renders
+    the structured source conversation (channel (slug, name) if it still exists, plus the
+    chronological source rows); [Ts_private] renders only a neutral notice with no channel
+    name, authors, content, or timestamps. *)
+type thread_source_view =
+  | Ts_private
+  | Ts_visible of (string * string) option * Db.thread_source_msg list
 (** Canonical thread view inside the persistent shell (/c/:slug/t/:post_id-:post_slug).
     Shell-styled comments/composer; mod/admin/ban dialogs preserve post_page behavior verbatim.
     Preserves the optimistic-vote DOM contract and all comment/vote/mod/delete routes & CSRF. *)
-val thread_shell_page : ?user:string -> ?noindex:bool -> is_member:bool -> is_current_user_mod:bool -> mod_usernames:string list -> admin_usernames:string list -> banned_usernames:string list -> rail_communities:Db.community list -> channels:Db.channel list -> sections:Db.community_section list -> community:Db.community -> ?thread_source:((string * string) option * (int64 * string * string * string) list) -> user_post_votes:(int * int) list -> user_comment_votes:(int * int) list -> post:Db.post -> comments:Db.comment list -> Dream.request -> string
+val thread_shell_page : ?user:string -> ?noindex:bool -> is_member:bool -> is_current_user_mod:bool -> mod_usernames:string list -> admin_usernames:string list -> banned_usernames:string list -> rail_communities:Db.community list -> channels:Db.channel list -> sections:Db.community_section list -> community:Db.community -> ?thread_source:thread_source_view -> user_post_votes:(int * int) list -> user_comment_votes:(int * int) list -> post:Db.post -> comments:Db.comment list -> Dream.request -> string
 val community_overview_page : ?user:string -> ?noindex:bool -> is_member:bool -> is_current_user_mod:bool -> is_current_user_top_mod:bool -> mod_usernames:string list -> orphaned:(int * string option) -> channels:Db.channel list -> recent_posts:Db.post list -> Db.community -> (Db.community_section * int * string option) list -> Dream.request -> string
 val community_settings_page : ?user:string -> is_admin:bool -> is_top_mod:bool -> open_reports_count:int -> community:Db.community -> mods:Db.user list -> banned_users:Db.user list -> members:Db.user list -> sections:Db.community_section list -> channels:Db.channel list -> Dream.request -> string
 val manage_mods_page : ?user:string -> is_admin:bool -> current_user_role:string option -> community:Db.community -> mods:Db.moderator_entry list -> Dream.request -> string
@@ -44,11 +54,11 @@ val report_form_page : ?user:string -> community:Db.community -> target_type:Db.
     it render a safe "Target unavailable or deleted" cell. Renders nothing mutable. *)
 val reports_queue_page : ?user:string -> community:Db.community -> status:Db.report_status -> reports:Db.report_row list -> previews:(int * (string * string)) list -> Dream.request -> string
 
-(** "Start thread from chat" pure helpers (title/body prefill, checkbox-id parsing,
-    server-side selection guard). Pure — unit-tested without a DB. *)
+(** "Start thread from chat" pure helpers (title prefill, checkbox-id parsing, server-side
+    selection guard, provenance summary, reverse-navigation parsing). Pure — unit-tested
+    without a DB. *)
 module Start_thread : sig
   val derive_title : string -> string
-  val derive_body : channel_name:string -> (string * string) list -> string
   val parse_selected_ids : (string * string) list -> int64 list
   (* Channel-row marker for a chat message, from all its thread-source links. *)
   type msg_marker =
@@ -57,6 +67,22 @@ module Start_thread : sig
     | Mk_no_link
   val classify_message_links : (int * string * bool) list -> msg_marker
   val normalize_selection : seed:int64 -> max_total:int -> valid:int64 list -> int64 list -> int64 list
+  (* ?source_thread= strict positive-int parse; anything else is "no focus". *)
+  val parse_source_thread : string option -> int option
+  (* Comma-joined ids for data-source-highlight-ids (attribute-safe by construction). *)
+  val highlight_ids_attr : int64 list -> string
+  (* Compact "YYYY-MM-DD" / "YYYY-MM-DD HH:MM" truncations of a Postgres timestamp text. *)
+  val date_of_ts : string -> string
+  val minute_of_ts : string -> string
+  (* Provenance metadata for the promoted-conversation block, derived from persisted
+     source rows only (never from the editable introduction). *)
+  type source_summary = {
+    ss_available : int;
+    ss_unavailable : int;
+    ss_participants : int;
+    ss_date_range : string;
+  }
+  val summarize_source : Db.thread_source_msg list -> source_summary
 end
 (** GET form to start a durable thread from a seed chat message + nearby context. *)
 val start_thread_form : ?user:string -> ?error:string -> community:Db.community -> channel:Db.channel -> seed_id:int64 -> candidates:(Db.chat_message * string option) list -> sections:Db.community_section list -> default_section_id:int -> default_title:string -> default_body:string -> Dream.request -> string

@@ -870,25 +870,6 @@ module Start_thread = struct
       cut ^ "\xe2\x80\xa6" (* … *)
     end
 
-  (* Body / notes prefill. Markdown-ish quote block; the thread body is rendered escaped
-     (not markdown) so the '>' is cosmetic. The durable representation of the selected
-     messages is the thread_source_messages block on the thread page — this textarea is
-     editable notes, per the approved adjustment. msgs: ordered (author, content). *)
-  let derive_body ~channel_name (msgs : (string * string) list) : string =
-    let quote (author, content) =
-      let author = if String.trim author = "" then "[deleted]" else author in
-      let quoted =
-        String.split_on_char '\n' content
-        |> List.map (fun line -> "> " ^ line)
-        |> String.concat "\n"
-      in
-      Printf.sprintf "%s:\n\n%s" author quoted
-    in
-    let header = Printf.sprintf "Started from a chat discussion in #%s.\n" channel_name in
-    match msgs with
-    | [] -> header
-    | _ -> header ^ "\n" ^ String.concat "\n\n" (List.map quote msgs)
-
   (* Checkbox field names are "msg_<id>" (value "on"). Repeated same-name fields don't
      survive Dream.form's assoc list, so one distinct key per candidate is used. Parse
      -> deduped int64 list; non-matching keys and unparseable ids are ignored. *)
@@ -941,10 +922,68 @@ module Start_thread = struct
     |> List.filter (fun id -> id <> seed && List.mem id valid)
     |> List.sort_uniq Int64.compare
     |> take (max_total - 1)
+
+  (* ?source_thread=<post_id> reverse-navigation parameter. Strict positive-int parse:
+     anything unparseable, zero, or negative reads as "no focus" so a mangled URL renders
+     the normal channel page instead of an error. *)
+  let parse_source_thread (raw : string option) : int option =
+    match raw with
+    | None -> None
+    | Some s ->
+        (match int_of_string_opt (String.trim s) with
+         | Some n when n > 0 -> Some n
+         | _ -> None)
+
+  (* Comma-joined id list for the data-source-highlight-ids attribute. Digits and commas
+     only by construction, so it is attribute-safe without escaping. *)
+  let highlight_ids_attr (ids : int64 list) : string =
+    String.concat "," (List.map Int64.to_string ids)
+
+  (* Compact display forms of a Postgres timestamp-text ("YYYY-MM-DD HH:MM:SS..."):
+     date_of_ts -> "YYYY-MM-DD", minute_of_ts -> "YYYY-MM-DD HH:MM". Pure truncation —
+     timestamps are stored UTC and rendered verbatim elsewhere in chat, so no timezone
+     math here. Short/odd inputs pass through untouched. *)
+  let date_of_ts (ts : string) : string =
+    if String.length ts >= 10 then String.sub ts 0 10 else ts
+
+  let minute_of_ts (ts : string) : string =
+    if String.length ts >= 16 then String.sub ts 0 16 else ts
+
+  (* Provenance metadata for the promoted-conversation block, derived purely from the
+     persisted source rows — never from the curator's editable introduction. Participants
+     are distinct non-empty authors of AVAILABLE rows (deleted rows are masked and would
+     otherwise all collapse into one fake "" participant). Date range spans all rows. *)
+  type source_summary = {
+    ss_available : int;
+    ss_unavailable : int;
+    ss_participants : int;
+    ss_date_range : string;
+  }
+
+  let summarize_source (msgs : Db.thread_source_msg list) : source_summary =
+    let available = List.filter (fun (m : Db.thread_source_msg) -> not m.sm_deleted) msgs in
+    let participants =
+      List.fold_left (fun acc (m : Db.thread_source_msg) ->
+        let a = String.trim m.sm_author in
+        if a = "" || List.mem a acc then acc else a :: acc) [] available
+    in
+    let dates = List.map (fun (m : Db.thread_source_msg) -> date_of_ts m.sm_created_at) msgs in
+    let date_range =
+      match dates with
+      | [] -> ""
+      | first :: rest ->
+          let last = List.fold_left (fun _ d -> d) first rest in
+          if first = last then first else first ^ " \xe2\x80\x93 " ^ last (* – *)
+    in
+    { ss_available = List.length available;
+      ss_unavailable = List.length msgs - List.length available;
+      ss_participants = List.length participants;
+      ss_date_range = date_range }
 end
 
 let community_channel_shell_page ?user ?realtime_token ?(noindex=false) ~is_member ?(can_start=false)
     ?(thread_links : (int64 * int * string * bool) list = [])
+    ?(source_focus : (int * string * int64 list) option)
     ~(rail_communities : community list)
     ~(channels : channel list) ~(sections : community_section list)
     ~(channel : channel) ~(messages : (chat_message * string option) list)
@@ -1017,18 +1056,20 @@ let community_channel_shell_page ?user ?realtime_token ?(noindex=false) ~is_memb
     let action =
       match marker with
       | Start_thread.Mk_seed (post_id, title) ->
-          Printf.sprintf "<a class='cs-msg-thread' href='%s'>Thread &rarr; %s</a>"
+          Printf.sprintf "<a class='cs-msg-thread' href='%s'>Started thread &rarr; %s</a>"
             (Components.canonical_thread_path community.slug post_id title) (esc (short title))
       | Start_thread.Mk_referenced (post_id, title, count) ->
           let extra = if count > 1 then Printf.sprintf " <span class='cs-msg-refmore'>+%d</span>" (count - 1) else "" in
-          Printf.sprintf "<a class='cs-msg-ref' href='%s'>Referenced in &rarr; %s</a>%s"
+          Printf.sprintf "<a class='cs-msg-ref' href='%s'>Included in thread &rarr; %s</a>%s"
             (Components.canonical_thread_path community.slug post_id title) (esc (short title)) extra
       | Start_thread.Mk_no_link -> ""
     in
     let actions_row = if action = "" then "" else Printf.sprintf "<div class='cs-msg-actions'>%s</div>" action in
+    (* id='msg-<id>' makes per-message deep links (#msg-…) work with JS off; the reverse-
+       navigation highlighter also targets rows through it. *)
     Printf.sprintf
-      "<div class='cs-msg' data-message-id='%Ld' data-has-thread='%s'><div class='cs-msg-avatar'>%s</div><div class='cs-msg-body'><div class='cs-msg-meta'><span class='cs-msg-author'>%s</span>%s</div><div class='cs-msg-text'>%s</div>%s</div></div>"
-      m.id (if already_promoted then "true" else "false") (esc initial) (esc name) time_html body actions_row
+      "<div class='cs-msg' id='msg-%Ld' data-message-id='%Ld' data-has-thread='%s'><div class='cs-msg-avatar'>%s</div><div class='cs-msg-body'><div class='cs-msg-meta'><span class='cs-msg-author'>%s</span>%s</div><div class='cs-msg-text'>%s</div>%s</div></div>"
+      m.id m.id (if already_promoted then "true" else "false") (esc initial) (esc name) time_html body actions_row
   in
   let messages_html =
     if messages = [] then
@@ -1068,14 +1109,37 @@ let community_channel_shell_page ?user ?realtime_token ?(noindex=false) ~is_memb
     if realtime_socket_url = "" then ""
     else Option.value realtime_token ~default:""
   in
+  (* Reverse navigation (?source_thread=<post_id>): an SSR-visible context notice plus
+     data attributes the page JS uses to scroll to the first source message and flash the
+     whole group. Everything degrades: with JS off the notice still explains the state and
+     the links still work; without source_focus the page is byte-identical to before. *)
+  let source_notice, source_data_attrs =
+    match source_focus with
+    | None -> ("", "")
+    | Some (post_id, post_title, highlight_ids) ->
+        let thread_href = Components.canonical_thread_path community.slug post_id post_title in
+        let short_title =
+          if String.length post_title > 60 then String.sub post_title 0 59 ^ "\xe2\x80\xa6" else post_title in
+        let notice = Printf.sprintf
+          "<div class='cs-source-notice'><span class='cs-source-notice-text'>Viewing the conversation promoted to <b>%s</b></span><span class='cs-source-notice-actions'><a href='%s'>&larr; Back to thread</a><a href='%s'>Jump to latest &darr;</a></span></div>"
+          (esc short_title) thread_href channel_url in
+        let attrs = match highlight_ids with
+          | [] -> ""
+          | first :: _ ->
+              Printf.sprintf " data-source-anchor-id='%Ld' data-source-highlight-ids='%s'"
+                first (Start_thread.highlight_ids_attr highlight_ids) in
+        (notice, attrs)
+  in
   let main =
     Printf.sprintf
-      "%s<div id='chat-live-root' class='cs-main-body cs-chat-body' data-channel-id='%d' data-can-start='%s' data-socket-url='%s' data-signed-token='%s'>%s</div>%s"
+      "%s%s<div id='chat-live-root' class='cs-main-body cs-chat-body' data-channel-id='%d' data-can-start='%s' data-socket-url='%s' data-signed-token='%s'%s>%s</div>%s"
       head
+      source_notice
       channel.id
       (if can_start then "true" else "false")
       (Components.html_escape realtime_socket_url)
       (Components.html_escape realtime_signed_token)
+      source_data_attrs
       messages_html
       composer
   in
@@ -1087,12 +1151,29 @@ let community_channel_shell_page ?user ?realtime_token ?(noindex=false) ~is_memb
      </div>"
   in
   let title = Printf.sprintf "#%s · %s" channel.name community.name in
+  (* The parameterized reverse-navigation view canonicalizes to the clean channel URL so
+     crawlers never index per-thread duplicates of the same channel page. *)
+  let canonical_link =
+    if source_focus = None then ""
+    else Printf.sprintf "<link rel='canonical' href='%s'>" channel_url
+  in
   let head_extra =
+    canonical_link ^
     "<script src='/static/js/phoenix.js' defer></script>\
      <script src='/static/js/chat_live.js' defer></script>"
   in
   Components.community_shell ?user ~noindex ~request ~rail_communities ~active_slug:community.slug
     ~title ~community ~nav_groups ~main ~right_pane:presence_pane ~head_extra ()
+
+(* What the thread page may say about a promoted thread's chat origin, decided by the
+   HANDLER from the viewer's read authorization on the source channel's community:
+   Ts_visible carries the (slug, name) of the source channel (None if the channel was
+   deleted) plus the chronological source rows; Ts_private renders only a neutral
+   "promoted from a private conversation" notice — no channel name, authors, content,
+   or timestamps ever reach an unauthorized viewer's markup. *)
+type thread_source_view =
+  | Ts_private
+  | Ts_visible of (string * string) option * Db.thread_source_msg list
 
 (* /c/:slug/t/:post_id-:post_slug — the canonical thread view, inside the persistent shell.
    Replaces the legacy warm-card post_page for normal threads (post_page stays only as the
@@ -1105,7 +1186,7 @@ let community_channel_shell_page ?user ?realtime_token ?(noindex=false) ~is_memb
 let thread_shell_page ?user ?(noindex=false) ~is_member ~is_current_user_mod ~mod_usernames ~admin_usernames
     ~banned_usernames ~(rail_communities : community list) ~(channels : channel list)
     ~(sections : community_section list) ~(community : community)
-    ?(thread_source : ((string * string) option * (int64 * string * string * string) list) option)
+    ?(thread_source : thread_source_view option)
     ~user_post_votes ~user_comment_votes ~(post : post) ~(comments : comment list) request =
   let esc = Components.html_escape in
   let csrf_token = Dream.csrf_tag request in
@@ -1308,28 +1389,67 @@ let thread_shell_page ?user ?(noindex=false) ~is_member ~is_current_user_mod ~mo
   (* Post mod/owner actions get their own compact row under the meta — no far-right float. *)
   let post_actions_row =
     if post_mod_controls = "" then "" else Printf.sprintf "<div class='th-actions'>%s</div>" post_mod_controls in
-  (* Source attribution for threads started from chat. Real provenance lives in
-     thread_source_messages (this is its display); the post body is editable notes.
-     Renders nothing for a normal post (no source channel and no source messages). If
-     the source channel was deleted (FK SET NULL) we still list any surviving messages. *)
+  (* Promoted-conversation block. Real provenance lives in thread_source_messages — this
+     is its display, always rendered from the persisted relations regardless of the
+     curator's editable introduction (the post body). Renders nothing for a normal post.
+     Source messages are display-only structured rows: never forum replies, no vote UI,
+     no forum authorship. If the source channel was deleted (FK SET NULL) surviving rows
+     still render, just without channel links. Ts_private renders only a neutral notice. *)
   let source_html =
     match thread_source with
     | None -> ""
-    | Some (channel_opt, msgs) when channel_opt = None && msgs = [] -> ""
-    | Some (channel_opt, msgs) ->
-        let head = match channel_opt with
+    | Some Ts_private ->
+        "<div class='th-src th-src--private'>\
+           <div class='th-src-label'>Promoted conversation</div>\
+           <div class='th-src-private-note'>This thread was promoted from a private conversation.</div>\
+         </div>"
+    | Some (Ts_visible (None, [])) -> ""
+    | Some (Ts_visible (channel_opt, msgs)) ->
+        let summary = Start_thread.summarize_source msgs in
+        let from_html = match channel_opt with
           | Some (cslug, cname) ->
-              Printf.sprintf "Started from <a href='/c/%s/ch/%s'>#%s</a> chat"
+              Printf.sprintf "Promoted from <a href='/c/%s/ch/%s'>#%s</a>"
                 (esc community.slug) (esc cslug) (esc cname)
-          | None -> "Started from chat" in
-        let msgs_html =
-          if msgs = [] then ""
-          else String.concat "" (List.map (fun (_id, author, content, _ts) ->
-            let name = if String.trim author = "" then "[deleted]" else author in
-            Printf.sprintf "<div class='th-source-msg'><span class='th-source-author'>%s</span><span class='th-source-text'>%s</span></div>"
-              (esc name) (esc content)
-          ) msgs) in
-        Printf.sprintf "<div class='th-source'><div class='th-source-head'>%s</div>%s</div>" head msgs_html in
+          | None -> "Promoted from chat" in
+        let plural n = if n = 1 then "" else "s" in
+        let meta_bits =
+          (if summary.Start_thread.ss_date_range = "" then []
+           else [ esc summary.Start_thread.ss_date_range ])
+          @ [ Printf.sprintf "%d message%s" summary.Start_thread.ss_available (plural summary.Start_thread.ss_available)
+            ; Printf.sprintf "%d participant%s" summary.Start_thread.ss_participants (plural summary.Start_thread.ss_participants) ]
+          @ (if summary.Start_thread.ss_unavailable = 0 then []
+             else [ Printf.sprintf "%d unavailable" summary.Start_thread.ss_unavailable ]) in
+        let meta_html = String.concat " &middot; " meta_bits in
+        let row (m : Db.thread_source_msg) =
+          if m.sm_deleted then
+            "<div class='th-src-msg th-src-msg--gone'><span class='th-src-unavailable'>[message unavailable]</span></div>"
+          else
+            let name = if String.trim m.sm_author = "" then "[deleted]" else m.sm_author in
+            let seed_badge = if m.sm_is_seed then "<span class='th-src-seed'>seed</span>" else "" in
+            let chat_link = match channel_opt with
+              | Some (cslug, _) ->
+                  Printf.sprintf "<a class='th-src-jump' href='/c/%s/ch/%s?source_thread=%d#msg-%Ld'>view in chat</a>"
+                    (esc community.slug) (esc cslug) post.id m.sm_id
+              | None -> "" in
+            Printf.sprintf
+              "<div class='th-src-msg'><div class='th-src-msg-meta'><span class='th-src-author'>%s</span>%s<span class='th-src-time'>%s</span>%s</div><div class='th-src-text'>%s</div></div>"
+              (esc name) seed_badge (esc (Start_thread.minute_of_ts m.sm_created_at)) chat_link (esc m.sm_content) in
+        let rows_html = String.concat "" (List.map row msgs) in
+        let view_original = match channel_opt with
+          | Some (cslug, _) ->
+              Printf.sprintf
+                "<div class='th-src-foot'><a href='/c/%s/ch/%s?source_thread=%d'>View original conversation &rarr;</a></div>"
+                (esc community.slug) (esc cslug) post.id
+          | None -> "" in
+        Printf.sprintf
+          "<div class='th-src'>\
+             <div class='th-src-label'>Promoted conversation</div>\
+             <div class='th-src-head'>%s</div>\
+             <div class='th-src-meta'>%s</div>\
+             <div class='th-src-msgs'>%s</div>\
+             %s\
+           </div>"
+          from_html meta_html rows_html view_original in
   let body_html =
     let img = match post.image_url with
       | Some i when i <> "" -> Printf.sprintf "<div class='th-img'><img src='%s' alt='Post image'></div>" (esc i)
@@ -1636,7 +1756,26 @@ let thread_shell_page ?user ?(noindex=false) ~is_member ~is_current_user_mod ~mo
         let badge = if List.mem u mod_usernames then "<span class='role mod'>MOD</span>" else "" in
         Printf.sprintf "<div class='member'><a href='/u/%s'>%s</a>%s</div>" (esc u) (esc u) badge) uniq) in
       Printf.sprintf "<div class='ca-block'><div class='ca-label'>Participants</div>%s</div>" rows in
-  let right_pane = stats_block ^ participants_block in
+  (* Source participants: authors of the promoted chat conversation. A separately labeled
+     group — deliberately NOT deduplicated against forum Participants above, because the
+     two lists communicate different roles (spoke in the source chat vs. posted in the
+     thread). Tombstoned/unavailable identities are skipped: there is no safe generic
+     identity chip in the current UI, and the block's "N unavailable" note already covers
+     the gap. Only rendered for viewers authorized to see the source (Ts_visible). *)
+  let source_participants_block =
+    match thread_source with
+    | Some (Ts_visible (_, msgs)) ->
+        let names =
+          List.fold_left (fun acc (m : Db.thread_source_msg) ->
+            let a = String.trim m.sm_author in
+            if m.sm_deleted || a = "" || List.mem a acc then acc else acc @ [a]) [] msgs in
+        if names = [] then ""
+        else
+          let rows = String.concat "" (List.map (fun u ->
+            Printf.sprintf "<div class='member'><a href='/u/%s'>%s</a></div>" (esc u) (esc u)) names) in
+          Printf.sprintf "<div class='ca-block'><div class='ca-label'>Source participants</div>%s</div>" rows
+    | _ -> "" in
+  let right_pane = stats_block ^ participants_block ^ source_participants_block in
 
   (* --- head: canonical + meta description + page-scoped collapse script --- *)
   let canonical = Components.canonical_thread_path post.community_slug post.id post.title in
@@ -2814,7 +2953,7 @@ let start_thread_form ?user ?error ~(community : community) ~(channel : channel)
             %s
             <div class='create-field'>
                 <label class='create-label'>Source messages</label>
-                <p class='create-hint'>The seed message is always included. Tick nearby messages to attach as context (up to 10 total).</p>
+                <p class='create-hint'>The seed message is always included. Tick nearby messages to attach (up to 10 total). <span id='st-selection-count'></span></p>
                 <div class='st-msglist'>%s</div>
             </div>
             %s
@@ -2823,9 +2962,9 @@ let start_thread_form ?user ?error ~(community : community) ~(channel : channel)
                 <input type='text' name='title' required maxlength='300' class='create-input' value='%s' placeholder='What is this thread about?'>
             </div>
             <div class='create-field'>
-                <label class='create-label'>Thread body / notes <span class='create-label-opt'>(optional)</span></label>
-                <textarea name='content' class='create-textarea' style='min-height:160px;'>%s</textarea>
-                <p class='create-hint'>Selected messages are saved as source context and shown on the thread regardless of this text.</p>
+                <label class='create-label'>Introduction / context <span class='create-label-opt'>(optional)</span></label>
+                <textarea name='content' class='create-textarea' style='min-height:160px;' placeholder='Why is this conversation worth keeping? Add any context for the forum.'>%s</textarea>
+                <p class='create-hint'>The selected messages are shown on the thread automatically &mdash; this field is only for your own introduction.</p>
             </div>
             <div class='create-actions'>
                 <button type='submit' class='create-btn create-btn--block'>Start thread</button>
@@ -2833,7 +2972,31 @@ let start_thread_form ?user ?error ~(community : community) ~(channel : channel)
             </div>
         </form>
       </div>
-    </div>"
+    </div>
+    <script>
+    (function () {
+      var out = document.getElementById('st-selection-count');
+      var list = document.querySelector('.st-msglist');
+      if (!out || !list) return;
+      function update() {
+        var rows = list.querySelectorAll('.st-msg');
+        var count = 0;
+        var authors = {};
+        rows.forEach(function (row) {
+          var box = row.querySelector('.st-check');
+          if (!box || !box.checked) return;
+          count += 1;
+          var a = row.querySelector('.st-msg-author');
+          if (a) authors[a.textContent] = true;
+        });
+        var participants = Object.keys(authors).length;
+        out.textContent = count + ' of 10 selected · ' +
+          participants + (participants === 1 ? ' participant' : ' participants');
+      }
+      list.addEventListener('change', update);
+      update();
+    })();
+    </script>"
     (esc channel.name)
     error_html
     action

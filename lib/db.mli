@@ -62,6 +62,19 @@ type chat_message = {
   created_at : string; edited_at : string option; deleted_at : string option;
 }
 
+(* One source row of a promoted thread (thread page display). Chronologically ordered by
+   the queries that return it. sm_author is "" for a tombstoned author; sm_deleted rows
+   carry no author/content (masked at the SQL layer) — render "[message unavailable]".
+   Fields prefixed (sm_) to avoid record-field disambiguation. *)
+type thread_source_msg = {
+  sm_id : int64;
+  sm_author : string;
+  sm_content : string;
+  sm_created_at : string;
+  sm_is_seed : bool;
+  sm_deleted : bool;
+}
+
 type comment = {
   id : int; content : string; username : string; created_at : string;
   score : int; parent_id : int option; avatar_url : string option;
@@ -294,9 +307,15 @@ module ThreadSource : sig
   (* Every thread-source link in a channel -> (message_id, post_id, post_title, is_seed),
      non-seed references included. One bounded query; the renderer groups by message id. *)
   val get_thread_links_for_channel : (module Caqti_lwt.CONNECTION) -> int -> ((int64 * int * string * bool) list, string) result Lwt.t
-  (* Thread attribution: (source channel (slug, name) option, ordered source messages
-     (message_id, author_or_"", content, created_at)). *)
-  val get_thread_source : (module Caqti_lwt.CONNECTION) -> int -> ((string * string) option * (int64 * string * string * string) list, string) result Lwt.t
+  (* Thread attribution: (source channel (slug, name, community_id) option, source
+     messages in chronological order — deleted rows included but masked). The CALLER
+     decides viewer visibility: authorized readers of the returned community id see the
+     conversation; everyone else gets only a neutral "promoted from a private
+     conversation" notice. *)
+  val get_thread_source : (module Caqti_lwt.CONNECTION) -> int -> ((string * string * int) option * thread_source_msg list, string) result Lwt.t
+  (* Reverse navigation: promoted post -> (source channel id, post title, ids of
+     surviving source messages, chronological). None when nothing usable remains. *)
+  val get_source_span_for_thread : (module Caqti_lwt.CONNECTION) -> int -> ((int * string * int64 list) option, string) result Lwt.t
   (* Batch chat-provenance for a page of post ids -> (post_id, channel_slug, channel_name,
      source_message_count). One bounded query (ids passed comma-joined); only posts started
      from chat appear. Empty input -> []. Lets search show "Started from #channel" with no N+1. *)
@@ -537,8 +556,9 @@ val get_messages_after_id_with_authors : (module Caqti_lwt.CONNECTION) -> int ->
 
 val get_seed_thread_for_message : (module Caqti_lwt.CONNECTION) -> int64 -> ((int * string * string) option, string) result Lwt.t
 val get_thread_links_for_channel : (module Caqti_lwt.CONNECTION) -> int -> ((int64 * int * string * bool) list, string) result Lwt.t
-val get_thread_source : (module Caqti_lwt.CONNECTION) -> int -> ((string * string) option * (int64 * string * string * string) list, string) result Lwt.t
+val get_thread_source : (module Caqti_lwt.CONNECTION) -> int -> ((string * string * int) option * thread_source_msg list, string) result Lwt.t
 val get_thread_sources_for_posts : (module Caqti_lwt.CONNECTION) -> int list -> ((int * string * string * int) list, string) result Lwt.t
+val get_source_span_for_thread : (module Caqti_lwt.CONNECTION) -> int -> ((int * string * int64 list) option, string) result Lwt.t
 val start_thread_from_chat :
   (module Caqti_lwt.CONNECTION) ->
   title:string -> content:string option -> section_id:int option ->

@@ -471,6 +471,20 @@ html, body { height: 100%; overflow: hidden; }
 }
 .community-shell .cs-msg-empty { padding: 24px 18px; color: var(--ink-3); font-size: 14px; }
 
+/* Reverse navigation from a promoted thread: SSR context notice above the message pane,
+   and a temporary grouped tint on every loaded source message (fades via transition when
+   the JS removes the class after a few seconds). */
+.community-shell .cs-source-notice {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap;
+  padding: 8px 18px; border-bottom: 1px solid var(--line-2); background: var(--panel-2);
+  font-family: var(--cs-mono); font-size: 11.5px; color: var(--ink-2);
+}
+.community-shell .cs-source-notice-actions { display: flex; gap: 14px; white-space: nowrap; }
+.community-shell .cs-source-notice a { color: var(--red); text-decoration: none; }
+.community-shell .cs-source-notice a:hover { text-decoration: underline; }
+.community-shell .cs-msg { transition: background-color 1.2s ease; }
+.community-shell .cs-msg--source-flash { background-color: color-mix(in srgb, var(--red) 9%, transparent); transition: none; }
+
 .community-shell .cs-composer {
   flex-shrink: 0; border-top: 1px solid var(--line-2); background: var(--panel); padding: 12px 16px;
 }
@@ -698,18 +712,42 @@ html, body { height: 100%; overflow: hidden; }
 /* Post mod/owner actions: their own compact left-aligned row under the meta (no far-right float). */
 .community-shell .th-actions { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-top: 12px; }
 
-/* Source attribution for threads started from chat. Compact panel under the meta:
-   the "Started from #channel" line plus the ordered source messages. */
-.community-shell .th-source {
+/* Promoted conversation: the structured source-chat block on a promoted thread.
+   Distinct panel between the post meta and the curator introduction — label, channel
+   provenance, metadata line, one structured row per source message, footer link. */
+.community-shell .th-src {
   margin-top: 16px; border: 1px solid var(--line-2); border-left: 2px solid var(--red);
   background: var(--panel-2); border-radius: 2px; padding: 12px 14px;
 }
-.community-shell .th-source-head { font-family: var(--cs-mono); font-size: 12.5px; color: var(--ink-2); }
-.community-shell .th-source-head a { color: var(--red); text-decoration: none; }
-.community-shell .th-source-head a:hover { text-decoration: underline; }
-.community-shell .th-source-msg { display: flex; gap: 8px; margin-top: 8px; font-size: 13px; line-height: 1.5; }
-.community-shell .th-source-author { font-family: var(--cs-mono); font-weight: 600; color: var(--ink); flex-shrink: 0; }
-.community-shell .th-source-text { color: var(--ink-2); white-space: pre-wrap; overflow-wrap: anywhere; }
+.community-shell .th-src-label {
+  font-family: var(--cs-mono); font-size: 10.5px; font-weight: 700; letter-spacing: 0.08em;
+  text-transform: uppercase; color: var(--red);
+}
+.community-shell .th-src-head { font-family: var(--cs-mono); font-size: 12.5px; color: var(--ink-2); margin-top: 6px; }
+.community-shell .th-src-head a { color: var(--red); text-decoration: none; }
+.community-shell .th-src-head a:hover { text-decoration: underline; }
+.community-shell .th-src-meta { font-family: var(--cs-mono); font-size: 11px; color: var(--ink-3); margin-top: 3px; }
+.community-shell .th-src-msgs { margin-top: 10px; display: flex; flex-direction: column; gap: 9px; }
+.community-shell .th-src-msg { border-top: 1px solid var(--line); padding-top: 8px; }
+.community-shell .th-src-msg-meta { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.community-shell .th-src-author { font-family: var(--cs-mono); font-size: 12px; font-weight: 600; color: var(--ink); }
+.community-shell .th-src-seed {
+  font-family: var(--cs-mono); font-size: 9.5px; font-weight: 700; letter-spacing: 0.06em;
+  text-transform: uppercase; color: var(--red); border: 1px solid var(--red);
+  border-radius: 2px; padding: 0 4px; opacity: 0.75;
+}
+.community-shell .th-src-time { font-family: var(--cs-mono); font-size: 11px; color: var(--ink-3); }
+.community-shell .th-src-jump { font-family: var(--cs-mono); font-size: 11px; color: var(--ink-3); margin-left: auto; text-decoration: none; }
+.community-shell .th-src-jump:hover { color: var(--red); text-decoration: underline; }
+.community-shell .th-src-text { margin-top: 3px; font-size: 13px; line-height: 1.5; color: var(--ink-2); white-space: pre-wrap; overflow-wrap: anywhere; }
+.community-shell .th-src-msg--gone .th-src-unavailable { font-family: var(--cs-mono); font-size: 12px; color: var(--ink-3); font-style: italic; }
+.community-shell .th-src-foot { margin-top: 11px; border-top: 1px solid var(--line); padding-top: 9px; }
+.community-shell .th-src-foot a {
+  font-family: var(--cs-mono); font-size: 11.5px; font-weight: 700; letter-spacing: 0.04em;
+  text-transform: uppercase; color: var(--red); text-decoration: none;
+}
+.community-shell .th-src-foot a:hover { text-decoration: underline; }
+.community-shell .th-src-private-note { font-family: var(--cs-mono); font-size: 12.5px; color: var(--ink-3); margin-top: 6px; font-style: italic; }
 
 /* Body: post content / image / external link, aligned under the title. */
 .community-shell .th-body {

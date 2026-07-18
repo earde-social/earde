@@ -101,6 +101,19 @@ type chat_message = {
   deleted_at : string option;
 }
 
+(* One source row of a promoted thread, as displayed on the thread page.
+   sm_author is "" for a tombstoned author. sm_deleted rows are masked in SQL
+   (author and content forced to "") so deleted chat text never leaves the DB
+   layer; the render layer shows a "[message unavailable]" placeholder. *)
+type thread_source_msg = {
+  sm_id : int64;
+  sm_author : string;
+  sm_content : string;
+  sm_created_at : string;
+  sm_is_seed : bool;
+  sm_deleted : bool;
+}
+
 type user = {
   id : int;
   username : string;
@@ -1730,7 +1743,16 @@ end
 (* Provenance for the "Start thread from chat" feature: links a durable forum thread
    back to the chat messages it crystallized. Kept in its own cohesive module because
    it spans posts + chat_messages + thread_source_messages; normal post creation
-   (Post.create_post) is left untouched per the no-broad-refactor rule. *)
+   (Post.create_post) is left untouched per the no-broad-refactor rule.
+
+   TODO(P0.5 — before serious external onboarding): thread_source_messages stores
+   REFERENCES only, no snapshots. Consequences today: a later edit shows the edited
+   text on the thread; a soft-delete masks the row to "[message unavailable]"; user
+   anonymization tombstones the author; a HARD delete CASCADEs the relation away and
+   silently shrinks the conversation. The follow-up is an additive migration adding
+   author/content/timestamp snapshot columns captured at promotion time — which first
+   requires deciding the semantics for edits, user deletion, moderation deletion and
+   hard deletion (i.e. when the snapshot may still be shown vs. must be suppressed). *)
 module ThreadSource = struct
   (* The canonical thread a chat message already seeds, if any -> (post_id, title,
      community_slug). Drives the "already started -> link to it" guard and the
@@ -1771,56 +1793,70 @@ module ThreadSource = struct
     | Error err -> Lwt.return (Error (Caqti_error.show err))
 
   (* Source channel of a promoted thread (posts.promoted_from_channel_id) ->
-     (slug, name, source-channel community visibility, community indexable, channel indexable).
-     None when the post was not started from chat, or the channel was deleted (the FK is
-     ON DELETE SET NULL so a durable thread survives channel deletion). The trailing three
-     columns let get_thread_source suppress provenance whose source channel is not publicly
-     indexable (Slice G), so chat text from a private/non-indexable channel never surfaces. *)
+     (slug, name, source-channel community id). None when the post was not started from
+     chat, or the channel was deleted (the FK is ON DELETE SET NULL so a durable thread
+     survives channel deletion). Whether the VIEWER may see this provenance is decided by
+     the handler (can_view_community on the returned community id) — access is
+     authorization-driven, not indexability-driven, so members of a private community
+     keep their provenance while unauthorized viewers get only a neutral notice. *)
   let thread_source_channel_query =
     let open Caqti_request.Infix in
-    (Caqti_type.int ->? Caqti_type.(t2 (t2 string string) (t3 string bool bool)))
-    "SELECT c.slug, c.name, oc.visibility, oc.indexable, c.indexable FROM posts p \
+    (Caqti_type.int ->? Caqti_type.(t3 string string int))
+    "SELECT c.slug, c.name, c.community_id FROM posts p \
      JOIN channels c ON c.id = p.promoted_from_channel_id \
-     JOIN communities oc ON oc.id = c.community_id \
      WHERE p.id = $1"
 
-  (* Ordered source messages for the thread attribution block ->
-     (message_id, author_or_"", content, created_at). author is '' for a tombstoned
-     (user_id NULL) row; the render layer shows "[deleted]". Soft-deleted messages are
-     excluded from display. Ordered by stored position so the seed (position 0) leads. *)
+  (* Ordered source messages for the promoted-conversation block. Chronological by
+     created_at (id as tiebreak) — NOT by stored position — so the seed sits at its real
+     place in the conversation; is_seed is carried only for the origin badge. Soft-deleted
+     rows are returned (so the conversation doesn't silently shrink) but their author and
+     content are masked to '' in SQL; the renderer shows "[message unavailable]". *)
   let thread_source_messages_query =
     let open Caqti_request.Infix in
-    (Caqti_type.int ->* Caqti_type.(t4 int64 string string string))
-    "SELECT t.message_id, COALESCE(u.username, ''), m.content, m.created_at::text \
+    (Caqti_type.int ->* Caqti_type.(t2 (t3 int64 string string) (t3 string bool bool)))
+    "SELECT t.message_id, \
+            CASE WHEN m.deleted_at IS NULL THEN COALESCE(u.username, '') ELSE '' END, \
+            CASE WHEN m.deleted_at IS NULL THEN m.content ELSE '' END, \
+            m.created_at::text, t.is_seed, (m.deleted_at IS NOT NULL) \
      FROM thread_source_messages t \
      JOIN chat_messages m ON m.id = t.message_id \
      LEFT JOIN users u ON u.id = m.user_id \
-     WHERE t.post_id = $1 AND m.deleted_at IS NULL \
-     ORDER BY t.position ASC, t.message_id ASC"
+     WHERE t.post_id = $1 \
+     ORDER BY m.created_at ASC, m.id ASC"
+
+  let map_thread_source_msg ((sm_id, sm_author, sm_content), (sm_created_at, sm_is_seed, sm_deleted)) =
+    { sm_id; sm_author; sm_content; sm_created_at; sm_is_seed; sm_deleted }
 
   let get_thread_source (module C : Caqti_lwt.CONNECTION) post_id =
     C.find_opt thread_source_channel_query post_id >>= function
     | Error err -> Lwt.return (Error (Caqti_error.show err))
     | Ok channel_row ->
-        (* Slice G provenance safety: a source channel that is not publicly indexable (its
-           community is private, its community is indexable=false, or the channel itself is
-           indexable=false) must not surface chat text on a thread page — that thread may itself
-           be public. We collapse the whole provenance block to None in that case, rather than
-           leak the channel name or the quoted messages. effective_indexable_child encodes the
-           exact "private dominates; otherwise community AND child must opt in" rule. *)
-        let channel, safe =
-          match channel_row with
-          | None -> (None, true)
-          | Some ((slug, name), (vis, comm_ix, chan_ix)) ->
-              let visibility = Option.value (community_visibility_of_string vis) ~default:Community_private in
-              let safe = effective_indexable_child visibility ~community_indexable:comm_ix ~child_indexable:chan_ix in
-              ((if safe then Some (slug, name) else None), safe)
-        in
-        if not safe then Lwt.return (Ok (None, []))
-        else
-          C.collect_list thread_source_messages_query post_id >>= function
-          | Ok msgs -> Lwt.return (Ok (channel, msgs))
-          | Error err -> Lwt.return (Error (Caqti_error.show err))
+        C.collect_list thread_source_messages_query post_id >>= function
+        | Ok rows -> Lwt.return (Ok (channel_row, List.map map_thread_source_msg rows))
+        | Error err -> Lwt.return (Error (Caqti_error.show err))
+
+  (* Reverse navigation ("View original conversation"): resolve a promoted thread to its
+     source channel id, its title (for the chat-side context notice), and the ids of its
+     still-available (non-deleted) source messages in chronological order. None when the
+     post was never promoted, its channel is gone, or no source message survives — the
+     channel page then renders normally with no highlight. *)
+  let source_span_for_thread_query =
+    let open Caqti_request.Infix in
+    (Caqti_type.int ->* Caqti_type.(t3 int string int64))
+    "SELECT c.id, p.title, t.message_id \
+     FROM posts p \
+     JOIN channels c ON c.id = p.promoted_from_channel_id \
+     JOIN thread_source_messages t ON t.post_id = p.id \
+     JOIN chat_messages m ON m.id = t.message_id \
+     WHERE p.id = $1 AND m.deleted_at IS NULL \
+     ORDER BY m.created_at ASC, m.id ASC"
+
+  let get_source_span_for_thread (module C : Caqti_lwt.CONNECTION) post_id =
+    C.collect_list source_span_for_thread_query post_id >>= function
+    | Ok [] -> Lwt.return (Ok None)
+    | Ok ((channel_id, title, _) :: _ as rows) ->
+        Lwt.return (Ok (Some (channel_id, title, List.map (fun (_, _, mid) -> mid) rows)))
+    | Error err -> Lwt.return (Error (Caqti_error.show err))
 
   (* Batch chat-provenance for one page of post/search results:
      post_id -> (channel_slug, channel_name, source_message_count). One bounded query over
@@ -3054,6 +3090,7 @@ let get_seed_thread_for_message = ThreadSource.get_seed_thread_for_message
 let get_thread_links_for_channel = ThreadSource.get_thread_links_for_channel
 let get_thread_source = ThreadSource.get_thread_source
 let get_thread_sources_for_posts = ThreadSource.get_thread_sources_for_posts
+let get_source_span_for_thread = ThreadSource.get_source_span_for_thread
 let start_thread_from_chat = ThreadSource.start_thread_from_chat
 
 let join_community = Membership.join_community
