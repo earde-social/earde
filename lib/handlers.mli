@@ -32,6 +32,7 @@ val community_page_handler : Dream.handler
 val community_section_handler : Dream.handler
 val community_channel_handler : Dream.handler
 val channel_messages_json_handler : Dream.handler
+val realtime_token_handler : Dream.handler
 val send_message_handler : Dream.handler
 (* Start thread from chat: GET renders the form, POST creates the thread + provenance. *)
 val start_thread_form_handler : Dream.handler

@@ -116,6 +116,7 @@ let () =
     Dream.get "/c/:slug/s/:section_slug" Earde.Handlers.community_section_handler;
     Dream.get "/c/:slug/ch/:channel_slug" Earde.Handlers.community_channel_handler;
     Dream.get "/c/:slug/ch/:channel_slug/messages.json" Earde.Handlers.channel_messages_json_handler;
+    Dream.get "/c/:slug/ch/:channel_slug/realtime-token" Earde.Handlers.realtime_token_handler;
     Dream.get "/c/:slug/ch/:channel_slug/messages/:message_id/start-thread" Earde.Handlers.start_thread_form_handler;
     Dream.post "/c/:slug/ch/:channel_slug/messages/:message_id/start-thread" Earde.Handlers.start_thread_create_handler;
     Dream.get "/c/:slug/t/:thread" Earde.Handlers.view_thread_handler;

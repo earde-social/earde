@@ -485,6 +485,18 @@ html, body { height: 100%; overflow: hidden; }
 .community-shell .cs-msg { transition: background-color 1.2s ease; }
 .community-shell .cs-msg--source-flash { background-color: color-mix(in srgb, var(--red) 9%, transparent); transition: none; }
 
+/* Typing row: a quiet single line pinned between the scrolling chat body and
+   the composer. min-height reserves the line so the composer never jumps; the
+   [hidden] override keeps that space while hiding the text (the JS toggles the
+   hidden attribute), and one line of overflow control stops long username
+   lists from growing the row. */
+.community-shell .cs-typing {
+  flex-shrink: 0; box-sizing: content-box; min-height: 15px; padding: 3px 16px 0;
+  font-size: 12px; font-style: italic; color: var(--ink-3); background: var(--panel);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.community-shell .cs-typing[hidden] { display: block; visibility: hidden; }
+
 .community-shell .cs-composer {
   flex-shrink: 0; border-top: 1px solid var(--line-2); background: var(--panel); padding: 12px 16px;
 }
