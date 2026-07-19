@@ -51,10 +51,33 @@ let sign ~secret payload_json =
   let signature = hmac_sha256_base64url ~secret payload in
   payload ^ "." ^ signature
 
+(* Single source of truth for token lifetime: the refresh endpoint reports it
+   to the client as expires_in. *)
+let default_ttl_seconds = 3600
+
 let create_for_topic ~user_id ~username ~topic =
   match getenv_nonempty secret_env with
   | None -> None
   | Some secret ->
-      payload_json ~user_id ~username ~topic ~ttl_seconds:3600
+      payload_json ~user_id ~username ~topic ~ttl_seconds:default_ttl_seconds
       |> sign ~secret
       |> Option.some
+
+(* Decode a token's (transparent, signed) payload part back to JSON. Used by
+   tests to assert topic binding and expiry without a second signing path. *)
+let decode_payload token =
+  match String.split_on_char '.' token with
+  | [ payload; _signature ] -> (
+      let unescaped =
+        String.map (function '-' -> '+' | '_' -> '/' | c -> c) payload
+      in
+      let padded =
+        match String.length unescaped mod 4 with
+        | 0 -> unescaped
+        | r -> unescaped ^ String.make (4 - r) '='
+      in
+      match Base64.decode padded with
+      | Error _ -> None
+      | Ok decoded -> (
+          try Some (Yojson.Safe.from_string decoded) with _ -> None))
+  | _ -> None

@@ -1130,9 +1130,12 @@ let community_channel_shell_page ?user ?realtime_token ?(noindex=false) ~is_memb
                 first (Start_thread.highlight_ids_attr highlight_ids) in
         (notice, attrs)
   in
+  (* The typing row sits between the scrolling message body and the composer
+     (Discord placement): it never scrolls with history and keeps its reserved
+     height when empty so the composer doesn't jump. JS fills it by id. *)
   let main =
     Printf.sprintf
-      "%s%s<div id='chat-live-root' class='cs-main-body cs-chat-body' data-channel-id='%d' data-can-start='%s' data-socket-url='%s' data-signed-token='%s'%s>%s</div>%s"
+      "%s%s<div id='chat-live-root' class='cs-main-body cs-chat-body' data-channel-id='%d' data-can-start='%s' data-socket-url='%s' data-signed-token='%s'%s>%s</div><div class='cs-typing' id='chat-typing' hidden></div>%s"
       head
       source_notice
       channel.id

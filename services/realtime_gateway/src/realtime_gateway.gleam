@@ -7,6 +7,7 @@ import beryl/wire
 import gleam/bit_array
 import gleam/bytes_tree
 import gleam/crypto
+import gleam/dynamic.{type Dynamic}
 import gleam/dynamic/decode
 import gleam/erlang/process
 import gleam/http
@@ -21,12 +22,15 @@ import gleam/order
 import gleam/result
 import gleam/string
 import mist.{type Connection, type ResponseData}
+import typing
 
 const port = 8090
 
 const internal_secret_env = "REALTIME_INTERNAL_SECRET"
 
 const token_secret_env = "REALTIME_TOKEN_SECRET"
+
+const allowed_origins_env = "REALTIME_ALLOWED_ORIGINS"
 
 type AuthClaims {
   AuthClaims(user_id: Int, username: String, topic: String, exp: Int)
@@ -49,20 +53,49 @@ fn getenv(name: String) -> Result(String, Nil)
 @external(erlang, "realtime_gateway_ffi", "safely")
 fn safely(operation: fn() -> Nil) -> Result(Nil, Nil)
 
-type PublishRequest {
+pub type PublishRequest {
   PublishRequest(topic: String, event: String, payload: json.Json)
 }
 
+/// Parse an internal-publish body. Public so tests can pin the new_msg
+/// contract; the HTTP handler goes through the same decoder.
+pub fn parse_publish_request(body: String) -> Result(PublishRequest, Nil) {
+  json.parse(from: body, using: publish_request_decoder())
+  |> result.map_error(fn(_) { Nil })
+}
+
+/// Beryl configuration with inbound rate limiting. Limits are conservative:
+/// the client pushes at most one throttled typing event every couple of
+/// seconds (chat messages go over HTTP), so ordinary use never comes close.
+/// Rate-limited frames are dropped by Beryl without disconnecting the socket.
+pub fn gateway_config() -> beryl.Config {
+  beryl.config(wire.phoenix_codec())
+  // Transport-level, per socket, all inbound frames (incl. heartbeats):
+  // generous ceiling against broken/malicious clients.
+  |> beryl.with_message_rate(per_second: 10, burst: 20)
+  // Per socket+topic after join — effectively the typing-event budget.
+  |> beryl.with_channel_rate(per_second: 2, burst: 5)
+  // Reconnect/join churn guard; Phoenix rejoin backoff absorbs rejections.
+  |> beryl.with_join_rate(per_second: 2, burst: 5)
+}
+
 pub fn main() -> Nil {
-  let assert Ok(channels) = beryl.start(beryl.config(wire.phoenix_codec()))
+  let assert Ok(channels) = beryl.start(gateway_config())
   io.println("beryl started")
 
   let assert Ok(tracker) =
     presence.start(presence.default_config("realtime_gateway"))
   io.println("presence started")
 
+  let assert Ok(typing_tracker) = typing.start(channels)
+  io.println("typing tracker started")
+
   let assert Ok(_registration) =
-    beryl.register(channels, "chan:*", chat_channel(channels, tracker))
+    beryl.register(
+      channels,
+      "chan:*",
+      chat_channel(channels, tracker, typing_tracker),
+    )
   io.println("registered channel pattern chan:*")
 
   let assert Ok(_server) =
@@ -81,6 +114,7 @@ pub fn main() -> Nil {
 fn chat_channel(
   channels: beryl.Channels,
   tracker: presence.Presence,
+  typing_tracker: typing.Typing,
 ) -> channel.Channel(AuthClaims, Nil) {
   channel.new(fn(topic: String, _payload, socket: socket.Socket(AuthClaims)) {
     let claims = socket.get_assigns(socket)
@@ -108,10 +142,61 @@ fn chat_channel(
       }
     }
   })
+  |> channel.with_handle_in(fn(event, payload, socket: socket.Socket(AuthClaims)) {
+    case event {
+      "typing" -> handle_typing_event(typing_tracker, payload, socket)
+      // Unknown client events are ignored so they can never affect
+      // presence or new_msg fanout.
+      _ -> channel.NoReply(socket)
+    }
+  })
   |> channel.with_terminate(fn(_reason, socket: socket.Socket(AuthClaims)) {
     let claims = socket.get_assigns(socket)
     untrack_presence(channels, tracker, claims.topic, socket.id(socket))
+    typing.socket_gone(typing_tracker, socket_id: socket.id(socket))
   })
+}
+
+/// Identity and topic come exclusively from the verified socket assigns —
+/// the client controls only the boolean. Joins are already restricted to the
+/// token's exact topic, so claims.topic is the joined channel. Malformed or
+/// unversioned payloads are ignored.
+fn handle_typing_event(
+  typing_tracker: typing.Typing,
+  payload: Dynamic,
+  socket: socket.Socket(AuthClaims),
+) -> channel.HandleResult(AuthClaims) {
+  let claims = socket.get_assigns(socket)
+  case decode_typing_payload(payload) {
+    Ok(True) ->
+      typing.active(
+        typing_tracker,
+        topic: claims.topic,
+        socket_id: socket.id(socket),
+        user_id: claims.user_id,
+        username: claims.username,
+      )
+    Ok(False) ->
+      typing.inactive(
+        typing_tracker,
+        topic: claims.topic,
+        socket_id: socket.id(socket),
+      )
+    Error(Nil) -> Nil
+  }
+  channel.NoReply(socket)
+}
+
+pub fn decode_typing_payload(payload: Dynamic) -> Result(Bool, Nil) {
+  let decoder = {
+    use v <- decode.field("v", decode.int)
+    use active <- decode.field("active", decode.bool)
+    decode.success(#(v, active))
+  }
+  case channel.decode_payload(payload, decoder) {
+    Ok(#(1, active)) -> Ok(active)
+    _ -> Error(Nil)
+  }
 }
 
 pub type PresenceUser {
@@ -246,6 +331,7 @@ fn handle_request(
 
 fn ws_config() {
   ws.default_config("/socket/websocket")
+  |> with_configured_origins
   |> ws.with_on_connect(fn(req) {
     case token_of(req) {
       Ok(token) -> {
@@ -261,6 +347,31 @@ fn ws_config() {
       }
     }
   })
+}
+
+/// Beryl 1.x defaults WebSocket upgrades to a SameOrigin policy, which
+/// rejects browsers whenever the page origin differs from the gateway's
+/// host:port (the standard Dream-on-8080 / gateway-on-8090 topology). When
+/// REALTIME_ALLOWED_ORIGINS is set (comma-separated full origins, e.g.
+/// "https://earde.com,http://localhost:8080") pin an explicit allow-list;
+/// when unset, keep the stricter SameOrigin default.
+fn with_configured_origins(
+  config: ws.TransportConfig(Nil),
+) -> ws.TransportConfig(Nil) {
+  case getenv(allowed_origins_env) {
+    Ok(raw) -> {
+      let origins =
+        raw
+        |> string.split(",")
+        |> list.map(string.trim)
+        |> list.filter(fn(origin) { origin != "" })
+      case origins {
+        [] -> config
+        _ -> ws.with_allowed_origins(config, origins)
+      }
+    }
+    Error(Nil) -> config
+  }
 }
 
 fn token_of(req: Request(Connection)) -> Result(String, Nil) {
@@ -395,7 +506,7 @@ fn publish_from_body(
     Ok(req_with_body) -> {
       case bit_array.to_string(req_with_body.body) {
         Ok(body) -> {
-          case json.parse(from: body, using: publish_request_decoder()) {
+          case parse_publish_request(body) {
             Ok(PublishRequest(topic, event, payload)) -> {
               beryl.broadcast(channels, topic, event, payload)
               text(202, "published")

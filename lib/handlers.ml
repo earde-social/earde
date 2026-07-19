@@ -1104,6 +1104,59 @@ let channel_messages_json_handler request =
                 in
                 Dream.json (Yojson.Safe.to_string json)))
 
+(* GET /c/:slug/ch/:channel_slug/realtime-token — fresh websocket token for the chat page's
+   JS, so a socket can reconnect after the initial token's expiry without a page reload.
+   Authentication is required BEFORE any lookup: every slug gets the same 401 for an anonymous
+   caller, so nothing is enumerable from this endpoint. Authenticated callers then follow
+   channel_messages_json_handler's exact privacy order (community → can_view_community →
+   channel), reusing community_not_found for denied private reads. The token itself is minted
+   by the same Realtime_token.create_for_topic used at page render — no second signing path —
+   and only ever travels in this response body, never in a URL or a log line. *)
+let realtime_token_handler request =
+  let slug = Dream.param request "slug" in
+  let channel_slug = Dream.param request "channel_slug" in
+  let user = Dream.session_field request "username" in
+  let user_id =
+    match Dream.session_field request "user_id" with
+    | Some id -> (try int_of_string id with _ -> 0)
+    | None -> 0
+  in
+  let is_admin = Dream.session_field request "is_admin" = Some "true" in
+  match user, user_id > 0 with
+  | None, _ | _, false ->
+      Dream.json ~status:`Unauthorized {|{"error":"unauthorized"}|}
+  | Some username, true ->
+      Dream.sql request (fun db ->
+        match%lwt Db.get_community_by_slug db slug with
+        | Error e ->
+            Logs.err (fun m -> m "realtime_token: community lookup failed: %s" e);
+            Dream.respond ~status:`Internal_Server_Error "Internal server error"
+        | Ok None -> community_not_found ?user request
+        | Ok (Some community) ->
+            let%lwt can_view = can_view_community db ~user_id ~is_admin community in
+            if not can_view then community_not_found ?user request
+            else (
+              match%lwt Db.get_channel_by_slug db channel_slug community.id with
+              | Error e ->
+                  Logs.err (fun m -> m "realtime_token: channel lookup failed: %s" e);
+                  Dream.respond ~status:`Internal_Server_Error "Internal server error"
+              | Ok None -> Dream.respond ~status:`Not_Found "Channel not found"
+              | Ok (Some channel) ->
+                  let topic = Printf.sprintf "chan:%d" channel.id in
+                  match Realtime_token.create_for_topic ~user_id ~username ~topic with
+                  | None ->
+                      (* Signing secret not configured: realtime is off for this
+                         deployment; the client stops proactive refresh cleanly. *)
+                      Dream.json ~status:`Service_Unavailable
+                        {|{"error":"realtime unavailable"}|}
+                  | Some token ->
+                      Dream.json
+                        (Yojson.Safe.to_string
+                           (`Assoc
+                             [ ("token", `String token)
+                             ; ("expires_in", `Int Realtime_token.default_ttl_seconds)
+                             ]))))
+
 (* POST /messages — send a chat message via a normal form POST (CSRF auto-validated by
    Dream.form). Flat endpoint with hidden community_slug + channel_slug (not a raw id) so we
    re-resolve and re-validate channel ownership server-side. Safety gates mirror
