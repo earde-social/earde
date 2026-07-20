@@ -530,6 +530,19 @@ html, body { height: 100%; overflow: hidden; }
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 
+/* "New messages" pill floated over the scroller (inside .cs-chat-stage) while
+   messages accumulate below the reader's viewport. Sits above the inert
+   cursor overlay (z-index 5) so it stays clickable. */
+.community-shell .cs-new-msgs {
+  position: absolute; bottom: 10px; left: 50%; transform: translateX(-50%);
+  z-index: 6; cursor: pointer;
+  border: 1px solid var(--red); border-radius: 999px;
+  background: var(--red); color: #fff;
+  font-family: var(--cs-sans); font-weight: 600; font-size: 12px;
+  padding: 4px 12px;
+}
+.community-shell .cs-new-msgs:hover { filter: brightness(1.05); }
+
 /* Opt-in control for shared cursors, rendered only in enabled communities.
    Quiet and secondary: mono microcopy pushed to the right edge of the sticky
    channel header, outside the scroller, sidebars and composer. */

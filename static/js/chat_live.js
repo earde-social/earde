@@ -35,11 +35,18 @@
       return;
     }
 
+    // Synchronous first so the position is right before the next paint (the
+    // initial-load case: this script is deferred, so it runs before first
+    // paint and the reader never sees the top of the SSR history). The rAF
+    // passes re-assert after layout settles; the timeout is deliberately NOT
+    // nested inside rAF so background tabs (where rAF never fires) still end
+    // up positioned.
+    scrollToBottom(scroller);
     requestAnimationFrame(() => {
       scrollToBottom(scroller);
       requestAnimationFrame(() => scrollToBottom(scroller));
-      window.setTimeout(() => scrollToBottom(scroller), 100);
     });
+    window.setTimeout(() => scrollToBottom(scroller), 100);
   }
 
   const chatScroller = getChatScroller();
@@ -127,6 +134,43 @@
   // recoverable even after later live messages have rendered — the next
   // catch-up re-covers the gap from the last HTTP-confirmed point.
   let recoveryCursor = lastMessageId;
+
+  // --- New-messages affordance ----------------------------------------------
+  // A quiet pill over the scroller while messages accumulate below the
+  // reader's viewport; activating it (or scrolling to the bottom) clears it.
+  const chatStage = document.querySelector(".cs-chat-stage");
+  let newMessagesPill = null;
+
+  if (chatStage) {
+    newMessagesPill = document.createElement("button");
+    newMessagesPill.type = "button";
+    newMessagesPill.className = "cs-new-msgs";
+    newMessagesPill.textContent = "↓ New messages";
+    newMessagesPill.hidden = true;
+    newMessagesPill.addEventListener("click", () => {
+      scrollToBottom(chatScroller);
+      hideNewMessagesPill();
+    });
+    chatStage.appendChild(newMessagesPill);
+
+    chatScroller.addEventListener("scroll", () => {
+      if (isNearBottom(chatScroller)) {
+        hideNewMessagesPill();
+      }
+    });
+  }
+
+  function showNewMessagesPill() {
+    if (newMessagesPill) {
+      newMessagesPill.hidden = false;
+    }
+  }
+
+  function hideNewMessagesPill() {
+    if (newMessagesPill) {
+      newMessagesPill.hidden = true;
+    }
+  }
 
   // --- Ordered insertion ----------------------------------------------------
   // SSR, composer-response, catch-up and realtime rows all converge into
@@ -218,13 +262,24 @@
 
     const text = document.createElement("div");
     text.className = "cs-msg-text";
-    text.textContent = payload.content || "";
+
+    const isDeleted = payload.deleted === true;
+
+    if (isDeleted) {
+      // Same tombstone styling as SSR rows: catch-up can deliver a message
+      // that was deleted while this client was disconnected.
+      const tombstone = document.createElement("span");
+      tombstone.className = "cs-msg-deleted";
+      tombstone.textContent = payload.content || "[message deleted]";
+      text.appendChild(tombstone);
+    } else {
+      text.textContent = payload.content || "";
+    }
 
     meta.appendChild(author);
 
     const hasId = payload.id !== undefined && payload.id !== null;
     const hasAuthor = payload.user_id !== undefined && payload.user_id !== null;
-    const isDeleted = payload.deleted === true;
     const isPromoted = payload.thread_id !== undefined && payload.thread_id !== null;
     row.dataset.hasThread = isPromoted ? "true" : "false";
 
@@ -257,6 +312,10 @@
 
     if (shouldStayAtBottom) {
       scrollToBottomSoon(chatScroller);
+    } else if (row.offsetTop > chatScroller.scrollTop + chatScroller.clientHeight) {
+      // The row landed below the reader's viewport: surface the affordance
+      // instead of moving them.
+      showNewMessagesPill();
     }
   }
 
