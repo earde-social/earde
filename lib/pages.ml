@@ -1009,9 +1009,21 @@ let community_channel_shell_page ?user ?realtime_token ?(noindex=false) ~is_memb
     | Some t when t <> "" -> Printf.sprintf "<span class='cs-ch-topic'>%s</span>" (esc t)
     | _ -> ""
   in
+  (* Shared cursors are opt-in and community-gated: the server decides whether
+     the control exists at all (Features allow-list), so the browser can't
+     enable the feature by editing its DOM/URL. Logged-out viewers get no
+     control — they have no realtime token to share through. The checkbox
+     itself only governs broadcasting; seeing others' cursors needs no opt-in. *)
+  let share_control =
+    if user <> None && Features.shared_cursors_enabled ~community_slug:community.slug then
+      Printf.sprintf
+        "<label class='cs-cursor-share' id='chat-cursor-share' data-community-slug='%s'><input type='checkbox' id='chat-cursor-share-toggle'>Share cursor</label>"
+        (esc community.slug)
+    else ""
+  in
   let head = Printf.sprintf
-    "<div class='cs-main-head'><span class='cs-hash'>#</span><span>%s</span>%s</div>"
-    (esc channel.name) topic_html
+    "<div class='cs-main-head'><span class='cs-hash'>#</span><span>%s</span>%s%s</div>"
+    (esc channel.name) topic_html share_control
   in
 
   (* Stream oldest → newest (the DB read already returns ascending), so newest sits at the
@@ -1132,10 +1144,12 @@ let community_channel_shell_page ?user ?realtime_token ?(noindex=false) ~is_memb
   in
   (* The typing row sits between the scrolling message body and the composer
      (Discord placement): it never scrolls with history and keeps its reserved
-     height when empty so the composer doesn't jump. JS fills it by id. *)
+     height when empty so the composer doesn't jump. JS fills it by id.
+     cs-chat-stage wraps the scroller with a sibling shared-cursor overlay
+     covering its visible box; both are empty/inert without JS. *)
   let main =
     Printf.sprintf
-      "%s%s<div id='chat-live-root' class='cs-main-body cs-chat-body' data-channel-id='%d' data-can-start='%s' data-socket-url='%s' data-signed-token='%s'%s>%s</div><div class='cs-typing' id='chat-typing' hidden></div>%s"
+      "%s%s<div class='cs-chat-stage'><div id='chat-live-root' class='cs-main-body cs-chat-body' data-channel-id='%d' data-can-start='%s' data-socket-url='%s' data-signed-token='%s'%s>%s</div><div class='cs-cursor-overlay' id='chat-cursor-overlay' aria-hidden='true'></div></div><div class='cs-typing' id='chat-typing' hidden></div>%s"
       head
       source_notice
       channel.id

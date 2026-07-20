@@ -707,6 +707,346 @@
     renderTypingList(payload);
   });
 
+  // --- Shared cursors ------------------------------------------------------
+  // Fine-pointer clients only. The client sends only { v: 1, active, x, y }
+  // (normalized to the visible chat viewport); identity comes from the
+  // gateway's verified socket state. Viewport-relative coordinates describe a
+  // position within each user's own visible viewport — not the same message
+  // when scroll positions differ. Advisory feature: every failure path
+  // degrades to "no cursors" without touching chat, typing, or presence.
+
+  const cursorOverlay = document.getElementById("chat-cursor-overlay");
+  const finePointer =
+    typeof window.matchMedia === "function" &&
+    window.matchMedia("(pointer: fine)").matches;
+  let cursorDebug = null;
+
+  // The opt-in control exists only where the server enabled the feature for
+  // this community; on coarse-pointer devices it would be inert, so hide it.
+  const cursorShareLabel = document.getElementById("chat-cursor-share");
+  if (cursorShareLabel && !finePointer) {
+    cursorShareLabel.hidden = true;
+  }
+
+  if (cursorOverlay && finePointer) {
+    const cursorSendIntervalMs = 100;
+    const cursorMinMoveNorm = 0.005;
+    const cursorStaleMs = 5000;
+    const cursorStaleSweepMs = 2000;
+    const maxRenderedCursors = 128;
+    const cursorHueCount = 8;
+
+    function clamp01(value) {
+      return Math.min(1, Math.max(0, value));
+    }
+
+    // One cached rect serves emission and rendering; per-event
+    // getBoundingClientRect calls would force layout at 10 Hz per user.
+    let overlayRect = cursorOverlay.getBoundingClientRect();
+
+    function refreshOverlayRect() {
+      overlayRect = cursorOverlay.getBoundingClientRect();
+      cursorEls.forEach((entry) => positionCursorEl(entry));
+    }
+
+    if (window.ResizeObserver) {
+      new ResizeObserver(refreshOverlayRect).observe(cursorOverlay);
+    }
+    window.addEventListener("resize", refreshOverlayRect);
+
+    // -- Emission (opt-in) --
+    // Broadcasting is off by default and only possible where the server
+    // rendered the "Share cursor" control. The checkbox governs emission
+    // only: remote cursors keep rendering for everyone regardless.
+
+    const shareToggle = document.getElementById("chat-cursor-share-toggle");
+    const shareCommunitySlug =
+      cursorShareLabel && typeof cursorShareLabel.dataset.communitySlug === "string"
+        ? cursorShareLabel.dataset.communitySlug
+        : "";
+    const shareStorageKey =
+      shareCommunitySlug !== "" ? `earde:share-cursor:${shareCommunitySlug}` : null;
+
+    // localStorage can be unavailable (privacy modes); degrade to a
+    // session-only, default-off preference.
+    function readSharePreference() {
+      if (!shareStorageKey) {
+        return false;
+      }
+
+      try {
+        return window.localStorage.getItem(shareStorageKey) === "true";
+      } catch (err) {
+        return false;
+      }
+    }
+
+    function writeSharePreference(value) {
+      if (!shareStorageKey) {
+        return;
+      }
+
+      try {
+        window.localStorage.setItem(shareStorageKey, value ? "true" : "false");
+      } catch (err) {
+        // Preference stays session-only.
+      }
+    }
+
+    // True only while the server-rendered toggle exists AND is checked; a
+    // stored "true" from another community can never flip it here because the
+    // key is community-scoped and the toggle only exists where enabled.
+    let sharingEnabled = false;
+
+    let pointerClientX = 0;
+    let pointerClientY = 0;
+    let pointerDirty = false;
+    let cursorActive = false;
+    let lastSentX = null;
+    let lastSentY = null;
+
+    function pushCursor(payload) {
+      if (!hasJoined || !socket.isConnected() || !channel.isJoined()) {
+        return false;
+      }
+
+      try {
+        channel.push("cursor", payload);
+        return true;
+      } catch (err) {
+        console.warn("[chat_live] cursor push failed", err);
+        return false;
+      }
+    }
+
+    function sendCursorInactive() {
+      pointerDirty = false;
+
+      if (!cursorActive) {
+        return;
+      }
+
+      cursorActive = false;
+      lastSentX = null;
+      lastSentY = null;
+      pushCursor({ v: 1, active: false });
+    }
+
+    // Raw pointermove events only record the position; this timer coalesces
+    // them to at most one push per interval, skipping micro-jitter. A
+    // stationary pointer sends nothing and its remote cursor expires via the
+    // gateway TTL by design.
+    const cursorSendTimer = window.setInterval(() => {
+      if (!sharingEnabled || !pointerDirty) {
+        return;
+      }
+
+      pointerDirty = false;
+      const rect = overlayRect;
+      if (!rect || rect.width <= 0 || rect.height <= 0) {
+        return;
+      }
+
+      const x = clamp01((pointerClientX - rect.left) / rect.width);
+      const y = clamp01((pointerClientY - rect.top) / rect.height);
+
+      if (cursorActive && lastSentX !== null) {
+        if (Math.hypot(x - lastSentX, y - lastSentY) < cursorMinMoveNorm) {
+          return;
+        }
+      }
+
+      if (pushCursor({ v: 1, active: true, x, y })) {
+        cursorActive = true;
+        lastSentX = x;
+        lastSentY = y;
+      }
+    }, cursorSendIntervalMs);
+
+    function onCursorPointerMove(event) {
+      if (!sharingEnabled || event.pointerType === "touch") {
+        return;
+      }
+
+      pointerClientX = event.clientX;
+      pointerClientY = event.clientY;
+      pointerDirty = true;
+    }
+
+    function onCursorVisibilityChange() {
+      if (document.visibilityState === "hidden") {
+        sendCursorInactive();
+      }
+    }
+
+    root.addEventListener("pointermove", onCursorPointerMove);
+    root.addEventListener("pointerleave", sendCursorInactive);
+    document.addEventListener("visibilitychange", onCursorVisibilityChange);
+
+    if (composerForm) {
+      composerForm.addEventListener("submit", sendCursorInactive);
+    }
+
+    if (shareToggle) {
+      shareToggle.checked = readSharePreference();
+      sharingEnabled = shareToggle.checked;
+
+      shareToggle.addEventListener("change", () => {
+        sharingEnabled = shareToggle.checked;
+        writeSharePreference(sharingEnabled);
+
+        if (!sharingEnabled) {
+          // Withdraw immediately: pushes active=false if a cursor is live and
+          // resets pointerDirty/lastSent, so nothing sends until re-opted-in.
+          sendCursorInactive();
+        }
+      });
+    }
+
+    // -- Rendering --
+
+    const cursorEls = new Map();
+
+    function positionCursorEl(entry) {
+      const rect = overlayRect;
+      if (!rect) {
+        return;
+      }
+
+      const x = entry.nx * rect.width;
+      const y = entry.ny * rect.height;
+      entry.el.style.transform = `translate(${x}px, ${y}px)`;
+    }
+
+    const svgNs = "http://www.w3.org/2000/svg";
+
+    function buildCursorEl(userId, username) {
+      const el = document.createElement("div");
+      el.className = "cs-cursor";
+      el.dataset.hue = String(((userId % cursorHueCount) + cursorHueCount) % cursorHueCount);
+
+      const svg = document.createElementNS(svgNs, "svg");
+      svg.setAttribute("width", "14");
+      svg.setAttribute("height", "18");
+      svg.setAttribute("viewBox", "0 0 14 18");
+      svg.setAttribute("aria-hidden", "true");
+
+      const path = document.createElementNS(svgNs, "path");
+      path.setAttribute("d", "M1 1 L13 8.6 L7.2 9.9 L4.6 16.4 Z");
+      path.setAttribute("fill", "currentColor");
+      svg.appendChild(path);
+
+      const label = document.createElement("span");
+      label.className = "cs-cursor-label";
+      label.textContent = username;
+
+      el.appendChild(svg);
+      el.appendChild(label);
+      return el;
+    }
+
+    function removeCursorEl(userId) {
+      const entry = cursorEls.get(userId);
+      if (!entry) {
+        return;
+      }
+
+      cursorEls.delete(userId);
+      entry.el.remove();
+    }
+
+    function clearCursors() {
+      cursorEls.forEach((entry) => entry.el.remove());
+      cursorEls.clear();
+    }
+
+    function renderCursor(payload) {
+      try {
+        if (!payload || payload.v !== 1 || typeof payload.user_id !== "number") {
+          return;
+        }
+
+        // Never render the viewer's own cursor.
+        if (viewerId !== null && payload.user_id === viewerId) {
+          return;
+        }
+
+        if (payload.active === false) {
+          removeCursorEl(payload.user_id);
+          return;
+        }
+
+        if (
+          payload.active !== true ||
+          typeof payload.x !== "number" ||
+          typeof payload.y !== "number" ||
+          typeof payload.username !== "string" ||
+          payload.username === ""
+        ) {
+          return;
+        }
+
+        let entry = cursorEls.get(payload.user_id);
+
+        if (!entry) {
+          // Hard DOM cap: unknown users beyond it are ignored until capacity
+          // frees up; existing cursors keep updating and removals still work.
+          if (cursorEls.size >= maxRenderedCursors) {
+            return;
+          }
+
+          entry = {
+            el: buildCursorEl(payload.user_id, payload.username),
+            nx: 0,
+            ny: 0,
+            lastSeen: 0,
+          };
+          cursorEls.set(payload.user_id, entry);
+          cursorOverlay.appendChild(entry.el);
+        }
+
+        entry.nx = clamp01(payload.x);
+        entry.ny = clamp01(payload.y);
+        entry.lastSeen = Date.now();
+        positionCursorEl(entry);
+      } catch (err) {
+        console.warn("[chat_live] cursor render failed", err);
+      }
+    }
+
+    // Client-side safety net mirroring the gateway TTL: even if a removal
+    // event is lost, a cursor that stops updating disappears and the DOM
+    // stays bounded.
+    const cursorStaleTimer = window.setInterval(() => {
+      const cutoff = Date.now() - cursorStaleMs;
+      cursorEls.forEach((entry, userId) => {
+        if (entry.lastSeen < cutoff) {
+          removeCursorEl(userId);
+        }
+      });
+    }, cursorStaleSweepMs);
+
+    function cursorTeardown() {
+      sendCursorInactive();
+      window.clearInterval(cursorSendTimer);
+      window.clearInterval(cursorStaleTimer);
+      root.removeEventListener("pointermove", onCursorPointerMove);
+      root.removeEventListener("pointerleave", sendCursorInactive);
+      document.removeEventListener("visibilitychange", onCursorVisibilityChange);
+      clearCursors();
+    }
+
+    window.addEventListener("pagehide", cursorTeardown);
+
+    channel.on("cursor", renderCursor);
+    socket.onError(clearCursors);
+    socket.onClose(clearCursors);
+
+    cursorDebug = {
+      count: () => cursorEls.size,
+    };
+  }
+
   window.eardeLiveChat = {
     socket,
     channel,
@@ -714,5 +1054,6 @@
     catchUp,
     getChatScroller,
     getLastMessageId: () => lastMessageId,
+    getCursorCount: () => (cursorDebug ? cursorDebug.count() : 0),
   };
 })();

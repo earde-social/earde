@@ -4,11 +4,13 @@ import beryl/presence
 import beryl/socket
 import beryl/transport/mist as ws
 import beryl/wire
+import cursors
 import gleam/bit_array
 import gleam/bytes_tree
 import gleam/crypto
 import gleam/dynamic.{type Dynamic}
 import gleam/dynamic/decode
+import gleam/float
 import gleam/erlang/process
 import gleam/http
 import gleam/http/request.{type Request}
@@ -32,8 +34,17 @@ const token_secret_env = "REALTIME_TOKEN_SECRET"
 
 const allowed_origins_env = "REALTIME_ALLOWED_ORIGINS"
 
-type AuthClaims {
-  AuthClaims(user_id: Int, username: String, topic: String, exp: Int)
+/// shared_cursors is a per-community capability minted into the signed token
+/// by Dream; legacy tokens without the claim default to False. Public (with
+/// parse_claims_json) so tests can pin the trust boundary.
+pub type AuthClaims {
+  AuthClaims(
+    user_id: Int,
+    username: String,
+    topic: String,
+    exp: Int,
+    shared_cursors: Bool,
+  )
 }
 
 type AuthError {
@@ -64,19 +75,25 @@ pub fn parse_publish_request(body: String) -> Result(PublishRequest, Nil) {
   |> result.map_error(fn(_) { Nil })
 }
 
-/// Beryl configuration with inbound rate limiting. Limits are conservative:
-/// the client pushes at most one throttled typing event every couple of
-/// seconds (chat messages go over HTTP), so ordinary use never comes close.
+/// Beryl configuration with inbound rate limiting. Budgets cover typing
+/// (~1 push / 2.5s) plus shared cursors (client-throttled to 10/s); chat
+/// messages go over HTTP, so ordinary use stays below every limit.
 /// Rate-limited frames are dropped by Beryl without disconnecting the socket.
+/// Beryl has no per-event budgets — typing and cursor share the channel
+/// bucket — so the cursors store adds its own 12/s movement-only limiter to
+/// keep a cursor flood from starving typing.
 pub fn gateway_config() -> beryl.Config {
   beryl.config(wire.phoenix_codec())
   // Transport-level, per socket, all inbound frames (incl. heartbeats):
   // generous ceiling against broken/malicious clients.
-  |> beryl.with_message_rate(per_second: 10, burst: 20)
-  // Per socket+topic after join — effectively the typing-event budget.
-  |> beryl.with_channel_rate(per_second: 2, burst: 5)
+  |> beryl.with_message_rate(per_second: 20, burst: 40)
+  // Per socket+topic after join — the combined typing + cursor budget.
+  |> beryl.with_channel_rate(per_second: 15, burst: 30)
   // Reconnect/join churn guard; Phoenix rejoin backoff absorbs rejections.
   |> beryl.with_join_rate(per_second: 2, burst: 5)
+  // Legitimate inbound frames (join, heartbeat, typing, cursor) are tiny;
+  // oversized frames are closed before decoding and cannot affect others.
+  |> beryl.with_max_inbound_frame_bytes(max_bytes: 4096)
 }
 
 pub fn main() -> Nil {
@@ -90,11 +107,14 @@ pub fn main() -> Nil {
   let assert Ok(typing_tracker) = typing.start(channels)
   io.println("typing tracker started")
 
+  let assert Ok(cursor_tracker) = cursors.start(channels)
+  io.println("cursor tracker started")
+
   let assert Ok(_registration) =
     beryl.register(
       channels,
       "chan:*",
-      chat_channel(channels, tracker, typing_tracker),
+      chat_channel(channels, tracker, typing_tracker, cursor_tracker),
     )
   io.println("registered channel pattern chan:*")
 
@@ -115,6 +135,7 @@ fn chat_channel(
   channels: beryl.Channels,
   tracker: presence.Presence,
   typing_tracker: typing.Typing,
+  cursor_tracker: cursors.Cursors,
 ) -> channel.Channel(AuthClaims, Nil) {
   channel.new(fn(topic: String, _payload, socket: socket.Socket(AuthClaims)) {
     let claims = socket.get_assigns(socket)
@@ -145,6 +166,7 @@ fn chat_channel(
   |> channel.with_handle_in(fn(event, payload, socket: socket.Socket(AuthClaims)) {
     case event {
       "typing" -> handle_typing_event(typing_tracker, payload, socket)
+      "cursor" -> handle_cursor_event(cursor_tracker, payload, socket)
       // Unknown client events are ignored so they can never affect
       // presence or new_msg fanout.
       _ -> channel.NoReply(socket)
@@ -154,6 +176,7 @@ fn chat_channel(
     let claims = socket.get_assigns(socket)
     untrack_presence(channels, tracker, claims.topic, socket.id(socket))
     typing.socket_gone(typing_tracker, socket_id: socket.id(socket))
+    cursors.socket_gone(cursor_tracker, socket_id: socket.id(socket))
   })
 }
 
@@ -195,6 +218,93 @@ pub fn decode_typing_payload(payload: Dynamic) -> Result(Bool, Nil) {
   }
   case channel.decode_payload(payload, decoder) {
     Ok(#(1, active)) -> Ok(active)
+    _ -> Error(Nil)
+  }
+}
+
+pub type CursorEvent {
+  CursorActive(x: Float, y: Float)
+  CursorInactive
+}
+
+/// Enforcement of the per-community capability at the trust boundary: only
+/// the verified token claim decides. An active event without the capability
+/// is dropped before any state or broadcast can exist; inactive stays a
+/// harmless cleanup no-op. Payload fields (e.g. a forged shared_cursors)
+/// can never override the claim — the payload decoder ignores them.
+pub fn authorize_cursor_event(
+  shared_cursors shared_cursors: Bool,
+  event event: CursorEvent,
+) -> Result(CursorEvent, Nil) {
+  case shared_cursors, event {
+    False, CursorActive(_, _) -> Error(Nil)
+    _, _ -> Ok(event)
+  }
+}
+
+/// Same trust model as typing: identity and topic come exclusively from the
+/// verified socket assigns; the client controls only active/x/y. Malformed or
+/// unversioned payloads are ignored, as are active events from tokens
+/// without the shared_cursors capability.
+fn handle_cursor_event(
+  cursor_tracker: cursors.Cursors,
+  payload: Dynamic,
+  socket: socket.Socket(AuthClaims),
+) -> channel.HandleResult(AuthClaims) {
+  let claims = socket.get_assigns(socket)
+  case
+    decode_cursor_payload(payload)
+    |> result.try(fn(event) {
+      authorize_cursor_event(shared_cursors: claims.shared_cursors, event: event)
+    })
+  {
+    Ok(CursorActive(x, y)) ->
+      cursors.active(
+        cursor_tracker,
+        topic: claims.topic,
+        socket_id: socket.id(socket),
+        user_id: claims.user_id,
+        username: claims.username,
+        x: x,
+        y: y,
+      )
+    Ok(CursorInactive) ->
+      cursors.inactive(
+        cursor_tracker,
+        topic: claims.topic,
+        socket_id: socket.id(socket),
+      )
+    Error(Nil) -> Nil
+  }
+  channel.NoReply(socket)
+}
+
+/// Coordinates must be numeric (JSON integers 0 and 1 included — Erlang JSON
+/// yields ints for them, so plain decode.float would wrongly reject the
+/// edges) and are clamped to [0, 1]. Missing or non-numeric coordinates on an
+/// active update reject the whole event.
+pub fn decode_cursor_payload(payload: Dynamic) -> Result(CursorEvent, Nil) {
+  let number = decode.one_of(decode.float, or: [decode.map(decode.int, int.to_float)])
+  let decoder = {
+    use v <- decode.field("v", decode.int)
+    use active <- decode.field("active", decode.bool)
+    case active {
+      False -> decode.success(#(v, CursorInactive))
+      True -> {
+        use x <- decode.field("x", number)
+        use y <- decode.field("y", number)
+        decode.success(#(
+          v,
+          CursorActive(
+            float.clamp(x, min: 0.0, max: 1.0),
+            float.clamp(y, min: 0.0, max: 1.0),
+          ),
+        ))
+      }
+    }
+  }
+  case channel.decode_payload(payload, decoder) {
+    Ok(#(1, event)) -> Ok(event)
     _ -> Error(Nil)
   }
 }
@@ -448,8 +558,19 @@ fn claims_decoder() -> decode.Decoder(AuthClaims) {
   use username <- decode.field("username", decode.string)
   use topic <- decode.field("topic", decode.string)
   use exp <- decode.field("exp", decode.int)
+  // Absent on legacy tokens (minted before the capability existed): those
+  // stay valid for presence/typing/chat but can never share cursors.
+  use shared_cursors <- decode.optional_field("shared_cursors", False, decode.bool)
 
-  decode.success(AuthClaims(user_id, username, topic, exp))
+  decode.success(AuthClaims(user_id, username, topic, exp, shared_cursors))
+}
+
+/// Parse a raw claims JSON document (the decoded token payload). Signature
+/// and expiry checks live in verify_signed_token; this is the pure decoding
+/// step, public so tests can pin claim semantics (legacy default included).
+pub fn parse_claims_json(payload_json: String) -> Result(AuthClaims, Nil) {
+  json.parse(from: payload_json, using: claims_decoder())
+  |> result.map_error(fn(_) { Nil })
 }
 
 fn handle_internal_publish(

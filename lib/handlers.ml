@@ -974,6 +974,9 @@ let community_channel_handler request =
                     ~user_id
                     ~username
                     ~topic:realtime_topic
+                    ~shared_cursors:
+                      (Features.shared_cursors_enabled
+                         ~community_slug:community.slug)
               | _ -> None
             in
             Dream.html (Pages.community_channel_shell_page ?user ?realtime_token ~noindex:(child_noindex community ~child_indexable:channel.Db.indexable) ~is_member ~can_start ~thread_links ?source_focus ~rail_communities ~channels ~sections ~channel ~messages ~community request)
@@ -1143,7 +1146,12 @@ let realtime_token_handler request =
               | Ok None -> Dream.respond ~status:`Not_Found "Channel not found"
               | Ok (Some channel) ->
                   let topic = Printf.sprintf "chan:%d" channel.id in
-                  match Realtime_token.create_for_topic ~user_id ~username ~topic with
+                  (* Capability recomputed from the community on every refresh —
+                     never copied from the old token or any client input. *)
+                  let shared_cursors =
+                    Features.shared_cursors_enabled ~community_slug:community.slug
+                  in
+                  match Realtime_token.create_for_topic ~user_id ~username ~topic ~shared_cursors with
                   | None ->
                       (* Signing secret not configured: realtime is off for this
                          deployment; the client stops proactive refresh cleanly. *)

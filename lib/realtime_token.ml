@@ -32,7 +32,11 @@ let hmac_sha256_base64url ~secret value =
 let unix_now () =
   Unix.time () |> int_of_float
 
-let payload_json ~user_id ~username ~topic ~ttl_seconds =
+(* shared_cursors is a capability claim, not identity: the gateway trusts it
+   only because it rides the HMAC signature, and callers must derive it
+   server-side (Features.shared_cursors_enabled) — never from client input.
+   Gateways treat a missing claim (legacy token) as false. *)
+let payload_json ~user_id ~username ~topic ~shared_cursors ~ttl_seconds =
   let exp = unix_now () + ttl_seconds in
   `Assoc
     [ ("v", `Int 1)
@@ -40,6 +44,7 @@ let payload_json ~user_id ~username ~topic ~ttl_seconds =
     ; ("username", `String username)
     ; ("topic", `String topic)
     ; ("exp", `Int exp)
+    ; ("shared_cursors", `Bool shared_cursors)
     ]
 
 let sign ~secret payload_json =
@@ -55,11 +60,12 @@ let sign ~secret payload_json =
    to the client as expires_in. *)
 let default_ttl_seconds = 3600
 
-let create_for_topic ~user_id ~username ~topic =
+let create_for_topic ~user_id ~username ~topic ~shared_cursors =
   match getenv_nonempty secret_env with
   | None -> None
   | Some secret ->
-      payload_json ~user_id ~username ~topic ~ttl_seconds:default_ttl_seconds
+      payload_json ~user_id ~username ~topic ~shared_cursors
+        ~ttl_seconds:default_ttl_seconds
       |> sign ~secret
       |> Option.some
 
