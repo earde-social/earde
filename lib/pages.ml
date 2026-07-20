@@ -1059,9 +1059,12 @@ let community_channel_shell_page ?user ?realtime_token ?(noindex=false) ~is_memb
       if can_start && m.deleted_at = None && m.user_id <> None && not already_promoted then
         Printf.sprintf "<a class='cs-msg-start' href='%s' data-promote-url='%s'>Start thread</a>" promote_url promote_url
       else "" in
+    (* Minute precision, matching chat_message_json, so SSR rows and rows the
+       JS appends later (live, catch-up, composer response) display alike. *)
+    let time_text = Start_thread.minute_of_ts m.created_at in
     let time_html =
-      if start_link = "" then Printf.sprintf "<span class='cs-msg-time'>%s</span>" (esc m.created_at)
-      else Printf.sprintf "<span class='cs-msg-time-slot'><span class='cs-msg-time'>%s</span>%s</span>" (esc m.created_at) start_link
+      if start_link = "" then Printf.sprintf "<span class='cs-msg-time'>%s</span>" (esc time_text)
+      else Printf.sprintf "<span class='cs-msg-time-slot'><span class='cs-msg-time'>%s</span>%s</span>" (esc time_text) start_link
     in
     (* Provenance markers stay attached under the message text. Start thread is rendered
        in the meta row beside the timestamp so hover never changes message height. *)
@@ -1105,7 +1108,7 @@ let community_channel_shell_page ?user ?realtime_token ?(noindex=false) ~is_memb
         Printf.sprintf "<div class='cs-composer cs-composer-prompt'><span>Join this community to chat.</span><form action='/join' method='POST'>%s<input type='hidden' name='community_id' value='%d'><input type='hidden' name='redirect_to' value='%s'><button type='submit' class='cs-send'>Join &amp; chat</button></form></div>"
           csrf_token community.id channel_url
     | Some _ ->
-        Printf.sprintf "<div class='cs-composer'><form action='/messages' method='POST'>%s<input type='hidden' name='community_slug' value='%s'><input type='hidden' name='channel_slug' value='%s'><textarea name='content' rows='1' placeholder='Message #%s' required></textarea><button type='submit' class='cs-send'>Send</button></form></div>"
+        Printf.sprintf "<div class='cs-composer'><form action='/messages' method='POST'>%s<input type='hidden' name='community_slug' value='%s'><input type='hidden' name='channel_slug' value='%s'><textarea name='content' rows='1' maxlength='4000' placeholder='Message #%s' required></textarea><button type='submit' class='cs-send'>Send</button></form></div>"
           csrf_token (esc community.slug) (esc channel.slug) (esc channel.slug)
   in
 

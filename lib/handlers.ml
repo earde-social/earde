@@ -1026,13 +1026,57 @@ let chat_message_json
         (match message.deleted_at with
          | Some _ -> `String "[message deleted]"
          | None -> json_string message.content))
-    ; ("created_at", json_string message.created_at)
+      (* Minute precision everywhere a chat row is serialized, matching the SSR
+         renderer, so live, catch-up and composer-response rows display alike. *)
+    ; ("created_at", json_string (Pages.Start_thread.minute_of_ts message.created_at))
     ; ("deleted", `Bool (message.deleted_at <> None))
     ; ("thread_id",
         (match thread_id with
          | Some pid -> json_int pid
          | None -> `Null))
     ]
+
+(* ---- Chat composer JSON contract -----------------------------------------
+   The chat composer submits over fetch with "Accept: application/json"; the
+   no-JS fallback stays an ordinary form POST and keeps its redirect/HTML
+   responses. These helpers are pure and exposed for tests so the negotiation
+   rule, the validation boundary and the error shape cannot silently drift. *)
+module Chat_api = struct
+  (* A submission opts into JSON by sending an Accept value that mentions
+     application/json; browser navigation Accept headers never do. *)
+  let wants_json (accept : string option) =
+    match accept with
+    | None -> false
+    | Some value ->
+        let value = String.lowercase_ascii value in
+        let needle = "application/json" in
+        let nlen = String.length needle in
+        let vlen = String.length value in
+        let rec scan i =
+          i + nlen <= vlen
+          && (String.sub value i nlen = needle || scan (i + 1))
+        in
+        scan 0
+
+  let max_content_length = 4000
+
+  (* One validation for both response modes: trimmed content or a closed error
+     variant, so the JSON and HTML paths always agree on what is sendable. *)
+  let validate_content (raw : string) =
+    let content = String.trim raw in
+    if content = "" then Error `Empty
+    else if String.length content > max_content_length then Error `Too_long
+    else Ok content
+
+  (* Client-safe error body: a stable code plus display copy only — never an
+     exception string, SQL error or anything else internal. *)
+  let error_json ~code ~message =
+    Yojson.Safe.to_string
+      (`Assoc [ ("error", `String code); ("message", `String message) ])
+
+  let internal_error_json =
+    error_json ~code:"internal" ~message:"Something went wrong. Please try again."
+end
 
 let channel_messages_json_handler request =
   let slug = Dream.param request "slug" in
@@ -1165,13 +1209,27 @@ let realtime_token_handler request =
                              ; ("expires_in", `Int Realtime_token.default_ttl_seconds)
                              ]))))
 
-(* POST /messages — send a chat message via a normal form POST (CSRF auto-validated by
-   Dream.form). Flat endpoint with hidden community_slug + channel_slug (not a raw id) so we
-   re-resolve and re-validate channel ownership server-side. Safety gates mirror
-   create_post_handler: global ban → membership → local ban. Redirects back to the channel. *)
+(* POST /messages — send a chat message. Two response modes over one endpoint:
+   an ordinary form POST (no-JS fallback) keeps the historical redirect/HTML
+   contract, while the chat page's fetch submission (Accept: application/json)
+   receives JSON — a canonical new_msg-shaped row on success, a safe
+   code+message body on failure — so the page never navigates. Validation,
+   authorization and persistence are identical for both modes: CSRF
+   auto-validated by Dream.form, hidden community_slug + channel_slug (not a
+   raw id) re-resolved and re-validated server-side, safety gates mirroring
+   create_post_handler (global ban → membership → local ban), Postgres write
+   first, gateway publish best-effort after. *)
 let send_message_handler request =
+  let respond_json = Chat_api.wants_json (Dream.header request "Accept") in
+  let json_error status ~code ~message =
+    Dream.json ~status (Chat_api.error_json ~code ~message)
+  in
   match Dream.session_field request "user_id" with
-  | None -> Dream.redirect request "/login"
+  | None ->
+      if respond_json then
+        json_error `Unauthorized ~code:"unauthorized"
+          ~message:"Your session has ended. Reload the page and log in."
+      else Dream.redirect request "/login"
   | Some uid_str ->
       let user_id = try int_of_string uid_str with _ -> 0 in
       let uname = Dream.session_field request "username" in
@@ -1179,8 +1237,15 @@ let send_message_handler request =
       | `Ok form_data ->
           let community_slug = List.assoc_opt "community_slug" form_data |> Option.value ~default:"" in
           let channel_slug = List.assoc_opt "channel_slug" form_data |> Option.value ~default:"" in
-          let content = String.trim (List.assoc_opt "content" form_data |> Option.value ~default:"") in
+          let raw_content = List.assoc_opt "content" form_data |> Option.value ~default:"" in
           let back_url = Printf.sprintf "/c/%s/ch/%s" community_slug channel_slug in
+          let internal_error e =
+            Logs.err (fun m -> m "send_message: %s" e);
+            if respond_json then
+              Dream.json ~status:`Internal_Server_Error Chat_api.internal_error_json
+            else
+              Dream.html (Pages.msg_page ?user:uname ~title:"Error" ~message:("Database error: " ^ e) ~alert_type:"error" ~return_url:"/" request)
+          in
           Dream.sql request (fun db ->
             match%lwt Db.get_community_by_slug db community_slug with
             | Ok (Some community) ->
@@ -1188,57 +1253,90 @@ let send_message_handler request =
                  | Ok (Some channel) ->
                      let%lwt is_gb = match%lwt Db.is_globally_banned db user_id with Ok b -> Lwt.return b | Error _ -> Lwt.return false in
                      if is_gb then
-                       Dream.respond ~status:`Forbidden (Pages.msg_page ?user:uname ~title:"Account Banned" ~message:"Your account has been permanently banned from Earde." ~alert_type:"error" ~return_url:"/" request)
+                       (if respond_json then
+                          json_error `Forbidden ~code:"forbidden"
+                            ~message:"Your account has been permanently banned from Earde."
+                        else
+                          Dream.respond ~status:`Forbidden (Pages.msg_page ?user:uname ~title:"Account Banned" ~message:"Your account has been permanently banned from Earde." ~alert_type:"error" ~return_url:"/" request))
                      else begin
                        match%lwt Db.is_member db user_id community.id with
                        | Ok true ->
                            (match%lwt Db.community_is_banned db user_id community.id with
                             | Ok true ->
-                                Dream.respond ~status:`Forbidden (Pages.msg_page ?user:uname ~title:"Banned from Community" ~message:"You are banned from this community." ~alert_type:"error" ~return_url:("/c/" ^ community_slug) request)
-                            | _ ->
-                                if content = "" then Dream.redirect request (safe_local_redirect back_url)
-                                else if String.length content > 4000 then
-                                  Dream.html (Pages.msg_page ?user:uname ~title:"Message too long" ~message:"Messages cannot exceed 4000 characters." ~alert_type:"error" ~return_url:back_url request)
+                                if respond_json then
+                                  json_error `Forbidden ~code:"forbidden"
+                                    ~message:"You are banned from this community."
                                 else
+                                  Dream.respond ~status:`Forbidden (Pages.msg_page ?user:uname ~title:"Banned from Community" ~message:"You are banned from this community." ~alert_type:"error" ~return_url:("/c/" ^ community_slug) request)
+                            | _ ->
+                                (match Chat_api.validate_content raw_content with
+                                 | Error `Empty ->
+                                     if respond_json then
+                                       json_error `Bad_Request ~code:"empty" ~message:"Message is empty."
+                                     else Dream.redirect request (safe_local_redirect back_url)
+                                 | Error `Too_long ->
+                                     if respond_json then
+                                       json_error `Bad_Request ~code:"too_long"
+                                         ~message:"Messages cannot exceed 4000 characters."
+                                     else
+                                       Dream.html (Pages.msg_page ?user:uname ~title:"Message too long" ~message:"Messages cannot exceed 4000 characters." ~alert_type:"error" ~return_url:back_url request)
+                                 | Ok content ->
                                   (match%lwt Db.send_message db channel.id user_id content with
-                                   | Ok message_id ->
-                                       let%lwt created_at_opt =
-                                         match%lwt Db.get_message_by_id db message_id with
-                                         | Ok (Some message) ->
-                                             Lwt.return_some (message : Db.chat_message).created_at
-                                         | Ok None ->
-                                             Logs.warn (fun m ->
-                                                 m "Inserted chat message %Ld but could not read it back" message_id);
-                                             Lwt.return_none
-                                         | Error e ->
-                                             Logs.warn (fun m ->
-                                                 m "Could not read inserted chat message %Ld: %s" message_id e);
-                                             Lwt.return_none
-                                       in
-                                       (match created_at_opt with
-                                        | Some created_at ->
-                                            Lwt.async (fun () ->
-                                                Realtime.publish_chat_message
-                                                  ~channel_id:channel.id
-                                                  ~community_id:community.id
-                                                  ~message_id
-                                                  ~user_id
-                                                  ~username:(Option.value uname ~default:"[unknown]")
-                                                  ~content
-                                                  ~created_at)
-                                        | None -> ());
-                                       Dream.redirect request (safe_local_redirect back_url)
-                                   | Error e -> Dream.html (Pages.msg_page ?user:uname ~title:"Error" ~message:("Could not send message: " ^ e) ~alert_type:"error" ~return_url:back_url request)))
+                                   | Ok message ->
+                                       (* INSERT ... RETURNING hands back the canonical
+                                          persisted row (Postgres id and created_at) in
+                                          the insert round-trip, so both the publish and
+                                          the JSON success body come straight from what
+                                          was stored — no read-back, no synthesized
+                                          fields. Username joins from the already
+                                          authenticated session. *)
+                                       let username = Option.value uname ~default:"[unknown]" in
+                                       Lwt.async (fun () ->
+                                           Realtime.publish_chat_message
+                                             ~channel_id:channel.id
+                                             ~community_id:community.id
+                                             ~message_id:message.Db.id
+                                             ~user_id
+                                             ~username
+                                             ~content
+                                             ~created_at:(Pages.Start_thread.minute_of_ts message.Db.created_at));
+                                       if respond_json then
+                                         Dream.json
+                                           (Yojson.Safe.to_string
+                                              (chat_message_json
+                                                 ~channel_id:channel.id
+                                                 ~community_id:community.id
+                                                 (message, Some username)))
+                                       else Dream.redirect request (safe_local_redirect back_url)
+                                   | Error e ->
+                                       if respond_json then internal_error e
+                                       else Dream.html (Pages.msg_page ?user:uname ~title:"Error" ~message:("Could not send message: " ^ e) ~alert_type:"error" ~return_url:back_url request))))
                        | Ok false ->
-                           Dream.respond ~status:`Forbidden (Pages.msg_page ?user:uname ~title:"Not a Member" ~message:"You must join this community to chat." ~alert_type:"error" ~return_url:("/c/" ^ community_slug) request)
-                       | Error e ->
-                           Dream.html (Pages.msg_page ?user:uname ~title:"Error" ~message:("Database error: " ^ e) ~alert_type:"error" ~return_url:"/" request)
+                           if respond_json then
+                             json_error `Forbidden ~code:"not_member" ~message:"Join this community to chat."
+                           else
+                             Dream.respond ~status:`Forbidden (Pages.msg_page ?user:uname ~title:"Not a Member" ~message:"You must join this community to chat." ~alert_type:"error" ~return_url:("/c/" ^ community_slug) request)
+                       | Error e -> internal_error e
                      end
-                 | Ok None -> Dream.respond ~status:`Not_Found (Pages.msg_page ?user:uname ~title:"Not Found" ~message:"This channel does not exist." ~alert_type:"error" ~return_url:("/c/" ^ community_slug) request)
-                 | Error e -> Dream.html (Pages.msg_page ?user:uname ~title:"Error" ~message:("Database error: " ^ e) ~alert_type:"error" ~return_url:"/" request))
-            | Ok None -> Dream.respond ~status:`Not_Found (Pages.msg_page ?user:uname ~title:"Not Found" ~message:"This community does not exist." ~alert_type:"error" ~return_url:"/" request)
-            | Error e -> Dream.html (Pages.msg_page ?user:uname ~title:"Error" ~message:("Database error: " ^ e) ~alert_type:"error" ~return_url:"/" request))
-      | _ -> Dream.respond ~status:`Bad_Request (Pages.msg_page ?user:uname ~title:"Form Error" ~message:"There was a problem with your submission. Please try again." ~alert_type:"error" ~return_url:"/" request)
+                 | Ok None ->
+                     if respond_json then
+                       json_error `Not_Found ~code:"not_found" ~message:"This channel does not exist."
+                     else Dream.respond ~status:`Not_Found (Pages.msg_page ?user:uname ~title:"Not Found" ~message:"This channel does not exist." ~alert_type:"error" ~return_url:("/c/" ^ community_slug) request)
+                 | Error e -> internal_error e)
+            | Ok None ->
+                if respond_json then
+                  json_error `Not_Found ~code:"not_found" ~message:"This community does not exist."
+                else Dream.respond ~status:`Not_Found (Pages.msg_page ?user:uname ~title:"Not Found" ~message:"This community does not exist." ~alert_type:"error" ~return_url:"/" request)
+            | Error e -> internal_error e)
+      | _ ->
+          (* Dream.form failure: missing/stale CSRF or a non-form body. The fetch
+             path surfaces it as retry-after-reload guidance — a chat tab older
+             than the CSRF token lifetime lands here. *)
+          if respond_json then
+            json_error `Bad_Request ~code:"stale_form"
+              ~message:"This page is out of date. Reload and try again."
+          else
+            Dream.respond ~status:`Bad_Request (Pages.msg_page ?user:uname ~title:"Form Error" ~message:"There was a problem with your submission. Please try again." ~alert_type:"error" ~return_url:"/" request)
 
 (* ---- Start thread from chat -------------------------------------------------
    Crystallize a chat conversation into a durable forum thread. A seed message plus

@@ -1,3 +1,7 @@
 (test
  (name test_earde)
- (libraries earde alcotest))
+ (libraries earde alcotest)
+ ; Referencing Earde.Handlers pulls in Auth's argon2 (ctypes) binding, which
+ ; needs the system library linked explicitly — same flags as bin/dune.
+ (link_flags
+  (:standard -cclib -largon2)))

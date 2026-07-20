@@ -1580,17 +1580,19 @@ module Chat = struct
     { id; channel_id; user_id; content; created_at; edited_at; deleted_at }
 
   (* user_id is the non-optional int here (see chat_message comment); created_at,
-     edited_at, deleted_at take their column defaults/NULL. RETURNING id (int64) lets
-     the caller emit the new message id without a second round-trip — mirrors
-     Post.create_post. *)
+     edited_at, deleted_at take their column defaults/NULL. RETURNING the full row
+     hands the caller the canonical persisted message — Postgres-assigned id and
+     created_at included — in the single insert round-trip, so the composer's JSON
+     response and the realtime publish never need a read-back. *)
   let send_message_query =
     let open Caqti_request.Infix in
-    (Caqti_type.(t3 int int string) ->! Caqti_type.int64)
-    "INSERT INTO chat_messages (channel_id, user_id, content) VALUES ($1, $2, $3) RETURNING id"
+    (Caqti_type.(t3 int int string) ->! chat_message_row_type)
+    "INSERT INTO chat_messages (channel_id, user_id, content) VALUES ($1, $2, $3) \
+     RETURNING id, channel_id, user_id, content, created_at::text, edited_at::text, deleted_at::text"
 
   let send_message (module C : Caqti_lwt.CONNECTION) channel_id user_id content =
     C.find send_message_query (channel_id, user_id, content) >>= function
-    | Ok id -> Lwt.return (Ok id)
+    | Ok row -> Lwt.return (Ok (map_chat_message_row row))
     | Error err -> Lwt.return (Error (Caqti_error.show err))
 
   let get_by_id_query =

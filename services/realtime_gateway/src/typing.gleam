@@ -30,6 +30,12 @@ pub const ttl_seconds = 6
 
 const sweep_interval_ms = 2000
 
+/// Hard bound on typing entries per topic, mirroring the cursors store. At
+/// capacity, brand-new sockets are dropped; sockets already typing keep
+/// refreshing and every removal path (inactive, disconnect, sweep) still
+/// works, so capacity frees itself within one TTL.
+pub const max_entries_per_topic = 256
+
 pub type TypingUser {
   TypingUser(user_id: Int, username: String)
 }
@@ -60,8 +66,19 @@ pub fn set_active(
   let sockets =
     dict.get(store.topics, topic)
     |> result.unwrap(dict.new())
-    |> dict.insert(socket_id, Entry(user_id, username, now))
-  Store(dict.insert(store.topics, topic, sockets))
+
+  case
+    dict.size(sockets) >= max_entries_per_topic
+    && !dict.has_key(sockets, socket_id)
+  {
+    True -> store
+    False ->
+      Store(dict.insert(
+        store.topics,
+        topic,
+        dict.insert(sockets, socket_id, Entry(user_id, username, now)),
+      ))
+  }
 }
 
 pub fn set_inactive(
