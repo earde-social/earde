@@ -117,8 +117,52 @@
     return maxId;
   }
 
-  // Highest rendered message id.
+  // Highest rendered message id — drives display-side decisions only.
   let lastMessageId = readLastMessageIdFromDom();
+
+  // Recovery cursor for HTTP catch-up. Deliberately separate from
+  // lastMessageId: it starts at the highest SSR id and advances ONLY through
+  // successful catch-up responses, never through realtime events. A message
+  // that was persisted but whose gateway publish was lost therefore stays
+  // recoverable even after later live messages have rendered — the next
+  // catch-up re-covers the gap from the last HTTP-confirmed point.
+  let recoveryCursor = lastMessageId;
+
+  // --- Ordered insertion ----------------------------------------------------
+  // SSR, composer-response, catch-up and realtime rows all converge into
+  // ascending message-id order. The scan walks from the tail because the
+  // overwhelmingly common insert is an append; mid-stream inserts (catch-up
+  // backfilling a gap) compensate scrollTop when they land above the viewport
+  // so the reader's visual position never moves.
+  function insertRowOrdered(row, id) {
+    let ref = null;
+
+    if (Number.isFinite(id)) {
+      let node = root.lastElementChild;
+      while (node) {
+        const nodeId = Number(node.dataset ? node.dataset.messageId : NaN);
+        if (Number.isFinite(nodeId) && nodeId < id) {
+          break;
+        }
+        if (Number.isFinite(nodeId)) {
+          ref = node;
+        }
+        node = node.previousElementSibling;
+      }
+    }
+
+    const prevTop = chatScroller.scrollTop;
+    const prevHeight = chatScroller.scrollHeight;
+
+    if (ref) {
+      root.insertBefore(row, ref);
+      if (row.offsetTop < prevTop) {
+        chatScroller.scrollTop = prevTop + (chatScroller.scrollHeight - prevHeight);
+      }
+    } else {
+      root.appendChild(row);
+    }
+  }
 
   function appendMessage(payload, options = {}) {
     if (payload.id !== undefined && payload.id !== null) {
@@ -144,12 +188,13 @@
     const row = document.createElement("div");
     row.className = "cs-msg";
 
+    const numericId = Number(payload.id);
+
     if (payload.id !== undefined && payload.id !== null) {
       row.dataset.messageId = String(payload.id);
 
-      const id = Number(payload.id);
-      if (Number.isFinite(id) && id > lastMessageId) {
-        lastMessageId = id;
+      if (Number.isFinite(numericId) && numericId > lastMessageId) {
+        lastMessageId = numericId;
       }
     }
 
@@ -208,7 +253,7 @@
     row.appendChild(avatar);
     row.appendChild(body);
 
-    root.appendChild(row);
+    insertRowOrdered(row, numericId);
 
     if (shouldStayAtBottom) {
       scrollToBottomSoon(chatScroller);
@@ -216,8 +261,23 @@
   }
 
   // --- HTTP catch-up --------------------------------------------------------
-  // One page after the highest rendered id; runs on join and reconnect.
+  // Requests start after the recovery cursor and merge through the same
+  // ordered, deduplicated insertion as every other row. The cursor advances
+  // only when a page arrives successfully; timeout, abort and HTTP errors
+  // leave it (and catchUpInFlight) reset so the next cycle retries the same
+  // range.
+  const catchUpPageSize = 100; // server-side LIMIT of messages.json
+  const catchUpMaxPagesPerCycle = 5;
+  const catchUpTimeoutMs = 10000;
+  const catchUpContinuationDelayMs = 250;
+  const catchUpReconcileDelayMs = 4000;
   let catchUpInFlight = false;
+  let catchUpTimer = null;
+
+  function scheduleCatchUp(delayMs) {
+    window.clearTimeout(catchUpTimer);
+    catchUpTimer = window.setTimeout(catchUp, delayMs);
+  }
 
   async function catchUp() {
     if (catchUpInFlight) {
@@ -225,36 +285,60 @@
     }
 
     catchUpInFlight = true;
+    let continueLater = false;
 
     try {
-      const url = `${catchUpUrl}?after_id=${encodeURIComponent(String(lastMessageId))}`;
+      for (let page = 0; page < catchUpMaxPagesPerCycle; page++) {
+        const url = `${catchUpUrl}?after_id=${encodeURIComponent(String(recoveryCursor))}`;
+        const controller = new AbortController();
+        const timeoutTimer = window.setTimeout(() => controller.abort(), catchUpTimeoutMs);
 
-      const response = await fetch(url, {
-        method: "GET",
-        headers: {
-          Accept: "application/json",
-        },
-        credentials: "same-origin",
-      });
+        let data;
+        try {
+          const response = await fetch(url, {
+            method: "GET",
+            headers: { Accept: "application/json" },
+            credentials: "same-origin",
+            signal: controller.signal,
+          });
 
-      if (!response.ok) {
-        console.warn("[chat_live] catch-up failed", response.status);
-        return;
+          if (!response.ok) {
+            console.warn("[chat_live] catch-up failed", response.status);
+            return;
+          }
+
+          data = await response.json();
+        } finally {
+          window.clearTimeout(timeoutTimer);
+        }
+
+        const messages = Array.isArray(data.messages) ? data.messages : [];
+        const wasNearBottom = isNearBottom(chatScroller);
+
+        messages.forEach((message) => {
+          appendMessage(message, { wasNearBottom });
+
+          const id = Number(message.id);
+          if (Number.isFinite(id) && id > recoveryCursor) {
+            recoveryCursor = id;
+          }
+        });
+
+        if (messages.length < catchUpPageSize) {
+          return;
+        }
       }
 
-      const data = await response.json();
-      const messages = Array.isArray(data.messages) ? data.messages : [];
-      const shouldStayAtBottom = isNearBottom(chatScroller);
-
-      messages.forEach((message) => appendMessage(message, { wasNearBottom: shouldStayAtBottom }));
-
-      if (shouldStayAtBottom) {
-        scrollToBottomSoon(chatScroller);
-      }
+      // Page cap reached on a full page: more may remain, so schedule a
+      // continuation instead of silently treating recovery as complete.
+      continueLater = true;
     } catch (err) {
       console.warn("[chat_live] catch-up exception", err);
     } finally {
       catchUpInFlight = false;
+      if (continueLater) {
+        scheduleCatchUp(catchUpContinuationDelayMs);
+      }
     }
   }
 
@@ -740,6 +824,15 @@
     console.log("[chat_live] new_msg", payload);
     const shouldStayAtBottom = isNearBottom(chatScroller);
     appendMessage(payload, { wasNearBottom: shouldStayAtBottom });
+
+    // Live events never advance the recovery cursor, so a live id ahead of it
+    // means an HTTP-unconfirmed range exists. Reconcile shortly after the
+    // burst settles: the catch-up either confirms the range or backfills a
+    // message whose gateway publish was lost.
+    const id = Number(payload && payload.id);
+    if (Number.isFinite(id) && id > recoveryCursor) {
+      scheduleCatchUp(catchUpReconcileDelayMs);
+    }
   });
 
   channel.on("presence_list", (payload) => {
@@ -1175,6 +1268,7 @@
     catchUp,
     getChatScroller,
     getLastMessageId: () => lastMessageId,
+    getRecoveryCursor: () => recoveryCursor,
     getCursorCount: () => (cursorDebug ? cursorDebug.count() : 0),
   };
 })();
