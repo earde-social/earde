@@ -75,6 +75,29 @@ pub fn parse_publish_request(body: String) -> Result(PublishRequest, Nil) {
   |> result.map_error(fn(_) { Nil })
 }
 
+/// Internal-publish event allow-list. Only new_msg exists today; anything
+/// else (even from a holder of the internal secret) is rejected so reserved
+/// client-facing event names (presence_list, typing_list, cursor) can never
+/// be spoofed through this endpoint.
+pub fn publish_event_allowed(event: String) -> Bool {
+  event == "new_msg"
+}
+
+/// Token freshness as used at connect AND at every join: a socket that
+/// somehow outlives its token cannot re-join with the stale claims.
+pub fn token_fresh(exp exp: Int, now now: Int) -> Bool {
+  exp > now
+}
+
+/// How long a connection authenticated with this token may live, in
+/// milliseconds. Clamped at zero: an already-expired token closes now.
+pub fn expiry_delay_ms(exp exp: Int, now now: Int) -> Int {
+  case exp > now {
+    True -> { exp - now } * 1000
+    False -> 0
+  }
+}
+
 /// Beryl configuration with inbound rate limiting. Budgets cover typing
 /// (~1 push / 2.5s) plus shared cursors (client-throttled to 10/s); chat
 /// messages go over HTTP, so ordinary use stays below every limit.
@@ -140,14 +163,25 @@ fn chat_channel(
   channel.new(fn(topic: String, _payload, socket: socket.Socket(AuthClaims)) {
     let claims = socket.get_assigns(socket)
 
-    case claims.topic == topic {
-      True -> {
+    case claims.topic == topic, token_fresh(exp: claims.exp, now: unix_now()) {
+      True, True -> {
         io.println("client joined topic " <> topic)
         track_presence(channels, tracker, topic, claims, socket.id(socket))
+        schedule_expiry_close(socket, claims.exp)
         channel.JoinOk(reply: None, socket: socket)
       }
 
-      False -> {
+      True, False -> {
+        io.println("rejected join for topic " <> topic <> ": expired token")
+
+        channel.JoinError(
+          json.object([
+            #("reason", json.string("expired token")),
+          ]),
+        )
+      }
+
+      False, _ -> {
         io.println(
           "rejected join for topic "
           <> topic
@@ -178,6 +212,26 @@ fn chat_channel(
     typing.socket_gone(typing_tracker, socket_id: socket.id(socket))
     cursors.socket_gone(cursor_tracker, socket_id: socket.id(socket))
   })
+}
+
+/// Enforce token expiry on the connection itself: an unlinked sleeper closes
+/// the underlying transport when the token's exp is reached — the same close
+/// path Beryl's heartbeat eviction uses, so mist runs the full disconnect
+/// (terminate → presence/typing/cursor cleanup) and the browser's Phoenix
+/// socket reconnects on its own with the refreshed token from its params
+/// callback. Closing an already-dead connection is a no-op, so the sleeper
+/// needs no cancellation on early disconnect; duplicate joins just add
+/// another sleeper for the same instant.
+fn schedule_expiry_close(sock: socket.Socket(AuthClaims), exp: Int) -> Nil {
+  let close = socket.close(socket.transport(sock))
+  let delay = expiry_delay_ms(exp: exp, now: unix_now())
+  let _pid =
+    process.spawn_unlinked(fn() {
+      process.sleep(delay)
+      let _ = close()
+      Nil
+    })
+  Nil
 }
 
 /// Identity and topic come exclusively from the verified socket assigns —
@@ -628,10 +682,19 @@ fn publish_from_body(
       case bit_array.to_string(req_with_body.body) {
         Ok(body) -> {
           case parse_publish_request(body) {
-            Ok(PublishRequest(topic, event, payload)) -> {
-              beryl.broadcast(channels, topic, event, payload)
-              text(202, "published")
-            }
+            Ok(PublishRequest(topic, event, payload)) ->
+              case publish_event_allowed(event) {
+                True -> {
+                  beryl.broadcast(channels, topic, event, payload)
+                  text(202, "published")
+                }
+                False -> {
+                  io.println(
+                    "internal publish rejected: unsupported event " <> event,
+                  )
+                  text(400, "unsupported event")
+                }
+              }
             Error(_) -> text(400, "invalid json")
           }
         }

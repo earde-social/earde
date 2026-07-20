@@ -785,3 +785,127 @@ pub fn parse_publish_request_rejects_malformed_test() {
     == Error(Nil)
   assert realtime_gateway.parse_publish_request("not json") == Error(Nil)
 }
+
+// ── internal-publish event allow-list ───────────────────────────────────────
+
+pub fn publish_event_allowed_only_new_msg_test() {
+  assert realtime_gateway.publish_event_allowed("new_msg")
+  assert !realtime_gateway.publish_event_allowed("presence_list")
+  assert !realtime_gateway.publish_event_allowed("typing_list")
+  assert !realtime_gateway.publish_event_allowed("cursor")
+  assert !realtime_gateway.publish_event_allowed("phx_reply")
+  assert !realtime_gateway.publish_event_allowed("")
+}
+
+// ── token expiry decision ───────────────────────────────────────────────────
+
+pub fn token_fresh_boundary_test() {
+  // exp strictly in the future is fresh; exp == now is already expired,
+  // matching the connect-time check in verify_signed_token.
+  assert realtime_gateway.token_fresh(exp: 101, now: 100)
+  assert !realtime_gateway.token_fresh(exp: 100, now: 100)
+  assert !realtime_gateway.token_fresh(exp: 99, now: 100)
+}
+
+pub fn expiry_delay_ms_test() {
+  assert realtime_gateway.expiry_delay_ms(exp: 100, now: 100) == 0
+  assert realtime_gateway.expiry_delay_ms(exp: 90, now: 100) == 0
+  assert realtime_gateway.expiry_delay_ms(exp: 101, now: 100) == 1000
+  assert realtime_gateway.expiry_delay_ms(exp: 3700, now: 100) == 3_600_000
+}
+
+// ── typing per-topic capacity ───────────────────────────────────────────────
+
+fn int_range(from: Int, to: Int) -> List(Int) {
+  case from > to {
+    True -> []
+    False -> [from, ..int_range(from + 1, to)]
+  }
+}
+
+fn full_typing_topic(topic: String) -> typing.Store {
+  int_range(1, typing.max_entries_per_topic)
+  |> list.fold(typing.new(), fn(store, i) {
+    typing.set_active(
+      store,
+      topic: topic,
+      socket_id: "sock-" <> int.to_string(i),
+      user_id: i,
+      username: "user" <> int.to_string(i),
+      now: 100,
+    )
+  })
+}
+
+pub fn typing_capacity_drops_new_socket_at_cap_test() {
+  let store = full_typing_topic("chan:8")
+  assert list.length(typing.snapshot(store, "chan:8"))
+    == typing.max_entries_per_topic
+
+  // A brand-new socket beyond the cap is dropped…
+  let store =
+    typing.set_active(
+      store,
+      topic: "chan:8",
+      socket_id: "sock-overflow",
+      user_id: 9999,
+      username: "overflow",
+      now: 101,
+    )
+  assert list.length(typing.snapshot(store, "chan:8"))
+    == typing.max_entries_per_topic
+  assert !list.contains(
+    typing.snapshot(store, "chan:8"),
+    TypingUser(9999, "overflow"),
+  )
+}
+
+pub fn typing_capacity_existing_socket_still_refreshes_test() {
+  let store = full_typing_topic("chan:8")
+
+  // …but an already-typing socket refreshes at capacity (its TTL advances,
+  // so a sweep at old-now + ttl keeps it while dropping the stale rest).
+  let store =
+    typing.set_active(
+      store,
+      topic: "chan:8",
+      socket_id: "sock-1",
+      user_id: 1,
+      username: "user1",
+      now: 105,
+    )
+  let swept = typing.sweep(store, now: 100 + typing.ttl_seconds, ttl: typing.ttl_seconds)
+  assert typing.snapshot(swept, "chan:8") == [TypingUser(1, "user1")]
+}
+
+pub fn typing_capacity_other_topics_unaffected_test() {
+  let store = full_typing_topic("chan:8")
+  let store =
+    typing.set_active(
+      store,
+      topic: "chan:9",
+      socket_id: "sock-elsewhere",
+      user_id: 5,
+      username: "elsewhere",
+      now: 101,
+    )
+  assert typing.snapshot(store, "chan:9") == [TypingUser(5, "elsewhere")]
+}
+
+pub fn typing_capacity_frees_after_inactive_test() {
+  let store = full_typing_topic("chan:8")
+  let store = typing.set_inactive(store, topic: "chan:8", socket_id: "sock-1")
+  let store =
+    typing.set_active(
+      store,
+      topic: "chan:8",
+      socket_id: "sock-new",
+      user_id: 500,
+      username: "fresh",
+      now: 102,
+    )
+  assert list.contains(
+    typing.snapshot(store, "chan:8"),
+    TypingUser(500, "fresh"),
+  )
+}
