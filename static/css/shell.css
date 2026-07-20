@@ -523,6 +523,58 @@ html, body { height: 100%; overflow: hidden; }
 }
 .community-shell .cs-composer-prompt form { display: inline-flex; }
 
+/* Opt-in control for shared cursors, rendered only in enabled communities.
+   Quiet and secondary: mono microcopy pushed to the right edge of the sticky
+   channel header, outside the scroller, sidebars and composer. */
+.community-shell .cs-cursor-share {
+  margin-left: auto; display: inline-flex; align-items: center; gap: 6px;
+  font-family: var(--cs-mono); font-weight: 400; font-size: 11.5px; color: var(--ink-3);
+  cursor: pointer; user-select: none; white-space: nowrap;
+}
+.community-shell .cs-cursor-share:hover { color: var(--ink-2); }
+.community-shell .cs-cursor-share input { accent-color: var(--red); margin: 0; }
+/* The inline-flex above would defeat the [hidden] attribute (coarse-pointer
+   devices hide the inert control via JS). */
+.community-shell .cs-cursor-share[hidden] { display: none; }
+
+/* Shared cursors. The stage is a positioned wrapper around the chat scroller
+   so the overlay can sit on the scroller's *visible* box as a sibling: cursor
+   elements never scroll with message history and never affect layout. The
+   overlay is inert (pointer-events:none) and clips cursors at its edges;
+   header, typing row, composer and both sidebars all live outside it. */
+.community-shell .cs-chat-stage {
+  position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column;
+}
+.community-shell .cs-chat-stage > .cs-chat-body { flex: 1; }
+.community-shell .cs-cursor-overlay {
+  position: absolute; inset: 0; overflow: hidden; pointer-events: none; z-index: 5;
+}
+.community-shell .cs-cursor {
+  position: absolute; left: 0; top: 0; pointer-events: none;
+  display: flex; align-items: flex-start; gap: 3px;
+  will-change: transform; transition: transform 90ms linear;
+}
+.community-shell .cs-cursor svg { display: block; color: var(--cursor-color); }
+.community-shell .cs-cursor-label {
+  margin-top: 9px; padding: 1px 6px; border-radius: 3px;
+  font-family: var(--cs-mono); font-size: 10.5px; line-height: 1.5; color: var(--ink-2);
+  background: var(--panel); border: 1px solid var(--cursor-color);
+  max-width: 120px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+/* Deterministic per-user hue (user_id % 8, computed locally — never sent over
+   the network). Same lightness/chroma band as the shell's --red. */
+.community-shell .cs-cursor[data-hue='0'] { --cursor-color: oklch(0.555 0.155 27); }
+.community-shell .cs-cursor[data-hue='1'] { --cursor-color: oklch(0.555 0.13 70); }
+.community-shell .cs-cursor[data-hue='2'] { --cursor-color: oklch(0.555 0.13 130); }
+.community-shell .cs-cursor[data-hue='3'] { --cursor-color: oklch(0.555 0.13 165); }
+.community-shell .cs-cursor[data-hue='4'] { --cursor-color: oklch(0.555 0.13 210); }
+.community-shell .cs-cursor[data-hue='5'] { --cursor-color: oklch(0.555 0.13 260); }
+.community-shell .cs-cursor[data-hue='6'] { --cursor-color: oklch(0.555 0.13 300); }
+.community-shell .cs-cursor[data-hue='7'] { --cursor-color: oklch(0.555 0.13 340); }
+@media (prefers-reduced-motion: reduce) {
+  .community-shell .cs-cursor { transition: none; }
+}
+
 /* --------------------------------------------------------------------------
    FORUM SECTION — thread-first feed filling the main pane + section context
    aside. Ported from the prototype's forum-section view (.forum-head/.ftabs/

@@ -1,5 +1,5 @@
 -module(realtime_gateway_ffi).
--export([unix_now/0, getenv/1, safely/1]).
+-export([unix_now/0, unix_now_ms/0, getenv/1, safely/1]).
 
 safely(F) ->
     try
@@ -11,6 +11,9 @@ safely(F) ->
 
 unix_now() ->
     erlang:system_time(second).
+
+unix_now_ms() ->
+    erlang:system_time(millisecond).
 
 getenv(Name) ->
     case os:getenv(binary_to_list(Name)) of
