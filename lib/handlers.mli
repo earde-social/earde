@@ -33,6 +33,27 @@ val community_section_handler : Dream.handler
 val community_channel_handler : Dream.handler
 val channel_messages_json_handler : Dream.handler
 val realtime_token_handler : Dream.handler
+
+(** Chat composer JSON contract (pure, exposed for tests): Accept-header
+    negotiation, the shared content validation boundary, and the client-safe
+    error body shape used by the fetch submission path. *)
+module Chat_api : sig
+  val wants_json : string option -> bool
+  val max_content_length : int
+  val validate_content : string -> (string, [ `Empty | `Too_long ]) result
+  val error_json : code:string -> message:string -> string
+  val internal_error_json : string
+end
+
+(** Canonical chat-row serialization shared by catch-up, the composer JSON
+    response and (shape-wise) gateway new_msg events. Exposed for tests. *)
+val chat_message_json :
+  channel_id:int ->
+  community_id:int ->
+  ?thread_id:int ->
+  Db.chat_message * string option ->
+  Yojson.Safe.t
+
 val send_message_handler : Dream.handler
 (* Start thread from chat: GET renders the form, POST creates the thread + provenance. *)
 val start_thread_form_handler : Dream.handler

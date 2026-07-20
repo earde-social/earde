@@ -277,9 +277,11 @@ module Channel : sig
 end
 
 module Chat : sig
-  (* send_message channel_id user_id content -> new message id. user_id is a plain int:
-     a new message is always attributed to its author. *)
-  val send_message : (module Caqti_lwt.CONNECTION) -> int -> int -> string -> (int64, string) result Lwt.t
+  (* send_message channel_id user_id content -> the canonical persisted message
+     (INSERT ... RETURNING: Postgres-assigned id and created_at included), so callers
+     never need a post-insert read-back. user_id is a plain int: a new message is
+     always attributed to its author. *)
+  val send_message : (module Caqti_lwt.CONNECTION) -> int -> int -> string -> (chat_message, string) result Lwt.t
   val get_message_by_id : (module Caqti_lwt.CONNECTION) -> int64 -> (chat_message option, string) result Lwt.t
   (* get_recent_messages channel_id limit -> newest `limit` messages, ascending by id. *)
   val get_recent_messages : (module Caqti_lwt.CONNECTION) -> int -> int -> (chat_message list, string) result Lwt.t
@@ -543,7 +545,7 @@ val set_channel_archived : (module Caqti_lwt.CONNECTION) -> int -> int -> bool -
 val update_channel : (module Caqti_lwt.CONNECTION) -> int -> int -> string -> string option -> (unit, string) result Lwt.t
 val update_channel_indexable : (module Caqti_lwt.CONNECTION) -> int -> int -> bool -> (unit, string) result Lwt.t
 
-val send_message : (module Caqti_lwt.CONNECTION) -> int -> int -> string -> (int64, string) result Lwt.t
+val send_message : (module Caqti_lwt.CONNECTION) -> int -> int -> string -> (chat_message, string) result Lwt.t
 val get_message_by_id : (module Caqti_lwt.CONNECTION) -> int64 -> (chat_message option, string) result Lwt.t
 val get_recent_messages : (module Caqti_lwt.CONNECTION) -> int -> int -> (chat_message list, string) result Lwt.t
 val get_recent_messages_with_authors : (module Caqti_lwt.CONNECTION) -> int -> int -> ((chat_message * string option) list, string) result Lwt.t

@@ -1105,7 +1105,7 @@ let community_channel_shell_page ?user ?realtime_token ?(noindex=false) ~is_memb
         Printf.sprintf "<div class='cs-composer cs-composer-prompt'><span>Join this community to chat.</span><form action='/join' method='POST'>%s<input type='hidden' name='community_id' value='%d'><input type='hidden' name='redirect_to' value='%s'><button type='submit' class='cs-send'>Join &amp; chat</button></form></div>"
           csrf_token community.id channel_url
     | Some _ ->
-        Printf.sprintf "<div class='cs-composer'><form action='/messages' method='POST'>%s<input type='hidden' name='community_slug' value='%s'><input type='hidden' name='channel_slug' value='%s'><textarea name='content' rows='1' placeholder='Message #%s' required></textarea><button type='submit' class='cs-send'>Send</button></form></div>"
+        Printf.sprintf "<div class='cs-composer'><form action='/messages' method='POST'>%s<input type='hidden' name='community_slug' value='%s'><input type='hidden' name='channel_slug' value='%s'><textarea name='content' rows='1' maxlength='4000' placeholder='Message #%s' required></textarea><button type='submit' class='cs-send'>Send</button></form></div>"
           csrf_token (esc community.slug) (esc channel.slug) (esc channel.slug)
   in
 

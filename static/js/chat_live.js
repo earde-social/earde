@@ -97,32 +97,357 @@
     scrollToBottomSoon(chatScroller);
   }
 
+  // --- Shared page constants ------------------------------------------------
+  // Everything the rendering core and the composer need, independent of
+  // whether the realtime socket ever initializes on this page.
+  const channelBasePath = window.location.pathname.replace(/\/$/, "");
+  const catchUpUrl = `${channelBasePath}/messages.json`;
+  const canStart = root.dataset.canStart === "true";
+
+  function readLastMessageIdFromDom() {
+    let maxId = 0;
+
+    root.querySelectorAll(".cs-msg[data-message-id]").forEach((el) => {
+      const id = Number(el.dataset.messageId);
+      if (Number.isFinite(id) && id > maxId) {
+        maxId = id;
+      }
+    });
+
+    return maxId;
+  }
+
+  // Highest rendered message id.
+  let lastMessageId = readLastMessageIdFromDom();
+
+  function appendMessage(payload, options = {}) {
+    if (payload.id !== undefined && payload.id !== null) {
+      const existing = root.querySelector(`[data-message-id="${payload.id}"]`);
+      if (existing) {
+        return;
+      }
+    }
+
+    const shouldStayAtBottom =
+      options.forceScroll === true ||
+      (options.wasNearBottom !== undefined ? options.wasNearBottom : isNearBottom(chatScroller));
+
+    const empty = root.querySelector(".cs-msg-empty");
+    if (empty) {
+      empty.remove();
+    }
+
+    const name = payload.username || "[deleted]";
+    const initial =
+      name.length > 0 && name[0] !== "[" ? name[0].toUpperCase() : "?";
+
+    const row = document.createElement("div");
+    row.className = "cs-msg";
+
+    if (payload.id !== undefined && payload.id !== null) {
+      row.dataset.messageId = String(payload.id);
+
+      const id = Number(payload.id);
+      if (Number.isFinite(id) && id > lastMessageId) {
+        lastMessageId = id;
+      }
+    }
+
+    const avatar = document.createElement("div");
+    avatar.className = "cs-msg-avatar";
+    avatar.textContent = initial;
+
+    const body = document.createElement("div");
+    body.className = "cs-msg-body";
+
+    const meta = document.createElement("div");
+    meta.className = "cs-msg-meta";
+
+    const author = document.createElement("span");
+    author.className = "cs-msg-author";
+    author.textContent = name;
+
+    const time = document.createElement("span");
+    time.className = "cs-msg-time";
+    time.textContent = payload.created_at || "";
+
+    const text = document.createElement("div");
+    text.className = "cs-msg-text";
+    text.textContent = payload.content || "";
+
+    meta.appendChild(author);
+
+    const hasId = payload.id !== undefined && payload.id !== null;
+    const hasAuthor = payload.user_id !== undefined && payload.user_id !== null;
+    const isDeleted = payload.deleted === true;
+    const isPromoted = payload.thread_id !== undefined && payload.thread_id !== null;
+    row.dataset.hasThread = isPromoted ? "true" : "false";
+
+    if (canStart && hasId && hasAuthor && !isDeleted && !isPromoted) {
+      const slot = document.createElement("span");
+      slot.className = "cs-msg-time-slot";
+
+      const startLink = document.createElement("a");
+      startLink.className = "cs-msg-start";
+      startLink.href = `${channelBasePath}/messages/${encodeURIComponent(
+        String(payload.id)
+      )}/start-thread`;
+      startLink.dataset.promoteUrl = startLink.href;
+      row.dataset.promoteUrl = startLink.href;
+      startLink.textContent = "Start thread";
+
+      slot.appendChild(time);
+      slot.appendChild(startLink);
+      meta.appendChild(slot);
+    } else {
+      meta.appendChild(time);
+    }
+
+    body.appendChild(meta);
+    body.appendChild(text);
+    row.appendChild(avatar);
+    row.appendChild(body);
+
+    root.appendChild(row);
+
+    if (shouldStayAtBottom) {
+      scrollToBottomSoon(chatScroller);
+    }
+  }
+
+  // --- HTTP catch-up --------------------------------------------------------
+  // One page after the highest rendered id; runs on join and reconnect.
+  let catchUpInFlight = false;
+
+  async function catchUp() {
+    if (catchUpInFlight) {
+      return;
+    }
+
+    catchUpInFlight = true;
+
+    try {
+      const url = `${catchUpUrl}?after_id=${encodeURIComponent(String(lastMessageId))}`;
+
+      const response = await fetch(url, {
+        method: "GET",
+        headers: {
+          Accept: "application/json",
+        },
+        credentials: "same-origin",
+      });
+
+      if (!response.ok) {
+        console.warn("[chat_live] catch-up failed", response.status);
+        return;
+      }
+
+      const data = await response.json();
+      const messages = Array.isArray(data.messages) ? data.messages : [];
+      const shouldStayAtBottom = isNearBottom(chatScroller);
+
+      messages.forEach((message) => appendMessage(message, { wasNearBottom: shouldStayAtBottom }));
+
+      if (shouldStayAtBottom) {
+        scrollToBottomSoon(chatScroller);
+      }
+    } catch (err) {
+      console.warn("[chat_live] catch-up exception", err);
+    } finally {
+      catchUpInFlight = false;
+    }
+  }
+
+  // --- Typing emission ------------------------------------------------------
+  // Emission state lives up here so the composer can clear typing on send
+  // even when realtime never initializes; the realtime section plugs the
+  // actual channel transport into realtimeTypingPush.
+  const typingRefreshMs = 2500;
+  const typingIdleMs = 4000;
+  let typingActive = false;
+  let lastTypingSentAt = 0;
+  let typingIdleTimer = null;
+  let realtimeTypingPush = null;
+
+  function pushTyping(active) {
+    if (realtimeTypingPush) {
+      realtimeTypingPush(active);
+    }
+  }
+
+  function sendTypingActive() {
+    const now = Date.now();
+
+    if (!typingActive || now - lastTypingSentAt >= typingRefreshMs) {
+      typingActive = true;
+      lastTypingSentAt = now;
+      pushTyping(true);
+    }
+
+    window.clearTimeout(typingIdleTimer);
+    typingIdleTimer = window.setTimeout(sendTypingStop, typingIdleMs);
+  }
+
+  function sendTypingStop() {
+    window.clearTimeout(typingIdleTimer);
+    typingIdleTimer = null;
+
+    if (!typingActive) {
+      return;
+    }
+
+    typingActive = false;
+    lastTypingSentAt = 0;
+    pushTyping(false);
+  }
+
+  // --- Composer -------------------------------------------------------------
+  // Submission is intercepted and sent over fetch with Accept:
+  // application/json; the server answers with the canonical persisted row
+  // (same shape as a realtime new_msg), which is inserted immediately — the
+  // later realtime echo is absorbed by id deduplication. The <form> itself is
+  // untouched, so with JavaScript disabled it still POSTs and redirects.
   const composerForm = document.querySelector(".cs-composer form[action='/messages']");
 
   if (composerForm) {
     const textarea = composerForm.querySelector("textarea[name='content']");
     const sendButton = composerForm.querySelector("button[type='submit'], .cs-send");
 
+    // Bounded inline error line; cleared on the next input or success.
+    const composerError = document.createElement("div");
+    composerError.className = "cs-composer-error";
+    composerError.setAttribute("role", "alert");
+    composerError.hidden = true;
+    composerForm.parentElement.appendChild(composerError);
+
+    function showComposerError(message) {
+      composerError.textContent = String(message || "Could not send message.").slice(0, 200);
+      composerError.hidden = false;
+    }
+
+    function clearComposerError() {
+      composerError.textContent = "";
+      composerError.hidden = true;
+    }
+
+    function setComposerPending(pending) {
+      composerForm.dataset.submitting = pending ? "true" : "false";
+      if (sendButton) {
+        sendButton.disabled = pending;
+      }
+    }
+
+    // Focus restoration guard: after the request settles, return focus to the
+    // composer only when focus is still on the composer itself, on the (now
+    // disabled) send button, or fell back to <body> because we disabled that
+    // button. If the user deliberately moved to any other control while the
+    // request was pending, their focus is left alone.
+    function shouldRestoreComposerFocus() {
+      const active = document.activeElement;
+      return (
+        active === null ||
+        active === textarea ||
+        active === sendButton ||
+        active === document.body
+      );
+    }
+
+    function composerErrorMessage(data, status) {
+      if (data && typeof data.message === "string" && data.message !== "") {
+        return data.message;
+      }
+      if (status >= 500) {
+        return "Something went wrong. Please try again.";
+      }
+      return "Could not send message.";
+    }
+
     composerForm.addEventListener("submit", (event) => {
+      event.preventDefault();
+
       if (!textarea || textarea.value.trim() === "") {
-        event.preventDefault();
         return;
       }
 
       if (composerForm.dataset.submitting === "true") {
-        event.preventDefault();
         return;
       }
 
-      composerForm.dataset.submitting = "true";
-      if (sendButton) {
-        sendButton.disabled = true;
-      }
+      setComposerPending(true);
+      clearComposerError();
+      // Submitted text is no longer "being typed" regardless of the outcome.
+      sendTypingStop();
 
-      scrollToBottomSoon(chatScroller);
+      const body = new URLSearchParams(new FormData(composerForm));
+      const sentValue = textarea.value;
+
+      fetch(composerForm.getAttribute("action") || "/messages", {
+        method: "POST",
+        headers: { Accept: "application/json" },
+        body,
+        credentials: "same-origin",
+      })
+        .then(async (response) => {
+          let data = null;
+          try {
+            data = await response.json();
+          } catch (err) {
+            // Non-JSON body (proxy error page): fall through to status text.
+          }
+
+          if (!response.ok) {
+            // Failure: the textarea keeps its value so the user can retry.
+            showComposerError(composerErrorMessage(data, response.status));
+            return;
+          }
+
+          // Success: insert the persisted row and end at the latest message.
+          if (data && data.id !== undefined && data.id !== null) {
+            appendMessage(data, { forceScroll: true });
+          } else {
+            scrollToBottomSoon(chatScroller);
+          }
+
+          // Clear only what was sent: anything typed while the request was
+          // pending survives in the composer.
+          if (textarea.value === sentValue) {
+            textarea.value = "";
+          } else if (textarea.value.startsWith(sentValue)) {
+            textarea.value = textarea.value.slice(sentValue.length);
+          }
+        })
+        .catch(() => {
+          showComposerError("Could not send. Check your connection and try again.");
+        })
+        .finally(() => {
+          setComposerPending(false);
+
+          if (textarea && shouldRestoreComposerFocus()) {
+            const cleared = textarea.value === "";
+            textarea.focus();
+            if (cleared) {
+              try {
+                textarea.setSelectionRange(0, 0);
+              } catch (err) {
+                // Non-text inputs throw; the textarea never should.
+              }
+            }
+          }
+        });
     });
 
     if (textarea) {
+      textarea.addEventListener("input", () => {
+        clearComposerError();
+
+        if (textarea.value.trim() === "") {
+          sendTypingStop();
+          return;
+        }
+
+        sendTypingActive();
+      });
+
       textarea.addEventListener("keydown", (event) => {
         if (event.key !== "Enter" || event.shiftKey || event.isComposing) {
           return;
@@ -225,7 +550,6 @@
   const topic = `chan:${channelId}`;
   const socketUrl = root.dataset.socketUrl;
   const token = root.dataset.signedToken;
-  const catchUpUrl = `${window.location.pathname.replace(/\/$/, "")}/messages.json`;
 
   if (!socketUrl) {
     console.warn("[chat_live] missing data-socket-url");
@@ -238,9 +562,6 @@
     setPresenceStatus("Presence unavailable");
     return;
   }
-
-  const canStart = root.dataset.canStart === "true";
-  const channelBasePath = window.location.pathname.replace(/\/$/, "");
 
   // --- Realtime token lifecycle -------------------------------------------
   // The signed token payload is transparent (base64url JSON): decode it to
@@ -352,21 +673,6 @@
 
   scheduleTokenRefresh();
 
-  function readLastMessageIdFromDom() {
-    let maxId = 0;
-
-    root.querySelectorAll(".cs-msg[data-message-id]").forEach((el) => {
-      const id = Number(el.dataset.messageId);
-      if (Number.isFinite(id) && id > maxId) {
-        maxId = id;
-      }
-    });
-
-    return maxId;
-  }
-
-  let lastMessageId = readLastMessageIdFromDom();
-  let catchUpInFlight = false;
   let hasJoined = false;
 
   console.log("[chat_live] channel_id", channelId);
@@ -430,140 +736,6 @@
       setPresenceStatus("Presence unavailable");
     });
 
-  function appendMessage(payload, options = {}) {
-    if (payload.id !== undefined && payload.id !== null) {
-      const existing = root.querySelector(`[data-message-id="${payload.id}"]`);
-      if (existing) {
-        return;
-      }
-    }
-
-    const shouldStayAtBottom =
-      options.forceScroll === true ||
-      (options.wasNearBottom !== undefined ? options.wasNearBottom : isNearBottom(chatScroller));
-
-    const empty = root.querySelector(".cs-msg-empty");
-    if (empty) {
-      empty.remove();
-    }
-
-    const name = payload.username || "[deleted]";
-    const initial =
-      name.length > 0 && name[0] !== "[" ? name[0].toUpperCase() : "?";
-
-    const row = document.createElement("div");
-    row.className = "cs-msg";
-
-    if (payload.id !== undefined && payload.id !== null) {
-      row.dataset.messageId = String(payload.id);
-
-      const id = Number(payload.id);
-      if (Number.isFinite(id) && id > lastMessageId) {
-        lastMessageId = id;
-      }
-    }
-
-    const avatar = document.createElement("div");
-    avatar.className = "cs-msg-avatar";
-    avatar.textContent = initial;
-
-    const body = document.createElement("div");
-    body.className = "cs-msg-body";
-
-    const meta = document.createElement("div");
-    meta.className = "cs-msg-meta";
-
-    const author = document.createElement("span");
-    author.className = "cs-msg-author";
-    author.textContent = name;
-
-    const time = document.createElement("span");
-    time.className = "cs-msg-time";
-    time.textContent = payload.created_at || "";
-
-    const text = document.createElement("div");
-    text.className = "cs-msg-text";
-    text.textContent = payload.content || "";
-
-    meta.appendChild(author);
-
-    const hasId = payload.id !== undefined && payload.id !== null;
-    const hasAuthor = payload.user_id !== undefined && payload.user_id !== null;
-    const isDeleted = payload.deleted === true;
-    const isPromoted = payload.thread_id !== undefined && payload.thread_id !== null;
-    row.dataset.hasThread = isPromoted ? "true" : "false";
-
-    if (canStart && hasId && hasAuthor && !isDeleted && !isPromoted) {
-      const slot = document.createElement("span");
-      slot.className = "cs-msg-time-slot";
-
-      const startLink = document.createElement("a");
-      startLink.className = "cs-msg-start";
-      startLink.href = `${channelBasePath}/messages/${encodeURIComponent(
-        String(payload.id)
-      )}/start-thread`;
-      startLink.dataset.promoteUrl = startLink.href;
-      row.dataset.promoteUrl = startLink.href;
-      startLink.textContent = "Start thread";
-
-      slot.appendChild(time);
-      slot.appendChild(startLink);
-      meta.appendChild(slot);
-    } else {
-      meta.appendChild(time);
-    }
-
-    body.appendChild(meta);
-    body.appendChild(text);
-    row.appendChild(avatar);
-    row.appendChild(body);
-
-    root.appendChild(row);
-
-    if (shouldStayAtBottom) {
-      scrollToBottomSoon(chatScroller);
-    }
-  }
-
-  async function catchUp() {
-    if (catchUpInFlight) {
-      return;
-    }
-
-    catchUpInFlight = true;
-
-    try {
-      const url = `${catchUpUrl}?after_id=${encodeURIComponent(String(lastMessageId))}`;
-
-      const response = await fetch(url, {
-        method: "GET",
-        headers: {
-          Accept: "application/json",
-        },
-        credentials: "same-origin",
-      });
-
-      if (!response.ok) {
-        console.warn("[chat_live] catch-up failed", response.status);
-        return;
-      }
-
-      const data = await response.json();
-      const messages = Array.isArray(data.messages) ? data.messages : [];
-      const shouldStayAtBottom = isNearBottom(chatScroller);
-
-      messages.forEach((message) => appendMessage(message, { wasNearBottom: shouldStayAtBottom }));
-
-      if (shouldStayAtBottom) {
-        scrollToBottomSoon(chatScroller);
-      }
-    } catch (err) {
-      console.warn("[chat_live] catch-up exception", err);
-    } finally {
-      catchUpInFlight = false;
-    }
-  }
-
   channel.on("new_msg", (payload) => {
     console.log("[chat_live] new_msg", payload);
     const shouldStayAtBottom = isNearBottom(chatScroller);
@@ -578,24 +750,12 @@
   // Client sends only { v: 1, active: bool }; identity and channel come from
   // the gateway's verified socket state. Advisory feature: every failure path
   // degrades to "no typing line" without touching the composer or chat.
+  // Emission state and the composer input listeners live in the composer
+  // section; only the channel transport is plugged in here.
 
   const typingLine = document.getElementById("chat-typing");
-  const typingRefreshMs = 2500;
-  const typingIdleMs = 4000;
-  let typingActive = false;
-  let lastTypingSentAt = 0;
-  let typingIdleTimer = null;
 
-  function clearTypingLine() {
-    if (!typingLine) {
-      return;
-    }
-
-    typingLine.textContent = "";
-    typingLine.hidden = true;
-  }
-
-  function pushTyping(active) {
+  realtimeTypingPush = (active) => {
     if (!hasJoined || !socket.isConnected() || !channel.isJoined()) {
       return;
     }
@@ -605,54 +765,15 @@
     } catch (err) {
       console.warn("[chat_live] typing push failed", err);
     }
-  }
+  };
 
-  function sendTypingActive() {
-    const now = Date.now();
-
-    if (!typingActive || now - lastTypingSentAt >= typingRefreshMs) {
-      typingActive = true;
-      lastTypingSentAt = now;
-      pushTyping(true);
-    }
-
-    window.clearTimeout(typingIdleTimer);
-    typingIdleTimer = window.setTimeout(sendTypingStop, typingIdleMs);
-  }
-
-  function sendTypingStop() {
-    window.clearTimeout(typingIdleTimer);
-    typingIdleTimer = null;
-
-    if (!typingActive) {
+  function clearTypingLine() {
+    if (!typingLine) {
       return;
     }
 
-    typingActive = false;
-    lastTypingSentAt = 0;
-    pushTyping(false);
-  }
-
-  const typingTextarea = composerForm
-    ? composerForm.querySelector("textarea[name='content']")
-    : null;
-
-  if (typingTextarea) {
-    typingTextarea.addEventListener("input", () => {
-      if (typingTextarea.value.trim() === "") {
-        sendTypingStop();
-        return;
-      }
-
-      sendTypingActive();
-    });
-
-    // Submitted messages are no longer "being typed"; push the stop while the
-    // socket is still open (the form POST navigates, and disconnect cleanup
-    // plus the gateway TTL cover anything that doesn't flush in time).
-    composerForm.addEventListener("submit", () => {
-      sendTypingStop();
-    });
+    typingLine.textContent = "";
+    typingLine.hidden = true;
   }
 
   function typingLineText(usernames) {
