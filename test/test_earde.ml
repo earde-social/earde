@@ -302,6 +302,24 @@ let rt_decode_garbage =
       Alcotest.(check bool) "non-json payload" true
         (RT.decode_payload "!!!.sig" = None))
 
+(* /delete-comment authorization matrix — pure. The decision function takes no
+   community id at all: the old handler trusted a hidden community_id form field
+   for its moderator check, which is exactly what allowed a moderator of
+   community A to delete community B's comment. Only the session role and the
+   server-resolved owner may matter, so a forged community field cannot affect
+   authorization by construction. *)
+module CD = Earde.Handlers.Comment_delete
+
+let cd_str = function
+  | CD.Admin_delete -> "admin_delete"
+  | CD.Author_delete -> "author_delete"
+  | CD.Forbidden -> "forbidden"
+
+let check_cd name expected ~is_admin ~requester_id ~owner_id =
+  Alcotest.test_case name `Quick (fun () ->
+      Alcotest.(check string) name expected
+        (cd_str (CD.decide ~is_admin ~requester_id ~owner_id)))
+
 (* === Cross-community moderation scoping (security regression) ===
    A moderator of community A must not be able to tombstone content in community
    B by forging the numeric id on an A-scoped route. The enforcement lives in the
@@ -326,13 +344,20 @@ module Mod_scope = struct
       [ "DELETE FROM comments WHERE post_id IN (SELECT id FROM posts WHERE title LIKE 'modscope %')"
       ; "DELETE FROM posts WHERE title LIKE 'modscope %'"
       ; "DELETE FROM communities WHERE slug IN ('modscope-a', 'modscope-b')"
-      ; "DELETE FROM users WHERE username = 'modscope_author'"
+      ; "DELETE FROM users WHERE username IN ('modscope_author', 'modscope_other')"
       ]
 
   let q_insert_user =
     (Caqti_type.unit ->! Caqti_type.int)
     "INSERT INTO users (username, email, password_hash, is_email_verified)
      VALUES ('modscope_author', 'modscope_author@test.invalid', 'x', TRUE) RETURNING id"
+
+  (* A second, non-author user: stands in for a moderator of community A
+     attacking through the general /delete-comment path. *)
+  let q_insert_other_user =
+    (Caqti_type.unit ->! Caqti_type.int)
+    "INSERT INTO users (username, email, password_hash, is_email_verified)
+     VALUES ('modscope_other', 'modscope_other@test.invalid', 'x', TRUE) RETURNING id"
 
   let q_insert_community =
     (Caqti_type.string ->! Caqti_type.int)
@@ -441,7 +466,46 @@ module Mod_scope = struct
         Alcotest.(check string) "A comment tombstoned" "[removed by moderator]" content;
         Lwt.return_unit)
 
-  let suite = [ posts_case; comments_case ]
+  (* /delete-comment data path: the general endpoint is author-only for
+     non-admins, and its SQL is ownership-scoped (id AND user_id) — so a
+     moderator of community A attacking B's comment reaches (at most)
+     soft_delete_comment with a requester id that is not the owner, which must
+     match nothing regardless of any community value the client sends. The
+     admin path resolves the target server-side and tombstones with the admin
+     label. *)
+  let delete_comment_case =
+    db_case "delete-comment: ownership-scoped soft delete; admin path tombstones" (fun conn c ->
+        let (module C : Caqti_lwt.CONNECTION) = c in
+        let* (_a, _b, author, post_a, post_b) = setup_posts c in
+        let* other = C.find q_insert_other_user () in
+        let* other = or_fail "other user" other in
+        let* comment_b = C.find q_insert_comment (post_b, author) in
+        let* comment_b = or_fail "comment b" comment_b in
+        (* Non-author (e.g. a mod of A) against B's comment: zero rows match.
+           soft_delete_comment reports Ok () either way — the ownership scope in
+           the SQL is what this pins down. *)
+        let* r = Earde.Db.soft_delete_comment conn comment_b other in
+        Alcotest.(check (result unit string)) "non-author soft delete does not error" (Ok ()) r;
+        let* content = C.find q_comment_content comment_b in
+        let* content = or_fail "B comment state" content in
+        Alcotest.(check string) "non-author soft delete matches nothing" "modscope original comment" content;
+        (* The author still deletes their own comment. *)
+        let* comment_a = C.find q_insert_comment (post_a, author) in
+        let* comment_a = or_fail "comment a" comment_a in
+        let* r = Earde.Db.soft_delete_comment conn comment_a author in
+        Alcotest.(check (result unit string)) "author soft delete ok" (Ok ()) r;
+        let* content = C.find q_comment_content comment_a in
+        let* content = or_fail "A comment state" content in
+        Alcotest.(check string) "author soft delete tombstones" "[deleted]" content;
+        (* Global admin: deletes regardless of author, with the admin label. *)
+        let* r = Earde.Db.admin_delete_comment conn ~label:"[removed by admin]" comment_b in
+        Alcotest.(check (result unit string)) "admin delete ok" (Ok ()) r;
+        let* content = C.find q_comment_content comment_b in
+        let* content = or_fail "B comment after admin" content in
+        Alcotest.(check string) "admin delete tombstones with admin label" "[removed by admin]" content;
+        Lwt.return_unit)
+
+  let suite = [ posts_case; comments_case; delete_comment_case ]
 end
 
 let () =
@@ -776,6 +840,20 @@ let () =
             Earde.Features.default_shared_cursor_slugs "beryl"
         ; check_enabled "default list is only beryl" false
             Earde.Features.default_shared_cursor_slugs "earde"
+        ] )
+      (* /delete-comment matrix: author-only for non-admins; admins delete with
+         the admin label; moderators are refused (the mod_delete flow is the only
+         community-removal path). decide has no community parameter, so there is
+         nothing a forged hidden community_id could influence. *)
+    ; ( "delete_comment_authorization"
+      , [ check_cd "author deletes own comment" "author_delete"
+            ~is_admin:false ~requester_id:7 ~owner_id:7
+        ; check_cd "non-author (incl. any moderator) refused" "forbidden"
+            ~is_admin:false ~requester_id:7 ~owner_id:8
+        ; check_cd "admin deletes any comment" "admin_delete"
+            ~is_admin:true ~requester_id:7 ~owner_id:8
+        ; check_cd "admin deleting own comment stays on the admin path" "admin_delete"
+            ~is_admin:true ~requester_id:7 ~owner_id:7
         ] )
     ; ( "mod_delete_community_scope", Mod_scope.suite )
     ]

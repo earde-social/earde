@@ -3096,6 +3096,23 @@ let create_comment_handler request =
           )
       | _ -> Dream.html (Pages.msg_page ~user:username ~title:"Form Error" ~message:"There was a problem with your form submission. Please try again." ~alert_type:"error" ~return_url:"/" request)
 
+(* Authorization for the general /delete-comment endpoint. Pure and deliberately
+   blind to any community id: the old handler trusted a hidden community_id form
+   field for its moderator check, which let a moderator of community A delete a
+   comment in community B by pairing A's id with B's comment id. Community
+   moderation now lives exclusively on /c/:slug/comments/:id/mod_delete, which
+   requires a reason and writes the public modlog — so this endpoint is
+   author-only for non-admins, and the decision needs nothing but the session
+   role and the server-resolved comment owner. *)
+module Comment_delete = struct
+  type decision = Admin_delete | Author_delete | Forbidden
+
+  let decide ~is_admin ~requester_id ~owner_id =
+    if is_admin then Admin_delete
+    else if requester_id = owner_id then Author_delete
+    else Forbidden
+end
+
 let delete_comment_handler request =
   match Dream.session_field request "user_id" with
   | None -> Dream.redirect request "/login"
@@ -3105,52 +3122,47 @@ let delete_comment_handler request =
       match%lwt Dream.form request with
       | `Ok form_data ->
           let comment_id = try int_of_string (List.assoc_opt "comment_id" form_data |> Option.value ~default:"") with _ -> 0 in
-          let community_id_opt = match List.assoc_opt "community_id" form_data with
-            | Some s -> (try Some (int_of_string s) with _ -> None)
-            | None -> None
-          in
           if comment_id = 0 then Dream.respond ~status:`Bad_Request (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Form Error" ~message:"Invalid comment reference." ~alert_type:"error" ~return_url:"/" request)
           else
 
           Dream.sql request (fun db ->
-            (* community_id comes from a hidden form field (post.community_id set in post_page).
-               Even if a client tampers the value, is_moderator checks the DB — a fake
-               community_id returns false, so authorization is always correct server-side. *)
-            let%lwt is_mod =
-              if is_admin then Lwt.return false
-              else
-                match community_id_opt with
-                | Some community_id ->
-                    (match%lwt Db.is_moderator db user_id community_id with
-                    | Ok b -> Lwt.return b
-                    | _ -> Lwt.return false)
-                | None -> Lwt.return false
+            (* Resolve the target server-side: comment -> owner and parent post.
+               A missing comment and a comment whose parent post is gone get the
+               same neutral 404 with no mutation. *)
+            let not_found () =
+              Dream.respond ~status:`Not_Found (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Not Found" ~message:"This comment does not exist." ~alert_type:"error" ~return_url:"/" request)
             in
-            (* Admin immunity: mods cannot delete comments authored by global admins. *)
-            let%lwt blocked_by_immunity =
-              if is_mod then
-                (match%lwt Db.get_comment_owner db comment_id with
-                | Ok owner_id ->
-                    (match%lwt Db.is_user_admin db owner_id with
-                    | Ok true -> Lwt.return true | _ -> Lwt.return false)
-                | _ -> Lwt.return false)
-              else Lwt.return false
+            let%lwt target =
+              match%lwt Db.get_comment_owner db comment_id with
+              | Error _ -> Lwt.return None
+              | Ok owner_id ->
+                  (match%lwt Db.get_comment_post_id db comment_id with
+                  | Error _ -> Lwt.return None
+                  | Ok pid ->
+                      (match%lwt Db.get_post_by_id db pid with
+                      | Ok (Some _) -> Lwt.return (Some (owner_id, pid))
+                      | _ -> Lwt.return None))
             in
-            if blocked_by_immunity then
-              Dream.respond ~status:`Forbidden "⛔ You cannot moderate an Admin."
-            else
-            (* Fetch post_id before deletion so we can redirect to the post page regardless
-               of whether the delete succeeds — comment row may be gone after the call. *)
-            let%lwt post_id_res = Db.get_comment_post_id db comment_id in
-            let%lwt db_action =
-              if is_admin || is_mod then Db.admin_delete_comment db ~label:"[removed by admin]" comment_id
-              else Db.soft_delete_comment db comment_id user_id
-            in
-            match db_action with
-            | Ok () ->
-                let target = match post_id_res with Ok pid -> "/p/" ^ string_of_int pid | Error _ -> "/" in
-                Dream.redirect request target
-            | Error err -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Error" ~message:("Database error: " ^ err) ~alert_type:"error" ~return_url:"/" request)
+            match target with
+            | None -> not_found ()
+            | Some (owner_id, post_id) ->
+                let redirect_target = "/p/" ^ string_of_int post_id in
+                (match Comment_delete.decide ~is_admin ~requester_id:user_id ~owner_id with
+                | Comment_delete.Forbidden ->
+                    (* Moderators included: community removal must go through the
+                       mod_delete flow (required reason, public modlog). *)
+                    Dream.respond ~status:`Forbidden (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Forbidden" ~message:"You can only delete your own comments. Community moderation goes through the Mod Remove flow." ~alert_type:"error" ~return_url:redirect_target request)
+                | Comment_delete.Admin_delete ->
+                    (match%lwt Db.admin_delete_comment db ~label:"[removed by admin]" comment_id with
+                    | Ok () -> Dream.redirect request redirect_target
+                    | Error err -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Error" ~message:("Database error: " ^ err) ~alert_type:"error" ~return_url:redirect_target request))
+                | Comment_delete.Author_delete ->
+                    (* The SQL is also ownership-scoped (id AND user_id), so even a
+                       race with an ownership change cannot delete someone else's
+                       comment. *)
+                    (match%lwt Db.soft_delete_comment db comment_id user_id with
+                    | Ok () -> Dream.redirect request redirect_target
+                    | Error err -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Error" ~message:("Database error: " ^ err) ~alert_type:"error" ~return_url:redirect_target request)))
           )
       | _ -> Dream.respond ~status:`Bad_Request (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Form Error" ~message:"Invalid form submission." ~alert_type:"error" ~return_url:"/" request)
 
