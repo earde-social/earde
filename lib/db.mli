@@ -431,6 +431,14 @@ end
 module Admin : sig
   val admin_delete_post : (module Caqti_lwt.CONNECTION) -> label:string -> int -> (unit, string) result Lwt.t
   val admin_delete_comment : (module Caqti_lwt.CONNECTION) -> label:string -> int -> (unit, string) result Lwt.t
+  (* Community-scoped moderator tombstones: the mutation is bound to the route
+     community and reports whether a row actually matched, so a zero-row update
+     can never be mistaken for a deletion.
+     mod_delete_post: Ok true = deleted; Ok false = no such post in that community.
+     mod_delete_comment: Ok (Some post_id) = deleted (post_id of the parent post);
+     Ok None = no such comment under that community's posts. *)
+  val mod_delete_post : (module Caqti_lwt.CONNECTION) -> community_id:int -> int -> (bool, string) result Lwt.t
+  val mod_delete_comment : (module Caqti_lwt.CONNECTION) -> community_id:int -> int -> (int option, string) result Lwt.t
   val ban_user : (module Caqti_lwt.CONNECTION) -> int -> (unit, string) result Lwt.t
   val is_globally_banned : (module Caqti_lwt.CONNECTION) -> int -> (bool, string) result Lwt.t
   val unban_user_global : (module Caqti_lwt.CONNECTION) -> int -> (unit, string) result Lwt.t
@@ -594,8 +602,10 @@ val search_comments : (module Caqti_lwt.CONNECTION) -> string -> int -> int -> (
 
 val admin_delete_post : (module Caqti_lwt.CONNECTION) -> label:string -> int -> (unit, string) result Lwt.t
 val admin_delete_comment : (module Caqti_lwt.CONNECTION) -> label:string -> int -> (unit, string) result Lwt.t
-val mod_delete_post : (module Caqti_lwt.CONNECTION) -> int -> (unit, string) result Lwt.t
-val mod_delete_comment : (module Caqti_lwt.CONNECTION) -> int -> (unit, string) result Lwt.t
+(* See module Admin for the result contract. There is deliberately no ID-only
+   mod deletion: community moderation must always prove route-to-target scope. *)
+val mod_delete_post : (module Caqti_lwt.CONNECTION) -> community_id:int -> int -> (bool, string) result Lwt.t
+val mod_delete_comment : (module Caqti_lwt.CONNECTION) -> community_id:int -> int -> (int option, string) result Lwt.t
 val ban_user : (module Caqti_lwt.CONNECTION) -> int -> (unit, string) result Lwt.t
 val is_globally_banned : (module Caqti_lwt.CONNECTION) -> int -> (bool, string) result Lwt.t
 val unban_user_global : (module Caqti_lwt.CONNECTION) -> int -> (unit, string) result Lwt.t

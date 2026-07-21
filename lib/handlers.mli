@@ -94,6 +94,17 @@ val delete_post_handler : Dream.handler
 val mod_delete_post_handler : Dream.handler
 
 (** === COMMENT === *)
+
+(** Pure authorization decision for the general /delete-comment endpoint —
+    author-only for non-admins; community moderation must use the scoped
+    mod_delete flow. Takes no community id by design (the old hidden
+    community_id form field enabled a cross-community delete) and is exposed
+    for tests. *)
+module Comment_delete : sig
+  type decision = Admin_delete | Author_delete | Forbidden
+  val decide : is_admin:bool -> requester_id:int -> owner_id:int -> decision
+end
+
 val create_comment_handler : Dream.handler
 val delete_comment_handler : Dream.handler
 val mod_delete_comment_handler : Dream.handler

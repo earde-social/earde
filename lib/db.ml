@@ -2461,6 +2461,41 @@ module Admin = struct
     | Ok () -> Lwt.return (Ok ())
     | Error err -> Lwt.return (Error (Caqti_error.show err))
 
+  (* Community-scoped moderator tombstones. Unlike the admin variants above, the
+     mutation itself is bound to the route community — a moderator of community A
+     must not be able to tombstone content in community B by forging the numeric
+     id. RETURNING proves a row actually matched: C.exec reports Ok () even when
+     zero rows update, which must never count as a deletion (it would produce a
+     modlog entry and a notification for a mutation that never happened). *)
+  let mod_delete_post_query =
+    let open Caqti_request.Infix in
+    (Caqti_type.t2 Caqti_type.int Caqti_type.int ->? Caqti_type.int)
+    "UPDATE posts SET content = '[removed by moderator]', url = NULL, image_url = NULL
+     WHERE id = $1 AND community_id = $2 RETURNING id"
+
+  let mod_delete_post (module C : Caqti_lwt.CONNECTION) ~community_id post_id =
+    C.find_opt mod_delete_post_query (post_id, community_id) >>= function
+    | Ok (Some _) -> Lwt.return (Ok true)
+    | Ok None -> Lwt.return (Ok false)
+    | Error e -> Lwt.return (Error (Caqti_error.show e))
+
+  (* Comment ownership is comment -> post -> community; the join enforces it
+     atomically. RETURNING c.post_id doubles as the match proof and the redirect/
+     notification target. *)
+  let mod_delete_comment_query =
+    let open Caqti_request.Infix in
+    (Caqti_type.t2 Caqti_type.int Caqti_type.int ->? Caqti_type.int)
+    "UPDATE comments AS c SET content = '[removed by moderator]'
+     FROM posts AS p
+     WHERE c.id = $1 AND c.post_id = p.id AND p.community_id = $2
+     RETURNING c.post_id"
+
+  let mod_delete_comment (module C : Caqti_lwt.CONNECTION) ~community_id comment_id =
+    C.find_opt mod_delete_comment_query (comment_id, community_id) >>= function
+    | Ok (Some post_id) -> Lwt.return (Ok (Some post_id))
+    | Ok None -> Lwt.return (Ok None)
+    | Error e -> Lwt.return (Error (Caqti_error.show e))
+
   let ban_user_query =
     let open Caqti_request.Infix in
     (Caqti_type.int ->. Caqti_type.unit)
@@ -3142,8 +3177,8 @@ let pending_signup_confirm = PendingSignup.confirm
 
 let admin_delete_post = Admin.admin_delete_post
 let admin_delete_comment = Admin.admin_delete_comment
-let mod_delete_post db post_id = Admin.admin_delete_post db ~label:"[removed by moderator]" post_id
-let mod_delete_comment db comment_id = Admin.admin_delete_comment db ~label:"[removed by moderator]" comment_id
+let mod_delete_post = Admin.mod_delete_post
+let mod_delete_comment = Admin.mod_delete_comment
 let ban_user = Admin.ban_user
 let is_globally_banned = Admin.is_globally_banned
 let unban_user_global = Admin.unban_user_global

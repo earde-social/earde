@@ -1538,7 +1538,7 @@ let thread_shell_page ?user ?(noindex=false) ~is_member ~is_current_user_mod ~mo
         | None -> ""
         | Some u ->
             if u = c.username then
-              Printf.sprintf "<form action='/delete-comment' method='POST' class='inline m-0 p-0' onsubmit=\"confirmModal(event, 'Do you really want to delete this comment? This action cannot be undone.')\">%s<input type='hidden' name='comment_id' value='%d'><input type='hidden' name='community_id' value='%d'><button type='submit' class='ct-act ct-act-danger'>&#128465;&#65039;</button></form>" csrf_token c.id post.community_id
+              Printf.sprintf "<form action='/delete-comment' method='POST' class='inline m-0 p-0' onsubmit=\"confirmModal(event, 'Do you really want to delete this comment? This action cannot be undone.')\">%s<input type='hidden' name='comment_id' value='%d'><button type='submit' class='ct-act ct-act-danger'>&#128465;&#65039;</button></form>" csrf_token c.id
             else if is_current_user_mod && not comment_target_is_admin then
               Printf.sprintf "
                 <button onclick=\"document.getElementById('mod-modal-comment-%d').showModal()\" class='ct-act ct-act-mod'>&#128737;&#65039; Mod Remove</button>
@@ -3395,9 +3395,8 @@ let post_page ?user ?(noindex=false) ~is_member ~is_current_user_mod ~mod_userna
                 (* Rule A: personal delete — no audit trail needed *)
                 Printf.sprintf "<form action='/delete-comment' method='POST' class='inline m-0 p-0' onsubmit=\"confirmModal(event, 'Do you really want to delete this comment? This action cannot be undone.')\">
                     %s <input type='hidden' name='comment_id' value='%d'>
-                    <input type='hidden' name='community_id' value='%d'>
                     <button type='submit' class='text-xs text-red-500 hover:text-red-700 font-bold'>🗑️</button>
-                </form>" csrf_token c.id post.community_id
+                </form>" csrf_token c.id
               else if is_current_user_mod && not comment_target_is_admin then
                 (* Rule B: mod removal — dialog enforces a public reason in the mod log *)
                 Printf.sprintf "
