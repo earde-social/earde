@@ -2619,39 +2619,54 @@ let mod_delete_post_handler request =
                 if not (is_admin || is_community_mod) then
                     Dream.respond ~status:`Forbidden (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Forbidden" ~message:"You are not a moderator of this community." ~alert_type:"error" ~return_url:("/c/" ^ slug) request)
                 else
-                    (* Fetch post image before the DB tombstone so we can clean the disk. *)
-                    let%lwt post_img_opt =
-                      match%lwt Db.get_post_by_id db post_id with
-                      | Ok (Some post) -> Lwt.return post.image_url | _ -> Lwt.return None
+                    (* Ownership gate: load the post and prove it belongs to the route
+                       community BEFORE any side effect (disk, DB, modlog, notification).
+                       A missing post and a post from another community get the same
+                       neutral 404 — the response must not reveal that the numeric id
+                       exists elsewhere, and admins on this community-scoped route obey
+                       the same route-to-target relationship. *)
+                    let not_found_here () =
+                      Dream.respond ~status:`Not_Found (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Not Found" ~message:"This post does not exist in this community." ~alert_type:"error" ~return_url:("/c/" ^ slug) request)
                     in
-                    let () = match post_img_opt with
-                      | Some image_url ->
-                          let filename = Filename.basename image_url in
-                          let physical_path = Filename.concat "static/uploads" filename in
-                          Dream.log "Attempting to delete physical file: %s" physical_path;
-                          (try Sys.remove physical_path
-                           with Sys_error e -> Dream.log "Failed to delete file: %s" e)
-                      | None -> ()
-                    in
-                    let%lwt delete_res = Db.mod_delete_post db post_id in
-                    (match delete_res with
+                    (match%lwt Db.get_post_by_id db post_id with
                     | Error err ->
                         Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Error" ~message:("Database error: " ^ err) ~alert_type:"error" ~return_url:("/c/" ^ slug) request)
-                    | Ok () ->
-                        (* Admin acting without mod role: flag action_type and prefix reason
-                           so the public mod_actions log explicitly shows "Admin Intervention". *)
-                        let is_admin_override = is_admin && not is_community_mod in
-                        let action_type = if is_admin_override then "admin_delete_post" else "delete_post" in
-                        let logged_reason = if is_admin_override then "Admin Intervention: " ^ reason else reason in
-                        let%lwt _ = Db.log_mod_action db community.id user_id action_type (Some post_id) logged_reason in
-                        (* Notify post author — best-effort; post is a tombstone at this point so get_post_owner still works. *)
-                        let%lwt _ = match%lwt Db.get_post_owner db post_id with
-                          | Ok author_id ->
+                    | Ok None -> not_found_here ()
+                    | Ok (Some post) when post.community_id <> community.id -> not_found_here ()
+                    | Ok (Some post) ->
+                        (* The mutation re-proves the scope: id AND community_id, with
+                           RETURNING as the match evidence. Ok false means the post
+                           vanished or moved since the read above — still a neutral 404,
+                           still zero side effects. *)
+                        (match%lwt Db.mod_delete_post db ~community_id:community.id post_id with
+                        | Error err ->
+                            Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Error" ~message:("Database error: " ^ err) ~alert_type:"error" ~return_url:("/c/" ^ slug) request)
+                        | Ok false -> not_found_here ()
+                        | Ok true ->
+                            (* Disk cleanup only after the scoped mutation confirmed the
+                               target matched this community. *)
+                            let () = match post.image_url with
+                              | Some image_url ->
+                                  let filename = Filename.basename image_url in
+                                  let physical_path = Filename.concat "static/uploads" filename in
+                                  Dream.log "Attempting to delete physical file: %s" physical_path;
+                                  (try Sys.remove physical_path
+                                   with Sys_error e -> Dream.log "Failed to delete file: %s" e)
+                              | None -> ()
+                            in
+                            (* Admin acting without mod role: flag action_type and prefix reason
+                               so the public mod_actions log explicitly shows "Admin Intervention". *)
+                            let is_admin_override = is_admin && not is_community_mod in
+                            let action_type = if is_admin_override then "admin_delete_post" else "delete_post" in
+                            let logged_reason = if is_admin_override then "Admin Intervention: " ^ reason else reason in
+                            let%lwt _ = Db.log_mod_action db community.id user_id action_type (Some post_id) logged_reason in
+                            (* Notify the author from the row validated above — no re-query
+                               of the tombstoned row. *)
+                            let%lwt _ =
                               let msg = "Your post was removed by a moderator. Reason: " ^ reason in
-                              Db.create_notif db author_id (Some post_id) "mod_action" msg
-                          | Error _ -> Lwt.return (Ok ())
-                        in
-                        Dream.redirect request ("/c/" ^ slug))
+                              Db.create_notif db post.user_id (Some post_id) "mod_action" msg
+                            in
+                            Dream.redirect request ("/c/" ^ slug)))
           )
       | _ ->
           Dream.respond ~status:`Bad_Request (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Form Error" ~message:"Invalid form submission." ~alert_type:"error" ~return_url:("/c/" ^ slug) request)
@@ -2692,32 +2707,51 @@ let mod_delete_comment_handler request =
                 if not (is_admin || is_community_mod) then
                     Dream.respond ~status:`Forbidden (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Forbidden" ~message:"You are not a moderator of this community." ~alert_type:"error" ~return_url:("/c/" ^ slug) request)
                 else
-                    (* Fetch post_id before deletion — row still exists at this point,
-                       and we need it for both the notification link and the redirect target. *)
-                    let%lwt post_id_res = Db.get_comment_post_id db comment_id in
-                    let%lwt delete_res = Db.mod_delete_comment db comment_id in
-                    (match delete_res with
+                    (* Ownership gate: resolve comment -> post -> community BEFORE the
+                       mutation. A missing comment and a comment under another
+                       community's post get the same neutral 404 — the response must
+                       not reveal that the numeric id exists elsewhere.
+                       get_comment_post_id collapses "no row" and DB failure into one
+                       Error; both are safe to treat as not-found because nothing has
+                       been mutated yet. *)
+                    let not_found_here () =
+                      Dream.respond ~status:`Not_Found (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Not Found" ~message:"This comment does not exist in this community." ~alert_type:"error" ~return_url:("/c/" ^ slug) request)
+                    in
+                    let%lwt in_this_community =
+                      match%lwt Db.get_comment_post_id db comment_id with
+                      | Error _ -> Lwt.return false
+                      | Ok pid ->
+                          (match%lwt Db.get_post_by_id db pid with
+                          | Ok (Some post) -> Lwt.return (post.community_id = community.id)
+                          | _ -> Lwt.return false)
+                    in
+                    if not in_this_community then not_found_here ()
+                    else
+                    (* Author read while the row is intact (the tombstone keeps user_id,
+                       but the notification must never depend on that detail). *)
+                    let%lwt author_res = Db.get_comment_owner db comment_id in
+                    (* The mutation re-proves comment -> post -> community atomically;
+                       RETURNING c.post_id is both the match evidence and the redirect
+                       target. Ok None means the comment vanished since the check above —
+                       still a neutral 404, still zero side effects. *)
+                    (match%lwt Db.mod_delete_comment db ~community_id:community.id comment_id with
                     | Error err ->
                         Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Error" ~message:("Database error: " ^ err) ~alert_type:"error" ~return_url:("/c/" ^ slug) request)
-                    | Ok () ->
+                    | Ok None -> not_found_here ()
+                    | Ok (Some post_id) ->
                         (* Admin acting without mod role: flag action_type and prefix reason
                            so the public mod_actions log explicitly shows "Admin Intervention". *)
                         let is_admin_override = is_admin && not is_community_mod in
                         let action_type = if is_admin_override then "admin_delete_comment" else "delete_comment" in
                         let logged_reason = if is_admin_override then "Admin Intervention: " ^ reason else reason in
                         let%lwt _ = Db.log_mod_action db community.id user_id action_type (Some comment_id) logged_reason in
-                        (* Notify comment author — reuse the post_id already fetched above. *)
-                        let%lwt _ = match%lwt Db.get_comment_owner db comment_id with
+                        let%lwt _ = match author_res with
                           | Ok author_id ->
-                              (match post_id_res with
-                              | Ok pid ->
-                                  let msg = "Your comment was removed by a moderator. Reason: " ^ reason in
-                                  Db.create_notif db author_id (Some pid) "mod_action" msg
-                              | Error _ -> Lwt.return (Ok ()))
+                              let msg = "Your comment was removed by a moderator. Reason: " ^ reason in
+                              Db.create_notif db author_id (Some post_id) "mod_action" msg
                           | Error _ -> Lwt.return (Ok ())
                         in
-                        let target = match post_id_res with Ok pid -> "/p/" ^ string_of_int pid | Error _ -> "/c/" ^ slug in
-                        Dream.redirect request target)
+                        Dream.redirect request ("/p/" ^ string_of_int post_id))
           )
       | _ ->
           Dream.respond ~status:`Bad_Request (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Form Error" ~message:"Invalid form submission." ~alert_type:"error" ~return_url:("/c/" ^ slug) request)
