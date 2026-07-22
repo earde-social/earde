@@ -89,6 +89,11 @@ type event =
 (** ["user:<database_id>"] — the §4.1 authenticated distinct-ID scheme. *)
 val distinct_id_of_user_id : int -> string
 
+(** ["community:<database_id>"] — the §5.3 stable group key (the immutable
+    numeric id, never the mutable slug). Used by server payloads and by the
+    browser group attribute rendered in the layout. *)
+val community_group_key : int -> string
+
 (** Strictly public browser configuration: the write-only project token and
     the ingest host, nothing else. [None] when analytics is disabled or the
     required configuration is invalid — in that case no banner, no config

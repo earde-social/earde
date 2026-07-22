@@ -224,7 +224,7 @@ let mobile_desktop_gate =
    in-app shell. The shell surfaces (feed, section/channel/thread, account, admin, community
    management, and the public /c/:slug community-home) opt into `App via their wrappers; the
    remaining legacy/marketing pages keep `Site, byte-for-byte unchanged. *)
-let layout ?(noindex=false) ?user ?request ?(head_extra="") ?(full_bleed=false) ?(chrome=`Site) ~title content =
+let layout ?(noindex=false) ?user ?request ?(head_extra="") ?(full_bleed=false) ?(chrome=`Site) ?analytics_community_id ~title content =
   let is_admin = match request with
     | Some req -> Dream.session_field req "is_admin" = Some "true"
     | None -> false
@@ -234,14 +234,40 @@ let layout ?(noindex=false) ?user ?request ?(head_extra="") ?(full_bleed=false) 
      attributes, and therefore no PostHog network request. Only the public
      token and ingest host are rendered; analytics.js itself is local and
      connects to PostHog exclusively after granted consent. The banner ships
-     hidden; analytics.js reveals it only when no consent cookie exists. *)
+     hidden; analytics.js reveals it only when no consent cookie exists.
+     The same root carries the §4.2 identity attribute (authenticated pages
+     only: exactly user:<id>, nothing else — no username/email/raw id) and
+     the §5.3 group attribute (community-scoped pages only: exactly
+     community:<id>, keyed by the immutable numeric id). *)
   let analytics_head, analytics_banner =
     match Posthog.browser_config () with
     | None -> ("", "")
     | Some cfg ->
+        let identity_attr =
+          match request with
+          | None -> ""
+          | Some req -> (
+              (* Absence of session middleware (tests) or a malformed session
+                 value must safely mean "no identity". *)
+              match (try Dream.session_field req "user_id" with _ -> None) with
+              | None -> ""
+              | Some uid_str -> (
+                  match int_of_string_opt uid_str with
+                  | Some id ->
+                      Printf.sprintf " data-analytics-user='%s'"
+                        (html_escape (Posthog.distinct_id_of_user_id id))
+                  | None -> ""))
+        in
+        let group_attr =
+          match analytics_community_id with
+          | Some community_id ->
+              Printf.sprintf " data-analytics-group='%s'"
+                (html_escape (Posthog.community_group_key community_id))
+          | None -> ""
+        in
         ( "<script src='/static/js/analytics.js' defer></script>",
           Printf.sprintf
-            "<div id='analytics-consent' hidden data-ph-token='%s' data-ph-api-host='%s' class='fixed bottom-4 left-1/2 -translate-x-1/2 z-50 w-[calc(100%%-2rem)] max-w-md bg-white border border-[#E0D9CC] rounded-2xl shadow-xl p-4'>\
+            "<div id='analytics-consent' hidden data-ph-token='%s' data-ph-api-host='%s'%s%s class='fixed bottom-4 left-1/2 -translate-x-1/2 z-50 w-[calc(100%%-2rem)] max-w-md bg-white border border-[#E0D9CC] rounded-2xl shadow-xl p-4'>\
                <p class='text-sm text-gray-700 mb-3'>Earde can collect anonymous usage analytics (PostHog) to improve the product. Nothing is collected until you choose.</p>\
                <div class='flex items-center gap-2'>\
                  <button type='button' data-analytics-accept class='px-4 py-1.5 text-sm font-semibold bg-[#C94C4C] text-white rounded-full hover:bg-[#A83A3A] transition'>Accept</button>\
@@ -250,7 +276,8 @@ let layout ?(noindex=false) ?user ?request ?(head_extra="") ?(full_bleed=false) 
                </div>\
              </div>"
             (html_escape cfg.Posthog.browser_token)
-            (html_escape cfg.Posthog.browser_api_host) )
+            (html_escape cfg.Posthog.browser_api_host)
+            identity_attr group_attr )
   in
   let auth_menu =
     match user with
@@ -1323,7 +1350,7 @@ let render_sidebar (community : community) (nav_groups : nav_group list) =
    that differ only in the local sidebar and which rail tile is active.
    `main`/`sidebar`/`right_pane` are caller-rendered HTML fragments. *)
 let global_shell ?user ?request ?noindex ?(rail_communities=[]) ~(rail_active : rail_active)
-    ?sidebar ?right_pane ?(head_extra="") ~title ~main () =
+    ?sidebar ?right_pane ?(head_extra="") ?analytics_community_id ~title ~main () =
   let rail = render_global_rail ~active:rail_active rail_communities in
   let sidebar_html = Option.value sidebar ~default:"" in
   let aside = match right_pane with
@@ -1344,7 +1371,7 @@ let global_shell ?user ?request ?noindex ?(rail_communities=[]) ~(rail_active : 
   (* head_extra lets a shell page add per-page <head> tags (canonical, meta description, a
      page-scoped script) after the shell stylesheet; default "" keeps pages byte-for-byte
      unchanged. *)
-  layout ?noindex ?user ?request ~head_extra:(shell_css_link ^ head_extra) ~full_bleed:true ~chrome:`App ~title grid
+  layout ?noindex ?user ?request ~head_extra:(shell_css_link ^ head_extra) ~full_bleed:true ~chrome:`App ?analytics_community_id ~title grid
 
 (* Replay privacy (analytics spec §6): private-community page content is
    blocked from session replay entirely via PostHog's built-in ph-no-capture
@@ -1364,7 +1391,8 @@ let community_shell ?user ?request ?noindex ?(rail_communities=[]) ?active_slug
   let main = private_replay_guard ~community main in
   let rail_active = match active_slug with Some s -> Rail_community s | None -> Rail_none in
   global_shell ?user ?request ?noindex ~rail_communities ~rail_active
-    ~sidebar ?right_pane ~head_extra ~title ~main ()
+    ~sidebar ?right_pane ~head_extra
+    ~analytics_community_id:community.id ~title ~main ()
 
 (* The global Feed shell: the same app shell with NO community sidebar (Feed lives outside any
    one community) and the Feed rail tile active. *)
@@ -1380,11 +1408,11 @@ let feed_shell ?user ?request ?noindex ?(rail_communities=[]) ?right_pane ?(head
    [body] is the inner page HTML the caller renders (the form, list, or gate panel). *)
 let create_css_link = "<link rel='stylesheet' href='/static/css/create.css'>"
 
-let create_page ?user ?request ?(noindex=false) ~title ~body () =
+let create_page ?user ?request ?(noindex=false) ?analytics_community_id ~title ~body () =
   let shell =
     Printf.sprintf "<div class='create-shell'>%s</div>" body
   in
-  layout ?user ?request ~noindex ~full_bleed:true ~chrome:`App
+  layout ?user ?request ~noindex ~full_bleed:true ~chrome:`App ?analytics_community_id
     ~head_extra:(shell_css_link ^ create_css_link) ~title shell
 
 (* Focused in-product account layout: the mono app command bar over a single centered
@@ -1427,11 +1455,11 @@ let admin_page ?user ?request ?(noindex=false) ~title ~body () =
    (and modlog stays public exactly as the handler allows). *)
 let community_manage_css_link = "<link rel='stylesheet' href='/static/css/community-manage.css'>"
 
-let community_manage_page ?user ?request ?(noindex=false) ~title ~body () =
+let community_manage_page ?user ?request ?(noindex=false) ?analytics_community_id ~title ~body () =
   let shell =
     Printf.sprintf "<div class='cm-shell'>%s</div>" body
   in
-  layout ?user ?request ~noindex ~full_bleed:true ~chrome:`App
+  layout ?user ?request ~noindex ~full_bleed:true ~chrome:`App ?analytics_community_id
     ~head_extra:(shell_css_link ^ community_manage_css_link) ~title shell
 
 (* The public community home (/c/:slug). Unlike the focused single-column wrappers above it
@@ -1441,8 +1469,8 @@ let community_manage_page ?user ?request ?(noindex=false) ~title ~body () =
    owns everything under .community-home). SSR-only: every link/form works with JS off. *)
 let community_home_css_link = "<link rel='stylesheet' href='/static/css/community-home.css'>"
 
-let community_home_page ?user ?request ?(noindex=false) ~title ~body () =
-  layout ?user ?request ~noindex ~full_bleed:true ~chrome:`App
+let community_home_page ?user ?request ?(noindex=false) ?analytics_community_id ~title ~body () =
+  layout ?user ?request ~noindex ~full_bleed:true ~chrome:`App ?analytics_community_id
     ~head_extra:(shell_css_link ^ community_home_css_link) ~title body
 
 (* Focused in-product search layout: the mono app command bar over a single centered

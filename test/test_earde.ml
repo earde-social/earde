@@ -977,6 +977,68 @@ let consent_sync_db_case =
           AnT.clear_configuration_override ();
           Lwt.return_unit))
 
+(* --- Step-5: identity/group attributes + browser reconciliation ---------- *)
+
+let index_of haystack needle =
+  let hl = String.length haystack and nl = String.length needle in
+  let rec loop i =
+    if nl = 0 || i > hl - nl then None
+    else if String.sub haystack i nl = needle then Some i
+    else loop (i + 1)
+  in
+  loop 0
+
+(* Extracts the single-quoted value of [name='value'] from rendered HTML. *)
+let attr_value html name =
+  match index_of html (name ^ "='") with
+  | None -> None
+  | Some i -> (
+      let start = i + String.length name + 2 in
+      match String.index_from_opt html start '\'' with
+      | None -> None
+      | Some j -> Some (String.sub html start (j - start)))
+
+(* Counts occurrences of a substring — used to prove no unexpected
+   data-analytics-* attribute sneaks in. *)
+let count_sub haystack needle =
+  let nl = String.length needle in
+  let rec loop i acc =
+    match index_of (String.sub haystack i (String.length haystack - i)) needle with
+    | None -> acc
+    | Some j -> loop (i + j + nl) (acc + 1)
+  in
+  if nl = 0 then 0 else loop 0 0
+
+(* Renders the shared layout through real session middleware, optionally with
+   a session user_id value, under the enabled test analytics config. *)
+let render_layout ?session_user ?analytics_community_id () =
+  let rendered = ref "" in
+  let (_ : Dream.response) =
+    Lwt_main.run
+      (Dream.memory_sessions
+         (fun req ->
+           Lwt.bind
+             (match session_user with
+             | Some v -> Dream.set_session_field req "user_id" v
+             | None -> Lwt.return_unit)
+             (fun () ->
+               rendered :=
+                 Earde.Components.layout ~request:req ?analytics_community_id
+                   ~title:"T" "<p>body</p>";
+               Dream.html ""))
+         (Dream.request ~method_:`GET ~target:"/" ""))
+  in
+  !rendered
+
+let with_enabled_config f =
+  AnT.use_enabled_test_configuration ();
+  Fun.protect ~finally:AnT.clear_configuration_override f
+
+let test_community ~id ~visibility : Earde.Db.community =
+  { Earde.Db.id; slug = "testc"; name = "Test Community"; description = None;
+    rules = None; avatar_url = None; banner_url = None; allow_downvotes = true;
+    sections_enabled = true; visibility; indexable = true }
+
 let () =
   Alcotest.run "earde"
     [ ( "smoke"
@@ -1922,6 +1984,191 @@ let () =
                  maskAllInputs) — only the title had to change. *)
               Alcotest.(check bool) "page body still echoes query in input" true
                 (contains html "value='secret'"))
+        ] )
+      (* §4.2 identity attribute: exactly user:<id> on authenticated pages,
+         nothing anywhere else, and no person data in analytics attributes. *)
+    ; ( "analytics_identity_attrs"
+      , [ an_case "authenticated layout emits exactly user:42" (fun () ->
+              with_enabled_config (fun () ->
+                  let html = render_layout ~session_user:"42" () in
+                  Alcotest.(check (option string)) "identity attr"
+                    (Some "user:42")
+                    (attr_value html "data-analytics-user")))
+        ; an_case "anonymous layout emits no identity attribute" (fun () ->
+              with_enabled_config (fun () ->
+                  let html = render_layout () in
+                  Alcotest.(check (option string)) "no identity" None
+                    (attr_value html "data-analytics-user")))
+        ; an_case "malformed session value emits no identity" (fun () ->
+              with_enabled_config (fun () ->
+                  let html = render_layout ~session_user:"not-a-number" () in
+                  Alcotest.(check (option string)) "no identity" None
+                    (attr_value html "data-analytics-user")))
+        ; an_case "disabled analytics emits neither identity nor group"
+            (fun () ->
+              AnT.use_disabled_test_configuration ();
+              Fun.protect ~finally:AnT.clear_configuration_override (fun () ->
+                  let html =
+                    render_layout ~session_user:"42" ~analytics_community_id:7
+                      ()
+                  in
+                  Alcotest.(check bool) "no identity attr" false
+                    (contains html "data-analytics-user");
+                  Alcotest.(check bool) "no group attr" false
+                    (contains html "data-analytics-group")))
+        ; an_case "only the two analytics attributes exist; no person data"
+            (fun () ->
+              with_enabled_config (fun () ->
+                  let html =
+                    render_layout ~session_user:"42" ~analytics_community_id:7
+                      ()
+                  in
+                  (* exactly one identity and one group attribute (the other
+                     data-analytics-* hits are the banner's own accept /
+                     refuse / error control hooks, which carry no values) *)
+                  Alcotest.(check int) "one identity attr" 1
+                    (count_sub html "data-analytics-user='");
+                  Alcotest.(check int) "one group attr" 1
+                    (count_sub html "data-analytics-group='");
+                  Alcotest.(check bool) "no username attr" false
+                    (contains html "data-analytics-username");
+                  Alcotest.(check bool) "no email anywhere in analytics root"
+                    false
+                    (contains html "data-analytics-email")))
+        ] )
+      (* §5.3 group attribute: exactly community:<id> on community-scoped
+         pages, actively absent on global pages, across all wrappers. *)
+    ; ( "analytics_group_attrs"
+      , [ an_case "community layout emits exactly community:7" (fun () ->
+              with_enabled_config (fun () ->
+                  let html = render_layout ~analytics_community_id:7 () in
+                  Alcotest.(check (option string)) "group attr"
+                    (Some "community:7")
+                    (attr_value html "data-analytics-group")))
+        ; an_case "global layout emits no group attribute" (fun () ->
+              with_enabled_config (fun () ->
+                  let html = render_layout () in
+                  Alcotest.(check (option string)) "no group" None
+                    (attr_value html "data-analytics-group")))
+        ; an_case "community_shell (public) carries the group key" (fun () ->
+              with_enabled_config (fun () ->
+                  let community =
+                    test_community ~id:9 ~visibility:Earde.Db.Community_public
+                  in
+                  let html =
+                    Earde.Components.community_shell ~title:"T" ~community
+                      ~nav_groups:[] ~main:"MAIN" ()
+                  in
+                  Alcotest.(check (option string)) "group attr"
+                    (Some "community:9")
+                    (attr_value html "data-analytics-group");
+                  Alcotest.(check bool) "public: no replay block" false
+                    (contains html "ph-no-capture")))
+        ; an_case
+            "community_shell (private) keeps group key + ph-no-capture only"
+            (fun () ->
+              with_enabled_config (fun () ->
+                  let community =
+                    test_community ~id:9 ~visibility:Earde.Db.Community_private
+                  in
+                  let html =
+                    Earde.Components.community_shell ~title:"T" ~community
+                      ~nav_groups:[] ~main:"MAIN" ()
+                  in
+                  Alcotest.(check (option string)) "group attr"
+                    (Some "community:9")
+                    (attr_value html "data-analytics-group");
+                  Alcotest.(check bool) "content replay-blocked" true
+                    (contains html "class='ph-no-capture'>MAIN");
+                  (* only the group attribute — no identity (no request) and
+                     no visibility/name leak *)
+                  Alcotest.(check int) "one group attr" 1
+                    (count_sub html "data-analytics-group='");
+                  Alcotest.(check int) "no identity attr" 0
+                    (count_sub html "data-analytics-user='");
+                  Alcotest.(check bool) "no visibility leak" false
+                    (contains html "data-analytics-visibility")))
+        ; an_case "community wrappers all pass the key through" (fun () ->
+              with_enabled_config (fun () ->
+                  let check_attr label expected html =
+                    Alcotest.(check (option string)) label expected
+                      (attr_value html "data-analytics-group")
+                  in
+                  check_attr "community_home_page" (Some "community:5")
+                    (Earde.Components.community_home_page
+                       ~analytics_community_id:5 ~title:"T" ~body:"B" ());
+                  check_attr "community_manage_page" (Some "community:6")
+                    (Earde.Components.community_manage_page
+                       ~analytics_community_id:6 ~title:"T" ~body:"B" ());
+                  check_attr "create_page (join/post/report/start-thread)"
+                    (Some "community:8")
+                    (Earde.Components.create_page ~analytics_community_id:8
+                       ~title:"T" ~body:"B" ())))
+        ; an_case "global wrappers emit no group" (fun () ->
+              with_enabled_config (fun () ->
+                  List.iter
+                    (fun (label, html) ->
+                      Alcotest.(check (option string)) label None
+                        (attr_value html "data-analytics-group"))
+                    [ ( "account_page",
+                        Earde.Components.account_page ~title:"T" ~body:"B" () )
+                    ; ( "admin_page",
+                        Earde.Components.admin_page ~title:"T" ~body:"B" () )
+                    ; ( "search_page",
+                        Earde.Components.search_page ~title:"T" ~body:"B" () )
+                    ; ( "feed_shell",
+                        Earde.Components.feed_shell ~title:"T" ~main:"M" () )
+                    ; ( "create_page without community",
+                        Earde.Components.create_page ~title:"T" ~body:"B" () )
+                    ]))
+        ] )
+      (* Shipped analytics.js: reconciliation contract + strict ordering. *)
+    ; ( "analytics_js_reconciliation"
+      , [ an_case "identity → group → pageview ordering" (fun () ->
+              let js = read_analytics_js () in
+              let pos needle =
+                match index_of js needle with
+                | Some i -> i
+                | None -> Alcotest.failf "analytics.js is missing %S" needle
+              in
+              let identity_call = pos "reconcileIdentity();" in
+              let group_call = pos "reconcileGroup();" in
+              let pageview = pos "pageviewSent = true" in
+              Alcotest.(check bool) "identify before group" true
+                (identity_call < group_call);
+              Alcotest.(check bool) "group before pageview" true
+                (group_call < pageview))
+        ; an_case "identity contract guards" (fun () ->
+              let js = read_analytics_js () in
+              (* identify only when the persisted id differs, key only *)
+              Alcotest.(check bool) "differs guard" true
+                (contains js "current !== identityAttr");
+              Alcotest.(check bool) "identify carries no properties" true
+                (contains js "window.posthog.identify(identityAttr);");
+              (* reset only a user:-prefixed id; anonymous ids preserved *)
+              Alcotest.(check bool) "reset guard" true
+                (contains js
+                   "else if (typeof current === \"string\" && current.indexOf(\"user:\") === 0)");
+              Alcotest.(check bool) "reset present" true
+                (contains js "window.posthog.reset();"))
+        ; an_case "group contract guards" (fun () ->
+              let js = read_analytics_js () in
+              (* key only — exactly two arguments, no properties object *)
+              Alcotest.(check bool) "group key only" true
+                (contains js "window.posthog.group(\"community\", groupAttr);");
+              Alcotest.(check bool) "global pages clear sticky group" true
+                (contains js "window.posthog.resetGroups();");
+              Alcotest.(check bool) "reads the layout attributes" true
+                (contains js "data-analytics-user"
+                && contains js "data-analytics-group"))
+        ; an_case "no duplicate init or pageview" (fun () ->
+              let js = read_analytics_js () in
+              Alcotest.(check bool) "shared init promise" true
+                (contains js "if (initPromise) return initPromise;");
+              Alcotest.(check bool) "single pageview guard" true
+                (contains js "if (!pageviewSent)");
+              Alcotest.(check int) "exactly one $pageview capture" 1
+                (count_sub js "posthog.capture(\"$pageview\""))
         ] )
     ; ( "mod_delete_community_scope", Mod_scope.suite )
     ; ( "db_returning_ids", Returning_ids.suite )

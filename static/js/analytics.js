@@ -16,6 +16,13 @@
   var apiHost = banner.getAttribute("data-ph-api-host");
   if (!token || !apiHost) return;
 
+  /* §4.2/§5.3 page context, rendered by the Dream layout: the authenticated
+     identity is exactly "user:<database_id>" (absent on anonymous pages); the
+     community group key is exactly "community:<database_id>" (absent on
+     global pages). No other identity or group data ever reaches the DOM. */
+  var identityAttr = banner.getAttribute("data-analytics-user");
+  var groupAttr = banner.getAttribute("data-analytics-group");
+
   var COOKIE_NAME = "earde_analytics_consent";
 
   /* Exact parse mirroring the server: only the exact values granted/denied
@@ -88,11 +95,43 @@
   ].join(", ");
 
   /* Module-owned idempotent initialization: one shared Promise; repeated
-     calls (banner + settings, double clicks) reuse the same attempt. The
-     manual $pageview fires at most once per document load. No undocumented
-     PostHog internals are consulted. */
+     calls (banner + settings, double clicks) reuse the same attempt, so
+     identify/group/pageview each run at most once per document load. No
+     undocumented PostHog internals are consulted. */
   var initPromise = null;
   var pageviewSent = false;
+
+  /* §4.2 identity reconciliation. Runs after init, before anything else:
+     - identity attribute present: identify only when the persisted distinct
+       id differs (a matching id must not identify again). No person
+       properties are ever sent from the browser ($set is server-owned).
+     - attribute absent (anonymous page): a persisted "user:"-prefixed id
+       means the user logged out or was deleted → reset() to a fresh
+       anonymous id; an already-anonymous id is preserved untouched. */
+  function reconcileIdentity() {
+    var current = window.posthog.get_distinct_id();
+    if (identityAttr) {
+      if (current !== identityAttr) {
+        window.posthog.identify(identityAttr);
+      }
+    } else if (typeof current === "string" && current.indexOf("user:") === 0) {
+      window.posthog.reset();
+    }
+  }
+
+  /* §5.3 group reconciliation. Runs after identity reconciliation (so it
+     applies to the post-reset identity) and before the pageview:
+     - group attribute present: session-sticky group set by key only — group
+       properties are owned by the server via $groupidentify (later step);
+     - absent (global pages): actively clear the sticky group so a previously
+       visited community never leaks onto /feed, search, settings, etc. */
+  function reconcileGroup() {
+    if (groupAttr) {
+      window.posthog.group("community", groupAttr);
+    } else {
+      window.posthog.resetGroups();
+    }
+  }
 
   function loadSdk() {
     return new Promise(function (resolve, reject) {
@@ -143,6 +182,11 @@
             recordBody: false
           }
         });
+        /* Required order (§4.2/§5.3): init → identify/reset → group
+           set/reset → the single manual pageview, so the pageview is
+           attributed to the correct person and community. */
+        reconcileIdentity();
+        reconcileGroup();
         if (!pageviewSent) {
           pageviewSent = true;
           window.posthog.capture("$pageview", {
