@@ -201,11 +201,16 @@ module Community : sig
   val get_community_by_slug : (module Caqti_lwt.CONNECTION) -> string -> (community option, string) result Lwt.t
   val get_community_by_id : (module Caqti_lwt.CONNECTION) -> int -> (community option, string) result Lwt.t
   val search_communities : (module Caqti_lwt.CONNECTION) -> string -> int -> int -> (community list, string) result Lwt.t
-  val update_community_details : (module Caqti_lwt.CONNECTION) -> int -> string option -> string option -> string option -> string option -> (unit, string) result Lwt.t
+  (* UPDATE ... RETURNING: the authoritative updated record rides the same
+     round-trip (analytics $groupidentify needs it); None = no such id, which
+     was previously an indistinguishable silent no-op. *)
+  val update_community_details : (module Caqti_lwt.CONNECTION) -> int -> string option -> string option -> string option -> string option -> (community option, string) result Lwt.t
   val toggle_community_downvotes : (module Caqti_lwt.CONNECTION) -> int -> bool -> (unit, string) result Lwt.t
   (** Slice E: set community visibility / indexability from the settings UI. [visibility] is the
-      closed variant (stringified internally); [indexable] is a bool. Touch only those columns. *)
-  val update_community_visibility : (module Caqti_lwt.CONNECTION) -> int -> community_visibility -> (unit, string) result Lwt.t
+      closed variant (stringified internally); [indexable] is a bool. Touch only those columns.
+      Visibility returns the authoritative updated record (UPDATE ... RETURNING) because it is a
+      closed analytics group property; [None] = no such community id. *)
+  val update_community_visibility : (module Caqti_lwt.CONNECTION) -> int -> community_visibility -> (community option, string) result Lwt.t
   val update_community_indexable : (module Caqti_lwt.CONNECTION) -> int -> bool -> (unit, string) result Lwt.t
   val get_allows_downvotes_for_post : (module Caqti_lwt.CONNECTION) -> int -> (bool, string) result Lwt.t
   val get_allows_downvotes_for_comment : (module Caqti_lwt.CONNECTION) -> int -> (bool, string) result Lwt.t
@@ -214,9 +219,14 @@ end
 module User : sig
   val create_user : (module Caqti_lwt.CONNECTION) -> string -> string -> string -> string -> (unit, string) result Lwt.t
   val user_exists : (module Caqti_lwt.CONNECTION) -> string -> string -> (bool, string) result Lwt.t
-  val get_user_for_login : (module Caqti_lwt.CONNECTION) -> string -> ((int * string * string * string * bool * bool) option, string) result Lwt.t
+  (* Nested row: (id, username, email, created_at), (password_hash, is_admin,
+     is_banned) — created_at rides along for the analytics person $set. *)
+  val get_user_for_login : (module Caqti_lwt.CONNECTION) -> string -> (((int * string * string * string) * (string * bool * bool)) option, string) result Lwt.t
   val anonymize_user : (module Caqti_lwt.CONNECTION) -> int -> (unit, string) result Lwt.t
   val get_user_public : (module Caqti_lwt.CONNECTION) -> string -> ((int * string * string * string option * string option) option, string) result Lwt.t
+  (* Analytics person properties (username, email, created_at, is_admin) —
+     the closed §4.3 set, used only by the consent-grant sync. *)
+  val get_user_analytics_props : (module Caqti_lwt.CONNECTION) -> int -> ((string * string * string * bool) option, string) result Lwt.t
   val update_user_profile : (module Caqti_lwt.CONNECTION) -> string option -> string option -> int -> (unit, string) result Lwt.t
   val get_user_karma : (module Caqti_lwt.CONNECTION) -> int -> (int, string) result Lwt.t
   val get_user_post_votes : (module Caqti_lwt.CONNECTION) -> int -> ((int * int) list, string) result Lwt.t
@@ -336,7 +346,7 @@ end
 
 module Comment : sig
   val get_comments : (module Caqti_lwt.CONNECTION) -> int -> (comment list, string) result Lwt.t
-  val create_comment : (module Caqti_lwt.CONNECTION) -> string -> int -> int -> int option -> (unit, string) result Lwt.t
+  val create_comment : (module Caqti_lwt.CONNECTION) -> string -> int -> int -> int option -> (int, string) result Lwt.t
   val touch_last_activity : (module Caqti_lwt.CONNECTION) -> int -> (unit, string) result Lwt.t
   val vote_comment : (module Caqti_lwt.CONNECTION) -> int -> int -> int -> (unit, string) result Lwt.t
   val get_comments_by_user : (module Caqti_lwt.CONNECTION) -> int -> ((int * string * string * int * string * int) list, string) result Lwt.t
@@ -351,7 +361,9 @@ end
 module Membership : sig
   val join_community : (module Caqti_lwt.CONNECTION) -> int -> int -> (unit, string) result Lwt.t
   val is_member : (module Caqti_lwt.CONNECTION) -> int -> int -> (bool, string) result Lwt.t
-  val leave_community : (module Caqti_lwt.CONNECTION) -> int -> int -> (unit, string) result Lwt.t
+  (* true = a membership row was actually deleted; false = the user was not a
+     member (no-op). Same DELETE round-trip via RETURNING. *)
+  val leave_community : (module Caqti_lwt.CONNECTION) -> int -> int -> (bool, string) result Lwt.t
   (** Slice F: list the [community_members] allow-list (username/id/email) for the settings
       member-management UI. Ordered by username. Mods/admins absent unless also members. *)
   val get_community_members : (module Caqti_lwt.CONNECTION) -> int -> (user list, string) result Lwt.t
@@ -414,9 +426,14 @@ end
 
 module Analytics : sig
   val log_page_view : (module Caqti_lwt.CONNECTION) -> string -> string option -> string -> (unit, string) result Lwt.t
-  val touch_user_active : (module Caqti_lwt.CONNECTION) -> int -> (unit, string) result Lwt.t
   val get_kpi_dashboard : (module Caqti_lwt.CONNECTION) -> start_date:string -> end_date:string -> (((int * int * int) * (int * int)), string) result Lwt.t
   val get_dau_mau_ratio : (module Caqti_lwt.CONNECTION) -> start_date:string -> end_date:string -> (float, string) result Lwt.t
+end
+
+(* Presence is operational state, not analytics: last_active_at feeds
+   Moderator.demote_inactive_mods and must survive analytics changes. *)
+module Presence : sig
+  val touch_user_active : (module Caqti_lwt.CONNECTION) -> int -> (unit, string) result Lwt.t
 end
 
 module Security : sig
@@ -467,11 +484,99 @@ module PendingSignup : sig
     username:string -> email:string -> password_hash:string -> token_hash:string ->
     ip:string option -> user_agent:string option -> (unit, string) result Lwt.t
   val sweep_expired : (module Caqti_lwt.CONNECTION) -> (unit, string) result Lwt.t
-  (* `Confirmed username = user row created; `Invalid = token missing/expired/already used;
+  (* `Confirmed (user_id, username, email, created_at, is_admin) = user row
+     created — id/created_at/is_admin from the insert's RETURNING, so the
+     caller holds the closed analytics person properties (§4.3) without a
+     post-transaction lookup; `Invalid = token missing/expired/already used;
      `Conflict = username/email taken in users since signup. *)
   val confirm :
     (module Caqti_lwt.CONNECTION) -> string ->
-    ([ `Confirmed of string | `Invalid | `Conflict ], string) result Lwt.t
+    ([ `Confirmed of int * string * string * string * bool
+     | `Invalid | `Conflict ], string) result Lwt.t
+end
+
+(* Durable PostHog person-deletion jobs (analytics spec §3.3). Job state only —
+   no function here performs network IO; the Persons-API client lives in
+   Posthog_deletion. *)
+module PosthogDeletionJobs : sig
+  val default_lease_minutes : int
+
+  (** One transaction: lock the user row, apply exactly the [anonymize_user]
+      rewrite, insert-or-adopt the pending deletion job for the immutable
+      ["user:<id>"], commit both or roll back both. Returns
+      [(job_id, distinct_id)]. Duplicate/concurrent calls converge on the same
+      job. Never performs HTTP. *)
+  val anonymize_and_enqueue :
+    (module Caqti_lwt.CONNECTION) -> int -> (int * string, string) result Lwt.t
+
+  (** Atomically claim one pending job (attempts+1, lease timestamp set in the
+      same statement). [None] = completed, or lease-held by another attempt. *)
+  val claim :
+    (module Caqti_lwt.CONNECTION) -> ?lease_minutes:int -> int ->
+    (string option, string) result Lwt.t
+
+  (** Claim up to [limit] oldest eligible pending jobs (SKIP LOCKED — safe
+      under concurrent invocations), returned oldest-first as
+      [(job_id, distinct_id)]. *)
+  val claim_batch :
+    (module Caqti_lwt.CONNECTION) -> ?lease_minutes:int -> limit:int -> unit ->
+    ((int * string) list, string) result Lwt.t
+
+  val mark_completed :
+    (module Caqti_lwt.CONNECTION) -> int -> (unit, string) result Lwt.t
+
+  (** Store a bounded safe diagnostic class on a still-pending job. Never pass
+      response bodies, URLs, tokens, or personal data. *)
+  val mark_failed :
+    (module Caqti_lwt.CONNECTION) -> int -> string -> (unit, string) result Lwt.t
+
+  (** [(id, status, attempts, last_error)] for tests/inspection. *)
+  val get_by_distinct_id :
+    (module Caqti_lwt.CONNECTION) -> string ->
+    ((int * string * int * string option) option, string) result Lwt.t
+end
+
+(** Durable §13 group-profile scrub jobs (privacy cleanup on public->private
+    transitions). Same architecture as [PosthogDeletionJobs]: enqueue happens
+    inside the authoritative transaction, claims are lease-based and bounded,
+    and no function here performs network IO. [group_key] is always the
+    immutable ["community:<id>"] — never a name or slug. *)
+module PosthogGroupCleanupJobs : sig
+  val default_lease_minutes : int
+
+  (** One transaction: apply the visibility UPDATE and, when the new value is
+      [Community_private], insert-or-re-arm the pending cleanup job for the
+      community's group key; commit both or roll back both. Returns the
+      updated community ([None] = id matched nothing) and the job id ([None]
+      on ->public transitions). Never performs HTTP. *)
+  val update_visibility_and_enqueue :
+    (module Caqti_lwt.CONNECTION) -> int -> community_visibility ->
+    (community option * int option, string) result Lwt.t
+
+  (** Atomically claim one pending job (attempts+1, lease timestamp set in the
+      same statement). [None] = completed, or lease-held by another attempt. *)
+  val claim :
+    (module Caqti_lwt.CONNECTION) -> ?lease_minutes:int -> int ->
+    (string option, string) result Lwt.t
+
+  (** Claim up to [limit] oldest eligible pending jobs (SKIP LOCKED), returned
+      oldest-first as [(job_id, group_key)]. *)
+  val claim_batch :
+    (module Caqti_lwt.CONNECTION) -> ?lease_minutes:int -> limit:int -> unit ->
+    ((int * string) list, string) result Lwt.t
+
+  val mark_completed :
+    (module Caqti_lwt.CONNECTION) -> int -> (unit, string) result Lwt.t
+
+  (** Store a bounded safe diagnostic class on a still-pending job. Never pass
+      response bodies, URLs, tokens, names, or slugs. *)
+  val mark_failed :
+    (module Caqti_lwt.CONNECTION) -> int -> string -> (unit, string) result Lwt.t
+
+  (** [(id, status, attempts, last_error)] for tests/inspection. *)
+  val get_by_group_key :
+    (module Caqti_lwt.CONNECTION) -> string ->
+    ((int * string * int * string option) option, string) result Lwt.t
 end
 
 module Community_user_stats : sig
@@ -484,9 +589,10 @@ end
 
 val create_user : (module Caqti_lwt.CONNECTION) -> string -> string -> string -> string -> (unit, string) result Lwt.t
 val user_exists : (module Caqti_lwt.CONNECTION) -> string -> string -> (bool, string) result Lwt.t
-val get_user_for_login : (module Caqti_lwt.CONNECTION) -> string -> ((int * string * string * string * bool * bool) option, string) result Lwt.t
+val get_user_for_login : (module Caqti_lwt.CONNECTION) -> string -> (((int * string * string * string) * (string * bool * bool)) option, string) result Lwt.t
 val anonymize_user : (module Caqti_lwt.CONNECTION) -> int -> (unit, string) result Lwt.t
 val get_user_public : (module Caqti_lwt.CONNECTION) -> string -> ((int * string * string * string option * string option) option, string) result Lwt.t
+val get_user_analytics_props : (module Caqti_lwt.CONNECTION) -> int -> ((string * string * string * bool) option, string) result Lwt.t
 val update_user_profile : (module Caqti_lwt.CONNECTION) -> string option -> string option -> int -> (unit, string) result Lwt.t
 val get_user_karma : (module Caqti_lwt.CONNECTION) -> int -> (int, string) result Lwt.t
 val verify_email : (module Caqti_lwt.CONNECTION) -> string -> (string option, string) result Lwt.t
@@ -499,9 +605,9 @@ val get_all_communities : (module Caqti_lwt.CONNECTION) -> (community list, stri
 val create_community : (module Caqti_lwt.CONNECTION) -> string -> string -> string option -> bool -> (unit, string) result Lwt.t
 val get_community_by_slug : (module Caqti_lwt.CONNECTION) -> string -> (community option, string) result Lwt.t
 val get_community_by_id : (module Caqti_lwt.CONNECTION) -> int -> (community option, string) result Lwt.t
-val update_community_details : (module Caqti_lwt.CONNECTION) -> int -> string option -> string option -> string option -> string option -> (unit, string) result Lwt.t
+val update_community_details : (module Caqti_lwt.CONNECTION) -> int -> string option -> string option -> string option -> string option -> (community option, string) result Lwt.t
 val join_community : (module Caqti_lwt.CONNECTION) -> int -> int -> (unit, string) result Lwt.t
-val leave_community : (module Caqti_lwt.CONNECTION) -> int -> int -> (unit, string) result Lwt.t
+val leave_community : (module Caqti_lwt.CONNECTION) -> int -> int -> (bool, string) result Lwt.t
 val is_member : (module Caqti_lwt.CONNECTION) -> int -> int -> (bool, string) result Lwt.t
 val get_community_members : (module Caqti_lwt.CONNECTION) -> int -> (user list, string) result Lwt.t
 val get_user_communities : (module Caqti_lwt.CONNECTION) -> int -> (community list, string) result Lwt.t
@@ -527,7 +633,7 @@ val get_post_by_id : (module Caqti_lwt.CONNECTION) -> int -> (post option, strin
 val get_posts_by_user : (module Caqti_lwt.CONNECTION) -> int -> (post list, string) result Lwt.t
 val get_post_communities : (module Caqti_lwt.CONNECTION) -> int list -> ((int * int * string * bool * bool) list, string) result Lwt.t
 val soft_delete_post : (module Caqti_lwt.CONNECTION) -> int -> int -> (unit, string) result Lwt.t
-val create_comment : (module Caqti_lwt.CONNECTION) -> string -> int -> int -> int option -> (unit, string) result Lwt.t
+val create_comment : (module Caqti_lwt.CONNECTION) -> string -> int -> int -> int option -> (int, string) result Lwt.t
 val touch_post_last_activity : (module Caqti_lwt.CONNECTION) -> int -> (unit, string) result Lwt.t
 val get_comments : (module Caqti_lwt.CONNECTION) -> int -> (comment list, string) result Lwt.t
 val get_comments_by_user : (module Caqti_lwt.CONNECTION) -> int -> ((int * string * string * int * string * int) list, string) result Lwt.t
@@ -591,9 +697,9 @@ val get_post_owner : (module Caqti_lwt.CONNECTION) -> int -> (int, string) resul
 val get_comment_owner : (module Caqti_lwt.CONNECTION) -> int -> (int, string) result Lwt.t
 val get_comment_post_id : (module Caqti_lwt.CONNECTION) -> int -> (int, string) result Lwt.t
 val log_page_view : (module Caqti_lwt.CONNECTION) -> string -> string option -> string -> (unit, string) result Lwt.t
-val touch_user_active : (module Caqti_lwt.CONNECTION) -> int -> (unit, string) result Lwt.t
 val get_kpi_dashboard : (module Caqti_lwt.CONNECTION) -> start_date:string -> end_date:string -> (((int * int * int) * (int * int)), string) result Lwt.t
 val get_dau_mau_ratio : (module Caqti_lwt.CONNECTION) -> start_date:string -> end_date:string -> (float, string) result Lwt.t
+val touch_user_active : (module Caqti_lwt.CONNECTION) -> int -> (unit, string) result Lwt.t
 
 val search_communities : (module Caqti_lwt.CONNECTION) -> string -> int -> int -> (community list, string) result Lwt.t
 val search_users : (module Caqti_lwt.CONNECTION) -> string -> int -> int -> ((int * string * string * string option * string option) list, string) result Lwt.t
@@ -633,7 +739,7 @@ val resolve_report :
   action_kind:report_action_kind option -> note:string option -> (unit, string) result Lwt.t
 val count_open_reports : (module Caqti_lwt.CONNECTION) -> int -> (int, string) result Lwt.t
 val toggle_community_downvotes : (module Caqti_lwt.CONNECTION) -> int -> bool -> (unit, string) result Lwt.t
-val update_community_visibility : (module Caqti_lwt.CONNECTION) -> int -> community_visibility -> (unit, string) result Lwt.t
+val update_community_visibility : (module Caqti_lwt.CONNECTION) -> int -> community_visibility -> (community option, string) result Lwt.t
 val update_community_indexable : (module Caqti_lwt.CONNECTION) -> int -> bool -> (unit, string) result Lwt.t
 val get_allows_downvotes_for_post : (module Caqti_lwt.CONNECTION) -> int -> (bool, string) result Lwt.t
 val get_allows_downvotes_for_comment : (module Caqti_lwt.CONNECTION) -> int -> (bool, string) result Lwt.t
@@ -652,7 +758,42 @@ val pending_signup_upsert :
 val pending_signup_sweep_expired : (module Caqti_lwt.CONNECTION) -> (unit, string) result Lwt.t
 val pending_signup_confirm :
   (module Caqti_lwt.CONNECTION) -> string ->
-  ([ `Confirmed of string | `Invalid | `Conflict ], string) result Lwt.t
+  ([ `Confirmed of int * string * string * string * bool
+     (* new user id, username, email, created_at, is_admin *)
+   | `Invalid | `Conflict ], string) result Lwt.t
+
+val anonymize_user_and_enqueue_posthog_deletion :
+  (module Caqti_lwt.CONNECTION) -> int -> (int * string, string) result Lwt.t
+val claim_posthog_deletion_job :
+  (module Caqti_lwt.CONNECTION) -> ?lease_minutes:int -> int ->
+  (string option, string) result Lwt.t
+val claim_posthog_deletion_batch :
+  (module Caqti_lwt.CONNECTION) -> ?lease_minutes:int -> limit:int -> unit ->
+  ((int * string) list, string) result Lwt.t
+val complete_posthog_deletion_job :
+  (module Caqti_lwt.CONNECTION) -> int -> (unit, string) result Lwt.t
+val fail_posthog_deletion_job :
+  (module Caqti_lwt.CONNECTION) -> int -> string -> (unit, string) result Lwt.t
+val get_posthog_deletion_job :
+  (module Caqti_lwt.CONNECTION) -> string ->
+  ((int * string * int * string option) option, string) result Lwt.t
+
+val update_community_visibility_and_enqueue_group_cleanup :
+  (module Caqti_lwt.CONNECTION) -> int -> community_visibility ->
+  (community option * int option, string) result Lwt.t
+val claim_posthog_group_cleanup_job :
+  (module Caqti_lwt.CONNECTION) -> ?lease_minutes:int -> int ->
+  (string option, string) result Lwt.t
+val claim_posthog_group_cleanup_batch :
+  (module Caqti_lwt.CONNECTION) -> ?lease_minutes:int -> limit:int -> unit ->
+  ((int * string) list, string) result Lwt.t
+val complete_posthog_group_cleanup_job :
+  (module Caqti_lwt.CONNECTION) -> int -> (unit, string) result Lwt.t
+val fail_posthog_group_cleanup_job :
+  (module Caqti_lwt.CONNECTION) -> int -> string -> (unit, string) result Lwt.t
+val get_posthog_group_cleanup_job :
+  (module Caqti_lwt.CONNECTION) -> string ->
+  ((int * string * int * string option) option, string) result Lwt.t
 
 val ensure_community_user_stats : (module Caqti_lwt.CONNECTION) -> int -> int -> (unit, string) result Lwt.t
 val increment_local_post_count : (module Caqti_lwt.CONNECTION) -> int -> int -> (unit, string) result Lwt.t

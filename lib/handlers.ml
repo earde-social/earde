@@ -335,23 +335,191 @@ let verify_email_handler request =
    real users row (in one DB transaction). Per product decision we do NOT auto-login — the
    user is sent to /login. Replay (already-consumed) and expired tokens both fail as `Invalid;
    a username/email taken since signup fails as `Conflict. Login/session logic is untouched. *)
+(* === ANALYTICS CONSENT (spec §9) === *)
+
+(* Session read that also behaves in tests where no session middleware is
+   installed: no middleware simply means no authenticated session. *)
+let session_user_id_opt request =
+  match Dream.session_field request "user_id" with
+  | exception _ -> None
+  | value -> value
+
+(* Analytics-only person sync on consent grant. Every failure mode (bad id,
+   missing pool, DB error) is swallowed and logged without email/tokens —
+   the consent cookie must be set regardless. *)
+let consent_grant_person_sync request =
+  match session_user_id_opt request with
+  | None -> Lwt.return_unit
+  | Some uid_str ->
+      Lwt.catch
+        (fun () ->
+          match int_of_string_opt uid_str with
+          | None -> Lwt.return_unit
+          | Some user_id -> (
+              let%lwt props =
+                Dream.sql request (fun db ->
+                    Db.get_user_analytics_props db user_id)
+              in
+              match props with
+              | Ok (Some (username, _email, signup_date, is_admin)) ->
+                  (* Email is deliberately excluded from the closed person
+                     properties — it never reaches PostHog. *)
+                  Analytics.sync_person_after_consent_grant
+                    ~distinct_id:(Analytics.distinct_id_of_user_id user_id)
+                    { Analytics.username; signup_date; is_admin };
+                  Lwt.return_unit
+              | Ok None -> Lwt.return_unit
+              | Error e ->
+                  Dream.log "analytics consent sync lookup failed (user %d): %s"
+                    user_id e;
+                  Lwt.return_unit))
+        (fun exn ->
+          Dream.log "analytics consent sync skipped: %s"
+            (Printexc.to_string exn);
+          Lwt.return_unit)
+
+(* No Dream CSRF and no session required (a first-time landing visitor has
+   neither); protection is the §9 JSON-only + Origin/Sec-Fetch-Site check in
+   Analytics.validate_consent_request. All responses are controlled JSON/204 —
+   never a rendered HTML error page. *)
+let analytics_consent_handler request =
+  let%lwt body = Dream.body request in
+  match
+    Analytics.validate_consent_request
+      ~content_type:(Dream.header request "Content-Type")
+      ~origin:(Dream.header request "Origin")
+      ~sec_fetch_site:(Dream.header request "Sec-Fetch-Site")
+      ~body
+  with
+  | Error (`Forbidden reason) ->
+      Dream.json ~status:`Forbidden (Printf.sprintf {|{"error":%S}|} reason)
+  | Error (`Bad_request reason) ->
+      Dream.json ~status:`Bad_Request (Printf.sprintf {|{"error":%S}|} reason)
+  | Ok state ->
+      (* Person sync runs only on granted, only for an authenticated session,
+         and can never fail the response. The just-granted value exists only
+         in the outgoing Set-Cookie, so this transition uses the dedicated
+         sync function, not capture_if_consented (§3.1). *)
+      let%lwt () =
+        match state with
+        | `Granted -> consent_grant_person_sync request
+        | `Denied -> Lwt.return_unit
+      in
+      let value = match state with `Granted -> "granted" | `Denied -> "denied" in
+      let response = Dream.response ~status:`No_Content "" in
+      (* Plaintext (encrypt:false) and no HttpOnly: the §9 contract requires
+         document.cookie readability (the prerendered landing can determine
+         consent only client-side). Secure follows the public origin scheme. *)
+      Dream.set_cookie ~encrypt:false ~max_age:Analytics.consent_cookie_max_age
+        ~path:(Some "/") ~secure:(Analytics.consent_cookie_secure ())
+        ~http_only:false ~same_site:(Some `Lax) response request
+        Analytics.consent_cookie_name value;
+      Lwt.return response
+
+(* Same exact path, non-POST methods: controlled JSON 405, never landing or
+   error HTML (deployment must route the path to Dream before any static
+   fallback — spec §10.4). *)
+let analytics_consent_method_not_allowed _request =
+  Dream.json ~status:`Method_Not_Allowed
+    ~headers:[ ("Allow", "POST") ]
+    {|{"error":"method not allowed"}|}
+
+(* Step-6 domain events: a success path inside a Dream.sql block RECORDS its
+   emission; the recorded thunk runs only after the block returns and its
+   pooled connection is released, so the fire-and-forget analytics HTTP never
+   overlaps a checked-out DB connection. Nothing recorded ⇒ nothing emitted,
+   so validation/authorization/DB failures stay silent by construction, and a
+   thunk can only call the closed consent-gated Analytics entry points. *)
+let with_analytics_after_sql make_response =
+  let pending = ref (fun () -> ()) in
+  let%lwt response = make_response (fun thunk -> pending := thunk) in
+  !pending ();
+  Lwt.return response
+
+(* Centralized private-safe analytics shaping (§13). Fully private
+   communities keep numeric ids, counts, and the community:<id> group key,
+   but no human-readable identifier (slug, name, channel/section slug) ever
+   enters an analytics payload. Every handler and the $groupidentify mapping
+   below go through this ONE helper — no per-handler visibility checks. The
+   visibility comes from the authoritative community record the handler
+   already loaded; no analytics-only DB query exists. *)
+let analytics_public_string (community : Db.community) value =
+  if Db.community_is_private community.Db.visibility then None else Some value
+
+(* The closed $groupidentify record from an authoritative Db.community row.
+   The shared community record carries no created_at column, so that optional
+   group property is omitted rather than approximated. Private communities:
+   slug and name are None (§13), id and closed visibility remain. *)
+let community_group_of (community : Db.community) : Analytics.community_group =
+  {
+    Analytics.community_id = community.Db.id;
+    community_slug = analytics_public_string community community.Db.slug;
+    community_name = analytics_public_string community community.Db.name;
+    community_visibility =
+      Db.community_visibility_to_string community.Db.visibility;
+    created_at = None;
+  }
+
+(* Immediate async attempt for a freshly enqueued §13 group-cleanup job —
+   the exact analog of attempt_posthog_deletion_job: claim, one bounded HTTP
+   scrub, mark. Every DB touch is its own short call; failures only leave
+   the durable job pending. Logs carry the job id and bounded error classes
+   only — never a community name or slug. *)
+let attempt_posthog_group_cleanup_job request ~job_id =
+  Lwt.catch
+    (fun () ->
+      let%lwt claimed =
+        Dream.sql request (fun db -> Db.claim_posthog_group_cleanup_job db job_id)
+      in
+      match claimed with
+      | Ok (Some group_key) ->
+          let%lwt (_ : [ `Completed | `Left_pending of string ]) =
+            Posthog_deletion.process_claimed_group_job
+              ~mark_completed:(fun () ->
+                Dream.sql request (fun db ->
+                    Db.complete_posthog_group_cleanup_job db job_id))
+              ~mark_failed:(fun err ->
+                Dream.sql request (fun db ->
+                    Db.fail_posthog_group_cleanup_job db job_id err))
+              ~group_key
+          in
+          Lwt.return_unit
+      | Ok None | Error _ -> Lwt.return_unit)
+    (fun exn ->
+      Dream.log "posthog group cleanup immediate attempt error: %s"
+        (Printexc.to_string exn);
+      Lwt.return_unit)
+
 let confirm_email_handler request =
   match Dream.query request "token" with
   | None ->
       Dream.html (Pages.msg_page ~auth:true ~title:"Confirmation Error" ~message:"The confirmation token is missing from the URL." ~alert_type:"error" ~return_url:"/signup" request)
   | Some token ->
       let token_hash = Db.pending_signup_hash_token token in
-      Dream.sql request (fun db ->
-        match%lwt Db.pending_signup_confirm db token_hash with
-        | Ok (`Confirmed username) ->
+      let%lwt result =
+        Dream.sql request (fun db -> Db.pending_signup_confirm db token_hash)
+      in
+      (match result with
+        | Ok (`Confirmed (user_id, username, _email, created_at, is_admin)) ->
+            (* The confirmation transaction returned the closed person
+               properties with the insert, so the capture needs no lookup. A
+               confirmation link opened without granted consent emits
+               nothing. Email never enters the analytics payload. *)
+            Analytics.capture_if_consented request
+              ~distinct_id:(Analytics.distinct_id_of_user_id user_id)
+              (Analytics.Account_signed_up
+                 {
+                   user_id;
+                   person =
+                     { Analytics.username; signup_date = created_at; is_admin };
+                 });
             Dream.html (Pages.msg_page ~auth:true ~title:"Email Confirmed!" ~message:(Printf.sprintf "Your account u/%s is now active. You can log in." username) ~alert_type:"success" ~return_url:"/login" request)
         | Ok `Invalid ->
             Dream.html (Pages.msg_page ~auth:true ~title:"Confirmation Failed" ~message:"This confirmation link is invalid or has expired. Please sign up again." ~alert_type:"error" ~return_url:"/signup" request)
         | Ok `Conflict ->
             Dream.html (Pages.msg_page ~auth:true ~title:"Already Registered" ~message:"An account with this username or email already exists. Please log in." ~alert_type:"error" ~return_url:"/login" request)
         | Error err ->
-            Dream.html (Pages.msg_page ~auth:true ~title:"Error" ~message:("A database error occurred: " ^ err) ~alert_type:"error" ~return_url:"/" request)
-      )
+            Dream.html (Pages.msg_page ~auth:true ~title:"Error" ~message:("A database error occurred: " ^ err) ~alert_type:"error" ~return_url:"/" request))
 
 let login_page request =
   let user = Dream.session_field request "username" in
@@ -366,9 +534,14 @@ let login_handler request =
       (* Credential check uses constant-message pattern: every failure path
          returns the same string to prevent username enumeration. Ban check
          happens only after password is verified to avoid leaking existence. *)
-      Dream.sql request (fun db ->
-        match%lwt Db.get_user_for_login db identifier with
-        | Ok (Some (id, user, _, hash, is_admin, is_banned)) ->
+      let%lwt lookup =
+        Dream.sql request (fun db -> Db.get_user_for_login db identifier)
+      in
+      (match lookup with
+        | Ok (Some ((id, user, _email, created_at), (hash, is_admin, is_banned))) ->
+            (* Argon2 verification runs after the lookup's connection is back
+               in the pool — CPU-bound work must not hold a connection open
+               (same rule as reset_password_handler). *)
             (match%lwt Auth.verify_password ~password ~hash with
             | Ok true ->
                 if is_banned then
@@ -377,11 +550,21 @@ let login_handler request =
                   let%lwt () = Dream.set_session_field request "user_id" (string_of_int id) in
                   let%lwt () = Dream.set_session_field request "username" user in
                   let%lwt () = if is_admin then Dream.set_session_field request "is_admin" "true" else Lwt.return () in
+                  (* Exactly once per fully successful login (credentials
+                     verified, not banned); the incoming request still carries
+                     the consent cookie the gate reads. *)
+                  Analytics.capture_if_consented request
+                    ~distinct_id:(Analytics.distinct_id_of_user_id id)
+                    (Analytics.Account_logged_in
+                       {
+                         user_id = id;
+                         person =
+                           { Analytics.username = user; signup_date = created_at; is_admin };
+                       });
                   Dream.redirect request "/"
               | _ -> Dream.html (Pages.msg_page ~auth:true ~title:"Login Failed" ~message:"Invalid username or password." ~alert_type:"error" ~return_url:"/login" request))
         | Ok None -> Dream.html (Pages.msg_page ~auth:true ~title:"Login Failed" ~message:"Invalid username or password." ~alert_type:"error" ~return_url:"/login" request)
-        | Error err -> Dream.html (Pages.msg_page ~auth:true ~title:"Error" ~message:("Database error: " ^ err) ~alert_type:"error" ~return_url:"/login" request)
-      )
+        | Error err -> Dream.html (Pages.msg_page ~auth:true ~title:"Error" ~message:("Database error: " ^ err) ~alert_type:"error" ~return_url:"/login" request))
   | _ -> Dream.html (Pages.msg_page ~auth:true ~title:"Form Error" ~message:"There was a problem with your form submission. Your session may have expired." ~alert_type:"error" ~return_url:"/login" request)
 
 let logout_handler request =
@@ -637,6 +820,7 @@ let create_community_handler request =
             Dream.html (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Validation Error" ~message:"Community name and URL slug are required." ~alert_type:"error" ~return_url:"/new-community" request)
           else
 
+          with_analytics_after_sql (fun record ->
           Dream.sql request (fun db ->
             match%lwt Db.create_community db name slug description sections_enabled with
             | Ok () ->
@@ -703,10 +887,18 @@ let create_community_handler request =
                                    Lwt.return_unit
                                  end
                                ) (List.init channel_count (fun i -> i + 1)) in
+                               (* §5.3: creation emits only $groupidentify (no
+                                  community_created event), attributed to the
+                                  creator's authenticated identity, from the
+                                  round-tripped authoritative record. *)
+                               record (fun () ->
+                                   Analytics.identify_community_if_consented request
+                                     ~distinct_id:(Analytics.distinct_id_of_user_id user_id)
+                                     (community_group_of community));
                                Dream.redirect request ("/c/" ^ slug)))
                  | _ -> Dream.redirect request ("/c/" ^ slug))
             | Error _ -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Error" ~message:"Could not create community. The URL slug may already be taken." ~alert_type:"error" ~return_url:"/new-community" request)
-          )
+          ))
       | _ -> Dream.respond ~status:`Bad_Request (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Form Error" ~message:"Your form submission was invalid. Please try again." ~alert_type:"error" ~return_url:"/new-community" request)
 
 let community_page_handler request =
@@ -1246,6 +1438,7 @@ let send_message_handler request =
             else
               Dream.html (Pages.msg_page ?user:uname ~title:"Error" ~message:("Database error: " ^ e) ~alert_type:"error" ~return_url:"/" request)
           in
+          with_analytics_after_sql (fun record ->
           Dream.sql request (fun db ->
             match%lwt Db.get_community_by_slug db community_slug with
             | Ok (Some community) ->
@@ -1300,6 +1493,30 @@ let send_message_handler request =
                                              ~username
                                              ~content
                                              ~created_at:(Pages.Start_thread.minute_of_ts message.Db.created_at));
+                                       (* One capture point ahead of the
+                                          respond_json split, so JSON and
+                                          redirect modes each emit exactly
+                                          once, never twice. *)
+                                       record (fun () ->
+                                           Analytics.capture_if_consented request
+                                             ~distinct_id:(Analytics.distinct_id_of_user_id user_id)
+                                             (Analytics.Chat_message_sent
+                                                {
+                                                  user_id;
+                                                  community_id = community.Db.id;
+                                                  community_slug =
+                                                    analytics_public_string
+                                                      community community.Db.slug;
+                                                  channel_id = channel.Db.id;
+                                                  channel_slug =
+                                                    analytics_public_string
+                                                      community channel.Db.slug;
+                                                  message_id = message.Db.id;
+                                                  content_length = String.length content;
+                                                  response_mode =
+                                                    (if respond_json then Analytics.Response_json
+                                                     else Analytics.Response_redirect);
+                                                }));
                                        if respond_json then
                                          Dream.json
                                            (Yojson.Safe.to_string
@@ -1327,7 +1544,7 @@ let send_message_handler request =
                 if respond_json then
                   json_error `Not_Found ~code:"not_found" ~message:"This community does not exist."
                 else Dream.respond ~status:`Not_Found (Pages.msg_page ?user:uname ~title:"Not Found" ~message:"This community does not exist." ~alert_type:"error" ~return_url:"/" request)
-            | Error e -> internal_error e)
+            | Error e -> internal_error e))
       | _ ->
           (* Dream.form failure: missing/stale CSRF or a non-form body. The fetch
              path surfaces it as retry-after-reload guidance — a chat tab older
@@ -1459,6 +1676,7 @@ let start_thread_create_handler request =
            (match Int64.of_string_opt message_id_str with
             | None -> Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"Not Found" ~message:"Invalid message reference." ~alert_type:"error" ~return_url:channel_url request)
             | Some message_id ->
+                with_analytics_after_sql (fun record ->
                 Dream.sql request (fun db ->
                   match%lwt Db.get_community_by_slug db community_slug with
                   | Ok None -> Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"Not Found" ~message:"This community does not exist." ~alert_type:"error" ~return_url:"/" request)
@@ -1527,6 +1745,37 @@ let start_thread_create_handler request =
                                                   (match%lwt Db.start_thread_from_chat db ~title ~content ~section_id ~community_id:community.id ~user_id ~channel_id:channel.id ~seed_message_id:message_id ~context_message_ids:context with
                                                    | Ok post_id ->
                                                        let%lwt _ = Db.increment_local_post_count db user_id community.id in
+                                                       (* Participant count from the candidate rows the selection was
+                                                          already validated against — distinct non-tombstoned author ids
+                                                          across the promoted messages; no extra query, no guessing. *)
+                                                       let promoted_ids = message_id :: context in
+                                                       let participant_count =
+                                                         candidates
+                                                         |> List.filter (fun ((m : Db.chat_message), _) -> List.mem m.id promoted_ids)
+                                                         |> List.filter_map (fun ((m : Db.chat_message), _) -> m.user_id)
+                                                         |> List.sort_uniq compare
+                                                         |> List.length
+                                                       in
+                                                       record (fun () ->
+                                                           Analytics.capture_if_consented request
+                                                             ~distinct_id:(Analytics.distinct_id_of_user_id user_id)
+                                                             (Analytics.Conversation_promoted
+                                                                {
+                                                                  user_id;
+                                                                  community_id = community.Db.id;
+                                                                  community_slug =
+                                                                    analytics_public_string
+                                                                      community community.Db.slug;
+                                                                  channel_id = channel.Db.id;
+                                                                  channel_slug =
+                                                                    analytics_public_string
+                                                                      community channel.Db.slug;
+                                                                  section_id;
+                                                                  post_id;
+                                                                  message_id;
+                                                                  promoted_message_count = 1 + List.length context;
+                                                                  promoted_participant_count = Some participant_count;
+                                                                }));
                                                        Dream.redirect request ("/p/" ^ string_of_int post_id)
                                                    | Error _ ->
                                                        (* A racing double-submit trips the seed unique index. Re-check and
@@ -1535,7 +1784,7 @@ let start_thread_create_handler request =
                                                         | Ok (Some (pid, ttl, cslug)) ->
                                                             Dream.html (Pages.msg_page ?user ~title:"Thread already started" ~message:"This message has already been made into a thread." ~alert_type:"info" ~return_url:(Components.canonical_thread_path cslug pid ttl) request)
                                                         | _ -> rerender ~error:"Could not start the thread. Please try again." ()))
-                                            end))))))
+                                            end)))))))
        | _ -> Dream.respond ~status:`Bad_Request (Pages.msg_page ?user ~title:"Form Error" ~message:"There was a problem with your submission. Please try again." ~alert_type:"error" ~return_url:channel_url request))
 
 let join_community_handler request =
@@ -1550,6 +1799,7 @@ let join_community_handler request =
           if community_id = 0 then Dream.respond ~status:`Bad_Request (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Form Error" ~message:"Invalid community reference." ~alert_type:"error" ~return_url:"/" request)
           else
 
+          with_analytics_after_sql (fun record ->
           Dream.sql request (fun db ->
             (* Slice C: no self-serve join for private communities — they are hidden and
                members are added by a mod/admin (later slice), not via this open endpoint.
@@ -1560,11 +1810,32 @@ let join_community_handler request =
                 community_not_found ?user:(Dream.session_field request "username") request
             | Ok None -> community_not_found ?user:(Dream.session_field request "username") request
             | Error _ -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Error" ~message:"Failed to join community. Please try again." ~alert_type:"error" ~return_url:"/" request)
-            | Ok (Some _) ->
+            | Ok (Some community) ->
                 (match%lwt Db.join_community db (int_of_string uid) community_id with
-                 | Ok () -> Dream.redirect request (safe_local_redirect redirect_url)
+                 | Ok () ->
+                     let user_id = int_of_string uid in
+                     let distinct_id = Analytics.distinct_id_of_user_id user_id in
+                     record (fun () ->
+                         Analytics.capture_if_consented request ~distinct_id
+                           (Analytics.Community_joined
+                              {
+                                user_id;
+                                community_id = community.Db.id;
+                                community_slug =
+                                  analytics_public_string community
+                                    community.Db.slug;
+                                community_visibility =
+                                  Db.community_visibility_to_string
+                                    community.Db.visibility;
+                              });
+                         (* Full authoritative record in scope after a
+                            successful join ⇒ also refresh the community group
+                            profile (§5.3). *)
+                         Analytics.identify_community_if_consented request
+                           ~distinct_id (community_group_of community));
+                     Dream.redirect request (safe_local_redirect redirect_url)
                  | Error _ -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Error" ~message:"Failed to join community. Please try again." ~alert_type:"error" ~return_url:"/" request))
-          )
+          ))
       | _ -> Dream.respond ~status:`Bad_Request (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Form Error" ~message:"Invalid form submission." ~alert_type:"error" ~return_url:"/" request)
 
 let leave_community_handler request =
@@ -1578,11 +1849,23 @@ let leave_community_handler request =
           let redirect_to = match List.assoc_opt "redirect_to" form_data with Some r -> r | None -> "/" in
           if community_id = 0 then Dream.respond ~status:`Bad_Request (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Form Error" ~message:"Invalid community reference." ~alert_type:"error" ~return_url:"/" request)
           else
+          with_analytics_after_sql (fun record ->
           Dream.sql request (fun db ->
             match%lwt Db.leave_community db user_id community_id with
-            | Ok () -> Dream.redirect request (safe_local_redirect redirect_to)
+            | Ok deleted ->
+                (* Only when a membership row was actually deleted — a
+                   non-member "leave" keeps the same redirect but is a no-op,
+                   not an event. Only the form's community id is in scope; the
+                   event still carries the group key through $groups (built
+                   from the id), and no lookup is added just for analytics. *)
+                if deleted then
+                  record (fun () ->
+                      Analytics.capture_if_consented request
+                        ~distinct_id:(Analytics.distinct_id_of_user_id user_id)
+                        (Analytics.Community_left { user_id; community_id }));
+                Dream.redirect request (safe_local_redirect redirect_to)
             | Error err -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Error" ~message:("Database error: " ^ err) ~alert_type:"error" ~return_url:"/" request)
-          )
+          ))
       | _ -> Dream.respond ~status:`Bad_Request (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Form Error" ~message:"Invalid form submission." ~alert_type:"error" ~return_url:"/" request)
 
 let community_settings_handler request =
@@ -1981,6 +2264,7 @@ let update_community_handler request =
           (* new_avatar/new_banner are None when no file was submitted; fall back to existing. *)
           let avatar_url = if new_avatar <> None then new_avatar else existing_avatar in
           let banner_url = if new_banner <> None then new_banner else existing_banner in
+          with_analytics_after_sql (fun record ->
           Dream.sql request (fun db ->
             (* Re-verify authority on every mutation — same TOCTOU guard as add_mod. *)
             let%lwt authorized =
@@ -1993,9 +2277,22 @@ let update_community_handler request =
               Dream.respond ~status:`Forbidden (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Access Denied" ~message:"You must be a moderator to perform this action." ~alert_type:"error" ~return_url:"/" request)
             else
               (match%lwt Db.update_community_details db community_id description rules avatar_url banner_url with
-              | Ok () -> Dream.redirect request ("/c/" ^ community_slug ^ "/settings")
+              | Ok (Some community) ->
+                  (* UPDATE ... RETURNING supplied the authoritative updated
+                     record — refresh the group profile (§5.3), attributed to
+                     the acting moderator/admin. *)
+                  record (fun () ->
+                      Analytics.identify_community_if_consented request
+                        ~distinct_id:(Analytics.distinct_id_of_user_id user_id)
+                        (community_group_of community));
+                  Dream.redirect request ("/c/" ^ community_slug ^ "/settings")
+              | Ok None ->
+                  (* No community matched the id: previously a silent no-op
+                     UPDATE with the same redirect; keep the response, emit
+                     nothing. *)
+                  Dream.redirect request ("/c/" ^ community_slug ^ "/settings")
               | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Error" ~message:("Database error: " ^ e) ~alert_type:"error" ~return_url:("/c/" ^ community_slug ^ "/settings") request))
-          ))
+          )))
       | _ -> Dream.respond ~status:`Bad_Request (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Form Error" ~message:"Invalid form submission." ~alert_type:"error" ~return_url:"/" request)
 
 let add_mod_handler request =
@@ -2257,6 +2554,7 @@ let create_post_handler request =
               Dream.html (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Image Error" ~message:img_err ~alert_type:"error" ~return_url:"/" request)
           | Ok image_url ->
 
+          with_analytics_after_sql (fun record ->
           Dream.sql request (fun db ->
             (* Global ban gate: checked first — a globally banned user's session may
                still be active if they were banned after logging in. *)
@@ -2307,6 +2605,22 @@ let create_post_handler request =
                               let%lwt _ = Db.increment_local_post_count db user_id community_id in
                               (* Fan-out @mention notifications — best-effort, skips self-mentions. *)
                               let text = title ^ " " ^ (Option.value ~default:"" content) in
+                              (* Closed derived flags only — never the title,
+                                 body, or URL themselves. *)
+                              record (fun () ->
+                                  Analytics.capture_if_consented request
+                                    ~distinct_id:(Analytics.distinct_id_of_user_id user_id)
+                                    (Analytics.Forum_thread_created
+                                       {
+                                         user_id;
+                                         community_id;
+                                         section_id;
+                                         post_id = new_post_id;
+                                         content_length =
+                                           String.length (Option.value ~default:"" content);
+                                         has_link = url <> None;
+                                         has_mention = extract_mentions text <> [];
+                                       }));
                               let%lwt () = Lwt_list.iter_s (fun uname ->
                                 match%lwt Db.get_user_by_username db uname with
                                 | Ok (Some mentioned) when mentioned.id <> user_id ->
@@ -2322,7 +2636,7 @@ let create_post_handler request =
               | Ok false ->
                   Dream.html (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Not a Member" ~message:"You must join this community before you can post in it." ~alert_type:"error" ~return_url:"/" request)
               | Error err -> Dream.html (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Error" ~message:("Database error: " ^ err) ~alert_type:"error" ~return_url:"/" request)
-          ))
+          )))
       | _ -> Dream.html (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Form Error" ~message:"There was a problem with your form submission. Please try again." ~alert_type:"error" ~return_url:"/" request)
 
 let view_post_handler request =
@@ -3040,6 +3354,7 @@ let create_comment_handler request =
             Dream.respond ~status:`Bad_Request (Pages.msg_page ~user:username ~title:"Form Error" ~message:"Invalid post reference." ~alert_type:"error" ~return_url:"/" request)
           else
 
+          with_analytics_after_sql (fun record ->
           Dream.sql request (fun db ->
             (* Global ban gate: same reasoning as create_post_handler — active sessions
                survive a ban until the next login, so we must check on every write. *)
@@ -3066,7 +3381,23 @@ let create_comment_handler request =
                     Dream.respond ~status:`Forbidden (Pages.msg_page ~user:username ~title:"Banned from Community" ~message:"You are banned from commenting in this community." ~alert_type:"error" ~return_url:("/p/" ^ string_of_int post_id) request)
                 | _ ->
                     (match%lwt Db.create_comment db content post_id user_id parent_id_opt with
-                    | Ok () ->
+                    | Ok comment_id ->
+                        (* comment_id is the real inserted id from the step-3
+                           INSERT ... RETURNING. Length/mention flags only —
+                           never the comment text. *)
+                        record (fun () ->
+                            Analytics.capture_if_consented request
+                              ~distinct_id:(Analytics.distinct_id_of_user_id user_id)
+                              (Analytics.Forum_comment_created
+                                 {
+                                   user_id;
+                                   community_id = post.community_id;
+                                   post_id;
+                                   comment_id;
+                                   parent_comment_id = parent_id_opt;
+                                   content_length = String.length content;
+                                   has_mention = extract_mentions content <> [];
+                                 }));
                         let%lwt _ = Db.increment_local_comment_count db user_id post.community_id in
                         (* Bump last_activity_at so the post rises in "active" sorted feeds. *)
                         let%lwt _ = Db.touch_post_last_activity db post_id in
@@ -3093,7 +3424,7 @@ let create_comment_handler request =
                     | Error err -> Dream.html (Pages.msg_page ~user:username ~title:"Error" ~message:("Database error: " ^ err) ~alert_type:"error" ~return_url:("/p/" ^ string_of_int post_id) request)))
             | Ok None -> Dream.html (Pages.msg_page ~user:username ~title:"Post Not Found" ~message:"The post you tried to comment on could not be found." ~alert_type:"error" ~return_url:"/" request)
             | Error err -> Dream.html (Pages.msg_page ~user:username ~title:"Error" ~message:("Database error: " ^ err) ~alert_type:"error" ~return_url:"/" request)
-          )
+          ))
       | _ -> Dream.html (Pages.msg_page ~user:username ~title:"Form Error" ~message:"There was a problem with your form submission. Please try again." ~alert_type:"error" ~return_url:"/" request)
 
 (* Authorization for the general /delete-comment endpoint. Pure and deliberately
@@ -3293,6 +3624,7 @@ let update_community_visibility_handler request =
             | None ->
                 Dream.respond ~status:`Bad_Request (Pages.msg_page ?user ~title:"Invalid setting" ~message:"Visibility must be either public or private." ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/settings") request)
             | Some visibility ->
+                with_analytics_after_sql (fun record ->
                 Dream.sql request (fun db ->
                   match%lwt Db.get_community_by_slug db slug with
                   | Ok None -> Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"Not Found" ~message:"Community not found." ~alert_type:"error" ~return_url:"/" request)
@@ -3303,9 +3635,38 @@ let update_community_visibility_handler request =
                       if not (is_top_mod || is_admin) then
                         Dream.respond ~status:`Forbidden (Pages.msg_page ?user ~title:"Access Denied" ~message:"Only Top Mods and admins can change visibility." ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/settings") request)
                       else
-                        match%lwt Db.update_community_visibility db community.id visibility with
-                        | Ok () -> Dream.redirect request ("/c/" ^ slug ^ "/settings?panel=visibility")
-                        | Error err -> Dream.respond ~status:`Internal_Server_Error ("DB Error: " ^ err)))
+                        match%lwt Db.update_community_visibility_and_enqueue_group_cleanup db community.id visibility with
+                        | Ok (Some updated, cleanup_job) ->
+                            (* Visibility is a closed group property: refresh
+                               the group profile from the UPDATE ... RETURNING
+                               record so PostHog never holds a stale value
+                               after a successful change (§5.3). On a
+                               ->private transition the SAME committed
+                               transaction also enqueued the durable §13
+                               scrub of the previously sent name/slug; its
+                               immediate attempt runs async off the response
+                               path and — like §3.3 person deletion — is a
+                               privacy duty, not collection, so it is not
+                               consent-gated. A PostHog failure only leaves
+                               the job pending; the visibility change itself
+                               is already committed. *)
+                            record (fun () ->
+                                Analytics.identify_community_if_consented request
+                                  ~distinct_id:(Analytics.distinct_id_of_user_id user_id)
+                                  (community_group_of updated);
+                                match cleanup_job with
+                                | Some job_id ->
+                                    Lwt.async (fun () ->
+                                        attempt_posthog_group_cleanup_job
+                                          request ~job_id)
+                                | None -> ());
+                            Dream.redirect request ("/c/" ^ slug ^ "/settings?panel=visibility")
+                        | Ok (None, _) ->
+                            (* Community vanished between fetch and update: the
+                               old code's silent no-op — same redirect, no
+                               emission. *)
+                            Dream.redirect request ("/c/" ^ slug ^ "/settings?panel=visibility")
+                        | Error err -> Dream.respond ~status:`Internal_Server_Error ("DB Error: " ^ err))))
        | _ -> Dream.respond ~status:`Bad_Request "Invalid form submission.")
 
 let update_community_indexability_handler request =
@@ -3485,9 +3846,11 @@ let remove_member_handler request =
                         Dream.respond ~status:`Forbidden (Pages.msg_page ?user ~title:"Access Denied" ~message:"Only Top Mods and admins can manage members." ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/settings") request)
                       else
                         (* Idempotent: removing a non-member deletes zero rows (no error). Only the
-                           community_members row is touched — moderator/admin rows are untouched. *)
+                           community_members row is touched — moderator/admin rows are untouched.
+                           No community_left analytics here: this is a moderator acting on ANOTHER
+                           user's membership, not that user leaving. *)
                         match%lwt Db.leave_community db target_user_id community.id with
-                        | Ok () -> Dream.redirect request ("/c/" ^ slug ^ "/settings?panel=members")
+                        | Ok _deleted -> Dream.redirect request ("/c/" ^ slug ^ "/settings?panel=members")
                         | Error err -> Dream.respond ~status:`Internal_Server_Error ("DB Error: " ^ err)))
        | _ -> Dream.respond ~status:`Bad_Request "Invalid form submission.")
 
@@ -3671,7 +4034,7 @@ let change_password_handler request =
           else
             Dream.sql request (fun db ->
               match%lwt Db.get_user_for_login db username with
-              | Ok (Some (_, _, _, hash, _, _)) ->
+              | Ok (Some (_, (hash, _, _))) ->
                   (match%lwt Auth.verify_password ~password:old_password ~hash with
                   | Ok true ->
                       (match%lwt Auth.hash_password new_password with
@@ -3750,6 +4113,36 @@ let export_data_handler request =
         | _ -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Error" ~message:"Failed to generate export data. Please try again." ~alert_type:"error" ~return_url:"/settings" request)
       )
 
+(* Immediate §3.3 attempt for a just-committed deletion job. The atomic claim
+   (status + lease in one statement) means a concurrently running maintenance
+   retry can never process the same job at the same time; every DB step is its
+   own short Dream.sql call, so no connection is held across the PostHog HTTP
+   attempt. All failures are swallowed — the job stays durably pending. *)
+let attempt_posthog_deletion_job request ~job_id =
+  Lwt.catch
+    (fun () ->
+      let%lwt claimed =
+        Dream.sql request (fun db -> Db.claim_posthog_deletion_job db job_id)
+      in
+      match claimed with
+      | Ok (Some distinct_id) ->
+          let%lwt (_ : [ `Completed | `Left_pending of string ]) =
+            Posthog_deletion.process_claimed_job
+              ~mark_completed:(fun () ->
+                Dream.sql request (fun db ->
+                    Db.complete_posthog_deletion_job db job_id))
+              ~mark_failed:(fun err ->
+                Dream.sql request (fun db ->
+                    Db.fail_posthog_deletion_job db job_id err))
+              ~distinct_id
+          in
+          Lwt.return_unit
+      | Ok None | Error _ -> Lwt.return_unit)
+    (fun exn ->
+      Dream.log "posthog deletion immediate attempt error: %s"
+        (Printexc.to_string exn);
+      Lwt.return_unit)
+
 (* GDPR Art. 17 (right to erasure): anonymize rather than hard-delete to preserve
    thread coherence; posts remain as [deleted] rather than leaving orphaned replies. *)
 let delete_account_handler request =
@@ -3759,13 +4152,36 @@ let delete_account_handler request =
       let user_id = int_of_string uid_str in
       match%lwt Dream.form request with
       | `Ok _ ->
-          Dream.sql request (fun db ->
-            match%lwt Db.anonymize_user db user_id with
-            | Ok () ->
+          (* §3.3 atomic local deletion: anonymization and the durable
+             deletion job commit together (or roll back together) — no crash
+             window with an anonymized user and no job. The transaction never
+             performs HTTP. *)
+          let%lwt result =
+            Dream.sql request (fun db ->
+                Db.anonymize_user_and_enqueue_posthog_deletion db user_id)
+          in
+          (match result with
+            | Ok (job_id, _distinct_id) ->
+                (* One async cleanup chain, off the response path:
+                   1. the consent-gated PERSONLESS account_deleted metric
+                      (constant system distinct id, person processing off — so
+                      ingestion timing can never associate it with, or
+                      recreate, the person being deleted);
+                   2. then — regardless of the metric's outcome — the
+                      immediate durable deletion attempt for the real
+                      user:<id> job. PostHog being down or unconfigured only
+                      leaves the committed job pending. *)
+                Lwt.async (fun () ->
+                    let%lwt () =
+                      Lwt.catch
+                        (fun () ->
+                          Analytics.capture_account_deleted_sequenced request)
+                        (fun _ -> Lwt.return_unit)
+                    in
+                    attempt_posthog_deletion_job request ~job_id);
                 let%lwt () = Dream.invalidate_session request in
                 Dream.redirect request "/"
-            | Error err -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Error" ~message:("Error during account deletion: " ^ err) ~alert_type:"error" ~return_url:"/settings" request)
-          )
+            | Error err -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Error" ~message:("Error during account deletion: " ^ err) ~alert_type:"error" ~return_url:"/settings" request))
       | _ -> Dream.respond ~status:`Bad_Request (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Form Error" ~message:"Invalid form submission." ~alert_type:"error" ~return_url:"/settings" request)
 
 (* === NOTIFICATIONS === *)
@@ -4059,12 +4475,13 @@ let manage_mods_remove_handler request =
 
 (* === MIDDLEWARE === *)
 
-(* Skip dashboard and unread-notifs paths: dashboard reads page_view data (recursive
-   self-counting); unread-notifs is polled every page load and would inflate counts. *)
-let analytics_middleware inner_handler request =
-  let path = Dream.target request in
-  let user_id_opt = Dream.session_field request "user_id" in
-
+(* Shared eligibility gate for both the presence touch and page-view logging.
+   Pure. Skips the admin dashboard (reads page_view data — recursive
+   self-counting), /api/unread-notifs (polled every page load — would inflate
+   counts and keep idle users "active"), static assets, and bot user agents.
+   Both middlewares must use this same decision so presence keeps the exact
+   pre-extraction touch semantics. *)
+let is_tracked_request ~path ~user_agent =
   (* Static asset filter: log only meaningful page navigations, not asset fetches. *)
   let is_static =
     let has_prefix p = String.length path >= String.length p && String.sub path 0 (String.length p) = p in
@@ -4080,7 +4497,7 @@ let analytics_middleware inner_handler request =
 
   (* Bot filter: skip synthetic traffic that inflates page-view counts. *)
   let is_bot =
-    match Dream.header request "User-Agent" with
+    match user_agent with
     | None -> false
     | Some ua ->
         let lc = String.lowercase_ascii ua in
@@ -4098,16 +4515,41 @@ let analytics_middleware inner_handler request =
         contains "bot" || contains "crawler" || contains "spider" || contains "scraper"
   in
 
+  let is_admin_route =
+    (* Exclude admin-only routes to prevent self-inflating page-view counts when admins
+       refresh the dashboard. Uses prefix match to cover query-string variants too. *)
+    let admin_prefix = "/earde-hq-dashboard" in
+    let plen = String.length path and alen = String.length admin_prefix in
+    (plen >= alen && String.sub path 0 alen = admin_prefix
+     && (plen = alen || path.[alen] = '?' || path.[alen] = '/'))
+  in
+  not (is_admin_route || path = "/api/unread-notifs" || is_static || is_bot)
+
+(* Presence, not analytics: sole writer of users.last_active_at, which moderator
+   auto-demotion (Db.demote_inactive_mods) reads. Kept separate from
+   analytics_middleware so replacing the page-view system cannot break it, but
+   gated on the same is_tracked_request decision so the touch fires exactly
+   where the old in-analytics touch did (never on polling/asset/bot requests).
+   Best-effort — the touch result is ignored, so a failed update never fails
+   the user's request. *)
+let presence_middleware inner_handler request =
+  let%lwt () =
+    match Dream.session_field request "user_id" with
+    | Some uid_str
+      when is_tracked_request ~path:(Dream.target request)
+             ~user_agent:(Dream.header request "User-Agent") ->
+        Dream.sql request (fun db ->
+          let%lwt _ = Db.touch_user_active db (int_of_string uid_str) in
+          Lwt.return_unit)
+    | _ -> Lwt.return_unit
+  in
+  inner_handler request
+
+let analytics_middleware inner_handler request =
+  let path = Dream.target request in
   let%lwt _ =
-    let is_admin_route =
-      (* Exclude admin-only routes to prevent self-inflating page-view counts when admins
-         refresh the dashboard. Uses prefix match to cover query-string variants too. *)
-      let admin_prefix = "/earde-hq-dashboard" in
-      let plen = String.length path and alen = String.length admin_prefix in
-      (plen >= alen && String.sub path 0 alen = admin_prefix
-       && (plen = alen || path.[alen] = '?' || path.[alen] = '/'))
-    in
-    if is_admin_route || path = "/api/unread-notifs" || is_static || is_bot
+    if not (is_tracked_request ~path
+              ~user_agent:(Dream.header request "User-Agent"))
     then Lwt.return_unit
     else begin
       (* Sanitize referer: keep only host to avoid leaking tokens in paths/query strings. *)
@@ -4134,11 +4576,7 @@ let analytics_middleware inner_handler request =
       let session_hash = Digest.to_hex (Digest.string (ip ^ ua ^ date)) in
       Dream.sql request (fun db ->
         let%lwt _ = Db.log_page_view db path referer session_hash in
-        match user_id_opt with
-        | Some uid_str ->
-            let%lwt _ = Db.touch_user_active db (int_of_string uid_str) in
-            Lwt.return_unit
-        | None -> Lwt.return_unit
+        Lwt.return_unit
       )
     end
   in

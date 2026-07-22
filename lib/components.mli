@@ -47,7 +47,15 @@ val post_thumbnail : ?alt:string -> img_class:string -> string option -> string
     drops the footer, for the in-app shell; [`Auth] drops both (no navbar/command bar,
     no footer) for the focused auth layout. All default to the prior behavior, so
     existing callers are unaffected. *)
-val layout : ?noindex:bool -> ?user:string -> ?request:Dream.request -> ?head_extra:string -> ?full_bleed:bool -> ?chrome:[ `Site | `App | `Auth ] -> title:string -> string -> string
+(* analytics_community renders the browser community-group attribute
+   (analytics spec §5.3): exactly community:<database_id>, community-scoped
+   pages only. The pair carries the authoritative Db visibility so the §13
+   private-community marker (data-analytics-private-community='true', value
+   only — never name/slug) cannot be forgotten or derived from URL shape;
+   on marked documents the browser records consent but never initializes
+   PostHog. The identity attribute (user:<id>) is derived from the request
+   session automatically. *)
+val layout : ?noindex:bool -> ?user:string -> ?request:Dream.request -> ?head_extra:string -> ?full_bleed:bool -> ?chrome:[ `Site | `App | `Auth ] -> ?analytics_community:(int * Db.community_visibility) -> title:string -> string -> string
 
 (** Focused auth/account-lifecycle layout: a single centered card (auth.css) in the
     cool-grey shell idiom, with no rail/sidebar/command bar/footer. [card] is the inner
@@ -58,7 +66,7 @@ val auth_page : ?user:string -> ?noindex:bool -> ?request:Dream.request -> title
     cool-grey panel (create.css), with no rail/sidebar. Used by the creation flows
     (new-community, new-post, choose-community, join-to-post). [body] is the inner page
     HTML; the outer .create-shell and topbar are supplied. *)
-val create_page : ?user:string -> ?request:Dream.request -> ?noindex:bool -> title:string -> body:string -> unit -> string
+val create_page : ?user:string -> ?request:Dream.request -> ?noindex:bool -> ?analytics_community:(int * Db.community_visibility) -> title:string -> body:string -> unit -> string
 
 (** Focused in-product account layout: the mono app command bar over a single centered
     cool-grey column (account.css), with no rail/sidebar/footer. Used by the personal
@@ -78,13 +86,13 @@ val admin_page : ?user:string -> ?request:Dream.request -> ?noindex:bool -> titl
     /c/:slug/modlog) so they read as one operator console. Adds no authorization — the
     handlers gate authority. [body] is the inner page HTML; the outer .cm-shell and topbar
     are supplied. *)
-val community_manage_page : ?user:string -> ?request:Dream.request -> ?noindex:bool -> title:string -> body:string -> unit -> string
+val community_manage_page : ?user:string -> ?request:Dream.request -> ?noindex:bool -> ?analytics_community:(int * Db.community_visibility) -> title:string -> body:string -> unit -> string
 
 (** The public community home (/c/:slug): App command bar (no warm navbar, no footer) over the
     page's own full-bleed .community-home structure. Loads shell.css (for .app-topbar) +
     community-home.css. Adds no authorization. [body] is the page's full markup, supplied verbatim
     (NOT wrapped in an extra shell div). *)
-val community_home_page : ?user:string -> ?request:Dream.request -> ?noindex:bool -> title:string -> body:string -> unit -> string
+val community_home_page : ?user:string -> ?request:Dream.request -> ?noindex:bool -> ?analytics_community:(int * Db.community_visibility) -> title:string -> body:string -> unit -> string
 
 (** Focused in-product search layout: App command bar (no warm navbar, no footer) over a single
     centered cool-grey column. Loads shell.css (for .app-topbar) + search.css; wraps [body] in a
@@ -139,9 +147,15 @@ type nav_group = {
   ng_items : nav_item list;
 }
 
+(** Replay privacy (analytics spec §6): wraps [body] in PostHog's built-in
+    ph-no-capture block class when the community is private, excluding its
+    content from session replay. Identity for public communities. *)
+val private_replay_guard : community:Db.community -> string -> string
+
 (** The persistent in-app community shell (community rail · sidebar · main · optional
     right pane). Wraps [layout] internally with the shell stylesheet and full-bleed main.
-    [main]/[right_pane] are caller-rendered HTML fragments. *)
+    [main]/[right_pane] are caller-rendered HTML fragments. Private communities get the
+    [private_replay_guard] applied to [main]. *)
 val community_shell :
   ?user:string -> ?request:Dream.request -> ?noindex:bool ->
   ?rail_communities:Db.community list -> ?active_slug:string -> ?right_pane:string ->

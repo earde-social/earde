@@ -1,3 +1,7 @@
+(* Bound before `open Db`, which would otherwise shadow the top-level
+   Analytics module with Db.Analytics. *)
+module Posthog = Analytics
+
 open Db
 
 (* Defense-in-depth: escape before string-interpolation into HTML templates.
@@ -220,10 +224,70 @@ let mobile_desktop_gate =
    in-app shell. The shell surfaces (feed, section/channel/thread, account, admin, community
    management, and the public /c/:slug community-home) opt into `App via their wrappers; the
    remaining legacy/marketing pages keep `Site, byte-for-byte unchanged. *)
-let layout ?(noindex=false) ?user ?request ?(head_extra="") ?(full_bleed=false) ?(chrome=`Site) ~title content =
+let layout ?(noindex=false) ?user ?request ?(head_extra="") ?(full_bleed=false) ?(chrome=`Site) ?analytics_community ~title content =
   let is_admin = match request with
     | Some req -> Dream.session_field req "is_admin" = Some "true"
     | None -> false
+  in
+  (* PostHog browser integration (spec §2): emitted only when analytics is
+     enabled with valid public config — otherwise no script, no banner, no
+     attributes, and therefore no PostHog network request. Only the public
+     token and ingest host are rendered; analytics.js itself is local and
+     connects to PostHog exclusively after granted consent. The banner ships
+     hidden; analytics.js reveals it only when no consent cookie exists.
+     The same root carries the §4.2 identity attribute (authenticated pages
+     only: exactly user:<id>, nothing else — no username/email/raw id) and
+     the §5.3 group attribute (community-scoped pages only: exactly
+     community:<id>, keyed by the immutable numeric id). *)
+  let analytics_head, analytics_banner =
+    match Posthog.browser_config () with
+    | None -> ("", "")
+    | Some cfg ->
+        let identity_attr =
+          match request with
+          | None -> ""
+          | Some req -> (
+              (* Absence of session middleware (tests) or a malformed session
+                 value must safely mean "no identity". *)
+              match (try Dream.session_field req "user_id" with _ -> None) with
+              | None -> ""
+              | Some uid_str -> (
+                  match int_of_string_opt uid_str with
+                  | Some id ->
+                      Printf.sprintf " data-analytics-user='%s'"
+                        (html_escape (Posthog.distinct_id_of_user_id id))
+                  | None -> ""))
+        in
+        (* Community context arrives as (id, authoritative visibility) — the
+           pair comes from the Db.community record the page already holds, so
+           the §13 private marker can never be derived from URL shape and a
+           call site cannot pass the id without stating visibility. The
+           marker value is only "true": no name, no slug. On marked
+           documents analytics.js records consent but never loads the SDK. *)
+        let group_attr, private_attr =
+          match analytics_community with
+          | Some (community_id, visibility) ->
+              ( Printf.sprintf " data-analytics-group='%s'"
+                  (html_escape (Posthog.community_group_key community_id)),
+                if Db.community_is_private visibility then
+                  " data-analytics-private-community='true'"
+                else "" )
+          | None -> ("", "")
+        in
+        ( "<script src='/static/js/analytics.js' defer></script>",
+          Printf.sprintf
+            "<div id='analytics-consent' hidden data-ph-token='%s' data-ph-api-host='%s' data-ph-deployment-environment='%s'%s%s%s class='fixed bottom-4 left-1/2 -translate-x-1/2 z-50 w-[calc(100%%-2rem)] max-w-md bg-white border border-[#E0D9CC] rounded-2xl shadow-xl p-4'>\
+               <p class='text-sm text-gray-700 mb-3'>Earde can collect anonymous usage analytics (PostHog) to improve the product. Nothing is collected until you choose.</p>\
+               <div class='flex items-center gap-2'>\
+                 <button type='button' data-analytics-accept class='px-4 py-1.5 text-sm font-semibold bg-[#C94C4C] text-white rounded-full hover:bg-[#A83A3A] transition'>Accept</button>\
+                 <button type='button' data-analytics-refuse class='px-4 py-1.5 text-sm font-semibold text-gray-600 bg-gray-100 rounded-full hover:bg-gray-200 transition'>Refuse</button>\
+                 <span data-analytics-error hidden class='text-xs text-red-600'>Couldn&#39;t save &mdash; try again.</span>\
+               </div>\
+             </div>"
+            (html_escape cfg.Posthog.browser_token)
+            (html_escape cfg.Posthog.browser_api_host)
+            (html_escape cfg.Posthog.browser_deployment_environment)
+            identity_attr group_attr private_attr )
   in
   let auth_menu =
     match user with
@@ -332,12 +396,14 @@ let layout ?(noindex=false) ?user ?request ?(head_extra="") ?(full_bleed=false) 
       <link href='https://fonts.googleapis.com/css2?family=Nunito:wght@400;500;600;700;800&display=swap' rel='stylesheet'>
       <script src='https://cdn.tailwindcss.com'></script>
       <style>body { font-family: 'Nunito', sans-serif; letter-spacing: 0.015em; }</style>
+      %s
   </head>
   <body class='bg-[#F7F3E8] text-[#3C3630] min-h-screen flex flex-col'>
       %s
       <main class='%s'>
           %s
       </main>
+      %s
       %s
       %s
 
@@ -480,7 +546,7 @@ let layout ?(noindex=false) ?user ?request ?(head_extra="") ?(full_bleed=false) 
       </script>
   </body>
   </html>"
-  title robots_meta head_extra gate_css topbar_html main_class content footer_html gate_html
+  title robots_meta head_extra gate_css analytics_head topbar_html main_class content footer_html gate_html analytics_banner
 
 (* Focused auth/account-lifecycle layout: a single centered card in the cool-grey
    shell idiom (auth.css), with no rail/sidebar/command bar. Uses `Auth chrome (no
@@ -618,7 +684,7 @@ let post_admin_actions ?(is_current_user_mod=false) ?(admin_usernames=[]) ?(bann
                     <span class='text-sm font-semibold text-gray-700'>Reason <span class='text-red-500'>*</span></span>
                     <textarea name='reason' required maxlength='255' rows='4'
                       placeholder='Explain why this post is being removed (visible to the community)...'
-                      class='w-full rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400 resize-none'></textarea>
+                      class='ph-mask w-full rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400 resize-none'></textarea>
                   </label>
                   <div class='flex justify-end gap-2 pt-1'>
                     <button type='button' onclick=\"document.getElementById('mod-modal-%d').close()\"
@@ -646,7 +712,7 @@ let post_admin_actions ?(is_current_user_mod=false) ?(admin_usernames=[]) ?(bann
                     <span class='text-sm font-semibold text-gray-700'>Reason <span class='text-red-500'>*</span></span>
                     <textarea name='reason' required maxlength='255' rows='4'
                       placeholder='Explain the admin intervention reason (visible to the community)...'
-                      class='w-full rounded-xl border border-red-300 bg-red-50 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-400 resize-none'></textarea>
+                      class='ph-mask w-full rounded-xl border border-red-300 bg-red-50 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-400 resize-none'></textarea>
                   </label>
                   <div class='flex justify-end gap-2 pt-1'>
                     <button type='button' onclick=\"document.getElementById('mod-modal-%d').close()\"
@@ -690,7 +756,7 @@ let post_admin_actions ?(is_current_user_mod=false) ?(admin_usernames=[]) ?(bann
                       <span class='text-sm font-semibold text-gray-700'>Reason <span class='text-red-500'>*</span></span>
                       <textarea name='reason' required rows='4'
                         placeholder='Explain why this user is being banned (visible to the community)...'
-                        class='w-full rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400 resize-none'></textarea>
+                        class='ph-mask w-full rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400 resize-none'></textarea>
                     </label>
                     <div class='flex justify-end gap-2 pt-1'>
                       <button type='button' onclick=\"document.getElementById('ban-modal-post-%d').close()\"
@@ -720,7 +786,7 @@ let post_admin_actions ?(is_current_user_mod=false) ?(admin_usernames=[]) ?(bann
                       <span class='text-sm font-semibold text-gray-700'>Reason <span class='text-red-500'>*</span></span>
                       <textarea name='reason' required rows='4'
                         placeholder='Explain the admin intervention reason (visible to the community)...'
-                        class='w-full rounded-xl border border-red-300 bg-red-50 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-400 resize-none'></textarea>
+                        class='ph-mask w-full rounded-xl border border-red-300 bg-red-50 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-400 resize-none'></textarea>
                     </label>
                     <div class='flex justify-end gap-2 pt-1'>
                       <button type='button' onclick=\"document.getElementById('ban-modal-post-%d').close()\"
@@ -796,12 +862,12 @@ let render_post ?(is_current_user_mod=false) ?(mod_usernames=[]) ?(admin_usernam
           </div>
 
           <h3 class='text-base font-semibold text-gray-900 leading-snug mb-1'>
-              <a href='/p/%d' class='hover:text-[#C94C4C] transition break-words'>%s</a>
+              <a href='/p/%d' class='ph-mask hover:text-[#C94C4C] transition break-words'>%s</a>
           </h3>
 
           <div class='relative z-10 text-xs'>%s</div>
           %s
-          <p class='text-sm text-gray-600 mt-2 break-words line-clamp-6'>%s</p>
+          <p class='ph-mask text-sm text-gray-600 mt-2 break-words line-clamp-6'>%s</p>
 
           <div class='flex items-center mt-2 text-xs text-gray-400'>
               <a href='/p/%d' class='hover:text-[#C94C4C] flex items-center gap-1 transition relative z-10'>
@@ -923,7 +989,7 @@ let mod_action_controls ~is_current_user_mod ~admin_usernames ~banned_usernames 
                     <span class='text-sm font-semibold text-gray-700'>Reason <span class='text-red-500'>*</span></span>
                     <textarea name='reason' required maxlength='255' rows='4'
                       placeholder='Explain why this post is being removed (visible to the community)...'
-                      class='w-full rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400 resize-none'></textarea>
+                      class='ph-mask w-full rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400 resize-none'></textarea>
                   </label>
                   <div class='flex justify-end gap-2 pt-1'>
                     <button type='button' onclick=\"document.getElementById('mod-modal-%d').close()\"
@@ -950,7 +1016,7 @@ let mod_action_controls ~is_current_user_mod ~admin_usernames ~banned_usernames 
                     <span class='text-sm font-semibold text-gray-700'>Reason <span class='text-red-500'>*</span></span>
                     <textarea name='reason' required maxlength='255' rows='4'
                       placeholder='Explain the admin intervention reason (visible to the community)...'
-                      class='w-full rounded-xl border border-red-300 bg-red-50 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-400 resize-none'></textarea>
+                      class='ph-mask w-full rounded-xl border border-red-300 bg-red-50 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-400 resize-none'></textarea>
                   </label>
                   <div class='flex justify-end gap-2 pt-1'>
                     <button type='button' onclick=\"document.getElementById('mod-modal-%d').close()\"
@@ -990,7 +1056,7 @@ let mod_action_controls ~is_current_user_mod ~admin_usernames ~banned_usernames 
                       <span class='text-sm font-semibold text-gray-700'>Reason <span class='text-red-500'>*</span></span>
                       <textarea name='reason' required rows='4'
                         placeholder='Explain why this user is being banned (visible to the community)...'
-                        class='w-full rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400 resize-none'></textarea>
+                        class='ph-mask w-full rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400 resize-none'></textarea>
                     </label>
                     <div class='flex justify-end gap-2 pt-1'>
                       <button type='button' onclick=\"document.getElementById('ban-modal-post-%d').close()\"
@@ -1019,7 +1085,7 @@ let mod_action_controls ~is_current_user_mod ~admin_usernames ~banned_usernames 
                       <span class='text-sm font-semibold text-gray-700'>Reason <span class='text-red-500'>*</span></span>
                       <textarea name='reason' required rows='4'
                         placeholder='Explain the admin intervention reason (visible to the community)...'
-                        class='w-full rounded-xl border border-red-300 bg-red-50 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-400 resize-none'></textarea>
+                        class='ph-mask w-full rounded-xl border border-red-300 bg-red-50 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-400 resize-none'></textarea>
                     </label>
                     <div class='flex justify-end gap-2 pt-1'>
                       <button type='button' onclick=\"document.getElementById('ban-modal-post-%d').close()\"
@@ -1294,7 +1360,7 @@ let render_sidebar (community : community) (nav_groups : nav_group list) =
    that differ only in the local sidebar and which rail tile is active.
    `main`/`sidebar`/`right_pane` are caller-rendered HTML fragments. *)
 let global_shell ?user ?request ?noindex ?(rail_communities=[]) ~(rail_active : rail_active)
-    ?sidebar ?right_pane ?(head_extra="") ~title ~main () =
+    ?sidebar ?right_pane ?(head_extra="") ?analytics_community ~title ~main () =
   let rail = render_global_rail ~active:rail_active rail_communities in
   let sidebar_html = Option.value sidebar ~default:"" in
   let aside = match right_pane with
@@ -1315,7 +1381,15 @@ let global_shell ?user ?request ?noindex ?(rail_communities=[]) ~(rail_active : 
   (* head_extra lets a shell page add per-page <head> tags (canonical, meta description, a
      page-scoped script) after the shell stylesheet; default "" keeps pages byte-for-byte
      unchanged. *)
-  layout ?noindex ?user ?request ~head_extra:(shell_css_link ^ head_extra) ~full_bleed:true ~chrome:`App ~title grid
+  layout ?noindex ?user ?request ~head_extra:(shell_css_link ^ head_extra) ~full_bleed:true ~chrome:`App ?analytics_community ~title grid
+
+(* Replay privacy (analytics spec §6): private-community page content is
+   blocked from session replay entirely via PostHog's built-in ph-no-capture
+   class, on top of the selector-based text masking. *)
+let private_replay_guard ~(community : Db.community) body =
+  if community.Db.visibility = Db.Community_private then
+    "<div class='ph-no-capture'>" ^ body ^ "</div>"
+  else body
 
 (* The community shell: global app shell + the local community sidebar (channels + forum
    sections). active_slug lights up this community's rail tile. Public signature unchanged so
@@ -1323,9 +1397,12 @@ let global_shell ?user ?request ?noindex ?(rail_communities=[]) ~(rail_active : 
 let community_shell ?user ?request ?noindex ?(rail_communities=[]) ?active_slug
     ?right_pane ?(head_extra="") ~title ~community ~nav_groups ~main () =
   let sidebar = render_sidebar community nav_groups in
+  (* Private communities: the whole main column is excluded from replay. *)
+  let main = private_replay_guard ~community main in
   let rail_active = match active_slug with Some s -> Rail_community s | None -> Rail_none in
   global_shell ?user ?request ?noindex ~rail_communities ~rail_active
-    ~sidebar ?right_pane ~head_extra ~title ~main ()
+    ~sidebar ?right_pane ~head_extra
+    ~analytics_community:(community.id, community.Db.visibility) ~title ~main ()
 
 (* The global Feed shell: the same app shell with NO community sidebar (Feed lives outside any
    one community) and the Feed rail tile active. *)
@@ -1341,11 +1418,11 @@ let feed_shell ?user ?request ?noindex ?(rail_communities=[]) ?right_pane ?(head
    [body] is the inner page HTML the caller renders (the form, list, or gate panel). *)
 let create_css_link = "<link rel='stylesheet' href='/static/css/create.css'>"
 
-let create_page ?user ?request ?(noindex=false) ~title ~body () =
+let create_page ?user ?request ?(noindex=false) ?analytics_community ~title ~body () =
   let shell =
     Printf.sprintf "<div class='create-shell'>%s</div>" body
   in
-  layout ?user ?request ~noindex ~full_bleed:true ~chrome:`App
+  layout ?user ?request ~noindex ~full_bleed:true ~chrome:`App ?analytics_community
     ~head_extra:(shell_css_link ^ create_css_link) ~title shell
 
 (* Focused in-product account layout: the mono app command bar over a single centered
@@ -1388,11 +1465,11 @@ let admin_page ?user ?request ?(noindex=false) ~title ~body () =
    (and modlog stays public exactly as the handler allows). *)
 let community_manage_css_link = "<link rel='stylesheet' href='/static/css/community-manage.css'>"
 
-let community_manage_page ?user ?request ?(noindex=false) ~title ~body () =
+let community_manage_page ?user ?request ?(noindex=false) ?analytics_community ~title ~body () =
   let shell =
     Printf.sprintf "<div class='cm-shell'>%s</div>" body
   in
-  layout ?user ?request ~noindex ~full_bleed:true ~chrome:`App
+  layout ?user ?request ~noindex ~full_bleed:true ~chrome:`App ?analytics_community
     ~head_extra:(shell_css_link ^ community_manage_css_link) ~title shell
 
 (* The public community home (/c/:slug). Unlike the focused single-column wrappers above it
@@ -1402,8 +1479,8 @@ let community_manage_page ?user ?request ?(noindex=false) ~title ~body () =
    owns everything under .community-home). SSR-only: every link/form works with JS off. *)
 let community_home_css_link = "<link rel='stylesheet' href='/static/css/community-home.css'>"
 
-let community_home_page ?user ?request ?(noindex=false) ~title ~body () =
-  layout ?user ?request ~noindex ~full_bleed:true ~chrome:`App
+let community_home_page ?user ?request ?(noindex=false) ?analytics_community ~title ~body () =
+  layout ?user ?request ~noindex ~full_bleed:true ~chrome:`App ?analytics_community
     ~head_extra:(shell_css_link ^ community_home_css_link) ~title body
 
 (* Focused in-product search layout: the mono app command bar over a single centered

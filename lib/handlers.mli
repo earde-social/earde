@@ -1,6 +1,7 @@
 (** HTTP layer. Every route in main.ml maps 1-to-1 to a value here.
     Handlers own auth checks, session reads, and DB fan-out; rendering is
-    delegated to Pages. analytics_middleware is a Dream middleware, not a handler. *)
+    delegated to Pages. presence_middleware and analytics_middleware are Dream
+    middlewares, not handlers. *)
 
 (** === RATE LIMITING === *)
 module Rate_limit : sig
@@ -150,5 +151,15 @@ val unban_user_global_handler : Dream.handler
 val admin_dashboard_handler : Dream.handler
 val debug_state_handler : Dream.handler
 
+(** === ANALYTICS CONSENT (spec §9) === *)
+(** JSON-only, Origin/Sec-Fetch-Site-protected, session-optional; sets the
+    plaintext earde_analytics_consent cookie and, on granted with an
+    authenticated session, performs the single person-property sync. *)
+val analytics_consent_handler : Dream.handler
+
+(** Controlled JSON 405 for non-POST methods on /analytics/consent. *)
+val analytics_consent_method_not_allowed : Dream.handler
+
 (** === MIDDLEWARE === *)
+val presence_middleware : Dream.handler -> Dream.handler
 val analytics_middleware : Dream.handler -> Dream.handler

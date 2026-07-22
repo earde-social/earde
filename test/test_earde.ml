@@ -508,6 +508,2910 @@ module Mod_scope = struct
   let suite = [ posts_case; comments_case; delete_comment_case ]
 end
 
+(* Step-3 RETURNING-id changes: Db.create_comment and
+   Db.pending_signup_confirm must return the real inserted ids, with the
+   failure variants unchanged. Same EARDE_TEST_DATABASE_URL opt-in gate as
+   Mod_scope. *)
+module Returning_ids = struct
+  let ( let* ) = Lwt.bind
+
+  open Caqti_request.Infix
+
+  let q_cleanup =
+    List.map
+      (fun sql -> (Caqti_type.unit ->. Caqti_type.unit) sql)
+      [ "DELETE FROM comments WHERE content LIKE 'step3ret %'"
+      ; "DELETE FROM posts WHERE title LIKE 'step3ret %'"
+      ; "DELETE FROM communities WHERE slug = 'step3ret-c'"
+      ; "DELETE FROM users WHERE username IN ('step3ret_author', 'step3ret_confirmed', 'step3ret_taken')"
+      ; "DELETE FROM pending_signups WHERE username IN ('step3ret_confirmed', 'step3ret_taken', 'step3ret_expired')"
+      ]
+
+  let q_insert_user =
+    (Caqti_type.string ->! Caqti_type.int)
+    "INSERT INTO users (username, email, password_hash, is_email_verified)
+     VALUES ($1, $1 || '@test.invalid', 'x', TRUE) RETURNING id"
+
+  let q_insert_community =
+    (Caqti_type.unit ->! Caqti_type.int)
+    "INSERT INTO communities (slug, name) VALUES ('step3ret-c', 'step3ret-c') RETURNING id"
+
+  let q_insert_post =
+    (Caqti_type.(t2 int int) ->! Caqti_type.int)
+    "INSERT INTO posts (title, content, community_id, user_id)
+     VALUES ('step3ret post', 'step3ret post body', $1, $2) RETURNING id"
+
+  (* Full row lookup by the returned id: proves the id is the real insert. *)
+  let q_comment_by_id =
+    (Caqti_type.int ->? Caqti_type.(t4 string int int (option int)))
+    "SELECT content, post_id, user_id, parent_id FROM comments WHERE id = $1"
+
+  let q_insert_pending =
+    (Caqti_type.(t2 string string) ->. Caqti_type.unit)
+    "INSERT INTO pending_signups (username, email, password_hash, token_hash, expires_at)
+     VALUES ($1, $1 || '@test.invalid', 'x', $2, NOW() + INTERVAL '1 hour')"
+
+  let q_insert_expired_pending =
+    (Caqti_type.(t2 string string) ->. Caqti_type.unit)
+    "INSERT INTO pending_signups (username, email, password_hash, token_hash, expires_at)
+     VALUES ($1, $1 || '@test.invalid', 'x', $2, NOW() - INTERVAL '1 hour')"
+
+  let q_user_id_by_name =
+    (Caqti_type.string ->? Caqti_type.int)
+    "SELECT id FROM users WHERE username = $1"
+
+  let or_fail label = function
+    | Ok v -> Lwt.return v
+    | Error e -> Alcotest.failf "%s: %s" label (Caqti_error.show e)
+
+  let db_case name f =
+    Alcotest.test_case name `Quick (fun () ->
+        match Sys.getenv_opt "EARDE_TEST_DATABASE_URL" with
+        | None | Some "" -> Alcotest.skip ()
+        | Some url ->
+            Lwt_main.run
+              (let* conn = Caqti_lwt_unix.connect (Uri.of_string url) in
+               let* conn = or_fail "connect" conn in
+               let (module C : Caqti_lwt.CONNECTION) = conn in
+               let cleanup () =
+                 Lwt_list.iter_s
+                   (fun q ->
+                     let* r = C.exec q () in
+                     let* _ = or_fail "cleanup" r in
+                     Lwt.return_unit)
+                   q_cleanup
+               in
+               let* () = cleanup () in
+               Lwt.finalize (fun () -> f conn (module C : Caqti_lwt.CONNECTION)) cleanup))
+
+  let comment_returning_case =
+    db_case "create_comment returns the real inserted id" (fun conn c ->
+        let (module C : Caqti_lwt.CONNECTION) = c in
+        let* community = C.find q_insert_community () in
+        let* community = or_fail "community" community in
+        let* author = C.find q_insert_user "step3ret_author" in
+        let* author = or_fail "author" author in
+        let* post = C.find q_insert_post (community, author) in
+        let* post = or_fail "post" post in
+        let* top =
+          Earde.Db.create_comment conn "step3ret top comment" post author None
+        in
+        let top = match top with
+          | Ok id -> id
+          | Error e -> Alcotest.failf "create_comment top: %s" e
+        in
+        let* row = C.find_opt q_comment_by_id top in
+        let* row = or_fail "top row" row in
+        (match row with
+         | Some (content, p, u, parent) ->
+             Alcotest.(check string) "top content" "step3ret top comment" content;
+             Alcotest.(check int) "top post" post p;
+             Alcotest.(check int) "top author" author u;
+             Alcotest.(check (option int)) "top has no parent" None parent
+         | None -> Alcotest.fail "returned top id matches no comment row");
+        let* reply =
+          Earde.Db.create_comment conn "step3ret reply comment" post author
+            (Some top)
+        in
+        let reply = match reply with
+          | Ok id -> id
+          | Error e -> Alcotest.failf "create_comment reply: %s" e
+        in
+        Alcotest.(check bool) "reply id differs from top id" true (reply <> top);
+        let* row = C.find_opt q_comment_by_id reply in
+        let* row = or_fail "reply row" row in
+        (match row with
+         | Some (content, _, _, parent) ->
+             Alcotest.(check string) "reply content" "step3ret reply comment"
+               content;
+             Alcotest.(check (option int)) "reply parent is top id" (Some top)
+               parent
+         | None -> Alcotest.fail "returned reply id matches no comment row");
+        Lwt.return_unit)
+
+  let confirm_str = function
+    | Ok (`Confirmed (id, username, _, _, _)) ->
+        Printf.sprintf "confirmed:%d:%s" id username
+    | Ok `Invalid -> "invalid"
+    | Ok `Conflict -> "conflict"
+    | Error e -> "error:" ^ e
+
+  let signup_confirm_returning_case =
+    db_case "pending_signup_confirm returns the real inserted user id"
+      (fun conn c ->
+        let (module C : Caqti_lwt.CONNECTION) = c in
+        let* r = C.exec q_insert_pending ("step3ret_confirmed", "step3ret_tok_1") in
+        let* () = or_fail "insert pending" r in
+        let* confirmed = Earde.Db.pending_signup_confirm conn "step3ret_tok_1" in
+        let user_id, username =
+          match confirmed with
+          | Ok (`Confirmed (id, name, email, created_at, is_admin)) ->
+              (* The confirmation's RETURNING now also carries the closed
+                 person properties (step 6). *)
+              Alcotest.(check string) "email preserved"
+                "step3ret_confirmed@test.invalid" email;
+              Alcotest.(check bool) "created_at non-empty" true (created_at <> "");
+              Alcotest.(check bool) "not admin" false is_admin;
+              (id, name)
+          | other -> Alcotest.failf "expected `Confirmed, got %s" (confirm_str other)
+        in
+        Alcotest.(check string) "username preserved" "step3ret_confirmed" username;
+        let* looked_up = C.find_opt q_user_id_by_name "step3ret_confirmed" in
+        let* looked_up = or_fail "user lookup" looked_up in
+        Alcotest.(check (option int)) "returned id is the real users.id"
+          (Some user_id) looked_up;
+        (* Replay of the same token: consumed_at excludes it -> `Invalid. *)
+        let* replay = Earde.Db.pending_signup_confirm conn "step3ret_tok_1" in
+        Alcotest.(check string) "replayed token invalid" "invalid"
+          (confirm_str replay);
+        (* Unknown token stays `Invalid. *)
+        let* unknown = Earde.Db.pending_signup_confirm conn "step3ret_tok_none" in
+        Alcotest.(check string) "unknown token invalid" "invalid"
+          (confirm_str unknown);
+        Lwt.return_unit)
+
+  let signup_confirm_failures_case =
+    db_case "expired and conflicting pendings behave as before" (fun conn c ->
+        let (module C : Caqti_lwt.CONNECTION) = c in
+        (* Expired token -> `Invalid, no user row created. *)
+        let* r =
+          C.exec q_insert_expired_pending ("step3ret_expired", "step3ret_tok_2")
+        in
+        let* () = or_fail "insert expired pending" r in
+        let* expired = Earde.Db.pending_signup_confirm conn "step3ret_tok_2" in
+        Alcotest.(check string) "expired token invalid" "invalid"
+          (confirm_str expired);
+        let* none = C.find_opt q_user_id_by_name "step3ret_expired" in
+        let* none = or_fail "no expired user" none in
+        Alcotest.(check (option int)) "expired pending created no user" None none;
+        (* Username already in users -> `Conflict, token not consumed into a user. *)
+        let* taken = C.find q_insert_user "step3ret_taken" in
+        let* taken_id = or_fail "existing user" taken in
+        let* r = C.exec q_insert_pending ("step3ret_taken", "step3ret_tok_3") in
+        let* () = or_fail "insert conflicting pending" r in
+        let* conflict = Earde.Db.pending_signup_confirm conn "step3ret_tok_3" in
+        Alcotest.(check string) "conflicting pending" "conflict"
+          (confirm_str conflict);
+        let* still = C.find_opt q_user_id_by_name "step3ret_taken" in
+        let* still = or_fail "conflict user unchanged" still in
+        Alcotest.(check (option int)) "existing user row unchanged"
+          (Some taken_id) still;
+        Lwt.return_unit)
+
+  let suite =
+    [ comment_returning_case
+    ; signup_confirm_returning_case
+    ; signup_confirm_failures_case
+    ]
+end
+
+(* PostHog analytics module (lib/analytics.ml): pure payload builders, exact
+   consent-cookie parsing, and the consent gate exercised through the test
+   capture sink. No network, no DB, no real PostHog project — the sink
+   replaces the HTTP transport entirely. *)
+module An = Earde.Analytics
+module AnT = Earde.Analytics.For_testing
+
+let yojson =
+  Alcotest.testable
+    (fun fmt j -> Format.pp_print_string fmt (Yojson.Safe.to_string j))
+    Yojson.Safe.equal
+
+let an_case name f = Alcotest.test_case name `Quick f
+let payload_member name = function `Assoc l -> List.assoc_opt name l | _ -> None
+
+let payload_props payload =
+  match payload_member "properties" payload with
+  | Some (`Assoc l) -> l
+  | _ -> []
+
+let prop_keys payload = List.map fst (payload_props payload)
+
+let consent_str = function
+  | `Granted -> "granted"
+  | `Denied -> "denied"
+  | `Unknown -> "unknown"
+
+let check_consent name expected header =
+  an_case name (fun () ->
+      Alcotest.(check string)
+        name expected
+        (consent_str (AnT.consent_of_cookie_header header)))
+
+let check_distinct name expected id =
+  an_case name (fun () ->
+      Alcotest.(check string) name expected (An.distinct_id_of_user_id id))
+
+(* Runs f with a test configuration and a collecting sink; always restores the
+   module's global state, and returns the captured payloads in order. *)
+let with_sink ~enabled f =
+  let captured = ref [] in
+  (if enabled then AnT.use_enabled_test_configuration ()
+   else AnT.use_disabled_test_configuration ());
+  AnT.set_capture_sink (fun p -> captured := p :: !captured);
+  Fun.protect
+    ~finally:(fun () ->
+      AnT.clear_capture_sink ();
+      AnT.clear_configuration_override ())
+    f;
+  List.rev !captured
+
+let consent_request = function
+  | None -> Dream.request ""
+  | Some cookie -> Dream.request ~headers:[ ("Cookie", cookie) ] ""
+
+let an_person =
+  { An.username = "alice";
+    signup_date = "2026-01-01T00:00:00Z"; is_admin = false }
+
+let an_login = An.Account_logged_in { user_id = 7; person = an_person }
+
+(* The exact closed $set object an_person must serialize to — email-free by
+   contract: the stable identity is user:<id> and email never reaches
+   PostHog. *)
+let an_person_set : Yojson.Safe.t =
+  `Assoc
+    [ ("username", `String "alice")
+    ; ("signup_date", `String "2026-01-01T00:00:00Z")
+    ; ("is_admin", `Bool false)
+    ]
+
+let check_gate name expected_count cookie =
+  an_case name (fun () ->
+      let captured =
+        with_sink ~enabled:true (fun () ->
+            An.capture_if_consented (consent_request cookie)
+              ~distinct_id:"user:7" an_login)
+      in
+      Alcotest.(check int) name expected_count (List.length captured))
+
+(* One instance of every event constructor, used for payload/allowlist tests. *)
+let an_all_events =
+  [
+    ("account_signed_up", An.Account_signed_up { user_id = 1; person = an_person });
+    ("account_logged_in", An.Account_logged_in { user_id = 1; person = an_person });
+    ( "community_joined",
+      An.Community_joined
+        { user_id = 1; community_id = 7; community_slug = Some "ocaml";
+          community_visibility = "public" } );
+    ("community_left", An.Community_left { user_id = 1; community_id = 7 });
+    ( "chat_message_sent",
+      An.Chat_message_sent
+        { user_id = 1; community_id = 7; community_slug = Some "ocaml";
+          channel_id = 3; channel_slug = Some "general"; message_id = 91L;
+          content_length = 42; response_mode = An.Response_json } );
+    ( "forum_thread_created",
+      An.Forum_thread_created
+        { user_id = 1; community_id = 7; section_id = Some 2; post_id = 10;
+          content_length = 100; has_link = true; has_mention = false } );
+    ( "forum_comment_created",
+      An.Forum_comment_created
+        { user_id = 1; community_id = 7; post_id = 10; comment_id = 55;
+          parent_comment_id = None; content_length = 9; has_mention = true } );
+    ( "conversation_promoted",
+      An.Conversation_promoted
+        { user_id = 1; community_id = 7; community_slug = Some "ocaml";
+          channel_id = 3; channel_slug = Some "general"; section_id = None;
+          post_id = 11; message_id = 91L; promoted_message_count = 4;
+          promoted_participant_count = Some 2 } );
+    ("account_deleted", An.Account_deleted);
+  ]
+
+(* Test payloads are built for the Development environment; the envelope
+   value is asserted separately in the analytics_envelope suite. *)
+let an_payload event =
+  AnT.event_payload ~api_key:"phc_test" ~environment:An.Development
+    ~distinct_id:"user:1" event
+
+let check_keys name event expected =
+  an_case name (fun () ->
+      Alcotest.(check (slist string compare))
+        name expected
+        (prop_keys (an_payload event)))
+
+let check_event_name name expected event =
+  an_case name (fun () ->
+      match payload_member "event" (an_payload event) with
+      | Some (`String n) -> Alcotest.(check string) name expected n
+      | _ -> Alcotest.fail "payload has no event name")
+
+let an_group_key payload =
+  match List.assoc_opt "$groups" (payload_props payload) with
+  | Some (`Assoc [ ("community", `String key) ]) -> Some key
+  | _ -> None
+
+let check_group name expected event =
+  an_case name (fun () ->
+      Alcotest.(check (option string))
+        name expected
+        (an_group_key (an_payload event)))
+
+(* --- Step-4: consent endpoint, cookie contract, browser config ----------- *)
+
+let contains haystack needle =
+  let hl = String.length haystack and nl = String.length needle in
+  if nl = 0 then true
+  else
+    let rec loop i =
+      if i > hl - nl then false
+      else if String.sub haystack i nl = needle then true
+      else loop (i + 1)
+    in
+    loop 0
+
+let read_analytics_js () =
+  (* dune test runs in test/, dune exec from the project root. *)
+  let path =
+    if Sys.file_exists "../static/js/analytics.js" then
+      "../static/js/analytics.js"
+    else "static/js/analytics.js"
+  in
+  let ic = open_in path in
+  let n = in_channel_length ic in
+  let s = really_input_string ic n in
+  close_in ic;
+  s
+
+let validate_result_str = function
+  | Ok `Granted -> "granted"
+  | Ok `Denied -> "denied"
+  | Error (`Bad_request _) -> "bad_request"
+  | Error (`Forbidden _) -> "forbidden"
+
+(* The dummy origin baked into For_testing.use_enabled_test_configuration. *)
+let test_origin = "http://earde.test"
+
+let check_validate name expected ~content_type ~origin ~sec_fetch_site body =
+  an_case name (fun () ->
+      AnT.use_enabled_test_configuration ();
+      Fun.protect ~finally:AnT.clear_configuration_override (fun () ->
+          Alcotest.(check string) name expected
+            (validate_result_str
+               (An.validate_consent_request ~content_type ~origin
+                  ~sec_fetch_site ~body))))
+
+let consent_good_headers =
+  [ ("Content-Type", "application/json")
+  ; ("Origin", test_origin)
+  ; ("Sec-Fetch-Site", "same-origin")
+  ]
+
+(* Runs the real handler on a mock request (deliberately WITHOUT session or
+   sql middleware: a first-time visitor has neither) and returns
+   (status, set-cookie header, sync payloads observed by the sink). *)
+let run_consent ?(headers = consent_good_headers) body =
+  let payloads = ref [] in
+  AnT.use_enabled_test_configuration ();
+  AnT.set_capture_sink (fun p -> payloads := p :: !payloads);
+  Fun.protect
+    ~finally:(fun () ->
+      AnT.clear_capture_sink ();
+      AnT.clear_configuration_override ())
+    (fun () ->
+      let request =
+        Dream.request ~method_:`POST ~target:"/analytics/consent" ~headers body
+      in
+      let response =
+        Lwt_main.run (Earde.Handlers.analytics_consent_handler request)
+      in
+      ( Dream.status_to_int (Dream.status response),
+        Dream.header response "Set-Cookie",
+        List.rev !payloads ))
+
+let check_consent_reject name expected_status ?headers body =
+  an_case name (fun () ->
+      let status, cookie, payloads = run_consent ?headers body in
+      Alcotest.(check int) (name ^ " status") expected_status status;
+      Alcotest.(check (option string)) (name ^ " no cookie") None cookie;
+      Alcotest.(check int) (name ^ " no sync") 0 (List.length payloads))
+
+(* Gated DB case: a real user row + sql_pool + memory sessions, so a granted
+   authenticated request performs exactly one closed person-property sync. *)
+let consent_sync_db_case =
+  Returning_ids.db_case "granted consent syncs person props once (authed)"
+    (fun _conn c ->
+      let ( let* ) = Lwt.bind in
+      let (module C : Caqti_lwt.CONNECTION) = c in
+      let* author = C.find Returning_ids.q_insert_user "step3ret_author" in
+      let* author = Returning_ids.or_fail "author" author in
+      let url =
+        match Sys.getenv_opt "EARDE_TEST_DATABASE_URL" with
+        | Some u -> u
+        | None -> Alcotest.fail "gate env var vanished"
+      in
+      let payloads = ref [] in
+      AnT.use_enabled_test_configuration ();
+      AnT.set_capture_sink (fun p -> payloads := p :: !payloads);
+      Lwt.finalize
+        (fun () ->
+          let pipeline =
+            Dream.sql_pool url @@ Dream.memory_sessions @@ fun req ->
+            let* () =
+              Dream.set_session_field req "user_id" (string_of_int author)
+            in
+            Earde.Handlers.analytics_consent_handler req
+          in
+          let request =
+            Dream.request ~method_:`POST ~target:"/analytics/consent"
+              ~headers:consent_good_headers {|{"state":"granted"}|}
+          in
+          let* response = pipeline request in
+          Alcotest.(check int) "status" 204
+            (Dream.status_to_int (Dream.status response));
+          (match !payloads with
+           | [ payload ] ->
+               (match payload_member "event" payload with
+                | Some (`String e) ->
+                    Alcotest.(check string) "event" "$identify" e
+                | _ -> Alcotest.fail "sync payload has no event");
+               (match payload_member "distinct_id" payload with
+                | Some (`String d) ->
+                    Alcotest.(check string) "distinct id"
+                      ("user:" ^ string_of_int author)
+                      d
+                | _ -> Alcotest.fail "sync payload has no distinct_id");
+               (match List.assoc_opt "$set" (payload_props payload) with
+                | Some (`Assoc set) ->
+                    Alcotest.(check (option string)) "username"
+                      (Some "step3ret_author")
+                      (match List.assoc_opt "username" set with
+                       | Some (`String u) -> Some u
+                       | _ -> None);
+                    Alcotest.(check bool) "email absent" false
+                      (List.mem_assoc "email" set);
+                    Alcotest.(check (slist string compare)) "sync $set keys"
+                      [ "username"; "signup_date"; "is_admin" ]
+                      (List.map fst set)
+                | _ -> Alcotest.fail "sync payload has no $set")
+           | l ->
+               Alcotest.failf "expected exactly 1 sync, got %d" (List.length l));
+          Lwt.return_unit)
+        (fun () ->
+          AnT.clear_capture_sink ();
+          AnT.clear_configuration_override ();
+          Lwt.return_unit))
+
+(* --- Step-6: consent-gated $groupidentify API + domain-event wiring ------- *)
+
+let an_group ?created_at () : An.community_group =
+  { An.community_id = 7; community_slug = Some "ocaml";
+    community_name = Some "OCaml"; community_visibility = "public";
+    created_at }
+
+(* The §13 private shape: numeric id and closed visibility only — no
+   readable identifiers. *)
+let an_private_group : An.community_group =
+  { An.community_id = 9; community_slug = None; community_name = None;
+    community_visibility = "private"; created_at = None }
+
+let run_group_identify ~enabled cookie =
+  with_sink ~enabled (fun () ->
+      An.identify_community_if_consented (consent_request cookie)
+        ~distinct_id:"user:7" (an_group ()))
+
+let check_group_identify_gate name expected ~enabled cookie =
+  an_case name (fun () ->
+      Alcotest.(check int)
+        name expected
+        (List.length (run_group_identify ~enabled cookie)))
+
+let event_of payload =
+  match payload_member "event" payload with
+  | Some (`String e) -> e
+  | _ -> "<no event>"
+
+let distinct_of payload =
+  match payload_member "distinct_id" payload with
+  | Some (`String d) -> d
+  | _ -> "<no distinct_id>"
+
+let group_set_of payload =
+  match List.assoc_opt "$group_set" (payload_props payload) with
+  | Some (`Assoc set) -> set
+  | _ -> []
+
+let group_key_prop_of payload =
+  match List.assoc_opt "$group_key" (payload_props payload) with
+  | Some (`String k) -> Some k
+  | _ -> None
+
+let is_redirect status = status / 100 = 3
+
+(* Polls an Lwt predicate until true, failing the test after [timeout]
+   seconds — used to await post-response async analytics/deletion chains. *)
+let wait_until ~label ?(timeout = 5.0) predicate =
+  let ( let* ) = Lwt.bind in
+  let rec loop remaining =
+    let* ok = predicate () in
+    if ok then Lwt.return_unit
+    else if remaining <= 0.0 then Alcotest.failf "%s: timed out waiting" label
+    else
+      let* () = Lwt_unix.sleep 0.05 in
+      loop (remaining -. 0.05)
+  in
+  loop timeout
+
+(* Real handlers over a real DB (EARDE_TEST_DATABASE_URL gate): each case runs
+   the actual Dream handler behind sql_pool + memory_sessions with a valid
+   CSRF token injected into the body, asserting the events the success path
+   emits through the sink and the silence of every failure path. *)
+module Step6_events = struct
+  let ( let* ) = Lwt.bind
+
+  open Caqti_request.Infix
+
+  let q_cleanup =
+    List.map
+      (fun sql -> (Caqti_type.unit ->. Caqti_type.unit) sql)
+      [ "DELETE FROM thread_source_messages WHERE post_id IN (SELECT id FROM posts WHERE title LIKE 'step6 %')"
+      ; "DELETE FROM notifications WHERE user_id IN (SELECT id FROM users WHERE username LIKE 'step6_%')"
+      ; "DELETE FROM comments WHERE content LIKE 'step6 %'"
+      ; "DELETE FROM posts WHERE title LIKE 'step6 %'"
+      ; "DELETE FROM chat_messages WHERE content LIKE 'step6 %'"
+      ; "DELETE FROM community_user_stats WHERE user_id IN (SELECT id FROM users WHERE username LIKE 'step6_%')"
+      ; "DELETE FROM community_members WHERE community_id IN (SELECT id FROM communities WHERE slug LIKE 'step6-%')"
+      ; "DELETE FROM community_moderators WHERE community_id IN (SELECT id FROM communities WHERE slug LIKE 'step6-%')"
+      ; "DELETE FROM channels WHERE community_id IN (SELECT id FROM communities WHERE slug LIKE 'step6-%')"
+      ; "DELETE FROM community_sections WHERE community_id IN (SELECT id FROM communities WHERE slug LIKE 'step6-%')"
+      ; "DELETE FROM posthog_group_cleanup_jobs WHERE group_key IN (SELECT 'community:' || c.id::text FROM communities c WHERE c.slug LIKE 'step6-%')"
+      ; "DELETE FROM communities WHERE slug LIKE 'step6-%'"
+      ; "DELETE FROM posthog_group_cleanup_jobs WHERE NOT EXISTS (SELECT 1 FROM communities c WHERE 'community:' || c.id::text = posthog_group_cleanup_jobs.group_key)"
+      ; "DELETE FROM pending_signups WHERE username LIKE 'step6_%'"
+      ; "DELETE FROM users WHERE username LIKE 'step6_%'"
+      ]
+
+  let or_fail label = function
+    | Ok v -> Lwt.return v
+    | Error e -> Alcotest.failf "%s: %s" label (Caqti_error.show e)
+
+  let or_fail_s label = function
+    | Ok v -> Lwt.return v
+    | Error e -> Alcotest.failf "%s: %s" label e
+
+  let db_case name f =
+    Alcotest.test_case name `Quick (fun () ->
+        match Sys.getenv_opt "EARDE_TEST_DATABASE_URL" with
+        | None | Some "" -> Alcotest.skip ()
+        | Some url ->
+            Lwt_main.run
+              (let* conn = Caqti_lwt_unix.connect (Uri.of_string url) in
+               let* conn = or_fail "connect" conn in
+               let (module C : Caqti_lwt.CONNECTION) = conn in
+               let cleanup () =
+                 Lwt_list.iter_s
+                   (fun q ->
+                     let* r = C.exec q () in
+                     let* _ = or_fail "cleanup" r in
+                     Lwt.return_unit)
+                   q_cleanup
+               in
+               let* () = cleanup () in
+               Lwt.finalize
+                 (fun () -> f ~url conn (module C : Caqti_lwt.CONNECTION))
+                 cleanup))
+
+  let q_insert_user =
+    (Caqti_type.(t2 string string) ->! Caqti_type.int)
+    "INSERT INTO users (username, email, password_hash, is_email_verified)
+     VALUES ($1, $1 || '@test.invalid', $2, TRUE) RETURNING id"
+
+  let q_insert_community =
+    (Caqti_type.(t3 string bool string) ->! Caqti_type.int)
+    "INSERT INTO communities (slug, name, sections_enabled, visibility)
+     VALUES ($1, $1, $2, $3) RETURNING id"
+
+  let q_insert_post =
+    (Caqti_type.(t2 int int) ->! Caqti_type.int)
+    "INSERT INTO posts (title, content, community_id, user_id)
+     VALUES ('step6 post', 'step6 post body', $1, $2) RETURNING id"
+
+  let q_insert_pending =
+    (Caqti_type.(t2 string string) ->. Caqti_type.unit)
+    "INSERT INTO pending_signups (username, email, password_hash, token_hash, expires_at)
+     VALUES ($1, $1 || '@test.invalid', 'x', $2, NOW() + INTERVAL '1 hour')"
+
+  let q_comment_content =
+    (Caqti_type.int ->? Caqti_type.string)
+    "SELECT content FROM comments WHERE id = $1"
+
+  let q_username_by_id =
+    (Caqti_type.int ->? Caqti_type.string)
+    "SELECT username FROM users WHERE id = $1"
+
+  let q_community_id_by_slug =
+    (Caqti_type.string ->? Caqti_type.int)
+    "SELECT id FROM communities WHERE slug = $1"
+
+  let q_visibility_by_id =
+    (Caqti_type.int ->? Caqti_type.string)
+    "SELECT visibility FROM communities WHERE id = $1"
+
+  let q_delete_user =
+    (Caqti_type.int ->. Caqti_type.unit) "DELETE FROM users WHERE id = $1"
+
+  let q_delete_job =
+    (Caqti_type.int ->. Caqti_type.unit)
+    "DELETE FROM posthog_person_deletion_jobs WHERE id = $1"
+
+  let form_body fields =
+    String.concat "&"
+      (List.map
+         (fun (k, v) ->
+           Dream.to_percent_encoded k ^ "=" ^ Dream.to_percent_encoded v)
+         fields)
+
+  let multipart_boundary = "step6boundary"
+
+  let multipart_body fields =
+    String.concat ""
+      (List.map
+         (fun (k, v) ->
+           Printf.sprintf
+             "--%s\r\nContent-Disposition: form-data; name=\"%s\"\r\n\r\n%s\r\n"
+             multipart_boundary k v)
+         fields)
+    ^ Printf.sprintf "--%s--\r\n" multipart_boundary
+
+  let consent_header = function
+    | Some v -> [ ("Cookie", An.consent_cookie_name ^ "=" ^ v) ]
+    | None -> []
+
+  (* POST runner: presets session fields, injects a valid dream.csrf into the
+     (urlencoded or multipart) body, and returns (status, sink payloads). *)
+  let run_handler ~url ?(consent = Some "granted") ?(session = [])
+      ?(multipart = false) ?accept ~target ~form handler =
+    let payloads = ref [] in
+    AnT.use_enabled_test_configuration ();
+    AnT.set_capture_sink (fun p -> payloads := p :: !payloads);
+    Lwt.finalize
+      (fun () ->
+        let pipeline =
+          Dream.sql_pool url @@ Dream.memory_sessions @@ fun req ->
+          let* () =
+            Lwt_list.iter_s
+              (fun (k, v) -> Dream.set_session_field req k v)
+              session
+          in
+          let csrf = Dream.csrf_token req in
+          let fields = ("dream.csrf", csrf) :: form in
+          Dream.set_body req
+            (if multipart then multipart_body fields else form_body fields);
+          handler req
+        in
+        let headers =
+          [ ( "Content-Type",
+              if multipart then
+                "multipart/form-data; boundary=" ^ multipart_boundary
+              else "application/x-www-form-urlencoded" ) ]
+          @ (match accept with Some a -> [ ("Accept", a) ] | None -> [])
+          @ consent_header consent
+        in
+        let request = Dream.request ~method_:`POST ~target ~headers "" in
+        let* response = pipeline request in
+        Lwt.return
+          (Dream.status_to_int (Dream.status response), List.rev !payloads))
+      (fun () ->
+        AnT.clear_capture_sink ();
+        AnT.clear_configuration_override ();
+        Lwt.return_unit)
+
+  (* GET runner (confirm-email): anonymous — no CSRF, no preset session fields
+     (the session middleware itself is part of the real app pipeline). *)
+  let run_get_handler ~url ?(consent = Some "granted") ~target handler =
+    let payloads = ref [] in
+    AnT.use_enabled_test_configuration ();
+    AnT.set_capture_sink (fun p -> payloads := p :: !payloads);
+    Lwt.finalize
+      (fun () ->
+        let pipeline = Dream.sql_pool url @@ Dream.memory_sessions @@ handler in
+        let request =
+          Dream.request ~method_:`GET ~target ~headers:(consent_header consent)
+            ""
+        in
+        let* response = pipeline request in
+        Lwt.return
+          (Dream.status_to_int (Dream.status response), List.rev !payloads))
+      (fun () ->
+        AnT.clear_capture_sink ();
+        AnT.clear_configuration_override ();
+        Lwt.return_unit)
+
+  let check_set_keys name expected payload =
+    match List.assoc_opt "$set" (payload_props payload) with
+    | Some (`Assoc set) ->
+        Alcotest.(check (slist string compare))
+          name expected (List.map fst set)
+    | _ -> Alcotest.failf "%s: payload has no $set" name
+
+  let signup_case =
+    db_case "account_signed_up once with closed $set; invalid/unconsented silent"
+      (fun ~url _conn c ->
+        let (module C : Caqti_lwt.CONNECTION) = c in
+        let hash tok = Earde.Db.pending_signup_hash_token tok in
+        let* r = C.exec q_insert_pending ("step6_signup", hash "step6_tok_1") in
+        let* () = or_fail "pending" r in
+        let* status, payloads =
+          run_get_handler ~url ~target:"/confirm?token=step6_tok_1"
+            Earde.Handlers.confirm_email_handler
+        in
+        Alcotest.(check int) "confirm status" 200 status;
+        (match payloads with
+         | [ p ] ->
+             Alcotest.(check string) "event" "account_signed_up" (event_of p);
+             Alcotest.(check (slist string compare))
+               "props keys" [ "user_id"; "$set"; "deployment_environment" ]
+               (prop_keys p);
+             check_set_keys "closed $set"
+               [ "username"; "signup_date"; "is_admin" ] p;
+             (match List.assoc_opt "$set" (payload_props p) with
+              | Some (`Assoc set) ->
+                  Alcotest.(check (option string)) "$set username"
+                    (Some "step6_signup")
+                    (match List.assoc_opt "username" set with
+                     | Some (`String u) -> Some u
+                     | _ -> None)
+              | _ -> Alcotest.fail "no $set");
+             (match List.assoc_opt "user_id" (payload_props p) with
+              | Some (`Int uid) ->
+                  Alcotest.(check string) "distinct id"
+                    ("user:" ^ string_of_int uid) (distinct_of p)
+              | _ -> Alcotest.fail "no user_id prop")
+         | l -> Alcotest.failf "expected 1 signup event, got %d" (List.length l));
+        (* Replay: token consumed -> `Invalid -> no event. *)
+        let* status, payloads =
+          run_get_handler ~url ~target:"/confirm?token=step6_tok_1"
+            Earde.Handlers.confirm_email_handler
+        in
+        Alcotest.(check int) "replay status" 200 status;
+        Alcotest.(check int) "replay emits none" 0 (List.length payloads);
+        (* Fresh pending confirmed WITHOUT consent: user still created, no
+           event. *)
+        let* r = C.exec q_insert_pending ("step6_signup2", hash "step6_tok_2") in
+        let* () = or_fail "pending 2" r in
+        let* status, payloads =
+          run_get_handler ~url ~consent:None ~target:"/confirm?token=step6_tok_2"
+            Earde.Handlers.confirm_email_handler
+        in
+        Alcotest.(check int) "unconsented confirm status" 200 status;
+        Alcotest.(check int) "unconsented emits none" 0 (List.length payloads);
+        let* created = C.find_opt q_username_by_id 0 in
+        let* _ = or_fail "noop lookup" created in
+        Lwt.return_unit)
+
+  let login_case =
+    db_case "account_logged_in once with closed $set; bad password silent"
+      (fun ~url _conn c ->
+        let (module C : Caqti_lwt.CONNECTION) = c in
+        let* hash = Earde.Auth.hash_password "step6 password" in
+        let* hash = or_fail_s "hash" hash in
+        let* uid = C.find q_insert_user ("step6_login", hash) in
+        let* uid = or_fail "user" uid in
+        let* status, payloads =
+          run_handler ~url ~target:"/login"
+            ~form:
+              [ ("identifier", "step6_login"); ("password", "step6 password") ]
+            Earde.Handlers.login_handler
+        in
+        Alcotest.(check bool) "login redirects" true (is_redirect status);
+        (match payloads with
+         | [ p ] ->
+             Alcotest.(check string) "event" "account_logged_in" (event_of p);
+             Alcotest.(check string) "distinct id"
+               ("user:" ^ string_of_int uid) (distinct_of p);
+             Alcotest.(check (slist string compare))
+               "person fields only inside $set"
+               [ "user_id"; "$set"; "deployment_environment" ]
+               (prop_keys p);
+             check_set_keys "closed $set"
+               [ "username"; "signup_date"; "is_admin" ] p
+         | l -> Alcotest.failf "expected 1 login event, got %d" (List.length l));
+        let* status, payloads =
+          run_handler ~url ~target:"/login"
+            ~form:[ ("identifier", "step6_login"); ("password", "wrong") ]
+            Earde.Handlers.login_handler
+        in
+        Alcotest.(check int) "failed login status" 200 status;
+        Alcotest.(check int) "failed login emits none" 0 (List.length payloads);
+        Lwt.return_unit)
+
+  let join_case =
+    db_case
+      "join emits community_joined + $groupidentify; private/denied silent"
+      (fun ~url conn c ->
+        let (module C : Caqti_lwt.CONNECTION) = c in
+        ignore conn;
+        let* uid = C.find q_insert_user ("step6_joiner", "x") in
+        let* uid = or_fail "user" uid in
+        let* pub = C.find q_insert_community ("step6-pub", true, "public") in
+        let* pub = or_fail "public community" pub in
+        let* priv = C.find q_insert_community ("step6-priv", true, "private") in
+        let* priv = or_fail "private community" priv in
+        let session =
+          [ ("user_id", string_of_int uid); ("username", "step6_joiner") ]
+        in
+        let* status, payloads =
+          run_handler ~url ~session ~target:"/join"
+            ~form:
+              [ ("community_id", string_of_int pub); ("redirect_to", "/feed") ]
+            Earde.Handlers.join_community_handler
+        in
+        Alcotest.(check bool) "join redirects" true (is_redirect status);
+        (match payloads with
+         | [ joined; gi ] ->
+             Alcotest.(check string) "event" "community_joined"
+               (event_of joined);
+             Alcotest.(check string) "joined distinct"
+               ("user:" ^ string_of_int uid) (distinct_of joined);
+             Alcotest.(check (option string)) "$groups key"
+               (Some ("community:" ^ string_of_int pub))
+               (an_group_key joined);
+             Alcotest.(check (slist string compare))
+               "joined props keys"
+               [ "user_id"; "community_id"; "community_slug";
+                 "community_visibility"; "$groups"; "deployment_environment" ]
+               (prop_keys joined);
+             Alcotest.(check string) "groupidentify event" "$groupidentify"
+               (event_of gi);
+             Alcotest.(check string) "groupidentify distinct is the USER"
+               ("user:" ^ string_of_int uid) (distinct_of gi);
+             Alcotest.(check (option string)) "group key"
+               (Some ("community:" ^ string_of_int pub))
+               (group_key_prop_of gi);
+             Alcotest.(check (slist string compare))
+               "closed group props (no created_at on the record)"
+               [ "community_id"; "community_slug"; "community_name";
+                 "community_visibility" ]
+               (List.map fst (group_set_of gi))
+         | l ->
+             Alcotest.failf "expected joined+groupidentify, got %d payloads"
+               (List.length l));
+        (* Private community: same 404 as missing; nothing emitted. *)
+        let* status, payloads =
+          run_handler ~url ~session ~target:"/join"
+            ~form:
+              [ ("community_id", string_of_int priv); ("redirect_to", "/feed") ]
+            Earde.Handlers.join_community_handler
+        in
+        Alcotest.(check int) "private join 404" 404 status;
+        Alcotest.(check int) "private join emits none" 0 (List.length payloads);
+        (* Denied consent: the join itself still succeeds, zero events. *)
+        let* status, payloads =
+          run_handler ~url ~session ~consent:(Some "denied") ~target:"/join"
+            ~form:
+              [ ("community_id", string_of_int pub); ("redirect_to", "/feed") ]
+            Earde.Handlers.join_community_handler
+        in
+        Alcotest.(check bool) "denied join still redirects" true
+          (is_redirect status);
+        Alcotest.(check int) "denied join emits none" 0 (List.length payloads);
+        Lwt.return_unit)
+
+  let leave_case =
+    db_case "leave emits community_left only when a row was really deleted"
+      (fun ~url conn c ->
+        let (module C : Caqti_lwt.CONNECTION) = c in
+        let* uid = C.find q_insert_user ("step6_leaver", "x") in
+        let* uid = or_fail "user" uid in
+        let* cid = C.find q_insert_community ("step6-leave", true, "public") in
+        let* cid = or_fail "community" cid in
+        let* r = Earde.Db.join_community conn uid cid in
+        let* () = or_fail_s "join fixture" r in
+        let session =
+          [ ("user_id", string_of_int uid); ("username", "step6_leaver") ]
+        in
+        let leave () =
+          run_handler ~url ~session ~target:"/leave"
+            ~form:
+              [ ("community_id", string_of_int cid); ("redirect_to", "/feed") ]
+            Earde.Handlers.leave_community_handler
+        in
+        let* status, payloads = leave () in
+        Alcotest.(check bool) "leave redirects" true (is_redirect status);
+        (match payloads with
+         | [ p ] ->
+             Alcotest.(check string) "event" "community_left" (event_of p);
+             Alcotest.(check (slist string compare))
+               "props keys"
+               [ "user_id"; "community_id"; "$groups";
+                 "deployment_environment" ]
+               (prop_keys p);
+             Alcotest.(check (option string)) "$groups key"
+               (Some ("community:" ^ string_of_int cid))
+               (an_group_key p)
+         | l -> Alcotest.failf "expected 1 leave event, got %d" (List.length l));
+        (* Leaving again as a non-member: identical product response (the
+           DELETE matches zero rows), but no community_left event. *)
+        let* status, payloads = leave () in
+        Alcotest.(check bool) "no-op leave still redirects" true
+          (is_redirect status);
+        Alcotest.(check int) "no-op leave emits none" 0 (List.length payloads);
+        Lwt.return_unit)
+
+  let visibility_case =
+    db_case "visibility change emits one $groupidentify with the new value"
+      (fun ~url _conn c ->
+        let (module C : Caqti_lwt.CONNECTION) = c in
+        let* uid = C.find q_insert_user ("step6_visadmin", "x") in
+        let* uid = or_fail "user" uid in
+        let* cid = C.find q_insert_community ("step6-vis", true, "public") in
+        let* cid = or_fail "community" cid in
+        let router =
+          Dream.router
+            [ Dream.post "/c/:slug/settings/visibility"
+                Earde.Handlers.update_community_visibility_handler
+            ]
+        in
+        let submit ?consent ~session value =
+          run_handler ~url ?consent ~session
+            ~target:"/c/step6-vis/settings/visibility"
+            ~form:[ ("visibility", value) ]
+            router
+        in
+        let admin_session =
+          [ ("user_id", string_of_int uid); ("username", "step6_visadmin");
+            ("is_admin", "true") ]
+        in
+        let* status, payloads = submit ~session:admin_session "private" in
+        Alcotest.(check bool) "visibility change redirects" true
+          (is_redirect status);
+        (match payloads with
+         | [ gi ] ->
+             Alcotest.(check string) "event" "$groupidentify" (event_of gi);
+             Alcotest.(check string) "distinct is the acting user, not synthetic"
+               ("user:" ^ string_of_int uid) (distinct_of gi);
+             Alcotest.(check (option string)) "group key"
+               (Some ("community:" ^ string_of_int cid))
+               (group_key_prop_of gi);
+             Alcotest.(check (option string)) "NEW visibility in $group_set"
+               (Some "private")
+               (match List.assoc_opt "community_visibility" (group_set_of gi) with
+                | Some (`String v) -> Some v
+                | _ -> None);
+             (* The switch is TO private, so the §13 redaction applies to
+                this very $groupidentify: no readable identifiers, no
+                indexability — only the numeric id and the new closed
+                visibility value. *)
+             Alcotest.(check (slist string compare))
+               "closed group props only (private: no slug/name/indexability)"
+               [ "community_id"; "community_visibility" ]
+               (List.map fst (group_set_of gi))
+         | l ->
+             Alcotest.failf "expected 1 groupidentify, got %d" (List.length l));
+        (* Forbidden: neither admin nor top mod -> 403, silent, value kept. *)
+        let* nobody = C.find q_insert_user ("step6_visnobody", "x") in
+        let* nobody = or_fail "nobody" nobody in
+        let* status, payloads =
+          submit
+            ~session:
+              [ ("user_id", string_of_int nobody);
+                ("username", "step6_visnobody") ]
+            "public"
+        in
+        Alcotest.(check int) "forbidden status" 403 status;
+        Alcotest.(check int) "forbidden emits none" 0 (List.length payloads);
+        (* Invalid value: validation error, silent. *)
+        let* status, payloads = submit ~session:admin_session "friends-only" in
+        Alcotest.(check int) "invalid value status" 400 status;
+        Alcotest.(check int) "invalid value emits none" 0 (List.length payloads);
+        (* Denied consent: the mutation still succeeds, zero events. *)
+        let* status, payloads =
+          submit ~consent:(Some "denied") ~session:admin_session "public"
+        in
+        Alcotest.(check bool) "denied consent still redirects" true
+          (is_redirect status);
+        Alcotest.(check int) "denied consent emits none" 0 (List.length payloads);
+        let* stored = C.find_opt q_visibility_by_id cid in
+        let* stored = or_fail "stored visibility" stored in
+        Alcotest.(check (option string))
+          "denied-consent mutation really applied" (Some "public") stored;
+        Lwt.return_unit)
+
+  let chat_case =
+    db_case "chat_message_sent: json and redirect modes each emit exactly once"
+      (fun ~url conn c ->
+        let (module C : Caqti_lwt.CONNECTION) = c in
+        let* uid = C.find q_insert_user ("step6_chatter", "x") in
+        let* uid = or_fail "user" uid in
+        let* cid = C.find q_insert_community ("step6-chat", true, "public") in
+        let* cid = or_fail "community" cid in
+        let* r = Earde.Db.join_community conn uid cid in
+        let* () = or_fail_s "membership" r in
+        let* chslug = Earde.Db.create_channel conn cid "general" None 0 in
+        let* chslug = or_fail_s "channel" chslug in
+        let session =
+          [ ("user_id", string_of_int uid); ("username", "step6_chatter") ]
+        in
+        let send ?accept content =
+          run_handler ~url ~session ?accept ~target:"/send-message"
+            ~form:
+              [ ("community_slug", "step6-chat"); ("channel_slug", chslug);
+                ("content", content) ]
+            Earde.Handlers.send_message_handler
+        in
+        let* status, payloads = send "step6 hello redirect" in
+        Alcotest.(check bool) "redirect mode redirects" true
+          (is_redirect status);
+        (match payloads with
+         | [ p ] ->
+             Alcotest.(check string) "event" "chat_message_sent" (event_of p);
+             Alcotest.(check (option string)) "response_mode"
+               (Some "redirect")
+               (match List.assoc_opt "response_mode" (payload_props p) with
+                | Some (`String m) -> Some m
+                | _ -> None);
+             Alcotest.(check (option string)) "$groups key"
+               (Some ("community:" ^ string_of_int cid))
+               (an_group_key p);
+             Alcotest.(check (slist string compare))
+               "props keys"
+               [ "user_id"; "community_id"; "community_slug"; "channel_id";
+                 "channel_slug"; "message_id"; "content_length";
+                 "response_mode"; "$groups"; "deployment_environment" ]
+               (prop_keys p);
+             (* Length only — never the message text. *)
+             Alcotest.(check (option int)) "content_length"
+               (Some (String.length "step6 hello redirect"))
+               (match List.assoc_opt "content_length" (payload_props p) with
+                | Some (`Int n) -> Some n
+                | _ -> None)
+         | l -> Alcotest.failf "redirect mode: expected 1, got %d" (List.length l));
+        let* status, payloads =
+          send ~accept:"application/json" "step6 hello json"
+        in
+        Alcotest.(check int) "json mode 200" 200 status;
+        (match payloads with
+         | [ p ] ->
+             Alcotest.(check (option string)) "response_mode json"
+               (Some "json")
+               (match List.assoc_opt "response_mode" (payload_props p) with
+                | Some (`String m) -> Some m
+                | _ -> None)
+         | l -> Alcotest.failf "json mode: expected 1, got %d" (List.length l));
+        Lwt.return_unit)
+
+  let post_case =
+    db_case "forum_thread_created once on success; non-member silent"
+      (fun ~url conn c ->
+        let (module C : Caqti_lwt.CONNECTION) = c in
+        let* uid = C.find q_insert_user ("step6_poster", "x") in
+        let* uid = or_fail "user" uid in
+        let* cid = C.find q_insert_community ("step6-post", false, "public") in
+        let* cid = or_fail "community" cid in
+        let* r = Earde.Db.join_community conn uid cid in
+        let* () = or_fail_s "membership" r in
+        let session =
+          [ ("user_id", string_of_int uid); ("username", "step6_poster") ]
+        in
+        let form =
+          [ ("title", "step6 post title"); ("content", "step6 body");
+            ("community_id", string_of_int cid) ]
+        in
+        let* status, payloads =
+          run_handler ~url ~session ~multipart:true ~target:"/create-post"
+            ~form Earde.Handlers.create_post_handler
+        in
+        Alcotest.(check bool) "post redirects" true (is_redirect status);
+        (match payloads with
+         | [ p ] ->
+             Alcotest.(check string) "event" "forum_thread_created" (event_of p);
+             Alcotest.(check (slist string compare))
+               "props keys (no title/body/url)"
+               [ "user_id"; "community_id"; "post_id"; "content_length";
+                 "has_link"; "has_mention"; "$groups";
+                 "deployment_environment" ]
+               (prop_keys p);
+             Alcotest.(check (option string)) "$groups key"
+               (Some ("community:" ^ string_of_int cid))
+               (an_group_key p)
+         | l -> Alcotest.failf "expected 1 post event, got %d" (List.length l));
+        (* Non-member: refused, silent. *)
+        let* other = C.find q_insert_user ("step6_stranger", "x") in
+        let* other = or_fail "other" other in
+        let* status, payloads =
+          run_handler ~url
+            ~session:
+              [ ("user_id", string_of_int other);
+                ("username", "step6_stranger") ]
+            ~multipart:true ~target:"/create-post" ~form
+            Earde.Handlers.create_post_handler
+        in
+        Alcotest.(check int) "non-member status" 200 status;
+        Alcotest.(check int) "non-member emits none" 0 (List.length payloads);
+        Lwt.return_unit)
+
+  let comment_case =
+    db_case "forum_comment_created carries the real RETURNING comment id"
+      (fun ~url _conn c ->
+        let (module C : Caqti_lwt.CONNECTION) = c in
+        let* uid = C.find q_insert_user ("step6_commenter", "x") in
+        let* uid = or_fail "user" uid in
+        let* cid = C.find q_insert_community ("step6-comm", false, "public") in
+        let* cid = or_fail "community" cid in
+        let* pid = C.find q_insert_post (cid, uid) in
+        let* pid = or_fail "post" pid in
+        let session =
+          [ ("user_id", string_of_int uid); ("username", "step6_commenter") ]
+        in
+        let* status, payloads =
+          run_handler ~url ~session ~target:"/create-comment"
+            ~form:
+              [ ("content", "step6 comment"); ("post_id", string_of_int pid) ]
+            Earde.Handlers.create_comment_handler
+        in
+        Alcotest.(check bool) "comment redirects" true (is_redirect status);
+        (match payloads with
+         | [ p ] ->
+             Alcotest.(check string) "event" "forum_comment_created" (event_of p);
+             Alcotest.(check (slist string compare))
+               "props keys (top-level comment: no parent_comment_id)"
+               [ "user_id"; "community_id"; "post_id"; "comment_id";
+                 "content_length"; "has_mention"; "$groups";
+                 "deployment_environment" ]
+               (prop_keys p);
+             (match List.assoc_opt "comment_id" (payload_props p) with
+              | Some (`Int comment_id) ->
+                  let* row = C.find_opt q_comment_content comment_id in
+                  let* row = or_fail "comment row" row in
+                  Alcotest.(check (option string))
+                    "payload comment_id is the real inserted row"
+                    (Some "step6 comment") row;
+                  Lwt.return_unit
+              | _ -> Alcotest.fail "payload has no int comment_id")
+         | l ->
+             Alcotest.failf "expected 1 comment event, got %d" (List.length l))
+        )
+
+  let promote_case =
+    db_case "conversation_promoted once with counts and group key"
+      (fun ~url conn c ->
+        let (module C : Caqti_lwt.CONNECTION) = c in
+        let* uid = C.find q_insert_user ("step6_promoter", "x") in
+        let* uid = or_fail "user" uid in
+        let* cid = C.find q_insert_community ("step6-thr", false, "public") in
+        let* cid = or_fail "community" cid in
+        let* r = Earde.Db.join_community conn uid cid in
+        let* () = or_fail_s "membership" r in
+        let* chslug = Earde.Db.create_channel conn cid "general" None 0 in
+        let* chslug = or_fail_s "channel" chslug in
+        let* channel = Earde.Db.get_channel_by_slug conn chslug cid in
+        let* channel = or_fail_s "channel row" channel in
+        let channel =
+          match channel with
+          | Some ch -> ch
+          | None -> Alcotest.fail "channel vanished"
+        in
+        let* seed = Earde.Db.send_message conn channel.Earde.Db.id uid "step6 seed" in
+        let* seed = or_fail_s "seed message" seed in
+        let session =
+          [ ("user_id", string_of_int uid); ("username", "step6_promoter") ]
+        in
+        let router =
+          Dream.router
+            [ Dream.post
+                "/c/:slug/ch/:channel_slug/messages/:message_id/start-thread"
+                Earde.Handlers.start_thread_create_handler
+            ]
+        in
+        let* status, payloads =
+          run_handler ~url ~session
+            ~target:
+              (Printf.sprintf "/c/step6-thr/ch/%s/messages/%Ld/start-thread"
+                 chslug seed.Earde.Db.id)
+            ~form:[ ("title", "step6 thread"); ("content", "") ]
+            router
+        in
+        Alcotest.(check bool) "promotion redirects" true (is_redirect status);
+        (match payloads with
+         | [ p ] ->
+             Alcotest.(check string) "event" "conversation_promoted" (event_of p);
+             Alcotest.(check string) "distinct"
+               ("user:" ^ string_of_int uid) (distinct_of p);
+             Alcotest.(check (slist string compare))
+               "props keys (sectionless community)"
+               [ "user_id"; "community_id"; "community_slug"; "channel_id";
+                 "channel_slug"; "post_id"; "message_id";
+                 "promoted_message_count"; "promoted_participant_count";
+                 "$groups"; "deployment_environment" ]
+               (prop_keys p);
+             Alcotest.(check (option string)) "$groups key"
+               (Some ("community:" ^ string_of_int cid))
+               (an_group_key p);
+             Alcotest.(check (option int)) "seed-only message count" (Some 1)
+               (match
+                  List.assoc_opt "promoted_message_count" (payload_props p)
+                with
+                | Some (`Int n) -> Some n
+                | _ -> None);
+             Alcotest.(check (option int)) "participant count" (Some 1)
+               (match
+                  List.assoc_opt "promoted_participant_count" (payload_props p)
+                with
+                | Some (`Int n) -> Some n
+                | _ -> None)
+         | l ->
+             Alcotest.failf "expected 1 promotion event, got %d" (List.length l));
+        Lwt.return_unit)
+
+  let create_community_case =
+    db_case "community creation emits exactly one $groupidentify (no event)"
+      (fun ~url _conn c ->
+        let (module C : Caqti_lwt.CONNECTION) = c in
+        let* uid = C.find q_insert_user ("step6_founder", "x") in
+        let* uid = or_fail "user" uid in
+        let session =
+          [ ("user_id", string_of_int uid); ("username", "step6_founder") ]
+        in
+        let* status, payloads =
+          run_handler ~url ~session ~target:"/create-community"
+            ~form:
+              [ ("name", "step6-created"); ("slug", "step6-created");
+                ("section_count", "0") ]
+            Earde.Handlers.create_community_handler
+        in
+        Alcotest.(check bool) "creation redirects" true (is_redirect status);
+        let* cid = C.find_opt q_community_id_by_slug "step6-created" in
+        let* cid = or_fail "created community" cid in
+        let cid =
+          match cid with Some id -> id | None -> Alcotest.fail "no community"
+        in
+        (match payloads with
+         | [ gi ] ->
+             Alcotest.(check string) "only $groupidentify" "$groupidentify"
+               (event_of gi);
+             Alcotest.(check string) "distinct is the creator"
+               ("user:" ^ string_of_int uid) (distinct_of gi);
+             Alcotest.(check (option string)) "group key"
+               (Some ("community:" ^ string_of_int cid))
+               (group_key_prop_of gi)
+         | l ->
+             Alcotest.failf "expected exactly 1 groupidentify, got %d: %s"
+               (List.length l)
+               (String.concat ", " (List.map event_of l)));
+        Lwt.return_unit)
+
+  let update_settings_case =
+    db_case "settings update emits $groupidentify; forbidden silent"
+      (fun ~url _conn c ->
+        let (module C : Caqti_lwt.CONNECTION) = c in
+        let* uid = C.find q_insert_user ("step6_moddy", "x") in
+        let* uid = or_fail "user" uid in
+        let* cid = C.find q_insert_community ("step6-upd", true, "public") in
+        let* cid = or_fail "community" cid in
+        let form =
+          [ ("community_id", string_of_int cid);
+            ("community_slug", "step6-upd");
+            ("description", "step6 new description"); ("rules", "");
+            ("avatar_url", ""); ("banner_url", "");
+            ("existing_avatar_url", ""); ("existing_banner_url", "") ]
+        in
+        let admin_session =
+          [ ("user_id", string_of_int uid); ("username", "step6_moddy");
+            ("is_admin", "true") ]
+        in
+        let* status, payloads =
+          run_handler ~url ~session:admin_session ~multipart:true
+            ~target:"/update-community" ~form
+            Earde.Handlers.update_community_handler
+        in
+        Alcotest.(check bool) "update redirects" true (is_redirect status);
+        (match payloads with
+         | [ gi ] ->
+             Alcotest.(check string) "event" "$groupidentify" (event_of gi);
+             Alcotest.(check string) "distinct is the acting admin"
+               ("user:" ^ string_of_int uid) (distinct_of gi);
+             Alcotest.(check (option string)) "group key"
+               (Some ("community:" ^ string_of_int cid))
+               (group_key_prop_of gi);
+             Alcotest.(check (slist string compare))
+               "closed group props"
+               [ "community_id"; "community_slug"; "community_name";
+                 "community_visibility" ]
+               (List.map fst (group_set_of gi))
+         | l ->
+             Alcotest.failf "expected 1 groupidentify, got %d" (List.length l));
+        (* Unauthorized (neither admin nor moderator): 403, silent. *)
+        let* other = C.find q_insert_user ("step6_nobody", "x") in
+        let* other = or_fail "other" other in
+        let* status, payloads =
+          run_handler ~url
+            ~session:
+              [ ("user_id", string_of_int other); ("username", "step6_nobody") ]
+            ~multipart:true ~target:"/update-community" ~form
+            Earde.Handlers.update_community_handler
+        in
+        Alcotest.(check int) "forbidden status" 403 status;
+        Alcotest.(check int) "forbidden emits none" 0 (List.length payloads);
+        Lwt.return_unit)
+
+  let delete_account_case =
+    db_case "account_deleted once with the pre-anonymization id"
+      (fun ~url conn c ->
+        let (module C : Caqti_lwt.CONNECTION) = c in
+        let* uid = C.find q_insert_user ("step6_deleteme", "x") in
+        let* uid = or_fail "user" uid in
+        let did = "user:" ^ string_of_int uid in
+        (* Step 7 moved the capture into the post-response async cleanup chain
+           (capture → claim → deletion attempt), so this runner keeps the sink
+           and configuration installed until the chain has finished — tracked
+           by the durable job row acquiring its safe last_error (no deletion
+           credentials are configured here, so the attempt must leave the job
+           pending with missing_configuration). *)
+        let payloads = ref [] in
+        AnT.use_enabled_test_configuration ();
+        AnT.set_capture_sink (fun p -> payloads := !payloads @ [ p ]);
+        Lwt.finalize
+          (fun () ->
+            let pipeline =
+              Dream.sql_pool url @@ Dream.memory_sessions @@ fun req ->
+              let* () =
+                Dream.set_session_field req "user_id" (string_of_int uid)
+              in
+              let* () =
+                Dream.set_session_field req "username" "step6_deleteme"
+              in
+              let csrf = Dream.csrf_token req in
+              Dream.set_body req (form_body [ ("dream.csrf", csrf) ]);
+              Earde.Handlers.delete_account_handler req
+            in
+            let request =
+              Dream.request ~method_:`POST ~target:"/delete-account"
+                ~headers:
+                  ([ ("Content-Type", "application/x-www-form-urlencoded") ]
+                  @ consent_header (Some "granted"))
+                ""
+            in
+            let* response = pipeline request in
+            Alcotest.(check bool) "deletion redirects" true
+              (is_redirect (Dream.status_to_int (Dream.status response)));
+            let* () =
+              wait_until ~label:"post-deletion cleanup chain" (fun () ->
+                  let* job = Earde.Db.get_posthog_deletion_job conn did in
+                  match job with
+                  | Ok (Some (_, _, _, Some _)) -> Lwt.return true
+                  | _ -> Lwt.return false)
+            in
+            (match !payloads with
+             | [ p ] ->
+                 Alcotest.(check string) "event" "account_deleted" (event_of p);
+                 Alcotest.(check string) "constant non-user distinct id"
+                   Earde.Analytics.account_deletion_distinct_id (distinct_of p);
+                 Alcotest.(check (slist string compare))
+                   "personless: person processing off, plus the envelope"
+                   [ "$process_person_profile"; "deployment_environment" ]
+                   (prop_keys p);
+                 Alcotest.(check bool) "no user identity in the metric" false
+                   (contains (Yojson.Safe.to_string p) did)
+             | l ->
+                 Alcotest.failf "expected 1 deletion metric, got %d"
+                   (List.length l));
+            let* job = Earde.Db.get_posthog_deletion_job conn did in
+            let* job = or_fail_s "job row" job in
+            let* job_id =
+              match job with
+              | Some (job_id, status, attempts, last_error) ->
+                  Alcotest.(check string) "job stays durably pending" "pending"
+                    status;
+                  Alcotest.(check int) "one immediate attempt" 1 attempts;
+                  Alcotest.(check (option string)) "safe config marker"
+                    (Some "missing_configuration") last_error;
+                  Lwt.return job_id
+              | None -> Alcotest.fail "no durable deletion job"
+            in
+            let* name = C.find_opt q_username_by_id uid in
+            let* name = or_fail "anonymized row" name in
+            Alcotest.(check (option string)) "row anonymized"
+              (Some (Printf.sprintf "[deleted_%d]" uid))
+              name;
+            (* The anonymized username no longer matches the step6_ cleanup
+               pattern — drop the job and the row here. *)
+            let* r = C.exec q_delete_job job_id in
+            let* () = or_fail "drop job" r in
+            let* r = C.exec q_delete_user uid in
+            let* () = or_fail "drop anonymized user" r in
+            Lwt.return_unit)
+          (fun () ->
+            AnT.clear_capture_sink ();
+            AnT.clear_configuration_override ();
+            Lwt.return_unit))
+
+  let suite =
+    [ signup_case; login_case; join_case; leave_case; chat_case; post_case
+    ; comment_case; promote_case; create_community_case; update_settings_case
+    ; visibility_case; delete_account_case
+    ]
+end
+
+(* --- Step-7: durable PostHog person deletion ------------------------------ *)
+
+(* Local Persons-API stub: an in-process cohttp server on an ephemeral
+   127.0.0.1 port — no real PostHog, no internet. [handler] maps a recorded
+   request to (status code, body). *)
+module Api_stub = struct
+  type req = {
+    meth : string;
+    path : string;
+    query : (string * string list) list;
+    auth : string option;
+    body : string;
+  }
+
+  let free_port () =
+    let sock = Unix.socket Unix.PF_INET Unix.SOCK_STREAM 0 in
+    Unix.bind sock (Unix.ADDR_INET (Unix.inet_addr_loopback, 0));
+    let port =
+      match Unix.getsockname sock with
+      | Unix.ADDR_INET (_, p) -> p
+      | _ -> assert false
+    in
+    Unix.close sock;
+    port
+
+  let start handler =
+    let ( let* ) = Lwt.bind in
+    let seen = ref [] in
+    let callback _conn request body =
+      let uri = Cohttp.Request.uri request in
+      let path = Uri.path uri in
+      if path = "/__ready" then
+        Cohttp_lwt_unix.Server.respond_string ~status:`OK ~body:"ok" ()
+      else begin
+        let ( let* ) = Lwt.bind in
+        let* body_string = Cohttp_lwt.Body.to_string body in
+        let req =
+          {
+            meth = Cohttp.Code.string_of_method (Cohttp.Request.meth request);
+            path;
+            query = Uri.query uri;
+            auth =
+              Cohttp.Header.get (Cohttp.Request.headers request) "authorization";
+            body = body_string;
+          }
+        in
+        seen := !seen @ [ req ];
+        let status, body = handler req in
+        Cohttp_lwt_unix.Server.respond_string
+          ~status:(Cohttp.Code.status_of_code status)
+          ~body ()
+      end
+    in
+    let port = free_port () in
+    let stop_promise, stop_resolver = Lwt.wait () in
+    Lwt.async (fun () ->
+        Cohttp_lwt_unix.Server.create ~stop:stop_promise
+          ~mode:(`TCP (`Port port))
+          (Cohttp_lwt_unix.Server.make ~callback ()));
+    let base_url = Printf.sprintf "http://127.0.0.1:%d" port in
+    let rec wait_ready retries =
+      Lwt.catch
+        (fun () ->
+          let* _resp, body =
+            Cohttp_lwt_unix.Client.get (Uri.of_string (base_url ^ "/__ready"))
+          in
+          Cohttp_lwt.Body.drain_body body)
+        (fun exn ->
+          if retries <= 0 then Lwt.reraise exn
+          else
+            let* () = Lwt_unix.sleep 0.02 in
+            wait_ready (retries - 1))
+    in
+    let* () = wait_ready 100 in
+    Lwt.return (base_url, seen, fun () -> Lwt.wakeup_later stop_resolver ())
+end
+
+(* Dummy credential values only — never real ones. *)
+let deletion_test_key = "phx_test_dummy"
+let stub_uuid = "11111111-2222-3333-4444-555555555555"
+let other_uuid = "99999999-8888-7777-6666-555555555555"
+
+let person_json uuid = Printf.sprintf {|{"id": %S, "properties": {}}|} uuid
+
+let results_body persons =
+  Printf.sprintf {|{"results": [%s]}|} (String.concat ", " persons)
+
+(* Configures the deletion client against the stub, runs [f], restores. *)
+let with_persons_stub handler f =
+  Lwt_main.run
+    (let ( let* ) = Lwt.bind in
+     let* base_url, seen, stop = Api_stub.start handler in
+     AnT.use_deletion_test_configuration ~ui_host:base_url
+       ~project_id:(Some "42") ~personal_api_key:(Some deletion_test_key) ();
+     Lwt.finalize
+       (fun () -> f ~seen)
+       (fun () ->
+         AnT.clear_configuration_override ();
+         stop ();
+         Lwt.return_unit))
+
+(* Reference stub behavior: bearer-authenticated lookup of user:314 returns
+   [persons]; DELETE of stub_uuid returns [delete_status]. *)
+let persons_handler ?(lookup_status = 200) ?(persons = [ person_json stub_uuid ])
+    ?lookup_body_override ?(delete_status = 204) () (req : Api_stub.req) =
+  if req.auth <> Some ("Bearer " ^ deletion_test_key) then
+    (401, {|{"type":"authentication_error"}|})
+  else if req.meth = "GET" && req.path = "/api/projects/42/persons/" then
+    match lookup_body_override with
+    | Some body -> (lookup_status, body)
+    | None ->
+        if List.assoc_opt "distinct_id" req.query = Some [ "user:314" ] then
+          (lookup_status, results_body persons)
+        else (200, results_body [])
+  else if
+    req.meth = "DELETE" && req.path = "/api/projects/42/persons/" ^ stub_uuid ^ "/"
+  then (delete_status, "")
+  else (404, {|{"detail":"not found"}|})
+
+let attempt_result = Alcotest.(result unit string)
+
+let check_attempt name handler expected ~expect_delete =
+  an_case name (fun () ->
+      with_persons_stub handler (fun ~seen ->
+          let ( let* ) = Lwt.bind in
+          let* r =
+            Earde.Posthog_deletion.attempt_person_deletion
+              ~distinct_id:"user:314"
+          in
+          Alcotest.(check attempt_result) name expected r;
+          let deletes =
+            List.filter (fun (q : Api_stub.req) -> q.meth = "DELETE") !seen
+          in
+          Alcotest.(check int)
+            (name ^ ": DELETE requests")
+            (if expect_delete then 1 else 0)
+            (List.length deletes);
+          Lwt.return_unit))
+
+(* Real handlers + real DB + the HTTP stub, EARDE_TEST_DATABASE_URL-gated. *)
+module Step7_deletion = struct
+  let ( let* ) = Lwt.bind
+
+  open Caqti_request.Infix
+
+  let q_cleanup =
+    List.map
+      (fun sql -> (Caqti_type.unit ->. Caqti_type.unit) sql)
+      [ "DROP TRIGGER IF EXISTS step7_fail_insert ON posthog_person_deletion_jobs"
+      ; "DROP FUNCTION IF EXISTS step7_fail_insert_fn()"
+      ; "DELETE FROM posthog_person_deletion_jobs WHERE distinct_id IN (SELECT 'user:' || u.id::text FROM users u WHERE u.username LIKE 'step7_%')"
+      ; "DELETE FROM posthog_person_deletion_jobs WHERE distinct_id LIKE 'user:9700%'"
+        (* Orphaned jobs whose fixture user was hard-deleted by a test. *)
+      ; "DELETE FROM posthog_person_deletion_jobs WHERE NOT EXISTS (SELECT 1 FROM users u WHERE 'user:' || u.id::text = posthog_person_deletion_jobs.distinct_id)"
+        (* Anonymized fixture leftovers from interrupted runs: their usernames
+           no longer match step7_/step6_, so match the anonymization rewrite. *)
+      ; "DELETE FROM posthog_person_deletion_jobs WHERE distinct_id IN (SELECT 'user:' || u.id::text FROM users u WHERE u.password_hash = '' AND u.email LIKE 'deleted\\_%@earde.local')"
+      ; "DELETE FROM users WHERE password_hash = '' AND email LIKE 'deleted\\_%@earde.local'"
+      ; "DELETE FROM users WHERE username LIKE 'step7_%'"
+      ]
+
+  let or_fail label = function
+    | Ok v -> Lwt.return v
+    | Error e -> Alcotest.failf "%s: %s" label (Caqti_error.show e)
+
+  let or_fail_s label = function
+    | Ok v -> Lwt.return v
+    | Error e -> Alcotest.failf "%s: %s" label e
+
+  let db_case name f =
+    Alcotest.test_case name `Quick (fun () ->
+        match Sys.getenv_opt "EARDE_TEST_DATABASE_URL" with
+        | None | Some "" -> Alcotest.skip ()
+        | Some url ->
+            Lwt_main.run
+              (let* conn = Caqti_lwt_unix.connect (Uri.of_string url) in
+               let* conn = or_fail "connect" conn in
+               let (module C : Caqti_lwt.CONNECTION) = conn in
+               let cleanup () =
+                 Lwt_list.iter_s
+                   (fun q ->
+                     let* r = C.exec q () in
+                     let* _ = or_fail "cleanup" r in
+                     Lwt.return_unit)
+                   q_cleanup
+               in
+               let* () = cleanup () in
+               Lwt.finalize
+                 (fun () -> f ~url conn (module C : Caqti_lwt.CONNECTION))
+                 cleanup))
+
+  let q_insert_job =
+    (Caqti_type.string ->! Caqti_type.int)
+    "INSERT INTO posthog_person_deletion_jobs (distinct_id) VALUES ($1) RETURNING id"
+
+  let q_insert_job_aged =
+    (Caqti_type.(t2 string int) ->! Caqti_type.int)
+    "INSERT INTO posthog_person_deletion_jobs (distinct_id, created_at)
+     VALUES ($1, NOW() - ($2 * INTERVAL '1 hour')) RETURNING id"
+
+  let q_backdate_attempt =
+    (Caqti_type.int ->. Caqti_type.unit)
+    "UPDATE posthog_person_deletion_jobs
+     SET last_attempt_at = NOW() - INTERVAL '2 hours' WHERE id = $1"
+
+  (* (status, attempts, last_error) by job id. *)
+  let q_job_state =
+    (Caqti_type.int ->? Caqti_type.(t3 string int (option string)))
+    "SELECT status, attempts, last_error FROM posthog_person_deletion_jobs WHERE id = $1"
+
+  let q_count_jobs_for =
+    (Caqti_type.string ->! Caqti_type.int)
+    "SELECT COUNT(*) FROM posthog_person_deletion_jobs WHERE distinct_id = $1"
+
+  (* plpgsql failure trigger: a DB-only mechanism to force the job INSERT to
+     fail inside the transaction — no production test hook. Quoted-body form
+     avoids $$, which the Caqti query parser reserves. *)
+  let q_create_fail_fn =
+    (Caqti_type.unit ->. Caqti_type.unit)
+    "CREATE OR REPLACE FUNCTION step7_fail_insert_fn() RETURNS trigger AS 'BEGIN RAISE EXCEPTION ''step7 forced failure''; END' LANGUAGE plpgsql"
+
+  let q_create_fail_trigger =
+    (Caqti_type.unit ->. Caqti_type.unit)
+    "CREATE TRIGGER step7_fail_insert BEFORE INSERT ON posthog_person_deletion_jobs FOR EACH ROW EXECUTE FUNCTION step7_fail_insert_fn()"
+
+  let q_drop_fail_trigger =
+    (Caqti_type.unit ->. Caqti_type.unit)
+    "DROP TRIGGER IF EXISTS step7_fail_insert ON posthog_person_deletion_jobs"
+
+  let q_drop_fail_fn =
+    (Caqti_type.unit ->. Caqti_type.unit)
+    "DROP FUNCTION IF EXISTS step7_fail_insert_fn()"
+
+  let job_state c job_id =
+    let (module C : Caqti_lwt.CONNECTION) = c in
+    let* row = C.find_opt q_job_state job_id in
+    or_fail "job state" row
+
+  let atomic_case =
+    db_case "atomic anonymize+enqueue: one idempotent job, user anonymized"
+      (fun ~url:_ conn c ->
+        let (module C : Caqti_lwt.CONNECTION) = c in
+        let* uid = C.find Step6_events.q_insert_user ("step7_atomic", "x") in
+        let* uid = or_fail "user" uid in
+        let did = "user:" ^ string_of_int uid in
+        let* r = Earde.Db.anonymize_user_and_enqueue_posthog_deletion conn uid in
+        let* job_id, distinct_id = or_fail_s "anonymize+enqueue" r in
+        Alcotest.(check string) "immutable distinct id" did distinct_id;
+        let* name = C.find_opt Step6_events.q_username_by_id uid in
+        let* name = or_fail "row" name in
+        Alcotest.(check (option string)) "anonymized"
+          (Some (Printf.sprintf "[deleted_%d]" uid))
+          name;
+        let* state = job_state c job_id in
+        (match state with
+         | Some (status, attempts, last_error) ->
+             Alcotest.(check string) "pending" "pending" status;
+             Alcotest.(check int) "no attempts yet" 0 attempts;
+             Alcotest.(check (option string)) "no error" None last_error
+         | None -> Alcotest.fail "job row missing");
+        (* Duplicate call converges on the SAME job — no competitors. *)
+        let* r2 = Earde.Db.anonymize_user_and_enqueue_posthog_deletion conn uid in
+        let* job_id2, _ = or_fail_s "second call" r2 in
+        Alcotest.(check int) "same job id" job_id job_id2;
+        let* count = C.find q_count_jobs_for did in
+        let* count = or_fail "count" count in
+        Alcotest.(check int) "exactly one job" 1 count;
+        Lwt.return_unit)
+
+  let rollback_case =
+    db_case "forced job-insert failure rolls back the anonymization too"
+      (fun ~url:_ conn c ->
+        let (module C : Caqti_lwt.CONNECTION) = c in
+        let* uid = C.find Step6_events.q_insert_user ("step7_rollback", "x") in
+        let* uid = or_fail "user" uid in
+        let* r = C.exec q_create_fail_fn () in
+        let* () = or_fail "create fn" r in
+        let* r = C.exec q_create_fail_trigger () in
+        let* () = or_fail "create trigger" r in
+        let* result =
+          Earde.Db.anonymize_user_and_enqueue_posthog_deletion conn uid
+        in
+        (match result with
+         | Error _ -> ()
+         | Ok _ -> Alcotest.fail "expected forced failure");
+        let* r = C.exec q_drop_fail_trigger () in
+        let* () = or_fail "drop trigger" r in
+        let* r = C.exec q_drop_fail_fn () in
+        let* () = or_fail "drop fn" r in
+        (* BOTH changes rolled back: username untouched, no job row. *)
+        let* name = C.find_opt Step6_events.q_username_by_id uid in
+        let* name = or_fail "row" name in
+        Alcotest.(check (option string)) "anonymization rolled back"
+          (Some "step7_rollback") name;
+        let* count = C.find q_count_jobs_for ("user:" ^ string_of_int uid) in
+        let* count = or_fail "count" count in
+        Alcotest.(check int) "no job row" 0 count;
+        Lwt.return_unit)
+
+  let claim_case =
+    db_case "claim: attempts once, lease blocks, stale lease re-eligible"
+      (fun ~url:_ conn c ->
+        let (module C : Caqti_lwt.CONNECTION) = c in
+        let* job_id = C.find q_insert_job "user:9700001" in
+        let* job_id = or_fail "job" job_id in
+        let* claimed = Earde.Db.claim_posthog_deletion_job conn job_id in
+        let* claimed = or_fail_s "claim" claimed in
+        Alcotest.(check (option string)) "claim returns the distinct id"
+          (Some "user:9700001") claimed;
+        let* state = job_state c job_id in
+        (match state with
+         | Some (_, attempts, _) ->
+             Alcotest.(check int) "attempts incremented exactly once" 1 attempts
+         | None -> Alcotest.fail "job vanished");
+        (* Fresh lease: a concurrent attempt cannot claim it. *)
+        let* again = Earde.Db.claim_posthog_deletion_job conn job_id in
+        let* again = or_fail_s "concurrent claim" again in
+        Alcotest.(check (option string)) "lease blocks reclaim" None again;
+        (* Failure records the safe class; the stale lease re-opens the job. *)
+        let* r = Earde.Db.fail_posthog_deletion_job conn job_id "timeout" in
+        let* () = or_fail_s "mark failed" r in
+        let* r = C.exec q_backdate_attempt job_id in
+        let* () = or_fail "backdate" r in
+        let* reclaimed = Earde.Db.claim_posthog_deletion_job conn job_id in
+        let* reclaimed = or_fail_s "stale reclaim" reclaimed in
+        Alcotest.(check (option string)) "stale lease eligible again"
+          (Some "user:9700001") reclaimed;
+        (* Completion clears the error and closes the job for good. *)
+        let* r = Earde.Db.complete_posthog_deletion_job conn job_id in
+        let* () = or_fail_s "complete" r in
+        let* r = C.exec q_backdate_attempt job_id in
+        let* () = or_fail "backdate completed" r in
+        let* never = Earde.Db.claim_posthog_deletion_job conn job_id in
+        let* never = or_fail_s "claim completed" never in
+        Alcotest.(check (option string)) "completed jobs never claimed" None
+          never;
+        let* state = job_state c job_id in
+        (match state with
+         | Some (status, attempts, last_error) ->
+             Alcotest.(check string) "completed" "completed" status;
+             Alcotest.(check int) "two attempts total" 2 attempts;
+             Alcotest.(check (option string)) "last_error cleared" None
+               last_error
+         | None -> Alcotest.fail "job vanished");
+        Lwt.return_unit)
+
+  let batch_case =
+    db_case "batch claim: bounded and oldest-first" (fun ~url:_ conn c ->
+        let (module C : Caqti_lwt.CONNECTION) = c in
+        let* oldest = C.find q_insert_job_aged ("user:9700011", 3) in
+        let* oldest = or_fail "oldest" oldest in
+        let* middle = C.find q_insert_job_aged ("user:9700012", 2) in
+        let* middle = or_fail "middle" middle in
+        let* newest = C.find q_insert_job_aged ("user:9700013", 1) in
+        let* newest = or_fail "newest" newest in
+        let* claimed = Earde.Db.claim_posthog_deletion_batch conn ~limit:2 () in
+        let* claimed = or_fail_s "batch claim" claimed in
+        Alcotest.(check (list (pair int string)))
+          "bound respected; oldest two, oldest first"
+          [ (oldest, "user:9700011"); (middle, "user:9700012") ]
+          claimed;
+        let* state = job_state c newest in
+        (match state with
+         | Some (_, attempts, _) ->
+             Alcotest.(check int) "unclaimed job untouched" 0 attempts
+         | None -> Alcotest.fail "newest vanished");
+        Lwt.return_unit)
+
+  let batch_worker_case =
+    db_case "process_batch: deleted+absent complete, failure stays pending"
+      (fun ~url:_ conn c ->
+        let (module C : Caqti_lwt.CONNECTION) = c in
+        let* j_found = C.find q_insert_job_aged ("user:9700021", 3) in
+        let* j_found = or_fail "found job" j_found in
+        let* j_absent = C.find q_insert_job_aged ("user:9700022", 2) in
+        let* j_absent = or_fail "absent job" j_absent in
+        let* j_fail = C.find q_insert_job_aged ("user:9700023", 1) in
+        let* j_fail = or_fail "fail job" j_fail in
+        let handler (req : Api_stub.req) =
+          if req.meth = "DELETE" then (204, "")
+          else
+            match List.assoc_opt "distinct_id" req.query with
+            | Some [ "user:9700021" ] -> (200, results_body [ person_json stub_uuid ])
+            | Some [ "user:9700022" ] -> (200, results_body [])
+            | Some [ "user:9700023" ] -> (500, {|{"detail":"server error"}|})
+            | _ -> (404, "")
+        in
+        let* base_url, _seen, stop = Api_stub.start handler in
+        AnT.use_deletion_test_configuration ~ui_host:base_url
+          ~project_id:(Some "42") ~personal_api_key:(Some deletion_test_key) ();
+        Lwt.finalize
+          (fun () ->
+            (* Same worker the maintenance executable runs. *)
+            let* summary =
+              Earde.Posthog_deletion.process_batch
+                ~claim:(fun () ->
+                  Earde.Db.claim_posthog_deletion_batch conn ~limit:25 ())
+                ~mark_completed:(fun job_id ->
+                  Earde.Db.complete_posthog_deletion_job conn job_id)
+                ~mark_failed:(fun job_id err ->
+                  Earde.Db.fail_posthog_deletion_job conn job_id err)
+                ()
+            in
+            let* summary = or_fail_s "process_batch" summary in
+            Alcotest.(check int) "claimed" 3
+              summary.Earde.Posthog_deletion.claimed;
+            Alcotest.(check int) "completed" 2
+              summary.Earde.Posthog_deletion.completed;
+            Alcotest.(check int) "left pending" 1
+              summary.Earde.Posthog_deletion.left_pending;
+            let expect label job expected_status expected_error =
+              let* state = job_state c job in
+              match state with
+              | Some (status, _, last_error) ->
+                  Alcotest.(check string) (label ^ " status") expected_status
+                    status;
+                  Alcotest.(check (option string))
+                    (label ^ " error") expected_error last_error;
+                  Lwt.return_unit
+              | None -> Alcotest.failf "%s vanished" label
+            in
+            let* () = expect "deleted person" j_found "completed" None in
+            let* () = expect "already-absent person" j_absent "completed" None in
+            let* () =
+              expect "failed lookup" j_fail "pending" (Some "lookup_http_500")
+            in
+            Lwt.return_unit)
+          (fun () ->
+            AnT.clear_configuration_override ();
+            stop ();
+            Lwt.return_unit))
+
+  (* Runs the real delete_account_handler, keeping sink + configuration
+     installed until the post-response cleanup chain finishes ([done_pred]
+     polls the durable job through the case's own connection). *)
+  let run_delete_account ~url ~configure ?(consent = Some "granted")
+      ?(on_capture = fun () -> ()) ~uid ~done_pred () =
+    let payloads = ref [] in
+    configure ();
+    AnT.set_capture_sink (fun p ->
+        payloads := !payloads @ [ p ];
+        on_capture ());
+    Lwt.finalize
+      (fun () ->
+        let pipeline =
+          Dream.sql_pool url @@ Dream.memory_sessions @@ fun req ->
+          let* () = Dream.set_session_field req "user_id" (string_of_int uid) in
+          let* () = Dream.set_session_field req "username" "step7_deleting" in
+          let csrf = Dream.csrf_token req in
+          Dream.set_body req (Step6_events.form_body [ ("dream.csrf", csrf) ]);
+          Earde.Handlers.delete_account_handler req
+        in
+        let request =
+          Dream.request ~method_:`POST ~target:"/delete-account"
+            ~headers:
+              ([ ("Content-Type", "application/x-www-form-urlencoded") ]
+              @ Step6_events.consent_header consent)
+            ""
+        in
+        let* response = pipeline request in
+        let* () = wait_until ~label:"deletion cleanup chain" done_pred in
+        Lwt.return (Dream.status_to_int (Dream.status response), !payloads))
+      (fun () ->
+        AnT.clear_capture_sink ();
+        AnT.clear_configuration_override ();
+        Lwt.return_unit)
+
+  let job_completed conn did () =
+    let* job = Earde.Db.get_posthog_deletion_job conn did in
+    match job with
+    | Ok (Some (_, "completed", _, _)) -> Lwt.return true
+    | _ -> Lwt.return false
+
+  let job_has_error conn did () =
+    let* job = Earde.Db.get_posthog_deletion_job conn did in
+    match job with
+    | Ok (Some (_, _, _, Some _)) -> Lwt.return true
+    | _ -> Lwt.return false
+
+  let drop_job_and_user c ~did ~uid =
+    let (module C : Caqti_lwt.CONNECTION) = c in
+    let* job = Earde.Db.get_posthog_deletion_job c did in
+    let* () =
+      match job with
+      | Ok (Some (job_id, _, _, _)) ->
+          let* r = C.exec Step6_events.q_delete_job job_id in
+          or_fail "drop job" r
+      | _ -> Lwt.return_unit
+    in
+    let* r = C.exec Step6_events.q_delete_user uid in
+    or_fail "drop user" r
+
+  let stub_config base_url () =
+    AnT.use_deletion_test_configuration ~ui_host:base_url
+      ~project_id:(Some "42") ~personal_api_key:(Some deletion_test_key) ()
+
+  let consented_flow_case =
+    db_case "handler: personless metric + real-identity deletion job completes"
+      (fun ~url conn c ->
+        let (module C : Caqti_lwt.CONNECTION) = c in
+        let* uid = C.find Step6_events.q_insert_user ("step7_flow", "x") in
+        let* uid = or_fail "user" uid in
+        let did = "user:" ^ string_of_int uid in
+        let order = ref [] in
+        let* base_url, seen, stop =
+          Api_stub.start (fun req ->
+              order := !order @ [ req.Api_stub.meth ];
+              if req.Api_stub.meth = "GET" then
+                (200, results_body [ person_json stub_uuid ])
+              else (204, ""))
+        in
+        Lwt.finalize
+          (fun () ->
+            let* status, payloads =
+              run_delete_account ~url ~configure:(stub_config base_url) ~uid
+                ~on_capture:(fun () -> order := !order @ [ "capture" ])
+                ~done_pred:(job_completed conn did) ()
+            in
+            Alcotest.(check bool) "response preserved (redirect)" true
+              (is_redirect status);
+            (match payloads with
+             | [ p ] ->
+                 Alcotest.(check string) "event" "account_deleted" (event_of p);
+                 Alcotest.(check string) "constant non-user distinct id"
+                   Earde.Analytics.account_deletion_distinct_id (distinct_of p);
+                 Alcotest.(check bool)
+                   "metric never mentions the deleted user" false
+                   (contains (Yojson.Safe.to_string p) did)
+             | l -> Alcotest.failf "expected 1 metric, got %d" (List.length l));
+            (* HTTP request sequence only — the metric request happens to run
+               first, but person-safety comes from the metric being personless
+               by construction, NOT from this ordering (which proves nothing
+               about PostHog's ingestion pipeline). *)
+            Alcotest.(check (list string))
+              "HTTP request sequence: metric, lookup, delete"
+              [ "capture"; "GET"; "DELETE" ] !order;
+            (* The Persons lookup and the durable job keep the REAL
+               user:<database_id>. *)
+            (match
+               List.find_opt (fun (q : Api_stub.req) -> q.meth = "GET") !seen
+             with
+             | Some lookup ->
+                 Alcotest.(check (option (list string)))
+                   "Persons lookup uses the real user distinct id"
+                   (Some [ did ])
+                   (List.assoc_opt "distinct_id" lookup.Api_stub.query)
+             | None -> Alcotest.fail "no Persons lookup recorded");
+            let* job = Earde.Db.get_posthog_deletion_job conn did in
+            let* job = or_fail_s "job" job in
+            (match job with
+             | Some (_, status, attempts, last_error) ->
+                 Alcotest.(check string) "completed" "completed" status;
+                 Alcotest.(check int) "one attempt" 1 attempts;
+                 Alcotest.(check (option string)) "no error" None last_error
+             | None -> Alcotest.fail "no job");
+            let* name = C.find_opt Step6_events.q_username_by_id uid in
+            let* name = or_fail "row" name in
+            Alcotest.(check (option string)) "anonymized"
+              (Some (Printf.sprintf "[deleted_%d]" uid))
+              name;
+            drop_job_and_user c ~did ~uid)
+          (fun () ->
+            stop ();
+            Lwt.return_unit))
+
+  let denied_consent_case =
+    db_case "handler: denied consent skips capture, still deletes remotely"
+      (fun ~url conn c ->
+        let (module C : Caqti_lwt.CONNECTION) = c in
+        let* uid = C.find Step6_events.q_insert_user ("step7_denied", "x") in
+        let* uid = or_fail "user" uid in
+        let did = "user:" ^ string_of_int uid in
+        let* base_url, seen, stop =
+          Api_stub.start (fun req ->
+              if req.Api_stub.meth = "GET" then (200, results_body [])
+              else (404, ""))
+        in
+        Lwt.finalize
+          (fun () ->
+            let* status, payloads =
+              run_delete_account ~url ~configure:(stub_config base_url)
+                ~consent:(Some "denied") ~uid
+                ~done_pred:(job_completed conn did) ()
+            in
+            Alcotest.(check bool) "redirects" true (is_redirect status);
+            Alcotest.(check int) "no capture without consent" 0
+              (List.length payloads);
+            Alcotest.(check bool) "deletion still attempted" true
+              (List.length !seen >= 1);
+            drop_job_and_user c ~did ~uid)
+          (fun () ->
+            stop ();
+            Lwt.return_unit))
+
+  let capture_failure_case =
+    db_case "handler: capture transport failure still proceeds to deletion"
+      (fun ~url conn c ->
+        let (module C : Caqti_lwt.CONNECTION) = c in
+        let* uid = C.find Step6_events.q_insert_user ("step7_capfail", "x") in
+        let* uid = or_fail "user" uid in
+        let did = "user:" ^ string_of_int uid in
+        let* base_url, seen, stop =
+          Api_stub.start (fun req ->
+              if req.Api_stub.meth = "GET" then (200, results_body [])
+              else (404, ""))
+        in
+        Lwt.finalize
+          (fun () ->
+            let* status, _payloads =
+              run_delete_account ~url ~configure:(stub_config base_url) ~uid
+                ~on_capture:(fun () -> failwith "capture transport down")
+                ~done_pred:(job_completed conn did) ()
+            in
+            Alcotest.(check bool) "redirects" true (is_redirect status);
+            Alcotest.(check bool) "deletion still attempted" true
+              (List.length !seen >= 1);
+            let* job = Earde.Db.get_posthog_deletion_job conn did in
+            let* job = or_fail_s "job" job in
+            (match job with
+             | Some (_, status, _, _) ->
+                 Alcotest.(check string) "completed despite capture failure"
+                   "completed" status
+             | None -> Alcotest.fail "no job");
+            drop_job_and_user c ~did ~uid)
+          (fun () ->
+            stop ();
+            Lwt.return_unit))
+
+  let missing_config_case =
+    db_case "handler: missing configuration leaves a durable pending job"
+      (fun ~url conn c ->
+        let (module C : Caqti_lwt.CONNECTION) = c in
+        let* uid = C.find Step6_events.q_insert_user ("step7_noconf", "x") in
+        let* uid = or_fail "user" uid in
+        let did = "user:" ^ string_of_int uid in
+        let* status, payloads =
+          run_delete_account ~url
+            ~configure:AnT.use_enabled_test_configuration ~uid
+            ~done_pred:(job_has_error conn did) ()
+        in
+        Alcotest.(check bool) "local deletion still succeeds" true
+          (is_redirect status);
+        Alcotest.(check int) "capture still emitted (consented)" 1
+          (List.length payloads);
+        let* job = Earde.Db.get_posthog_deletion_job conn did in
+        let* job = or_fail_s "job" job in
+        (match job with
+         | Some (_, status, attempts, last_error) ->
+             Alcotest.(check string) "pending" "pending" status;
+             Alcotest.(check int) "one attempt" 1 attempts;
+             Alcotest.(check (option string)) "safe marker"
+               (Some "missing_configuration") last_error
+         | None -> Alcotest.fail "no durable job");
+        drop_job_and_user c ~did ~uid)
+
+  let posthog_down_case =
+    db_case "handler: PostHog failure never changes the product response"
+      (fun ~url conn c ->
+        let (module C : Caqti_lwt.CONNECTION) = c in
+        let* uid = C.find Step6_events.q_insert_user ("step7_phdown", "x") in
+        let* uid = or_fail "user" uid in
+        let did = "user:" ^ string_of_int uid in
+        let* base_url, _seen, stop =
+          Api_stub.start (fun _req -> (500, {|{"detail":"server error"}|}))
+        in
+        Lwt.finalize
+          (fun () ->
+            let* status, _payloads =
+              run_delete_account ~url ~configure:(stub_config base_url) ~uid
+                ~done_pred:(job_has_error conn did) ()
+            in
+            Alcotest.(check bool) "redirects" true (is_redirect status);
+            let* job = Earde.Db.get_posthog_deletion_job conn did in
+            let* job = or_fail_s "job" job in
+            (match job with
+             | Some (_, status, _, last_error) ->
+                 Alcotest.(check string) "pending" "pending" status;
+                 Alcotest.(check (option string)) "safe status class"
+                   (Some "lookup_http_500") last_error
+             | None -> Alcotest.fail "no job");
+            let* name = C.find_opt Step6_events.q_username_by_id uid in
+            let* name = or_fail "row" name in
+            Alcotest.(check (option string)) "local deletion applied anyway"
+              (Some (Printf.sprintf "[deleted_%d]" uid))
+              name;
+            drop_job_and_user c ~did ~uid)
+          (fun () ->
+            stop ();
+            Lwt.return_unit))
+
+  let suite =
+    [ atomic_case; rollback_case; claim_case; batch_case; batch_worker_case
+    ; consented_flow_case; denied_consent_case; capture_failure_case
+    ; missing_config_case; posthog_down_case
+    ]
+end
+
+(* --- §13: durable private-community group-profile scrub ------------------ *)
+
+(* When a community turns fully private, its previously sent community_name /
+   community_slug must actually be REMOVED from the PostHog group profile via
+   the documented private Groups API (find + delete_property {"$unset": …}).
+   Stub-only cases run always; handler/job cases sit behind the DB gate. *)
+module Group_cleanup = struct
+  open Caqti_request.Infix
+
+  let or_fail label = function
+    | Ok v -> Lwt.return v
+    | Error e -> Alcotest.failf "%s: %s" label (Caqti_error.show e)
+
+  let or_fail_s label = function
+    | Ok v -> Lwt.return v
+    | Error e -> Alcotest.failf "%s: %s" label e
+
+  let group_find_path = "/api/projects/42/groups/find/"
+  let group_delete_path = "/api/projects/42/groups/delete_property/"
+
+  (* Human-readable stand-ins that must NEVER appear in requests (beyond the
+     find response we serve), job rows, or error strings. *)
+  let secret_name = "Secret Club"
+  let secret_slug = "secret-club"
+
+  let group_props_body props =
+    Printf.sprintf {|{"group_type_index": 0, "group_key": "k", "group_properties": {%s}}|}
+      (String.concat ", "
+         (List.map (fun (k, v) -> Printf.sprintf "%S: %S" k v) props))
+
+  let unset_of_body body =
+    match Yojson.Safe.from_string body with
+    | exception _ -> None
+    | `Assoc l -> (
+        match List.assoc_opt "$unset" l with
+        | Some (`String k) -> Some k
+        | _ -> None)
+    | _ -> None
+
+  (* Stateful stub: find serves the current [props]; a successful
+     delete_property removes the named key, mirroring real PostHog (which
+     400s on an absent key — exactly why the client re-reads before
+     deleting). *)
+  let groups_handler ?(find_status = 200) ?(delete_status = 200) props
+      (req : Api_stub.req) =
+    if req.auth <> Some ("Bearer " ^ deletion_test_key) then
+      (401, {|{"type":"authentication_error"}|})
+    else if req.meth = "GET" && req.path = group_find_path then
+      if find_status <> 200 then (find_status, {|{"detail":"not found"}|})
+      else (200, group_props_body !props)
+    else if req.meth = "POST" && req.path = group_delete_path then (
+      match unset_of_body req.body with
+      | Some key when delete_status = 200 && List.mem_assoc key !props ->
+          props := List.remove_assoc key !props;
+          (200, "{}")
+      | Some key when delete_status <> 200 ->
+          ignore key;
+          (delete_status, "")
+      | _ -> (400, {|{"attr":"$unset"}|}))
+    else (404, {|{"detail":"not found"}|})
+
+  let with_groups_stub handler f =
+    Lwt_main.run
+      (let ( let* ) = Lwt.bind in
+       let* base_url, seen, stop = Api_stub.start handler in
+       AnT.use_deletion_test_configuration ~ui_host:base_url
+         ~project_id:(Some "42") ~personal_api_key:(Some deletion_test_key) ();
+       Lwt.finalize
+         (fun () -> f ~seen)
+         (fun () ->
+           AnT.clear_configuration_override ();
+           stop ();
+           Lwt.return_unit))
+
+  let no_leak_in_requests (seen : Api_stub.req list) =
+    List.iter
+      (fun (r : Api_stub.req) ->
+        let surface =
+          r.path ^ " " ^ r.body ^ " "
+          ^ String.concat " " (List.concat_map snd r.query)
+        in
+        if contains surface secret_name || contains surface secret_slug then
+          Alcotest.failf "request leaked a community name/slug: %s" r.path)
+      seen
+
+  let full_props () =
+    ref
+      [ ("community_id", "9"); ("community_name", secret_name);
+        ("community_slug", secret_slug); ("community_visibility", "private")
+      ]
+
+  let scrub_case =
+    an_case "attempt: deletes exactly name+slug via $unset; rerun is a no-op"
+      (fun () ->
+        let props = full_props () in
+        with_groups_stub (groups_handler props) (fun ~seen ->
+            let ( let* ) = Lwt.bind in
+            let* first =
+              Earde.Posthog_deletion.attempt_group_cleanup
+                ~group_key:"community:9"
+            in
+            Alcotest.(check (result unit string)) "first run" (Ok ()) first;
+            let deletes =
+              List.filter
+                (fun (r : Api_stub.req) -> r.meth = "POST")
+                !seen
+            in
+            Alcotest.(check (slist (option string) compare))
+              "exactly the two closed scrub targets"
+              [ Some "community_name"; Some "community_slug" ]
+              (List.map (fun (r : Api_stub.req) -> unset_of_body r.body) deletes);
+            List.iter
+              (fun (r : Api_stub.req) ->
+                Alcotest.(check (option (list string)))
+                  "delete addressed by numeric key" (Some [ "community:9" ])
+                  (List.assoc_opt "group_key" r.query);
+                Alcotest.(check (option (list string)))
+                  "community group type index" (Some [ "0" ])
+                  (List.assoc_opt "group_type_index" r.query))
+              deletes;
+            (* Non-target properties survive; the group key itself stays. *)
+            Alcotest.(check (list string)) "untouched non-targets"
+              [ "community_id"; "community_visibility" ]
+              (List.map fst !props);
+            (* Idempotent rerun: nothing left to delete → find only. *)
+            let before = List.length !seen in
+            let* second =
+              Earde.Posthog_deletion.attempt_group_cleanup
+                ~group_key:"community:9"
+            in
+            Alcotest.(check (result unit string)) "rerun" (Ok ()) second;
+            let extra =
+              List.filteri (fun i _ -> i >= before) !seen
+            in
+            Alcotest.(check (list string)) "rerun performs find only"
+              [ "GET" ]
+              (List.map (fun (r : Api_stub.req) -> r.meth) extra);
+            no_leak_in_requests deletes;
+            Lwt.return_unit))
+
+  let absent_case =
+    an_case "attempt: group PostHog never saw (find 404) completes" (fun () ->
+        let props = full_props () in
+        with_groups_stub (groups_handler ~find_status:404 props) (fun ~seen ->
+            let ( let* ) = Lwt.bind in
+            let* r =
+              Earde.Posthog_deletion.attempt_group_cleanup
+                ~group_key:"community:9"
+            in
+            Alcotest.(check (result unit string)) "absent completes" (Ok ()) r;
+            Alcotest.(check (list string)) "no delete attempted" [ "GET" ]
+              (List.map (fun (q : Api_stub.req) -> q.meth) !seen);
+            Lwt.return_unit))
+
+  let failure_case =
+    an_case "attempt: delete failure is a bounded class, never a name/slug"
+      (fun () ->
+        let props = full_props () in
+        with_groups_stub (groups_handler ~delete_status:500 props)
+          (fun ~seen ->
+            let ( let* ) = Lwt.bind in
+            let* r =
+              Earde.Posthog_deletion.attempt_group_cleanup
+                ~group_key:"community:9"
+            in
+            (match r with
+            | Error cls ->
+                Alcotest.(check string) "closed class" "group_delete_http_500"
+                  cls
+            | Ok () -> Alcotest.fail "expected failure");
+            ignore seen;
+            Lwt.return_unit))
+
+  let missing_config_case =
+    an_case "attempt: no private credentials -> bounded missing_configuration"
+      (fun () ->
+        AnT.use_enabled_test_configuration ();
+        Fun.protect ~finally:AnT.clear_configuration_override (fun () ->
+            Alcotest.(check (result unit string))
+              "missing configuration"
+              (Error "missing_configuration")
+              (Lwt_main.run
+                 (Earde.Posthog_deletion.attempt_group_cleanup
+                    ~group_key:"community:9"))))
+
+  (* ---- DB-gated: transaction coupling, durability, retry, restore ------- *)
+
+  let q_cleanup =
+    List.map
+      (fun sql -> (Caqti_type.unit ->. Caqti_type.unit) sql)
+      [ "DELETE FROM posthog_group_cleanup_jobs WHERE group_key IN (SELECT 'community:' || c.id::text FROM communities c WHERE c.slug LIKE 'grpclean-%')"
+      ; "DELETE FROM posthog_group_cleanup_jobs WHERE group_key LIKE 'community:99912%'"
+      ; "DELETE FROM communities WHERE slug LIKE 'grpclean-%'"
+      ; "DELETE FROM posthog_group_cleanup_jobs WHERE NOT EXISTS (SELECT 1 FROM communities c WHERE 'community:' || c.id::text = posthog_group_cleanup_jobs.group_key)"
+      ; "DELETE FROM users WHERE username LIKE 'grpclean_%'"
+      ]
+
+  let db_case name f =
+    Alcotest.test_case name `Quick (fun () ->
+        match Sys.getenv_opt "EARDE_TEST_DATABASE_URL" with
+        | None | Some "" -> Alcotest.skip ()
+        | Some url ->
+            Lwt_main.run
+              (let ( let* ) = Lwt.bind in
+               let* conn = Caqti_lwt_unix.connect (Uri.of_string url) in
+               let* conn = or_fail "connect" conn in
+               let (module C : Caqti_lwt.CONNECTION) = conn in
+               let cleanup () =
+                 Lwt_list.iter_s
+                   (fun q ->
+                     let* r = C.exec q () in
+                     let* _ = or_fail "cleanup" r in
+                     Lwt.return_unit)
+                   q_cleanup
+               in
+               let* () = cleanup () in
+               Lwt.finalize
+                 (fun () -> f ~url conn (module C : Caqti_lwt.CONNECTION))
+                 cleanup))
+
+  let q_insert_community =
+    (Caqti_type.(t3 string string string) ->! Caqti_type.int)
+    "INSERT INTO communities (slug, name, visibility) VALUES ($1, $2, $3) RETURNING id"
+
+  let q_visibility_of =
+    (Caqti_type.int ->! Caqti_type.string)
+    "SELECT visibility FROM communities WHERE id = $1"
+
+  let q_insert_fake_job =
+    (Caqti_type.string ->! Caqti_type.int)
+    "INSERT INTO posthog_group_cleanup_jobs (group_key) VALUES ($1) RETURNING id"
+
+  (* Runs update_community_visibility_handler like Step-7 runs the deletion
+     handler: caller-chosen analytics configuration (so the async cleanup can
+     reach a stub), completion awaited through [done_pred]. *)
+  let run_visibility ~url ~configure ~uid ~slug ~value ~done_pred () =
+    let ( let* ) = Lwt.bind in
+    let payloads = ref [] in
+    configure ();
+    AnT.set_capture_sink (fun p -> payloads := !payloads @ [ p ]);
+    Lwt.finalize
+      (fun () ->
+        let router =
+          Dream.router
+            [ Dream.post "/c/:slug/settings/visibility"
+                Earde.Handlers.update_community_visibility_handler
+            ]
+        in
+        let pipeline =
+          Dream.sql_pool url @@ Dream.memory_sessions @@ fun req ->
+          let* () = Dream.set_session_field req "user_id" (string_of_int uid) in
+          let* () = Dream.set_session_field req "username" "grpclean_admin" in
+          let* () = Dream.set_session_field req "is_admin" "true" in
+          let csrf = Dream.csrf_token req in
+          Dream.set_body req
+            (Step6_events.form_body
+               [ ("dream.csrf", csrf); ("visibility", value) ]);
+          router req
+        in
+        let request =
+          Dream.request ~method_:`POST
+            ~target:("/c/" ^ slug ^ "/settings/visibility")
+            ~headers:
+              ([ ("Content-Type", "application/x-www-form-urlencoded") ]
+              @ Step6_events.consent_header (Some "granted"))
+            ""
+        in
+        let* response = pipeline request in
+        let* () = wait_until ~label:"group cleanup chain" done_pred in
+        Lwt.return (Dream.status_to_int (Dream.status response), !payloads))
+      (fun () ->
+        AnT.clear_capture_sink ();
+        AnT.clear_configuration_override ();
+        Lwt.return_unit)
+
+  let job_state conn key =
+    let ( let* ) = Lwt.bind in
+    let* job = Earde.Db.get_posthog_group_cleanup_job conn key in
+    or_fail_s "job state" job
+
+  let job_completed conn key () =
+    let ( let* ) = Lwt.bind in
+    let* job = Earde.Db.get_posthog_group_cleanup_job conn key in
+    match job with
+    | Ok (Some (_, "completed", _, _)) -> Lwt.return true
+    | _ -> Lwt.return false
+
+  let job_has_error conn key () =
+    let ( let* ) = Lwt.bind in
+    let* job = Earde.Db.get_posthog_group_cleanup_job conn key in
+    match job with
+    | Ok (Some (_, _, _, Some _)) -> Lwt.return true
+    | _ -> Lwt.return false
+
+  let handler_flow_case =
+    db_case "handler: public->private commits change + durable job; scrub runs"
+      (fun ~url conn c ->
+        let ( let* ) = Lwt.bind in
+        let (module C : Caqti_lwt.CONNECTION) = c in
+        let* uid = C.find Step6_events.q_insert_user ("grpclean_admin", "x") in
+        let* uid = or_fail "user" uid in
+        let* cid =
+          C.find q_insert_community ("grpclean-flow", secret_name, "public")
+        in
+        let* cid = or_fail "community" cid in
+        let key = "community:" ^ string_of_int cid in
+        let props =
+          ref
+            [ ("community_id", string_of_int cid);
+              ("community_name", secret_name);
+              ("community_slug", "grpclean-flow")
+            ]
+        in
+        let* base_url, seen, stop = Api_stub.start (groups_handler props) in
+        Lwt.finalize
+          (fun () ->
+            let* status, payloads =
+              run_visibility ~url
+                ~configure:(fun () ->
+                  AnT.use_deletion_test_configuration ~ui_host:base_url
+                    ~project_id:(Some "42")
+                    ~personal_api_key:(Some deletion_test_key) ())
+                ~uid ~slug:"grpclean-flow" ~value:"private"
+                ~done_pred:(job_completed conn key) ()
+            in
+            Alcotest.(check bool) "redirects" true (status / 100 = 3);
+            let* visibility = C.find q_visibility_of cid in
+            let* visibility = or_fail "visibility" visibility in
+            Alcotest.(check string) "visibility committed" "private" visibility;
+            let* state = job_state conn key in
+            (match state with
+            | Some (_, s, attempts, last_error) ->
+                Alcotest.(check string) "job completed" "completed" s;
+                Alcotest.(check bool) "attempted" true (attempts >= 1);
+                Alcotest.(check (option string)) "no error" None last_error
+            | None -> Alcotest.fail "job row missing");
+            (* Both stored identifiers really were unset over the API. *)
+            Alcotest.(check (list string)) "profile scrubbed"
+              [ "community_id" ]
+              (List.map fst !props);
+            no_leak_in_requests
+              (List.filter (fun (r : Api_stub.req) -> r.meth = "POST") !seen);
+            (* The consent-gated $groupidentify that rode along is already
+               the private shape. *)
+            (match
+               List.find_opt
+                 (fun p -> event_of p = "$groupidentify")
+                 payloads
+             with
+            | Some gi ->
+                Alcotest.(check (slist string compare)) "private group set"
+                  [ "community_id"; "community_visibility" ]
+                  (List.map fst (group_set_of gi))
+            | None -> Alcotest.fail "no $groupidentify captured");
+            Lwt.return_unit)
+          (fun () ->
+            stop ();
+            Lwt.return_unit))
+
+  let handler_failure_case =
+    db_case "handler: PostHog failure keeps the committed change, job pending"
+      (fun ~url conn c ->
+        let ( let* ) = Lwt.bind in
+        let (module C : Caqti_lwt.CONNECTION) = c in
+        let* uid = C.find Step6_events.q_insert_user ("grpclean_admin2", "x") in
+        let* uid = or_fail "user" uid in
+        let* cid =
+          C.find q_insert_community ("grpclean-down", secret_name, "public")
+        in
+        let* cid = or_fail "community" cid in
+        let key = "community:" ^ string_of_int cid in
+        let props =
+          ref
+            [ ("community_name", secret_name);
+              ("community_slug", "grpclean-down")
+            ]
+        in
+        let* base_url, _seen, stop =
+          Api_stub.start (groups_handler ~delete_status:500 props)
+        in
+        Lwt.finalize
+          (fun () ->
+            let* status, _payloads =
+              run_visibility ~url
+                ~configure:(fun () ->
+                  AnT.use_deletion_test_configuration ~ui_host:base_url
+                    ~project_id:(Some "42")
+                    ~personal_api_key:(Some deletion_test_key) ())
+                ~uid ~slug:"grpclean-down" ~value:"private"
+                ~done_pred:(job_has_error conn key) ()
+            in
+            Alcotest.(check bool) "product response preserved" true
+              (status / 100 = 3);
+            (* The transient PostHog failure did NOT roll anything back. *)
+            let* visibility = C.find q_visibility_of cid in
+            let* visibility = or_fail "visibility" visibility in
+            Alcotest.(check string) "visibility still private" "private"
+              visibility;
+            let* state = job_state conn key in
+            (match state with
+            | Some (_, s, attempts, Some err) ->
+                Alcotest.(check string) "durably pending" "pending" s;
+                Alcotest.(check bool) "attempted" true (attempts >= 1);
+                Alcotest.(check string) "bounded class only"
+                  "group_delete_http_500" err;
+                if contains err secret_name || contains err "grpclean-down"
+                then Alcotest.fail "error leaked a name/slug"
+            | _ -> Alcotest.fail "expected pending job with error");
+            Lwt.return_unit)
+          (fun () ->
+            stop ();
+            Lwt.return_unit))
+
+  let enqueue_semantics_case =
+    db_case "enqueue: converges while pending, re-arms after completion"
+      (fun ~url:_ conn c ->
+        let ( let* ) = Lwt.bind in
+        let (module C : Caqti_lwt.CONNECTION) = c in
+        let* cid =
+          C.find q_insert_community ("grpclean-rearm", secret_name, "public")
+        in
+        let* cid = or_fail "community" cid in
+        let key = "community:" ^ string_of_int cid in
+        let* r =
+          Earde.Db.update_community_visibility_and_enqueue_group_cleanup conn
+            cid Earde.Db.Community_private
+        in
+        let* updated, job1 = or_fail_s "first transition" r in
+        Alcotest.(check bool) "community returned" true (updated <> None);
+        let job1 = Option.get job1 in
+        (* Duplicate transition converges on the SAME pending job. *)
+        let* r = Earde.Db.update_community_visibility_and_enqueue_group_cleanup
+            conn cid Earde.Db.Community_private
+        in
+        let* _, job2 = or_fail_s "duplicate transition" r in
+        Alcotest.(check int) "same job" job1 (Option.get job2);
+        (* ->public enqueues nothing (restore rides $groupidentify). *)
+        let* r = Earde.Db.update_community_visibility_and_enqueue_group_cleanup
+            conn cid Earde.Db.Community_public
+        in
+        let* _, job3 = or_fail_s "back to public" r in
+        Alcotest.(check bool) "no job on ->public" true (job3 = None);
+        (* Complete, then a NEW ->private transition re-arms it. *)
+        let* m = Earde.Db.complete_posthog_group_cleanup_job conn job1 in
+        let* () = or_fail_s "complete" m in
+        let* r = Earde.Db.update_community_visibility_and_enqueue_group_cleanup
+            conn cid Earde.Db.Community_private
+        in
+        let* _, job4 = or_fail_s "re-arm" r in
+        Alcotest.(check int) "same row re-armed" job1 (Option.get job4);
+        let* state = job_state conn key in
+        (match state with
+        | Some (_, s, attempts, last_error) ->
+            Alcotest.(check string) "pending again" "pending" s;
+            Alcotest.(check int) "counters reset" 0 attempts;
+            Alcotest.(check (option string)) "diagnostics reset" None last_error
+        | None -> Alcotest.fail "job row missing");
+        Lwt.return_unit)
+
+  let restore_case =
+    db_case "handler: private->public restores name+slug, enqueues nothing"
+      (fun ~url conn c ->
+        let ( let* ) = Lwt.bind in
+        let (module C : Caqti_lwt.CONNECTION) = c in
+        let* uid = C.find Step6_events.q_insert_user ("grpclean_admin3", "x") in
+        let* uid = or_fail "user" uid in
+        let* cid =
+          C.find q_insert_community ("grpclean-back", secret_name, "private")
+        in
+        let* cid = or_fail "community" cid in
+        let key = "community:" ^ string_of_int cid in
+        let* status, payloads =
+          run_visibility ~url
+            ~configure:(fun () -> AnT.use_enabled_test_configuration ())
+            ~uid ~slug:"grpclean-back" ~value:"public"
+            ~done_pred:(fun () -> Lwt.return true)
+            ()
+        in
+        Alcotest.(check bool) "redirects" true (status / 100 = 3);
+        (match
+           List.find_opt (fun p -> event_of p = "$groupidentify") payloads
+         with
+        | Some gi ->
+            let set = group_set_of gi in
+            Alcotest.(check (slist string compare))
+              "public shape restored"
+              [ "community_id"; "community_slug"; "community_name";
+                "community_visibility" ]
+              (List.map fst set);
+            Alcotest.(check (option string)) "name restored"
+              (Some secret_name)
+              (match List.assoc_opt "community_name" set with
+               | Some (`String v) -> Some v
+               | _ -> None)
+        | None -> Alcotest.fail "no $groupidentify captured");
+        let* job = Earde.Db.get_posthog_group_cleanup_job conn key in
+        let* job = or_fail_s "job lookup" job in
+        Alcotest.(check bool) "no cleanup job for ->public" true (job = None);
+        Lwt.return_unit)
+
+  let batch_case =
+    db_case "batch: bounded claim + shared maintenance worker completes"
+      (fun ~url:_ conn c ->
+        let ( let* ) = Lwt.bind in
+        let (module C : Caqti_lwt.CONNECTION) = c in
+        let* j1 = C.find q_insert_fake_job "community:999121" in
+        let* j1 = or_fail "job1" j1 in
+        let* j2 = C.find q_insert_fake_job "community:999122" in
+        let* j2 = or_fail "job2" j2 in
+        let* j3 = C.find q_insert_fake_job "community:999123" in
+        let* j3 = or_fail "job3" j3 in
+        let* claimed =
+          Earde.Db.claim_posthog_group_cleanup_batch conn ~limit:2 ()
+        in
+        let* claimed = or_fail_s "bounded claim" claimed in
+        Alcotest.(check (list int)) "bounded, oldest first" [ j1; j2 ]
+          (List.map fst claimed);
+        (* The third job processes through the SAME worker; a 404 find (group
+           never existed) completes it. *)
+        let props = ref [] in
+        let handler = groups_handler ~find_status:404 props in
+        let* base_url, _seen, stop = Api_stub.start handler in
+        AnT.use_deletion_test_configuration ~ui_host:base_url
+          ~project_id:(Some "42") ~personal_api_key:(Some deletion_test_key) ();
+        Lwt.finalize
+          (fun () ->
+            let* summary =
+              Earde.Posthog_deletion.process_group_batch
+                ~claim:(fun () ->
+                  Earde.Db.claim_posthog_group_cleanup_batch conn
+                    ~lease_minutes:0 ~limit:10 ())
+                ~mark_completed:(fun job_id ->
+                  Earde.Db.complete_posthog_group_cleanup_job conn job_id)
+                ~mark_failed:(fun job_id err ->
+                  Earde.Db.fail_posthog_group_cleanup_job conn job_id err)
+                ()
+            in
+            let* summary = or_fail_s "batch" summary in
+            Alcotest.(check int) "all pending processed" 3
+              summary.Earde.Posthog_deletion.claimed;
+            Alcotest.(check int) "all completed" 3
+              summary.Earde.Posthog_deletion.completed;
+            let* state = job_state conn "community:999123" in
+            (match state with
+            | Some (id, s, _, _) ->
+                Alcotest.(check int) "third job" j3 id;
+                Alcotest.(check string) "completed" "completed" s
+            | None -> Alcotest.fail "job row missing");
+            Lwt.return_unit)
+          (fun () ->
+            AnT.clear_configuration_override ();
+            stop ();
+            Lwt.return_unit))
+
+  let suite =
+    [ scrub_case; absent_case; failure_case; missing_config_case
+    ; handler_flow_case; handler_failure_case; enqueue_semantics_case
+    ; restore_case; batch_case
+    ]
+end
+
+(* --- Step-5: identity/group attributes + browser reconciliation ---------- *)
+
+let index_of haystack needle =
+  let hl = String.length haystack and nl = String.length needle in
+  let rec loop i =
+    if nl = 0 || i > hl - nl then None
+    else if String.sub haystack i nl = needle then Some i
+    else loop (i + 1)
+  in
+  loop 0
+
+(* Extracts the single-quoted value of [name='value'] from rendered HTML. *)
+let attr_value html name =
+  match index_of html (name ^ "='") with
+  | None -> None
+  | Some i -> (
+      let start = i + String.length name + 2 in
+      match String.index_from_opt html start '\'' with
+      | None -> None
+      | Some j -> Some (String.sub html start (j - start)))
+
+(* Counts occurrences of a substring — used to prove no unexpected
+   data-analytics-* attribute sneaks in. *)
+let count_sub haystack needle =
+  let nl = String.length needle in
+  let rec loop i acc =
+    match index_of (String.sub haystack i (String.length haystack - i)) needle with
+    | None -> acc
+    | Some j -> loop (i + j + nl) (acc + 1)
+  in
+  if nl = 0 then 0 else loop 0 0
+
+(* Renders the shared layout through real session middleware, optionally with
+   a session user_id value, under the enabled test analytics config. *)
+let render_layout ?session_user ?analytics_community () =
+  let rendered = ref "" in
+  let (_ : Dream.response) =
+    Lwt_main.run
+      (Dream.memory_sessions
+         (fun req ->
+           Lwt.bind
+             (match session_user with
+             | Some v -> Dream.set_session_field req "user_id" v
+             | None -> Lwt.return_unit)
+             (fun () ->
+               rendered :=
+                 Earde.Components.layout ~request:req ?analytics_community
+                   ~title:"T" "<p>body</p>";
+               Dream.html ""))
+         (Dream.request ~method_:`GET ~target:"/" ""))
+  in
+  !rendered
+
+let with_enabled_config f =
+  AnT.use_enabled_test_configuration ();
+  Fun.protect ~finally:AnT.clear_configuration_override f
+
+let test_community ~id ~visibility : Earde.Db.community =
+  { Earde.Db.id; slug = "testc"; name = "Test Community"; description = None;
+    rules = None; avatar_url = None; banner_url = None; allow_downvotes = true;
+    sections_enabled = true; visibility; indexable = true }
+
+(* Renders the search results page through real session middleware (the page
+   embeds a CSRF tag). Analytics configuration is whatever the caller
+   installed. *)
+let render_search ?(page = 1) ?(tab = "posts") ?(communities = [])
+    ?(users = []) ?(posts = []) ?(comments = []) query =
+  let rendered = ref "" in
+  let (_ : Dream.response) =
+    Lwt_main.run
+      (Dream.memory_sessions
+         (fun req ->
+           rendered :=
+             Earde.Pages.search_results_page ~admin_usernames:[] [] page tab
+               query communities users posts comments req;
+           Dream.html "")
+         (Dream.request ~method_:`GET ~target:"/search" ""))
+  in
+  !rendered
+
+(* The full opening tag of the search analytics container, so leak assertions
+   can look at exactly the markup that feeds analytics.js — the page itself
+   legitimately echoes the query elsewhere (input value, pager hrefs). *)
+let sr_analytics_tag html =
+  match index_of html "<div id='sr-analytics'" with
+  | None -> None
+  | Some i -> (
+      match String.index_from_opt html i '>' with
+      | None -> None
+      | Some j -> Some (String.sub html i (j - i + 1)))
+
+(* --- Deployment environments: closed parsing, activation rules, envelope,
+   and the credential/project preflight (local stub only, never PostHog). --- *)
+
+(* Drives the pure validator with a COMPLETE dummy configuration by default,
+   so each case flips exactly the value under test. Dummy credentials only. *)
+let venv ?(enabled = "true") ?environment ?allow_development
+    ?(project_token = "phc_test_token")
+    ?(api_host = "https://eu.i.posthog.com")
+    ?(ui_host = "https://eu.posthog.com") ?(project_id = "42")
+    ?(personal_api_key = "phx_test_dummy") ?public_origin () =
+  AnT.validate_environment_configuration ~enabled ?environment
+    ?allow_development ~project_token ~api_host ~ui_host ~project_id
+    ~personal_api_key ?public_origin ()
+
+let check_env name ~expect_enabled ?expect_environment result =
+  an_case name (fun () ->
+      let enabled, environment, _diags = result in
+      Alcotest.(check bool) (name ^ " enabled") expect_enabled enabled;
+      match expect_environment with
+      | None -> ()
+      | Some expected ->
+          Alcotest.(check (option string)) (name ^ " environment") expected
+            environment)
+
+(* Full production-shaped raw values (dummy secrets), installable so
+   layout/browser-config tests exercise a validated production config. *)
+let install_production_config () =
+  AnT.install_validated_configuration ~enabled:"true"
+    ~environment:"production" ~project_token:"phc_test_token"
+    ~api_host:"https://eu.i.posthog.com" ~ui_host:"https://eu.posthog.com"
+    ~project_id:"654321" ~personal_api_key:"phx_secret_test_value"
+    ~public_origin:"https://earde.com" ()
+
+(* Preflight stub plumbing (Api_stub, same as the deletion-client tests): the
+   two documented private metadata endpoints, dummy values only. *)
+let preflight_org = "0196aaaa-bbbb-cccc-dddd-eeeeffff0001"
+let preflight_token = "phc_preflight_dummy_token"
+
+let preflight_orgs_body ids =
+  Printf.sprintf {|{"count": %d, "next": null, "results": [%s]}|}
+    (List.length ids)
+    (String.concat ", "
+       (List.map (fun id -> Printf.sprintf {|{"id": %S, "name": "o"}|} id) ids))
+
+let preflight_project_body ~id ~token =
+  Printf.sprintf {|{"id": %d, "name": "p", "api_token": %S}|} id token
+
+let preflight_handler ?(orgs_status = 200) ?orgs_override
+    ?(project_status = 200) ?project_override () (req : Api_stub.req) =
+  if req.Api_stub.path = "/api/organizations/" then
+    ( orgs_status,
+      match orgs_override with
+      | Some body -> body
+      | None -> preflight_orgs_body [ preflight_org ] )
+  else if
+    req.Api_stub.path
+    = Printf.sprintf "/api/organizations/%s/projects/42/" preflight_org
+  then
+    ( project_status,
+      match project_override with
+      | Some body -> body
+      | None -> preflight_project_body ~id:42 ~token:preflight_token )
+  else (404, "{}")
+
+(* Runs the real preflight against a local stub and returns
+   (result, requests the stub saw). *)
+let run_preflight ?(environment = An.Staging) handler =
+  let ( let* ) = Lwt.bind in
+  Lwt_main.run
+    (let* base_url, seen, stop = Api_stub.start handler in
+     AnT.use_preflight_test_configuration ~environment ~ui_host:base_url
+       ~project_id:"42" ~personal_api_key:deletion_test_key
+       ~project_token:preflight_token ();
+     Lwt.finalize
+       (fun () ->
+         let* result = An.Preflight.run () in
+         Lwt.return (result, !seen))
+       (fun () ->
+         AnT.clear_configuration_override ();
+         stop ();
+         Lwt.return_unit))
+
+let preflight_class = function
+  | Ok _ -> "verified"
+  | Error (failure_class, _) -> failure_class
+
+(* No request may leave the documented private metadata surface — above all,
+   nothing may reach an event-ingestion path. *)
+let check_preflight_requests_safe requests =
+  List.iter
+    (fun (req : Api_stub.req) ->
+      Alcotest.(check bool)
+        ("request stays on /api/organizations: " ^ req.Api_stub.path)
+        true
+        (String.length req.Api_stub.path >= 19
+        && String.sub req.Api_stub.path 0 19 = "/api/organizations/");
+      Alcotest.(check bool) "no ingestion path" false
+        (contains req.Api_stub.path "/i/v0/e"
+        || contains req.Api_stub.path "/capture"
+        || contains req.Api_stub.path "/batch"))
+    requests
+
+let check_preflight name ?environment handler expected_class =
+  an_case name (fun () ->
+      let result, requests = run_preflight ?environment handler in
+      Alcotest.(check string) name expected_class (preflight_class result);
+      check_preflight_requests_safe requests;
+      (* Neither credential may appear in any output, verified or failed. *)
+      let rendered =
+        match result with
+        | Ok r ->
+            String.concat "\n"
+              (r.An.Preflight.report_project_id
+               :: r.An.Preflight.report_token_fingerprint
+               :: r.An.Preflight.report_notes)
+        | Error (failure_class, detail) -> failure_class ^ "\n" ^ detail
+      in
+      Alcotest.(check bool) "output never contains the project token" false
+        (contains rendered preflight_token);
+      Alcotest.(check bool) "output never contains the personal key" false
+        (contains rendered deletion_test_key))
+
 let () =
   Alcotest.run "earde"
     [ ( "smoke"
@@ -855,5 +3759,1763 @@ let () =
         ; check_cd "admin deleting own comment stays on the admin path" "admin_delete"
             ~is_admin:true ~requester_id:7 ~owner_id:7
         ] )
+      (* PostHog distinct-ID scheme: exactly user:<database_id>. *)
+    ; ( "analytics_distinct_id"
+      , [ check_distinct "user 42" "user:42" 42
+        ; check_distinct "user 7" "user:7" 7
+        ] )
+      (* Exact consent-cookie parsing: only the exact values granted/denied
+         count; everything else (missing, malformed, wrong case, extra text)
+         is unknown and must produce no capture. *)
+    ; ( "analytics_consent_parse"
+      , [ check_consent "granted" "granted"
+            (Some "earde_analytics_consent=granted")
+        ; check_consent "denied" "denied" (Some "earde_analytics_consent=denied")
+        ; check_consent "missing header" "unknown" None
+        ; check_consent "empty header" "unknown" (Some "")
+        ; check_consent "other cookies only" "unknown" (Some "session=abc; theme=dark")
+        ; check_consent "granted among other cookies" "granted"
+            (Some "session=abc; earde_analytics_consent=granted; theme=dark")
+        ; check_consent "wrong case" "unknown" (Some "earde_analytics_consent=Granted")
+        ; check_consent "trailing junk in value" "unknown"
+            (Some "earde_analytics_consent=granted-ish")
+        ; check_consent "space inside value" "unknown"
+            (Some "earde_analytics_consent= granted")
+        ; check_consent "name prefix mismatch" "unknown"
+            (Some "xearde_analytics_consent=granted")
+        ; check_consent "no equals sign" "unknown" (Some "earde_analytics_consent")
+        ] )
+      (* Consent gate end-to-end through the sink: one capture for granted,
+         none otherwise. *)
+    ; ( "analytics_consent_gate"
+      , [ check_gate "granted captures once" 1
+            (Some "earde_analytics_consent=granted")
+        ; check_gate "denied captures nothing" 0
+            (Some "earde_analytics_consent=denied")
+        ; check_gate "missing cookie captures nothing" 0 None
+        ; check_gate "malformed value captures nothing" 0
+            (Some "earde_analytics_consent=yes")
+        ; an_case "granted payload carries event name and distinct id" (fun () ->
+              let captured =
+                with_sink ~enabled:true (fun () ->
+                    An.capture_if_consented
+                      (consent_request (Some "earde_analytics_consent=granted"))
+                      ~distinct_id:"user:7" an_login)
+              in
+              match captured with
+              | [ payload ] ->
+                  Alcotest.(check (option string)) "event"
+                    (Some "account_logged_in")
+                    (match payload_member "event" payload with
+                     | Some (`String s) -> Some s
+                     | _ -> None);
+                  Alcotest.(check (option string)) "distinct_id"
+                    (Some "user:7")
+                    (match payload_member "distinct_id" payload with
+                     | Some (`String s) -> Some s
+                     | _ -> None)
+              | l -> Alcotest.failf "expected 1 capture, got %d" (List.length l))
+        ] )
+      (* Per-constructor payloads: event names and the exact property key
+         sets of the closed allowlist; optional fields omitted when None. *)
+    ; ( "analytics_event_payloads"
+      , List.map
+          (fun (name, event) -> check_event_name ("name " ^ name) name event)
+          an_all_events
+        @ [ check_keys "account_signed_up keys (incl. $set)"
+              (List.assoc "account_signed_up" an_all_events)
+              [ "user_id"; "$set"; "deployment_environment" ]
+          ; check_keys "account_logged_in keys (incl. $set)"
+              (List.assoc "account_logged_in" an_all_events)
+              [ "user_id"; "$set"; "deployment_environment" ]
+          ; check_keys "community_joined keys"
+              (List.assoc "community_joined" an_all_events)
+              [ "user_id"; "community_id"; "community_slug";
+                "community_visibility"; "$groups"; "deployment_environment" ]
+          ; check_keys "community_left keys"
+              (List.assoc "community_left" an_all_events)
+              [ "user_id"; "community_id"; "$groups"; "deployment_environment" ]
+          ; check_keys "chat_message_sent keys"
+              (List.assoc "chat_message_sent" an_all_events)
+              [ "user_id"; "community_id"; "community_slug"; "channel_id";
+                "channel_slug"; "message_id"; "content_length";
+                "response_mode"; "$groups"; "deployment_environment" ]
+          ; check_keys "forum_thread_created keys"
+              (List.assoc "forum_thread_created" an_all_events)
+              [ "user_id"; "community_id"; "section_id"; "post_id";
+                "content_length"; "has_link"; "has_mention"; "$groups";
+                "deployment_environment" ]
+          ; check_keys "forum_comment_created keys (no parent -> omitted)"
+              (List.assoc "forum_comment_created" an_all_events)
+              [ "user_id"; "community_id"; "post_id"; "comment_id";
+                "content_length"; "has_mention"; "$groups";
+                "deployment_environment" ]
+          ; check_keys "conversation_promoted keys (no section -> omitted)"
+              (List.assoc "conversation_promoted" an_all_events)
+              [ "user_id"; "community_id"; "community_slug"; "channel_id";
+                "channel_slug"; "post_id"; "message_id";
+                "promoted_message_count"; "promoted_participant_count";
+                "$groups"; "deployment_environment" ]
+          ; check_keys "account_deleted keys (personless: no user_id)"
+              An.Account_deleted
+              [ "$process_person_profile"; "deployment_environment" ]
+          ; an_case "community_joined full payload" (fun () ->
+                let expected : Yojson.Safe.t =
+                  `Assoc
+                    [ ("api_key", `String "phc_test")
+                    ; ("event", `String "community_joined")
+                    ; ("distinct_id", `String "user:1")
+                    ; ( "properties"
+                      , `Assoc
+                          [ ("user_id", `Int 1)
+                          ; ("community_id", `Int 7)
+                          ; ("community_slug", `String "ocaml")
+                          ; ("community_visibility", `String "public")
+                          ; ( "$groups"
+                            , `Assoc [ ("community", `String "community:7") ] )
+                          ; ("deployment_environment", `String "development")
+                          ] )
+                    ]
+                in
+                Alcotest.check yojson "full payload" expected
+                  (an_payload (List.assoc "community_joined" an_all_events)))
+          ] )
+      (* Hard rule of §5.1/§4.3: no bodies, titles, or tokens anywhere;
+         person properties never as ordinary top-level event properties —
+         only inside $set, and $set only on the two identity events. *)
+    ; ( "analytics_property_allowlist"
+      , [ an_case "no forbidden ordinary property on any event" (fun () ->
+              let forbidden =
+                [ "email"; "username"; "signup_date"; "is_admin"; "content";
+                  "body"; "title"; "query"; "token" ]
+              in
+              List.iter
+                (fun (name, event) ->
+                  let keys = prop_keys (an_payload event) in
+                  List.iter
+                    (fun bad ->
+                      if List.mem bad keys then
+                        Alcotest.failf "%s carries forbidden property %s" name
+                          bad)
+                    forbidden)
+                an_all_events)
+        ; an_case "$set only on account_signed_up and account_logged_in" (fun () ->
+              List.iter
+                (fun (name, event) ->
+                  let has_set =
+                    List.mem_assoc "$set" (payload_props (an_payload event))
+                  in
+                  let expected =
+                    name = "account_signed_up" || name = "account_logged_in"
+                  in
+                  if has_set <> expected then
+                    Alcotest.failf "%s: unexpected $set presence (%b)" name
+                      has_set)
+                an_all_events)
+        ; an_case "account_signed_up $set is exactly the closed person record"
+            (fun () ->
+              match
+                List.assoc_opt "$set"
+                  (payload_props
+                     (an_payload (List.assoc "account_signed_up" an_all_events)))
+              with
+              | Some set -> Alcotest.check yojson "signup $set" an_person_set set
+              | None -> Alcotest.fail "account_signed_up has no $set")
+        ; an_case "account_logged_in $set is exactly the closed person record"
+            (fun () ->
+              match
+                List.assoc_opt "$set"
+                  (payload_props
+                     (an_payload (List.assoc "account_logged_in" an_all_events)))
+              with
+              | Some set -> Alcotest.check yojson "login $set" an_person_set set
+              | None -> Alcotest.fail "account_logged_in has no $set")
+          (* Pivot taxonomy invariants: the canonical closed name set (no
+             pre-rename name, no not-yet-implemented GitHub onboarding
+             event) and the email-free person contract on every $set-bearing
+             payload, including the consent-transition sync. *)
+        ; an_case "server taxonomy is exactly the canonical closed set"
+            (fun () ->
+              Alcotest.(check (slist string compare))
+                "emitted event names"
+                [ "account_signed_up"; "account_logged_in"; "community_joined";
+                  "community_left"; "chat_message_sent";
+                  "forum_thread_created"; "forum_comment_created";
+                  "conversation_promoted"; "account_deleted" ]
+                (List.map
+                   (fun (_, event) ->
+                     match payload_member "event" (an_payload event) with
+                     | Some (`String name) -> name
+                     | _ -> "<missing>")
+                   an_all_events))
+        ; an_case "no obsolete pre-pivot event name is ever emitted" (fun () ->
+              let obsolete =
+                [ "signup_confirmed"; "login_succeeded"; "post_created";
+                  "comment_created"; "thread_promoted" ]
+              in
+              List.iter
+                (fun (label, event) ->
+                  match payload_member "event" (an_payload event) with
+                  | Some (`String name) ->
+                      if List.mem name obsolete then
+                        Alcotest.failf "%s emits obsolete name %s" label name
+                  | _ -> Alcotest.failf "%s: payload has no event name" label)
+                an_all_events)
+        ; an_case "person $set never contains email" (fun () ->
+              let check_set label payload =
+                match List.assoc_opt "$set" (payload_props payload) with
+                | Some (`Assoc set) ->
+                    if List.mem_assoc "email" set then
+                      Alcotest.failf "%s: $set contains email" label
+                | Some _ -> Alcotest.failf "%s: $set is not an object" label
+                | None -> Alcotest.failf "%s: no $set" label
+              in
+              check_set "account_signed_up"
+                (an_payload (List.assoc "account_signed_up" an_all_events));
+              check_set "account_logged_in"
+                (an_payload (List.assoc "account_logged_in" an_all_events));
+              check_set "consent sync"
+                (AnT.person_sync_payload ~api_key:"phc_test" ~environment:An.Development
+                   ~distinct_id:"user:1" an_person))
+        ] )
+      (* $groups.community rides on community-scoped events only (§5.3). *)
+    ; ( "analytics_groups"
+      , [ check_group "joined has group" (Some "community:7")
+            (List.assoc "community_joined" an_all_events)
+        ; check_group "left has group" (Some "community:7")
+            (List.assoc "community_left" an_all_events)
+        ; check_group "chat has group" (Some "community:7")
+            (List.assoc "chat_message_sent" an_all_events)
+        ; check_group "post has group" (Some "community:7")
+            (List.assoc "forum_thread_created" an_all_events)
+        ; check_group "comment has group" (Some "community:7")
+            (List.assoc "forum_comment_created" an_all_events)
+        ; check_group "promoted has group" (Some "community:7")
+            (List.assoc "conversation_promoted" an_all_events)
+        ; check_group "signup has no group" None
+            (List.assoc "account_signed_up" an_all_events)
+        ; check_group "login has no group" None
+            (List.assoc "account_logged_in" an_all_events)
+        ; check_group "deletion has no group" None An.Account_deleted
+        ] )
+      (* Consent-transition sync: the dedicated $identify payload with the
+         same closed $set object as the identity events. *)
+    ; ( "analytics_person_sync"
+      , [ an_case "sync payload is a dedicated $identify" (fun () ->
+              let expected : Yojson.Safe.t =
+                `Assoc
+                  [ ("api_key", `String "phc_test")
+                  ; ("event", `String "$identify")
+                  ; ("distinct_id", `String "user:9")
+                  ; ( "properties"
+                    , `Assoc
+                        [ ("$set", an_person_set)
+                        ; ("deployment_environment", `String "development")
+                        ] )
+                  ]
+              in
+              let actual =
+                AnT.person_sync_payload ~api_key:"phc_test" ~environment:An.Development
+                  ~distinct_id:"user:9" an_person
+              in
+              Alcotest.check yojson "sync payload" expected actual)
+        ; an_case "sync_person_after_consent_grant emits exactly one $identify"
+            (fun () ->
+              let captured =
+                with_sink ~enabled:true (fun () ->
+                    An.sync_person_after_consent_grant ~distinct_id:"user:9"
+                      an_person)
+              in
+              match captured with
+              | [ payload ] ->
+                  Alcotest.(check (option string)) "event" (Some "$identify")
+                    (match payload_member "event" payload with
+                     | Some (`String s) -> Some s
+                     | _ -> None)
+              | l -> Alcotest.failf "expected 1 capture, got %d" (List.length l))
+        ] )
+      (* $groupidentify: community group type/key plus only the five
+         allowlisted group properties; created_at omitted when absent. *)
+    ; ( "analytics_group_identify"
+      , [ an_case "full payload with created_at" (fun () ->
+              let expected : Yojson.Safe.t =
+                `Assoc
+                  [ ("api_key", `String "phc_test")
+                  ; ("event", `String "$groupidentify")
+                  ; ("distinct_id", `String "user:1")
+                  ; ( "properties"
+                    , `Assoc
+                        [ ("$group_type", `String "community")
+                        ; ("$group_key", `String "community:7")
+                        ; ( "$group_set"
+                          , `Assoc
+                              [ ("community_id", `Int 7)
+                              ; ("community_slug", `String "ocaml")
+                              ; ("community_name", `String "OCaml")
+                              ; ("community_visibility", `String "public")
+                              ; ("created_at", `String "2026-01-01T00:00:00Z")
+                              ] )
+                        ; ("deployment_environment", `String "development")
+                        ] )
+                  ]
+              in
+              let actual =
+                AnT.group_identify_payload ~api_key:"phc_test" ~environment:An.Development
+                  ~distinct_id:"user:1"
+                  { An.community_id = 7; community_slug = Some "ocaml";
+                    community_name = Some "OCaml";
+                    community_visibility = "public";
+                    created_at = Some "2026-01-01T00:00:00Z" }
+              in
+              Alcotest.check yojson "group identify payload" expected actual)
+        ; an_case "created_at omitted when absent" (fun () ->
+              let actual =
+                AnT.group_identify_payload ~api_key:"phc_test" ~environment:An.Development
+                  ~distinct_id:"user:1"
+                  { An.community_id = 7; community_slug = Some "ocaml";
+                    community_name = Some "OCaml";
+                    community_visibility = "public"; created_at = None }
+              in
+              let set_keys =
+                match List.assoc_opt "$group_set" (payload_props actual) with
+                | Some (`Assoc l) -> List.map fst l
+                | _ -> []
+              in
+              Alcotest.(check (slist string compare))
+                "group set keys"
+                [ "community_id"; "community_slug"; "community_name";
+                  "community_visibility" ]
+                set_keys)
+          (* §13: fully private communities. Group identity stays
+             community:<id>; readable identifiers never appear. *)
+        ; an_case "private $groupidentify has no name or slug" (fun () ->
+              let actual =
+                AnT.group_identify_payload ~api_key:"phc_test" ~environment:An.Development
+                  ~distinct_id:"user:1" an_private_group
+              in
+              Alcotest.(check (option string)) "group key stays numeric"
+                (Some "community:9") (group_key_prop_of actual);
+              let set = group_set_of actual in
+              Alcotest.(check (slist string compare))
+                "private group set keys"
+                [ "community_id"; "community_visibility" ]
+                (List.map fst set);
+              Alcotest.(check bool) "no community_name" false
+                (List.mem_assoc "community_name" set);
+              Alcotest.(check bool) "no community_slug" false
+                (List.mem_assoc "community_slug" set))
+        ; an_case "private domain events omit slugs, keep ids/counts/group"
+            (fun () ->
+              let chat =
+                an_payload
+                  (An.Chat_message_sent
+                     { user_id = 1; community_id = 9; community_slug = None;
+                       channel_id = 3; channel_slug = None; message_id = 91L;
+                       content_length = 42; response_mode = An.Response_json })
+              in
+              Alcotest.(check (slist string compare))
+                "private chat keys"
+                [ "user_id"; "community_id"; "channel_id"; "message_id";
+                  "content_length"; "response_mode"; "$groups";
+                  "deployment_environment" ]
+                (prop_keys chat);
+              Alcotest.(check (option string)) "private chat group"
+                (Some "community:9") (an_group_key chat);
+              let joined =
+                an_payload
+                  (An.Community_joined
+                     { user_id = 1; community_id = 9; community_slug = None;
+                       community_visibility = "private" })
+              in
+              Alcotest.(check (slist string compare))
+                "private join keys"
+                [ "user_id"; "community_id"; "community_visibility";
+                  "$groups"; "deployment_environment" ]
+                (prop_keys joined);
+              let promoted =
+                an_payload
+                  (An.Conversation_promoted
+                     { user_id = 1; community_id = 9; community_slug = None;
+                       channel_id = 3; channel_slug = None; section_id = None;
+                       post_id = 11; message_id = 91L;
+                       promoted_message_count = 4;
+                       promoted_participant_count = Some 2 })
+              in
+              Alcotest.(check (slist string compare))
+                "private promoted keys"
+                [ "user_id"; "community_id"; "channel_id"; "post_id";
+                  "message_id"; "promoted_message_count";
+                  "promoted_participant_count"; "$groups";
+                  "deployment_environment" ]
+                (prop_keys promoted))
+        ] )
+      (* Disabled configuration and transport failures: never a capture, never
+         an exception into the caller. *)
+    ; ( "analytics_disabled_and_failures"
+      , [ an_case "disabled config captures nothing even when granted"
+            (fun () ->
+              let captured =
+                with_sink ~enabled:false (fun () ->
+                    An.capture_if_consented
+                      (consent_request (Some "earde_analytics_consent=granted"))
+                      ~distinct_id:"user:7" an_login;
+                    An.sync_person_after_consent_grant ~distinct_id:"user:7"
+                      { An.username = "a"; signup_date = "";
+                        is_admin = false })
+              in
+              Alcotest.(check int) "no captures" 0 (List.length captured))
+        ; an_case "raising sink does not escape into the caller" (fun () ->
+              AnT.use_enabled_test_configuration ();
+              AnT.set_capture_sink (fun _ -> failwith "sink boom");
+              Fun.protect
+                ~finally:(fun () ->
+                  AnT.clear_capture_sink ();
+                  AnT.clear_configuration_override ())
+                (fun () ->
+                  An.capture_if_consented
+                    (consent_request (Some "earde_analytics_consent=granted"))
+                    ~distinct_id:"user:7" an_login;
+                  An.sync_person_after_consent_grant ~distinct_id:"user:7"
+                    { An.username = "a"; signup_date = "";
+                      is_admin = false });
+              Alcotest.(check bool) "no exception escaped" true true)
+        ; an_case "test config report exposes presence booleans only" (fun () ->
+              AnT.use_enabled_test_configuration ();
+              Fun.protect
+                ~finally:(fun () -> AnT.clear_configuration_override ())
+                (fun () ->
+                  let report = AnT.config_report () in
+                  Alcotest.(check (option bool)) "enabled" (Some true)
+                    (List.assoc_opt "POSTHOG_ENABLED" report);
+                  Alcotest.(check (option bool)) "token set" (Some true)
+                    (List.assoc_opt "POSTHOG_PROJECT_TOKEN" report);
+                  Alcotest.(check (option bool)) "personal key unset"
+                    (Some false)
+                    (List.assoc_opt "POSTHOG_PERSONAL_API_KEY" report);
+                  Alcotest.(check (option bool)) "project id unset" (Some false)
+                    (List.assoc_opt "POSTHOG_PROJECT_ID" report)))
+        ] )
+      (* §9 request validation matrix: JSON-only, exactly-one-field body,
+         exact Origin, same-origin/same-site Sec-Fetch-Site. *)
+    ; ( "analytics_consent_validate"
+      , [ check_validate "granted ok" "granted"
+            ~content_type:(Some "application/json") ~origin:(Some test_origin)
+            ~sec_fetch_site:(Some "same-origin") {|{"state":"granted"}|}
+        ; check_validate "denied ok" "denied"
+            ~content_type:(Some "application/json") ~origin:(Some test_origin)
+            ~sec_fetch_site:(Some "same-site") {|{"state":"denied"}|}
+        ; check_validate "json with charset ok" "granted"
+            ~content_type:(Some "application/json; charset=utf-8")
+            ~origin:(Some test_origin) ~sec_fetch_site:(Some "same-origin")
+            {|{"state":"granted"}|}
+        ; check_validate "form content-type rejected" "bad_request"
+            ~content_type:(Some "application/x-www-form-urlencoded")
+            ~origin:(Some test_origin) ~sec_fetch_site:(Some "same-origin")
+            "state=granted"
+        ; check_validate "missing content-type rejected" "bad_request"
+            ~content_type:None ~origin:(Some test_origin)
+            ~sec_fetch_site:(Some "same-origin") {|{"state":"granted"}|}
+        ; check_validate "malformed json rejected" "bad_request"
+            ~content_type:(Some "application/json") ~origin:(Some test_origin)
+            ~sec_fetch_site:(Some "same-origin") "{state:"
+        ; check_validate "additional field rejected" "bad_request"
+            ~content_type:(Some "application/json") ~origin:(Some test_origin)
+            ~sec_fetch_site:(Some "same-origin")
+            {|{"state":"granted","extra":1}|}
+        ; check_validate "invalid state rejected" "bad_request"
+            ~content_type:(Some "application/json") ~origin:(Some test_origin)
+            ~sec_fetch_site:(Some "same-origin") {|{"state":"yes"}|}
+        ; check_validate "missing state rejected" "bad_request"
+            ~content_type:(Some "application/json") ~origin:(Some test_origin)
+            ~sec_fetch_site:(Some "same-origin") {|{}|}
+        ; check_validate "non-object body rejected" "bad_request"
+            ~content_type:(Some "application/json") ~origin:(Some test_origin)
+            ~sec_fetch_site:(Some "same-origin") {|"granted"|}
+        ; check_validate "wrong origin rejected" "forbidden"
+            ~content_type:(Some "application/json")
+            ~origin:(Some "https://evil.example") ~sec_fetch_site:(Some "same-origin")
+            {|{"state":"granted"}|}
+        ; check_validate "missing origin rejected" "forbidden"
+            ~content_type:(Some "application/json") ~origin:None
+            ~sec_fetch_site:(Some "same-origin") {|{"state":"granted"}|}
+        ; check_validate "cross-site fetch rejected" "forbidden"
+            ~content_type:(Some "application/json") ~origin:(Some test_origin)
+            ~sec_fetch_site:(Some "cross-site") {|{"state":"granted"}|}
+        ; check_validate "missing sec-fetch-site rejected" "forbidden"
+            ~content_type:(Some "application/json") ~origin:(Some test_origin)
+            ~sec_fetch_site:None {|{"state":"granted"}|}
+        ] )
+      (* The real handler on mock requests: cookie contract, controlled JSON
+         errors, no session required, failures isolated. *)
+    ; ( "analytics_consent_endpoint"
+      , [ an_case "granted: 204 + exact cookie, no session needed, no sync"
+            (fun () ->
+              let status, cookie, payloads =
+                run_consent {|{"state":"granted"}|}
+              in
+              Alcotest.(check int) "status" 204 status;
+              let cookie = Option.value ~default:"" cookie in
+              Alcotest.(check bool) "value" true
+                (contains cookie "earde_analytics_consent=granted");
+              Alcotest.(check bool) "path" true (contains cookie "Path=/");
+              Alcotest.(check bool) "max-age" true
+                (contains cookie "Max-Age=15552000");
+              Alcotest.(check bool) "samesite lax" true
+                (contains cookie "SameSite=Lax");
+              Alcotest.(check bool) "no httponly" false
+                (contains cookie "HttpOnly");
+              Alcotest.(check bool) "no secure on http origin" false
+                (contains cookie "Secure");
+              Alcotest.(check int) "anonymous grant syncs nothing" 0
+                (List.length payloads))
+        ; an_case "denied: 204 + denied cookie, no sync" (fun () ->
+              let status, cookie, payloads = run_consent {|{"state":"denied"}|} in
+              Alcotest.(check int) "status" 204 status;
+              Alcotest.(check bool) "value" true
+                (contains (Option.value ~default:"" cookie)
+                   "earde_analytics_consent=denied");
+              Alcotest.(check int) "no sync" 0 (List.length payloads))
+        ; check_consent_reject "form body -> 400" 400
+            ~headers:
+              [ ("Content-Type", "application/x-www-form-urlencoded")
+              ; ("Origin", test_origin)
+              ; ("Sec-Fetch-Site", "same-origin")
+              ]
+            "state=granted"
+        ; check_consent_reject "extra field -> 400" 400
+            {|{"state":"granted","x":1}|}
+        ; check_consent_reject "invalid state -> 400" 400 {|{"state":"maybe"}|}
+        ; check_consent_reject "malformed json -> 400" 400 "{"
+        ; check_consent_reject "bad origin -> 403" 403
+            ~headers:
+              [ ("Content-Type", "application/json")
+              ; ("Origin", "https://evil.example")
+              ; ("Sec-Fetch-Site", "same-origin")
+              ]
+            {|{"state":"granted"}|}
+        ; check_consent_reject "no origin metadata -> 403" 403
+            ~headers:[ ("Content-Type", "application/json") ]
+            {|{"state":"granted"}|}
+        ; an_case "unsupported method -> controlled 405 JSON" (fun () ->
+              let response =
+                Lwt_main.run
+                  (Earde.Handlers.analytics_consent_method_not_allowed
+                     (Dream.request ~method_:`GET ~target:"/analytics/consent"
+                        ""))
+              in
+              Alcotest.(check int) "status" 405
+                (Dream.status_to_int (Dream.status response));
+              Alcotest.(check (option string)) "allow" (Some "POST")
+                (Dream.header response "Allow"))
+        ; an_case "person-lookup failure never blocks the consent response"
+            (fun () ->
+              (* Session present but no sql pool: the lookup raises, is
+                 swallowed, and the cookie is still set. *)
+              let payloads = ref [] in
+              AnT.use_enabled_test_configuration ();
+              AnT.set_capture_sink (fun p -> payloads := p :: !payloads);
+              Fun.protect
+                ~finally:(fun () ->
+                  AnT.clear_capture_sink ();
+                  AnT.clear_configuration_override ())
+                (fun () ->
+                  let pipeline =
+                    Dream.memory_sessions (fun req ->
+                        Lwt.bind
+                          (Dream.set_session_field req "user_id" "12345")
+                          (fun () ->
+                            Earde.Handlers.analytics_consent_handler req))
+                  in
+                  let response =
+                    Lwt_main.run
+                      (pipeline
+                         (Dream.request ~method_:`POST
+                            ~target:"/analytics/consent"
+                            ~headers:consent_good_headers
+                            {|{"state":"granted"}|}))
+                  in
+                  Alcotest.(check int) "status" 204
+                    (Dream.status_to_int (Dream.status response));
+                  Alcotest.(check bool) "cookie still set" true
+                    (contains
+                       (Option.value ~default:""
+                          (Dream.header response "Set-Cookie"))
+                       "earde_analytics_consent=granted");
+                  Alcotest.(check int) "no sync happened" 0
+                    (List.length !payloads)))
+        ] )
+      (* Layout emission: banner + strictly public config when enabled;
+         nothing at all when disabled; never a server-only secret. *)
+    ; ( "analytics_layout"
+      , [ an_case "enabled: banner, script, public attrs only" (fun () ->
+              AnT.use_enabled_test_configuration ();
+              Fun.protect ~finally:AnT.clear_configuration_override (fun () ->
+                  let html =
+                    Earde.Components.layout ~title:"T" "<p>body</p>"
+                  in
+                  Alcotest.(check bool) "banner" true
+                    (contains html "id='analytics-consent'");
+                  Alcotest.(check bool) "script" true
+                    (contains html "/static/js/analytics.js");
+                  Alcotest.(check bool) "token attr" true
+                    (contains html "data-ph-token='phc_test_token'");
+                  Alcotest.(check bool) "api host attr" true
+                    (contains html "data-ph-api-host='https://eu.i.posthog.com'");
+                  Alcotest.(check bool) "banner ships hidden" true
+                    (contains html "id='analytics-consent' hidden");
+                  Alcotest.(check bool) "no personal key marker" false
+                    (contains html "phx_");
+                  Alcotest.(check bool) "no project id leak" false
+                    (contains html "229260")))
+        ; an_case "disabled: no banner, no script, no config" (fun () ->
+              AnT.use_disabled_test_configuration ();
+              Fun.protect ~finally:AnT.clear_configuration_override (fun () ->
+                  let html =
+                    Earde.Components.layout ~title:"T" "<p>body</p>"
+                  in
+                  Alcotest.(check bool) "no banner" false
+                    (contains html "analytics-consent");
+                  Alcotest.(check bool) "no script" false
+                    (contains html "/static/js/analytics.js");
+                  Alcotest.(check bool) "no token attr" false
+                    (contains html "data-ph-token")))
+          (* §13 private-community marker: derived from the authoritative
+             visibility passed with the community id, value "true" only. *)
+        ; an_case "private community page carries the private marker" (fun () ->
+              AnT.use_enabled_test_configuration ();
+              Fun.protect ~finally:AnT.clear_configuration_override (fun () ->
+                  let html =
+                    Earde.Components.layout
+                      ~analytics_community:(9, Earde.Db.Community_private)
+                      ~title:"T" "<p>body</p>"
+                  in
+                  Alcotest.(check bool) "private marker" true
+                    (contains html "data-analytics-private-community='true'");
+                  Alcotest.(check bool) "group attr stays numeric" true
+                    (contains html "data-analytics-group='community:9'")))
+        ; an_case "public community page has no private marker" (fun () ->
+              AnT.use_enabled_test_configuration ();
+              Fun.protect ~finally:AnT.clear_configuration_override (fun () ->
+                  let html =
+                    Earde.Components.layout
+                      ~analytics_community:(7, Earde.Db.Community_public)
+                      ~title:"T" "<p>body</p>"
+                  in
+                  Alcotest.(check bool) "no private marker" false
+                    (contains html "data-analytics-private-community");
+                  Alcotest.(check bool) "group attr present" true
+                    (contains html "data-analytics-group='community:7'")))
+        ; an_case "global page has neither group nor private marker" (fun () ->
+              AnT.use_enabled_test_configuration ();
+              Fun.protect ~finally:AnT.clear_configuration_override (fun () ->
+                  let html =
+                    Earde.Components.layout ~title:"T" "<p>body</p>"
+                  in
+                  Alcotest.(check bool) "no group attr" false
+                    (contains html "data-analytics-group");
+                  Alcotest.(check bool) "no private marker" false
+                    (contains html "data-analytics-private-community")))
+        ] )
+      (* §2.3 URL rule, reference implementation. *)
+    ; ( "analytics_url_sanitizer"
+      , [ an_case "token query stripped" (fun () ->
+              Alcotest.(check string) "confirm-email" "/confirm-email"
+                (An.sanitize_url_for_analytics "/confirm-email?token=abc"))
+        ; an_case "search query stripped" (fun () ->
+              Alcotest.(check string) "search" "/search"
+                (An.sanitize_url_for_analytics "/search?q=x&page=2"))
+        ; an_case "fragment stripped" (fun () ->
+              Alcotest.(check string) "fragment" "https://earde.com/p/1"
+                (An.sanitize_url_for_analytics "https://earde.com/p/1#frag"))
+        ; an_case "query and fragment stripped" (fun () ->
+              Alcotest.(check string) "both" "https://earde.com/feed"
+                (An.sanitize_url_for_analytics "https://earde.com/feed?a=1#b"))
+        ; an_case "clean url unchanged" (fun () ->
+              Alcotest.(check string) "clean" "https://earde.com/feed"
+                (An.sanitize_url_for_analytics "https://earde.com/feed"))
+        ] )
+      (* Replay masking config coverage: every §6 selector/setting must be in
+         the shipped analytics.js, plus the document-title protections. *)
+    ; ( "analytics_replay_masking"
+      , [ an_case "analytics.js covers all §6 masking targets" (fun () ->
+              let js = read_analytics_js () in
+              List.iter
+                (fun needle ->
+                  if not (contains js needle) then
+                    Alcotest.failf "analytics.js is missing %S" needle)
+                [ ".ph-mask"; ".cs-msg-text"; ".cs-msg-author"; "#chat-typing"
+                ; ".cs-presence-name"; ".ft-title"; ".ft-preview"; ".th-title"
+                ; ".th-body"; ".sr-row-title"; ".sr-row-excerpt"; ".ctext"
+                ; "comment-content-"; ".account-notif-msg"; ".cm-table-reason"
+                ; ".admin-cell-muted"; ".account-bio"; "maskAllInputs: true"
+                ; "recordHeaders: false"; "recordBody: false"
+                ; "capture_pageview: false"; "capture_pageleave: true"
+                ])
+        ; an_case "document title is masked in replay and stripped from events"
+            (fun () ->
+              let js = read_analytics_js () in
+              (* "title" element selector in the mask list (verified against
+                 the rrweb source posthog-js bundles: text-node masking checks
+                 the parent element, only STYLE/SCRIPT excluded). *)
+              Alcotest.(check bool) "title selector present" true
+                (contains js "\"title\",");
+              (* $title removed from every outbound event... *)
+              Alcotest.(check bool) "$title deletion present" true
+                (contains js "delete props.$title");
+              (* ...and never replaced by document.title or any other
+                 user-controlled value; no search-query handling either. *)
+              Alcotest.(check bool) "no document.title reference" false
+                (contains js "document.title");
+              Alcotest.(check bool) "no query-string handling" false
+                (contains js "location.search"))
+        ] )
+      (* §13 privacy hardening: autocapture is structural-only, exception
+         autocapture is off, and fully private community documents never
+         initialize the SDK. Static contract checks against the shipped
+         analytics.js (same technique as the replay-masking coverage). *)
+    ; ( "analytics_autocapture_protection"
+      , [ an_case "autocapture text masking and scrubbers present" (fun () ->
+              let js = read_analytics_js () in
+              List.iter
+                (fun needle ->
+                  if not (contains js needle) then
+                    Alcotest.failf "analytics.js is missing %S" needle)
+                [ (* documented SDK option: element text never captured *)
+                  "mask_all_text: true"
+                  (* defense-in-depth scrubbers in the sanitize hook *)
+                ; "delete props.$el_text"
+                ; "sanitizeElement"
+                ; "sanitizeElementsChain"
+                ; "$elements_chain"
+                ; "attr__title"
+                ; "attr__aria-label"
+                ; "attr__value"
+                ; "attr__href"
+                ; "attr__src"
+                ; "attr__action"
+                ])
+        ; an_case "chain scrubber removes text and URL query/fragment"
+            (fun () ->
+              let js = read_analytics_js () in
+              (* The regexes that make nested element text and full URLs
+                 unrepresentable in $elements_chain payloads. *)
+              Alcotest.(check bool) "text= scrub regex" true
+                (contains js {|text="[^"]*"|});
+              Alcotest.(check bool) "url attr scrub regex" true
+                (contains js {|(?:attr__)?(?:href|src|action)="|});
+              Alcotest.(check bool) "query/fragment stripper" true
+                (contains js {|split("?")[0].split("#")[0]|}))
+        ; an_case "manual closed events keep their own schemas" (fun () ->
+              let js = read_analytics_js () in
+              (* search_performed: exactly the existing closed properties. *)
+              Alcotest.(check bool) "search_performed present" true
+                (contains js "search_performed");
+              List.iter
+                (fun needle ->
+                  if not (contains js needle) then
+                    Alcotest.failf "search_performed lost %S" needle)
+                [ "result_count: resultCount"; "active_tab: tab"; "page: page" ])
+        ; an_case "automatic exception capture is disabled" (fun () ->
+              let js = read_analytics_js () in
+              Alcotest.(check bool) "capture_exceptions: false" true
+                (contains js "capture_exceptions: false");
+              Alcotest.(check bool) "no capture_exceptions: true" false
+                (contains js "capture_exceptions: true");
+              Alcotest.(check bool) "no window.onerror forwarding" false
+                (contains js "window.onerror");
+              Alcotest.(check bool) "no unhandledrejection forwarding" false
+                (contains js "unhandledrejection");
+              Alcotest.(check bool) "no raw error-message property" false
+                (contains js "error_message"))
+        ; an_case "private documents never reach the SDK" (fun () ->
+              let js = read_analytics_js () in
+              Alcotest.(check bool) "reads the private marker" true
+                (contains js "data-analytics-private-community");
+              (* The single centralized gate: initAnalytics resolves inert
+                 before loadSdk on private documents, so pageview, group,
+                 search_performed and the SDK download are all unreachable. *)
+              Alcotest.(check bool) "privateCommunity gate" true
+                (contains js "if (privateCommunity)");
+              Alcotest.(check bool) "gate precedes SDK load" true
+                (match
+                   ( index_of js "if (privateCommunity)",
+                     index_of js "initPromise = loadSdk()" )
+                 with
+                | Some gate, Some load -> gate < load
+                | _ -> false))
+        ] )
+      (* Document-title leakage: the search term must never enter <title>. *)
+    ; ( "analytics_title_leakage"
+      , [ an_case "/search?q=secret renders a generic document title" (fun () ->
+              let rendered = ref "" in
+              let (_ : Dream.response) =
+                Lwt_main.run
+                  (Dream.memory_sessions
+                     (fun req ->
+                       rendered :=
+                         Earde.Pages.search_results_page ~admin_usernames:[]
+                           [] 1 "all" "secret" [] [] [] [] req;
+                       Dream.html !rendered)
+                     (Dream.request ~method_:`GET
+                        ~target:"/search?q=secret" ""))
+              in
+              let html = !rendered in
+              let title_tag =
+                (* Extract exactly the <title>…</title> element. *)
+                let start = ref 0 and stop = ref 0 in
+                String.iteri
+                  (fun i _ ->
+                    if
+                      i + 7 <= String.length html
+                      && String.sub html i 7 = "<title>"
+                    then start := i
+                    else if
+                      i + 8 <= String.length html
+                      && String.sub html i 8 = "</title>"
+                    then if !stop = 0 then stop := i)
+                  html;
+                if !stop > !start then String.sub html !start (!stop - !start)
+                else Alcotest.fail "no <title> found"
+              in
+              Alcotest.(check bool) "title has no query" false
+                (contains title_tag "secret");
+              Alcotest.(check bool) "title is the generic label" true
+                (contains title_tag "Search");
+              (* The visible UI still echoes the query (input value, masked by
+                 maskAllInputs) — only the title had to change. *)
+              Alcotest.(check bool) "page body still echoes query in input" true
+                (contains html "value='secret'"))
+        ] )
+      (* §4.2 identity attribute: exactly user:<id> on authenticated pages,
+         nothing anywhere else, and no person data in analytics attributes. *)
+    ; ( "analytics_identity_attrs"
+      , [ an_case "authenticated layout emits exactly user:42" (fun () ->
+              with_enabled_config (fun () ->
+                  let html = render_layout ~session_user:"42" () in
+                  Alcotest.(check (option string)) "identity attr"
+                    (Some "user:42")
+                    (attr_value html "data-analytics-user")))
+        ; an_case "anonymous layout emits no identity attribute" (fun () ->
+              with_enabled_config (fun () ->
+                  let html = render_layout () in
+                  Alcotest.(check (option string)) "no identity" None
+                    (attr_value html "data-analytics-user")))
+        ; an_case "malformed session value emits no identity" (fun () ->
+              with_enabled_config (fun () ->
+                  let html = render_layout ~session_user:"not-a-number" () in
+                  Alcotest.(check (option string)) "no identity" None
+                    (attr_value html "data-analytics-user")))
+        ; an_case "disabled analytics emits neither identity nor group"
+            (fun () ->
+              AnT.use_disabled_test_configuration ();
+              Fun.protect ~finally:AnT.clear_configuration_override (fun () ->
+                  let html =
+                    render_layout ~session_user:"42" ~analytics_community:(7, Earde.Db.Community_public)
+                      ()
+                  in
+                  Alcotest.(check bool) "no identity attr" false
+                    (contains html "data-analytics-user");
+                  Alcotest.(check bool) "no group attr" false
+                    (contains html "data-analytics-group")))
+        ; an_case "only the two analytics attributes exist; no person data"
+            (fun () ->
+              with_enabled_config (fun () ->
+                  let html =
+                    render_layout ~session_user:"42" ~analytics_community:(7, Earde.Db.Community_public)
+                      ()
+                  in
+                  (* exactly one identity and one group attribute (the other
+                     data-analytics-* hits are the banner's own accept /
+                     refuse / error control hooks, which carry no values) *)
+                  Alcotest.(check int) "one identity attr" 1
+                    (count_sub html "data-analytics-user='");
+                  Alcotest.(check int) "one group attr" 1
+                    (count_sub html "data-analytics-group='");
+                  Alcotest.(check bool) "no username attr" false
+                    (contains html "data-analytics-username");
+                  Alcotest.(check bool) "no email anywhere in analytics root"
+                    false
+                    (contains html "data-analytics-email")))
+        ] )
+      (* §5.3 group attribute: exactly community:<id> on community-scoped
+         pages, actively absent on global pages, across all wrappers. *)
+    ; ( "analytics_group_attrs"
+      , [ an_case "community layout emits exactly community:7" (fun () ->
+              with_enabled_config (fun () ->
+                  let html = render_layout ~analytics_community:(7, Earde.Db.Community_public) () in
+                  Alcotest.(check (option string)) "group attr"
+                    (Some "community:7")
+                    (attr_value html "data-analytics-group")))
+        ; an_case "global layout emits no group attribute" (fun () ->
+              with_enabled_config (fun () ->
+                  let html = render_layout () in
+                  Alcotest.(check (option string)) "no group" None
+                    (attr_value html "data-analytics-group")))
+        ; an_case "community_shell (public) carries the group key" (fun () ->
+              with_enabled_config (fun () ->
+                  let community =
+                    test_community ~id:9 ~visibility:Earde.Db.Community_public
+                  in
+                  let html =
+                    Earde.Components.community_shell ~title:"T" ~community
+                      ~nav_groups:[] ~main:"MAIN" ()
+                  in
+                  Alcotest.(check (option string)) "group attr"
+                    (Some "community:9")
+                    (attr_value html "data-analytics-group");
+                  Alcotest.(check bool) "public: no replay block" false
+                    (contains html "ph-no-capture")))
+        ; an_case
+            "community_shell (private) keeps group key + ph-no-capture only"
+            (fun () ->
+              with_enabled_config (fun () ->
+                  let community =
+                    test_community ~id:9 ~visibility:Earde.Db.Community_private
+                  in
+                  let html =
+                    Earde.Components.community_shell ~title:"T" ~community
+                      ~nav_groups:[] ~main:"MAIN" ()
+                  in
+                  Alcotest.(check (option string)) "group attr"
+                    (Some "community:9")
+                    (attr_value html "data-analytics-group");
+                  Alcotest.(check bool) "content replay-blocked" true
+                    (contains html "class='ph-no-capture'>MAIN");
+                  (* only the group attribute — no identity (no request) and
+                     no visibility/name leak *)
+                  Alcotest.(check int) "one group attr" 1
+                    (count_sub html "data-analytics-group='");
+                  Alcotest.(check int) "no identity attr" 0
+                    (count_sub html "data-analytics-user='");
+                  Alcotest.(check bool) "no visibility leak" false
+                    (contains html "data-analytics-visibility")))
+        ; an_case "community wrappers all pass the key through" (fun () ->
+              with_enabled_config (fun () ->
+                  let check_attr label expected html =
+                    Alcotest.(check (option string)) label expected
+                      (attr_value html "data-analytics-group")
+                  in
+                  check_attr "community_home_page" (Some "community:5")
+                    (Earde.Components.community_home_page
+                       ~analytics_community:(5, Earde.Db.Community_public)
+                       ~title:"T" ~body:"B" ());
+                  check_attr "community_manage_page" (Some "community:6")
+                    (Earde.Components.community_manage_page
+                       ~analytics_community:(6, Earde.Db.Community_public)
+                       ~title:"T" ~body:"B" ());
+                  check_attr "create_page (join/post/report/start-thread)"
+                    (Some "community:8")
+                    (Earde.Components.create_page
+                       ~analytics_community:(8, Earde.Db.Community_public)
+                       ~title:"T" ~body:"B" ())))
+        ; an_case "global wrappers emit no group" (fun () ->
+              with_enabled_config (fun () ->
+                  List.iter
+                    (fun (label, html) ->
+                      Alcotest.(check (option string)) label None
+                        (attr_value html "data-analytics-group"))
+                    [ ( "account_page",
+                        Earde.Components.account_page ~title:"T" ~body:"B" () )
+                    ; ( "admin_page",
+                        Earde.Components.admin_page ~title:"T" ~body:"B" () )
+                    ; ( "search_page",
+                        Earde.Components.search_page ~title:"T" ~body:"B" () )
+                    ; ( "feed_shell",
+                        Earde.Components.feed_shell ~title:"T" ~main:"M" () )
+                    ; ( "create_page without community",
+                        Earde.Components.create_page ~title:"T" ~body:"B" () )
+                    ]))
+        ] )
+      (* Shipped analytics.js: reconciliation contract + strict ordering. *)
+    ; ( "analytics_js_reconciliation"
+      , [ an_case "identity → group → pageview ordering" (fun () ->
+              let js = read_analytics_js () in
+              let pos needle =
+                match index_of js needle with
+                | Some i -> i
+                | None -> Alcotest.failf "analytics.js is missing %S" needle
+              in
+              let identity_call = pos "reconcileIdentity();" in
+              let group_call = pos "reconcileGroup();" in
+              let pageview = pos "pageviewSent = true" in
+              Alcotest.(check bool) "identify before group" true
+                (identity_call < group_call);
+              Alcotest.(check bool) "group before pageview" true
+                (group_call < pageview))
+        ; an_case "identity contract guards" (fun () ->
+              let js = read_analytics_js () in
+              (* identify only when the persisted id differs, key only *)
+              Alcotest.(check bool) "differs guard" true
+                (contains js "current !== identityAttr");
+              Alcotest.(check bool) "identify carries no properties" true
+                (contains js "window.posthog.identify(identityAttr);");
+              (* reset only a user:-prefixed id; anonymous ids preserved *)
+              Alcotest.(check bool) "reset guard" true
+                (contains js
+                   "else if (typeof current === \"string\" && current.indexOf(\"user:\") === 0)");
+              Alcotest.(check bool) "reset present" true
+                (contains js "window.posthog.reset();"))
+        ; an_case "group contract guards" (fun () ->
+              let js = read_analytics_js () in
+              (* key only — exactly two arguments, no properties object *)
+              Alcotest.(check bool) "group key only" true
+                (contains js "window.posthog.group(\"community\", groupAttr);");
+              Alcotest.(check bool) "global pages clear sticky group" true
+                (contains js "window.posthog.resetGroups();");
+              Alcotest.(check bool) "reads the layout attributes" true
+                (contains js "data-analytics-user"
+                && contains js "data-analytics-group"))
+        ; an_case "no duplicate init or pageview" (fun () ->
+              let js = read_analytics_js () in
+              Alcotest.(check bool) "shared init promise" true
+                (contains js "if (initPromise) return initPromise;");
+              Alcotest.(check bool) "single pageview guard" true
+                (contains js "if (!pageviewSent)");
+              Alcotest.(check int) "exactly one $pageview capture" 1
+                (count_sub js "posthog.capture(\"$pageview\""))
+        ] )
+      (* §2.4 search metadata container: closed values only, emitted only for
+         an executed non-empty search, never carrying the query. *)
+    ; ( "analytics_search_metadata"
+      , [ an_case "executed search emits the closed container" (fun () ->
+              with_enabled_config (fun () ->
+                  let html =
+                    render_search ~page:3 ~tab:"communities"
+                      ~communities:
+                        [ test_community ~id:1
+                            ~visibility:Earde.Db.Community_public
+                        ; test_community ~id:2
+                            ~visibility:Earde.Db.Community_public
+                        ]
+                      "ocaml"
+                  in
+                  Alcotest.(check (option string)) "tab" (Some "communities")
+                    (attr_value html "data-analytics-search-tab");
+                  Alcotest.(check (option string)) "count is rows rendered"
+                    (Some "2")
+                    (attr_value html "data-analytics-search-result-count");
+                  Alcotest.(check (option string)) "page" (Some "3")
+                    (attr_value html "data-analytics-search-page");
+                  (* exactly the three closed attributes, nothing else *)
+                  Alcotest.(check int) "three attributes" 3
+                    (count_sub html "data-analytics-search-")))
+        ; an_case "empty search emits no search analytics metadata" (fun () ->
+              with_enabled_config (fun () ->
+                  let html = render_search "" in
+                  Alcotest.(check bool) "no container" false
+                    (contains html "sr-analytics");
+                  Alcotest.(check bool) "no attributes" false
+                    (contains html "data-analytics-search-")))
+        ; an_case "disabled analytics emits no container" (fun () ->
+              AnT.use_disabled_test_configuration ();
+              Fun.protect ~finally:AnT.clear_configuration_override (fun () ->
+                  let html = render_search "ocaml" in
+                  Alcotest.(check bool) "no container" false
+                    (contains html "sr-analytics")))
+        ; an_case "every supported tab value is emitted verbatim" (fun () ->
+              with_enabled_config (fun () ->
+                  List.iter
+                    (fun tab ->
+                      Alcotest.(check (option string)) tab (Some tab)
+                        (attr_value (render_search ~tab "x")
+                           "data-analytics-search-tab"))
+                    [ "posts"; "communities"; "comments"; "people" ]))
+        ; an_case "arbitrary tab values are normalized, never echoed" (fun () ->
+              with_enabled_config (fun () ->
+                  let html = render_search ~tab:"weird-tab" "x" in
+                  (* the renderer's catch-all shows the Threads tab, so the
+                     authoritative reported tab is posts *)
+                  Alcotest.(check (option string)) "normalized" (Some "posts")
+                    (attr_value html "data-analytics-search-tab");
+                  match sr_analytics_tag html with
+                  | None -> Alcotest.fail "container missing"
+                  | Some tag ->
+                      Alcotest.(check bool) "raw tab not in container" false
+                        (contains tag "weird-tab")))
+        ; an_case "the query never appears in the analytics container"
+            (fun () ->
+              with_enabled_config (fun () ->
+                  let html = render_search ~tab:"posts" "sekret-term" in
+                  (* the page legitimately echoes the query (input value,
+                     pager hrefs — masked/stripped by other layers); the
+                     analytics container must not *)
+                  Alcotest.(check bool) "page echoes query" true
+                    (contains html "sekret-term");
+                  match sr_analytics_tag html with
+                  | None -> Alcotest.fail "container missing"
+                  | Some tag ->
+                      Alcotest.(check bool) "no query in container" false
+                        (contains tag "sekret-term")))
+        ; an_case "non-positive page is clamped to the effective page 1"
+            (fun () ->
+              with_enabled_config (fun () ->
+                  Alcotest.(check (option string)) "page 0 -> 1" (Some "1")
+                    (attr_value (render_search ~page:0 "x")
+                       "data-analytics-search-page")))
+        ; an_case "result_count is authoritative for the active tab" (fun () ->
+              with_enabled_config (fun () ->
+                  (* a community row exists, but the active tab is people →
+                     the count reflects the rendered people rows: 0 *)
+                  let html =
+                    render_search ~tab:"people"
+                      ~communities:
+                        [ test_community ~id:1
+                            ~visibility:Earde.Db.Community_public
+                        ]
+                      "x"
+                  in
+                  Alcotest.(check (option string)) "count 0" (Some "0")
+                    (attr_value html "data-analytics-search-result-count")))
+        ] )
+      (* Shipped analytics.js: search_performed capture contract. *)
+    ; ( "analytics_js_search_event"
+      , [ an_case "search_performed follows the manual $pageview, once"
+            (fun () ->
+              let js = read_analytics_js () in
+              let pos needle =
+                match index_of js needle with
+                | Some i -> i
+                | None -> Alcotest.failf "analytics.js is missing %S" needle
+              in
+              Alcotest.(check int) "exactly one capture call" 1
+                (count_sub js "posthog.capture(\"search_performed\"");
+              Alcotest.(check int) "exactly one call site" 1
+                (count_sub js "captureSearchPerformed();");
+              Alcotest.(check bool) "pageview precedes search event" true
+                (pos "pageviewSent = true" < pos "captureSearchPerformed();");
+              (* the single call site lives inside the consent-gated init
+                 chain (initAnalytics only runs after granted consent and a
+                 successful SDK load), before the next top-level function *)
+              Alcotest.(check bool) "inside initAnalytics" true
+                (pos "function initAnalytics"
+                   < pos "captureSearchPerformed();"
+                && pos "captureSearchPerformed();"
+                   < pos "function clearPosthogPersistence"))
+        ; an_case "once per document load, even across repeated init"
+            (fun () ->
+              let js = read_analytics_js () in
+              Alcotest.(check bool) "module-owned guard" true
+                (contains js "var searchPerformedSent = false;");
+              Alcotest.(check bool) "re-entry returns" true
+                (contains js "if (searchPerformedSent) return;");
+              Alcotest.(check bool) "flag set before capture" true
+                (contains js "searchPerformedSent = true;"))
+        ; an_case "strict allowlist: closed tabs, integer count, positive page"
+            (fun () ->
+              let js = read_analytics_js () in
+              Alcotest.(check bool) "exact tab set" true
+                (contains js
+                   "[\"posts\", \"communities\", \"comments\", \"people\"]");
+              Alcotest.(check bool) "tab membership required" true
+                (contains js "SEARCH_TABS.indexOf(tab) === -1) return;");
+              Alcotest.(check bool) "integer-only parse" true
+                (contains js "/^[0-9]+$/.test");
+              Alcotest.(check bool) "positive page required" true
+                (contains js "if (page < 1) return;"))
+        ; an_case "captures a fresh closed object, never the raw dataset"
+            (fun () ->
+              let js = read_analytics_js () in
+              (* reads exactly the three closed attributes... *)
+              Alcotest.(check int) "three attribute reads" 3
+                (count_sub js "getAttribute(\"data-analytics-search-");
+              (* ...and never passes an attribute bag through *)
+              Alcotest.(check bool) "no dataset access" false
+                (contains js ".dataset");
+              Alcotest.(check bool) "closed property object" true
+                (contains js "result_count: resultCount,");
+              (* no query-named property can exist in the file *)
+              Alcotest.(check bool) "no query property" false
+                (contains js "query:"))
+        ] )
+    ; ( "analytics_group_identify_api"
+      , [ check_group_identify_gate "granted emits one" 1 ~enabled:true
+            (Some "earde_analytics_consent=granted")
+        ; check_group_identify_gate "denied emits none" 0 ~enabled:true
+            (Some "earde_analytics_consent=denied")
+        ; check_group_identify_gate "missing cookie emits none" 0 ~enabled:true
+            None
+        ; check_group_identify_gate "malformed value emits none" 0
+            ~enabled:true
+            (Some "earde_analytics_consent=maybe")
+        ; check_group_identify_gate "disabled analytics emits none" 0
+            ~enabled:false
+            (Some "earde_analytics_consent=granted")
+        ; an_case "granted payload is a closed $groupidentify" (fun () ->
+              match
+                run_group_identify ~enabled:true
+                  (Some "earde_analytics_consent=granted")
+              with
+              | [ p ] ->
+                  Alcotest.(check string) "event" "$groupidentify" (event_of p);
+                  Alcotest.(check string) "caller-supplied user distinct id"
+                    "user:7" (distinct_of p);
+                  Alcotest.(check (slist string compare))
+                    "props keys"
+                    [ "$group_type"; "$group_key"; "$group_set";
+                      "deployment_environment" ]
+                    (prop_keys p);
+                  Alcotest.(check (option string)) "group key"
+                    (Some "community:7") (group_key_prop_of p);
+                  Alcotest.(check (slist string compare))
+                    "closed group set"
+                    [ "community_id"; "community_slug"; "community_name";
+                      "community_visibility" ]
+                    (List.map fst (group_set_of p))
+              | l -> Alcotest.failf "expected 1 payload, got %d" (List.length l))
+        ; an_case "raising sink never escapes to the caller" (fun () ->
+              AnT.use_enabled_test_configuration ();
+              AnT.set_capture_sink (fun _ -> failwith "sink boom");
+              Fun.protect
+                ~finally:(fun () ->
+                  AnT.clear_capture_sink ();
+                  AnT.clear_configuration_override ())
+                (fun () ->
+                  An.identify_community_if_consented
+                    (consent_request (Some "earde_analytics_consent=granted"))
+                    ~distinct_id:"user:7" (an_group ());
+                  An.capture_if_consented
+                    (consent_request (Some "earde_analytics_consent=granted"))
+                    ~distinct_id:"user:7" an_login))
+        ] )
+    ; ( "posthog_deletion_api"
+      , [ check_attempt "exact match: delete accepted -> completed"
+            (persons_handler ())
+            (Ok ()) ~expect_delete:true
+        ; an_case "delete carries delete_events=true for the looked-up uuid"
+            (fun () ->
+              with_persons_stub (persons_handler ()) (fun ~seen ->
+                  let ( let* ) = Lwt.bind in
+                  let* r =
+                    Earde.Posthog_deletion.attempt_person_deletion
+                      ~distinct_id:"user:314"
+                  in
+                  Alcotest.(check attempt_result) "completed" (Ok ()) r;
+                  (match !seen with
+                   | [ lookup; delete ] ->
+                       Alcotest.(check string) "lookup meth" "GET"
+                         lookup.Api_stub.meth;
+                       Alcotest.(check (option (list string)))
+                         "exact URL-encoded distinct id" (Some [ "user:314" ])
+                         (List.assoc_opt "distinct_id" lookup.Api_stub.query);
+                       Alcotest.(check string) "delete path"
+                         ("/api/projects/42/persons/" ^ stub_uuid ^ "/")
+                         delete.Api_stub.path;
+                       Alcotest.(check (option (list string)))
+                         "delete_events=true" (Some [ "true" ])
+                         (List.assoc_opt "delete_events" delete.Api_stub.query)
+                   | l ->
+                       Alcotest.failf "expected lookup+delete, saw %d"
+                         (List.length l));
+                  Lwt.return_unit))
+        ; check_attempt "absent person -> completed without DELETE"
+            (persons_handler ~persons:[] ())
+            (Ok ()) ~expect_delete:false
+        ; check_attempt "ambiguous lookup -> pending, nobody deleted"
+            (persons_handler
+               ~persons:[ person_json stub_uuid; person_json other_uuid ]
+               ())
+            (Error "ambiguous_person_match") ~expect_delete:false
+        ; check_attempt "malformed lookup JSON -> pending"
+            (persons_handler ~lookup_body_override:"not json at all" ())
+            (Error "malformed_lookup_response") ~expect_delete:false
+        ; check_attempt "lookup 401 -> pending with safe class"
+            (persons_handler ~lookup_status:401
+               ~lookup_body_override:{|{"type":"authentication_error"}|} ())
+            (Error "lookup_http_401") ~expect_delete:false
+        ; check_attempt "lookup 500 -> pending with safe class"
+            (persons_handler ~lookup_status:500
+               ~lookup_body_override:{|{"detail":"boom"}|} ())
+            (Error "lookup_http_500") ~expect_delete:false
+        ; check_attempt "delete 403 -> pending with safe class"
+            (persons_handler ~delete_status:403 ())
+            (Error "delete_http_403") ~expect_delete:true
+        ; an_case "unreachable host -> network_error, never a raw exception"
+            (fun () ->
+              AnT.use_deletion_test_configuration
+                ~ui_host:"http://127.0.0.1:9" ~project_id:(Some "42")
+                ~personal_api_key:(Some deletion_test_key) ();
+              Fun.protect ~finally:AnT.clear_configuration_override (fun () ->
+                  let r =
+                    Lwt_main.run
+                      (Earde.Posthog_deletion.attempt_person_deletion
+                         ~distinct_id:"user:314")
+                  in
+                  Alcotest.(check attempt_result) "network error class"
+                    (Error "network_error") r))
+        ; an_case "missing configuration -> safe pending marker" (fun () ->
+              AnT.use_deletion_test_configuration ~ui_host:"http://earde.test"
+                ~project_id:None ~personal_api_key:(Some deletion_test_key) ();
+              Fun.protect ~finally:AnT.clear_configuration_override (fun () ->
+                  let r =
+                    Lwt_main.run
+                      (Earde.Posthog_deletion.attempt_person_deletion
+                         ~distinct_id:"user:314")
+                  in
+                  Alcotest.(check attempt_result) "missing configuration"
+                    (Error "missing_configuration") r))
+        ; an_case "account_deleted metric is personless by construction"
+            (fun () ->
+              let captured =
+                with_sink ~enabled:true (fun () ->
+                    Lwt_main.run
+                      (An.capture_account_deleted_sequenced
+                         (consent_request
+                            (Some "earde_analytics_consent=granted"))))
+              in
+              match captured with
+              | [ p ] ->
+                  Alcotest.(check string) "event" "account_deleted"
+                    (event_of p);
+                  Alcotest.(check string) "constant non-user distinct id"
+                    An.account_deletion_distinct_id (distinct_of p);
+                  Alcotest.(check (slist string compare))
+                    "person processing disabled, plus only the envelope"
+                    [ "$process_person_profile"; "deployment_environment" ]
+                    (prop_keys p);
+                  (match
+                     List.assoc_opt "$process_person_profile" (payload_props p)
+                   with
+                   | Some (`Bool false) -> ()
+                   | _ ->
+                       Alcotest.fail "$process_person_profile must be false");
+                  let raw = Yojson.Safe.to_string p in
+                  Alcotest.(check bool) "no user identity anywhere" false
+                    (contains raw "user:");
+                  Alcotest.(check bool) "no person $set" false
+                    (contains raw "$set");
+                  Alcotest.(check bool) "no community group" false
+                    (contains raw "$groups")
+              | l -> Alcotest.failf "expected 1 metric, got %d" (List.length l))
+        ; an_case "denied/missing consent emits no deletion metric" (fun () ->
+              let denied =
+                with_sink ~enabled:true (fun () ->
+                    Lwt_main.run
+                      (An.capture_account_deleted_sequenced
+                         (consent_request
+                            (Some "earde_analytics_consent=denied"))))
+              in
+              Alcotest.(check int) "denied emits none" 0 (List.length denied);
+              let missing =
+                with_sink ~enabled:true (fun () ->
+                    Lwt_main.run
+                      (An.capture_account_deleted_sequenced
+                         (consent_request None)))
+              in
+              Alcotest.(check int) "missing emits none" 0
+                (List.length missing))
+        ] )
+      (* Closed deployment-environment parsing: exact values only; unknown,
+         missing, blank and differently-cased values fail closed; disabled
+         analytics needs no environment at all. *)
+    ; ( "analytics_environment_parsing"
+      , [ check_env "production parses exactly" ~expect_enabled:true
+            ~expect_environment:(Some "production")
+            (venv ~environment:"production" ~public_origin:"https://earde.com"
+               ())
+        ; check_env "staging parses exactly" ~expect_enabled:true
+            ~expect_environment:(Some "staging")
+            (venv ~environment:"staging"
+               ~public_origin:"https://staging.example.com" ())
+        ; check_env "development parses with explicit opt-in"
+            ~expect_enabled:true ~expect_environment:(Some "development")
+            (venv ~environment:"development" ~allow_development:"true"
+               ~public_origin:"http://localhost:8080" ())
+        ; check_env "missing environment fails closed" ~expect_enabled:false
+            ~expect_environment:None
+            (venv ~public_origin:"https://earde.com" ())
+        ; check_env "blank environment fails closed" ~expect_enabled:false
+            ~expect_environment:None
+            (venv ~environment:"   " ~public_origin:"https://earde.com" ())
+        ; check_env "cased Production fails closed" ~expect_enabled:false
+            (venv ~environment:"Production" ~public_origin:"https://earde.com"
+               ())
+        ; check_env "cased STAGING fails closed" ~expect_enabled:false
+            (venv ~environment:"STAGING"
+               ~public_origin:"https://staging.example.com" ())
+        ; check_env "abbreviation prod fails closed" ~expect_enabled:false
+            (venv ~environment:"prod" ~public_origin:"https://earde.com" ())
+        ; check_env "arbitrary value fails closed" ~expect_enabled:false
+            (venv ~environment:"qa" ~public_origin:"https://earde.com" ())
+        ; an_case "missing environment produces a diagnostic" (fun () ->
+              let _, _, diags =
+                venv ~public_origin:"https://earde.com" ()
+              in
+              Alcotest.(check int) "one diagnostic" 1 (List.length diags))
+        ; an_case "disabled analytics permits an absent environment" (fun () ->
+              let enabled, environment, diags =
+                AnT.validate_environment_configuration ()
+              in
+              Alcotest.(check bool) "disabled" false enabled;
+              Alcotest.(check (option string)) "no environment" None
+                environment;
+              Alcotest.(check int) "no diagnostics" 0 (List.length diags))
+        ; check_env "POSTHOG_ENABLED must be exactly true" ~expect_enabled:false
+            (venv ~enabled:"TRUE" ~environment:"production"
+               ~public_origin:"https://earde.com" ())
+        ; check_env "development without opt-in stays disabled"
+            ~expect_enabled:false
+            (venv ~environment:"development"
+               ~public_origin:"http://localhost:8080" ())
+        ; an_case "development without opt-in explains itself" (fun () ->
+              let _, _, diags =
+                venv ~environment:"development"
+                  ~public_origin:"http://localhost:8080" ()
+              in
+              Alcotest.(check int) "one diagnostic" 1 (List.length diags))
+        ; check_env "opt-in must be exactly true (not TRUE)"
+            ~expect_enabled:false
+            (venv ~environment:"development" ~allow_development:"TRUE"
+               ~public_origin:"http://localhost:8080" ())
+        ; check_env "opt-in must be exactly true (not 1)" ~expect_enabled:false
+            (venv ~environment:"development" ~allow_development:"1"
+               ~public_origin:"http://localhost:8080" ())
+        ; an_case "explicit development enablement prints a diagnostic"
+            (fun () ->
+              let enabled, _, diags =
+                venv ~environment:"development" ~allow_development:"true"
+                  ~public_origin:"http://localhost:8080" ()
+              in
+              Alcotest.(check bool) "enabled" true enabled;
+              Alcotest.(check int) "one notice" 1 (List.length diags))
+        ] )
+      (* Origin/environment binding: production is bound exactly to
+         https://earde.com; staging to any OTHER https origin; the
+         development opt-in to loopback only. *)
+    ; ( "analytics_environment_origin"
+      , [ check_env "production accepts exactly https://earde.com"
+            ~expect_enabled:true
+            (venv ~environment:"production" ~public_origin:"https://earde.com"
+               ())
+        ; check_env "production rejects http" ~expect_enabled:false
+            (venv ~environment:"production" ~public_origin:"http://earde.com"
+               ())
+        ; check_env "production rejects www" ~expect_enabled:false
+            (venv ~environment:"production"
+               ~public_origin:"https://www.earde.com" ())
+        ; check_env "production rejects a staging origin" ~expect_enabled:false
+            (venv ~environment:"production"
+               ~public_origin:"https://staging.earde.com" ())
+        ; check_env "production rejects localhost" ~expect_enabled:false
+            (venv ~environment:"production"
+               ~public_origin:"http://localhost:8080" ())
+        ; check_env "production rejects a trailing slash" ~expect_enabled:false
+            (venv ~environment:"production"
+               ~public_origin:"https://earde.com/" ())
+        ; check_env "staging accepts a non-production https origin"
+            ~expect_enabled:true
+            (venv ~environment:"staging"
+               ~public_origin:"https://staging.example.com" ())
+        ; check_env "staging rejects the production origin"
+            ~expect_enabled:false
+            (venv ~environment:"staging" ~public_origin:"https://earde.com" ())
+        ; check_env "staging rejects the www production origin"
+            ~expect_enabled:false
+            (venv ~environment:"staging" ~public_origin:"https://www.earde.com"
+               ())
+        ; check_env "staging rejects http" ~expect_enabled:false
+            (venv ~environment:"staging"
+               ~public_origin:"http://staging.example.com" ())
+        ; check_env "development accepts http://localhost with port"
+            ~expect_enabled:true
+            (venv ~environment:"development" ~allow_development:"true"
+               ~public_origin:"http://localhost:8080" ())
+        ; check_env "development accepts https 127.0.0.1" ~expect_enabled:true
+            (venv ~environment:"development" ~allow_development:"true"
+               ~public_origin:"https://127.0.0.1:8443" ())
+        ; check_env "development accepts ::1" ~expect_enabled:true
+            (venv ~environment:"development" ~allow_development:"true"
+               ~public_origin:"http://[::1]:8080" ())
+        ; check_env "development rejects the production origin"
+            ~expect_enabled:false
+            (venv ~environment:"development" ~allow_development:"true"
+               ~public_origin:"https://earde.com" ())
+        ; check_env "development rejects arbitrary remote origins"
+            ~expect_enabled:false
+            (venv ~environment:"development" ~allow_development:"true"
+               ~public_origin:"https://remote.example.com" ())
+        ] )
+      (* Complete-configuration requirements and the public browser config:
+         incomplete token/host/project/key combinations disable analytics;
+         the browser sees only the public token, ingest host and normalized
+         environment — never the personal key or project id. *)
+    ; ( "analytics_environment_config"
+      , [ check_env "missing token disables" ~expect_enabled:false
+            (AnT.validate_environment_configuration ~enabled:"true"
+               ~environment:"production" ~api_host:"https://eu.i.posthog.com"
+               ~ui_host:"https://eu.posthog.com" ~project_id:"42"
+               ~personal_api_key:"phx_test_dummy"
+               ~public_origin:"https://earde.com" ())
+        ; check_env "missing project id disables" ~expect_enabled:false
+            (AnT.validate_environment_configuration ~enabled:"true"
+               ~environment:"production" ~project_token:"phc_test_token"
+               ~api_host:"https://eu.i.posthog.com"
+               ~ui_host:"https://eu.posthog.com"
+               ~personal_api_key:"phx_test_dummy"
+               ~public_origin:"https://earde.com" ())
+        ; check_env "zero project id disables" ~expect_enabled:false
+            (venv ~environment:"production" ~project_id:"0"
+               ~public_origin:"https://earde.com" ())
+        ; check_env "negative project id disables" ~expect_enabled:false
+            (venv ~environment:"production" ~project_id:"-3"
+               ~public_origin:"https://earde.com" ())
+        ; check_env "non-numeric project id disables" ~expect_enabled:false
+            (venv ~environment:"production" ~project_id:"abc"
+               ~public_origin:"https://earde.com" ())
+        ; check_env "missing personal key disables" ~expect_enabled:false
+            (AnT.validate_environment_configuration ~enabled:"true"
+               ~environment:"production" ~project_token:"phc_test_token"
+               ~api_host:"https://eu.i.posthog.com"
+               ~ui_host:"https://eu.posthog.com" ~project_id:"42"
+               ~public_origin:"https://earde.com" ())
+        ; check_env "http api host disables" ~expect_enabled:false
+            (venv ~environment:"production"
+               ~api_host:"http://eu.i.posthog.com"
+               ~public_origin:"https://earde.com" ())
+        ; check_env "http ui host disables" ~expect_enabled:false
+            (venv ~environment:"production" ~ui_host:"http://eu.posthog.com"
+               ~public_origin:"https://earde.com" ())
+        ; an_case "staging requires the complete configuration too" (fun () ->
+              let enabled, _, _ =
+                AnT.validate_environment_configuration ~enabled:"true"
+                  ~environment:"staging" ~project_token:"phc_test_token"
+                  ~api_host:"https://eu.i.posthog.com"
+                  ~ui_host:"https://eu.posthog.com"
+                  ~public_origin:"https://staging.example.com" ()
+              in
+              Alcotest.(check bool) "disabled without id+key" false enabled)
+        ; an_case "browser config carries only public values + environment"
+            (fun () ->
+              install_production_config ();
+              Fun.protect ~finally:AnT.clear_configuration_override (fun () ->
+                  match An.browser_config () with
+                  | None -> Alcotest.fail "expected browser config"
+                  | Some cfg ->
+                      Alcotest.(check string) "token" "phc_test_token"
+                        cfg.An.browser_token;
+                      Alcotest.(check string) "ingest host"
+                        "https://eu.i.posthog.com" cfg.An.browser_api_host;
+                      Alcotest.(check string) "normalized environment"
+                        "production" cfg.An.browser_deployment_environment))
+        ; an_case "invalid configuration yields no browser config" (fun () ->
+              AnT.install_validated_configuration ~enabled:"true"
+                ~environment:"production" ~project_token:"phc_test_token"
+                ~public_origin:"https://earde.com" ();
+              Fun.protect ~finally:AnT.clear_configuration_override (fun () ->
+                  Alcotest.(check bool) "no browser config" true
+                    (An.browser_config () = None)))
+        ; an_case "layout renders the environment attr and no secret" (fun () ->
+              install_production_config ();
+              Fun.protect ~finally:AnT.clear_configuration_override (fun () ->
+                  let html =
+                    Earde.Components.layout ~title:"T" "<p>body</p>"
+                  in
+                  Alcotest.(check bool) "environment attr" true
+                    (contains html
+                       "data-ph-deployment-environment='production'");
+                  Alcotest.(check bool) "no personal key" false
+                    (contains html "phx_secret_test_value");
+                  Alcotest.(check bool) "no project id" false
+                    (contains html "654321")))
+        ] )
+      (* The common event envelope: deployment_environment appears exactly
+         once on every server payload, follows the closed value, and the
+         browser adds it centrally in the sanitizer. *)
+    ; ( "analytics_envelope"
+      , [ an_case "every domain event carries the envelope exactly once"
+            (fun () ->
+              List.iter
+                (fun (name, event) ->
+                  let occurrences =
+                    List.length
+                      (List.filter
+                         (fun k -> k = "deployment_environment")
+                         (prop_keys (an_payload event)))
+                  in
+                  if occurrences <> 1 then
+                    Alcotest.failf "%s carries the envelope %d times" name
+                      occurrences)
+                an_all_events)
+        ; an_case "envelope value follows the closed environment" (fun () ->
+              List.iter
+                (fun (environment, expected) ->
+                  let payload =
+                    AnT.event_payload ~api_key:"phc_test" ~environment
+                      ~distinct_id:"user:1" an_login
+                  in
+                  Alcotest.(check (option string)) expected (Some expected)
+                    (match
+                       List.assoc_opt "deployment_environment"
+                         (payload_props payload)
+                     with
+                    | Some (`String v) -> Some v
+                    | _ -> None))
+                [ (An.Production, "production"); (An.Staging, "staging");
+                  (An.Development, "development") ])
+        ; an_case "$groupidentify carries the envelope exactly once" (fun () ->
+              let payload =
+                AnT.group_identify_payload ~api_key:"phc_test"
+                  ~environment:An.Production ~distinct_id:"user:1"
+                  (an_group ())
+              in
+              Alcotest.(check int) "once" 1
+                (List.length
+                   (List.filter
+                      (fun k -> k = "deployment_environment")
+                      (prop_keys payload)));
+              Alcotest.(check bool) "not inside $group_set" false
+                (List.mem_assoc "deployment_environment"
+                   (group_set_of payload)))
+        ; an_case "person sync carries the envelope exactly once" (fun () ->
+              let payload =
+                AnT.person_sync_payload ~api_key:"phc_test"
+                  ~environment:An.Staging ~distinct_id:"user:1" an_person
+              in
+              Alcotest.(check int) "once" 1
+                (List.length
+                   (List.filter
+                      (fun k -> k = "deployment_environment")
+                      (prop_keys payload)));
+              (match List.assoc_opt "$set" (payload_props payload) with
+              | Some (`Assoc set) ->
+                  Alcotest.(check bool) "not inside $set" false
+                    (List.mem_assoc "deployment_environment" set)
+              | _ -> Alcotest.fail "no $set"))
+        ; an_case "browser sanitizer adds the closed value centrally" (fun () ->
+              let js = read_analytics_js () in
+              (* the exact closed set, validated before any SDK work *)
+              Alcotest.(check bool) "closed set" true
+                (contains js
+                   "[\"production\", \"staging\", \"development\"]");
+              Alcotest.(check bool) "invalid environment bails out" true
+                (contains js
+                   "DEPLOYMENT_ENVIRONMENTS.indexOf(deploymentEnvironment) \
+                    === -1) return;");
+              (* one central assignment, inside sanitizeProperties *)
+              Alcotest.(check int) "single central assignment" 1
+                (count_sub js "props.deployment_environment =");
+              (match
+                 ( index_of js "function sanitizeProperties",
+                   index_of js "props.deployment_environment =",
+                   index_of js "MASK_TEXT_SELECTOR" )
+               with
+              | Some sanitize, Some assign, Some after ->
+                  Alcotest.(check bool) "assignment inside the sanitizer" true
+                    (sanitize < assign && assign < after)
+              | _ -> Alcotest.fail "sanitizer markers missing");
+              (* never added at capture call sites *)
+              Alcotest.(check int) "no per-capture property" 0
+                (count_sub js "deployment_environment:");
+              (* the gate precedes SDK loading, so an invalid environment can
+                 produce no PostHog request at all *)
+              match
+                (index_of js "DEPLOYMENT_ENVIRONMENTS.indexOf",
+                 index_of js "function loadSdk")
+              with
+              | Some gate, Some load ->
+                  Alcotest.(check bool) "gate precedes SDK load" true
+                    (gate < load)
+              | _ -> Alcotest.fail "gate markers missing")
+        ] )
+      (* Credential/project preflight against a LOCAL stub: verified only
+         when the configured project id exists and its live api_token equals
+         the configured token; every failure is a bounded class; no request
+         ever reaches an ingestion path; no credential is ever printed. *)
+    ; ( "analytics_preflight"
+      , [ check_preflight "matching project and token verifies"
+            (preflight_handler ()) "verified"
+        ; an_case "verified report carries the safe fields" (fun () ->
+              let result, requests = run_preflight (preflight_handler ()) in
+              (match result with
+              | Ok r ->
+                  Alcotest.(check string) "project id" "42"
+                    r.An.Preflight.report_project_id;
+                  Alcotest.(check bool) "staging environment" true
+                    (r.An.Preflight.report_environment = An.Staging);
+                  Alcotest.(check int) "short fingerprint" 12
+                    (String.length r.An.Preflight.report_token_fingerprint);
+                  Alcotest.(check bool) "fingerprint is not the token" false
+                    (contains preflight_token
+                       r.An.Preflight.report_token_fingerprint)
+              | Error (c, d) -> Alcotest.failf "expected Ok, got %s: %s" c d);
+              Alcotest.(check int) "exactly two metadata requests" 2
+                (List.length requests);
+              (match requests with
+              | [ orgs; project ] ->
+                  Alcotest.(check string) "orgs listing first"
+                    "/api/organizations/" orgs.Api_stub.path;
+                  Alcotest.(check string) "documented project retrieve"
+                    (Printf.sprintf "/api/organizations/%s/projects/42/"
+                       preflight_org)
+                    project.Api_stub.path
+              | _ -> Alcotest.fail "unexpected request sequence"))
+        ; check_preflight "wrong token fails"
+            (preflight_handler
+               ~project_override:
+                 (preflight_project_body ~id:42 ~token:"phc_other_token") ())
+            "token_mismatch"
+        ; check_preflight "missing project fails"
+            (preflight_handler ~project_status:404 ()) "project_not_found"
+        ; check_preflight "unauthorized key fails"
+            (preflight_handler ~orgs_status:401 ()) "unauthorized"
+        ; check_preflight "missing scope fails"
+            (preflight_handler ~orgs_status:403 ()) "missing_scope"
+        ; check_preflight "malformed organization listing fails"
+            (preflight_handler ~orgs_override:"not json" ())
+            "malformed_response"
+        ; check_preflight "malformed project metadata fails"
+            (preflight_handler ~project_override:{|{"unexpected": true}|} ())
+            "malformed_response"
+        ; check_preflight "different project id in the response fails"
+            (preflight_handler
+               ~project_override:
+                 (preflight_project_body ~id:99 ~token:preflight_token) ())
+            "project_id_mismatch"
+        ; check_preflight "server error on project retrieve fails"
+            (preflight_handler ~project_status:500 ()) "http_500"
+        ; check_preflight "redirect behavior fails safely"
+            (preflight_handler ~orgs_status:302 ()) "unexpected_redirect"
+        ; check_preflight "redirect on project retrieve fails safely"
+            (preflight_handler ~project_status:301 ()) "unexpected_redirect"
+        ; an_case "unreachable host fails as network_failure" (fun () ->
+              AnT.use_preflight_test_configuration ~environment:An.Staging
+                ~ui_host:"http://127.0.0.1:9" ~project_id:"42"
+                ~personal_api_key:deletion_test_key
+                ~project_token:preflight_token ();
+              Fun.protect ~finally:AnT.clear_configuration_override (fun () ->
+                  match Lwt_main.run (An.Preflight.run ()) with
+                  | Error ("network_failure", detail) ->
+                      Alcotest.(check bool) "no credential in detail" false
+                        (contains detail preflight_token
+                        || contains detail deletion_test_key)
+                  | Error (c, _) -> Alcotest.failf "unexpected class %s" c
+                  | Ok _ -> Alcotest.fail "must not verify"))
+        ; an_case "invalid configuration fails before any request" (fun () ->
+              AnT.use_disabled_test_configuration ();
+              Fun.protect ~finally:AnT.clear_configuration_override (fun () ->
+                  match Lwt_main.run (An.Preflight.run ()) with
+                  | Error ("configuration_invalid", _) -> ()
+                  | Error (c, _) -> Alcotest.failf "unexpected class %s" c
+                  | Ok _ -> Alcotest.fail "must not verify"))
+        ; an_case "mismatched cloud regions fail statically" (fun () ->
+              (* eu ingest host against the us private host: fails before any
+                 network request is attempted. *)
+              AnT.install_validated_configuration ~enabled:"true"
+                ~environment:"staging" ~project_token:"phc_test_token"
+                ~api_host:"https://eu.i.posthog.com"
+                ~ui_host:"https://us.posthog.com" ~project_id:"42"
+                ~personal_api_key:"phx_test_dummy"
+                ~public_origin:"https://staging.example.com" ()
+              ;
+              Fun.protect ~finally:AnT.clear_configuration_override (fun () ->
+                  match Lwt_main.run (An.Preflight.run ()) with
+                  | Error ("region_mismatch", _) -> ()
+                  | Error (c, _) -> Alcotest.failf "unexpected class %s" c
+                  | Ok _ -> Alcotest.fail "must not verify"))
+        ] )
     ; ( "mod_delete_community_scope", Mod_scope.suite )
+    ; ( "db_returning_ids", Returning_ids.suite )
+    ; ( "analytics_consent_db", [ consent_sync_db_case ] )
+    ; ( "analytics_step6_events", Step6_events.suite )
+    ; ( "posthog_deletion_jobs", Step7_deletion.suite )
+    ; ( "posthog_group_cleanup", Group_cleanup.suite )
     ]

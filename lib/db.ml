@@ -1,5 +1,11 @@
 open Lwt.Infix
 
+(* The PostHog analytics module (lib/analytics.ml), aliased before this file's
+   own inner homemade [Analytics] (page-view) module shadows the name — same
+   idiom as [Components.Posthog]. Used only for the central "user:<id>"
+   distinct-id derivation (§3.3). *)
+module Posthog = Analytics
+
 (* Community access control. A closed variant keeps raw strings out of the public API and dynamic
    SQL; the DB CHECK constraint (communities_visibility_check) mirrors it exactly. *_of_string is
    partial (None off-enum) so a stray value fails at the boundary instead of corrupting a row —
@@ -431,16 +437,19 @@ module Community = struct
     | Error err -> Lwt.return (Error (Caqti_error.show err))
 
   (* Single UPDATE covers all editable fields — no partial-update complexity;
-     settings form always submits all four fields so overwrite is safe. *)
+     settings form always submits all four fields so overwrite is safe.
+     RETURNING hands back the authoritative updated row in the same round-trip;
+     None means the id matched no community (previously a silent no-op). *)
   let update_community_details_query =
     let open Caqti_request.Infix in
-    (Caqti_type.(t2 (t4 (option string) (option string) (option string) (option string)) int) ->. Caqti_type.unit)
-    "UPDATE communities SET description = $1, rules = $2, avatar_url = $3, banner_url = $4 WHERE id = $5"
+    (Caqti_type.(t2 (t4 (option string) (option string) (option string) (option string)) int) ->? community_row_type)
+    "UPDATE communities SET description = $1, rules = $2, avatar_url = $3, banner_url = $4 WHERE id = $5 RETURNING id, slug, name, description, rules, avatar_url, banner_url, allow_downvotes, sections_enabled, visibility, indexable"
 
   let update_community_details (module C : Caqti_lwt.CONNECTION) community_id description rules avatar_url banner_url =
-    C.exec update_community_details_query ((description, rules, avatar_url, banner_url), community_id)
+    C.find_opt update_community_details_query ((description, rules, avatar_url, banner_url), community_id)
     >>= function
-    | Ok () -> Lwt.return (Ok ())
+    | Ok (Some row) -> Lwt.return (Ok (Some (map_community_row row)))
+    | Ok None -> Lwt.return (Ok None)
     | Error err -> Lwt.return (Error (Caqti_error.show err))
 
   let toggle_downvotes_query =
@@ -458,15 +467,19 @@ module Community = struct
      stored TEXT mirrored by the CHECK constraint; we accept the closed [community_visibility]
      variant and stringify here so call sites never pass a raw, unvalidated string. The DB CHECK
      is the backstop. These touch only the SEO/access columns added in Slice B — no other field. *)
+  (* RETURNING the authoritative updated row: visibility is a closed PostHog
+     group property, so the handler needs the post-update record for its
+     $groupidentify without a second lookup. None = id matched no community. *)
   let update_community_visibility_query =
     let open Caqti_request.Infix in
-    (Caqti_type.(t2 string int) ->. Caqti_type.unit)
-    "UPDATE communities SET visibility = $1 WHERE id = $2"
+    (Caqti_type.(t2 string int) ->? community_row_type)
+    "UPDATE communities SET visibility = $1 WHERE id = $2 RETURNING id, slug, name, description, rules, avatar_url, banner_url, allow_downvotes, sections_enabled, visibility, indexable"
 
   let update_community_visibility (module C : Caqti_lwt.CONNECTION) community_id visibility =
-    C.exec update_community_visibility_query (community_visibility_to_string visibility, community_id)
+    C.find_opt update_community_visibility_query (community_visibility_to_string visibility, community_id)
     >>= function
-    | Ok () -> Lwt.return (Ok ())
+    | Ok (Some row) -> Lwt.return (Ok (Some (map_community_row row)))
+    | Ok None -> Lwt.return (Ok None)
     | Error err -> Lwt.return (Error (Caqti_error.show err))
 
   let update_community_indexable_query =
@@ -528,10 +541,13 @@ module User = struct
     | Ok exists -> Lwt.return (Ok exists)
     | Error e -> Lwt.return (Error (Caqti_error.show e))
 
+  (* Nested 7-column row: (id, username, email, created_at), (hash, is_admin,
+     is_banned). created_at rides the same lookup so a successful login has the
+     closed analytics person properties with no extra query. *)
   let get_user_for_login_query =
     let open Caqti_request.Infix in
-    (Caqti_type.string ->? Caqti_type.(t6 int string string string bool bool))
-    "SELECT id, username, email, password_hash, is_admin, is_banned FROM users WHERE username = $1 OR email = $1"
+    (Caqti_type.string ->? Caqti_type.(t2 (t4 int string string string) (t3 string bool bool)))
+    "SELECT id, username, email, created_at::text, password_hash, is_admin, is_banned FROM users WHERE username = $1 OR email = $1"
 
   let get_user_for_login (module C: Caqti_lwt.CONNECTION) identifier =
     with_query_timer ~name:"get_user_for_login" (fun () ->
@@ -568,6 +584,19 @@ module User = struct
     | Ok (Some (id, username, created_at, bio, avatar_url)) ->
         Lwt.return (Ok (Some (id, username, created_at, bio, avatar_url)))
     | Ok None -> Lwt.return (Ok None)
+    | Error err -> Lwt.return (Error (Caqti_error.show err))
+
+  (* Closed analytics person-property lookup (spec §4.3): exactly the four
+     allowed fields — username, email, signup date, is_admin — nothing else. *)
+  let get_user_analytics_props_query =
+    let open Caqti_request.Infix in
+    (Caqti_type.int ->? Caqti_type.(t4 string string string bool))
+    "SELECT username, email, created_at::text, is_admin FROM users WHERE id = $1"
+
+  let get_user_analytics_props (module C : Caqti_lwt.CONNECTION) user_id =
+    C.find_opt get_user_analytics_props_query user_id
+    >>= function
+    | Ok row -> Lwt.return (Ok row)
     | Error err -> Lwt.return (Error (Caqti_error.show err))
 
   let update_user_profile_query =
@@ -1038,15 +1067,17 @@ module Comment = struct
         Lwt.return (Ok comments)
     | Error err -> Lwt.return (Error (Caqti_error.show err))
 
+  (* RETURNING id: the inserted comment id is part of the success payload so
+     later consumers (e.g. analytics) never need a second lookup query. *)
   let create_comment_query =
     let open Caqti_request.Infix in
-    (Caqti_type.(t4 string int int (option int)) ->. Caqti_type.unit)
-    "INSERT INTO comments (content, post_id, user_id, parent_id) VALUES ($1, $2, $3, $4)"
+    (Caqti_type.(t4 string int int (option int)) ->! Caqti_type.int)
+    "INSERT INTO comments (content, post_id, user_id, parent_id) VALUES ($1, $2, $3, $4) RETURNING id"
 
   let create_comment (module C : Caqti_lwt.CONNECTION) content post_id user_id parent_id =
-    C.exec create_comment_query (content, post_id, user_id, parent_id)
+    C.find create_comment_query (content, post_id, user_id, parent_id)
     >>= function
-    | Ok () -> Lwt.return (Ok ())
+    | Ok comment_id -> Lwt.return (Ok comment_id)
     | Error err -> Lwt.return (Error (Caqti_error.show err))
 
   (* Bumped on every new comment so the "active" sort reflects engagement recency, not creation time. *)
@@ -1971,15 +2002,20 @@ module Membership = struct
     | Ok None -> Lwt.return (Ok false)
     | Error err -> Lwt.return (Error (Caqti_error.show err))
 
+  (* DELETE ... RETURNING so the caller can tell a real membership removal
+     (true) from a no-op non-member request (false) in the same round-trip —
+     the analytics wiring must not report a community_left that never
+     happened. (user_id, community_id) is unique, so at most one row. *)
   let leave_community_query =
     let open Caqti_request.Infix in
-    (Caqti_type.(t2 int int) ->. Caqti_type.unit)
-    "DELETE FROM community_members WHERE user_id = $1 AND community_id = $2"
+    (Caqti_type.(t2 int int) ->? Caqti_type.int)
+    "DELETE FROM community_members WHERE user_id = $1 AND community_id = $2 RETURNING community_id"
 
   let leave_community (module C : Caqti_lwt.CONNECTION) user_id community_id =
-    C.exec leave_community_query (user_id, community_id)
+    C.find_opt leave_community_query (user_id, community_id)
     >>= function
-    | Ok () -> Lwt.return (Ok ())
+    | Ok (Some _) -> Lwt.return (Ok true)
+    | Ok None -> Lwt.return (Ok false)
     | Error err -> Lwt.return (Error (Caqti_error.show err))
 
   (* Slice F: the allow-list for a private community, rendered as the member-management list on
@@ -2338,16 +2374,6 @@ module Analytics = struct
     | Ok () -> Lwt.return (Ok ())
     | Error e -> Lwt.return (Error (Caqti_error.show e))
 
-  let touch_user_active_query =
-    let open Caqti_request.Infix in
-    (Caqti_type.int ->. Caqti_type.unit)
-    "UPDATE users SET last_active_at = CURRENT_TIMESTAMP WHERE id = $1"
-
-  let touch_user_active (module C: Caqti_lwt.CONNECTION) user_id =
-    C.exec touch_user_active_query user_id >>= function
-    | Ok () -> Lwt.return (Ok ())
-    | Error e -> Lwt.return (Error (Caqti_error.show e))
-
   (* 5 scalar columns fit in t2(t3, t2) — no arity overflow.
      end_date is inclusive: we shift it to the next day's midnight with ::date + INTERVAL '1 day'
      so that "2026-03-23" captures all events on that calendar day. *)
@@ -2410,6 +2436,21 @@ module Analytics = struct
   let get_dau_mau_ratio (module C: Caqti_lwt.CONNECTION) ~start_date ~end_date =
     C.find get_dau_mau_ratio_query (start_date, end_date) >>= function
     | Ok res -> Lwt.return (Ok res)
+    | Error e -> Lwt.return (Error (Caqti_error.show e))
+end
+
+(* Presence is operational state, not analytics: last_active_at is read by
+   Moderator.demote_inactive_mods, so this must survive any replacement of the
+   page-view analytics system. *)
+module Presence = struct
+  let touch_user_active_query =
+    let open Caqti_request.Infix in
+    (Caqti_type.int ->. Caqti_type.unit)
+    "UPDATE users SET last_active_at = CURRENT_TIMESTAMP WHERE id = $1"
+
+  let touch_user_active (module C: Caqti_lwt.CONNECTION) user_id =
+    C.exec touch_user_active_query user_id >>= function
+    | Ok () -> Lwt.return (Ok ())
     | Error e -> Lwt.return (Error (Caqti_error.show e))
 end
 
@@ -2748,8 +2789,11 @@ module PendingSignup = struct
      is irrelevant to pending-signup users). *)
   let insert_user_query =
     let open Caqti_request.Infix in
-    (Caqti_type.(t3 string string string) ->. Caqti_type.unit)
-    "INSERT INTO users (username, email, password_hash, is_email_verified) VALUES ($1, $2, $3, TRUE)"
+    (* created_at/is_admin come back from the same RETURNING so the caller has
+       the authoritative closed person properties (analytics §4.3) without a
+       post-transaction lookup. *)
+    (Caqti_type.(t3 string string string ->! t3 int string bool))
+    "INSERT INTO users (username, email, password_hash, is_email_verified) VALUES ($1, $2, $3, TRUE) RETURNING id, created_at::text, is_admin"
 
   let mark_consumed_query =
     let open Caqti_request.Infix in
@@ -2758,7 +2802,8 @@ module PendingSignup = struct
 
   (* Confirms a pending in one transaction so a token is consumed exactly once:
      find -> re-check users -> insert user -> mark consumed -> commit. Any failure
-     rolls the whole thing back. Returns the new username for the success page. *)
+     rolls the whole thing back. Returns the new user id (from the insert's
+     RETURNING, no later lookup) and the username for the success page. *)
   let confirm (module C : Caqti_lwt.CONNECTION) token_hash =
     C.start () >>= function
     | Error e -> Lwt.return (Error (Caqti_error.show e))
@@ -2771,15 +2816,306 @@ module PendingSignup = struct
           | Error e -> C.rollback () >>= fun _ -> Lwt.return (Error (Caqti_error.show e))
           | Ok true -> C.rollback () >>= fun _ -> Lwt.return (Ok `Conflict)
           | Ok false ->
-            (C.exec insert_user_query (username, email, password_hash) >>= function
+            (C.find insert_user_query (username, email, password_hash) >>= function
              | Error e -> C.rollback () >>= fun _ -> Lwt.return (Error (Caqti_error.show e))
-             | Ok () ->
+             | Ok (user_id, created_at, is_admin) ->
                (C.exec mark_consumed_query id >>= function
                 | Error e -> C.rollback () >>= fun _ -> Lwt.return (Error (Caqti_error.show e))
                 | Ok () ->
                   (C.commit () >>= function
                    | Error e -> Lwt.return (Error (Caqti_error.show e))
-                   | Ok () -> Lwt.return (Ok (`Confirmed username)))))))
+                   | Ok () ->
+                     Lwt.return
+                       (Ok (`Confirmed (user_id, username, email, created_at, is_admin))))))))
+end
+
+(* Durable PostHog person-deletion jobs (analytics spec §3.3). Job state only —
+   the Persons-API HTTP client lives in Posthog_deletion, and no function here
+   ever performs network IO. *)
+module PosthogDeletionJobs = struct
+  (* Retry lease: a claimed pending job is ineligible for this long, so an
+     immediate attempt and a maintenance retry (or two concurrent retries)
+     cannot process the same job at once; a crash after claiming simply makes
+     the job eligible again after the lease. *)
+  let default_lease_minutes = 15
+
+  let lock_user_query =
+    let open Caqti_request.Infix in
+    (Caqti_type.int ->? Caqti_type.int)
+    "SELECT id FROM users WHERE id = $1 FOR UPDATE"
+
+  (* ON CONFLICT (distinct_id) DO UPDATE is a no-op rewrite that still RETURNS
+     the existing row's id, so duplicate/concurrent deletions deterministically
+     converge on ONE job instead of erroring or creating competitors. *)
+  let enqueue_query =
+    let open Caqti_request.Infix in
+    (Caqti_type.string ->! Caqti_type.int)
+    "INSERT INTO posthog_person_deletion_jobs (distinct_id) VALUES ($1)
+     ON CONFLICT (distinct_id) DO UPDATE SET distinct_id = EXCLUDED.distinct_id
+     RETURNING id"
+
+  (* §3.3 atomic local deletion: lock the user row, apply exactly the
+     anonymize_user rewrite, enqueue (or adopt) the durable deletion job, and
+     commit both together. The FOR UPDATE lock serializes concurrent deletions
+     of the same account. No HTTP happens anywhere near this transaction. *)
+  let anonymize_and_enqueue (module C : Caqti_lwt.CONNECTION) user_id =
+    let distinct_id = Posthog.distinct_id_of_user_id user_id in
+    C.start () >>= function
+    | Error e -> Lwt.return (Error (Caqti_error.show e))
+    | Ok () ->
+      (C.find_opt lock_user_query user_id >>= function
+       | Error e -> C.rollback () >>= fun _ -> Lwt.return (Error (Caqti_error.show e))
+       | Ok _locked_row ->
+         (* A missing row (already hard-deleted) keeps the old anonymize_user
+            semantics — the UPDATE matches nothing — while the deletion job is
+            still enqueued: PostHog may hold data regardless. *)
+         (User.anonymize_user (module C) user_id >>= function
+          | Error e -> C.rollback () >>= fun _ -> Lwt.return (Error e)
+          | Ok () ->
+            (C.find enqueue_query distinct_id >>= function
+             | Error e -> C.rollback () >>= fun _ -> Lwt.return (Error (Caqti_error.show e))
+             | Ok job_id ->
+               (C.commit () >>= function
+                | Error e -> Lwt.return (Error (Caqti_error.show e))
+                | Ok () -> Lwt.return (Ok (job_id, distinct_id))))))
+
+  (* Atomic claim of one specific pending job (the immediate post-deletion
+     attempt): attempts and the lease timestamp advance in the same statement.
+     None = already completed, or claimed within the lease by someone else. *)
+  let claim_query =
+    let open Caqti_request.Infix in
+    (Caqti_type.(t2 int int) ->? Caqti_type.string)
+    "UPDATE posthog_person_deletion_jobs
+     SET attempts = attempts + 1, last_attempt_at = NOW()
+     WHERE id = $1 AND status = 'pending'
+       AND (last_attempt_at IS NULL
+            OR last_attempt_at < NOW() - ($2 * INTERVAL '1 minute'))
+     RETURNING distinct_id"
+
+  let claim (module C : Caqti_lwt.CONNECTION) ?(lease_minutes = default_lease_minutes) job_id =
+    C.find_opt claim_query (job_id, lease_minutes)
+    >>= function
+    | Ok res -> Lwt.return (Ok res)
+    | Error err -> Lwt.return (Error (Caqti_error.show err))
+
+  (* Maintenance batch claim: oldest eligible pending jobs first, bounded by
+     LIMIT; FOR UPDATE SKIP LOCKED keeps concurrent invocations from blocking
+     on (or double-claiming) the same rows. RETURNING order is unspecified, so
+     the caller re-sorts by id (BIGSERIAL follows enqueue order). *)
+  (* Canonical job-queue claim: the picked set lives in a CTE (materialized —
+     it contains FOR UPDATE), because a bare `WHERE id IN (SELECT ... LIMIT n
+     FOR UPDATE SKIP LOCKED)` may re-evaluate the subquery during the outer
+     scan and claim more than n rows. *)
+  let claim_batch_query =
+    let open Caqti_request.Infix in
+    (Caqti_type.(t2 int int) ->* Caqti_type.(t2 int string))
+    "WITH picked AS (
+       SELECT id FROM posthog_person_deletion_jobs
+       WHERE status = 'pending'
+         AND (last_attempt_at IS NULL
+              OR last_attempt_at < NOW() - ($2 * INTERVAL '1 minute'))
+       ORDER BY created_at ASC, id ASC
+       LIMIT $1
+       FOR UPDATE SKIP LOCKED)
+     UPDATE posthog_person_deletion_jobs j
+     SET attempts = j.attempts + 1, last_attempt_at = NOW()
+     FROM picked
+     WHERE j.id = picked.id
+     RETURNING j.id, j.distinct_id"
+
+  let claim_batch (module C : Caqti_lwt.CONNECTION) ?(lease_minutes = default_lease_minutes) ~limit () =
+    C.collect_list claim_batch_query (limit, lease_minutes)
+    >>= function
+    | Ok rows ->
+        Lwt.return (Ok (List.sort (fun (a, _) (b, _) -> compare a b) rows))
+    | Error err -> Lwt.return (Error (Caqti_error.show err))
+
+  let mark_completed_query =
+    let open Caqti_request.Infix in
+    (Caqti_type.int ->. Caqti_type.unit)
+    "UPDATE posthog_person_deletion_jobs
+     SET status = 'completed', completed_at = NOW(), last_error = NULL
+     WHERE id = $1"
+
+  let mark_completed (module C : Caqti_lwt.CONNECTION) job_id =
+    C.exec mark_completed_query job_id
+    >>= function
+    | Ok () -> Lwt.return (Ok ())
+    | Error err -> Lwt.return (Error (Caqti_error.show err))
+
+  (* attempts/last_attempt_at were already advanced by the claim; a failure
+     only records the bounded safe diagnostic. Length-capped as a backstop —
+     callers must already pass short error classes, never response bodies. *)
+  let mark_failed_query =
+    let open Caqti_request.Infix in
+    (Caqti_type.(t2 int string) ->. Caqti_type.unit)
+    "UPDATE posthog_person_deletion_jobs
+     SET last_error = $2
+     WHERE id = $1 AND status = 'pending'"
+
+  let mark_failed (module C : Caqti_lwt.CONNECTION) job_id error =
+    let error =
+      if String.length error > 120 then String.sub error 0 120 else error
+    in
+    C.exec mark_failed_query (job_id, error)
+    >>= function
+    | Ok () -> Lwt.return (Ok ())
+    | Error err -> Lwt.return (Error (Caqti_error.show err))
+
+  (* Test/inspection lookup: (id, status, attempts, last_error). *)
+  let get_query =
+    let open Caqti_request.Infix in
+    (Caqti_type.string ->? Caqti_type.(t4 int string int (option string)))
+    "SELECT id, status, attempts, last_error
+     FROM posthog_person_deletion_jobs WHERE distinct_id = $1"
+
+  let get_by_distinct_id (module C : Caqti_lwt.CONNECTION) distinct_id =
+    C.find_opt get_query distinct_id
+    >>= function
+    | Ok res -> Lwt.return (Ok res)
+    | Error err -> Lwt.return (Error (Caqti_error.show err))
+end
+
+(* Durable §13 group-profile scrub jobs: when a community turns fully
+   private, its previously sent human-readable PostHog group properties must
+   be removed via the private Groups API. Same architecture as
+   PosthogDeletionJobs — enqueue in the authoritative transaction, bounded
+   lease-based claims, HTTP strictly outside the DB layer. *)
+module PosthogGroupCleanupJobs = struct
+  let default_lease_minutes = 15
+
+  (* Re-arming upsert: while pending, duplicate transitions converge on ONE
+     job; a NEW public->private transition re-arms a completed job (fresh
+     logical scrub request, counters and diagnostics reset). *)
+  let enqueue_query =
+    let open Caqti_request.Infix in
+    (Caqti_type.string ->! Caqti_type.int)
+    "INSERT INTO posthog_group_cleanup_jobs (group_key) VALUES ($1)
+     ON CONFLICT (group_key) DO UPDATE
+       SET status = 'pending', attempts = 0, last_error = NULL,
+           last_attempt_at = NULL, completed_at = NULL
+     RETURNING id"
+
+  (* §13 atomic transition: the visibility UPDATE and — when the new value is
+     private — the durable cleanup job commit together or roll back together,
+     so a crash can never leave a private community without its pending
+     scrub. No HTTP anywhere near this transaction. Returns the updated
+     community (None = id matched nothing) and the enqueued job id (None on
+     ->public transitions, which need no scrub). *)
+  let update_visibility_and_enqueue (module C : Caqti_lwt.CONNECTION)
+      community_id visibility =
+    C.start () >>= function
+    | Error e -> Lwt.return (Error (Caqti_error.show e))
+    | Ok () -> (
+        Community.update_community_visibility (module C) community_id visibility
+        >>= function
+        | Error e -> C.rollback () >>= fun _ -> Lwt.return (Error e)
+        | Ok None -> (
+            C.commit () >>= function
+            | Error e -> Lwt.return (Error (Caqti_error.show e))
+            | Ok () -> Lwt.return (Ok (None, None)))
+        | Ok (Some updated) ->
+            if visibility = Community_private then
+              C.find enqueue_query
+                (Posthog.community_group_key (updated : community).id)
+              >>= function
+              | Error e ->
+                  C.rollback () >>= fun _ ->
+                  Lwt.return (Error (Caqti_error.show e))
+              | Ok job_id -> (
+                  C.commit () >>= function
+                  | Error e -> Lwt.return (Error (Caqti_error.show e))
+                  | Ok () -> Lwt.return (Ok (Some updated, Some job_id)))
+            else
+              C.commit () >>= function
+              | Error e -> Lwt.return (Error (Caqti_error.show e))
+              | Ok () -> Lwt.return (Ok (Some updated, None)))
+
+  let claim_query =
+    let open Caqti_request.Infix in
+    (Caqti_type.(t2 int int) ->? Caqti_type.string)
+    "UPDATE posthog_group_cleanup_jobs
+     SET attempts = attempts + 1, last_attempt_at = NOW()
+     WHERE id = $1 AND status = 'pending'
+       AND (last_attempt_at IS NULL
+            OR last_attempt_at < NOW() - ($2 * INTERVAL '1 minute'))
+     RETURNING group_key"
+
+  let claim (module C : Caqti_lwt.CONNECTION)
+      ?(lease_minutes = default_lease_minutes) job_id =
+    C.find_opt claim_query (job_id, lease_minutes)
+    >>= function
+    | Ok res -> Lwt.return (Ok res)
+    | Error err -> Lwt.return (Error (Caqti_error.show err))
+
+  (* Same canonical CTE claim as PosthogDeletionJobs.claim_batch (see that
+     comment for the FOR UPDATE SKIP LOCKED rationale). *)
+  let claim_batch_query =
+    let open Caqti_request.Infix in
+    (Caqti_type.(t2 int int) ->* Caqti_type.(t2 int string))
+    "WITH picked AS (
+       SELECT id FROM posthog_group_cleanup_jobs
+       WHERE status = 'pending'
+         AND (last_attempt_at IS NULL
+              OR last_attempt_at < NOW() - ($2 * INTERVAL '1 minute'))
+       ORDER BY created_at ASC, id ASC
+       LIMIT $1
+       FOR UPDATE SKIP LOCKED)
+     UPDATE posthog_group_cleanup_jobs j
+     SET attempts = j.attempts + 1, last_attempt_at = NOW()
+     FROM picked
+     WHERE j.id = picked.id
+     RETURNING j.id, j.group_key"
+
+  let claim_batch (module C : Caqti_lwt.CONNECTION)
+      ?(lease_minutes = default_lease_minutes) ~limit () =
+    C.collect_list claim_batch_query (limit, lease_minutes)
+    >>= function
+    | Ok rows ->
+        Lwt.return (Ok (List.sort (fun (a, _) (b, _) -> compare a b) rows))
+    | Error err -> Lwt.return (Error (Caqti_error.show err))
+
+  let mark_completed_query =
+    let open Caqti_request.Infix in
+    (Caqti_type.int ->. Caqti_type.unit)
+    "UPDATE posthog_group_cleanup_jobs
+     SET status = 'completed', completed_at = NOW(), last_error = NULL
+     WHERE id = $1"
+
+  let mark_completed (module C : Caqti_lwt.CONNECTION) job_id =
+    C.exec mark_completed_query job_id
+    >>= function
+    | Ok () -> Lwt.return (Ok ())
+    | Error err -> Lwt.return (Error (Caqti_error.show err))
+
+  let mark_failed_query =
+    let open Caqti_request.Infix in
+    (Caqti_type.(t2 int string) ->. Caqti_type.unit)
+    "UPDATE posthog_group_cleanup_jobs
+     SET last_error = $2
+     WHERE id = $1 AND status = 'pending'"
+
+  let mark_failed (module C : Caqti_lwt.CONNECTION) job_id error =
+    let error =
+      if String.length error > 120 then String.sub error 0 120 else error
+    in
+    C.exec mark_failed_query (job_id, error)
+    >>= function
+    | Ok () -> Lwt.return (Ok ())
+    | Error err -> Lwt.return (Error (Caqti_error.show err))
+
+  (* Test/inspection lookup: (id, status, attempts, last_error). *)
+  let get_query =
+    let open Caqti_request.Infix in
+    (Caqti_type.string ->? Caqti_type.(t4 int string int (option string)))
+    "SELECT id, status, attempts, last_error
+     FROM posthog_group_cleanup_jobs WHERE group_key = $1"
+
+  let get_by_group_key (module C : Caqti_lwt.CONNECTION) group_key =
+    C.find_opt get_query group_key
+    >>= function
+    | Ok res -> Lwt.return (Ok res)
+    | Error err -> Lwt.return (Error (Caqti_error.show err))
 end
 
 module Mod_action = struct
@@ -3061,6 +3397,7 @@ let user_exists = User.user_exists
 let get_user_for_login = User.get_user_for_login
 let anonymize_user = User.anonymize_user
 let get_user_public = User.get_user_public
+let get_user_analytics_props = User.get_user_analytics_props
 let update_user_profile = User.update_user_profile
 let get_user_karma = User.get_user_karma
 let get_user_post_votes = User.get_user_post_votes
@@ -3158,9 +3495,10 @@ let get_comment_owner = Notification.get_comment_owner
 let get_comment_post_id = Notification.get_comment_post_id
 
 let log_page_view = Analytics.log_page_view
-let touch_user_active = Analytics.touch_user_active
 let get_kpi_dashboard = Analytics.get_kpi_dashboard
 let get_dau_mau_ratio = Analytics.get_dau_mau_ratio
+
+let touch_user_active = Presence.touch_user_active
 
 let update_password = Security.update_password
 let verify_email = Security.verify_email
@@ -3174,6 +3512,23 @@ let pending_signup_username_elsewhere = PendingSignup.username_pending_elsewhere
 let pending_signup_upsert = PendingSignup.upsert
 let pending_signup_sweep_expired = PendingSignup.sweep_expired
 let pending_signup_confirm = PendingSignup.confirm
+
+let anonymize_user_and_enqueue_posthog_deletion =
+  PosthogDeletionJobs.anonymize_and_enqueue
+let claim_posthog_deletion_job = PosthogDeletionJobs.claim
+let claim_posthog_deletion_batch = PosthogDeletionJobs.claim_batch
+let complete_posthog_deletion_job = PosthogDeletionJobs.mark_completed
+let fail_posthog_deletion_job = PosthogDeletionJobs.mark_failed
+let get_posthog_deletion_job = PosthogDeletionJobs.get_by_distinct_id
+
+let update_community_visibility_and_enqueue_group_cleanup =
+  PosthogGroupCleanupJobs.update_visibility_and_enqueue
+
+let claim_posthog_group_cleanup_job = PosthogGroupCleanupJobs.claim
+let claim_posthog_group_cleanup_batch = PosthogGroupCleanupJobs.claim_batch
+let complete_posthog_group_cleanup_job = PosthogGroupCleanupJobs.mark_completed
+let fail_posthog_group_cleanup_job = PosthogGroupCleanupJobs.mark_failed
+let get_posthog_group_cleanup_job = PosthogGroupCleanupJobs.get_by_group_key
 
 let admin_delete_post = Admin.admin_delete_post
 let admin_delete_comment = Admin.admin_delete_comment
