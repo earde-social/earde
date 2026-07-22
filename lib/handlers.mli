@@ -151,6 +151,15 @@ val unban_user_global_handler : Dream.handler
 val admin_dashboard_handler : Dream.handler
 val debug_state_handler : Dream.handler
 
+(** === ANALYTICS CONSENT (spec §9) === *)
+(** JSON-only, Origin/Sec-Fetch-Site-protected, session-optional; sets the
+    plaintext earde_analytics_consent cookie and, on granted with an
+    authenticated session, performs the single person-property sync. *)
+val analytics_consent_handler : Dream.handler
+
+(** Controlled JSON 405 for non-POST methods on /analytics/consent. *)
+val analytics_consent_method_not_allowed : Dream.handler
+
 (** === MIDDLEWARE === *)
 val presence_middleware : Dream.handler -> Dream.handler
 val analytics_middleware : Dream.handler -> Dream.handler

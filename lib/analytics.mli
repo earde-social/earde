@@ -89,6 +89,42 @@ type event =
 (** ["user:<database_id>"] — the §4.1 authenticated distinct-ID scheme. *)
 val distinct_id_of_user_id : int -> string
 
+(** Strictly public browser configuration: the write-only project token and
+    the ingest host, nothing else. [None] when analytics is disabled or the
+    required configuration is invalid — in that case no banner, no config
+    attributes, and no PostHog request may be produced. Server-only values
+    ([POSTHOG_PERSONAL_API_KEY], [POSTHOG_PROJECT_ID]) are not reachable
+    through this interface. *)
+type browser_config = { browser_token : string; browser_api_host : string }
+
+val browser_config : unit -> browser_config option
+
+(** Consent cookie contract (§9): plaintext (JS-readable), [Path=/],
+    [SameSite=Lax], no [HttpOnly], ~180-day Max-Age, [Secure] when the
+    configured public origin is https. *)
+val consent_cookie_name : string
+
+val consent_cookie_max_age : float
+val consent_cookie_secure : unit -> bool
+
+(** §9 route-specific protection for [POST /analytics/consent]: exact Origin
+    match against [EARDE_PUBLIC_ORIGIN], same-origin/same-site
+    [Sec-Fetch-Site], JSON-only content type, and a body of exactly
+    [{"state": "granted"|"denied"}]. No Dream CSRF token and no session are
+    involved — a first-time landing visitor has neither. *)
+val validate_consent_request :
+  content_type:string option ->
+  origin:string option ->
+  sec_fetch_site:string option ->
+  body:string ->
+  ( [ `Granted | `Denied ],
+    [ `Bad_request of string | `Forbidden of string ] )
+  result
+
+(** §2.3 URL rule (reference implementation, mirrored by analytics.js):
+    strips the query string and fragment, keeping origin + path only. *)
+val sanitize_url_for_analytics : string -> string
+
 (** Captures the event iff analytics is enabled and the request carries
     [earde_analytics_consent=granted]. Missing, denied, or malformed consent
     produces no side effect. Community-scoped events automatically carry

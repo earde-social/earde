@@ -570,6 +570,19 @@ module User = struct
     | Ok None -> Lwt.return (Ok None)
     | Error err -> Lwt.return (Error (Caqti_error.show err))
 
+  (* Closed analytics person-property lookup (spec §4.3): exactly the four
+     allowed fields — username, email, signup date, is_admin — nothing else. *)
+  let get_user_analytics_props_query =
+    let open Caqti_request.Infix in
+    (Caqti_type.int ->? Caqti_type.(t4 string string string bool))
+    "SELECT username, email, created_at::text, is_admin FROM users WHERE id = $1"
+
+  let get_user_analytics_props (module C : Caqti_lwt.CONNECTION) user_id =
+    C.find_opt get_user_analytics_props_query user_id
+    >>= function
+    | Ok row -> Lwt.return (Ok row)
+    | Error err -> Lwt.return (Error (Caqti_error.show err))
+
   let update_user_profile_query =
     let open Caqti_request.Infix in
     (Caqti_type.(t3 (option string) (option string) int) ->. Caqti_type.unit)
@@ -3069,6 +3082,7 @@ let user_exists = User.user_exists
 let get_user_for_login = User.get_user_for_login
 let anonymize_user = User.anonymize_user
 let get_user_public = User.get_user_public
+let get_user_analytics_props = User.get_user_analytics_props
 let update_user_profile = User.update_user_profile
 let get_user_karma = User.get_user_karma
 let get_user_post_votes = User.get_user_post_votes

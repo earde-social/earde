@@ -124,17 +124,19 @@ let strip_trailing_slash value =
 let config_from_env () =
   let enabled_flag = getenv_nonempty enabled_env = Some "true" in
   let token = getenv_nonempty project_token_env in
+  let origin = getenv_nonempty public_origin_env in
   let enabled, project_token =
-    match (enabled_flag, token) with
-    | true, Some t -> (true, t)
-    | true, None ->
-        (* Misconfigured: enabled without a token. Disable safely rather than
-           break the product; log the variable name, never any value. *)
+    match (enabled_flag, token, origin) with
+    | true, Some t, Some _ -> (true, t)
+    | true, _, _ ->
+        (* Misconfigured: enabled without a token or without the public origin
+           the §9 consent endpoint needs. Disable safely rather than break the
+           product; log the variable names, never any value. *)
         Logs.warn (fun m ->
-            m "%s=true but %s is unset; analytics disabled" enabled_env
-              project_token_env);
+            m "%s=true but %s or %s is unset; analytics disabled" enabled_env
+              project_token_env public_origin_env);
         (false, "")
-    | false, _ -> (false, "")
+    | false, _, _ -> (false, "")
   in
   let host_or env_name default =
     match getenv_nonempty env_name with
@@ -162,9 +164,83 @@ let current_config () =
   | Some config -> config
   | None -> Lazy.force env_config
 
+(* === Browser configuration (strictly public values) === *)
+
+type browser_config = { browser_token : string; browser_api_host : string }
+
+(* Only the public write-only project token and the ingest host ever reach the
+   browser. personal_api_key and project_id are deliberately unreachable from
+   here. None ⇒ render no banner, no config attributes, no scripts. *)
+let browser_config () =
+  let c = current_config () in
+  if c.enabled then
+    Some { browser_token = c.project_token; browser_api_host = c.api_host }
+  else None
+
 (* === Consent (pure) === *)
 
 let consent_cookie_name = "earde_analytics_consent"
+
+(* ~180 days, in seconds, for the cookie Max-Age (§9). *)
+let consent_cookie_max_age = 15552000.0
+
+let allowed_public_origin () =
+  let c = current_config () in
+  if c.enabled then c.public_origin else None
+
+(* Secure flag follows the configured public origin's scheme: https in
+   production ⇒ Secure; http in local dev ⇒ not, so the cookie still works. *)
+let consent_cookie_secure () =
+  match allowed_public_origin () with
+  | Some origin ->
+      String.length origin >= 8 && String.sub origin 0 8 = "https://"
+  | None -> false
+
+(* §9 route-specific request protection for POST /analytics/consent. This
+   endpoint deliberately has no Dream CSRF token (the static landing cannot
+   obtain one) and requires no session; instead: exact Origin match against
+   EARDE_PUBLIC_ORIGIN, same-origin/same-site Sec-Fetch-Site, JSON-only
+   content type, and a body of exactly {"state": "granted"|"denied"}. *)
+let validate_consent_request ~content_type ~origin ~sec_fetch_site ~body =
+  let origin_ok =
+    match (origin, allowed_public_origin ()) with
+    | Some o, Some allowed -> String.trim o = allowed
+    | _ -> false
+  in
+  let fetch_site_ok =
+    match Option.map String.trim sec_fetch_site with
+    | Some "same-origin" | Some "same-site" -> true
+    | _ -> false
+  in
+  let is_json =
+    match content_type with
+    | None -> false
+    | Some ct -> (
+        let ct = String.lowercase_ascii (String.trim ct) in
+        let mime = "application/json" in
+        let ml = String.length mime in
+        String.length ct >= ml
+        && String.sub ct 0 ml = mime
+        && (String.length ct = ml || ct.[ml] = ';'))
+  in
+  if not origin_ok then Error (`Forbidden "origin not allowed")
+  else if not fetch_site_ok then Error (`Forbidden "fetch metadata not allowed")
+  else if not is_json then Error (`Bad_request "expected application/json")
+  else
+    match Yojson.Safe.from_string body with
+    | exception _ -> Error (`Bad_request "invalid JSON")
+    | `Assoc [ ("state", `String "granted") ] -> Ok `Granted
+    | `Assoc [ ("state", `String "denied") ] -> Ok `Denied
+    | _ ->
+        Error
+          (`Bad_request "body must be exactly {\"state\":\"granted\"|\"denied\"}")
+
+(* Reference implementation of the §2.3 URL rule, mirrored by analytics.js:
+   analytics URLs carry origin + path only — never query strings (which hold
+   confirmation/reset tokens and search text) and never fragments. *)
+let sanitize_url_for_analytics raw =
+  let uri = Uri.of_string raw in
+  Uri.to_string (Uri.with_fragment (Uri.with_query uri []) None)
 
 (* Exact parse of the raw Cookie header: the consent cookie is a plaintext,
    JS-readable cookie (§9), so no Dream cookie decryption applies. Anything
@@ -453,13 +529,13 @@ module For_testing = struct
   let test_config ~enabled =
     {
       enabled;
-      (* Dummy token, not a real credential. *)
+      (* Dummy token/origin, not real values. *)
       project_token = (if enabled then "phc_test_token" else "");
       api_host = default_api_host;
       ui_host = default_ui_host;
       project_id = None;
       personal_api_key = None;
-      public_origin = None;
+      public_origin = (if enabled then Some "http://earde.test" else None);
     }
 
   let use_enabled_test_configuration () =

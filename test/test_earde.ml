@@ -835,6 +835,148 @@ let check_group name expected event =
         name expected
         (an_group_key (an_payload event)))
 
+(* --- Step-4: consent endpoint, cookie contract, browser config ----------- *)
+
+let contains haystack needle =
+  let hl = String.length haystack and nl = String.length needle in
+  if nl = 0 then true
+  else
+    let rec loop i =
+      if i > hl - nl then false
+      else if String.sub haystack i nl = needle then true
+      else loop (i + 1)
+    in
+    loop 0
+
+let read_analytics_js () =
+  (* dune test runs in test/, dune exec from the project root. *)
+  let path =
+    if Sys.file_exists "../static/js/analytics.js" then
+      "../static/js/analytics.js"
+    else "static/js/analytics.js"
+  in
+  let ic = open_in path in
+  let n = in_channel_length ic in
+  let s = really_input_string ic n in
+  close_in ic;
+  s
+
+let validate_result_str = function
+  | Ok `Granted -> "granted"
+  | Ok `Denied -> "denied"
+  | Error (`Bad_request _) -> "bad_request"
+  | Error (`Forbidden _) -> "forbidden"
+
+(* The dummy origin baked into For_testing.use_enabled_test_configuration. *)
+let test_origin = "http://earde.test"
+
+let check_validate name expected ~content_type ~origin ~sec_fetch_site body =
+  an_case name (fun () ->
+      AnT.use_enabled_test_configuration ();
+      Fun.protect ~finally:AnT.clear_configuration_override (fun () ->
+          Alcotest.(check string) name expected
+            (validate_result_str
+               (An.validate_consent_request ~content_type ~origin
+                  ~sec_fetch_site ~body))))
+
+let consent_good_headers =
+  [ ("Content-Type", "application/json")
+  ; ("Origin", test_origin)
+  ; ("Sec-Fetch-Site", "same-origin")
+  ]
+
+(* Runs the real handler on a mock request (deliberately WITHOUT session or
+   sql middleware: a first-time visitor has neither) and returns
+   (status, set-cookie header, sync payloads observed by the sink). *)
+let run_consent ?(headers = consent_good_headers) body =
+  let payloads = ref [] in
+  AnT.use_enabled_test_configuration ();
+  AnT.set_capture_sink (fun p -> payloads := p :: !payloads);
+  Fun.protect
+    ~finally:(fun () ->
+      AnT.clear_capture_sink ();
+      AnT.clear_configuration_override ())
+    (fun () ->
+      let request =
+        Dream.request ~method_:`POST ~target:"/analytics/consent" ~headers body
+      in
+      let response =
+        Lwt_main.run (Earde.Handlers.analytics_consent_handler request)
+      in
+      ( Dream.status_to_int (Dream.status response),
+        Dream.header response "Set-Cookie",
+        List.rev !payloads ))
+
+let check_consent_reject name expected_status ?headers body =
+  an_case name (fun () ->
+      let status, cookie, payloads = run_consent ?headers body in
+      Alcotest.(check int) (name ^ " status") expected_status status;
+      Alcotest.(check (option string)) (name ^ " no cookie") None cookie;
+      Alcotest.(check int) (name ^ " no sync") 0 (List.length payloads))
+
+(* Gated DB case: a real user row + sql_pool + memory sessions, so a granted
+   authenticated request performs exactly one closed person-property sync. *)
+let consent_sync_db_case =
+  Returning_ids.db_case "granted consent syncs person props once (authed)"
+    (fun _conn c ->
+      let ( let* ) = Lwt.bind in
+      let (module C : Caqti_lwt.CONNECTION) = c in
+      let* author = C.find Returning_ids.q_insert_user "step3ret_author" in
+      let* author = Returning_ids.or_fail "author" author in
+      let url =
+        match Sys.getenv_opt "EARDE_TEST_DATABASE_URL" with
+        | Some u -> u
+        | None -> Alcotest.fail "gate env var vanished"
+      in
+      let payloads = ref [] in
+      AnT.use_enabled_test_configuration ();
+      AnT.set_capture_sink (fun p -> payloads := p :: !payloads);
+      Lwt.finalize
+        (fun () ->
+          let pipeline =
+            Dream.sql_pool url @@ Dream.memory_sessions @@ fun req ->
+            let* () =
+              Dream.set_session_field req "user_id" (string_of_int author)
+            in
+            Earde.Handlers.analytics_consent_handler req
+          in
+          let request =
+            Dream.request ~method_:`POST ~target:"/analytics/consent"
+              ~headers:consent_good_headers {|{"state":"granted"}|}
+          in
+          let* response = pipeline request in
+          Alcotest.(check int) "status" 204
+            (Dream.status_to_int (Dream.status response));
+          (match !payloads with
+           | [ payload ] ->
+               (match payload_member "event" payload with
+                | Some (`String e) ->
+                    Alcotest.(check string) "event" "$identify" e
+                | _ -> Alcotest.fail "sync payload has no event");
+               (match payload_member "distinct_id" payload with
+                | Some (`String d) ->
+                    Alcotest.(check string) "distinct id"
+                      ("user:" ^ string_of_int author)
+                      d
+                | _ -> Alcotest.fail "sync payload has no distinct_id");
+               (match List.assoc_opt "$set" (payload_props payload) with
+                | Some (`Assoc set) ->
+                    Alcotest.(check (option string)) "username"
+                      (Some "step3ret_author")
+                      (match List.assoc_opt "username" set with
+                       | Some (`String u) -> Some u
+                       | _ -> None);
+                    Alcotest.(check bool) "email present" true
+                      (List.mem_assoc "email" set)
+                | _ -> Alcotest.fail "sync payload has no $set")
+           | l ->
+               Alcotest.failf "expected exactly 1 sync, got %d" (List.length l));
+          Lwt.return_unit)
+        (fun () ->
+          AnT.clear_capture_sink ();
+          AnT.clear_configuration_override ();
+          Lwt.return_unit))
+
 let () =
   Alcotest.run "earde"
     [ ( "smoke"
@@ -1501,6 +1643,287 @@ let () =
                   Alcotest.(check (option bool)) "project id unset" (Some false)
                     (List.assoc_opt "POSTHOG_PROJECT_ID" report)))
         ] )
+      (* §9 request validation matrix: JSON-only, exactly-one-field body,
+         exact Origin, same-origin/same-site Sec-Fetch-Site. *)
+    ; ( "analytics_consent_validate"
+      , [ check_validate "granted ok" "granted"
+            ~content_type:(Some "application/json") ~origin:(Some test_origin)
+            ~sec_fetch_site:(Some "same-origin") {|{"state":"granted"}|}
+        ; check_validate "denied ok" "denied"
+            ~content_type:(Some "application/json") ~origin:(Some test_origin)
+            ~sec_fetch_site:(Some "same-site") {|{"state":"denied"}|}
+        ; check_validate "json with charset ok" "granted"
+            ~content_type:(Some "application/json; charset=utf-8")
+            ~origin:(Some test_origin) ~sec_fetch_site:(Some "same-origin")
+            {|{"state":"granted"}|}
+        ; check_validate "form content-type rejected" "bad_request"
+            ~content_type:(Some "application/x-www-form-urlencoded")
+            ~origin:(Some test_origin) ~sec_fetch_site:(Some "same-origin")
+            "state=granted"
+        ; check_validate "missing content-type rejected" "bad_request"
+            ~content_type:None ~origin:(Some test_origin)
+            ~sec_fetch_site:(Some "same-origin") {|{"state":"granted"}|}
+        ; check_validate "malformed json rejected" "bad_request"
+            ~content_type:(Some "application/json") ~origin:(Some test_origin)
+            ~sec_fetch_site:(Some "same-origin") "{state:"
+        ; check_validate "additional field rejected" "bad_request"
+            ~content_type:(Some "application/json") ~origin:(Some test_origin)
+            ~sec_fetch_site:(Some "same-origin")
+            {|{"state":"granted","extra":1}|}
+        ; check_validate "invalid state rejected" "bad_request"
+            ~content_type:(Some "application/json") ~origin:(Some test_origin)
+            ~sec_fetch_site:(Some "same-origin") {|{"state":"yes"}|}
+        ; check_validate "missing state rejected" "bad_request"
+            ~content_type:(Some "application/json") ~origin:(Some test_origin)
+            ~sec_fetch_site:(Some "same-origin") {|{}|}
+        ; check_validate "non-object body rejected" "bad_request"
+            ~content_type:(Some "application/json") ~origin:(Some test_origin)
+            ~sec_fetch_site:(Some "same-origin") {|"granted"|}
+        ; check_validate "wrong origin rejected" "forbidden"
+            ~content_type:(Some "application/json")
+            ~origin:(Some "https://evil.example") ~sec_fetch_site:(Some "same-origin")
+            {|{"state":"granted"}|}
+        ; check_validate "missing origin rejected" "forbidden"
+            ~content_type:(Some "application/json") ~origin:None
+            ~sec_fetch_site:(Some "same-origin") {|{"state":"granted"}|}
+        ; check_validate "cross-site fetch rejected" "forbidden"
+            ~content_type:(Some "application/json") ~origin:(Some test_origin)
+            ~sec_fetch_site:(Some "cross-site") {|{"state":"granted"}|}
+        ; check_validate "missing sec-fetch-site rejected" "forbidden"
+            ~content_type:(Some "application/json") ~origin:(Some test_origin)
+            ~sec_fetch_site:None {|{"state":"granted"}|}
+        ] )
+      (* The real handler on mock requests: cookie contract, controlled JSON
+         errors, no session required, failures isolated. *)
+    ; ( "analytics_consent_endpoint"
+      , [ an_case "granted: 204 + exact cookie, no session needed, no sync"
+            (fun () ->
+              let status, cookie, payloads =
+                run_consent {|{"state":"granted"}|}
+              in
+              Alcotest.(check int) "status" 204 status;
+              let cookie = Option.value ~default:"" cookie in
+              Alcotest.(check bool) "value" true
+                (contains cookie "earde_analytics_consent=granted");
+              Alcotest.(check bool) "path" true (contains cookie "Path=/");
+              Alcotest.(check bool) "max-age" true
+                (contains cookie "Max-Age=15552000");
+              Alcotest.(check bool) "samesite lax" true
+                (contains cookie "SameSite=Lax");
+              Alcotest.(check bool) "no httponly" false
+                (contains cookie "HttpOnly");
+              Alcotest.(check bool) "no secure on http origin" false
+                (contains cookie "Secure");
+              Alcotest.(check int) "anonymous grant syncs nothing" 0
+                (List.length payloads))
+        ; an_case "denied: 204 + denied cookie, no sync" (fun () ->
+              let status, cookie, payloads = run_consent {|{"state":"denied"}|} in
+              Alcotest.(check int) "status" 204 status;
+              Alcotest.(check bool) "value" true
+                (contains (Option.value ~default:"" cookie)
+                   "earde_analytics_consent=denied");
+              Alcotest.(check int) "no sync" 0 (List.length payloads))
+        ; check_consent_reject "form body -> 400" 400
+            ~headers:
+              [ ("Content-Type", "application/x-www-form-urlencoded")
+              ; ("Origin", test_origin)
+              ; ("Sec-Fetch-Site", "same-origin")
+              ]
+            "state=granted"
+        ; check_consent_reject "extra field -> 400" 400
+            {|{"state":"granted","x":1}|}
+        ; check_consent_reject "invalid state -> 400" 400 {|{"state":"maybe"}|}
+        ; check_consent_reject "malformed json -> 400" 400 "{"
+        ; check_consent_reject "bad origin -> 403" 403
+            ~headers:
+              [ ("Content-Type", "application/json")
+              ; ("Origin", "https://evil.example")
+              ; ("Sec-Fetch-Site", "same-origin")
+              ]
+            {|{"state":"granted"}|}
+        ; check_consent_reject "no origin metadata -> 403" 403
+            ~headers:[ ("Content-Type", "application/json") ]
+            {|{"state":"granted"}|}
+        ; an_case "unsupported method -> controlled 405 JSON" (fun () ->
+              let response =
+                Lwt_main.run
+                  (Earde.Handlers.analytics_consent_method_not_allowed
+                     (Dream.request ~method_:`GET ~target:"/analytics/consent"
+                        ""))
+              in
+              Alcotest.(check int) "status" 405
+                (Dream.status_to_int (Dream.status response));
+              Alcotest.(check (option string)) "allow" (Some "POST")
+                (Dream.header response "Allow"))
+        ; an_case "person-lookup failure never blocks the consent response"
+            (fun () ->
+              (* Session present but no sql pool: the lookup raises, is
+                 swallowed, and the cookie is still set. *)
+              let payloads = ref [] in
+              AnT.use_enabled_test_configuration ();
+              AnT.set_capture_sink (fun p -> payloads := p :: !payloads);
+              Fun.protect
+                ~finally:(fun () ->
+                  AnT.clear_capture_sink ();
+                  AnT.clear_configuration_override ())
+                (fun () ->
+                  let pipeline =
+                    Dream.memory_sessions (fun req ->
+                        Lwt.bind
+                          (Dream.set_session_field req "user_id" "12345")
+                          (fun () ->
+                            Earde.Handlers.analytics_consent_handler req))
+                  in
+                  let response =
+                    Lwt_main.run
+                      (pipeline
+                         (Dream.request ~method_:`POST
+                            ~target:"/analytics/consent"
+                            ~headers:consent_good_headers
+                            {|{"state":"granted"}|}))
+                  in
+                  Alcotest.(check int) "status" 204
+                    (Dream.status_to_int (Dream.status response));
+                  Alcotest.(check bool) "cookie still set" true
+                    (contains
+                       (Option.value ~default:""
+                          (Dream.header response "Set-Cookie"))
+                       "earde_analytics_consent=granted");
+                  Alcotest.(check int) "no sync happened" 0
+                    (List.length !payloads)))
+        ] )
+      (* Layout emission: banner + strictly public config when enabled;
+         nothing at all when disabled; never a server-only secret. *)
+    ; ( "analytics_layout"
+      , [ an_case "enabled: banner, script, public attrs only" (fun () ->
+              AnT.use_enabled_test_configuration ();
+              Fun.protect ~finally:AnT.clear_configuration_override (fun () ->
+                  let html =
+                    Earde.Components.layout ~title:"T" "<p>body</p>"
+                  in
+                  Alcotest.(check bool) "banner" true
+                    (contains html "id='analytics-consent'");
+                  Alcotest.(check bool) "script" true
+                    (contains html "/static/js/analytics.js");
+                  Alcotest.(check bool) "token attr" true
+                    (contains html "data-ph-token='phc_test_token'");
+                  Alcotest.(check bool) "api host attr" true
+                    (contains html "data-ph-api-host='https://eu.i.posthog.com'");
+                  Alcotest.(check bool) "banner ships hidden" true
+                    (contains html "id='analytics-consent' hidden");
+                  Alcotest.(check bool) "no personal key marker" false
+                    (contains html "phx_");
+                  Alcotest.(check bool) "no project id leak" false
+                    (contains html "229260")))
+        ; an_case "disabled: no banner, no script, no config" (fun () ->
+              AnT.use_disabled_test_configuration ();
+              Fun.protect ~finally:AnT.clear_configuration_override (fun () ->
+                  let html =
+                    Earde.Components.layout ~title:"T" "<p>body</p>"
+                  in
+                  Alcotest.(check bool) "no banner" false
+                    (contains html "analytics-consent");
+                  Alcotest.(check bool) "no script" false
+                    (contains html "/static/js/analytics.js");
+                  Alcotest.(check bool) "no token attr" false
+                    (contains html "data-ph-token")))
+        ] )
+      (* §2.3 URL rule, reference implementation. *)
+    ; ( "analytics_url_sanitizer"
+      , [ an_case "token query stripped" (fun () ->
+              Alcotest.(check string) "confirm-email" "/confirm-email"
+                (An.sanitize_url_for_analytics "/confirm-email?token=abc"))
+        ; an_case "search query stripped" (fun () ->
+              Alcotest.(check string) "search" "/search"
+                (An.sanitize_url_for_analytics "/search?q=x&page=2"))
+        ; an_case "fragment stripped" (fun () ->
+              Alcotest.(check string) "fragment" "https://earde.com/p/1"
+                (An.sanitize_url_for_analytics "https://earde.com/p/1#frag"))
+        ; an_case "query and fragment stripped" (fun () ->
+              Alcotest.(check string) "both" "https://earde.com/feed"
+                (An.sanitize_url_for_analytics "https://earde.com/feed?a=1#b"))
+        ; an_case "clean url unchanged" (fun () ->
+              Alcotest.(check string) "clean" "https://earde.com/feed"
+                (An.sanitize_url_for_analytics "https://earde.com/feed"))
+        ] )
+      (* Replay masking config coverage: every §6 selector/setting must be in
+         the shipped analytics.js, plus the document-title protections. *)
+    ; ( "analytics_replay_masking"
+      , [ an_case "analytics.js covers all §6 masking targets" (fun () ->
+              let js = read_analytics_js () in
+              List.iter
+                (fun needle ->
+                  if not (contains js needle) then
+                    Alcotest.failf "analytics.js is missing %S" needle)
+                [ ".ph-mask"; ".cs-msg-text"; ".cs-msg-author"; "#chat-typing"
+                ; ".cs-presence-name"; ".ft-title"; ".ft-preview"; ".th-title"
+                ; ".th-body"; ".sr-row-title"; ".sr-row-excerpt"; ".ctext"
+                ; "comment-content-"; ".account-notif-msg"; ".cm-table-reason"
+                ; ".admin-cell-muted"; ".account-bio"; "maskAllInputs: true"
+                ; "recordHeaders: false"; "recordBody: false"
+                ; "capture_pageview: false"; "capture_pageleave: true"
+                ])
+        ; an_case "document title is masked in replay and stripped from events"
+            (fun () ->
+              let js = read_analytics_js () in
+              (* "title" element selector in the mask list (verified against
+                 the rrweb source posthog-js bundles: text-node masking checks
+                 the parent element, only STYLE/SCRIPT excluded). *)
+              Alcotest.(check bool) "title selector present" true
+                (contains js "\"title\",");
+              (* $title removed from every outbound event... *)
+              Alcotest.(check bool) "$title deletion present" true
+                (contains js "delete props.$title");
+              (* ...and never replaced by document.title or any other
+                 user-controlled value; no search-query handling either. *)
+              Alcotest.(check bool) "no document.title reference" false
+                (contains js "document.title");
+              Alcotest.(check bool) "no query-string handling" false
+                (contains js "location.search"))
+        ] )
+      (* Document-title leakage: the search term must never enter <title>. *)
+    ; ( "analytics_title_leakage"
+      , [ an_case "/search?q=secret renders a generic document title" (fun () ->
+              let rendered = ref "" in
+              let (_ : Dream.response) =
+                Lwt_main.run
+                  (Dream.memory_sessions
+                     (fun req ->
+                       rendered :=
+                         Earde.Pages.search_results_page ~admin_usernames:[]
+                           [] 1 "all" "secret" [] [] [] [] req;
+                       Dream.html !rendered)
+                     (Dream.request ~method_:`GET
+                        ~target:"/search?q=secret" ""))
+              in
+              let html = !rendered in
+              let title_tag =
+                (* Extract exactly the <title>…</title> element. *)
+                let start = ref 0 and stop = ref 0 in
+                String.iteri
+                  (fun i _ ->
+                    if
+                      i + 7 <= String.length html
+                      && String.sub html i 7 = "<title>"
+                    then start := i
+                    else if
+                      i + 8 <= String.length html
+                      && String.sub html i 8 = "</title>"
+                    then if !stop = 0 then stop := i)
+                  html;
+                if !stop > !start then String.sub html !start (!stop - !start)
+                else Alcotest.fail "no <title> found"
+              in
+              Alcotest.(check bool) "title has no query" false
+                (contains title_tag "secret");
+              Alcotest.(check bool) "title is the generic label" true
+                (contains title_tag "Search");
+              (* The visible UI still echoes the query (input value, masked by
+                 maskAllInputs) — only the title had to change. *)
+              Alcotest.(check bool) "page body still echoes query in input" true
+                (contains html "value='secret'"))
+        ] )
     ; ( "mod_delete_community_scope", Mod_scope.suite )
     ; ( "db_returning_ids", Returning_ids.suite )
+    ; ( "analytics_consent_db", [ consent_sync_db_case ] )
     ]

@@ -2081,7 +2081,8 @@ let community_overview_page ?user ?(noindex=false) ~is_member ~is_current_user_m
     channels_block sections_block recent_block
     rules_panel mods_panel modlog_card
   in
-  Components.community_home_page ?user ~noindex ~request ~title:community.name ~body:content ()
+  Components.community_home_page ?user ~noindex ~request ~title:community.name
+    ~body:(Components.private_replay_guard ~community content) ()
 
 let community_settings_page ?user ~is_admin ~is_top_mod ~open_reports_count ~(community : community) ~(mods : user list) ~(banned_users : user list) ~(members : user list) ~(sections : community_section list) ~(channels : Db.channel list) request =
   let csrf_token = Dream.csrf_tag request in
@@ -2709,7 +2710,8 @@ let community_settings_page ?user ~is_admin ~is_top_mod ~open_reports_count ~(co
     (nav_item ~danger:true "bans" "Bans")
     main_panel
   in
-  Components.community_manage_page ?user ~request ~title:(Printf.sprintf "Settings — /c/%s" community.slug) ~body:content ()
+  Components.community_manage_page ?user ~request ~title:(Printf.sprintf "Settings — /c/%s" community.slug)
+    ~body:(Components.private_replay_guard ~community content) ()
 
 let manage_mods_page ?user ~is_admin ~current_user_role ~(community : community) ~(mods : moderator_entry list) request =
   let csrf_token = Dream.csrf_tag request in
@@ -2841,7 +2843,8 @@ let manage_mods_page ?user ~is_admin ~current_user_role ~(community : community)
     mod_section
     legacy_section
   in
-  Components.community_manage_page ?user ~request ~title:(Printf.sprintf "Manage Mods — /c/%s" community.slug) ~body:content ()
+  Components.community_manage_page ?user ~request ~title:(Printf.sprintf "Manage Mods — /c/%s" community.slug)
+    ~body:(Components.private_replay_guard ~community content) ()
 
 (* === POST === *)
 
@@ -3119,7 +3122,7 @@ let report_form_page ?user ~(community : community) ~(target_type : Db.report_ta
     if String.length t <= 160 then t else String.sub t 0 157 ^ "\xe2\x80\xa6" in
   let excerpt_html =
     if excerpt = "" then ""
-    else Printf.sprintf "<div class='create-field'><label class='create-label'>Reported %s</label><p class='create-hint'>%s</p></div>"
+    else Printf.sprintf "<div class='create-field'><label class='create-label'>Reported %s</label><p class='create-hint ph-mask'>%s</p></div>"
       kind_label (esc excerpt) in
   let reason_option value label = Printf.sprintf "<option value='%s'>%s</option>" value label in
   let reasons = String.concat "\n" [
@@ -3232,7 +3235,7 @@ let reports_queue_page ?user ~(community : community) ~(status : Db.report_statu
     let context_html = match List.assoc_opt r.id previews with
       | Some (url, preview) ->
           Printf.sprintf
-            "<a href='%s' class='cm-table-actor'>View %s &rarr;</a><br><span class='cm-table-target'>%s</span>"
+            "<a href='%s' class='cm-table-actor'>View %s &rarr;</a><br><span class='cm-table-target ph-mask'>%s</span>"
             (Components.safe_internal_path url) (target_label r.target_type) (esc (excerpt preview))
       | None -> "<span class='cm-table-target'>Target unavailable or deleted</span>" in
     (* Resolution controls live only on still-open reports; the handler re-checks both that
@@ -3259,7 +3262,7 @@ let reports_queue_page ?user ~(community : community) ~(status : Db.report_statu
           | Some t -> Printf.sprintf "<div>Resolved %s</div>" (Components.time_ago t)
           | None -> "" in
         let note = match r.resolution_note with
-          | Some n when String.trim n <> "" -> Printf.sprintf "<div>Note: %s</div>" (esc (excerpt n))
+          | Some n when String.trim n <> "" -> Printf.sprintf "<div class='ph-mask'>Note: %s</div>" (esc (excerpt n))
           | _ -> "" in
         let body = kind ^ resolved ^ note in
         if body = "" then "<span class='cm-table-target'>&mdash;</span>"
@@ -3326,7 +3329,8 @@ let reports_queue_page ?user ~(community : community) ~(status : Db.report_statu
     preview_note
     table_body
   in
-  Components.community_manage_page ?user ~request ~title:(community.name ^ " — Reports") ~body:content ()
+  Components.community_manage_page ?user ~request ~title:(community.name ^ " — Reports")
+    ~body:(Components.private_replay_guard ~community content) ()
 
 let post_page ?user ?(noindex=false) ~is_member ~is_current_user_mod ~mod_usernames ~admin_usernames ~banned_usernames ~community ~user_communities:_ ~moderated_communities:_ user_post_votes user_comment_votes (post : post) (comments : comment list) request =
   let csrf_token = Dream.csrf_tag request in
@@ -3652,7 +3656,7 @@ let post_page ?user ?(noindex=false) ~is_member ~is_current_user_mod ~mod_userna
       </div>" post.community_slug csrf_token post.community_id post.id post.community_slug
   in
 
-  let post_content = match post.content with | Some c -> Printf.sprintf "<div class='text-sm text-gray-800 leading-relaxed whitespace-pre-wrap break-words mt-2 mb-3'>%s</div>" (Components.html_escape c) | None -> "" in
+  let post_content = match post.content with | Some c -> Printf.sprintf "<div class='ph-mask text-sm text-gray-800 leading-relaxed whitespace-pre-wrap break-words mt-2 mb-3'>%s</div>" (Components.html_escape c) | None -> "" in
   let link_content = match post.url with | Some u -> Printf.sprintf "<div class='mb-6'><a href='%s' target='_blank' class='text-blue-600 hover:underline break-all'>🔗 %s</a></div>" (Components.safe_url u) (Components.html_escape u) | None -> "" in
   (* Image stored as /static/uploads/<uuid>.webp — served directly by Dream.static. *)
   let image_content = match post.image_url with
@@ -4323,6 +4327,19 @@ let settings_page ?user bio avatar_url request =
             <a href='/export-data' class='account-btn account-btn--secondary'>&#8595; Download my data</a>
         </div>
 
+        <div class='account-panel account-panel--card' data-analytics-settings hidden>
+            <h2 class='account-section-title'>Analytics</h2>
+            <p class='account-section-desc'>Control whether Earde may collect anonymous product-usage analytics (PostHog) in your browser. Nothing is collected without your consent.</p>
+            <div class='account-form'>
+                <span data-analytics-state class='account-hint'></span>
+                <div>
+                    <button type='button' data-analytics-accept class='account-btn account-btn--secondary'>Enable analytics</button>
+                    <button type='button' data-analytics-refuse class='account-btn account-btn--secondary'>Disable analytics</button>
+                </div>
+                <span data-analytics-error hidden class='account-hint' style='color:#C94C4C;'>Couldn&#39;t save your choice &mdash; please try again.</span>
+            </div>
+        </div>
+
         <div class='account-panel account-danger'>
             <h2 class='account-section-title'>Danger zone</h2>
             <p class='account-section-desc'>Permanently delete your account and personal data. Your posts and comments will remain, but their author will be anonymized as <strong>[deleted]</strong>. This action is irreversible.</p>
@@ -4563,7 +4580,10 @@ let search_results_page ?user ~admin_usernames ?(chat_sources=[]) _user_votes cu
         </div>"
         header_html tabs_html content_html prev_btn next_btn
   in
-  let title = if has_query then "Search: " ^ eq else "Search" in
+  (* Generic on purpose: the document <title> leaks into analytics surfaces
+     (replay snapshots, $title) — the search term must never appear there.
+     The visible UI still echoes the query via the input value (masked). *)
+  let title = "Search" in
   Components.search_page ?user ~request ~title ~body ()
 
 (* === LEGAL / PRIVACY === *)
@@ -4803,7 +4823,7 @@ let admin_dashboard_page ?user ~signups_enabled
       "<section class='admin-panel'>\
          <h2 class='admin-panel-title'>Recent users</h2>\
          <p class='admin-panel-desc'>Latest %d accounts by signup time, with activity counts and quick suspicious-signal flags.</p>\
-         <div class='admin-table-wrap'><table class='admin-table'>\
+         <div class='admin-table-wrap'><table class='admin-table ph-no-capture'>\
            <thead><tr><th>User</th><th>Joined</th><th>Posts</th><th>Comments</th><th>Msgs</th><th>Signals</th></tr></thead>\
            <tbody>%s</tbody>\
          </table></div>\
@@ -4833,7 +4853,7 @@ let admin_dashboard_page ?user ~signups_enabled
       "<section class='admin-panel'>\
          <h2 class='admin-panel-title'>Pending signups</h2>\
          <p class='admin-panel-desc'>Unconfirmed signups still within their 24h window (latest %d). These have not become user accounts yet.</p>\
-         <div class='admin-table-wrap'><table class='admin-table'>\
+         <div class='admin-table-wrap'><table class='admin-table ph-no-capture'>\
            <thead><tr><th>Username</th><th>Email</th><th>Requested</th><th>Expires</th><th>IP</th></tr></thead>\
            <tbody>%s</tbody>\
          </table></div>\
@@ -4864,7 +4884,7 @@ let admin_dashboard_page ?user ~signups_enabled
       "<section class='admin-panel'>\
          <h2 class='admin-panel-title'>Globally banned users</h2>\
          <p class='admin-panel-desc'>These accounts are blocked from logging in and posting anywhere on Earde.</p>\
-         <div class='admin-table-wrap'><table class='admin-table'>\
+         <div class='admin-table-wrap'><table class='admin-table ph-no-capture'>\
            <thead><tr><th>User</th><th>Email</th><th>Action</th></tr></thead>\
            <tbody>%s</tbody>\
          </table></div>\
@@ -4950,7 +4970,8 @@ let mod_log_page ?user ?(noindex=false) ~(can_access_settings : bool) ~(communit
     back_link
     table_body
   in
-  Components.community_manage_page ?user ~noindex ~request ~title:(community.name ^ " — Mod Log") ~body:content ()
+  Components.community_manage_page ?user ~noindex ~request ~title:(community.name ^ " — Mod Log")
+    ~body:(Components.private_replay_guard ~community content) ()
 
 (* Standalone HTML — intentionally outside Components.layout to prevent nav/JS
    assets from loading on an admin-only internal page that needs no public shell. *)

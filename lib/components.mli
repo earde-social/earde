@@ -139,9 +139,15 @@ type nav_group = {
   ng_items : nav_item list;
 }
 
+(** Replay privacy (analytics spec §6): wraps [body] in PostHog's built-in
+    ph-no-capture block class when the community is private, excluding its
+    content from session replay. Identity for public communities. *)
+val private_replay_guard : community:Db.community -> string -> string
+
 (** The persistent in-app community shell (community rail · sidebar · main · optional
     right pane). Wraps [layout] internally with the shell stylesheet and full-bleed main.
-    [main]/[right_pane] are caller-rendered HTML fragments. *)
+    [main]/[right_pane] are caller-rendered HTML fragments. Private communities get the
+    [private_replay_guard] applied to [main]. *)
 val community_shell :
   ?user:string -> ?request:Dream.request -> ?noindex:bool ->
   ?rail_communities:Db.community list -> ?active_slug:string -> ?right_pane:string ->

@@ -199,6 +199,13 @@ let () =
     Dream.post "/forgot-password" (Earde.Handlers.Rate_limit.middleware Earde.Handlers.forgot_password_handler);
     Dream.get "/reset-password" Earde.Handlers.reset_password_page_handler;
     Dream.post "/reset-password" Earde.Handlers.reset_password_handler;
+    (* §9 consent endpoint: JSON-only + Origin/Sec-Fetch-Site protection
+       instead of the form-CSRF used by other state-changing routes; the POST
+       route matches first, every other method falls to the controlled 405.
+       Inside sql_pool (person-property lookup) and sql_sessions (reads the
+       authenticated user on granted). *)
+    Dream.post "/analytics/consent" Earde.Handlers.analytics_consent_handler;
+    Dream.any "/analytics/consent" Earde.Handlers.analytics_consent_method_not_allowed;
     Dream.get "/export-data" Earde.Handlers.export_data_handler;
     Dream.get "/earde-hq-dashboard" Earde.Handlers.hq_dashboard_handler;
     Dream.get "/_debug/state" Earde.Handlers.debug_state_handler;
