@@ -1,3 +1,7 @@
+(* Bound before `open Db`, which would otherwise shadow the top-level
+   Analytics module with Db.Analytics. *)
+module Posthog = Analytics
+
 open Db
 
 (* === CORE FEED === *)
@@ -4563,6 +4567,31 @@ let search_results_page ?user ~admin_usernames ?(chat_sources=[]) _user_votes cu
     (tab "Comments" "comments") (tab "People" "people")
   in
 
+  (* PostHog search_performed metadata (spec §2.4): one cohesive, inert
+     container of closed values only — never the query text. The tab is
+     normalized to the renderer's own closed set (any unknown ?t= value falls
+     into the Threads branch above, so it is reported as "posts", never echoed
+     back). result_count is the number of rows rendered on THIS page for the
+     active tab — the only count the page authoritatively knows: search
+     queries are LIMIT/OFFSET and no total-match count exists anywhere. page
+     is the effective page after the handler's max-1 clamp. Emitted only when
+     analytics is enabled and a non-empty search actually executed. *)
+  let analytics_meta_html =
+    match Posthog.browser_config () with
+    | None -> ""
+    | Some _ ->
+        let analytics_tab, result_count =
+          match active_tab with
+          | "communities" -> ("communities", List.length communities)
+          | "people" -> ("people", List.length users)
+          | "comments" -> ("comments", List.length comments)
+          | _ -> ("posts", List.length posts)
+        in
+        Printf.sprintf
+          "<div id='sr-analytics' hidden data-analytics-search-tab='%s' data-analytics-search-result-count='%d' data-analytics-search-page='%d'></div>"
+          analytics_tab result_count (max 1 current_page)
+  in
+
   let prev_btn = if current_page <= 1 then "" else
     Printf.sprintf "<a class='sr-page' href='/search?q=%s&t=%s&page=%d'>&larr; Prev</a>" eq et (current_page - 1) in
   let next_btn = if not has_next then "" else
@@ -4590,8 +4619,9 @@ let search_results_page ?user ~admin_usernames ?(chat_sources=[]) _user_votes cu
           %s
           <div class='sr-results'>%s</div>
           <div class='sr-pager'>%s%s</div>
+          %s
         </div>"
-        header_html tabs_html content_html prev_btn next_btn
+        header_html tabs_html content_html prev_btn next_btn analytics_meta_html
   in
   (* Generic on purpose: the document <title> leaks into analytics surfaces
      (replay snapshots, $title) — the search term must never appear there.

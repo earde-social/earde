@@ -2670,6 +2670,35 @@ let test_community ~id ~visibility : Earde.Db.community =
     rules = None; avatar_url = None; banner_url = None; allow_downvotes = true;
     sections_enabled = true; visibility; indexable = true }
 
+(* Renders the search results page through real session middleware (the page
+   embeds a CSRF tag). Analytics configuration is whatever the caller
+   installed. *)
+let render_search ?(page = 1) ?(tab = "posts") ?(communities = [])
+    ?(users = []) ?(posts = []) ?(comments = []) query =
+  let rendered = ref "" in
+  let (_ : Dream.response) =
+    Lwt_main.run
+      (Dream.memory_sessions
+         (fun req ->
+           rendered :=
+             Earde.Pages.search_results_page ~admin_usernames:[] [] page tab
+               query communities users posts comments req;
+           Dream.html "")
+         (Dream.request ~method_:`GET ~target:"/search" ""))
+  in
+  !rendered
+
+(* The full opening tag of the search analytics container, so leak assertions
+   can look at exactly the markup that feeds analytics.js — the page itself
+   legitimately echoes the query elsewhere (input value, pager hrefs). *)
+let sr_analytics_tag html =
+  match index_of html "<div id='sr-analytics'" with
+  | None -> None
+  | Some i -> (
+      match String.index_from_opt html i '>' with
+      | None -> None
+      | Some j -> Some (String.sub html i (j - i + 1)))
+
 let () =
   Alcotest.run "earde"
     [ ( "smoke"
@@ -3799,6 +3828,159 @@ let () =
                 (contains js "if (!pageviewSent)");
               Alcotest.(check int) "exactly one $pageview capture" 1
                 (count_sub js "posthog.capture(\"$pageview\""))
+        ] )
+      (* §2.4 search metadata container: closed values only, emitted only for
+         an executed non-empty search, never carrying the query. *)
+    ; ( "analytics_search_metadata"
+      , [ an_case "executed search emits the closed container" (fun () ->
+              with_enabled_config (fun () ->
+                  let html =
+                    render_search ~page:3 ~tab:"communities"
+                      ~communities:
+                        [ test_community ~id:1
+                            ~visibility:Earde.Db.Community_public
+                        ; test_community ~id:2
+                            ~visibility:Earde.Db.Community_public
+                        ]
+                      "ocaml"
+                  in
+                  Alcotest.(check (option string)) "tab" (Some "communities")
+                    (attr_value html "data-analytics-search-tab");
+                  Alcotest.(check (option string)) "count is rows rendered"
+                    (Some "2")
+                    (attr_value html "data-analytics-search-result-count");
+                  Alcotest.(check (option string)) "page" (Some "3")
+                    (attr_value html "data-analytics-search-page");
+                  (* exactly the three closed attributes, nothing else *)
+                  Alcotest.(check int) "three attributes" 3
+                    (count_sub html "data-analytics-search-")))
+        ; an_case "empty search emits no search analytics metadata" (fun () ->
+              with_enabled_config (fun () ->
+                  let html = render_search "" in
+                  Alcotest.(check bool) "no container" false
+                    (contains html "sr-analytics");
+                  Alcotest.(check bool) "no attributes" false
+                    (contains html "data-analytics-search-")))
+        ; an_case "disabled analytics emits no container" (fun () ->
+              AnT.use_disabled_test_configuration ();
+              Fun.protect ~finally:AnT.clear_configuration_override (fun () ->
+                  let html = render_search "ocaml" in
+                  Alcotest.(check bool) "no container" false
+                    (contains html "sr-analytics")))
+        ; an_case "every supported tab value is emitted verbatim" (fun () ->
+              with_enabled_config (fun () ->
+                  List.iter
+                    (fun tab ->
+                      Alcotest.(check (option string)) tab (Some tab)
+                        (attr_value (render_search ~tab "x")
+                           "data-analytics-search-tab"))
+                    [ "posts"; "communities"; "comments"; "people" ]))
+        ; an_case "arbitrary tab values are normalized, never echoed" (fun () ->
+              with_enabled_config (fun () ->
+                  let html = render_search ~tab:"weird-tab" "x" in
+                  (* the renderer's catch-all shows the Threads tab, so the
+                     authoritative reported tab is posts *)
+                  Alcotest.(check (option string)) "normalized" (Some "posts")
+                    (attr_value html "data-analytics-search-tab");
+                  match sr_analytics_tag html with
+                  | None -> Alcotest.fail "container missing"
+                  | Some tag ->
+                      Alcotest.(check bool) "raw tab not in container" false
+                        (contains tag "weird-tab")))
+        ; an_case "the query never appears in the analytics container"
+            (fun () ->
+              with_enabled_config (fun () ->
+                  let html = render_search ~tab:"posts" "sekret-term" in
+                  (* the page legitimately echoes the query (input value,
+                     pager hrefs — masked/stripped by other layers); the
+                     analytics container must not *)
+                  Alcotest.(check bool) "page echoes query" true
+                    (contains html "sekret-term");
+                  match sr_analytics_tag html with
+                  | None -> Alcotest.fail "container missing"
+                  | Some tag ->
+                      Alcotest.(check bool) "no query in container" false
+                        (contains tag "sekret-term")))
+        ; an_case "non-positive page is clamped to the effective page 1"
+            (fun () ->
+              with_enabled_config (fun () ->
+                  Alcotest.(check (option string)) "page 0 -> 1" (Some "1")
+                    (attr_value (render_search ~page:0 "x")
+                       "data-analytics-search-page")))
+        ; an_case "result_count is authoritative for the active tab" (fun () ->
+              with_enabled_config (fun () ->
+                  (* a community row exists, but the active tab is people →
+                     the count reflects the rendered people rows: 0 *)
+                  let html =
+                    render_search ~tab:"people"
+                      ~communities:
+                        [ test_community ~id:1
+                            ~visibility:Earde.Db.Community_public
+                        ]
+                      "x"
+                  in
+                  Alcotest.(check (option string)) "count 0" (Some "0")
+                    (attr_value html "data-analytics-search-result-count")))
+        ] )
+      (* Shipped analytics.js: search_performed capture contract. *)
+    ; ( "analytics_js_search_event"
+      , [ an_case "search_performed follows the manual $pageview, once"
+            (fun () ->
+              let js = read_analytics_js () in
+              let pos needle =
+                match index_of js needle with
+                | Some i -> i
+                | None -> Alcotest.failf "analytics.js is missing %S" needle
+              in
+              Alcotest.(check int) "exactly one capture call" 1
+                (count_sub js "posthog.capture(\"search_performed\"");
+              Alcotest.(check int) "exactly one call site" 1
+                (count_sub js "captureSearchPerformed();");
+              Alcotest.(check bool) "pageview precedes search event" true
+                (pos "pageviewSent = true" < pos "captureSearchPerformed();");
+              (* the single call site lives inside the consent-gated init
+                 chain (initAnalytics only runs after granted consent and a
+                 successful SDK load), before the next top-level function *)
+              Alcotest.(check bool) "inside initAnalytics" true
+                (pos "function initAnalytics"
+                   < pos "captureSearchPerformed();"
+                && pos "captureSearchPerformed();"
+                   < pos "function clearPosthogPersistence"))
+        ; an_case "once per document load, even across repeated init"
+            (fun () ->
+              let js = read_analytics_js () in
+              Alcotest.(check bool) "module-owned guard" true
+                (contains js "var searchPerformedSent = false;");
+              Alcotest.(check bool) "re-entry returns" true
+                (contains js "if (searchPerformedSent) return;");
+              Alcotest.(check bool) "flag set before capture" true
+                (contains js "searchPerformedSent = true;"))
+        ; an_case "strict allowlist: closed tabs, integer count, positive page"
+            (fun () ->
+              let js = read_analytics_js () in
+              Alcotest.(check bool) "exact tab set" true
+                (contains js
+                   "[\"posts\", \"communities\", \"comments\", \"people\"]");
+              Alcotest.(check bool) "tab membership required" true
+                (contains js "SEARCH_TABS.indexOf(tab) === -1) return;");
+              Alcotest.(check bool) "integer-only parse" true
+                (contains js "/^[0-9]+$/.test");
+              Alcotest.(check bool) "positive page required" true
+                (contains js "if (page < 1) return;"))
+        ; an_case "captures a fresh closed object, never the raw dataset"
+            (fun () ->
+              let js = read_analytics_js () in
+              (* reads exactly the three closed attributes... *)
+              Alcotest.(check int) "three attribute reads" 3
+                (count_sub js "getAttribute(\"data-analytics-search-");
+              (* ...and never passes an attribute bag through *)
+              Alcotest.(check bool) "no dataset access" false
+                (contains js ".dataset");
+              Alcotest.(check bool) "closed property object" true
+                (contains js "result_count: resultCount,");
+              (* no query-named property can exist in the file *)
+              Alcotest.(check bool) "no query property" false
+                (contains js "query:"))
         ] )
     ; ( "analytics_group_identify_api"
       , [ check_group_identify_gate "granted emits one" 1 ~enabled:true

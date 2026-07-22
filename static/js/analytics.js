@@ -100,6 +100,7 @@
      undocumented PostHog internals are consulted. */
   var initPromise = null;
   var pageviewSent = false;
+  var searchPerformedSent = false;
 
   /* §4.2 identity reconciliation. Runs after init, before anything else:
      - identity attribute present: identify only when the persisted distinct
@@ -131,6 +132,39 @@
     } else {
       window.posthog.resetGroups();
     }
+  }
+
+  /* §2.4 search_performed: the ONLY UI event. Reads the closed
+     server-rendered metadata container (#sr-analytics, present only when a
+     non-empty search actually executed) and captures at most one event per
+     document load, immediately after the manual $pageview. Strict allowlist
+     parsing: the tab must belong to the exact closed UI set, the count must
+     be a non-negative integer, the page a positive integer — anything
+     missing or malformed means NO event, never a guessed value. A fresh
+     object with exactly the three permitted properties is captured; the raw
+     dataset is never passed through, and the query text has no path in: the
+     container carries none and nothing else is read. */
+  var SEARCH_TABS = ["posts", "communities", "comments", "people"];
+
+  function captureSearchPerformed() {
+    if (searchPerformedSent) return;
+    var meta = document.getElementById("sr-analytics");
+    if (!meta) return;
+    var tab = meta.getAttribute("data-analytics-search-tab");
+    var countRaw = meta.getAttribute("data-analytics-search-result-count");
+    var pageRaw = meta.getAttribute("data-analytics-search-page");
+    if (SEARCH_TABS.indexOf(tab) === -1) return;
+    if (!/^[0-9]+$/.test(countRaw || "") || !/^[0-9]+$/.test(pageRaw || ""))
+      return;
+    var resultCount = parseInt(countRaw, 10);
+    var page = parseInt(pageRaw, 10);
+    if (page < 1) return;
+    searchPerformedSent = true;
+    window.posthog.capture("search_performed", {
+      result_count: resultCount,
+      active_tab: tab,
+      page: page
+    });
   }
 
   function loadSdk() {
@@ -182,9 +216,12 @@
             recordBody: false
           }
         });
-        /* Required order (§4.2/§5.3): init → identify/reset → group
-           set/reset → the single manual pageview, so the pageview is
-           attributed to the correct person and community. */
+        /* Required order (§4.2/§5.3/§2.4): init → identify/reset → group
+           set/reset → the single manual pageview → search_performed, so both
+           events are attributed to the correct person and (for search: no)
+           community. This block runs once per document load (shared
+           initPromise), so neither event can be duplicated by repeated
+           initialization calls. */
         reconcileIdentity();
         reconcileGroup();
         if (!pageviewSent) {
@@ -193,6 +230,7 @@
             $current_url: window.location.origin + window.location.pathname
           });
         }
+        captureSearchPerformed();
       })
       .catch(function () {
         /* Swallowed: a blocked/failed SDK load must not break the page. */
