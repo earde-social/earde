@@ -1,7 +1,19 @@
 (executable
  (public_name earde_server)
  (name main)
+ (modules main)
  (libraries earde dream dream-pure uri lwt.unix caqti-lwt.unix caqti-driver-postgresql)
+ (link_flags
+  (:standard -cclib -largon2))
+ (preprocess
+  (pps lwt_ppx)))
+
+; Bounded maintenance retry for durable PostHog person-deletion jobs
+; (analytics spec §3.3): DATABASE_URL=... dune exec bin/retry_posthog_deletions.exe
+(executable
+ (name retry_posthog_deletions)
+ (modules retry_posthog_deletions)
+ (libraries earde uri lwt.unix caqti-lwt.unix caqti-driver-postgresql)
  (link_flags
   (:standard -cclib -largon2))
  (preprocess

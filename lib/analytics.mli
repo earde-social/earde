@@ -84,10 +84,18 @@ type event =
       promoted_message_count : int;
       promoted_participant_count : int option;
     }
-  | Account_deleted of { user_id : int }
+  | Account_deleted
+      (** personless aggregate deletion counter (§3.3): no user_id, no person
+          [$set], no group — emitted with [$process_person_profile]=false and
+          the constant [account_deletion_distinct_id], never a user identity *)
 
 (** ["user:<database_id>"] — the §4.1 authenticated distinct-ID scheme. *)
 val distinct_id_of_user_id : int -> string
+
+(** ["system:account-deletion"] — the constant non-user distinct id of the
+    personless [Account_deleted] metric. Never a person: the event disables
+    person processing. *)
+val account_deletion_distinct_id : string
 
 (** ["community:<database_id>"] — the §5.3 stable group key (the immutable
     numeric id, never the mutable slug). Used by server payloads and by the
@@ -146,6 +154,30 @@ val capture_if_consented : Dream.request -> distinct_id:string -> event -> unit
 val sync_person_after_consent_grant :
   distinct_id:string -> person_properties -> unit
 
+(** Server-only private Persons-API configuration (§3.3): UI host, project id,
+    personal API key. [None] unless BOTH [POSTHOG_PROJECT_ID] and
+    [POSTHOG_PERSONAL_API_KEY] are set (a partial configuration warns once, by
+    variable name only). Independent of [POSTHOG_ENABLED] — deletion is a
+    data-lifecycle duty, not collection. These values must never reach HTML,
+    JavaScript, responses, or logs. *)
+type deletion_api_config = {
+  deletion_ui_host : string;
+  deletion_project_id : string;
+  deletion_api_key : string;
+}
+
+val deletion_api_config : unit -> deletion_api_config option
+
+(** Narrow §3.3 orchestration seam, usable ONLY by the account-deletion flow:
+    the consent-gated personless [Account_deleted] metric as an awaitable
+    bounded transport attempt. The event is safe against the Persons-API
+    deletion by CONSTRUCTION (constant system distinct id, person processing
+    disabled), not by request ordering — the await merely sequences the HTTP
+    calls and proves nothing about ingestion. Disabled analytics or
+    absent/denied consent resolves immediately. Not a generic capture API: it
+    emits exactly one closed, identity-free event shape. *)
+val capture_account_deleted_sequenced : Dream.request -> unit Lwt.t
+
 (** Consent-gated [$groupidentify] for a community (§5.3): same request-cookie
     gate as [capture_if_consented]; emits only the closed [community_group]
     record. [distinct_id] MUST be the acting authenticated user's
@@ -180,6 +212,15 @@ module For_testing : sig
   (** Config overrides so tests never read the process environment or hit the
       network. The test token is a dummy value, not a real credential. *)
   val use_enabled_test_configuration : unit -> unit
+
+  (** Deletion-client tests: enabled test configuration whose private
+      Persons-API host points at a local stub. Dummy values only. *)
+  val use_deletion_test_configuration :
+    ui_host:string ->
+    project_id:string option ->
+    personal_api_key:string option ->
+    unit ->
+    unit
 
   val use_disabled_test_configuration : unit -> unit
   val clear_configuration_override : unit -> unit

@@ -813,7 +813,7 @@ let an_all_events =
           channel_id = 3; channel_slug = "general"; section_id = None;
           post_id = 11; message_id = 91L; promoted_message_count = 4;
           promoted_participant_count = Some 2 } );
-    ("account_deleted", An.Account_deleted { user_id = 1 });
+    ("account_deleted", An.Account_deleted);
   ]
 
 let an_payload event =
@@ -1023,6 +1023,20 @@ let group_key_prop_of payload =
 
 let is_redirect status = status / 100 = 3
 
+(* Polls an Lwt predicate until true, failing the test after [timeout]
+   seconds — used to await post-response async analytics/deletion chains. *)
+let wait_until ~label ?(timeout = 5.0) predicate =
+  let ( let* ) = Lwt.bind in
+  let rec loop remaining =
+    let* ok = predicate () in
+    if ok then Lwt.return_unit
+    else if remaining <= 0.0 then Alcotest.failf "%s: timed out waiting" label
+    else
+      let* () = Lwt_unix.sleep 0.05 in
+      loop (remaining -. 0.05)
+  in
+  loop timeout
+
 (* Real handlers over a real DB (EARDE_TEST_DATABASE_URL gate): each case runs
    the actual Dream handler behind sql_pool + memory_sessions with a valid
    CSRF token injected into the body, asserting the events the success path
@@ -1118,6 +1132,10 @@ module Step6_events = struct
 
   let q_delete_user =
     (Caqti_type.int ->. Caqti_type.unit) "DELETE FROM users WHERE id = $1"
+
+  let q_delete_job =
+    (Caqti_type.int ->. Caqti_type.unit)
+    "DELETE FROM posthog_person_deletion_jobs WHERE id = $1"
 
   let form_body fields =
     String.concat "&"
@@ -1802,42 +1820,791 @@ module Step6_events = struct
 
   let delete_account_case =
     db_case "account_deleted once with the pre-anonymization id"
-      (fun ~url _conn c ->
+      (fun ~url conn c ->
         let (module C : Caqti_lwt.CONNECTION) = c in
         let* uid = C.find q_insert_user ("step6_deleteme", "x") in
         let* uid = or_fail "user" uid in
-        let* status, payloads =
-          run_handler ~url
-            ~session:
-              [ ("user_id", string_of_int uid); ("username", "step6_deleteme") ]
-            ~target:"/delete-account" ~form:[]
-            Earde.Handlers.delete_account_handler
-        in
-        Alcotest.(check bool) "deletion redirects" true (is_redirect status);
-        (match payloads with
-         | [ p ] ->
-             Alcotest.(check string) "event" "account_deleted" (event_of p);
-             Alcotest.(check string) "pre-anonymization distinct id"
-               ("user:" ^ string_of_int uid) (distinct_of p);
-             Alcotest.(check (slist string compare))
-               "user_id only — no person data" [ "user_id" ] (prop_keys p)
-         | l ->
-             Alcotest.failf "expected 1 deletion event, got %d" (List.length l));
-        let* name = C.find_opt q_username_by_id uid in
-        let* name = or_fail "anonymized row" name in
-        Alcotest.(check (option string)) "row anonymized"
-          (Some (Printf.sprintf "[deleted_%d]" uid))
-          name;
-        (* The anonymized username no longer matches the step6_ cleanup
-           pattern — drop the row here. *)
-        let* r = C.exec q_delete_user uid in
-        let* () = or_fail "drop anonymized user" r in
-        Lwt.return_unit)
+        let did = "user:" ^ string_of_int uid in
+        (* Step 7 moved the capture into the post-response async cleanup chain
+           (capture → claim → deletion attempt), so this runner keeps the sink
+           and configuration installed until the chain has finished — tracked
+           by the durable job row acquiring its safe last_error (no deletion
+           credentials are configured here, so the attempt must leave the job
+           pending with missing_configuration). *)
+        let payloads = ref [] in
+        AnT.use_enabled_test_configuration ();
+        AnT.set_capture_sink (fun p -> payloads := !payloads @ [ p ]);
+        Lwt.finalize
+          (fun () ->
+            let pipeline =
+              Dream.sql_pool url @@ Dream.memory_sessions @@ fun req ->
+              let* () =
+                Dream.set_session_field req "user_id" (string_of_int uid)
+              in
+              let* () =
+                Dream.set_session_field req "username" "step6_deleteme"
+              in
+              let csrf = Dream.csrf_token req in
+              Dream.set_body req (form_body [ ("dream.csrf", csrf) ]);
+              Earde.Handlers.delete_account_handler req
+            in
+            let request =
+              Dream.request ~method_:`POST ~target:"/delete-account"
+                ~headers:
+                  ([ ("Content-Type", "application/x-www-form-urlencoded") ]
+                  @ consent_header (Some "granted"))
+                ""
+            in
+            let* response = pipeline request in
+            Alcotest.(check bool) "deletion redirects" true
+              (is_redirect (Dream.status_to_int (Dream.status response)));
+            let* () =
+              wait_until ~label:"post-deletion cleanup chain" (fun () ->
+                  let* job = Earde.Db.get_posthog_deletion_job conn did in
+                  match job with
+                  | Ok (Some (_, _, _, Some _)) -> Lwt.return true
+                  | _ -> Lwt.return false)
+            in
+            (match !payloads with
+             | [ p ] ->
+                 Alcotest.(check string) "event" "account_deleted" (event_of p);
+                 Alcotest.(check string) "constant non-user distinct id"
+                   Earde.Analytics.account_deletion_distinct_id (distinct_of p);
+                 Alcotest.(check (slist string compare))
+                   "personless: person processing off, nothing else"
+                   [ "$process_person_profile" ] (prop_keys p);
+                 Alcotest.(check bool) "no user identity in the metric" false
+                   (contains (Yojson.Safe.to_string p) did)
+             | l ->
+                 Alcotest.failf "expected 1 deletion metric, got %d"
+                   (List.length l));
+            let* job = Earde.Db.get_posthog_deletion_job conn did in
+            let* job = or_fail_s "job row" job in
+            let* job_id =
+              match job with
+              | Some (job_id, status, attempts, last_error) ->
+                  Alcotest.(check string) "job stays durably pending" "pending"
+                    status;
+                  Alcotest.(check int) "one immediate attempt" 1 attempts;
+                  Alcotest.(check (option string)) "safe config marker"
+                    (Some "missing_configuration") last_error;
+                  Lwt.return job_id
+              | None -> Alcotest.fail "no durable deletion job"
+            in
+            let* name = C.find_opt q_username_by_id uid in
+            let* name = or_fail "anonymized row" name in
+            Alcotest.(check (option string)) "row anonymized"
+              (Some (Printf.sprintf "[deleted_%d]" uid))
+              name;
+            (* The anonymized username no longer matches the step6_ cleanup
+               pattern — drop the job and the row here. *)
+            let* r = C.exec q_delete_job job_id in
+            let* () = or_fail "drop job" r in
+            let* r = C.exec q_delete_user uid in
+            let* () = or_fail "drop anonymized user" r in
+            Lwt.return_unit)
+          (fun () ->
+            AnT.clear_capture_sink ();
+            AnT.clear_configuration_override ();
+            Lwt.return_unit))
 
   let suite =
     [ signup_case; login_case; join_case; leave_case; chat_case; post_case
     ; comment_case; promote_case; create_community_case; update_settings_case
     ; visibility_case; delete_account_case
+    ]
+end
+
+(* --- Step-7: durable PostHog person deletion ------------------------------ *)
+
+(* Local Persons-API stub: an in-process cohttp server on an ephemeral
+   127.0.0.1 port — no real PostHog, no internet. [handler] maps a recorded
+   request to (status code, body). *)
+module Api_stub = struct
+  type req = {
+    meth : string;
+    path : string;
+    query : (string * string list) list;
+    auth : string option;
+  }
+
+  let free_port () =
+    let sock = Unix.socket Unix.PF_INET Unix.SOCK_STREAM 0 in
+    Unix.bind sock (Unix.ADDR_INET (Unix.inet_addr_loopback, 0));
+    let port =
+      match Unix.getsockname sock with
+      | Unix.ADDR_INET (_, p) -> p
+      | _ -> assert false
+    in
+    Unix.close sock;
+    port
+
+  let start handler =
+    let ( let* ) = Lwt.bind in
+    let seen = ref [] in
+    let callback _conn request _body =
+      let uri = Cohttp.Request.uri request in
+      let path = Uri.path uri in
+      if path = "/__ready" then
+        Cohttp_lwt_unix.Server.respond_string ~status:`OK ~body:"ok" ()
+      else begin
+        let req =
+          {
+            meth = Cohttp.Code.string_of_method (Cohttp.Request.meth request);
+            path;
+            query = Uri.query uri;
+            auth =
+              Cohttp.Header.get (Cohttp.Request.headers request) "authorization";
+          }
+        in
+        seen := !seen @ [ req ];
+        let status, body = handler req in
+        Cohttp_lwt_unix.Server.respond_string
+          ~status:(Cohttp.Code.status_of_code status)
+          ~body ()
+      end
+    in
+    let port = free_port () in
+    let stop_promise, stop_resolver = Lwt.wait () in
+    Lwt.async (fun () ->
+        Cohttp_lwt_unix.Server.create ~stop:stop_promise
+          ~mode:(`TCP (`Port port))
+          (Cohttp_lwt_unix.Server.make ~callback ()));
+    let base_url = Printf.sprintf "http://127.0.0.1:%d" port in
+    let rec wait_ready retries =
+      Lwt.catch
+        (fun () ->
+          let* _resp, body =
+            Cohttp_lwt_unix.Client.get (Uri.of_string (base_url ^ "/__ready"))
+          in
+          Cohttp_lwt.Body.drain_body body)
+        (fun exn ->
+          if retries <= 0 then Lwt.reraise exn
+          else
+            let* () = Lwt_unix.sleep 0.02 in
+            wait_ready (retries - 1))
+    in
+    let* () = wait_ready 100 in
+    Lwt.return (base_url, seen, fun () -> Lwt.wakeup_later stop_resolver ())
+end
+
+(* Dummy credential values only — never real ones. *)
+let deletion_test_key = "phx_test_dummy"
+let stub_uuid = "11111111-2222-3333-4444-555555555555"
+let other_uuid = "99999999-8888-7777-6666-555555555555"
+
+let person_json uuid = Printf.sprintf {|{"id": %S, "properties": {}}|} uuid
+
+let results_body persons =
+  Printf.sprintf {|{"results": [%s]}|} (String.concat ", " persons)
+
+(* Configures the deletion client against the stub, runs [f], restores. *)
+let with_persons_stub handler f =
+  Lwt_main.run
+    (let ( let* ) = Lwt.bind in
+     let* base_url, seen, stop = Api_stub.start handler in
+     AnT.use_deletion_test_configuration ~ui_host:base_url
+       ~project_id:(Some "42") ~personal_api_key:(Some deletion_test_key) ();
+     Lwt.finalize
+       (fun () -> f ~seen)
+       (fun () ->
+         AnT.clear_configuration_override ();
+         stop ();
+         Lwt.return_unit))
+
+(* Reference stub behavior: bearer-authenticated lookup of user:314 returns
+   [persons]; DELETE of stub_uuid returns [delete_status]. *)
+let persons_handler ?(lookup_status = 200) ?(persons = [ person_json stub_uuid ])
+    ?lookup_body_override ?(delete_status = 204) () (req : Api_stub.req) =
+  if req.auth <> Some ("Bearer " ^ deletion_test_key) then
+    (401, {|{"type":"authentication_error"}|})
+  else if req.meth = "GET" && req.path = "/api/projects/42/persons/" then
+    match lookup_body_override with
+    | Some body -> (lookup_status, body)
+    | None ->
+        if List.assoc_opt "distinct_id" req.query = Some [ "user:314" ] then
+          (lookup_status, results_body persons)
+        else (200, results_body [])
+  else if
+    req.meth = "DELETE" && req.path = "/api/projects/42/persons/" ^ stub_uuid ^ "/"
+  then (delete_status, "")
+  else (404, {|{"detail":"not found"}|})
+
+let attempt_result = Alcotest.(result unit string)
+
+let check_attempt name handler expected ~expect_delete =
+  an_case name (fun () ->
+      with_persons_stub handler (fun ~seen ->
+          let ( let* ) = Lwt.bind in
+          let* r =
+            Earde.Posthog_deletion.attempt_person_deletion
+              ~distinct_id:"user:314"
+          in
+          Alcotest.(check attempt_result) name expected r;
+          let deletes =
+            List.filter (fun (q : Api_stub.req) -> q.meth = "DELETE") !seen
+          in
+          Alcotest.(check int)
+            (name ^ ": DELETE requests")
+            (if expect_delete then 1 else 0)
+            (List.length deletes);
+          Lwt.return_unit))
+
+(* Real handlers + real DB + the HTTP stub, EARDE_TEST_DATABASE_URL-gated. *)
+module Step7_deletion = struct
+  let ( let* ) = Lwt.bind
+
+  open Caqti_request.Infix
+
+  let q_cleanup =
+    List.map
+      (fun sql -> (Caqti_type.unit ->. Caqti_type.unit) sql)
+      [ "DROP TRIGGER IF EXISTS step7_fail_insert ON posthog_person_deletion_jobs"
+      ; "DROP FUNCTION IF EXISTS step7_fail_insert_fn()"
+      ; "DELETE FROM posthog_person_deletion_jobs WHERE distinct_id IN (SELECT 'user:' || u.id::text FROM users u WHERE u.username LIKE 'step7_%')"
+      ; "DELETE FROM posthog_person_deletion_jobs WHERE distinct_id LIKE 'user:9700%'"
+        (* Orphaned jobs whose fixture user was hard-deleted by a test. *)
+      ; "DELETE FROM posthog_person_deletion_jobs WHERE NOT EXISTS (SELECT 1 FROM users u WHERE 'user:' || u.id::text = posthog_person_deletion_jobs.distinct_id)"
+        (* Anonymized fixture leftovers from interrupted runs: their usernames
+           no longer match step7_/step6_, so match the anonymization rewrite. *)
+      ; "DELETE FROM posthog_person_deletion_jobs WHERE distinct_id IN (SELECT 'user:' || u.id::text FROM users u WHERE u.password_hash = '' AND u.email LIKE 'deleted\\_%@earde.local')"
+      ; "DELETE FROM users WHERE password_hash = '' AND email LIKE 'deleted\\_%@earde.local'"
+      ; "DELETE FROM users WHERE username LIKE 'step7_%'"
+      ]
+
+  let or_fail label = function
+    | Ok v -> Lwt.return v
+    | Error e -> Alcotest.failf "%s: %s" label (Caqti_error.show e)
+
+  let or_fail_s label = function
+    | Ok v -> Lwt.return v
+    | Error e -> Alcotest.failf "%s: %s" label e
+
+  let db_case name f =
+    Alcotest.test_case name `Quick (fun () ->
+        match Sys.getenv_opt "EARDE_TEST_DATABASE_URL" with
+        | None | Some "" -> Alcotest.skip ()
+        | Some url ->
+            Lwt_main.run
+              (let* conn = Caqti_lwt_unix.connect (Uri.of_string url) in
+               let* conn = or_fail "connect" conn in
+               let (module C : Caqti_lwt.CONNECTION) = conn in
+               let cleanup () =
+                 Lwt_list.iter_s
+                   (fun q ->
+                     let* r = C.exec q () in
+                     let* _ = or_fail "cleanup" r in
+                     Lwt.return_unit)
+                   q_cleanup
+               in
+               let* () = cleanup () in
+               Lwt.finalize
+                 (fun () -> f ~url conn (module C : Caqti_lwt.CONNECTION))
+                 cleanup))
+
+  let q_insert_job =
+    (Caqti_type.string ->! Caqti_type.int)
+    "INSERT INTO posthog_person_deletion_jobs (distinct_id) VALUES ($1) RETURNING id"
+
+  let q_insert_job_aged =
+    (Caqti_type.(t2 string int) ->! Caqti_type.int)
+    "INSERT INTO posthog_person_deletion_jobs (distinct_id, created_at)
+     VALUES ($1, NOW() - ($2 * INTERVAL '1 hour')) RETURNING id"
+
+  let q_backdate_attempt =
+    (Caqti_type.int ->. Caqti_type.unit)
+    "UPDATE posthog_person_deletion_jobs
+     SET last_attempt_at = NOW() - INTERVAL '2 hours' WHERE id = $1"
+
+  (* (status, attempts, last_error) by job id. *)
+  let q_job_state =
+    (Caqti_type.int ->? Caqti_type.(t3 string int (option string)))
+    "SELECT status, attempts, last_error FROM posthog_person_deletion_jobs WHERE id = $1"
+
+  let q_count_jobs_for =
+    (Caqti_type.string ->! Caqti_type.int)
+    "SELECT COUNT(*) FROM posthog_person_deletion_jobs WHERE distinct_id = $1"
+
+  (* plpgsql failure trigger: a DB-only mechanism to force the job INSERT to
+     fail inside the transaction — no production test hook. Quoted-body form
+     avoids $$, which the Caqti query parser reserves. *)
+  let q_create_fail_fn =
+    (Caqti_type.unit ->. Caqti_type.unit)
+    "CREATE OR REPLACE FUNCTION step7_fail_insert_fn() RETURNS trigger AS 'BEGIN RAISE EXCEPTION ''step7 forced failure''; END' LANGUAGE plpgsql"
+
+  let q_create_fail_trigger =
+    (Caqti_type.unit ->. Caqti_type.unit)
+    "CREATE TRIGGER step7_fail_insert BEFORE INSERT ON posthog_person_deletion_jobs FOR EACH ROW EXECUTE FUNCTION step7_fail_insert_fn()"
+
+  let q_drop_fail_trigger =
+    (Caqti_type.unit ->. Caqti_type.unit)
+    "DROP TRIGGER IF EXISTS step7_fail_insert ON posthog_person_deletion_jobs"
+
+  let q_drop_fail_fn =
+    (Caqti_type.unit ->. Caqti_type.unit)
+    "DROP FUNCTION IF EXISTS step7_fail_insert_fn()"
+
+  let job_state c job_id =
+    let (module C : Caqti_lwt.CONNECTION) = c in
+    let* row = C.find_opt q_job_state job_id in
+    or_fail "job state" row
+
+  let atomic_case =
+    db_case "atomic anonymize+enqueue: one idempotent job, user anonymized"
+      (fun ~url:_ conn c ->
+        let (module C : Caqti_lwt.CONNECTION) = c in
+        let* uid = C.find Step6_events.q_insert_user ("step7_atomic", "x") in
+        let* uid = or_fail "user" uid in
+        let did = "user:" ^ string_of_int uid in
+        let* r = Earde.Db.anonymize_user_and_enqueue_posthog_deletion conn uid in
+        let* job_id, distinct_id = or_fail_s "anonymize+enqueue" r in
+        Alcotest.(check string) "immutable distinct id" did distinct_id;
+        let* name = C.find_opt Step6_events.q_username_by_id uid in
+        let* name = or_fail "row" name in
+        Alcotest.(check (option string)) "anonymized"
+          (Some (Printf.sprintf "[deleted_%d]" uid))
+          name;
+        let* state = job_state c job_id in
+        (match state with
+         | Some (status, attempts, last_error) ->
+             Alcotest.(check string) "pending" "pending" status;
+             Alcotest.(check int) "no attempts yet" 0 attempts;
+             Alcotest.(check (option string)) "no error" None last_error
+         | None -> Alcotest.fail "job row missing");
+        (* Duplicate call converges on the SAME job — no competitors. *)
+        let* r2 = Earde.Db.anonymize_user_and_enqueue_posthog_deletion conn uid in
+        let* job_id2, _ = or_fail_s "second call" r2 in
+        Alcotest.(check int) "same job id" job_id job_id2;
+        let* count = C.find q_count_jobs_for did in
+        let* count = or_fail "count" count in
+        Alcotest.(check int) "exactly one job" 1 count;
+        Lwt.return_unit)
+
+  let rollback_case =
+    db_case "forced job-insert failure rolls back the anonymization too"
+      (fun ~url:_ conn c ->
+        let (module C : Caqti_lwt.CONNECTION) = c in
+        let* uid = C.find Step6_events.q_insert_user ("step7_rollback", "x") in
+        let* uid = or_fail "user" uid in
+        let* r = C.exec q_create_fail_fn () in
+        let* () = or_fail "create fn" r in
+        let* r = C.exec q_create_fail_trigger () in
+        let* () = or_fail "create trigger" r in
+        let* result =
+          Earde.Db.anonymize_user_and_enqueue_posthog_deletion conn uid
+        in
+        (match result with
+         | Error _ -> ()
+         | Ok _ -> Alcotest.fail "expected forced failure");
+        let* r = C.exec q_drop_fail_trigger () in
+        let* () = or_fail "drop trigger" r in
+        let* r = C.exec q_drop_fail_fn () in
+        let* () = or_fail "drop fn" r in
+        (* BOTH changes rolled back: username untouched, no job row. *)
+        let* name = C.find_opt Step6_events.q_username_by_id uid in
+        let* name = or_fail "row" name in
+        Alcotest.(check (option string)) "anonymization rolled back"
+          (Some "step7_rollback") name;
+        let* count = C.find q_count_jobs_for ("user:" ^ string_of_int uid) in
+        let* count = or_fail "count" count in
+        Alcotest.(check int) "no job row" 0 count;
+        Lwt.return_unit)
+
+  let claim_case =
+    db_case "claim: attempts once, lease blocks, stale lease re-eligible"
+      (fun ~url:_ conn c ->
+        let (module C : Caqti_lwt.CONNECTION) = c in
+        let* job_id = C.find q_insert_job "user:9700001" in
+        let* job_id = or_fail "job" job_id in
+        let* claimed = Earde.Db.claim_posthog_deletion_job conn job_id in
+        let* claimed = or_fail_s "claim" claimed in
+        Alcotest.(check (option string)) "claim returns the distinct id"
+          (Some "user:9700001") claimed;
+        let* state = job_state c job_id in
+        (match state with
+         | Some (_, attempts, _) ->
+             Alcotest.(check int) "attempts incremented exactly once" 1 attempts
+         | None -> Alcotest.fail "job vanished");
+        (* Fresh lease: a concurrent attempt cannot claim it. *)
+        let* again = Earde.Db.claim_posthog_deletion_job conn job_id in
+        let* again = or_fail_s "concurrent claim" again in
+        Alcotest.(check (option string)) "lease blocks reclaim" None again;
+        (* Failure records the safe class; the stale lease re-opens the job. *)
+        let* r = Earde.Db.fail_posthog_deletion_job conn job_id "timeout" in
+        let* () = or_fail_s "mark failed" r in
+        let* r = C.exec q_backdate_attempt job_id in
+        let* () = or_fail "backdate" r in
+        let* reclaimed = Earde.Db.claim_posthog_deletion_job conn job_id in
+        let* reclaimed = or_fail_s "stale reclaim" reclaimed in
+        Alcotest.(check (option string)) "stale lease eligible again"
+          (Some "user:9700001") reclaimed;
+        (* Completion clears the error and closes the job for good. *)
+        let* r = Earde.Db.complete_posthog_deletion_job conn job_id in
+        let* () = or_fail_s "complete" r in
+        let* r = C.exec q_backdate_attempt job_id in
+        let* () = or_fail "backdate completed" r in
+        let* never = Earde.Db.claim_posthog_deletion_job conn job_id in
+        let* never = or_fail_s "claim completed" never in
+        Alcotest.(check (option string)) "completed jobs never claimed" None
+          never;
+        let* state = job_state c job_id in
+        (match state with
+         | Some (status, attempts, last_error) ->
+             Alcotest.(check string) "completed" "completed" status;
+             Alcotest.(check int) "two attempts total" 2 attempts;
+             Alcotest.(check (option string)) "last_error cleared" None
+               last_error
+         | None -> Alcotest.fail "job vanished");
+        Lwt.return_unit)
+
+  let batch_case =
+    db_case "batch claim: bounded and oldest-first" (fun ~url:_ conn c ->
+        let (module C : Caqti_lwt.CONNECTION) = c in
+        let* oldest = C.find q_insert_job_aged ("user:9700011", 3) in
+        let* oldest = or_fail "oldest" oldest in
+        let* middle = C.find q_insert_job_aged ("user:9700012", 2) in
+        let* middle = or_fail "middle" middle in
+        let* newest = C.find q_insert_job_aged ("user:9700013", 1) in
+        let* newest = or_fail "newest" newest in
+        let* claimed = Earde.Db.claim_posthog_deletion_batch conn ~limit:2 () in
+        let* claimed = or_fail_s "batch claim" claimed in
+        Alcotest.(check (list (pair int string)))
+          "bound respected; oldest two, oldest first"
+          [ (oldest, "user:9700011"); (middle, "user:9700012") ]
+          claimed;
+        let* state = job_state c newest in
+        (match state with
+         | Some (_, attempts, _) ->
+             Alcotest.(check int) "unclaimed job untouched" 0 attempts
+         | None -> Alcotest.fail "newest vanished");
+        Lwt.return_unit)
+
+  let batch_worker_case =
+    db_case "process_batch: deleted+absent complete, failure stays pending"
+      (fun ~url:_ conn c ->
+        let (module C : Caqti_lwt.CONNECTION) = c in
+        let* j_found = C.find q_insert_job_aged ("user:9700021", 3) in
+        let* j_found = or_fail "found job" j_found in
+        let* j_absent = C.find q_insert_job_aged ("user:9700022", 2) in
+        let* j_absent = or_fail "absent job" j_absent in
+        let* j_fail = C.find q_insert_job_aged ("user:9700023", 1) in
+        let* j_fail = or_fail "fail job" j_fail in
+        let handler (req : Api_stub.req) =
+          if req.meth = "DELETE" then (204, "")
+          else
+            match List.assoc_opt "distinct_id" req.query with
+            | Some [ "user:9700021" ] -> (200, results_body [ person_json stub_uuid ])
+            | Some [ "user:9700022" ] -> (200, results_body [])
+            | Some [ "user:9700023" ] -> (500, {|{"detail":"server error"}|})
+            | _ -> (404, "")
+        in
+        let* base_url, _seen, stop = Api_stub.start handler in
+        AnT.use_deletion_test_configuration ~ui_host:base_url
+          ~project_id:(Some "42") ~personal_api_key:(Some deletion_test_key) ();
+        Lwt.finalize
+          (fun () ->
+            (* Same worker the maintenance executable runs. *)
+            let* summary =
+              Earde.Posthog_deletion.process_batch
+                ~claim:(fun () ->
+                  Earde.Db.claim_posthog_deletion_batch conn ~limit:25 ())
+                ~mark_completed:(fun job_id ->
+                  Earde.Db.complete_posthog_deletion_job conn job_id)
+                ~mark_failed:(fun job_id err ->
+                  Earde.Db.fail_posthog_deletion_job conn job_id err)
+                ()
+            in
+            let* summary = or_fail_s "process_batch" summary in
+            Alcotest.(check int) "claimed" 3
+              summary.Earde.Posthog_deletion.claimed;
+            Alcotest.(check int) "completed" 2
+              summary.Earde.Posthog_deletion.completed;
+            Alcotest.(check int) "left pending" 1
+              summary.Earde.Posthog_deletion.left_pending;
+            let expect label job expected_status expected_error =
+              let* state = job_state c job in
+              match state with
+              | Some (status, _, last_error) ->
+                  Alcotest.(check string) (label ^ " status") expected_status
+                    status;
+                  Alcotest.(check (option string))
+                    (label ^ " error") expected_error last_error;
+                  Lwt.return_unit
+              | None -> Alcotest.failf "%s vanished" label
+            in
+            let* () = expect "deleted person" j_found "completed" None in
+            let* () = expect "already-absent person" j_absent "completed" None in
+            let* () =
+              expect "failed lookup" j_fail "pending" (Some "lookup_http_500")
+            in
+            Lwt.return_unit)
+          (fun () ->
+            AnT.clear_configuration_override ();
+            stop ();
+            Lwt.return_unit))
+
+  (* Runs the real delete_account_handler, keeping sink + configuration
+     installed until the post-response cleanup chain finishes ([done_pred]
+     polls the durable job through the case's own connection). *)
+  let run_delete_account ~url ~configure ?(consent = Some "granted")
+      ?(on_capture = fun () -> ()) ~uid ~done_pred () =
+    let payloads = ref [] in
+    configure ();
+    AnT.set_capture_sink (fun p ->
+        payloads := !payloads @ [ p ];
+        on_capture ());
+    Lwt.finalize
+      (fun () ->
+        let pipeline =
+          Dream.sql_pool url @@ Dream.memory_sessions @@ fun req ->
+          let* () = Dream.set_session_field req "user_id" (string_of_int uid) in
+          let* () = Dream.set_session_field req "username" "step7_deleting" in
+          let csrf = Dream.csrf_token req in
+          Dream.set_body req (Step6_events.form_body [ ("dream.csrf", csrf) ]);
+          Earde.Handlers.delete_account_handler req
+        in
+        let request =
+          Dream.request ~method_:`POST ~target:"/delete-account"
+            ~headers:
+              ([ ("Content-Type", "application/x-www-form-urlencoded") ]
+              @ Step6_events.consent_header consent)
+            ""
+        in
+        let* response = pipeline request in
+        let* () = wait_until ~label:"deletion cleanup chain" done_pred in
+        Lwt.return (Dream.status_to_int (Dream.status response), !payloads))
+      (fun () ->
+        AnT.clear_capture_sink ();
+        AnT.clear_configuration_override ();
+        Lwt.return_unit)
+
+  let job_completed conn did () =
+    let* job = Earde.Db.get_posthog_deletion_job conn did in
+    match job with
+    | Ok (Some (_, "completed", _, _)) -> Lwt.return true
+    | _ -> Lwt.return false
+
+  let job_has_error conn did () =
+    let* job = Earde.Db.get_posthog_deletion_job conn did in
+    match job with
+    | Ok (Some (_, _, _, Some _)) -> Lwt.return true
+    | _ -> Lwt.return false
+
+  let drop_job_and_user c ~did ~uid =
+    let (module C : Caqti_lwt.CONNECTION) = c in
+    let* job = Earde.Db.get_posthog_deletion_job c did in
+    let* () =
+      match job with
+      | Ok (Some (job_id, _, _, _)) ->
+          let* r = C.exec Step6_events.q_delete_job job_id in
+          or_fail "drop job" r
+      | _ -> Lwt.return_unit
+    in
+    let* r = C.exec Step6_events.q_delete_user uid in
+    or_fail "drop user" r
+
+  let stub_config base_url () =
+    AnT.use_deletion_test_configuration ~ui_host:base_url
+      ~project_id:(Some "42") ~personal_api_key:(Some deletion_test_key) ()
+
+  let consented_flow_case =
+    db_case "handler: personless metric + real-identity deletion job completes"
+      (fun ~url conn c ->
+        let (module C : Caqti_lwt.CONNECTION) = c in
+        let* uid = C.find Step6_events.q_insert_user ("step7_flow", "x") in
+        let* uid = or_fail "user" uid in
+        let did = "user:" ^ string_of_int uid in
+        let order = ref [] in
+        let* base_url, seen, stop =
+          Api_stub.start (fun req ->
+              order := !order @ [ req.Api_stub.meth ];
+              if req.Api_stub.meth = "GET" then
+                (200, results_body [ person_json stub_uuid ])
+              else (204, ""))
+        in
+        Lwt.finalize
+          (fun () ->
+            let* status, payloads =
+              run_delete_account ~url ~configure:(stub_config base_url) ~uid
+                ~on_capture:(fun () -> order := !order @ [ "capture" ])
+                ~done_pred:(job_completed conn did) ()
+            in
+            Alcotest.(check bool) "response preserved (redirect)" true
+              (is_redirect status);
+            (match payloads with
+             | [ p ] ->
+                 Alcotest.(check string) "event" "account_deleted" (event_of p);
+                 Alcotest.(check string) "constant non-user distinct id"
+                   Earde.Analytics.account_deletion_distinct_id (distinct_of p);
+                 Alcotest.(check bool)
+                   "metric never mentions the deleted user" false
+                   (contains (Yojson.Safe.to_string p) did)
+             | l -> Alcotest.failf "expected 1 metric, got %d" (List.length l));
+            (* HTTP request sequence only — the metric request happens to run
+               first, but person-safety comes from the metric being personless
+               by construction, NOT from this ordering (which proves nothing
+               about PostHog's ingestion pipeline). *)
+            Alcotest.(check (list string))
+              "HTTP request sequence: metric, lookup, delete"
+              [ "capture"; "GET"; "DELETE" ] !order;
+            (* The Persons lookup and the durable job keep the REAL
+               user:<database_id>. *)
+            (match
+               List.find_opt (fun (q : Api_stub.req) -> q.meth = "GET") !seen
+             with
+             | Some lookup ->
+                 Alcotest.(check (option (list string)))
+                   "Persons lookup uses the real user distinct id"
+                   (Some [ did ])
+                   (List.assoc_opt "distinct_id" lookup.Api_stub.query)
+             | None -> Alcotest.fail "no Persons lookup recorded");
+            let* job = Earde.Db.get_posthog_deletion_job conn did in
+            let* job = or_fail_s "job" job in
+            (match job with
+             | Some (_, status, attempts, last_error) ->
+                 Alcotest.(check string) "completed" "completed" status;
+                 Alcotest.(check int) "one attempt" 1 attempts;
+                 Alcotest.(check (option string)) "no error" None last_error
+             | None -> Alcotest.fail "no job");
+            let* name = C.find_opt Step6_events.q_username_by_id uid in
+            let* name = or_fail "row" name in
+            Alcotest.(check (option string)) "anonymized"
+              (Some (Printf.sprintf "[deleted_%d]" uid))
+              name;
+            drop_job_and_user c ~did ~uid)
+          (fun () ->
+            stop ();
+            Lwt.return_unit))
+
+  let denied_consent_case =
+    db_case "handler: denied consent skips capture, still deletes remotely"
+      (fun ~url conn c ->
+        let (module C : Caqti_lwt.CONNECTION) = c in
+        let* uid = C.find Step6_events.q_insert_user ("step7_denied", "x") in
+        let* uid = or_fail "user" uid in
+        let did = "user:" ^ string_of_int uid in
+        let* base_url, seen, stop =
+          Api_stub.start (fun req ->
+              if req.Api_stub.meth = "GET" then (200, results_body [])
+              else (404, ""))
+        in
+        Lwt.finalize
+          (fun () ->
+            let* status, payloads =
+              run_delete_account ~url ~configure:(stub_config base_url)
+                ~consent:(Some "denied") ~uid
+                ~done_pred:(job_completed conn did) ()
+            in
+            Alcotest.(check bool) "redirects" true (is_redirect status);
+            Alcotest.(check int) "no capture without consent" 0
+              (List.length payloads);
+            Alcotest.(check bool) "deletion still attempted" true
+              (List.length !seen >= 1);
+            drop_job_and_user c ~did ~uid)
+          (fun () ->
+            stop ();
+            Lwt.return_unit))
+
+  let capture_failure_case =
+    db_case "handler: capture transport failure still proceeds to deletion"
+      (fun ~url conn c ->
+        let (module C : Caqti_lwt.CONNECTION) = c in
+        let* uid = C.find Step6_events.q_insert_user ("step7_capfail", "x") in
+        let* uid = or_fail "user" uid in
+        let did = "user:" ^ string_of_int uid in
+        let* base_url, seen, stop =
+          Api_stub.start (fun req ->
+              if req.Api_stub.meth = "GET" then (200, results_body [])
+              else (404, ""))
+        in
+        Lwt.finalize
+          (fun () ->
+            let* status, _payloads =
+              run_delete_account ~url ~configure:(stub_config base_url) ~uid
+                ~on_capture:(fun () -> failwith "capture transport down")
+                ~done_pred:(job_completed conn did) ()
+            in
+            Alcotest.(check bool) "redirects" true (is_redirect status);
+            Alcotest.(check bool) "deletion still attempted" true
+              (List.length !seen >= 1);
+            let* job = Earde.Db.get_posthog_deletion_job conn did in
+            let* job = or_fail_s "job" job in
+            (match job with
+             | Some (_, status, _, _) ->
+                 Alcotest.(check string) "completed despite capture failure"
+                   "completed" status
+             | None -> Alcotest.fail "no job");
+            drop_job_and_user c ~did ~uid)
+          (fun () ->
+            stop ();
+            Lwt.return_unit))
+
+  let missing_config_case =
+    db_case "handler: missing configuration leaves a durable pending job"
+      (fun ~url conn c ->
+        let (module C : Caqti_lwt.CONNECTION) = c in
+        let* uid = C.find Step6_events.q_insert_user ("step7_noconf", "x") in
+        let* uid = or_fail "user" uid in
+        let did = "user:" ^ string_of_int uid in
+        let* status, payloads =
+          run_delete_account ~url
+            ~configure:AnT.use_enabled_test_configuration ~uid
+            ~done_pred:(job_has_error conn did) ()
+        in
+        Alcotest.(check bool) "local deletion still succeeds" true
+          (is_redirect status);
+        Alcotest.(check int) "capture still emitted (consented)" 1
+          (List.length payloads);
+        let* job = Earde.Db.get_posthog_deletion_job conn did in
+        let* job = or_fail_s "job" job in
+        (match job with
+         | Some (_, status, attempts, last_error) ->
+             Alcotest.(check string) "pending" "pending" status;
+             Alcotest.(check int) "one attempt" 1 attempts;
+             Alcotest.(check (option string)) "safe marker"
+               (Some "missing_configuration") last_error
+         | None -> Alcotest.fail "no durable job");
+        drop_job_and_user c ~did ~uid)
+
+  let posthog_down_case =
+    db_case "handler: PostHog failure never changes the product response"
+      (fun ~url conn c ->
+        let (module C : Caqti_lwt.CONNECTION) = c in
+        let* uid = C.find Step6_events.q_insert_user ("step7_phdown", "x") in
+        let* uid = or_fail "user" uid in
+        let did = "user:" ^ string_of_int uid in
+        let* base_url, _seen, stop =
+          Api_stub.start (fun _req -> (500, {|{"detail":"server error"}|}))
+        in
+        Lwt.finalize
+          (fun () ->
+            let* status, _payloads =
+              run_delete_account ~url ~configure:(stub_config base_url) ~uid
+                ~done_pred:(job_has_error conn did) ()
+            in
+            Alcotest.(check bool) "redirects" true (is_redirect status);
+            let* job = Earde.Db.get_posthog_deletion_job conn did in
+            let* job = or_fail_s "job" job in
+            (match job with
+             | Some (_, status, _, last_error) ->
+                 Alcotest.(check string) "pending" "pending" status;
+                 Alcotest.(check (option string)) "safe status class"
+                   (Some "lookup_http_500") last_error
+             | None -> Alcotest.fail "no job");
+            let* name = C.find_opt Step6_events.q_username_by_id uid in
+            let* name = or_fail "row" name in
+            Alcotest.(check (option string)) "local deletion applied anyway"
+              (Some (Printf.sprintf "[deleted_%d]" uid))
+              name;
+            drop_job_and_user c ~did ~uid)
+          (fun () ->
+            stop ();
+            Lwt.return_unit))
+
+  let suite =
+    [ atomic_case; rollback_case; claim_case; batch_case; batch_worker_case
+    ; consented_flow_case; denied_consent_case; capture_failure_case
+    ; missing_config_case; posthog_down_case
     ]
 end
 
@@ -2345,9 +3112,9 @@ let () =
                 "channel_slug"; "post_id"; "message_id";
                 "promoted_message_count"; "promoted_participant_count";
                 "$groups" ]
-          ; check_keys "account_deleted keys"
-              (An.Account_deleted { user_id = 1 })
-              [ "user_id" ]
+          ; check_keys "account_deleted keys (personless: no user_id)"
+              An.Account_deleted
+              [ "$process_person_profile" ]
           ; an_case "community_joined full payload" (fun () ->
                 let expected : Yojson.Safe.t =
                   `Assoc
@@ -2437,8 +3204,7 @@ let () =
             (List.assoc "signup_confirmed" an_all_events)
         ; check_group "login has no group" None
             (List.assoc "login_succeeded" an_all_events)
-        ; check_group "deletion has no group" None
-            (An.Account_deleted { user_id = 1 })
+        ; check_group "deletion has no group" None An.Account_deleted
         ] )
       (* Consent-transition sync: the dedicated $identify payload with the
          same closed $set object as the identity events. *)
@@ -3083,8 +3849,135 @@ let () =
                     (consent_request (Some "earde_analytics_consent=granted"))
                     ~distinct_id:"user:7" an_login))
         ] )
+    ; ( "posthog_deletion_api"
+      , [ check_attempt "exact match: delete accepted -> completed"
+            (persons_handler ())
+            (Ok ()) ~expect_delete:true
+        ; an_case "delete carries delete_events=true for the looked-up uuid"
+            (fun () ->
+              with_persons_stub (persons_handler ()) (fun ~seen ->
+                  let ( let* ) = Lwt.bind in
+                  let* r =
+                    Earde.Posthog_deletion.attempt_person_deletion
+                      ~distinct_id:"user:314"
+                  in
+                  Alcotest.(check attempt_result) "completed" (Ok ()) r;
+                  (match !seen with
+                   | [ lookup; delete ] ->
+                       Alcotest.(check string) "lookup meth" "GET"
+                         lookup.Api_stub.meth;
+                       Alcotest.(check (option (list string)))
+                         "exact URL-encoded distinct id" (Some [ "user:314" ])
+                         (List.assoc_opt "distinct_id" lookup.Api_stub.query);
+                       Alcotest.(check string) "delete path"
+                         ("/api/projects/42/persons/" ^ stub_uuid ^ "/")
+                         delete.Api_stub.path;
+                       Alcotest.(check (option (list string)))
+                         "delete_events=true" (Some [ "true" ])
+                         (List.assoc_opt "delete_events" delete.Api_stub.query)
+                   | l ->
+                       Alcotest.failf "expected lookup+delete, saw %d"
+                         (List.length l));
+                  Lwt.return_unit))
+        ; check_attempt "absent person -> completed without DELETE"
+            (persons_handler ~persons:[] ())
+            (Ok ()) ~expect_delete:false
+        ; check_attempt "ambiguous lookup -> pending, nobody deleted"
+            (persons_handler
+               ~persons:[ person_json stub_uuid; person_json other_uuid ]
+               ())
+            (Error "ambiguous_person_match") ~expect_delete:false
+        ; check_attempt "malformed lookup JSON -> pending"
+            (persons_handler ~lookup_body_override:"not json at all" ())
+            (Error "malformed_lookup_response") ~expect_delete:false
+        ; check_attempt "lookup 401 -> pending with safe class"
+            (persons_handler ~lookup_status:401
+               ~lookup_body_override:{|{"type":"authentication_error"}|} ())
+            (Error "lookup_http_401") ~expect_delete:false
+        ; check_attempt "lookup 500 -> pending with safe class"
+            (persons_handler ~lookup_status:500
+               ~lookup_body_override:{|{"detail":"boom"}|} ())
+            (Error "lookup_http_500") ~expect_delete:false
+        ; check_attempt "delete 403 -> pending with safe class"
+            (persons_handler ~delete_status:403 ())
+            (Error "delete_http_403") ~expect_delete:true
+        ; an_case "unreachable host -> network_error, never a raw exception"
+            (fun () ->
+              AnT.use_deletion_test_configuration
+                ~ui_host:"http://127.0.0.1:9" ~project_id:(Some "42")
+                ~personal_api_key:(Some deletion_test_key) ();
+              Fun.protect ~finally:AnT.clear_configuration_override (fun () ->
+                  let r =
+                    Lwt_main.run
+                      (Earde.Posthog_deletion.attempt_person_deletion
+                         ~distinct_id:"user:314")
+                  in
+                  Alcotest.(check attempt_result) "network error class"
+                    (Error "network_error") r))
+        ; an_case "missing configuration -> safe pending marker" (fun () ->
+              AnT.use_deletion_test_configuration ~ui_host:"http://earde.test"
+                ~project_id:None ~personal_api_key:(Some deletion_test_key) ();
+              Fun.protect ~finally:AnT.clear_configuration_override (fun () ->
+                  let r =
+                    Lwt_main.run
+                      (Earde.Posthog_deletion.attempt_person_deletion
+                         ~distinct_id:"user:314")
+                  in
+                  Alcotest.(check attempt_result) "missing configuration"
+                    (Error "missing_configuration") r))
+        ; an_case "account_deleted metric is personless by construction"
+            (fun () ->
+              let captured =
+                with_sink ~enabled:true (fun () ->
+                    Lwt_main.run
+                      (An.capture_account_deleted_sequenced
+                         (consent_request
+                            (Some "earde_analytics_consent=granted"))))
+              in
+              match captured with
+              | [ p ] ->
+                  Alcotest.(check string) "event" "account_deleted"
+                    (event_of p);
+                  Alcotest.(check string) "constant non-user distinct id"
+                    An.account_deletion_distinct_id (distinct_of p);
+                  Alcotest.(check (slist string compare))
+                    "person processing disabled, nothing else"
+                    [ "$process_person_profile" ] (prop_keys p);
+                  (match
+                     List.assoc_opt "$process_person_profile" (payload_props p)
+                   with
+                   | Some (`Bool false) -> ()
+                   | _ ->
+                       Alcotest.fail "$process_person_profile must be false");
+                  let raw = Yojson.Safe.to_string p in
+                  Alcotest.(check bool) "no user identity anywhere" false
+                    (contains raw "user:");
+                  Alcotest.(check bool) "no person $set" false
+                    (contains raw "$set");
+                  Alcotest.(check bool) "no community group" false
+                    (contains raw "$groups")
+              | l -> Alcotest.failf "expected 1 metric, got %d" (List.length l))
+        ; an_case "denied/missing consent emits no deletion metric" (fun () ->
+              let denied =
+                with_sink ~enabled:true (fun () ->
+                    Lwt_main.run
+                      (An.capture_account_deleted_sequenced
+                         (consent_request
+                            (Some "earde_analytics_consent=denied"))))
+              in
+              Alcotest.(check int) "denied emits none" 0 (List.length denied);
+              let missing =
+                with_sink ~enabled:true (fun () ->
+                    Lwt_main.run
+                      (An.capture_account_deleted_sequenced
+                         (consent_request None)))
+              in
+              Alcotest.(check int) "missing emits none" 0
+                (List.length missing))
+        ] )
     ; ( "mod_delete_community_scope", Mod_scope.suite )
     ; ( "db_returning_ids", Returning_ids.suite )
     ; ( "analytics_consent_db", [ consent_sync_db_case ] )
     ; ( "analytics_step6_events", Step6_events.suite )
+    ; ( "posthog_deletion_jobs", Step7_deletion.suite )
     ]

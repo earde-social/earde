@@ -76,9 +76,18 @@ type event =
       promoted_message_count : int;
       promoted_participant_count : int option;
     }
-  | Account_deleted of { user_id : int }
+  | Account_deleted
+      (* Personless aggregate deletion counter (§3.3): carries NO user_id, no
+         person, no group. Person processing is disabled on the payload, so it
+         can never be associated with (or recreate) the person the deletion
+         job is about to remove. *)
 
 let distinct_id_of_user_id user_id = Printf.sprintf "user:%d" user_id
+
+(* Constant non-user distinct id for the personless account_deleted metric.
+   With $process_person_profile=false no person profile is ever created for
+   it; the constant only pools the aggregate counter. *)
+let account_deletion_distinct_id = "system:account-deletion"
 
 (* Group keys use the immutable numeric id — slugs are mutable (§5.3). *)
 let community_group_key community_id = Printf.sprintf "community:%d" community_id
@@ -176,6 +185,39 @@ let browser_config () =
   if c.enabled then
     Some { browser_token = c.project_token; browser_api_host = c.api_host }
   else None
+
+(* === Private Persons-API configuration (server-only, §3.3) === *)
+
+type deletion_api_config = {
+  deletion_ui_host : string;
+  deletion_project_id : string;
+  deletion_api_key : string;
+}
+
+(* Deletion is a data-lifecycle duty, not analytics collection: it is
+   available whenever the private credentials exist, independent of
+   POSTHOG_ENABLED. Warn (once, by variable NAME only — never a value) when
+   exactly one of the two credentials is set, since that is almost certainly a
+   deployment mistake that leaves deletion jobs pending. *)
+let warned_partial_deletion_config = ref false
+
+let deletion_api_config () =
+  let c = current_config () in
+  match (c.project_id, c.personal_api_key) with
+  | Some project_id, Some api_key ->
+      Some
+        {
+          deletion_ui_host = c.ui_host;
+          deletion_project_id = project_id;
+          deletion_api_key = api_key;
+        }
+  | (Some _, None | None, Some _) when not !warned_partial_deletion_config ->
+      warned_partial_deletion_config := true;
+      Logs.warn (fun m ->
+          m "only one of %s and %s is set; PostHog person deletion stays pending"
+            project_id_env personal_api_key_env);
+      None
+  | _ -> None
 
 (* === Consent (pure) === *)
 
@@ -284,12 +326,12 @@ let event_name = function
   | Post_created _ -> "post_created"
   | Comment_created _ -> "comment_created"
   | Thread_promoted _ -> "thread_promoted"
-  | Account_deleted _ -> "account_deleted"
+  | Account_deleted -> "account_deleted"
 
 (* Community-scoped events carry $groups.community (§5.3); identity/lifecycle
    events do not. *)
 let event_community_id = function
-  | Signup_confirmed _ | Login_succeeded _ | Account_deleted _ -> None
+  | Signup_confirmed _ | Login_succeeded _ | Account_deleted -> None
   | Community_joined { community_id; _ }
   | Community_left { community_id; _ }
   | Chat_message_sent { community_id; _ }
@@ -399,7 +441,11 @@ let event_properties = function
           ("promoted_message_count", `Int promoted_message_count);
         ]
       @ opt_int "promoted_participant_count" promoted_participant_count
-  | Account_deleted { user_id } -> [ ("user_id", `Int user_id) ]
+  | Account_deleted ->
+      (* Raw Capture API anonymous-event mechanism (verified against current
+         docs, api/capture "Anonymous event capture"): person processing off,
+         no other properties — an aggregate counter only. *)
+      [ ("$process_person_profile", `Bool false) ]
 
 let capture_payload ~api_key ~distinct_id ~name ~properties : Yojson.Safe.t =
   `Assoc
@@ -482,22 +528,30 @@ let post_capture ~api_host payload =
        response body is uncontrolled third-party data. *)
     Logs.warn (fun m -> m "PostHog capture failed: status=%d" status)
 
-let dispatch config payload =
+(* Awaitable dispatch: resolves after the sink call or the bounded transport
+   attempt (timeout included). Every failure is swallowed — the returned
+   promise never rejects. *)
+let dispatch_await config payload =
   match !capture_sink with
   | Some sink ->
       (* Test transport. Failures are swallowed exactly like HTTP failures:
          analytics can never affect the caller. *)
-      (try sink payload with _ -> ())
+      (try sink payload with _ -> ());
+      Lwt.return_unit
   | None ->
-      Lwt.async (fun () ->
-          Lwt.catch
-            (fun () ->
-              with_timeout capture_timeout_seconds
-                (post_capture ~api_host:config.api_host payload))
-            (fun exn ->
-              Logs.warn (fun m ->
-                  m "PostHog capture exception: %s" (Printexc.to_string exn));
-              Lwt.return_unit))
+      Lwt.catch
+        (fun () ->
+          with_timeout capture_timeout_seconds
+            (post_capture ~api_host:config.api_host payload))
+        (fun exn ->
+          Logs.warn (fun m ->
+              m "PostHog capture exception: %s" (Printexc.to_string exn));
+          Lwt.return_unit)
+
+let dispatch config payload =
+  match !capture_sink with
+  | Some sink -> ( try sink payload with _ -> ())
+  | None -> Lwt.async (fun () -> dispatch_await config payload)
 
 (* === Public API === *)
 
@@ -515,6 +569,25 @@ let sync_person_after_consent_grant ~distinct_id person =
   if config.enabled then
     dispatch config
       (person_sync_payload ~api_key:config.project_token ~distinct_id person)
+
+(* Narrow §3.3 orchestration seam for the account-deletion flow only. The
+   metric is PERSONLESS by construction — constant system distinct id,
+   $process_person_profile=false, no properties — so ingestion timing relative
+   to the Persons-API deletion cannot associate it with (or recreate) the
+   deleted person; the await only sequences the HTTP requests, it proves
+   nothing about ingestion. Same gate as capture_if_consented — disabled
+   analytics or absent/denied consent resolves immediately with no side
+   effect — and it can emit only the closed Account_deleted event. *)
+let capture_account_deleted_sequenced request =
+  let config = current_config () in
+  if not config.enabled then Lwt.return_unit
+  else
+    match consent_of_cookie_header (Dream.header request "Cookie") with
+    | `Granted ->
+        dispatch_await config
+          (event_payload ~api_key:config.project_token
+             ~distinct_id:account_deletion_distinct_id Account_deleted)
+    | `Denied | `Unknown -> Lwt.return_unit
 
 (* $groupidentify shares capture_if_consented's exact gate: enabled AND the
    request's consent cookie is exactly "granted". It accepts only the closed
@@ -556,6 +629,19 @@ module For_testing = struct
 
   let use_enabled_test_configuration () =
     config_override := Some (test_config ~enabled:true)
+
+  (* §3.3 deletion-client tests: point the private Persons API at a local HTTP
+     stub. Dummy values only — never real credentials. *)
+  let use_deletion_test_configuration ~ui_host ~project_id ~personal_api_key ()
+      =
+    config_override :=
+      Some
+        {
+          (test_config ~enabled:true) with
+          ui_host = strip_trailing_slash ui_host;
+          project_id;
+          personal_api_key;
+        }
 
   let use_disabled_test_configuration () =
     config_override := Some (test_config ~enabled:false)

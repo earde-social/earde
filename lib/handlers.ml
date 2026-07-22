@@ -4045,6 +4045,36 @@ let export_data_handler request =
         | _ -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Error" ~message:"Failed to generate export data. Please try again." ~alert_type:"error" ~return_url:"/settings" request)
       )
 
+(* Immediate §3.3 attempt for a just-committed deletion job. The atomic claim
+   (status + lease in one statement) means a concurrently running maintenance
+   retry can never process the same job at the same time; every DB step is its
+   own short Dream.sql call, so no connection is held across the PostHog HTTP
+   attempt. All failures are swallowed — the job stays durably pending. *)
+let attempt_posthog_deletion_job request ~job_id =
+  Lwt.catch
+    (fun () ->
+      let%lwt claimed =
+        Dream.sql request (fun db -> Db.claim_posthog_deletion_job db job_id)
+      in
+      match claimed with
+      | Ok (Some distinct_id) ->
+          let%lwt (_ : [ `Completed | `Left_pending of string ]) =
+            Posthog_deletion.process_claimed_job
+              ~mark_completed:(fun () ->
+                Dream.sql request (fun db ->
+                    Db.complete_posthog_deletion_job db job_id))
+              ~mark_failed:(fun err ->
+                Dream.sql request (fun db ->
+                    Db.fail_posthog_deletion_job db job_id err))
+              ~distinct_id
+          in
+          Lwt.return_unit
+      | Ok None | Error _ -> Lwt.return_unit)
+    (fun exn ->
+      Dream.log "posthog deletion immediate attempt error: %s"
+        (Printexc.to_string exn);
+      Lwt.return_unit)
+
 (* GDPR Art. 17 (right to erasure): anonymize rather than hard-delete to preserve
    thread coherence; posts remain as [deleted] rather than leaving orphaned replies. *)
 let delete_account_handler request =
@@ -4054,19 +4084,33 @@ let delete_account_handler request =
       let user_id = int_of_string uid_str in
       match%lwt Dream.form request with
       | `Ok _ ->
+          (* §3.3 atomic local deletion: anonymization and the durable
+             deletion job commit together (or roll back together) — no crash
+             window with an anonymized user and no job. The transaction never
+             performs HTTP. *)
           let%lwt result =
-            Dream.sql request (fun db -> Db.anonymize_user db user_id)
+            Dream.sql request (fun db ->
+                Db.anonymize_user_and_enqueue_posthog_deletion db user_id)
           in
           (match result with
-            | Ok () ->
-                (* Captured after local anonymization succeeds and BEFORE the
-                   session is invalidated, with the pre-anonymization
-                   user:<id> and no personal data. Step 7 replaces the local
-                   anonymize with the durable deletion-job transaction; this
-                   capture point stays. *)
-                Analytics.capture_if_consented request
-                  ~distinct_id:(Analytics.distinct_id_of_user_id user_id)
-                  (Analytics.Account_deleted { user_id });
+            | Ok (job_id, _distinct_id) ->
+                (* One async cleanup chain, off the response path:
+                   1. the consent-gated PERSONLESS account_deleted metric
+                      (constant system distinct id, person processing off — so
+                      ingestion timing can never associate it with, or
+                      recreate, the person being deleted);
+                   2. then — regardless of the metric's outcome — the
+                      immediate durable deletion attempt for the real
+                      user:<id> job. PostHog being down or unconfigured only
+                      leaves the committed job pending. *)
+                Lwt.async (fun () ->
+                    let%lwt () =
+                      Lwt.catch
+                        (fun () ->
+                          Analytics.capture_account_deleted_sequenced request)
+                        (fun _ -> Lwt.return_unit)
+                    in
+                    attempt_posthog_deletion_job request ~job_id);
                 let%lwt () = Dream.invalidate_session request in
                 Dream.redirect request "/"
             | Error err -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Error" ~message:("Error during account deletion: " ^ err) ~alert_type:"error" ~return_url:"/settings" request))
