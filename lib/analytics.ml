@@ -1,0 +1,484 @@
+(* PostHog server-side analytics (spec: docs/features/posthog-analytics.md).
+   Precedents: lib/turnstile.ml (env-driven optional external HTTP service) and
+   lib/realtime.ml (fire-and-forget Cohttp POST with timeout). Payloads target
+   the Capture API single-event endpoint POST <api_host>/i/v0/e/ with
+   {api_key, event, distinct_id, properties}; $set and $groupidentify are
+   event types on the same endpoint. *)
+
+open Lwt.Infix
+
+(* === Closed models === *)
+
+type person_properties = {
+  username : string;
+  email : string;
+  signup_date : string;
+  is_admin : bool;
+}
+
+type community_group = {
+  community_id : int;
+  community_slug : string;
+  community_name : string;
+  community_visibility : string;
+  created_at : string option;
+}
+
+type response_mode = Response_json | Response_redirect
+
+type event =
+  | Signup_confirmed of { user_id : int; person : person_properties }
+  | Login_succeeded of { user_id : int; person : person_properties }
+  | Community_joined of {
+      user_id : int;
+      community_id : int;
+      community_slug : string;
+      community_visibility : string;
+    }
+  | Community_left of { user_id : int; community_id : int }
+  | Chat_message_sent of {
+      user_id : int;
+      community_id : int;
+      community_slug : string;
+      channel_id : int;
+      channel_slug : string;
+      message_id : int64;
+      content_length : int;
+      response_mode : response_mode;
+    }
+  | Post_created of {
+      user_id : int;
+      community_id : int;
+      section_id : int option;
+      post_id : int;
+      content_length : int;
+      has_link : bool;
+      has_mention : bool;
+    }
+  | Comment_created of {
+      user_id : int;
+      community_id : int;
+      post_id : int;
+      comment_id : int;
+      parent_comment_id : int option;
+      content_length : int;
+      has_mention : bool;
+    }
+  | Thread_promoted of {
+      user_id : int;
+      community_id : int;
+      community_slug : string;
+      channel_id : int;
+      channel_slug : string;
+      section_id : int option;
+      post_id : int;
+      message_id : int64;
+      promoted_message_count : int;
+      promoted_participant_count : int option;
+    }
+  | Account_deleted of { user_id : int }
+
+let distinct_id_of_user_id user_id = Printf.sprintf "user:%d" user_id
+
+(* Group keys use the immutable numeric id — slugs are mutable (§5.3). *)
+let community_group_key community_id = Printf.sprintf "community:%d" community_id
+
+(* === Configuration === *)
+
+let enabled_env = "POSTHOG_ENABLED"
+let project_token_env = "POSTHOG_PROJECT_TOKEN"
+let api_host_env = "POSTHOG_API_HOST"
+let ui_host_env = "POSTHOG_UI_HOST"
+let project_id_env = "POSTHOG_PROJECT_ID"
+let personal_api_key_env = "POSTHOG_PERSONAL_API_KEY"
+let public_origin_env = "EARDE_PUBLIC_ORIGIN"
+
+let default_api_host = "https://eu.i.posthog.com"
+let default_ui_host = "https://eu.posthog.com"
+
+type config = {
+  enabled : bool;
+  project_token : string;
+  api_host : string;
+  (* Held for the later steps that consume them (§3.3 deletion lifecycle, §9
+     consent endpoint). personal_api_key and project_id are server-only and
+     must never be rendered into browser configuration or logged. *)
+  ui_host : string;
+  project_id : string option;
+  personal_api_key : string option;
+  public_origin : string option;
+}
+
+let getenv_nonempty name =
+  match Sys.getenv_opt name with
+  | None -> None
+  | Some value ->
+      let value = String.trim value in
+      if value = "" then None else Some value
+
+let strip_trailing_slash value =
+  let len = String.length value in
+  if len > 0 && value.[len - 1] = '/' then String.sub value 0 (len - 1)
+  else value
+
+let config_from_env () =
+  let enabled_flag = getenv_nonempty enabled_env = Some "true" in
+  let token = getenv_nonempty project_token_env in
+  let enabled, project_token =
+    match (enabled_flag, token) with
+    | true, Some t -> (true, t)
+    | true, None ->
+        (* Misconfigured: enabled without a token. Disable safely rather than
+           break the product; log the variable name, never any value. *)
+        Logs.warn (fun m ->
+            m "%s=true but %s is unset; analytics disabled" enabled_env
+              project_token_env);
+        (false, "")
+    | false, _ -> (false, "")
+  in
+  let host_or env_name default =
+    match getenv_nonempty env_name with
+    | Some h -> strip_trailing_slash h
+    | None -> default
+  in
+  {
+    enabled;
+    project_token;
+    api_host = host_or api_host_env default_api_host;
+    ui_host = host_or ui_host_env default_ui_host;
+    project_id = getenv_nonempty project_id_env;
+    personal_api_key = getenv_nonempty personal_api_key_env;
+    public_origin = getenv_nonempty public_origin_env;
+  }
+
+(* Lazy because analytics is not wired in bin/main.ml yet; the first caller
+   resolves the environment once. Tests install an override instead so they
+   never depend on the process environment. *)
+let env_config = lazy (config_from_env ())
+let config_override : config option ref = ref None
+
+let current_config () =
+  match !config_override with
+  | Some config -> config
+  | None -> Lazy.force env_config
+
+(* === Consent (pure) === *)
+
+let consent_cookie_name = "earde_analytics_consent"
+
+(* Exact parse of the raw Cookie header: the consent cookie is a plaintext,
+   JS-readable cookie (§9), so no Dream cookie decryption applies. Anything
+   other than the exact values "granted"/"denied" is `Unknown. *)
+let consent_of_cookie_header header =
+  match header with
+  | None -> `Unknown
+  | Some raw ->
+      let rec find = function
+        | [] -> `Unknown
+        | part :: rest -> (
+            let part = String.trim part in
+            match String.index_opt part '=' with
+            | Some i when String.sub part 0 i = consent_cookie_name -> (
+                match
+                  String.sub part (i + 1) (String.length part - i - 1)
+                with
+                | "granted" -> `Granted
+                | "denied" -> `Denied
+                | _ -> `Unknown)
+            | _ -> find rest)
+      in
+      find (String.split_on_char ';' raw)
+
+(* === Payload builders (pure) === *)
+
+let json_int64 value = `Intlit (Int64.to_string value)
+
+let response_mode_to_string = function
+  | Response_json -> "json"
+  | Response_redirect -> "redirect"
+
+let opt_int name = function None -> [] | Some v -> [ (name, `Int v) ]
+
+let event_name = function
+  | Signup_confirmed _ -> "signup_confirmed"
+  | Login_succeeded _ -> "login_succeeded"
+  | Community_joined _ -> "community_joined"
+  | Community_left _ -> "community_left"
+  | Chat_message_sent _ -> "chat_message_sent"
+  | Post_created _ -> "post_created"
+  | Comment_created _ -> "comment_created"
+  | Thread_promoted _ -> "thread_promoted"
+  | Account_deleted _ -> "account_deleted"
+
+(* Community-scoped events carry $groups.community (§5.3); identity/lifecycle
+   events do not. *)
+let event_community_id = function
+  | Signup_confirmed _ | Login_succeeded _ | Account_deleted _ -> None
+  | Community_joined { community_id; _ }
+  | Community_left { community_id; _ }
+  | Chat_message_sent { community_id; _ }
+  | Post_created { community_id; _ }
+  | Comment_created { community_id; _ }
+  | Thread_promoted { community_id; _ } ->
+      Some community_id
+
+(* The closed §4.3 person properties, as the $set object. Only the two
+   identity events (signup_confirmed, login_succeeded) and the consent
+   transition may carry it; person properties never appear as ordinary
+   top-level event properties. *)
+let person_set_json (p : person_properties) =
+  `Assoc
+    [
+      ("username", `String p.username);
+      ("email", `String p.email);
+      ("signup_date", `String p.signup_date);
+      ("is_admin", `Bool p.is_admin);
+    ]
+
+let event_properties = function
+  | Signup_confirmed { user_id; person } ->
+      [ ("user_id", `Int user_id); ("$set", person_set_json person) ]
+  | Login_succeeded { user_id; person } ->
+      [ ("user_id", `Int user_id); ("$set", person_set_json person) ]
+  | Community_joined { user_id; community_id; community_slug; community_visibility }
+    ->
+      [
+        ("user_id", `Int user_id);
+        ("community_id", `Int community_id);
+        ("community_slug", `String community_slug);
+        ("community_visibility", `String community_visibility);
+      ]
+  | Community_left { user_id; community_id } ->
+      [ ("user_id", `Int user_id); ("community_id", `Int community_id) ]
+  | Chat_message_sent
+      {
+        user_id;
+        community_id;
+        community_slug;
+        channel_id;
+        channel_slug;
+        message_id;
+        content_length;
+        response_mode;
+      } ->
+      [
+        ("user_id", `Int user_id);
+        ("community_id", `Int community_id);
+        ("community_slug", `String community_slug);
+        ("channel_id", `Int channel_id);
+        ("channel_slug", `String channel_slug);
+        ("message_id", json_int64 message_id);
+        ("content_length", `Int content_length);
+        ("response_mode", `String (response_mode_to_string response_mode));
+      ]
+  | Post_created
+      { user_id; community_id; section_id; post_id; content_length; has_link;
+        has_mention } ->
+      [ ("user_id", `Int user_id); ("community_id", `Int community_id) ]
+      @ opt_int "section_id" section_id
+      @ [
+          ("post_id", `Int post_id);
+          ("content_length", `Int content_length);
+          ("has_link", `Bool has_link);
+          ("has_mention", `Bool has_mention);
+        ]
+  | Comment_created
+      { user_id; community_id; post_id; comment_id; parent_comment_id;
+        content_length; has_mention } ->
+      [
+        ("user_id", `Int user_id);
+        ("community_id", `Int community_id);
+        ("post_id", `Int post_id);
+        ("comment_id", `Int comment_id);
+      ]
+      @ opt_int "parent_comment_id" parent_comment_id
+      @ [
+          ("content_length", `Int content_length);
+          ("has_mention", `Bool has_mention);
+        ]
+  | Thread_promoted
+      {
+        user_id;
+        community_id;
+        community_slug;
+        channel_id;
+        channel_slug;
+        section_id;
+        post_id;
+        message_id;
+        promoted_message_count;
+        promoted_participant_count;
+      } ->
+      [
+        ("user_id", `Int user_id);
+        ("community_id", `Int community_id);
+        ("community_slug", `String community_slug);
+        ("channel_id", `Int channel_id);
+        ("channel_slug", `String channel_slug);
+      ]
+      @ opt_int "section_id" section_id
+      @ [
+          ("post_id", `Int post_id);
+          ("message_id", json_int64 message_id);
+          ("promoted_message_count", `Int promoted_message_count);
+        ]
+      @ opt_int "promoted_participant_count" promoted_participant_count
+  | Account_deleted { user_id } -> [ ("user_id", `Int user_id) ]
+
+let capture_payload ~api_key ~distinct_id ~name ~properties : Yojson.Safe.t =
+  `Assoc
+    [
+      ("api_key", `String api_key);
+      ("event", `String name);
+      ("distinct_id", `String distinct_id);
+      ("properties", `Assoc properties);
+    ]
+
+let event_payload ~api_key ~distinct_id event =
+  let groups =
+    match event_community_id event with
+    | None -> []
+    | Some community_id ->
+        [
+          ( "$groups",
+            `Assoc [ ("community", `String (community_group_key community_id)) ]
+          );
+        ]
+  in
+  capture_payload ~api_key ~distinct_id ~name:(event_name event)
+    ~properties:(event_properties event @ groups)
+
+(* Consent-transition sync: a dedicated $identify payload carrying the same
+   closed $set object, used only by sync_person_after_consent_grant. *)
+let person_sync_payload ~api_key ~distinct_id (p : person_properties) =
+  capture_payload ~api_key ~distinct_id ~name:"$identify"
+    ~properties:[ ("$set", person_set_json p) ]
+
+let group_identify_payload ~api_key ~distinct_id (g : community_group) =
+  let group_set =
+    [
+      ("community_id", `Int g.community_id);
+      ("community_slug", `String g.community_slug);
+      ("community_name", `String g.community_name);
+      ("community_visibility", `String g.community_visibility);
+    ]
+    @ (match g.created_at with
+      | None -> []
+      | Some created_at -> [ ("created_at", `String created_at) ])
+  in
+  capture_payload ~api_key ~distinct_id ~name:"$groupidentify"
+    ~properties:
+      [
+        ("$group_type", `String "community");
+        ("$group_key", `String (community_group_key g.community_id));
+        ("$group_set", `Assoc group_set);
+      ]
+
+(* === Dispatch (fire-and-forget) === *)
+
+let capture_timeout_seconds = 3.0
+
+let capture_sink : (Yojson.Safe.t -> unit) option ref = ref None
+
+let with_timeout seconds promise =
+  Lwt.pick
+    [
+      promise;
+      ( Lwt_unix.sleep seconds >>= fun () ->
+        Logs.warn (fun m ->
+            m "PostHog capture timed out after %.1fs" seconds);
+        Lwt.return_unit );
+    ]
+
+let post_capture ~api_host payload =
+  let uri = Uri.of_string (api_host ^ "/i/v0/e/") in
+  let body = payload |> Yojson.Safe.to_string |> Cohttp_lwt.Body.of_string in
+  let headers =
+    Cohttp.Header.init () |> fun h ->
+    Cohttp.Header.add h "content-type" "application/json"
+  in
+  Cohttp_lwt_unix.Client.post ~headers ~body uri
+  >>= fun (response, response_body) ->
+  Cohttp_lwt.Body.drain_body response_body >|= fun () ->
+  let status = Cohttp.Response.status response |> Cohttp.Code.code_of_status in
+  if status < 200 || status >= 300 then
+    (* Log the status only: the payload embeds the project token and the
+       response body is uncontrolled third-party data. *)
+    Logs.warn (fun m -> m "PostHog capture failed: status=%d" status)
+
+let dispatch config payload =
+  match !capture_sink with
+  | Some sink ->
+      (* Test transport. Failures are swallowed exactly like HTTP failures:
+         analytics can never affect the caller. *)
+      (try sink payload with _ -> ())
+  | None ->
+      Lwt.async (fun () ->
+          Lwt.catch
+            (fun () ->
+              with_timeout capture_timeout_seconds
+                (post_capture ~api_host:config.api_host payload))
+            (fun exn ->
+              Logs.warn (fun m ->
+                  m "PostHog capture exception: %s" (Printexc.to_string exn));
+              Lwt.return_unit))
+
+(* === Public API === *)
+
+let capture_if_consented request ~distinct_id event =
+  let config = current_config () in
+  if config.enabled then
+    match consent_of_cookie_header (Dream.header request "Cookie") with
+    | `Granted ->
+        dispatch config
+          (event_payload ~api_key:config.project_token ~distinct_id event)
+    | `Denied | `Unknown -> ()
+
+let sync_person_after_consent_grant ~distinct_id person =
+  let config = current_config () in
+  if config.enabled then
+    dispatch config
+      (person_sync_payload ~api_key:config.project_token ~distinct_id person)
+
+(* === Test seams === *)
+
+module For_testing = struct
+  let consent_of_cookie_header = consent_of_cookie_header
+  let event_payload = event_payload
+  let person_sync_payload = person_sync_payload
+  let group_identify_payload = group_identify_payload
+  let set_capture_sink sink = capture_sink := Some sink
+  let clear_capture_sink () = capture_sink := None
+
+  let test_config ~enabled =
+    {
+      enabled;
+      (* Dummy token, not a real credential. *)
+      project_token = (if enabled then "phc_test_token" else "");
+      api_host = default_api_host;
+      ui_host = default_ui_host;
+      project_id = None;
+      personal_api_key = None;
+      public_origin = None;
+    }
+
+  let use_enabled_test_configuration () =
+    config_override := Some (test_config ~enabled:true)
+
+  let use_disabled_test_configuration () =
+    config_override := Some (test_config ~enabled:false)
+
+  let clear_configuration_override () = config_override := None
+
+  let config_report () =
+    let c = current_config () in
+    [
+      (enabled_env, c.enabled);
+      (project_token_env, c.project_token <> "");
+      (api_host_env, c.api_host <> "");
+      (ui_host_env, c.ui_host <> "");
+      (project_id_env, c.project_id <> None);
+      (personal_api_key_env, c.personal_api_key <> None);
+      (public_origin_env, c.public_origin <> None);
+    ]
+end

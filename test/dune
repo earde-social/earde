@@ -2,7 +2,9 @@
  (name test_earde)
  ; caqti libs are for the opt-in EARDE_TEST_DATABASE_URL security-regression
  ; suite only; without that env var no test touches a database.
- (libraries earde alcotest caqti caqti-lwt caqti-lwt.unix caqti-driver-postgresql lwt lwt.unix uri)
+ ; dream and yojson are referenced directly by the analytics tests (mock
+ ; requests for the consent gate; payload JSON assertions).
+ (libraries earde alcotest caqti caqti-lwt caqti-lwt.unix caqti-driver-postgresql lwt lwt.unix uri dream yojson)
  ; Referencing Earde.Handlers pulls in Auth's argon2 (ctypes) binding, which
  ; needs the system library linked explicitly — same flags as bin/dune.
  (link_flags

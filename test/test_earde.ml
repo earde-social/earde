@@ -508,6 +508,143 @@ module Mod_scope = struct
   let suite = [ posts_case; comments_case; delete_comment_case ]
 end
 
+(* PostHog analytics module (lib/analytics.ml): pure payload builders, exact
+   consent-cookie parsing, and the consent gate exercised through the test
+   capture sink. No network, no DB, no real PostHog project — the sink
+   replaces the HTTP transport entirely. *)
+module An = Earde.Analytics
+module AnT = Earde.Analytics.For_testing
+
+let yojson =
+  Alcotest.testable
+    (fun fmt j -> Format.pp_print_string fmt (Yojson.Safe.to_string j))
+    Yojson.Safe.equal
+
+let an_case name f = Alcotest.test_case name `Quick f
+let payload_member name = function `Assoc l -> List.assoc_opt name l | _ -> None
+
+let payload_props payload =
+  match payload_member "properties" payload with
+  | Some (`Assoc l) -> l
+  | _ -> []
+
+let prop_keys payload = List.map fst (payload_props payload)
+
+let consent_str = function
+  | `Granted -> "granted"
+  | `Denied -> "denied"
+  | `Unknown -> "unknown"
+
+let check_consent name expected header =
+  an_case name (fun () ->
+      Alcotest.(check string)
+        name expected
+        (consent_str (AnT.consent_of_cookie_header header)))
+
+let check_distinct name expected id =
+  an_case name (fun () ->
+      Alcotest.(check string) name expected (An.distinct_id_of_user_id id))
+
+(* Runs f with a test configuration and a collecting sink; always restores the
+   module's global state, and returns the captured payloads in order. *)
+let with_sink ~enabled f =
+  let captured = ref [] in
+  (if enabled then AnT.use_enabled_test_configuration ()
+   else AnT.use_disabled_test_configuration ());
+  AnT.set_capture_sink (fun p -> captured := p :: !captured);
+  Fun.protect
+    ~finally:(fun () ->
+      AnT.clear_capture_sink ();
+      AnT.clear_configuration_override ())
+    f;
+  List.rev !captured
+
+let consent_request = function
+  | None -> Dream.request ""
+  | Some cookie -> Dream.request ~headers:[ ("Cookie", cookie) ] ""
+
+let an_person =
+  { An.username = "alice"; email = "alice@example.com";
+    signup_date = "2026-01-01T00:00:00Z"; is_admin = false }
+
+let an_login = An.Login_succeeded { user_id = 7; person = an_person }
+
+(* The exact closed $set object an_person must serialize to. *)
+let an_person_set : Yojson.Safe.t =
+  `Assoc
+    [ ("username", `String "alice")
+    ; ("email", `String "alice@example.com")
+    ; ("signup_date", `String "2026-01-01T00:00:00Z")
+    ; ("is_admin", `Bool false)
+    ]
+
+let check_gate name expected_count cookie =
+  an_case name (fun () ->
+      let captured =
+        with_sink ~enabled:true (fun () ->
+            An.capture_if_consented (consent_request cookie)
+              ~distinct_id:"user:7" an_login)
+      in
+      Alcotest.(check int) name expected_count (List.length captured))
+
+(* One instance of every event constructor, used for payload/allowlist tests. *)
+let an_all_events =
+  [
+    ("signup_confirmed", An.Signup_confirmed { user_id = 1; person = an_person });
+    ("login_succeeded", An.Login_succeeded { user_id = 1; person = an_person });
+    ( "community_joined",
+      An.Community_joined
+        { user_id = 1; community_id = 7; community_slug = "ocaml";
+          community_visibility = "public" } );
+    ("community_left", An.Community_left { user_id = 1; community_id = 7 });
+    ( "chat_message_sent",
+      An.Chat_message_sent
+        { user_id = 1; community_id = 7; community_slug = "ocaml";
+          channel_id = 3; channel_slug = "general"; message_id = 91L;
+          content_length = 42; response_mode = An.Response_json } );
+    ( "post_created",
+      An.Post_created
+        { user_id = 1; community_id = 7; section_id = Some 2; post_id = 10;
+          content_length = 100; has_link = true; has_mention = false } );
+    ( "comment_created",
+      An.Comment_created
+        { user_id = 1; community_id = 7; post_id = 10; comment_id = 55;
+          parent_comment_id = None; content_length = 9; has_mention = true } );
+    ( "thread_promoted",
+      An.Thread_promoted
+        { user_id = 1; community_id = 7; community_slug = "ocaml";
+          channel_id = 3; channel_slug = "general"; section_id = None;
+          post_id = 11; message_id = 91L; promoted_message_count = 4;
+          promoted_participant_count = Some 2 } );
+    ("account_deleted", An.Account_deleted { user_id = 1 });
+  ]
+
+let an_payload event =
+  AnT.event_payload ~api_key:"phc_test" ~distinct_id:"user:1" event
+
+let check_keys name event expected =
+  an_case name (fun () ->
+      Alcotest.(check (slist string compare))
+        name expected
+        (prop_keys (an_payload event)))
+
+let check_event_name name expected event =
+  an_case name (fun () ->
+      match payload_member "event" (an_payload event) with
+      | Some (`String n) -> Alcotest.(check string) name expected n
+      | _ -> Alcotest.fail "payload has no event name")
+
+let an_group_key payload =
+  match List.assoc_opt "$groups" (payload_props payload) with
+  | Some (`Assoc [ ("community", `String key) ]) -> Some key
+  | _ -> None
+
+let check_group name expected event =
+  an_case name (fun () ->
+      Alcotest.(check (option string))
+        name expected
+        (an_group_key (an_payload event)))
+
 let () =
   Alcotest.run "earde"
     [ ( "smoke"
@@ -854,6 +991,325 @@ let () =
             ~is_admin:true ~requester_id:7 ~owner_id:8
         ; check_cd "admin deleting own comment stays on the admin path" "admin_delete"
             ~is_admin:true ~requester_id:7 ~owner_id:7
+        ] )
+      (* PostHog distinct-ID scheme: exactly user:<database_id>. *)
+    ; ( "analytics_distinct_id"
+      , [ check_distinct "user 42" "user:42" 42
+        ; check_distinct "user 7" "user:7" 7
+        ] )
+      (* Exact consent-cookie parsing: only the exact values granted/denied
+         count; everything else (missing, malformed, wrong case, extra text)
+         is unknown and must produce no capture. *)
+    ; ( "analytics_consent_parse"
+      , [ check_consent "granted" "granted"
+            (Some "earde_analytics_consent=granted")
+        ; check_consent "denied" "denied" (Some "earde_analytics_consent=denied")
+        ; check_consent "missing header" "unknown" None
+        ; check_consent "empty header" "unknown" (Some "")
+        ; check_consent "other cookies only" "unknown" (Some "session=abc; theme=dark")
+        ; check_consent "granted among other cookies" "granted"
+            (Some "session=abc; earde_analytics_consent=granted; theme=dark")
+        ; check_consent "wrong case" "unknown" (Some "earde_analytics_consent=Granted")
+        ; check_consent "trailing junk in value" "unknown"
+            (Some "earde_analytics_consent=granted-ish")
+        ; check_consent "space inside value" "unknown"
+            (Some "earde_analytics_consent= granted")
+        ; check_consent "name prefix mismatch" "unknown"
+            (Some "xearde_analytics_consent=granted")
+        ; check_consent "no equals sign" "unknown" (Some "earde_analytics_consent")
+        ] )
+      (* Consent gate end-to-end through the sink: one capture for granted,
+         none otherwise. *)
+    ; ( "analytics_consent_gate"
+      , [ check_gate "granted captures once" 1
+            (Some "earde_analytics_consent=granted")
+        ; check_gate "denied captures nothing" 0
+            (Some "earde_analytics_consent=denied")
+        ; check_gate "missing cookie captures nothing" 0 None
+        ; check_gate "malformed value captures nothing" 0
+            (Some "earde_analytics_consent=yes")
+        ; an_case "granted payload carries event name and distinct id" (fun () ->
+              let captured =
+                with_sink ~enabled:true (fun () ->
+                    An.capture_if_consented
+                      (consent_request (Some "earde_analytics_consent=granted"))
+                      ~distinct_id:"user:7" an_login)
+              in
+              match captured with
+              | [ payload ] ->
+                  Alcotest.(check (option string)) "event"
+                    (Some "login_succeeded")
+                    (match payload_member "event" payload with
+                     | Some (`String s) -> Some s
+                     | _ -> None);
+                  Alcotest.(check (option string)) "distinct_id"
+                    (Some "user:7")
+                    (match payload_member "distinct_id" payload with
+                     | Some (`String s) -> Some s
+                     | _ -> None)
+              | l -> Alcotest.failf "expected 1 capture, got %d" (List.length l))
+        ] )
+      (* Per-constructor payloads: event names and the exact property key
+         sets of the closed allowlist; optional fields omitted when None. *)
+    ; ( "analytics_event_payloads"
+      , List.map
+          (fun (name, event) -> check_event_name ("name " ^ name) name event)
+          an_all_events
+        @ [ check_keys "signup_confirmed keys (incl. $set)"
+              (List.assoc "signup_confirmed" an_all_events)
+              [ "user_id"; "$set" ]
+          ; check_keys "login_succeeded keys (incl. $set)"
+              (List.assoc "login_succeeded" an_all_events)
+              [ "user_id"; "$set" ]
+          ; check_keys "community_joined keys"
+              (List.assoc "community_joined" an_all_events)
+              [ "user_id"; "community_id"; "community_slug";
+                "community_visibility"; "$groups" ]
+          ; check_keys "community_left keys"
+              (List.assoc "community_left" an_all_events)
+              [ "user_id"; "community_id"; "$groups" ]
+          ; check_keys "chat_message_sent keys"
+              (List.assoc "chat_message_sent" an_all_events)
+              [ "user_id"; "community_id"; "community_slug"; "channel_id";
+                "channel_slug"; "message_id"; "content_length";
+                "response_mode"; "$groups" ]
+          ; check_keys "post_created keys"
+              (List.assoc "post_created" an_all_events)
+              [ "user_id"; "community_id"; "section_id"; "post_id";
+                "content_length"; "has_link"; "has_mention"; "$groups" ]
+          ; check_keys "comment_created keys (no parent -> omitted)"
+              (List.assoc "comment_created" an_all_events)
+              [ "user_id"; "community_id"; "post_id"; "comment_id";
+                "content_length"; "has_mention"; "$groups" ]
+          ; check_keys "thread_promoted keys (no section -> omitted)"
+              (List.assoc "thread_promoted" an_all_events)
+              [ "user_id"; "community_id"; "community_slug"; "channel_id";
+                "channel_slug"; "post_id"; "message_id";
+                "promoted_message_count"; "promoted_participant_count";
+                "$groups" ]
+          ; check_keys "account_deleted keys"
+              (An.Account_deleted { user_id = 1 })
+              [ "user_id" ]
+          ; an_case "community_joined full payload" (fun () ->
+                let expected : Yojson.Safe.t =
+                  `Assoc
+                    [ ("api_key", `String "phc_test")
+                    ; ("event", `String "community_joined")
+                    ; ("distinct_id", `String "user:1")
+                    ; ( "properties"
+                      , `Assoc
+                          [ ("user_id", `Int 1)
+                          ; ("community_id", `Int 7)
+                          ; ("community_slug", `String "ocaml")
+                          ; ("community_visibility", `String "public")
+                          ; ( "$groups"
+                            , `Assoc [ ("community", `String "community:7") ] )
+                          ] )
+                    ]
+                in
+                Alcotest.check yojson "full payload" expected
+                  (an_payload (List.assoc "community_joined" an_all_events)))
+          ] )
+      (* Hard rule of §5.1/§4.3: no bodies, titles, or tokens anywhere;
+         person properties never as ordinary top-level event properties —
+         only inside $set, and $set only on the two identity events. *)
+    ; ( "analytics_property_allowlist"
+      , [ an_case "no forbidden ordinary property on any event" (fun () ->
+              let forbidden =
+                [ "email"; "username"; "signup_date"; "is_admin"; "content";
+                  "body"; "title"; "query"; "token" ]
+              in
+              List.iter
+                (fun (name, event) ->
+                  let keys = prop_keys (an_payload event) in
+                  List.iter
+                    (fun bad ->
+                      if List.mem bad keys then
+                        Alcotest.failf "%s carries forbidden property %s" name
+                          bad)
+                    forbidden)
+                an_all_events)
+        ; an_case "$set only on signup_confirmed and login_succeeded" (fun () ->
+              List.iter
+                (fun (name, event) ->
+                  let has_set =
+                    List.mem_assoc "$set" (payload_props (an_payload event))
+                  in
+                  let expected =
+                    name = "signup_confirmed" || name = "login_succeeded"
+                  in
+                  if has_set <> expected then
+                    Alcotest.failf "%s: unexpected $set presence (%b)" name
+                      has_set)
+                an_all_events)
+        ; an_case "signup_confirmed $set is exactly the closed person record"
+            (fun () ->
+              match
+                List.assoc_opt "$set"
+                  (payload_props
+                     (an_payload (List.assoc "signup_confirmed" an_all_events)))
+              with
+              | Some set -> Alcotest.check yojson "signup $set" an_person_set set
+              | None -> Alcotest.fail "signup_confirmed has no $set")
+        ; an_case "login_succeeded $set is exactly the closed person record"
+            (fun () ->
+              match
+                List.assoc_opt "$set"
+                  (payload_props
+                     (an_payload (List.assoc "login_succeeded" an_all_events)))
+              with
+              | Some set -> Alcotest.check yojson "login $set" an_person_set set
+              | None -> Alcotest.fail "login_succeeded has no $set")
+        ] )
+      (* $groups.community rides on community-scoped events only (§5.3). *)
+    ; ( "analytics_groups"
+      , [ check_group "joined has group" (Some "community:7")
+            (List.assoc "community_joined" an_all_events)
+        ; check_group "left has group" (Some "community:7")
+            (List.assoc "community_left" an_all_events)
+        ; check_group "chat has group" (Some "community:7")
+            (List.assoc "chat_message_sent" an_all_events)
+        ; check_group "post has group" (Some "community:7")
+            (List.assoc "post_created" an_all_events)
+        ; check_group "comment has group" (Some "community:7")
+            (List.assoc "comment_created" an_all_events)
+        ; check_group "promoted has group" (Some "community:7")
+            (List.assoc "thread_promoted" an_all_events)
+        ; check_group "signup has no group" None
+            (List.assoc "signup_confirmed" an_all_events)
+        ; check_group "login has no group" None
+            (List.assoc "login_succeeded" an_all_events)
+        ; check_group "deletion has no group" None
+            (An.Account_deleted { user_id = 1 })
+        ] )
+      (* Consent-transition sync: the dedicated $identify payload with the
+         same closed $set object as the identity events. *)
+    ; ( "analytics_person_sync"
+      , [ an_case "sync payload is a dedicated $identify" (fun () ->
+              let expected : Yojson.Safe.t =
+                `Assoc
+                  [ ("api_key", `String "phc_test")
+                  ; ("event", `String "$identify")
+                  ; ("distinct_id", `String "user:9")
+                  ; ("properties", `Assoc [ ("$set", an_person_set) ])
+                  ]
+              in
+              let actual =
+                AnT.person_sync_payload ~api_key:"phc_test"
+                  ~distinct_id:"user:9" an_person
+              in
+              Alcotest.check yojson "sync payload" expected actual)
+        ; an_case "sync_person_after_consent_grant emits exactly one $identify"
+            (fun () ->
+              let captured =
+                with_sink ~enabled:true (fun () ->
+                    An.sync_person_after_consent_grant ~distinct_id:"user:9"
+                      an_person)
+              in
+              match captured with
+              | [ payload ] ->
+                  Alcotest.(check (option string)) "event" (Some "$identify")
+                    (match payload_member "event" payload with
+                     | Some (`String s) -> Some s
+                     | _ -> None)
+              | l -> Alcotest.failf "expected 1 capture, got %d" (List.length l))
+        ] )
+      (* $groupidentify: community group type/key plus only the five
+         allowlisted group properties; created_at omitted when absent. *)
+    ; ( "analytics_group_identify"
+      , [ an_case "full payload with created_at" (fun () ->
+              let expected : Yojson.Safe.t =
+                `Assoc
+                  [ ("api_key", `String "phc_test")
+                  ; ("event", `String "$groupidentify")
+                  ; ("distinct_id", `String "user:1")
+                  ; ( "properties"
+                    , `Assoc
+                        [ ("$group_type", `String "community")
+                        ; ("$group_key", `String "community:7")
+                        ; ( "$group_set"
+                          , `Assoc
+                              [ ("community_id", `Int 7)
+                              ; ("community_slug", `String "ocaml")
+                              ; ("community_name", `String "OCaml")
+                              ; ("community_visibility", `String "public")
+                              ; ("created_at", `String "2026-01-01T00:00:00Z")
+                              ] )
+                        ] )
+                  ]
+              in
+              let actual =
+                AnT.group_identify_payload ~api_key:"phc_test"
+                  ~distinct_id:"user:1"
+                  { An.community_id = 7; community_slug = "ocaml";
+                    community_name = "OCaml"; community_visibility = "public";
+                    created_at = Some "2026-01-01T00:00:00Z" }
+              in
+              Alcotest.check yojson "group identify payload" expected actual)
+        ; an_case "created_at omitted when absent" (fun () ->
+              let actual =
+                AnT.group_identify_payload ~api_key:"phc_test"
+                  ~distinct_id:"user:1"
+                  { An.community_id = 7; community_slug = "ocaml";
+                    community_name = "OCaml"; community_visibility = "public";
+                    created_at = None }
+              in
+              let set_keys =
+                match List.assoc_opt "$group_set" (payload_props actual) with
+                | Some (`Assoc l) -> List.map fst l
+                | _ -> []
+              in
+              Alcotest.(check (slist string compare))
+                "group set keys"
+                [ "community_id"; "community_slug"; "community_name";
+                  "community_visibility" ]
+                set_keys)
+        ] )
+      (* Disabled configuration and transport failures: never a capture, never
+         an exception into the caller. *)
+    ; ( "analytics_disabled_and_failures"
+      , [ an_case "disabled config captures nothing even when granted"
+            (fun () ->
+              let captured =
+                with_sink ~enabled:false (fun () ->
+                    An.capture_if_consented
+                      (consent_request (Some "earde_analytics_consent=granted"))
+                      ~distinct_id:"user:7" an_login;
+                    An.sync_person_after_consent_grant ~distinct_id:"user:7"
+                      { An.username = "a"; email = "a@a"; signup_date = "";
+                        is_admin = false })
+              in
+              Alcotest.(check int) "no captures" 0 (List.length captured))
+        ; an_case "raising sink does not escape into the caller" (fun () ->
+              AnT.use_enabled_test_configuration ();
+              AnT.set_capture_sink (fun _ -> failwith "sink boom");
+              Fun.protect
+                ~finally:(fun () ->
+                  AnT.clear_capture_sink ();
+                  AnT.clear_configuration_override ())
+                (fun () ->
+                  An.capture_if_consented
+                    (consent_request (Some "earde_analytics_consent=granted"))
+                    ~distinct_id:"user:7" an_login;
+                  An.sync_person_after_consent_grant ~distinct_id:"user:7"
+                    { An.username = "a"; email = "a@a"; signup_date = "";
+                      is_admin = false });
+              Alcotest.(check bool) "no exception escaped" true true)
+        ; an_case "test config report exposes presence booleans only" (fun () ->
+              AnT.use_enabled_test_configuration ();
+              Fun.protect
+                ~finally:(fun () -> AnT.clear_configuration_override ())
+                (fun () ->
+                  let report = AnT.config_report () in
+                  Alcotest.(check (option bool)) "enabled" (Some true)
+                    (List.assoc_opt "POSTHOG_ENABLED" report);
+                  Alcotest.(check (option bool)) "token set" (Some true)
+                    (List.assoc_opt "POSTHOG_PROJECT_TOKEN" report);
+                  Alcotest.(check (option bool)) "personal key unset"
+                    (Some false)
+                    (List.assoc_opt "POSTHOG_PERSONAL_API_KEY" report);
+                  Alcotest.(check (option bool)) "project id unset" (Some false)
+                    (List.assoc_opt "POSTHOG_PROJECT_ID" report)))
         ] )
     ; ( "mod_delete_community_scope", Mod_scope.suite )
     ]
