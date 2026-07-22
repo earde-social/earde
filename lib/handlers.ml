@@ -409,9 +409,12 @@ let analytics_consent_handler request =
       let response = Dream.response ~status:`No_Content "" in
       (* Plaintext (encrypt:false) and no HttpOnly: the §9 contract requires
          document.cookie readability (the prerendered landing can determine
-         consent only client-side). Secure follows the public origin scheme. *)
-      Dream.set_cookie ~encrypt:false ~max_age:Analytics.consent_cookie_max_age
-        ~path:(Some "/") ~secure:(Analytics.consent_cookie_secure ())
+         consent only client-side). Secure follows the public origin scheme.
+         ~prefix:None is load-bearing: without it Dream infers __Host- for a
+         Secure + Path=/ cookie, breaking the exact cross-repo cookie name. *)
+      Dream.set_cookie ~prefix:None ~encrypt:false
+        ~max_age:Analytics.consent_cookie_max_age ~path:(Some "/")
+        ~secure:(Analytics.consent_cookie_secure ())
         ~http_only:false ~same_site:(Some `Lax) response request
         Analytics.consent_cookie_name value;
       Lwt.return response

@@ -4275,6 +4275,45 @@ let () =
                 (contains (Option.value ~default:"" cookie)
                    "earde_analytics_consent=denied");
               Alcotest.(check int) "no sync" 0 (List.length payloads))
+        ; an_case "production https: exact cookie name, no __Host- prefix"
+            (fun () ->
+              (* Dream infers a __Host- prefix for a Secure + Path=/ cookie
+                 unless ~prefix:None is passed explicitly; the http-origin
+                 cases above never set Secure, so only this validated
+                 production (https) configuration can catch the regression. *)
+              install_production_config ();
+              Fun.protect ~finally:AnT.clear_configuration_override (fun () ->
+                  let request =
+                    Dream.request ~method_:`POST ~target:"/analytics/consent"
+                      ~headers:
+                        [ ("Content-Type", "application/json")
+                        ; ("Origin", "https://earde.com")
+                        ; ("Sec-Fetch-Site", "same-origin")
+                        ]
+                      {|{"state":"granted"}|}
+                  in
+                  let response =
+                    Lwt_main.run
+                      (Earde.Handlers.analytics_consent_handler request)
+                  in
+                  Alcotest.(check int) "status" 204
+                    (Dream.status_to_int (Dream.status response));
+                  let cookie =
+                    Option.value ~default:""
+                      (Dream.header response "Set-Cookie")
+                  in
+                  Alcotest.(check bool) "exact name=value" true
+                    (contains cookie "earde_analytics_consent=granted");
+                  Alcotest.(check bool) "no __Host- prefix" false
+                    (contains cookie "__Host-earde_analytics_consent");
+                  Alcotest.(check bool) "secure" true (contains cookie "Secure");
+                  Alcotest.(check bool) "path" true (contains cookie "Path=/");
+                  Alcotest.(check bool) "samesite lax" true
+                    (contains cookie "SameSite=Lax");
+                  Alcotest.(check string) "parser recognizes returned cookie"
+                    "granted"
+                    (consent_str
+                       (AnT.consent_of_cookie_header (Some cookie)))))
         ; check_consent_reject "form body -> 400" 400
             ~headers:
               [ ("Content-Type", "application/x-www-form-urlencoded")
