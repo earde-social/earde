@@ -114,8 +114,125 @@ let attempt_person_deletion ~distinct_id =
           | `Timeout -> Error "timeout")
         (fun exn -> Lwt.return (Error (classify_exn exn)))
 
-let process_claimed_job ~mark_completed ~mark_failed ~distinct_id =
-  let%lwt outcome = attempt_person_deletion ~distinct_id in
+(* === §13 group-profile scrub (private Groups API) ========================
+   When a community turns fully private, its previously sent human-readable
+   group properties must actually be REMOVED from the PostHog group profile —
+   $groupidentify has no unset operation, so mere omission would leave the
+   old values behind. The documented mechanism (verified against current
+   PostHog docs api/groups and the served implementation):
+     GET  /api/projects/:id/groups/find/?group_type_index&group_key
+     POST /api/projects/:id/groups/delete_property/?group_type_index&group_key
+          with JSON body {"$unset": "<property name>"}
+   delete_property returns 400 when the property is absent, so each attempt
+   reads the group first and deletes only what is still present — that makes
+   re-runs idempotent. Only the closed property KEYS below and the numeric
+   "community:<id>" group key ever appear in requests, jobs, or logs. *)
+
+let group_cleanup_targets = [ "community_name"; "community_slug" ]
+
+let group_query ~group_key =
+  [
+    ( "group_type_index",
+      string_of_int Analytics.community_group_type_index );
+    ("group_key", group_key);
+  ]
+
+(* Which scrub targets the group still carries. Any other shape than the
+   documented serializer output is a bounded parse error. *)
+let parse_group_find_body body =
+  match Yojson.Safe.from_string body with
+  | exception _ -> Error "malformed_group_response"
+  | `Assoc fields -> (
+      match List.assoc_opt "group_properties" fields with
+      | Some (`Assoc props) ->
+          Ok
+            (List.filter
+               (fun key -> List.mem key group_cleanup_targets)
+               (List.map fst props))
+      | Some `Null | None -> Ok []
+      | Some _ -> Error "malformed_group_response")
+  | _ -> Error "malformed_group_response"
+
+let find_group ~config ~group_key =
+  let uri =
+    Uri.with_query'
+      (Uri.of_string
+         (Printf.sprintf "%s/api/projects/%s/groups/find/"
+            config.Analytics.deletion_ui_host
+            config.Analytics.deletion_project_id))
+      (group_query ~group_key)
+  in
+  Cohttp_lwt_unix.Client.get
+    ~headers:(auth_header config.Analytics.deletion_api_key) uri
+  >>= fun (response, body) ->
+  let status = Cohttp.Response.status response |> Cohttp.Code.code_of_status in
+  if status = 404 then
+    (* PostHog never saw this group (analytics disabled, always-private, or
+       nothing identified yet): there is nothing stored to remove. *)
+    Cohttp_lwt.Body.drain_body body >|= fun () -> Ok `Absent
+  else if status >= 200 && status < 300 then
+    Cohttp_lwt.Body.to_string body >|= fun b ->
+    Result.map (fun props -> `Props props) (parse_group_find_body b)
+  else
+    Cohttp_lwt.Body.drain_body body >|= fun () ->
+    Error (Printf.sprintf "group_lookup_http_%d" status)
+
+let delete_group_property ~config ~group_key ~property =
+  let uri =
+    Uri.with_query'
+      (Uri.of_string
+         (Printf.sprintf "%s/api/projects/%s/groups/delete_property/"
+            config.Analytics.deletion_ui_host
+            config.Analytics.deletion_project_id))
+      (group_query ~group_key)
+  in
+  let headers =
+    Cohttp.Header.add
+      (auth_header config.Analytics.deletion_api_key)
+      "content-type" "application/json"
+  in
+  let body =
+    Cohttp_lwt.Body.of_string
+      (Yojson.Safe.to_string (`Assoc [ ("$unset", `String property) ]))
+  in
+  Cohttp_lwt_unix.Client.post ~headers ~body uri
+  >>= fun (response, response_body) ->
+  Cohttp_lwt.Body.drain_body response_body >|= fun () ->
+  let status = Cohttp.Response.status response |> Cohttp.Code.code_of_status in
+  if status >= 200 && status < 300 then Ok ()
+  else Error (Printf.sprintf "group_delete_http_%d" status)
+
+(* One bounded, idempotent scrub attempt: read the group, delete whichever
+   scrub targets remain, sequentially. Absent group or no remaining targets
+   completes immediately; the first failure leaves the job pending for the
+   durable retry path. *)
+let attempt_group_cleanup ~group_key =
+  match Analytics.deletion_api_config () with
+  | None -> Lwt.return (Error "missing_configuration")
+  | Some config ->
+      Lwt.catch
+        (fun () ->
+          with_timeout
+            ( find_group ~config ~group_key >>= function
+              | Error e -> Lwt.return (Error e)
+              | Ok `Absent -> Lwt.return (Ok ())
+              | Ok (`Props props) ->
+                  Lwt_list.fold_left_s
+                    (fun acc property ->
+                      match acc with
+                      | Error _ as e -> Lwt.return e
+                      | Ok () ->
+                          delete_group_property ~config ~group_key ~property)
+                    (Ok ()) props )
+          >|= function
+          | `Done result -> result
+          | `Timeout -> Error "timeout")
+        (fun exn -> Lwt.return (Error (classify_exn exn)))
+
+(* === Claimed-job orchestration (shared by both job kinds) ================ *)
+
+let run_claimed ~log_label ~attempt ~mark_completed ~mark_failed =
+  let%lwt outcome = attempt () in
   let mark label op =
     Lwt.catch
       (fun () ->
@@ -123,12 +240,11 @@ let process_claimed_job ~mark_completed ~mark_failed ~distinct_id =
         (match marked with
         | Ok () -> ()
         | Error e ->
-            Logs.warn (fun m -> m "posthog deletion %s mark failed: %s" label e));
+            Logs.warn (fun m -> m "%s %s mark failed: %s" log_label label e));
         Lwt.return_unit)
       (fun exn ->
         Logs.warn (fun m ->
-            m "posthog deletion %s mark raised: %s" label
-              (Printexc.to_string exn));
+            m "%s %s mark raised: %s" log_label label (Printexc.to_string exn));
         Lwt.return_unit)
   in
   match outcome with
@@ -139,9 +255,19 @@ let process_claimed_job ~mark_completed ~mark_failed ~distinct_id =
       let%lwt () = mark "failed" (fun () -> mark_failed class_) in
       Lwt.return (`Left_pending class_)
 
+let process_claimed_job ~mark_completed ~mark_failed ~distinct_id =
+  run_claimed ~log_label:"posthog deletion"
+    ~attempt:(fun () -> attempt_person_deletion ~distinct_id)
+    ~mark_completed ~mark_failed
+
+let process_claimed_group_job ~mark_completed ~mark_failed ~group_key =
+  run_claimed ~log_label:"posthog group cleanup"
+    ~attempt:(fun () -> attempt_group_cleanup ~group_key)
+    ~mark_completed ~mark_failed
+
 type batch_summary = { claimed : int; completed : int; left_pending : int }
 
-let process_batch ~claim ~mark_completed ~mark_failed () =
+let run_batch ~run_one ~claim ~mark_completed ~mark_failed () =
   let%lwt claimed = claim () in
   match claimed with
   | Error e -> Lwt.return (Error e)
@@ -150,11 +276,11 @@ let process_batch ~claim ~mark_completed ~mark_failed () =
         (* Sequential: one bounded HTTP attempt at a time, each mark its own
            short DB call — never a connection held across HTTP. *)
         Lwt_list.map_s
-          (fun (job_id, distinct_id) ->
-            process_claimed_job
+          (fun (job_id, payload) ->
+            run_one
               ~mark_completed:(fun () -> mark_completed job_id)
               ~mark_failed:(fun err -> mark_failed job_id err)
-              ~distinct_id)
+              payload)
           jobs
       in
       let completed =
@@ -167,3 +293,15 @@ let process_batch ~claim ~mark_completed ~mark_failed () =
              completed;
              left_pending = List.length jobs - completed;
            })
+
+let process_batch ~claim ~mark_completed ~mark_failed () =
+  run_batch
+    ~run_one:(fun ~mark_completed ~mark_failed distinct_id ->
+      process_claimed_job ~mark_completed ~mark_failed ~distinct_id)
+    ~claim ~mark_completed ~mark_failed ()
+
+let process_group_batch ~claim ~mark_completed ~mark_failed () =
+  run_batch
+    ~run_one:(fun ~mark_completed ~mark_failed group_key ->
+      process_claimed_group_job ~mark_completed ~mark_failed ~group_key)
+    ~claim ~mark_completed ~mark_failed ()

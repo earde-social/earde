@@ -792,13 +792,13 @@ let an_all_events =
     ("account_logged_in", An.Account_logged_in { user_id = 1; person = an_person });
     ( "community_joined",
       An.Community_joined
-        { user_id = 1; community_id = 7; community_slug = "ocaml";
+        { user_id = 1; community_id = 7; community_slug = Some "ocaml";
           community_visibility = "public" } );
     ("community_left", An.Community_left { user_id = 1; community_id = 7 });
     ( "chat_message_sent",
       An.Chat_message_sent
-        { user_id = 1; community_id = 7; community_slug = "ocaml";
-          channel_id = 3; channel_slug = "general"; message_id = 91L;
+        { user_id = 1; community_id = 7; community_slug = Some "ocaml";
+          channel_id = 3; channel_slug = Some "general"; message_id = 91L;
           content_length = 42; response_mode = An.Response_json } );
     ( "forum_thread_created",
       An.Forum_thread_created
@@ -810,8 +810,8 @@ let an_all_events =
           parent_comment_id = None; content_length = 9; has_mention = true } );
     ( "conversation_promoted",
       An.Conversation_promoted
-        { user_id = 1; community_id = 7; community_slug = "ocaml";
-          channel_id = 3; channel_slug = "general"; section_id = None;
+        { user_id = 1; community_id = 7; community_slug = Some "ocaml";
+          channel_id = 3; channel_slug = Some "general"; section_id = None;
           post_id = 11; message_id = 91L; promoted_message_count = 4;
           promoted_participant_count = Some 2 } );
     ("account_deleted", An.Account_deleted);
@@ -991,8 +991,15 @@ let consent_sync_db_case =
 (* --- Step-6: consent-gated $groupidentify API + domain-event wiring ------- *)
 
 let an_group ?created_at () : An.community_group =
-  { An.community_id = 7; community_slug = "ocaml"; community_name = "OCaml";
-    community_visibility = "public"; created_at }
+  { An.community_id = 7; community_slug = Some "ocaml";
+    community_name = Some "OCaml"; community_visibility = "public";
+    created_at }
+
+(* The §13 private shape: numeric id and closed visibility only — no
+   readable identifiers. *)
+let an_private_group : An.community_group =
+  { An.community_id = 9; community_slug = None; community_name = None;
+    community_visibility = "private"; created_at = None }
 
 let run_group_identify ~enabled cookie =
   with_sink ~enabled (fun () ->
@@ -1063,7 +1070,9 @@ module Step6_events = struct
       ; "DELETE FROM community_moderators WHERE community_id IN (SELECT id FROM communities WHERE slug LIKE 'step6-%')"
       ; "DELETE FROM channels WHERE community_id IN (SELECT id FROM communities WHERE slug LIKE 'step6-%')"
       ; "DELETE FROM community_sections WHERE community_id IN (SELECT id FROM communities WHERE slug LIKE 'step6-%')"
+      ; "DELETE FROM posthog_group_cleanup_jobs WHERE group_key IN (SELECT 'community:' || c.id::text FROM communities c WHERE c.slug LIKE 'step6-%')"
       ; "DELETE FROM communities WHERE slug LIKE 'step6-%'"
+      ; "DELETE FROM posthog_group_cleanup_jobs WHERE NOT EXISTS (SELECT 1 FROM communities c WHERE 'community:' || c.id::text = posthog_group_cleanup_jobs.group_key)"
       ; "DELETE FROM pending_signups WHERE username LIKE 'step6_%'"
       ; "DELETE FROM users WHERE username LIKE 'step6_%'"
       ]
@@ -1471,10 +1480,13 @@ module Step6_events = struct
                (match List.assoc_opt "community_visibility" (group_set_of gi) with
                 | Some (`String v) -> Some v
                 | _ -> None);
+             (* The switch is TO private, so the §13 redaction applies to
+                this very $groupidentify: no readable identifiers, no
+                indexability — only the numeric id and the new closed
+                visibility value. *)
              Alcotest.(check (slist string compare))
-               "closed group props only (no indexability)"
-               [ "community_id"; "community_slug"; "community_name";
-                 "community_visibility" ]
+               "closed group props only (private: no slug/name/indexability)"
+               [ "community_id"; "community_visibility" ]
                (List.map fst (group_set_of gi))
          | l ->
              Alcotest.failf "expected 1 groupidentify, got %d" (List.length l));
@@ -1930,6 +1942,7 @@ module Api_stub = struct
     path : string;
     query : (string * string list) list;
     auth : string option;
+    body : string;
   }
 
   let free_port () =
@@ -1946,12 +1959,14 @@ module Api_stub = struct
   let start handler =
     let ( let* ) = Lwt.bind in
     let seen = ref [] in
-    let callback _conn request _body =
+    let callback _conn request body =
       let uri = Cohttp.Request.uri request in
       let path = Uri.path uri in
       if path = "/__ready" then
         Cohttp_lwt_unix.Server.respond_string ~status:`OK ~body:"ok" ()
       else begin
+        let ( let* ) = Lwt.bind in
+        let* body_string = Cohttp_lwt.Body.to_string body in
         let req =
           {
             meth = Cohttp.Code.string_of_method (Cohttp.Request.meth request);
@@ -1959,6 +1974,7 @@ module Api_stub = struct
             query = Uri.query uri;
             auth =
               Cohttp.Header.get (Cohttp.Request.headers request) "authorization";
+            body = body_string;
           }
         in
         seen := !seen @ [ req ];
@@ -2612,6 +2628,567 @@ module Step7_deletion = struct
     ]
 end
 
+(* --- §13: durable private-community group-profile scrub ------------------ *)
+
+(* When a community turns fully private, its previously sent community_name /
+   community_slug must actually be REMOVED from the PostHog group profile via
+   the documented private Groups API (find + delete_property {"$unset": …}).
+   Stub-only cases run always; handler/job cases sit behind the DB gate. *)
+module Group_cleanup = struct
+  open Caqti_request.Infix
+
+  let or_fail label = function
+    | Ok v -> Lwt.return v
+    | Error e -> Alcotest.failf "%s: %s" label (Caqti_error.show e)
+
+  let or_fail_s label = function
+    | Ok v -> Lwt.return v
+    | Error e -> Alcotest.failf "%s: %s" label e
+
+  let group_find_path = "/api/projects/42/groups/find/"
+  let group_delete_path = "/api/projects/42/groups/delete_property/"
+
+  (* Human-readable stand-ins that must NEVER appear in requests (beyond the
+     find response we serve), job rows, or error strings. *)
+  let secret_name = "Secret Club"
+  let secret_slug = "secret-club"
+
+  let group_props_body props =
+    Printf.sprintf {|{"group_type_index": 0, "group_key": "k", "group_properties": {%s}}|}
+      (String.concat ", "
+         (List.map (fun (k, v) -> Printf.sprintf "%S: %S" k v) props))
+
+  let unset_of_body body =
+    match Yojson.Safe.from_string body with
+    | exception _ -> None
+    | `Assoc l -> (
+        match List.assoc_opt "$unset" l with
+        | Some (`String k) -> Some k
+        | _ -> None)
+    | _ -> None
+
+  (* Stateful stub: find serves the current [props]; a successful
+     delete_property removes the named key, mirroring real PostHog (which
+     400s on an absent key — exactly why the client re-reads before
+     deleting). *)
+  let groups_handler ?(find_status = 200) ?(delete_status = 200) props
+      (req : Api_stub.req) =
+    if req.auth <> Some ("Bearer " ^ deletion_test_key) then
+      (401, {|{"type":"authentication_error"}|})
+    else if req.meth = "GET" && req.path = group_find_path then
+      if find_status <> 200 then (find_status, {|{"detail":"not found"}|})
+      else (200, group_props_body !props)
+    else if req.meth = "POST" && req.path = group_delete_path then (
+      match unset_of_body req.body with
+      | Some key when delete_status = 200 && List.mem_assoc key !props ->
+          props := List.remove_assoc key !props;
+          (200, "{}")
+      | Some key when delete_status <> 200 ->
+          ignore key;
+          (delete_status, "")
+      | _ -> (400, {|{"attr":"$unset"}|}))
+    else (404, {|{"detail":"not found"}|})
+
+  let with_groups_stub handler f =
+    Lwt_main.run
+      (let ( let* ) = Lwt.bind in
+       let* base_url, seen, stop = Api_stub.start handler in
+       AnT.use_deletion_test_configuration ~ui_host:base_url
+         ~project_id:(Some "42") ~personal_api_key:(Some deletion_test_key) ();
+       Lwt.finalize
+         (fun () -> f ~seen)
+         (fun () ->
+           AnT.clear_configuration_override ();
+           stop ();
+           Lwt.return_unit))
+
+  let no_leak_in_requests (seen : Api_stub.req list) =
+    List.iter
+      (fun (r : Api_stub.req) ->
+        let surface =
+          r.path ^ " " ^ r.body ^ " "
+          ^ String.concat " " (List.concat_map snd r.query)
+        in
+        if contains surface secret_name || contains surface secret_slug then
+          Alcotest.failf "request leaked a community name/slug: %s" r.path)
+      seen
+
+  let full_props () =
+    ref
+      [ ("community_id", "9"); ("community_name", secret_name);
+        ("community_slug", secret_slug); ("community_visibility", "private")
+      ]
+
+  let scrub_case =
+    an_case "attempt: deletes exactly name+slug via $unset; rerun is a no-op"
+      (fun () ->
+        let props = full_props () in
+        with_groups_stub (groups_handler props) (fun ~seen ->
+            let ( let* ) = Lwt.bind in
+            let* first =
+              Earde.Posthog_deletion.attempt_group_cleanup
+                ~group_key:"community:9"
+            in
+            Alcotest.(check (result unit string)) "first run" (Ok ()) first;
+            let deletes =
+              List.filter
+                (fun (r : Api_stub.req) -> r.meth = "POST")
+                !seen
+            in
+            Alcotest.(check (slist (option string) compare))
+              "exactly the two closed scrub targets"
+              [ Some "community_name"; Some "community_slug" ]
+              (List.map (fun (r : Api_stub.req) -> unset_of_body r.body) deletes);
+            List.iter
+              (fun (r : Api_stub.req) ->
+                Alcotest.(check (option (list string)))
+                  "delete addressed by numeric key" (Some [ "community:9" ])
+                  (List.assoc_opt "group_key" r.query);
+                Alcotest.(check (option (list string)))
+                  "community group type index" (Some [ "0" ])
+                  (List.assoc_opt "group_type_index" r.query))
+              deletes;
+            (* Non-target properties survive; the group key itself stays. *)
+            Alcotest.(check (list string)) "untouched non-targets"
+              [ "community_id"; "community_visibility" ]
+              (List.map fst !props);
+            (* Idempotent rerun: nothing left to delete → find only. *)
+            let before = List.length !seen in
+            let* second =
+              Earde.Posthog_deletion.attempt_group_cleanup
+                ~group_key:"community:9"
+            in
+            Alcotest.(check (result unit string)) "rerun" (Ok ()) second;
+            let extra =
+              List.filteri (fun i _ -> i >= before) !seen
+            in
+            Alcotest.(check (list string)) "rerun performs find only"
+              [ "GET" ]
+              (List.map (fun (r : Api_stub.req) -> r.meth) extra);
+            no_leak_in_requests deletes;
+            Lwt.return_unit))
+
+  let absent_case =
+    an_case "attempt: group PostHog never saw (find 404) completes" (fun () ->
+        let props = full_props () in
+        with_groups_stub (groups_handler ~find_status:404 props) (fun ~seen ->
+            let ( let* ) = Lwt.bind in
+            let* r =
+              Earde.Posthog_deletion.attempt_group_cleanup
+                ~group_key:"community:9"
+            in
+            Alcotest.(check (result unit string)) "absent completes" (Ok ()) r;
+            Alcotest.(check (list string)) "no delete attempted" [ "GET" ]
+              (List.map (fun (q : Api_stub.req) -> q.meth) !seen);
+            Lwt.return_unit))
+
+  let failure_case =
+    an_case "attempt: delete failure is a bounded class, never a name/slug"
+      (fun () ->
+        let props = full_props () in
+        with_groups_stub (groups_handler ~delete_status:500 props)
+          (fun ~seen ->
+            let ( let* ) = Lwt.bind in
+            let* r =
+              Earde.Posthog_deletion.attempt_group_cleanup
+                ~group_key:"community:9"
+            in
+            (match r with
+            | Error cls ->
+                Alcotest.(check string) "closed class" "group_delete_http_500"
+                  cls
+            | Ok () -> Alcotest.fail "expected failure");
+            ignore seen;
+            Lwt.return_unit))
+
+  let missing_config_case =
+    an_case "attempt: no private credentials -> bounded missing_configuration"
+      (fun () ->
+        AnT.use_enabled_test_configuration ();
+        Fun.protect ~finally:AnT.clear_configuration_override (fun () ->
+            Alcotest.(check (result unit string))
+              "missing configuration"
+              (Error "missing_configuration")
+              (Lwt_main.run
+                 (Earde.Posthog_deletion.attempt_group_cleanup
+                    ~group_key:"community:9"))))
+
+  (* ---- DB-gated: transaction coupling, durability, retry, restore ------- *)
+
+  let q_cleanup =
+    List.map
+      (fun sql -> (Caqti_type.unit ->. Caqti_type.unit) sql)
+      [ "DELETE FROM posthog_group_cleanup_jobs WHERE group_key IN (SELECT 'community:' || c.id::text FROM communities c WHERE c.slug LIKE 'grpclean-%')"
+      ; "DELETE FROM posthog_group_cleanup_jobs WHERE group_key LIKE 'community:99912%'"
+      ; "DELETE FROM communities WHERE slug LIKE 'grpclean-%'"
+      ; "DELETE FROM posthog_group_cleanup_jobs WHERE NOT EXISTS (SELECT 1 FROM communities c WHERE 'community:' || c.id::text = posthog_group_cleanup_jobs.group_key)"
+      ; "DELETE FROM users WHERE username LIKE 'grpclean_%'"
+      ]
+
+  let db_case name f =
+    Alcotest.test_case name `Quick (fun () ->
+        match Sys.getenv_opt "EARDE_TEST_DATABASE_URL" with
+        | None | Some "" -> Alcotest.skip ()
+        | Some url ->
+            Lwt_main.run
+              (let ( let* ) = Lwt.bind in
+               let* conn = Caqti_lwt_unix.connect (Uri.of_string url) in
+               let* conn = or_fail "connect" conn in
+               let (module C : Caqti_lwt.CONNECTION) = conn in
+               let cleanup () =
+                 Lwt_list.iter_s
+                   (fun q ->
+                     let* r = C.exec q () in
+                     let* _ = or_fail "cleanup" r in
+                     Lwt.return_unit)
+                   q_cleanup
+               in
+               let* () = cleanup () in
+               Lwt.finalize
+                 (fun () -> f ~url conn (module C : Caqti_lwt.CONNECTION))
+                 cleanup))
+
+  let q_insert_community =
+    (Caqti_type.(t3 string string string) ->! Caqti_type.int)
+    "INSERT INTO communities (slug, name, visibility) VALUES ($1, $2, $3) RETURNING id"
+
+  let q_visibility_of =
+    (Caqti_type.int ->! Caqti_type.string)
+    "SELECT visibility FROM communities WHERE id = $1"
+
+  let q_insert_fake_job =
+    (Caqti_type.string ->! Caqti_type.int)
+    "INSERT INTO posthog_group_cleanup_jobs (group_key) VALUES ($1) RETURNING id"
+
+  (* Runs update_community_visibility_handler like Step-7 runs the deletion
+     handler: caller-chosen analytics configuration (so the async cleanup can
+     reach a stub), completion awaited through [done_pred]. *)
+  let run_visibility ~url ~configure ~uid ~slug ~value ~done_pred () =
+    let ( let* ) = Lwt.bind in
+    let payloads = ref [] in
+    configure ();
+    AnT.set_capture_sink (fun p -> payloads := !payloads @ [ p ]);
+    Lwt.finalize
+      (fun () ->
+        let router =
+          Dream.router
+            [ Dream.post "/c/:slug/settings/visibility"
+                Earde.Handlers.update_community_visibility_handler
+            ]
+        in
+        let pipeline =
+          Dream.sql_pool url @@ Dream.memory_sessions @@ fun req ->
+          let* () = Dream.set_session_field req "user_id" (string_of_int uid) in
+          let* () = Dream.set_session_field req "username" "grpclean_admin" in
+          let* () = Dream.set_session_field req "is_admin" "true" in
+          let csrf = Dream.csrf_token req in
+          Dream.set_body req
+            (Step6_events.form_body
+               [ ("dream.csrf", csrf); ("visibility", value) ]);
+          router req
+        in
+        let request =
+          Dream.request ~method_:`POST
+            ~target:("/c/" ^ slug ^ "/settings/visibility")
+            ~headers:
+              ([ ("Content-Type", "application/x-www-form-urlencoded") ]
+              @ Step6_events.consent_header (Some "granted"))
+            ""
+        in
+        let* response = pipeline request in
+        let* () = wait_until ~label:"group cleanup chain" done_pred in
+        Lwt.return (Dream.status_to_int (Dream.status response), !payloads))
+      (fun () ->
+        AnT.clear_capture_sink ();
+        AnT.clear_configuration_override ();
+        Lwt.return_unit)
+
+  let job_state conn key =
+    let ( let* ) = Lwt.bind in
+    let* job = Earde.Db.get_posthog_group_cleanup_job conn key in
+    or_fail_s "job state" job
+
+  let job_completed conn key () =
+    let ( let* ) = Lwt.bind in
+    let* job = Earde.Db.get_posthog_group_cleanup_job conn key in
+    match job with
+    | Ok (Some (_, "completed", _, _)) -> Lwt.return true
+    | _ -> Lwt.return false
+
+  let job_has_error conn key () =
+    let ( let* ) = Lwt.bind in
+    let* job = Earde.Db.get_posthog_group_cleanup_job conn key in
+    match job with
+    | Ok (Some (_, _, _, Some _)) -> Lwt.return true
+    | _ -> Lwt.return false
+
+  let handler_flow_case =
+    db_case "handler: public->private commits change + durable job; scrub runs"
+      (fun ~url conn c ->
+        let ( let* ) = Lwt.bind in
+        let (module C : Caqti_lwt.CONNECTION) = c in
+        let* uid = C.find Step6_events.q_insert_user ("grpclean_admin", "x") in
+        let* uid = or_fail "user" uid in
+        let* cid =
+          C.find q_insert_community ("grpclean-flow", secret_name, "public")
+        in
+        let* cid = or_fail "community" cid in
+        let key = "community:" ^ string_of_int cid in
+        let props =
+          ref
+            [ ("community_id", string_of_int cid);
+              ("community_name", secret_name);
+              ("community_slug", "grpclean-flow")
+            ]
+        in
+        let* base_url, seen, stop = Api_stub.start (groups_handler props) in
+        Lwt.finalize
+          (fun () ->
+            let* status, payloads =
+              run_visibility ~url
+                ~configure:(fun () ->
+                  AnT.use_deletion_test_configuration ~ui_host:base_url
+                    ~project_id:(Some "42")
+                    ~personal_api_key:(Some deletion_test_key) ())
+                ~uid ~slug:"grpclean-flow" ~value:"private"
+                ~done_pred:(job_completed conn key) ()
+            in
+            Alcotest.(check bool) "redirects" true (status / 100 = 3);
+            let* visibility = C.find q_visibility_of cid in
+            let* visibility = or_fail "visibility" visibility in
+            Alcotest.(check string) "visibility committed" "private" visibility;
+            let* state = job_state conn key in
+            (match state with
+            | Some (_, s, attempts, last_error) ->
+                Alcotest.(check string) "job completed" "completed" s;
+                Alcotest.(check bool) "attempted" true (attempts >= 1);
+                Alcotest.(check (option string)) "no error" None last_error
+            | None -> Alcotest.fail "job row missing");
+            (* Both stored identifiers really were unset over the API. *)
+            Alcotest.(check (list string)) "profile scrubbed"
+              [ "community_id" ]
+              (List.map fst !props);
+            no_leak_in_requests
+              (List.filter (fun (r : Api_stub.req) -> r.meth = "POST") !seen);
+            (* The consent-gated $groupidentify that rode along is already
+               the private shape. *)
+            (match
+               List.find_opt
+                 (fun p -> event_of p = "$groupidentify")
+                 payloads
+             with
+            | Some gi ->
+                Alcotest.(check (slist string compare)) "private group set"
+                  [ "community_id"; "community_visibility" ]
+                  (List.map fst (group_set_of gi))
+            | None -> Alcotest.fail "no $groupidentify captured");
+            Lwt.return_unit)
+          (fun () ->
+            stop ();
+            Lwt.return_unit))
+
+  let handler_failure_case =
+    db_case "handler: PostHog failure keeps the committed change, job pending"
+      (fun ~url conn c ->
+        let ( let* ) = Lwt.bind in
+        let (module C : Caqti_lwt.CONNECTION) = c in
+        let* uid = C.find Step6_events.q_insert_user ("grpclean_admin2", "x") in
+        let* uid = or_fail "user" uid in
+        let* cid =
+          C.find q_insert_community ("grpclean-down", secret_name, "public")
+        in
+        let* cid = or_fail "community" cid in
+        let key = "community:" ^ string_of_int cid in
+        let props =
+          ref
+            [ ("community_name", secret_name);
+              ("community_slug", "grpclean-down")
+            ]
+        in
+        let* base_url, _seen, stop =
+          Api_stub.start (groups_handler ~delete_status:500 props)
+        in
+        Lwt.finalize
+          (fun () ->
+            let* status, _payloads =
+              run_visibility ~url
+                ~configure:(fun () ->
+                  AnT.use_deletion_test_configuration ~ui_host:base_url
+                    ~project_id:(Some "42")
+                    ~personal_api_key:(Some deletion_test_key) ())
+                ~uid ~slug:"grpclean-down" ~value:"private"
+                ~done_pred:(job_has_error conn key) ()
+            in
+            Alcotest.(check bool) "product response preserved" true
+              (status / 100 = 3);
+            (* The transient PostHog failure did NOT roll anything back. *)
+            let* visibility = C.find q_visibility_of cid in
+            let* visibility = or_fail "visibility" visibility in
+            Alcotest.(check string) "visibility still private" "private"
+              visibility;
+            let* state = job_state conn key in
+            (match state with
+            | Some (_, s, attempts, Some err) ->
+                Alcotest.(check string) "durably pending" "pending" s;
+                Alcotest.(check bool) "attempted" true (attempts >= 1);
+                Alcotest.(check string) "bounded class only"
+                  "group_delete_http_500" err;
+                if contains err secret_name || contains err "grpclean-down"
+                then Alcotest.fail "error leaked a name/slug"
+            | _ -> Alcotest.fail "expected pending job with error");
+            Lwt.return_unit)
+          (fun () ->
+            stop ();
+            Lwt.return_unit))
+
+  let enqueue_semantics_case =
+    db_case "enqueue: converges while pending, re-arms after completion"
+      (fun ~url:_ conn c ->
+        let ( let* ) = Lwt.bind in
+        let (module C : Caqti_lwt.CONNECTION) = c in
+        let* cid =
+          C.find q_insert_community ("grpclean-rearm", secret_name, "public")
+        in
+        let* cid = or_fail "community" cid in
+        let key = "community:" ^ string_of_int cid in
+        let* r =
+          Earde.Db.update_community_visibility_and_enqueue_group_cleanup conn
+            cid Earde.Db.Community_private
+        in
+        let* updated, job1 = or_fail_s "first transition" r in
+        Alcotest.(check bool) "community returned" true (updated <> None);
+        let job1 = Option.get job1 in
+        (* Duplicate transition converges on the SAME pending job. *)
+        let* r = Earde.Db.update_community_visibility_and_enqueue_group_cleanup
+            conn cid Earde.Db.Community_private
+        in
+        let* _, job2 = or_fail_s "duplicate transition" r in
+        Alcotest.(check int) "same job" job1 (Option.get job2);
+        (* ->public enqueues nothing (restore rides $groupidentify). *)
+        let* r = Earde.Db.update_community_visibility_and_enqueue_group_cleanup
+            conn cid Earde.Db.Community_public
+        in
+        let* _, job3 = or_fail_s "back to public" r in
+        Alcotest.(check bool) "no job on ->public" true (job3 = None);
+        (* Complete, then a NEW ->private transition re-arms it. *)
+        let* m = Earde.Db.complete_posthog_group_cleanup_job conn job1 in
+        let* () = or_fail_s "complete" m in
+        let* r = Earde.Db.update_community_visibility_and_enqueue_group_cleanup
+            conn cid Earde.Db.Community_private
+        in
+        let* _, job4 = or_fail_s "re-arm" r in
+        Alcotest.(check int) "same row re-armed" job1 (Option.get job4);
+        let* state = job_state conn key in
+        (match state with
+        | Some (_, s, attempts, last_error) ->
+            Alcotest.(check string) "pending again" "pending" s;
+            Alcotest.(check int) "counters reset" 0 attempts;
+            Alcotest.(check (option string)) "diagnostics reset" None last_error
+        | None -> Alcotest.fail "job row missing");
+        Lwt.return_unit)
+
+  let restore_case =
+    db_case "handler: private->public restores name+slug, enqueues nothing"
+      (fun ~url conn c ->
+        let ( let* ) = Lwt.bind in
+        let (module C : Caqti_lwt.CONNECTION) = c in
+        let* uid = C.find Step6_events.q_insert_user ("grpclean_admin3", "x") in
+        let* uid = or_fail "user" uid in
+        let* cid =
+          C.find q_insert_community ("grpclean-back", secret_name, "private")
+        in
+        let* cid = or_fail "community" cid in
+        let key = "community:" ^ string_of_int cid in
+        let* status, payloads =
+          run_visibility ~url
+            ~configure:(fun () -> AnT.use_enabled_test_configuration ())
+            ~uid ~slug:"grpclean-back" ~value:"public"
+            ~done_pred:(fun () -> Lwt.return true)
+            ()
+        in
+        Alcotest.(check bool) "redirects" true (status / 100 = 3);
+        (match
+           List.find_opt (fun p -> event_of p = "$groupidentify") payloads
+         with
+        | Some gi ->
+            let set = group_set_of gi in
+            Alcotest.(check (slist string compare))
+              "public shape restored"
+              [ "community_id"; "community_slug"; "community_name";
+                "community_visibility" ]
+              (List.map fst set);
+            Alcotest.(check (option string)) "name restored"
+              (Some secret_name)
+              (match List.assoc_opt "community_name" set with
+               | Some (`String v) -> Some v
+               | _ -> None)
+        | None -> Alcotest.fail "no $groupidentify captured");
+        let* job = Earde.Db.get_posthog_group_cleanup_job conn key in
+        let* job = or_fail_s "job lookup" job in
+        Alcotest.(check bool) "no cleanup job for ->public" true (job = None);
+        Lwt.return_unit)
+
+  let batch_case =
+    db_case "batch: bounded claim + shared maintenance worker completes"
+      (fun ~url:_ conn c ->
+        let ( let* ) = Lwt.bind in
+        let (module C : Caqti_lwt.CONNECTION) = c in
+        let* j1 = C.find q_insert_fake_job "community:999121" in
+        let* j1 = or_fail "job1" j1 in
+        let* j2 = C.find q_insert_fake_job "community:999122" in
+        let* j2 = or_fail "job2" j2 in
+        let* j3 = C.find q_insert_fake_job "community:999123" in
+        let* j3 = or_fail "job3" j3 in
+        let* claimed =
+          Earde.Db.claim_posthog_group_cleanup_batch conn ~limit:2 ()
+        in
+        let* claimed = or_fail_s "bounded claim" claimed in
+        Alcotest.(check (list int)) "bounded, oldest first" [ j1; j2 ]
+          (List.map fst claimed);
+        (* The third job processes through the SAME worker; a 404 find (group
+           never existed) completes it. *)
+        let props = ref [] in
+        let handler = groups_handler ~find_status:404 props in
+        let* base_url, _seen, stop = Api_stub.start handler in
+        AnT.use_deletion_test_configuration ~ui_host:base_url
+          ~project_id:(Some "42") ~personal_api_key:(Some deletion_test_key) ();
+        Lwt.finalize
+          (fun () ->
+            let* summary =
+              Earde.Posthog_deletion.process_group_batch
+                ~claim:(fun () ->
+                  Earde.Db.claim_posthog_group_cleanup_batch conn
+                    ~lease_minutes:0 ~limit:10 ())
+                ~mark_completed:(fun job_id ->
+                  Earde.Db.complete_posthog_group_cleanup_job conn job_id)
+                ~mark_failed:(fun job_id err ->
+                  Earde.Db.fail_posthog_group_cleanup_job conn job_id err)
+                ()
+            in
+            let* summary = or_fail_s "batch" summary in
+            Alcotest.(check int) "all pending processed" 3
+              summary.Earde.Posthog_deletion.claimed;
+            Alcotest.(check int) "all completed" 3
+              summary.Earde.Posthog_deletion.completed;
+            let* state = job_state conn "community:999123" in
+            (match state with
+            | Some (id, s, _, _) ->
+                Alcotest.(check int) "third job" j3 id;
+                Alcotest.(check string) "completed" "completed" s
+            | None -> Alcotest.fail "job row missing");
+            Lwt.return_unit)
+          (fun () ->
+            AnT.clear_configuration_override ();
+            stop ();
+            Lwt.return_unit))
+
+  let suite =
+    [ scrub_case; absent_case; failure_case; missing_config_case
+    ; handler_flow_case; handler_failure_case; enqueue_semantics_case
+    ; restore_case; batch_case
+    ]
+end
+
 (* --- Step-5: identity/group attributes + browser reconciliation ---------- *)
 
 let index_of haystack needle =
@@ -2646,7 +3223,7 @@ let count_sub haystack needle =
 
 (* Renders the shared layout through real session middleware, optionally with
    a session user_id value, under the enabled test analytics config. *)
-let render_layout ?session_user ?analytics_community_id () =
+let render_layout ?session_user ?analytics_community () =
   let rendered = ref "" in
   let (_ : Dream.response) =
     Lwt_main.run
@@ -2658,7 +3235,7 @@ let render_layout ?session_user ?analytics_community_id () =
              | None -> Lwt.return_unit)
              (fun () ->
                rendered :=
-                 Earde.Components.layout ~request:req ?analytics_community_id
+                 Earde.Components.layout ~request:req ?analytics_community
                    ~title:"T" "<p>body</p>";
                Dream.html ""))
          (Dream.request ~method_:`GET ~target:"/" ""))
@@ -3345,8 +3922,9 @@ let () =
               let actual =
                 AnT.group_identify_payload ~api_key:"phc_test"
                   ~distinct_id:"user:1"
-                  { An.community_id = 7; community_slug = "ocaml";
-                    community_name = "OCaml"; community_visibility = "public";
+                  { An.community_id = 7; community_slug = Some "ocaml";
+                    community_name = Some "OCaml";
+                    community_visibility = "public";
                     created_at = Some "2026-01-01T00:00:00Z" }
               in
               Alcotest.check yojson "group identify payload" expected actual)
@@ -3354,9 +3932,9 @@ let () =
               let actual =
                 AnT.group_identify_payload ~api_key:"phc_test"
                   ~distinct_id:"user:1"
-                  { An.community_id = 7; community_slug = "ocaml";
-                    community_name = "OCaml"; community_visibility = "public";
-                    created_at = None }
+                  { An.community_id = 7; community_slug = Some "ocaml";
+                    community_name = Some "OCaml";
+                    community_visibility = "public"; created_at = None }
               in
               let set_keys =
                 match List.assoc_opt "$group_set" (payload_props actual) with
@@ -3368,6 +3946,66 @@ let () =
                 [ "community_id"; "community_slug"; "community_name";
                   "community_visibility" ]
                 set_keys)
+          (* §13: fully private communities. Group identity stays
+             community:<id>; readable identifiers never appear. *)
+        ; an_case "private $groupidentify has no name or slug" (fun () ->
+              let actual =
+                AnT.group_identify_payload ~api_key:"phc_test"
+                  ~distinct_id:"user:1" an_private_group
+              in
+              Alcotest.(check (option string)) "group key stays numeric"
+                (Some "community:9") (group_key_prop_of actual);
+              let set = group_set_of actual in
+              Alcotest.(check (slist string compare))
+                "private group set keys"
+                [ "community_id"; "community_visibility" ]
+                (List.map fst set);
+              Alcotest.(check bool) "no community_name" false
+                (List.mem_assoc "community_name" set);
+              Alcotest.(check bool) "no community_slug" false
+                (List.mem_assoc "community_slug" set))
+        ; an_case "private domain events omit slugs, keep ids/counts/group"
+            (fun () ->
+              let chat =
+                an_payload
+                  (An.Chat_message_sent
+                     { user_id = 1; community_id = 9; community_slug = None;
+                       channel_id = 3; channel_slug = None; message_id = 91L;
+                       content_length = 42; response_mode = An.Response_json })
+              in
+              Alcotest.(check (slist string compare))
+                "private chat keys"
+                [ "user_id"; "community_id"; "channel_id"; "message_id";
+                  "content_length"; "response_mode"; "$groups" ]
+                (prop_keys chat);
+              Alcotest.(check (option string)) "private chat group"
+                (Some "community:9") (an_group_key chat);
+              let joined =
+                an_payload
+                  (An.Community_joined
+                     { user_id = 1; community_id = 9; community_slug = None;
+                       community_visibility = "private" })
+              in
+              Alcotest.(check (slist string compare))
+                "private join keys"
+                [ "user_id"; "community_id"; "community_visibility";
+                  "$groups" ]
+                (prop_keys joined);
+              let promoted =
+                an_payload
+                  (An.Conversation_promoted
+                     { user_id = 1; community_id = 9; community_slug = None;
+                       channel_id = 3; channel_slug = None; section_id = None;
+                       post_id = 11; message_id = 91L;
+                       promoted_message_count = 4;
+                       promoted_participant_count = Some 2 })
+              in
+              Alcotest.(check (slist string compare))
+                "private promoted keys"
+                [ "user_id"; "community_id"; "channel_id"; "post_id";
+                  "message_id"; "promoted_message_count";
+                  "promoted_participant_count"; "$groups" ]
+                (prop_keys promoted))
         ] )
       (* Disabled configuration and transport failures: never a capture, never
          an exception into the caller. *)
@@ -3599,6 +4237,42 @@ let () =
                     (contains html "/static/js/analytics.js");
                   Alcotest.(check bool) "no token attr" false
                     (contains html "data-ph-token")))
+          (* §13 private-community marker: derived from the authoritative
+             visibility passed with the community id, value "true" only. *)
+        ; an_case "private community page carries the private marker" (fun () ->
+              AnT.use_enabled_test_configuration ();
+              Fun.protect ~finally:AnT.clear_configuration_override (fun () ->
+                  let html =
+                    Earde.Components.layout
+                      ~analytics_community:(9, Earde.Db.Community_private)
+                      ~title:"T" "<p>body</p>"
+                  in
+                  Alcotest.(check bool) "private marker" true
+                    (contains html "data-analytics-private-community='true'");
+                  Alcotest.(check bool) "group attr stays numeric" true
+                    (contains html "data-analytics-group='community:9'")))
+        ; an_case "public community page has no private marker" (fun () ->
+              AnT.use_enabled_test_configuration ();
+              Fun.protect ~finally:AnT.clear_configuration_override (fun () ->
+                  let html =
+                    Earde.Components.layout
+                      ~analytics_community:(7, Earde.Db.Community_public)
+                      ~title:"T" "<p>body</p>"
+                  in
+                  Alcotest.(check bool) "no private marker" false
+                    (contains html "data-analytics-private-community");
+                  Alcotest.(check bool) "group attr present" true
+                    (contains html "data-analytics-group='community:7'")))
+        ; an_case "global page has neither group nor private marker" (fun () ->
+              AnT.use_enabled_test_configuration ();
+              Fun.protect ~finally:AnT.clear_configuration_override (fun () ->
+                  let html =
+                    Earde.Components.layout ~title:"T" "<p>body</p>"
+                  in
+                  Alcotest.(check bool) "no group attr" false
+                    (contains html "data-analytics-group");
+                  Alcotest.(check bool) "no private marker" false
+                    (contains html "data-analytics-private-community")))
         ] )
       (* §2.3 URL rule, reference implementation. *)
     ; ( "analytics_url_sanitizer"
@@ -3652,6 +4326,81 @@ let () =
                 (contains js "document.title");
               Alcotest.(check bool) "no query-string handling" false
                 (contains js "location.search"))
+        ] )
+      (* §13 privacy hardening: autocapture is structural-only, exception
+         autocapture is off, and fully private community documents never
+         initialize the SDK. Static contract checks against the shipped
+         analytics.js (same technique as the replay-masking coverage). *)
+    ; ( "analytics_autocapture_protection"
+      , [ an_case "autocapture text masking and scrubbers present" (fun () ->
+              let js = read_analytics_js () in
+              List.iter
+                (fun needle ->
+                  if not (contains js needle) then
+                    Alcotest.failf "analytics.js is missing %S" needle)
+                [ (* documented SDK option: element text never captured *)
+                  "mask_all_text: true"
+                  (* defense-in-depth scrubbers in the sanitize hook *)
+                ; "delete props.$el_text"
+                ; "sanitizeElement"
+                ; "sanitizeElementsChain"
+                ; "$elements_chain"
+                ; "attr__title"
+                ; "attr__aria-label"
+                ; "attr__value"
+                ; "attr__href"
+                ; "attr__src"
+                ; "attr__action"
+                ])
+        ; an_case "chain scrubber removes text and URL query/fragment"
+            (fun () ->
+              let js = read_analytics_js () in
+              (* The regexes that make nested element text and full URLs
+                 unrepresentable in $elements_chain payloads. *)
+              Alcotest.(check bool) "text= scrub regex" true
+                (contains js {|text="[^"]*"|});
+              Alcotest.(check bool) "url attr scrub regex" true
+                (contains js {|(?:attr__)?(?:href|src|action)="|});
+              Alcotest.(check bool) "query/fragment stripper" true
+                (contains js {|split("?")[0].split("#")[0]|}))
+        ; an_case "manual closed events keep their own schemas" (fun () ->
+              let js = read_analytics_js () in
+              (* search_performed: exactly the existing closed properties. *)
+              Alcotest.(check bool) "search_performed present" true
+                (contains js "search_performed");
+              List.iter
+                (fun needle ->
+                  if not (contains js needle) then
+                    Alcotest.failf "search_performed lost %S" needle)
+                [ "result_count: resultCount"; "active_tab: tab"; "page: page" ])
+        ; an_case "automatic exception capture is disabled" (fun () ->
+              let js = read_analytics_js () in
+              Alcotest.(check bool) "capture_exceptions: false" true
+                (contains js "capture_exceptions: false");
+              Alcotest.(check bool) "no capture_exceptions: true" false
+                (contains js "capture_exceptions: true");
+              Alcotest.(check bool) "no window.onerror forwarding" false
+                (contains js "window.onerror");
+              Alcotest.(check bool) "no unhandledrejection forwarding" false
+                (contains js "unhandledrejection");
+              Alcotest.(check bool) "no raw error-message property" false
+                (contains js "error_message"))
+        ; an_case "private documents never reach the SDK" (fun () ->
+              let js = read_analytics_js () in
+              Alcotest.(check bool) "reads the private marker" true
+                (contains js "data-analytics-private-community");
+              (* The single centralized gate: initAnalytics resolves inert
+                 before loadSdk on private documents, so pageview, group,
+                 search_performed and the SDK download are all unreachable. *)
+              Alcotest.(check bool) "privateCommunity gate" true
+                (contains js "if (privateCommunity)");
+              Alcotest.(check bool) "gate precedes SDK load" true
+                (match
+                   ( index_of js "if (privateCommunity)",
+                     index_of js "initPromise = loadSdk()" )
+                 with
+                | Some gate, Some load -> gate < load
+                | _ -> false))
         ] )
       (* Document-title leakage: the search term must never enter <title>. *)
     ; ( "analytics_title_leakage"
@@ -3719,7 +4468,7 @@ let () =
               AnT.use_disabled_test_configuration ();
               Fun.protect ~finally:AnT.clear_configuration_override (fun () ->
                   let html =
-                    render_layout ~session_user:"42" ~analytics_community_id:7
+                    render_layout ~session_user:"42" ~analytics_community:(7, Earde.Db.Community_public)
                       ()
                   in
                   Alcotest.(check bool) "no identity attr" false
@@ -3730,7 +4479,7 @@ let () =
             (fun () ->
               with_enabled_config (fun () ->
                   let html =
-                    render_layout ~session_user:"42" ~analytics_community_id:7
+                    render_layout ~session_user:"42" ~analytics_community:(7, Earde.Db.Community_public)
                       ()
                   in
                   (* exactly one identity and one group attribute (the other
@@ -3751,7 +4500,7 @@ let () =
     ; ( "analytics_group_attrs"
       , [ an_case "community layout emits exactly community:7" (fun () ->
               with_enabled_config (fun () ->
-                  let html = render_layout ~analytics_community_id:7 () in
+                  let html = render_layout ~analytics_community:(7, Earde.Db.Community_public) () in
                   Alcotest.(check (option string)) "group attr"
                     (Some "community:7")
                     (attr_value html "data-analytics-group")))
@@ -3806,13 +4555,16 @@ let () =
                   in
                   check_attr "community_home_page" (Some "community:5")
                     (Earde.Components.community_home_page
-                       ~analytics_community_id:5 ~title:"T" ~body:"B" ());
+                       ~analytics_community:(5, Earde.Db.Community_public)
+                       ~title:"T" ~body:"B" ());
                   check_attr "community_manage_page" (Some "community:6")
                     (Earde.Components.community_manage_page
-                       ~analytics_community_id:6 ~title:"T" ~body:"B" ());
+                       ~analytics_community:(6, Earde.Db.Community_public)
+                       ~title:"T" ~body:"B" ());
                   check_attr "create_page (join/post/report/start-thread)"
                     (Some "community:8")
-                    (Earde.Components.create_page ~analytics_community_id:8
+                    (Earde.Components.create_page
+                       ~analytics_community:(8, Earde.Db.Community_public)
                        ~title:"T" ~body:"B" ())))
         ; an_case "global wrappers emit no group" (fun () ->
               with_enabled_config (fun () ->
@@ -4213,4 +4965,5 @@ let () =
     ; ( "analytics_consent_db", [ consent_sync_db_case ] )
     ; ( "analytics_step6_events", Step6_events.suite )
     ; ( "posthog_deletion_jobs", Step7_deletion.suite )
+    ; ( "posthog_group_cleanup", Group_cleanup.suite )
     ]

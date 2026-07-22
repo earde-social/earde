@@ -436,18 +436,59 @@ let with_analytics_after_sql make_response =
   !pending ();
   Lwt.return response
 
+(* Centralized private-safe analytics shaping (§13). Fully private
+   communities keep numeric ids, counts, and the community:<id> group key,
+   but no human-readable identifier (slug, name, channel/section slug) ever
+   enters an analytics payload. Every handler and the $groupidentify mapping
+   below go through this ONE helper — no per-handler visibility checks. The
+   visibility comes from the authoritative community record the handler
+   already loaded; no analytics-only DB query exists. *)
+let analytics_public_string (community : Db.community) value =
+  if Db.community_is_private community.Db.visibility then None else Some value
+
 (* The closed $groupidentify record from an authoritative Db.community row.
    The shared community record carries no created_at column, so that optional
-   group property is omitted rather than approximated. *)
+   group property is omitted rather than approximated. Private communities:
+   slug and name are None (§13), id and closed visibility remain. *)
 let community_group_of (community : Db.community) : Analytics.community_group =
   {
     Analytics.community_id = community.Db.id;
-    community_slug = community.Db.slug;
-    community_name = community.Db.name;
+    community_slug = analytics_public_string community community.Db.slug;
+    community_name = analytics_public_string community community.Db.name;
     community_visibility =
       Db.community_visibility_to_string community.Db.visibility;
     created_at = None;
   }
+
+(* Immediate async attempt for a freshly enqueued §13 group-cleanup job —
+   the exact analog of attempt_posthog_deletion_job: claim, one bounded HTTP
+   scrub, mark. Every DB touch is its own short call; failures only leave
+   the durable job pending. Logs carry the job id and bounded error classes
+   only — never a community name or slug. *)
+let attempt_posthog_group_cleanup_job request ~job_id =
+  Lwt.catch
+    (fun () ->
+      let%lwt claimed =
+        Dream.sql request (fun db -> Db.claim_posthog_group_cleanup_job db job_id)
+      in
+      match claimed with
+      | Ok (Some group_key) ->
+          let%lwt (_ : [ `Completed | `Left_pending of string ]) =
+            Posthog_deletion.process_claimed_group_job
+              ~mark_completed:(fun () ->
+                Dream.sql request (fun db ->
+                    Db.complete_posthog_group_cleanup_job db job_id))
+              ~mark_failed:(fun err ->
+                Dream.sql request (fun db ->
+                    Db.fail_posthog_group_cleanup_job db job_id err))
+              ~group_key
+          in
+          Lwt.return_unit
+      | Ok None | Error _ -> Lwt.return_unit)
+    (fun exn ->
+      Dream.log "posthog group cleanup immediate attempt error: %s"
+        (Printexc.to_string exn);
+      Lwt.return_unit)
 
 let confirm_email_handler request =
   match Dream.query request "token" with
@@ -1463,9 +1504,13 @@ let send_message_handler request =
                                                 {
                                                   user_id;
                                                   community_id = community.Db.id;
-                                                  community_slug = community.Db.slug;
+                                                  community_slug =
+                                                    analytics_public_string
+                                                      community community.Db.slug;
                                                   channel_id = channel.Db.id;
-                                                  channel_slug = channel.Db.slug;
+                                                  channel_slug =
+                                                    analytics_public_string
+                                                      community channel.Db.slug;
                                                   message_id = message.Db.id;
                                                   content_length = String.length content;
                                                   response_mode =
@@ -1718,9 +1763,13 @@ let start_thread_create_handler request =
                                                                 {
                                                                   user_id;
                                                                   community_id = community.Db.id;
-                                                                  community_slug = community.Db.slug;
+                                                                  community_slug =
+                                                                    analytics_public_string
+                                                                      community community.Db.slug;
                                                                   channel_id = channel.Db.id;
-                                                                  channel_slug = channel.Db.slug;
+                                                                  channel_slug =
+                                                                    analytics_public_string
+                                                                      community channel.Db.slug;
                                                                   section_id;
                                                                   post_id;
                                                                   message_id;
@@ -1772,7 +1821,9 @@ let join_community_handler request =
                               {
                                 user_id;
                                 community_id = community.Db.id;
-                                community_slug = community.Db.slug;
+                                community_slug =
+                                  analytics_public_string community
+                                    community.Db.slug;
                                 community_visibility =
                                   Db.community_visibility_to_string
                                     community.Db.visibility;
@@ -3584,18 +3635,33 @@ let update_community_visibility_handler request =
                       if not (is_top_mod || is_admin) then
                         Dream.respond ~status:`Forbidden (Pages.msg_page ?user ~title:"Access Denied" ~message:"Only Top Mods and admins can change visibility." ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/settings") request)
                       else
-                        match%lwt Db.update_community_visibility db community.id visibility with
-                        | Ok (Some updated) ->
+                        match%lwt Db.update_community_visibility_and_enqueue_group_cleanup db community.id visibility with
+                        | Ok (Some updated, cleanup_job) ->
                             (* Visibility is a closed group property: refresh
                                the group profile from the UPDATE ... RETURNING
                                record so PostHog never holds a stale value
-                               after a successful change (§5.3). *)
+                               after a successful change (§5.3). On a
+                               ->private transition the SAME committed
+                               transaction also enqueued the durable §13
+                               scrub of the previously sent name/slug; its
+                               immediate attempt runs async off the response
+                               path and — like §3.3 person deletion — is a
+                               privacy duty, not collection, so it is not
+                               consent-gated. A PostHog failure only leaves
+                               the job pending; the visibility change itself
+                               is already committed. *)
                             record (fun () ->
                                 Analytics.identify_community_if_consented request
                                   ~distinct_id:(Analytics.distinct_id_of_user_id user_id)
-                                  (community_group_of updated));
+                                  (community_group_of updated);
+                                match cleanup_job with
+                                | Some job_id ->
+                                    Lwt.async (fun () ->
+                                        attempt_posthog_group_cleanup_job
+                                          request ~job_id)
+                                | None -> ());
                             Dream.redirect request ("/c/" ^ slug ^ "/settings?panel=visibility")
-                        | Ok None ->
+                        | Ok (None, _) ->
                             (* Community vanished between fetch and update: the
                                old code's silent no-op — same redirect, no
                                emission. *)

@@ -23,6 +23,16 @@
   var identityAttr = banner.getAttribute("data-analytics-user");
   var groupAttr = banner.getAttribute("data-analytics-group");
 
+  /* §13 fully private communities: the server-rendered marker (derived from
+     the authoritative community visibility, value only — never a name or
+     slug) makes this document analytics-inert. Consent controls still work
+     and the consent endpoint still records the choice, but the SDK is never
+     loaded or initialized here: no pageview, no autocapture, no replay, no
+     group call, no custom event, no PostHog network request. Analytics
+     resumes on the next eligible public/global page load. */
+  var privateCommunity =
+    banner.getAttribute("data-analytics-private-community") === "true";
+
   var COOKIE_NAME = "earde_analytics_consent";
 
   /* Exact parse mirroring the server: only the exact values granted/denied
@@ -52,6 +62,53 @@
     }
   }
 
+  /* Autocapture text protection (§13): autocapture keeps structural click
+     metadata only — tag, classes, event type, position. Visible text (post
+     titles, search results, usernames) must never enter a payload. The SDK's
+     mask_all_text option removes element text at the source; the scrubbers
+     below are defense in depth on every payload shape the SDK can emit
+     ($el_text, objects inside $elements, the encoded $elements_chain
+     string), and also strip query strings/fragments from URL-bearing
+     element attributes. */
+  function stripUrlValue(raw) {
+    return String(raw).split("?")[0].split("#")[0];
+  }
+
+  var ELEMENT_TEXT_KEYS = [
+    "$el_text",
+    "text",
+    "attr__title",
+    "attr__aria-label",
+    "attr__alt",
+    "attr__placeholder",
+    "attr__value",
+    "attr__label"
+  ];
+  var ELEMENT_URL_KEYS = ["attr__href", "attr__src", "attr__action"];
+
+  function sanitizeElement(el) {
+    if (!el || typeof el !== "object") return el;
+    ELEMENT_TEXT_KEYS.forEach(function (key) {
+      if (key in el) delete el[key];
+    });
+    ELEMENT_URL_KEYS.forEach(function (key) {
+      if (typeof el[key] === "string") el[key] = stripUrlValue(el[key]);
+    });
+    return el;
+  }
+
+  function sanitizeElementsChain(chain) {
+    return String(chain)
+      .replace(/text="[^"]*"/g, "")
+      .replace(/attr__(?:title|aria-label|alt|placeholder|value|label)="[^"]*"/g, "")
+      .replace(
+        /((?:attr__)?(?:href|src|action)=")([^"]*)"/g,
+        function (_match, prefix, url) {
+          return prefix + stripUrlValue(url) + '"';
+        }
+      );
+  }
+
   function sanitizeProperties(props) {
     if (!props) return props;
     if (props.$current_url) props.$current_url = stripUrl(props.$current_url);
@@ -62,6 +119,11 @@
        terms): removed from every event, never replaced with another
        user-controlled value. */
     if ("$title" in props) delete props.$title;
+    if ("$el_text" in props) delete props.$el_text;
+    if (Array.isArray(props.$elements))
+      props.$elements = props.$elements.map(sanitizeElement);
+    if (typeof props.$elements_chain === "string")
+      props.$elements_chain = sanitizeElementsChain(props.$elements_chain);
     return props;
   }
 
@@ -193,6 +255,13 @@
 
   function initAnalytics() {
     if (initPromise) return initPromise;
+    if (privateCommunity) {
+      /* §13: one centralized gate — every code path that could load or talk
+         to PostHog funnels through initAnalytics, so a private-community
+         document resolves to an inert no-op while staying idempotent. */
+      initPromise = Promise.resolve();
+      return initPromise;
+    }
     initPromise = loadSdk()
       .then(function () {
         if (!(window.posthog && typeof window.posthog.init === "function"))
@@ -203,9 +272,18 @@
           capture_pageview: false,
           capture_pageleave: true,
           autocapture: true,
+          /* §13: autocapture is structural-only — element text never leaves
+             the page. The sanitizeProperties scrubbers above are the
+             defense-in-depth layer for the same rule. */
+          mask_all_text: true,
           enable_heatmaps: true,
           capture_performance: { web_vitals: true },
-          capture_exceptions: true,
+          /* §13: automatic exception capture is DISABLED. Raw JS error
+             messages/stacks are arbitrary data and violate the closed
+             property contract; Error Tracking returns only with a closed
+             error_code/error_stage allowlist and explicit sanitization.
+             This file installs no global error or rejection handler. */
+          capture_exceptions: false,
           sanitize_properties: function (props) {
             return sanitizeProperties(props);
           },

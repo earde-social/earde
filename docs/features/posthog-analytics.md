@@ -84,10 +84,10 @@ Division of responsibilities:
 |---|---|
 | Page views | `capture_pageview: false` — **manual capture only** (§2.3) |
 | Page leaves | `capture_pageleave: true` (URLs pass through the sanitizer) |
-| Autocapture | on |
+| Autocapture | on, **structural metadata only** (§13): `mask_all_text: true` plus sanitize-hook scrubbing of `$el_text`, element text/title/aria-label/value fields, and URL-attribute query strings — visible/user-generated text never enters an autocapture payload |
 | Heatmaps | on |
 | Web Vitals | on (project flag already enabled) |
-| Error tracking | exception autocapture on |
+| Error tracking | **OFF** — `capture_exceptions: false`, no `window.onerror`/`unhandledrejection` forwarding; deferred until a closed `error_code`/`error_stage` taxonomy exists (§13) |
 | Session replay | on, with masking per §6 |
 | Replay network capture | `recordHeaders: false`, `recordBody: false` — chat catch-up JSON contains message bodies and must never enter replay |
 | Group context | declared per page load via a data attribute; set or cleared **before** the manual pageview capture (§5.3) |
@@ -425,9 +425,9 @@ Permitted properties (per event, where applicable):
 |---|---|---|
 | `user_id` | int | all authenticated events |
 | `community_id` | int | joined/left/chat/post/comment/promoted |
-| `community_slug` | string | joined/chat/promoted (in scope); omitted where only the id is in scope (left, post, comment) in v1 |
+| `community_slug` | string | joined/chat/promoted (in scope); omitted where only the id is in scope (left, post, comment) in v1; **omitted entirely for fully private communities (§13)** |
 | `community_visibility` | string | community_joined |
-| `channel_id` / `channel_slug` | int / string | chat_message_sent, conversation_promoted |
+| `channel_id` / `channel_slug` | int / string | chat_message_sent, conversation_promoted; the slug is **omitted for fully private communities (§13)** |
 | `section_id` | int | forum_thread_created, conversation_promoted |
 | `post_id` | int | forum_thread_created, forum_comment_created, conversation_promoted |
 | `comment_id` | int | forum_comment_created (needs §5.2) |
@@ -488,8 +488,8 @@ record is in scope: community creation, community settings update, and
 | Group property | Notes |
 |---|---|
 | `community_id` | int |
-| `community_slug` | current slug |
-| `community_name` | display name (not private content) |
+| `community_slug` | current slug — **public communities only**; omitted for fully private ones (§13) |
+| `community_name` | display name — **public communities only**; omitted for fully private ones (§13) |
 | `community_visibility` | `public` / `private` |
 | `created_at` | when available on the community record, ISO 8601 |
 
@@ -593,7 +593,7 @@ including this document and example files**):
 | `POSTHOG_PROJECT_TOKEN` | project API token (`phc_…`) | from PostHog project settings |
 | `POSTHOG_API_HOST` | ingest host | `https://eu.i.posthog.com` |
 | `POSTHOG_UI_HOST` | UI host (toolbar/links) and **private REST API host** for §3.3 | `https://eu.posthog.com` |
-| `POSTHOG_PERSONAL_API_KEY` | **server-only secret** (`phx_…`): personal API key minimally scoped to person read/write on this project; used exclusively by the §3.3 deletion lifecycle | from PostHog personal API key settings |
+| `POSTHOG_PERSONAL_API_KEY` | **server-only secret** (`phx_…`): personal API key minimally scoped to person read/write **and group read/write** on this project; used exclusively by the §3.3 deletion lifecycle and the §13 private-community group scrub | from PostHog personal API key settings |
 | `POSTHOG_PROJECT_ID` | **server-only**, numeric project id for the §3.3 private REST API paths; **required when person deletion is enabled** (i.e. whenever `POSTHOG_PERSONAL_API_KEY` is set). Never hardcoded in `lib/analytics.ml`; never rendered into browser configuration — v1 has no browser-side need for it | current production value: `229260` |
 | `EARDE_PUBLIC_ORIGIN` | the exact allowed `Origin` for `POST /analytics/consent` (§9); never hardcoded in the handler | `https://earde.com` |
 
@@ -934,3 +934,87 @@ GitHub-onboarding invariants:
   closed event property, never as a distinct ID, group key, or group type
   substitute — one Earde community may connect to multiple repositories, so a
   repository can never stand in for a community.
+
+## 13. Privacy hardening (2026-07)
+
+Pre-deployment hardening from the pivot audit; all enforced in code and tests.
+
+**Autocapture is structural-only.** `mask_all_text: true` (documented SDK
+option) removes element text at capture time; the shared `sanitize_properties`
+hook additionally scrubs every payload shape as defense in depth: `$el_text`
+is deleted, text-like fields inside `$elements` objects (`text`, `attr__title`,
+`attr__aria-label`, `attr__alt`, `attr__placeholder`, `attr__value`,
+`attr__label`) are deleted, the encoded `$elements_chain` string has its
+`text="…"` and title/aria-label/value segments removed, and URL-bearing
+element attributes (`href`/`src`/`action`, plain or `attr__`-prefixed) are cut
+at the first `?` or `#`. What remains is structural: tag names, CSS classes,
+event type, position. Forum/post titles, search-result text, usernames, and
+any other visible user-generated text cannot enter an autocapture payload.
+
+**Automatic exception capture is disabled** (`capture_exceptions: false`, no
+global error or rejection handler, no custom exception event). Raw JS error
+messages, stacks, and metadata are arbitrary data and violate the closed
+property contract. Error Tracking is **deferred** until Earde defines a closed
+`error_code`/`error_stage` allowlist with explicit sanitization and no raw
+exception text.
+
+**Fully private community pages never initialize browser analytics.** The
+layout takes the community context as `(id, authoritative Db visibility)` — a
+call site cannot pass the id without stating visibility, and the marker can
+never be derived from URL shape. Private pages render
+`data-analytics-private-community='true'` (value only — no name, no slug) on
+the analytics root; `analytics.js` gates its single `initAnalytics` entry
+point on it, so on such documents there is no SDK download, no init, no
+`$pageview`/`$pageleave`, no autocapture, no replay, no group call, no custom
+event — no PostHog network request at all. Consent controls still work: the
+banner and settings post to `/analytics/consent` as usual, the shared cookie
+is set, and analytics becomes active on the next eligible public/global page.
+
+**Private server-side analytics keep aggregates, drop identifiers.** Domain
+events for fully private communities retain numeric ids, counts, booleans and
+the `community:<id>` group key, but `community_slug`/`channel_slug` are
+omitted (optional fields, not empty strings). `$groupidentify` for a private
+community carries only `community_id` and the closed `community_visibility`
+value — never name, slug, description, channel/section names, or links. One
+centralized helper (`analytics_public_string` + `community_group_of` in
+`lib/handlers.ml`) implements the redaction from the visibility the handler
+already loaded; no per-handler checks, no analytics-only DB queries.
+
+**Public→private transitions durably scrub the stored group profile.**
+`$groupidentify` merges `$group_set` and has **no unset operation** (verified
+against current docs — `$unset` exists for person properties only, and
+null-setting is undocumented), so omission alone would leave previously sent
+`community_name`/`community_slug` in the PostHog group profile. The supported
+removal mechanism is the **private Groups API** (personal API key, group
+read/write scopes; §8):
+
+- `GET  /api/projects/:id/groups/find/?group_type_index=0&group_key=community:<id>`
+- `POST /api/projects/:id/groups/delete_property/?group_type_index=0&group_key=community:<id>`
+  with body `{"$unset": "<property name>"}` (400 when the property is absent —
+  which is why each attempt reads the group first and deletes only what is
+  still present, making re-runs idempotent; a 404 on find means PostHog never
+  saw the group and there is nothing to remove).
+
+Mechanics mirror §3.3 exactly (same architecture, not a second system):
+`Db.update_community_visibility_and_enqueue_group_cleanup` commits the
+visibility UPDATE and a durable `posthog_group_cleanup_jobs` row (keyed by the
+immutable `community:<id>`; additive migration) **in one transaction** — no
+HTTP inside it, and a transient PostHog failure can never roll back the
+product change. An immediate async attempt runs post-commit
+(`attempt_posthog_group_cleanup_job`); failures leave the job `pending` with a
+bounded diagnostic class (never a name or slug, in jobs or logs), and the
+`retry_posthog_deletions` maintenance command processes both person-deletion
+and group-cleanup batches with the same bounded lease-based claims. Duplicate
+transitions converge on one job; a later public→private transition re-arms a
+completed job. Like person deletion, the scrub is a privacy duty, not
+collection — it is **not** consent-gated. Private→public restores
+`community_name`/`community_slug` through the ordinary consent-gated public
+`$groupidentify` on the visibility change; always-private communities never
+send them in the first place.
+
+**Unchanged invariants**: `user:<database_user_id>`, public
+`community:<database_community_id>` group behavior, canonical event names
+(§12), consent-cookie contract (§9), account-deletion lifecycle (§3.3),
+`search_performed` semantics (§2.4), pageview URL/title sanitization (§2.3),
+and replay masking on public pages (§6). Future GitHub/private-repository
+data remains prohibited from analytics payloads (§12).

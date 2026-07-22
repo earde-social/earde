@@ -570,7 +570,7 @@ let community_page ?user ?(noindex=false) ?section:(section : community_section 
     prev_btn current_page next_btn
     community_info_card rules_card mods_card toggle_downvotes_card
   in
-  Components.layout ?user ~noindex ~request ~analytics_community_id:community.id
+  Components.layout ?user ~noindex ~request ~analytics_community:(community.id, community.visibility)
     ~title:community.name content
 
 (* First real adopter of Components.community_shell: the forum-section feed inside a structured
@@ -2087,7 +2087,7 @@ let community_overview_page ?user ?(noindex=false) ~is_member ~is_current_user_m
     rules_panel mods_panel modlog_card
   in
   Components.community_home_page ?user ~noindex ~request
-    ~analytics_community_id:community.id ~title:community.name
+    ~analytics_community:(community.id, community.visibility) ~title:community.name
     ~body:(Components.private_replay_guard ~community content) ()
 
 let community_settings_page ?user ~is_admin ~is_top_mod ~open_reports_count ~(community : community) ~(mods : user list) ~(banned_users : user list) ~(members : user list) ~(sections : community_section list) ~(channels : Db.channel list) request =
@@ -2717,7 +2717,7 @@ let community_settings_page ?user ~is_admin ~is_top_mod ~open_reports_count ~(co
     main_panel
   in
   Components.community_manage_page ?user ~request
-    ~analytics_community_id:community.id
+    ~analytics_community:(community.id, community.visibility)
     ~title:(Printf.sprintf "Settings — /c/%s" community.slug)
     ~body:(Components.private_replay_guard ~community content) ()
 
@@ -2852,7 +2852,7 @@ let manage_mods_page ?user ~is_admin ~current_user_role ~(community : community)
     legacy_section
   in
   Components.community_manage_page ?user ~request
-    ~analytics_community_id:community.id
+    ~analytics_community:(community.id, community.visibility)
     ~title:(Printf.sprintf "Manage Mods — /c/%s" community.slug)
     ~body:(Components.private_replay_guard ~community content) ()
 
@@ -2924,7 +2924,7 @@ let join_to_post_page ?user (community : community) request =
     </div>"
     (Components.html_escape community.slug) csrf_token community.id community.slug
   in
-  Components.create_page ?user ~request ~analytics_community_id:community.id
+  Components.create_page ?user ~request ~analytics_community:(community.id, community.visibility)
     ~title:("Join " ^ community.name) ~body:content ()
 
 (* GET form for "Start thread from chat". Mirrors new_post_form's create-* shell so it
@@ -3041,7 +3041,7 @@ let start_thread_form ?user ?error ~(community : community) ~(channel : channel)
     (esc default_body)
     (esc community.slug) (esc channel.slug)
   in
-  Components.create_page ?user ~request ~analytics_community_id:community.id
+  Components.create_page ?user ~request ~analytics_community:(community.id, community.visibility)
     ~title:("Start thread — #" ^ channel.name) ~body:content ()
 
 let new_post_form ?user ?preselected_section_id (sections : community_section list) (community : community) request =
@@ -3113,7 +3113,7 @@ let new_post_form ?user ?preselected_section_id (sections : community_section li
     community.id
     section_dropdown
   in
-  Components.create_page ?user ~request ~analytics_community_id:community.id
+  Components.create_page ?user ~request ~analytics_community:(community.id, community.visibility)
     ~title:("Post to " ^ community.name) ~body:content ()
 
 (* SSR report form (cool-grey create.css idiom, no JS). The handler is the security
@@ -3192,7 +3192,7 @@ let report_form_page ?user ~(community : community) ~(target_type : Db.report_ta
     (Components.safe_internal_path return_url)
   in
   Components.create_page ?user ~request ~noindex:true
-    ~analytics_community_id:community.id ~title:("Report " ^ kind_label)
+    ~analytics_community:(community.id, community.visibility) ~title:("Report " ^ kind_label)
     ~body:content ()
 
 (* Read-only community mod queue. [previews] is a (report_id -> (context_url, excerpt))
@@ -3345,7 +3345,7 @@ let reports_queue_page ?user ~(community : community) ~(status : Db.report_statu
     table_body
   in
   Components.community_manage_page ?user ~request
-    ~analytics_community_id:community.id ~title:(community.name ^ " — Reports")
+    ~analytics_community:(community.id, community.visibility) ~title:(community.name ^ " — Reports")
     ~body:(Components.private_replay_guard ~community content) ()
 
 let post_page ?user ?(noindex=false) ~is_member ~is_current_user_mod ~mod_usernames ~admin_usernames ~banned_usernames ~community ~user_communities:_ ~moderated_communities:_ user_post_votes user_comment_votes (post : post) (comments : comment list) request =
@@ -3996,7 +3996,7 @@ function toggleComment(id, btn) {
   }
 }
 </script>|} in
-  Components.layout ?user ~noindex ~request ~analytics_community_id:post.community_id
+  Components.layout ?user ~noindex ~request ~analytics_community:(post.community_id, community.visibility)
     ~title:post.title (toggle_script ^ content)
 
 (* === USER === *)
@@ -5014,7 +5014,7 @@ let mod_log_page ?user ?(noindex=false) ~(can_access_settings : bool) ~(communit
     table_body
   in
   Components.community_manage_page ?user ~noindex ~request
-    ~analytics_community_id:community.id ~title:(community.name ^ " — Mod Log")
+    ~analytics_community:(community.id, community.visibility) ~title:(community.name ^ " — Mod Log")
     ~body:(Components.private_replay_guard ~community content) ()
 
 (* Standalone HTML — intentionally outside Components.layout to prevent nav/JS

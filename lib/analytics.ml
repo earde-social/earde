@@ -15,10 +15,13 @@ type person_properties = {
   is_admin : bool;
 }
 
+(* Fully private communities (§13) keep the numeric id and the closed
+   visibility value but never expose human-readable identity: slug and name
+   are None there — explicit optional fields, not empty-string sentinels. *)
 type community_group = {
   community_id : int;
-  community_slug : string;
-  community_name : string;
+  community_slug : string option;
+  community_name : string option;
   community_visibility : string;
   created_at : string option;
 }
@@ -31,16 +34,18 @@ type event =
   | Community_joined of {
       user_id : int;
       community_id : int;
-      community_slug : string;
+      community_slug : string option;
+          (* None for fully private communities (§13): ids stay, readable
+             identifiers never leave the server. *)
       community_visibility : string;
     }
   | Community_left of { user_id : int; community_id : int }
   | Chat_message_sent of {
       user_id : int;
       community_id : int;
-      community_slug : string;
+      community_slug : string option;
       channel_id : int;
-      channel_slug : string;
+      channel_slug : string option;
       message_id : int64;
       content_length : int;
       response_mode : response_mode;
@@ -66,9 +71,9 @@ type event =
   | Conversation_promoted of {
       user_id : int;
       community_id : int;
-      community_slug : string;
+      community_slug : string option;
       channel_id : int;
-      channel_slug : string;
+      channel_slug : string option;
       section_id : int option;
       post_id : int;
       message_id : int64;
@@ -90,6 +95,10 @@ let account_deletion_distinct_id = "system:account-deletion"
 
 (* Group keys use the immutable numeric id — slugs are mutable (§5.3). *)
 let community_group_key community_id = Printf.sprintf "community:%d" community_id
+
+(* "community" is the project's first (and only) PostHog group type (§5.3),
+   so its group_type_index is 0. Used by the §13 private Groups-API cleanup. *)
+let community_group_type_index = 0
 
 (* === Configuration === *)
 
@@ -315,6 +324,7 @@ let response_mode_to_string = function
   | Response_redirect -> "redirect"
 
 let opt_int name = function None -> [] | Some v -> [ (name, `Int v) ]
+let opt_string name = function None -> [] | Some v -> [ (name, `String v) ]
 
 let event_name = function
   | Account_signed_up _ -> "account_signed_up"
@@ -359,12 +369,9 @@ let event_properties = function
       [ ("user_id", `Int user_id); ("$set", person_set_json person) ]
   | Community_joined { user_id; community_id; community_slug; community_visibility }
     ->
-      [
-        ("user_id", `Int user_id);
-        ("community_id", `Int community_id);
-        ("community_slug", `String community_slug);
-        ("community_visibility", `String community_visibility);
-      ]
+      [ ("user_id", `Int user_id); ("community_id", `Int community_id) ]
+      @ opt_string "community_slug" community_slug
+      @ [ ("community_visibility", `String community_visibility) ]
   | Community_left { user_id; community_id } ->
       [ ("user_id", `Int user_id); ("community_id", `Int community_id) ]
   | Chat_message_sent
@@ -378,16 +385,15 @@ let event_properties = function
         content_length;
         response_mode;
       } ->
-      [
-        ("user_id", `Int user_id);
-        ("community_id", `Int community_id);
-        ("community_slug", `String community_slug);
-        ("channel_id", `Int channel_id);
-        ("channel_slug", `String channel_slug);
-        ("message_id", json_int64 message_id);
-        ("content_length", `Int content_length);
-        ("response_mode", `String (response_mode_to_string response_mode));
-      ]
+      [ ("user_id", `Int user_id); ("community_id", `Int community_id) ]
+      @ opt_string "community_slug" community_slug
+      @ [ ("channel_id", `Int channel_id) ]
+      @ opt_string "channel_slug" channel_slug
+      @ [
+          ("message_id", json_int64 message_id);
+          ("content_length", `Int content_length);
+          ("response_mode", `String (response_mode_to_string response_mode));
+        ]
   | Forum_thread_created
       { user_id; community_id; section_id; post_id; content_length; has_link;
         has_mention } ->
@@ -426,13 +432,10 @@ let event_properties = function
         promoted_message_count;
         promoted_participant_count;
       } ->
-      [
-        ("user_id", `Int user_id);
-        ("community_id", `Int community_id);
-        ("community_slug", `String community_slug);
-        ("channel_id", `Int channel_id);
-        ("channel_slug", `String channel_slug);
-      ]
+      [ ("user_id", `Int user_id); ("community_id", `Int community_id) ]
+      @ opt_string "community_slug" community_slug
+      @ [ ("channel_id", `Int channel_id) ]
+      @ opt_string "channel_slug" channel_slug
       @ opt_int "section_id" section_id
       @ [
           ("post_id", `Int post_id);
@@ -477,15 +480,11 @@ let person_sync_payload ~api_key ~distinct_id (p : person_properties) =
 
 let group_identify_payload ~api_key ~distinct_id (g : community_group) =
   let group_set =
-    [
-      ("community_id", `Int g.community_id);
-      ("community_slug", `String g.community_slug);
-      ("community_name", `String g.community_name);
-      ("community_visibility", `String g.community_visibility);
-    ]
-    @ (match g.created_at with
-      | None -> []
-      | Some created_at -> [ ("created_at", `String created_at) ])
+    [ ("community_id", `Int g.community_id) ]
+    @ opt_string "community_slug" g.community_slug
+    @ opt_string "community_name" g.community_name
+    @ [ ("community_visibility", `String g.community_visibility) ]
+    @ opt_string "created_at" g.created_at
   in
   capture_payload ~api_key ~distinct_id ~name:"$groupidentify"
     ~properties:

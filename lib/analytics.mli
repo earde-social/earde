@@ -19,11 +19,15 @@ type person_properties = {
   is_admin : bool;
 }
 
-(** Closed community group-property record (§5.3), for [$groupidentify]. *)
+(** Closed community group-property record (§5.3), for [$groupidentify].
+    For fully private communities (§13) [community_slug] and
+    [community_name] are [None]: the group profile keeps only the immutable
+    numeric id and the closed visibility value — no human-readable
+    identifiers. *)
 type community_group = {
   community_id : int;
-  community_slug : string;
-  community_name : string;
+  community_slug : string option;
+  community_name : string option;
   community_visibility : string;  (** "public" / "private" *)
   created_at : string option;  (** ISO 8601 when available on the record *)
 }
@@ -42,16 +46,18 @@ type event =
   | Community_joined of {
       user_id : int;
       community_id : int;
-      community_slug : string;
+      community_slug : string option;
+          (** [None] for fully private communities (§13) — readable
+              identifiers are omitted, numeric ids and counts remain *)
       community_visibility : string;
     }
   | Community_left of { user_id : int; community_id : int }
   | Chat_message_sent of {
       user_id : int;
       community_id : int;
-      community_slug : string;
+      community_slug : string option;
       channel_id : int;
-      channel_slug : string;
+      channel_slug : string option;
       message_id : int64;
       content_length : int;
       response_mode : response_mode;
@@ -77,9 +83,9 @@ type event =
   | Conversation_promoted of {
       user_id : int;
       community_id : int;
-      community_slug : string;
+      community_slug : string option;
       channel_id : int;
-      channel_slug : string;
+      channel_slug : string option;
       section_id : int option;
       post_id : int;
       message_id : int64;  (** seed chat message *)
@@ -103,6 +109,11 @@ val account_deletion_distinct_id : string
     numeric id, never the mutable slug). Used by server payloads and by the
     browser group attribute rendered in the layout. *)
 val community_group_key : int -> string
+
+(** PostHog group_type_index of the "community" group type — the project's
+    first (and only) group type (§5.3), hence [0]. Consumed by the §13
+    Groups-API cleanup client. *)
+val community_group_type_index : int
 
 (** Strictly public browser configuration: the write-only project token and
     the ingest host, nothing else. [None] when analytics is disabled or the

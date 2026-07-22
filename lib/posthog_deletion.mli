@@ -27,6 +27,25 @@ val default_batch_limit : int
     deletes anyone. *)
 val attempt_person_deletion : distinct_id:string -> (unit, string) result Lwt.t
 
+(** The closed set of group properties the §13 privacy scrub removes from a
+    fully private community's PostHog group profile. Property KEYS only —
+    values (names, slugs) never enter requests, jobs, or logs. *)
+val group_cleanup_targets : string list
+
+(** One bounded, idempotent §13 scrub attempt against the private Groups API:
+    read the group ([GET /groups/find/]), then delete whichever
+    [group_cleanup_targets] are still present
+    ([POST /groups/delete_property/], body [{"$unset": <key>}] — the
+    documented removal mechanism; [$groupidentify] has no unset operation).
+
+    [Ok ()] = the job may be marked completed: every target is gone, was
+    never there, or the group does not exist in PostHog at all (404 on find).
+    [Error class] = the job must remain pending; [class] is one of the
+    bounded diagnostics (missing_configuration, timeout, network_error,
+    group_lookup_http_<n>, malformed_group_response, group_delete_http_<n>).
+    Never raises. *)
+val attempt_group_cleanup : group_key:string -> (unit, string) result Lwt.t
+
 (** Runs one ALREADY-CLAIMED job: performs the HTTP attempt, then persists the
     outcome through the provided callbacks (each is expected to run its own
     short DB operation). Never raises; marking failures are logged and
@@ -37,6 +56,15 @@ val process_claimed_job :
   distinct_id:string ->
   [ `Completed | `Left_pending of string ] Lwt.t
 
+(** [process_claimed_job]'s exact counterpart for an already-claimed §13
+    group-cleanup job: one [attempt_group_cleanup], outcome persisted through
+    the callbacks. Never raises. *)
+val process_claimed_group_job :
+  mark_completed:(unit -> (unit, string) result Lwt.t) ->
+  mark_failed:(string -> (unit, string) result Lwt.t) ->
+  group_key:string ->
+  [ `Completed | `Left_pending of string ] Lwt.t
+
 type batch_summary = { claimed : int; completed : int; left_pending : int }
 
 (** Claims a bounded batch through [claim] and processes each job with exactly
@@ -44,6 +72,16 @@ type batch_summary = { claimed : int; completed : int; left_pending : int }
     processed sequentially in the order [claim] returns them (oldest first).
     Used by the maintenance executable and by tests. *)
 val process_batch :
+  claim:(unit -> ((int * string) list, string) result Lwt.t) ->
+  mark_completed:(int -> (unit, string) result Lwt.t) ->
+  mark_failed:(int -> string -> (unit, string) result Lwt.t) ->
+  unit ->
+  (batch_summary, string) result Lwt.t
+
+(** [process_batch] over §13 group-cleanup jobs ([(job_id, group_key)] rows
+    from [Db.claim_posthog_group_cleanup_batch]) — the same bounded, durable
+    retry mechanism, not a second system. *)
+val process_group_batch :
   claim:(unit -> ((int * string) list, string) result Lwt.t) ->
   mark_completed:(int -> (unit, string) result Lwt.t) ->
   mark_failed:(int -> string -> (unit, string) result Lwt.t) ->
