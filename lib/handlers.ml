@@ -4059,12 +4059,13 @@ let manage_mods_remove_handler request =
 
 (* === MIDDLEWARE === *)
 
-(* Skip dashboard and unread-notifs paths: dashboard reads page_view data (recursive
-   self-counting); unread-notifs is polled every page load and would inflate counts. *)
-let analytics_middleware inner_handler request =
-  let path = Dream.target request in
-  let user_id_opt = Dream.session_field request "user_id" in
-
+(* Shared eligibility gate for both the presence touch and page-view logging.
+   Pure. Skips the admin dashboard (reads page_view data — recursive
+   self-counting), /api/unread-notifs (polled every page load — would inflate
+   counts and keep idle users "active"), static assets, and bot user agents.
+   Both middlewares must use this same decision so presence keeps the exact
+   pre-extraction touch semantics. *)
+let is_tracked_request ~path ~user_agent =
   (* Static asset filter: log only meaningful page navigations, not asset fetches. *)
   let is_static =
     let has_prefix p = String.length path >= String.length p && String.sub path 0 (String.length p) = p in
@@ -4080,7 +4081,7 @@ let analytics_middleware inner_handler request =
 
   (* Bot filter: skip synthetic traffic that inflates page-view counts. *)
   let is_bot =
-    match Dream.header request "User-Agent" with
+    match user_agent with
     | None -> false
     | Some ua ->
         let lc = String.lowercase_ascii ua in
@@ -4098,16 +4099,41 @@ let analytics_middleware inner_handler request =
         contains "bot" || contains "crawler" || contains "spider" || contains "scraper"
   in
 
+  let is_admin_route =
+    (* Exclude admin-only routes to prevent self-inflating page-view counts when admins
+       refresh the dashboard. Uses prefix match to cover query-string variants too. *)
+    let admin_prefix = "/earde-hq-dashboard" in
+    let plen = String.length path and alen = String.length admin_prefix in
+    (plen >= alen && String.sub path 0 alen = admin_prefix
+     && (plen = alen || path.[alen] = '?' || path.[alen] = '/'))
+  in
+  not (is_admin_route || path = "/api/unread-notifs" || is_static || is_bot)
+
+(* Presence, not analytics: sole writer of users.last_active_at, which moderator
+   auto-demotion (Db.demote_inactive_mods) reads. Kept separate from
+   analytics_middleware so replacing the page-view system cannot break it, but
+   gated on the same is_tracked_request decision so the touch fires exactly
+   where the old in-analytics touch did (never on polling/asset/bot requests).
+   Best-effort — the touch result is ignored, so a failed update never fails
+   the user's request. *)
+let presence_middleware inner_handler request =
+  let%lwt () =
+    match Dream.session_field request "user_id" with
+    | Some uid_str
+      when is_tracked_request ~path:(Dream.target request)
+             ~user_agent:(Dream.header request "User-Agent") ->
+        Dream.sql request (fun db ->
+          let%lwt _ = Db.touch_user_active db (int_of_string uid_str) in
+          Lwt.return_unit)
+    | _ -> Lwt.return_unit
+  in
+  inner_handler request
+
+let analytics_middleware inner_handler request =
+  let path = Dream.target request in
   let%lwt _ =
-    let is_admin_route =
-      (* Exclude admin-only routes to prevent self-inflating page-view counts when admins
-         refresh the dashboard. Uses prefix match to cover query-string variants too. *)
-      let admin_prefix = "/earde-hq-dashboard" in
-      let plen = String.length path and alen = String.length admin_prefix in
-      (plen >= alen && String.sub path 0 alen = admin_prefix
-       && (plen = alen || path.[alen] = '?' || path.[alen] = '/'))
-    in
-    if is_admin_route || path = "/api/unread-notifs" || is_static || is_bot
+    if not (is_tracked_request ~path
+              ~user_agent:(Dream.header request "User-Agent"))
     then Lwt.return_unit
     else begin
       (* Sanitize referer: keep only host to avoid leaking tokens in paths/query strings. *)
@@ -4134,11 +4160,7 @@ let analytics_middleware inner_handler request =
       let session_hash = Digest.to_hex (Digest.string (ip ^ ua ^ date)) in
       Dream.sql request (fun db ->
         let%lwt _ = Db.log_page_view db path referer session_hash in
-        match user_id_opt with
-        | Some uid_str ->
-            let%lwt _ = Db.touch_user_active db (int_of_string uid_str) in
-            Lwt.return_unit
-        | None -> Lwt.return_unit
+        Lwt.return_unit
       )
     end
   in

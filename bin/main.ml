@@ -96,6 +96,10 @@ let () =
      persistence. memory_sessions is zero-latency but loses all sessions on
      every systemd restart, forcing mass re-login. *)
   @@ Dream.sql_sessions
+  (* Inside sql_pool + sql_sessions: needs Dream.sql and the session's user_id.
+     Separate from analytics_middleware so removing page-view analytics later
+     cannot take last_active_at (moderator auto-demotion input) down with it. *)
+  @@ Earde.Handlers.presence_middleware
   @@ Earde.Handlers.analytics_middleware
   @@ restore_token_target_middleware
   @@ Dream.router [

@@ -2338,16 +2338,6 @@ module Analytics = struct
     | Ok () -> Lwt.return (Ok ())
     | Error e -> Lwt.return (Error (Caqti_error.show e))
 
-  let touch_user_active_query =
-    let open Caqti_request.Infix in
-    (Caqti_type.int ->. Caqti_type.unit)
-    "UPDATE users SET last_active_at = CURRENT_TIMESTAMP WHERE id = $1"
-
-  let touch_user_active (module C: Caqti_lwt.CONNECTION) user_id =
-    C.exec touch_user_active_query user_id >>= function
-    | Ok () -> Lwt.return (Ok ())
-    | Error e -> Lwt.return (Error (Caqti_error.show e))
-
   (* 5 scalar columns fit in t2(t3, t2) — no arity overflow.
      end_date is inclusive: we shift it to the next day's midnight with ::date + INTERVAL '1 day'
      so that "2026-03-23" captures all events on that calendar day. *)
@@ -2410,6 +2400,21 @@ module Analytics = struct
   let get_dau_mau_ratio (module C: Caqti_lwt.CONNECTION) ~start_date ~end_date =
     C.find get_dau_mau_ratio_query (start_date, end_date) >>= function
     | Ok res -> Lwt.return (Ok res)
+    | Error e -> Lwt.return (Error (Caqti_error.show e))
+end
+
+(* Presence is operational state, not analytics: last_active_at is read by
+   Moderator.demote_inactive_mods, so this must survive any replacement of the
+   page-view analytics system. *)
+module Presence = struct
+  let touch_user_active_query =
+    let open Caqti_request.Infix in
+    (Caqti_type.int ->. Caqti_type.unit)
+    "UPDATE users SET last_active_at = CURRENT_TIMESTAMP WHERE id = $1"
+
+  let touch_user_active (module C: Caqti_lwt.CONNECTION) user_id =
+    C.exec touch_user_active_query user_id >>= function
+    | Ok () -> Lwt.return (Ok ())
     | Error e -> Lwt.return (Error (Caqti_error.show e))
 end
 
@@ -3158,9 +3163,10 @@ let get_comment_owner = Notification.get_comment_owner
 let get_comment_post_id = Notification.get_comment_post_id
 
 let log_page_view = Analytics.log_page_view
-let touch_user_active = Analytics.touch_user_active
 let get_kpi_dashboard = Analytics.get_kpi_dashboard
 let get_dau_mau_ratio = Analytics.get_dau_mau_ratio
+
+let touch_user_active = Presence.touch_user_active
 
 let update_password = Security.update_password
 let verify_email = Security.verify_email

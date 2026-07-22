@@ -1,6 +1,7 @@
 (** HTTP layer. Every route in main.ml maps 1-to-1 to a value here.
     Handlers own auth checks, session reads, and DB fan-out; rendering is
-    delegated to Pages. analytics_middleware is a Dream middleware, not a handler. *)
+    delegated to Pages. presence_middleware and analytics_middleware are Dream
+    middlewares, not handlers. *)
 
 (** === RATE LIMITING === *)
 module Rate_limit : sig
@@ -151,4 +152,5 @@ val admin_dashboard_handler : Dream.handler
 val debug_state_handler : Dream.handler
 
 (** === MIDDLEWARE === *)
+val presence_middleware : Dream.handler -> Dream.handler
 val analytics_middleware : Dream.handler -> Dream.handler
