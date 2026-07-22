@@ -361,10 +361,12 @@ let consent_grant_person_sync request =
                     Db.get_user_analytics_props db user_id)
               in
               match props with
-              | Ok (Some (username, email, signup_date, is_admin)) ->
+              | Ok (Some (username, _email, signup_date, is_admin)) ->
+                  (* Email is deliberately excluded from the closed person
+                     properties — it never reaches PostHog. *)
                   Analytics.sync_person_after_consent_grant
                     ~distinct_id:(Analytics.distinct_id_of_user_id user_id)
-                    { Analytics.username; email; signup_date; is_admin };
+                    { Analytics.username; signup_date; is_admin };
                   Lwt.return_unit
               | Ok None -> Lwt.return_unit
               | Error e ->
@@ -457,18 +459,18 @@ let confirm_email_handler request =
         Dream.sql request (fun db -> Db.pending_signup_confirm db token_hash)
       in
       (match result with
-        | Ok (`Confirmed (user_id, username, email, created_at, is_admin)) ->
+        | Ok (`Confirmed (user_id, username, _email, created_at, is_admin)) ->
             (* The confirmation transaction returned the closed person
                properties with the insert, so the capture needs no lookup. A
                confirmation link opened without granted consent emits
-               nothing. *)
+               nothing. Email never enters the analytics payload. *)
             Analytics.capture_if_consented request
               ~distinct_id:(Analytics.distinct_id_of_user_id user_id)
-              (Analytics.Signup_confirmed
+              (Analytics.Account_signed_up
                  {
                    user_id;
                    person =
-                     { Analytics.username; email; signup_date = created_at; is_admin };
+                     { Analytics.username; signup_date = created_at; is_admin };
                  });
             Dream.html (Pages.msg_page ~auth:true ~title:"Email Confirmed!" ~message:(Printf.sprintf "Your account u/%s is now active. You can log in." username) ~alert_type:"success" ~return_url:"/login" request)
         | Ok `Invalid ->
@@ -495,7 +497,7 @@ let login_handler request =
         Dream.sql request (fun db -> Db.get_user_for_login db identifier)
       in
       (match lookup with
-        | Ok (Some ((id, user, email, created_at), (hash, is_admin, is_banned))) ->
+        | Ok (Some ((id, user, _email, created_at), (hash, is_admin, is_banned))) ->
             (* Argon2 verification runs after the lookup's connection is back
                in the pool — CPU-bound work must not hold a connection open
                (same rule as reset_password_handler). *)
@@ -512,11 +514,11 @@ let login_handler request =
                      the consent cookie the gate reads. *)
                   Analytics.capture_if_consented request
                     ~distinct_id:(Analytics.distinct_id_of_user_id id)
-                    (Analytics.Login_succeeded
+                    (Analytics.Account_logged_in
                        {
                          user_id = id;
                          person =
-                           { Analytics.username = user; email; signup_date = created_at; is_admin };
+                           { Analytics.username = user; signup_date = created_at; is_admin };
                        });
                   Dream.redirect request "/"
               | _ -> Dream.html (Pages.msg_page ~auth:true ~title:"Login Failed" ~message:"Invalid username or password." ~alert_type:"error" ~return_url:"/login" request))
@@ -1712,7 +1714,7 @@ let start_thread_create_handler request =
                                                        record (fun () ->
                                                            Analytics.capture_if_consented request
                                                              ~distinct_id:(Analytics.distinct_id_of_user_id user_id)
-                                                             (Analytics.Thread_promoted
+                                                             (Analytics.Conversation_promoted
                                                                 {
                                                                   user_id;
                                                                   community_id = community.Db.id;
@@ -2557,7 +2559,7 @@ let create_post_handler request =
                               record (fun () ->
                                   Analytics.capture_if_consented request
                                     ~distinct_id:(Analytics.distinct_id_of_user_id user_id)
-                                    (Analytics.Post_created
+                                    (Analytics.Forum_thread_created
                                        {
                                          user_id;
                                          community_id;
@@ -3335,7 +3337,7 @@ let create_comment_handler request =
                         record (fun () ->
                             Analytics.capture_if_consented request
                               ~distinct_id:(Analytics.distinct_id_of_user_id user_id)
-                              (Analytics.Comment_created
+                              (Analytics.Forum_comment_created
                                  {
                                    user_id;
                                    community_id = post.community_id;

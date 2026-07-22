@@ -9,11 +9,12 @@
     the calling request. *)
 
 (** Closed person-property record (§4.3). Emitted only as the [$set] object —
-    on [Signup_confirmed] / [Login_succeeded] payloads and in
-    [sync_person_after_consent_grant] — never as ordinary event properties. *)
+    on [Account_signed_up] / [Account_logged_in] payloads and in
+    [sync_person_after_consent_grant] — never as ordinary event properties.
+    Deliberately contains no email: the stable identity is
+    ["user:<database_id>"] and email is never sent to PostHog. *)
 type person_properties = {
   username : string;
-  email : string;
   signup_date : string;  (** ISO 8601 *)
   is_admin : bool;
 }
@@ -33,9 +34,10 @@ type response_mode = Response_json | Response_redirect
     allowlist: handlers cannot attach arbitrary properties, bodies, titles,
     emails, or tokens. *)
 type event =
-  | Signup_confirmed of { user_id : int; person : person_properties }
-      (** carries [$set] — refreshes person properties server-side (§4.3) *)
-  | Login_succeeded of { user_id : int; person : person_properties }
+  | Account_signed_up of { user_id : int; person : person_properties }
+      (** fired only after the confirmation link creates the real users row;
+          carries [$set] — refreshes person properties server-side (§4.3) *)
+  | Account_logged_in of { user_id : int; person : person_properties }
       (** carries [$set] — refreshes person properties server-side (§4.3) *)
   | Community_joined of {
       user_id : int;
@@ -54,7 +56,7 @@ type event =
       content_length : int;
       response_mode : response_mode;
     }
-  | Post_created of {
+  | Forum_thread_created of {
       user_id : int;
       community_id : int;
       section_id : int option;
@@ -63,7 +65,7 @@ type event =
       has_link : bool;
       has_mention : bool;
     }
-  | Comment_created of {
+  | Forum_comment_created of {
       user_id : int;
       community_id : int;
       post_id : int;
@@ -72,7 +74,7 @@ type event =
       content_length : int;
       has_mention : bool;
     }
-  | Thread_promoted of {
+  | Conversation_promoted of {
       user_id : int;
       community_id : int;
       community_slug : string;

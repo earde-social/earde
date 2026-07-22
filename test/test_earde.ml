@@ -761,16 +761,17 @@ let consent_request = function
   | Some cookie -> Dream.request ~headers:[ ("Cookie", cookie) ] ""
 
 let an_person =
-  { An.username = "alice"; email = "alice@example.com";
+  { An.username = "alice";
     signup_date = "2026-01-01T00:00:00Z"; is_admin = false }
 
-let an_login = An.Login_succeeded { user_id = 7; person = an_person }
+let an_login = An.Account_logged_in { user_id = 7; person = an_person }
 
-(* The exact closed $set object an_person must serialize to. *)
+(* The exact closed $set object an_person must serialize to — email-free by
+   contract: the stable identity is user:<id> and email never reaches
+   PostHog. *)
 let an_person_set : Yojson.Safe.t =
   `Assoc
     [ ("username", `String "alice")
-    ; ("email", `String "alice@example.com")
     ; ("signup_date", `String "2026-01-01T00:00:00Z")
     ; ("is_admin", `Bool false)
     ]
@@ -787,8 +788,8 @@ let check_gate name expected_count cookie =
 (* One instance of every event constructor, used for payload/allowlist tests. *)
 let an_all_events =
   [
-    ("signup_confirmed", An.Signup_confirmed { user_id = 1; person = an_person });
-    ("login_succeeded", An.Login_succeeded { user_id = 1; person = an_person });
+    ("account_signed_up", An.Account_signed_up { user_id = 1; person = an_person });
+    ("account_logged_in", An.Account_logged_in { user_id = 1; person = an_person });
     ( "community_joined",
       An.Community_joined
         { user_id = 1; community_id = 7; community_slug = "ocaml";
@@ -799,16 +800,16 @@ let an_all_events =
         { user_id = 1; community_id = 7; community_slug = "ocaml";
           channel_id = 3; channel_slug = "general"; message_id = 91L;
           content_length = 42; response_mode = An.Response_json } );
-    ( "post_created",
-      An.Post_created
+    ( "forum_thread_created",
+      An.Forum_thread_created
         { user_id = 1; community_id = 7; section_id = Some 2; post_id = 10;
           content_length = 100; has_link = true; has_mention = false } );
-    ( "comment_created",
-      An.Comment_created
+    ( "forum_comment_created",
+      An.Forum_comment_created
         { user_id = 1; community_id = 7; post_id = 10; comment_id = 55;
           parent_comment_id = None; content_length = 9; has_mention = true } );
-    ( "thread_promoted",
-      An.Thread_promoted
+    ( "conversation_promoted",
+      An.Conversation_promoted
         { user_id = 1; community_id = 7; community_slug = "ocaml";
           channel_id = 3; channel_slug = "general"; section_id = None;
           post_id = 11; message_id = 91L; promoted_message_count = 4;
@@ -973,8 +974,11 @@ let consent_sync_db_case =
                       (match List.assoc_opt "username" set with
                        | Some (`String u) -> Some u
                        | _ -> None);
-                    Alcotest.(check bool) "email present" true
-                      (List.mem_assoc "email" set)
+                    Alcotest.(check bool) "email absent" false
+                      (List.mem_assoc "email" set);
+                    Alcotest.(check (slist string compare)) "sync $set keys"
+                      [ "username"; "signup_date"; "is_admin" ]
+                      (List.map fst set)
                 | _ -> Alcotest.fail "sync payload has no $set")
            | l ->
                Alcotest.failf "expected exactly 1 sync, got %d" (List.length l));
@@ -1228,7 +1232,7 @@ module Step6_events = struct
     | _ -> Alcotest.failf "%s: payload has no $set" name
 
   let signup_case =
-    db_case "signup_confirmed once with closed $set; invalid/unconsented silent"
+    db_case "account_signed_up once with closed $set; invalid/unconsented silent"
       (fun ~url _conn c ->
         let (module C : Caqti_lwt.CONNECTION) = c in
         let hash tok = Earde.Db.pending_signup_hash_token tok in
@@ -1241,11 +1245,11 @@ module Step6_events = struct
         Alcotest.(check int) "confirm status" 200 status;
         (match payloads with
          | [ p ] ->
-             Alcotest.(check string) "event" "signup_confirmed" (event_of p);
+             Alcotest.(check string) "event" "account_signed_up" (event_of p);
              Alcotest.(check (slist string compare))
                "props keys" [ "user_id"; "$set" ] (prop_keys p);
              check_set_keys "closed $set"
-               [ "username"; "email"; "signup_date"; "is_admin" ] p;
+               [ "username"; "signup_date"; "is_admin" ] p;
              (match List.assoc_opt "$set" (payload_props p) with
               | Some (`Assoc set) ->
                   Alcotest.(check (option string)) "$set username"
@@ -1282,7 +1286,7 @@ module Step6_events = struct
         Lwt.return_unit)
 
   let login_case =
-    db_case "login_succeeded once with closed $set; bad password silent"
+    db_case "account_logged_in once with closed $set; bad password silent"
       (fun ~url _conn c ->
         let (module C : Caqti_lwt.CONNECTION) = c in
         let* hash = Earde.Auth.hash_password "step6 password" in
@@ -1298,14 +1302,14 @@ module Step6_events = struct
         Alcotest.(check bool) "login redirects" true (is_redirect status);
         (match payloads with
          | [ p ] ->
-             Alcotest.(check string) "event" "login_succeeded" (event_of p);
+             Alcotest.(check string) "event" "account_logged_in" (event_of p);
              Alcotest.(check string) "distinct id"
                ("user:" ^ string_of_int uid) (distinct_of p);
              Alcotest.(check (slist string compare))
                "person fields only inside $set" [ "user_id"; "$set" ]
                (prop_keys p);
              check_set_keys "closed $set"
-               [ "username"; "email"; "signup_date"; "is_admin" ] p
+               [ "username"; "signup_date"; "is_admin" ] p
          | l -> Alcotest.failf "expected 1 login event, got %d" (List.length l));
         let* status, payloads =
           run_handler ~url ~target:"/login"
@@ -1567,7 +1571,7 @@ module Step6_events = struct
         Lwt.return_unit)
 
   let post_case =
-    db_case "post_created once on success; non-member silent"
+    db_case "forum_thread_created once on success; non-member silent"
       (fun ~url conn c ->
         let (module C : Caqti_lwt.CONNECTION) = c in
         let* uid = C.find q_insert_user ("step6_poster", "x") in
@@ -1590,7 +1594,7 @@ module Step6_events = struct
         Alcotest.(check bool) "post redirects" true (is_redirect status);
         (match payloads with
          | [ p ] ->
-             Alcotest.(check string) "event" "post_created" (event_of p);
+             Alcotest.(check string) "event" "forum_thread_created" (event_of p);
              Alcotest.(check (slist string compare))
                "props keys (no title/body/url)"
                [ "user_id"; "community_id"; "post_id"; "content_length";
@@ -1616,7 +1620,7 @@ module Step6_events = struct
         Lwt.return_unit)
 
   let comment_case =
-    db_case "comment_created carries the real RETURNING comment id"
+    db_case "forum_comment_created carries the real RETURNING comment id"
       (fun ~url _conn c ->
         let (module C : Caqti_lwt.CONNECTION) = c in
         let* uid = C.find q_insert_user ("step6_commenter", "x") in
@@ -1637,7 +1641,7 @@ module Step6_events = struct
         Alcotest.(check bool) "comment redirects" true (is_redirect status);
         (match payloads with
          | [ p ] ->
-             Alcotest.(check string) "event" "comment_created" (event_of p);
+             Alcotest.(check string) "event" "forum_comment_created" (event_of p);
              Alcotest.(check (slist string compare))
                "props keys (top-level comment: no parent_comment_id)"
                [ "user_id"; "community_id"; "post_id"; "comment_id";
@@ -1657,7 +1661,7 @@ module Step6_events = struct
         )
 
   let promote_case =
-    db_case "thread_promoted once with counts and group key"
+    db_case "conversation_promoted once with counts and group key"
       (fun ~url conn c ->
         let (module C : Caqti_lwt.CONNECTION) = c in
         let* uid = C.find q_insert_user ("step6_promoter", "x") in
@@ -1698,7 +1702,7 @@ module Step6_events = struct
         Alcotest.(check bool) "promotion redirects" true (is_redirect status);
         (match payloads with
          | [ p ] ->
-             Alcotest.(check string) "event" "thread_promoted" (event_of p);
+             Alcotest.(check string) "event" "conversation_promoted" (event_of p);
              Alcotest.(check string) "distinct"
                ("user:" ^ string_of_int uid) (distinct_of p);
              Alcotest.(check (slist string compare))
@@ -3092,7 +3096,7 @@ let () =
               match captured with
               | [ payload ] ->
                   Alcotest.(check (option string)) "event"
-                    (Some "login_succeeded")
+                    (Some "account_logged_in")
                     (match payload_member "event" payload with
                      | Some (`String s) -> Some s
                      | _ -> None);
@@ -3109,11 +3113,11 @@ let () =
       , List.map
           (fun (name, event) -> check_event_name ("name " ^ name) name event)
           an_all_events
-        @ [ check_keys "signup_confirmed keys (incl. $set)"
-              (List.assoc "signup_confirmed" an_all_events)
+        @ [ check_keys "account_signed_up keys (incl. $set)"
+              (List.assoc "account_signed_up" an_all_events)
               [ "user_id"; "$set" ]
-          ; check_keys "login_succeeded keys (incl. $set)"
-              (List.assoc "login_succeeded" an_all_events)
+          ; check_keys "account_logged_in keys (incl. $set)"
+              (List.assoc "account_logged_in" an_all_events)
               [ "user_id"; "$set" ]
           ; check_keys "community_joined keys"
               (List.assoc "community_joined" an_all_events)
@@ -3127,16 +3131,16 @@ let () =
               [ "user_id"; "community_id"; "community_slug"; "channel_id";
                 "channel_slug"; "message_id"; "content_length";
                 "response_mode"; "$groups" ]
-          ; check_keys "post_created keys"
-              (List.assoc "post_created" an_all_events)
+          ; check_keys "forum_thread_created keys"
+              (List.assoc "forum_thread_created" an_all_events)
               [ "user_id"; "community_id"; "section_id"; "post_id";
                 "content_length"; "has_link"; "has_mention"; "$groups" ]
-          ; check_keys "comment_created keys (no parent -> omitted)"
-              (List.assoc "comment_created" an_all_events)
+          ; check_keys "forum_comment_created keys (no parent -> omitted)"
+              (List.assoc "forum_comment_created" an_all_events)
               [ "user_id"; "community_id"; "post_id"; "comment_id";
                 "content_length"; "has_mention"; "$groups" ]
-          ; check_keys "thread_promoted keys (no section -> omitted)"
-              (List.assoc "thread_promoted" an_all_events)
+          ; check_keys "conversation_promoted keys (no section -> omitted)"
+              (List.assoc "conversation_promoted" an_all_events)
               [ "user_id"; "community_id"; "community_slug"; "channel_id";
                 "channel_slug"; "post_id"; "message_id";
                 "promoted_message_count"; "promoted_participant_count";
@@ -3183,37 +3187,84 @@ let () =
                           bad)
                     forbidden)
                 an_all_events)
-        ; an_case "$set only on signup_confirmed and login_succeeded" (fun () ->
+        ; an_case "$set only on account_signed_up and account_logged_in" (fun () ->
               List.iter
                 (fun (name, event) ->
                   let has_set =
                     List.mem_assoc "$set" (payload_props (an_payload event))
                   in
                   let expected =
-                    name = "signup_confirmed" || name = "login_succeeded"
+                    name = "account_signed_up" || name = "account_logged_in"
                   in
                   if has_set <> expected then
                     Alcotest.failf "%s: unexpected $set presence (%b)" name
                       has_set)
                 an_all_events)
-        ; an_case "signup_confirmed $set is exactly the closed person record"
+        ; an_case "account_signed_up $set is exactly the closed person record"
             (fun () ->
               match
                 List.assoc_opt "$set"
                   (payload_props
-                     (an_payload (List.assoc "signup_confirmed" an_all_events)))
+                     (an_payload (List.assoc "account_signed_up" an_all_events)))
               with
               | Some set -> Alcotest.check yojson "signup $set" an_person_set set
-              | None -> Alcotest.fail "signup_confirmed has no $set")
-        ; an_case "login_succeeded $set is exactly the closed person record"
+              | None -> Alcotest.fail "account_signed_up has no $set")
+        ; an_case "account_logged_in $set is exactly the closed person record"
             (fun () ->
               match
                 List.assoc_opt "$set"
                   (payload_props
-                     (an_payload (List.assoc "login_succeeded" an_all_events)))
+                     (an_payload (List.assoc "account_logged_in" an_all_events)))
               with
               | Some set -> Alcotest.check yojson "login $set" an_person_set set
-              | None -> Alcotest.fail "login_succeeded has no $set")
+              | None -> Alcotest.fail "account_logged_in has no $set")
+          (* Pivot taxonomy invariants: the canonical closed name set (no
+             pre-rename name, no not-yet-implemented GitHub onboarding
+             event) and the email-free person contract on every $set-bearing
+             payload, including the consent-transition sync. *)
+        ; an_case "server taxonomy is exactly the canonical closed set"
+            (fun () ->
+              Alcotest.(check (slist string compare))
+                "emitted event names"
+                [ "account_signed_up"; "account_logged_in"; "community_joined";
+                  "community_left"; "chat_message_sent";
+                  "forum_thread_created"; "forum_comment_created";
+                  "conversation_promoted"; "account_deleted" ]
+                (List.map
+                   (fun (_, event) ->
+                     match payload_member "event" (an_payload event) with
+                     | Some (`String name) -> name
+                     | _ -> "<missing>")
+                   an_all_events))
+        ; an_case "no obsolete pre-pivot event name is ever emitted" (fun () ->
+              let obsolete =
+                [ "signup_confirmed"; "login_succeeded"; "post_created";
+                  "comment_created"; "thread_promoted" ]
+              in
+              List.iter
+                (fun (label, event) ->
+                  match payload_member "event" (an_payload event) with
+                  | Some (`String name) ->
+                      if List.mem name obsolete then
+                        Alcotest.failf "%s emits obsolete name %s" label name
+                  | _ -> Alcotest.failf "%s: payload has no event name" label)
+                an_all_events)
+        ; an_case "person $set never contains email" (fun () ->
+              let check_set label payload =
+                match List.assoc_opt "$set" (payload_props payload) with
+                | Some (`Assoc set) ->
+                    if List.mem_assoc "email" set then
+                      Alcotest.failf "%s: $set contains email" label
+                | Some _ -> Alcotest.failf "%s: $set is not an object" label
+                | None -> Alcotest.failf "%s: no $set" label
+              in
+              check_set "account_signed_up"
+                (an_payload (List.assoc "account_signed_up" an_all_events));
+              check_set "account_logged_in"
+                (an_payload (List.assoc "account_logged_in" an_all_events));
+              check_set "consent sync"
+                (AnT.person_sync_payload ~api_key:"phc_test"
+                   ~distinct_id:"user:1" an_person))
         ] )
       (* $groups.community rides on community-scoped events only (§5.3). *)
     ; ( "analytics_groups"
@@ -3224,15 +3275,15 @@ let () =
         ; check_group "chat has group" (Some "community:7")
             (List.assoc "chat_message_sent" an_all_events)
         ; check_group "post has group" (Some "community:7")
-            (List.assoc "post_created" an_all_events)
+            (List.assoc "forum_thread_created" an_all_events)
         ; check_group "comment has group" (Some "community:7")
-            (List.assoc "comment_created" an_all_events)
+            (List.assoc "forum_comment_created" an_all_events)
         ; check_group "promoted has group" (Some "community:7")
-            (List.assoc "thread_promoted" an_all_events)
+            (List.assoc "conversation_promoted" an_all_events)
         ; check_group "signup has no group" None
-            (List.assoc "signup_confirmed" an_all_events)
+            (List.assoc "account_signed_up" an_all_events)
         ; check_group "login has no group" None
-            (List.assoc "login_succeeded" an_all_events)
+            (List.assoc "account_logged_in" an_all_events)
         ; check_group "deletion has no group" None An.Account_deleted
         ] )
       (* Consent-transition sync: the dedicated $identify payload with the
@@ -3329,7 +3380,7 @@ let () =
                       (consent_request (Some "earde_analytics_consent=granted"))
                       ~distinct_id:"user:7" an_login;
                     An.sync_person_after_consent_grant ~distinct_id:"user:7"
-                      { An.username = "a"; email = "a@a"; signup_date = "";
+                      { An.username = "a"; signup_date = "";
                         is_admin = false })
               in
               Alcotest.(check int) "no captures" 0 (List.length captured))
@@ -3345,7 +3396,7 @@ let () =
                     (consent_request (Some "earde_analytics_consent=granted"))
                     ~distinct_id:"user:7" an_login;
                   An.sync_person_after_consent_grant ~distinct_id:"user:7"
-                    { An.username = "a"; email = "a@a"; signup_date = "";
+                    { An.username = "a"; signup_date = "";
                       is_admin = false });
               Alcotest.(check bool) "no exception escaped" true true)
         ; an_case "test config report exposes presence booleans only" (fun () ->

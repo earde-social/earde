@@ -191,14 +191,14 @@ logout-adjacent flows, before `Dream.invalidate_session`.
 
 | Event | Handler | Success anchor | Notes |
 |---|---|---|---|
-| `signup_confirmed` | `confirm_email_handler` `lib/handlers.ml:338` | `` `Confirmed`` arm `:346` | Requires `Db.pending_signup_confirm` to also return the new user id (§5.2) — today only the username is in scope. No session exists here; distinct ID comes from the returned id. **The confirmation link may be opened in a different browser or device than the one that consented; if the consent cookie is absent there, `signup_confirmed` is not captured.** Accepted gap: the person is then first created at `login_succeeded`. |
-| `login_succeeded` | `login_handler` `:360` | after checks pass, at session-set `:377–379` | `id`, `is_admin` in scope |
+| `account_signed_up` | `confirm_email_handler` `lib/handlers.ml:338` | `` `Confirmed`` arm `:346` | **Exact semantics: fires only after the email-confirmation transaction (`Db.pending_signup_confirm`) creates the real `users` row** — email confirmed *and* database account created together; never on signup-request submission and never on first login. No session exists here; the distinct ID comes from the id the transaction returns. **The confirmation link may be opened in a different browser or device than the one that consented; if the consent cookie is absent there, `account_signed_up` is not captured.** Accepted gap: the person is then first created at `account_logged_in`. |
+| `account_logged_in` | `login_handler` `:360` | after checks pass, at session-set `:377–379` | `id`, `is_admin` in scope |
 | `community_joined` | `join_community_handler` `:1541` | `:1564–1565` | full `community` record in scope (id, slug, visibility) |
 | `community_left` | `leave_community_handler` `:1570` | `:1582–1583` | only numeric `community_id` in scope; v1 sends id without slug |
 | `chat_message_sent` | `send_message_handler` `:1222` | `Ok message` `:1284–1285` | single capture point covers **both** response branches (JSON at `:1303` / redirect at `:1310`); `response_mode` distinguishes them |
-| `post_created` | `create_post_handler` `:2211` | `:2305–2306` | mention fan-out at `:2308–2317` supplies `has_mention` |
-| `comment_created` | `create_comment_handler` `:3017` | `:3068–3069` | requires `INSERT … RETURNING id` change (§5.2) to include `comment_id` |
-| `thread_promoted` | `start_thread_create_handler` `:1446` | `Ok post_id` `:1527–1528` | context message ids at `:1504` supply promoted counts |
+| `forum_thread_created` | `create_post_handler` `:2211` | `:2305–2306` | mention fan-out at `:2308–2317` supplies `has_mention` |
+| `forum_comment_created` | `create_comment_handler` `:3017` | `:3068–3069` | requires `INSERT … RETURNING id` change (§5.2) to include `comment_id` |
+| `conversation_promoted` | `start_thread_create_handler` `:1446` | `Ok post_id` `:1527–1528` | context message ids at `:1504` supply promoted counts |
 | `account_deleted` | `delete_account_handler` `:3755` | after the §3.3 transaction commits, **before** `invalidate_session` `:3765` | the handler's bare `Db.anonymize_user` call (`:3763`) is replaced by the atomic `Db.anonymize_user_and_enqueue_posthog_deletion` (§3.3); capture and the immediate deletion attempt both run only after that commit |
 
 Search is deliberately **not** a server event: it is a GET page render, covered by
@@ -343,15 +343,16 @@ Session state lives server-side (`Dream.sql_sessions`, fields set at
     `posthog.identify("user:<id>")`. Because every login ends in a 302 to a
     layout-rendered page, this runs on the **first page after login** and merges
     the anonymous browsing history into the person. The browser `identify()`
-    call carries **no `$set`** — person properties are set server-side (§4.3) so
-    email never transits the DOM or client-side JavaScript.
+    call carries **no `$set`** — person properties are set server-side (§4.3);
+    no personal value ever transits the DOM or client-side JavaScript for
+    analytics purposes.
   - attribute absent but the persisted distinct ID starts with `user:` → call
     `posthog.reset()`. This covers **logout** and **account deletion** (both 302
     to `/`, both rendered anonymous), with no event-time JS needed — but note
     that in production `/` is served by the **Wasp landing**, so the page that
     actually executes this reset is the landing's integration, not
     `analytics.js` (see the contract below).
-- `signup_confirmed` (server, `user:<id>`) creates the person before the first
+- `account_signed_up` (server, `user:<id>`) creates the person before the first
   login when consent allows (§3.2); the first post-login identify merges
   pre-signup anonymous activity into it.
 
@@ -380,15 +381,21 @@ After analytics consent and authenticated identification, these PostHog
 
 | Person property | Source |
 |---|---|
-| `username` | session / login lookup |
-| `email` | `users.email` — extend the login lookup to select it if not already |
+| `username` | session / login lookup (public site handle) |
 | `signup_date` | `users.created_at`, ISO 8601 |
 | `is_admin` | login lookup (`lib/handlers.ml:371`) |
 
+**Email is deliberately excluded** from the person-property contract and from
+every PostHog payload. The stable analytics identity is `user:<database_id>`
+(§4.1), which serves every identification need; no email, hashed email, or
+substitute identifier is ever sent to PostHog. Handlers that have the email in
+scope (signup confirmation, login lookup, consent sync) ignore it when
+building the closed `person_properties` record.
+
 Mechanics and rules:
 
-- They are attached **server-side** as `$set` on `signup_confirmed` (when
-  captured) and `login_succeeded` — inside `capture_if_consented`, so they are
+- They are attached **server-side** as `$set` on `account_signed_up` (when
+  captured) and `account_logged_in` — inside `capture_if_consented`, so they are
   consent-gated like everything else and are refreshed at each login.
 - They are additionally synchronized **immediately when consent is granted**:
   the `POST /analytics/consent` handler (§9) loads the current user's values and
@@ -400,10 +407,10 @@ Mechanics and rules:
 - They are **person properties, not event properties**: they never appear in the
   §5.1 custom-event allowlist, and handlers cannot attach them (closed variant).
 - They must never appear in session replay, autocapture element text, URLs, or
-  arbitrary event properties. Email is not rendered in the DOM outside the
-  masked admin table (§6), the browser never receives it for analytics purposes,
-  and the URL sanitizer (§2.3) already strips query strings where such values
-  could otherwise travel.
+  arbitrary event properties. Email — no longer a person property at all — is
+  not rendered in the DOM outside the masked admin table (§6), the browser
+  never receives it for analytics purposes, and the URL sanitizer (§2.3)
+  already strips query strings where such values could otherwise travel.
 - On account deletion they are removed with the person (§3.3).
 
 ## 5. Event properties
@@ -420,25 +427,26 @@ Permitted properties (per event, where applicable):
 | `community_id` | int | joined/left/chat/post/comment/promoted |
 | `community_slug` | string | joined/chat/promoted (in scope); omitted where only the id is in scope (left, post, comment) in v1 |
 | `community_visibility` | string | community_joined |
-| `channel_id` / `channel_slug` | int / string | chat_message_sent, thread_promoted |
-| `section_id` | int | post_created, thread_promoted |
-| `post_id` | int | post_created, comment_created, thread_promoted |
-| `comment_id` | int | comment_created (needs §5.2) |
-| `parent_comment_id` | int option | comment_created (top-level vs reply) |
-| `message_id` | int64 | chat_message_sent; seed message of thread_promoted |
-| `promoted_message_count` | int | thread_promoted (seed + context ids) |
-| `promoted_participant_count` | int | thread_promoted (distinct authors among promoted messages; if not derivable at `:1504`, extend `Db.start_thread_from_chat`'s return — otherwise omit in v1) |
+| `channel_id` / `channel_slug` | int / string | chat_message_sent, conversation_promoted |
+| `section_id` | int | forum_thread_created, conversation_promoted |
+| `post_id` | int | forum_thread_created, forum_comment_created, conversation_promoted |
+| `comment_id` | int | forum_comment_created (needs §5.2) |
+| `parent_comment_id` | int option | forum_comment_created (top-level vs reply) |
+| `message_id` | int64 | chat_message_sent; seed message of conversation_promoted |
+| `promoted_message_count` | int | conversation_promoted (seed + context ids) |
+| `promoted_participant_count` | int | conversation_promoted (distinct authors among promoted messages; if not derivable at `:1504`, extend `Db.start_thread_from_chat`'s return — otherwise omit in v1) |
 | `surface` | string | where the action originated (`feed`, `thread`, `chat`, `search`, `email_link`, …) |
 | `user_role` | string | `member` / `mod` / `top_mod` / `admin` where already in scope; no extra lookups |
 | `content_length` | int | chat/post/comment (length only) |
-| `has_link` | bool | post_created (url field present) |
-| `has_mention` | bool | post_created, comment_created |
+| `has_link` | bool | forum_thread_created (url field present) |
+| `has_mention` | bool | forum_thread_created, forum_comment_created |
 | `result_count` | int | search_performed (browser-side) |
 | `response_mode` | string | chat_message_sent: `json` \| `redirect` |
 
 Hard rule: **no chat, post, or comment bodies, no titles, no search query text, no
-emails, no tokens** in any custom event property. `username`, `email`,
-`signup_date`, `is_admin` are person properties (§4.3), never event properties.
+emails, no tokens** in any custom event property. `username`, `signup_date`,
+`is_admin` are person properties (§4.3), never event properties; email is not
+sent to PostHog at all.
 
 ### 5.2 Required DB-layer changes (additive)
 
@@ -447,7 +455,7 @@ emails, no tokens** in any custom event property. `username`, `email`,
   `Ok ()`. Update `db.mli` and the single call site.
 - `Db.pending_signup_confirm` (`lib/handlers.ml:345`): extend the success payload
   from `` `Confirmed of username`` to also carry the new user id (`RETURNING id`
-  on the user insert), so `signup_confirmed` can use `user:<id>`.
+  on the user insert), so `account_signed_up` can use `user:<id>`.
 
 Both are backward-compatible query changes, no migration needed.
 
@@ -464,8 +472,8 @@ Mechanics verified against current PostHog docs (read-only):
 
 **Server-side.** Backend capture is stateless, so group context is attached
 per event: every §3.2 event associated with a community (`community_joined`,
-`community_left`, `chat_message_sent`, `post_created`, `comment_created`,
-`thread_promoted`) carries, in its capture payload:
+`community_left`, `chat_message_sent`, `forum_thread_created`, `forum_comment_created`,
+`conversation_promoted`) carries, in its capture payload:
 
 ```json
 "$groups": { "community": "community:<id>" }
@@ -534,7 +542,7 @@ Gap-filling convention: where a private-content element has no stable class toda
 markup and include `.ph-mask` in `maskTextSelector`. Usernames elsewhere
 (`render_author`, `lib/components.ml:510`) remain visible: they are public handles.
 
-Person properties (§4.3 — including email) live only in the PostHog person
+Person properties (§4.3 — email-free by contract) live only in the PostHog person
 profile via server-side `$set`; they are never rendered into the DOM for
 analytics purposes and never appear in autocapture element text or URLs, so
 they create no new masking surface. The only emails in the DOM remain the admin
@@ -666,7 +674,7 @@ Earde state-changing routes retain their existing CSRF mechanism unchanged.**
 - On `granted`, when the request carries an authenticated Dream session: after `state`
   has been validated as exactly `granted` and the origin checks above have
   passed, the handler
-  loads the current user's analytics values (username, email, `created_at`,
+  loads the current user's analytics values (username, `created_at`,
   `is_admin`) and calls `sync_person_after_consent_grant` (§3.1). The
   request-inspecting `capture_if_consented` cannot be used here — the response
   `Set-Cookie` does not modify the current `Dream.request`, so at this moment
@@ -736,12 +744,12 @@ the existing `EARDE_TEST_DATABASE_URL` opt-in gate.
   restriction).
 - **Handler/event tests**: `lib/analytics.ml` exposes a test-only injectable sink
   so tests assert capture fires exactly once on the success arm and never on
-  validation/permission failures — covering at minimum `comment_created` (with the
+  validation/permission failures — covering at minimum `forum_comment_created` (with the
   new returned id) and `chat_message_sent` (both response modes).
 - **Group and person-property payload tests** (pure): community-scoped event
   payloads carry `$groups.community = "community:<id>"`; `$groupidentify`
   payloads contain only the §5.3 allowlisted group properties; `$set` appears
-  only on `signup_confirmed`/`login_succeeded` payloads and contains only the
+  only on `account_signed_up`/`account_logged_in` payloads and contains only the
   §4.3 person properties.
 - **Deletion lifecycle tests** (job-table behavior behind the
   `EARDE_TEST_DATABASE_URL` gate where DB-backed): **atomicity** —
@@ -885,3 +893,44 @@ The landing needs only the public project token and hosts.
 the last build artifact (which baked `…/feed`); the value must be corrected to
 the `/feed` URL during implementation, and the built HTML verified as part of
 the landing rollout (§10.1).
+
+## 12. Canonical taxonomy and pivot invariants (2026-07)
+
+Fixed before first production ingestion, per the pivot audit ("the community
+network for open source"). PostHog had zero ingested events at rename time, so
+no aliases or dual emission exist — the old names (`signup_confirmed`,
+`login_succeeded`, `post_created`, `comment_created`, `thread_promoted`) were
+retired outright.
+
+Canonical server event names (the closed variant in `lib/analytics.ml` is the
+single authority; handlers never use raw name strings):
+
+- `account_signed_up` — only after the email-confirmation transaction creates
+  the real `users` row (§3.2);
+- `account_logged_in` — only after successful authentication and session setup;
+- `community_viewed` — **not implemented yet** (reserved);
+- `community_joined`, `community_left`, `chat_message_sent` — unchanged;
+- `forum_thread_created` — only after the top-level forum thread is persisted;
+- `forum_comment_created` — only after the comment is persisted;
+- `conversation_promotion_started` — **not implemented yet** (reserved);
+- `conversation_promoted` — only after the durable promotion transaction
+  succeeds;
+- `search_performed` (browser), `account_deleted` (personless) — unchanged.
+
+Person properties (§4.3) are exactly `username`, `signup_date`, `is_admin` —
+**never email**, in any payload.
+
+GitHub-onboarding invariants:
+
+- No GitHub onboarding analytics event (`bring_community_started`,
+  `github_app_install*`, `github_repositories_*`, `community_setup_*`,
+  `community_published`, `github_onboarding_failed`, …) is implemented yet;
+  they are added only alongside the real onboarding feature, as new closed
+  variants in `lib/analytics.ml`.
+- Future GitHub identifiers (installation id, repository id, organization id)
+  **never replace the Earde identities**: the person stays
+  `user:<earde_user_id>` and the community group key stays
+  `community:<earde_database_community_id>`. A GitHub id may appear only as a
+  closed event property, never as a distinct ID, group key, or group type
+  substitute — one Earde community may connect to multiple repositories, so a
+  repository can never stand in for a community.

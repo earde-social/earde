@@ -11,7 +11,6 @@ open Lwt.Infix
 
 type person_properties = {
   username : string;
-  email : string;
   signup_date : string;
   is_admin : bool;
 }
@@ -27,8 +26,8 @@ type community_group = {
 type response_mode = Response_json | Response_redirect
 
 type event =
-  | Signup_confirmed of { user_id : int; person : person_properties }
-  | Login_succeeded of { user_id : int; person : person_properties }
+  | Account_signed_up of { user_id : int; person : person_properties }
+  | Account_logged_in of { user_id : int; person : person_properties }
   | Community_joined of {
       user_id : int;
       community_id : int;
@@ -46,7 +45,7 @@ type event =
       content_length : int;
       response_mode : response_mode;
     }
-  | Post_created of {
+  | Forum_thread_created of {
       user_id : int;
       community_id : int;
       section_id : int option;
@@ -55,7 +54,7 @@ type event =
       has_link : bool;
       has_mention : bool;
     }
-  | Comment_created of {
+  | Forum_comment_created of {
       user_id : int;
       community_id : int;
       post_id : int;
@@ -64,7 +63,7 @@ type event =
       content_length : int;
       has_mention : bool;
     }
-  | Thread_promoted of {
+  | Conversation_promoted of {
       user_id : int;
       community_id : int;
       community_slug : string;
@@ -318,45 +317,45 @@ let response_mode_to_string = function
 let opt_int name = function None -> [] | Some v -> [ (name, `Int v) ]
 
 let event_name = function
-  | Signup_confirmed _ -> "signup_confirmed"
-  | Login_succeeded _ -> "login_succeeded"
+  | Account_signed_up _ -> "account_signed_up"
+  | Account_logged_in _ -> "account_logged_in"
   | Community_joined _ -> "community_joined"
   | Community_left _ -> "community_left"
   | Chat_message_sent _ -> "chat_message_sent"
-  | Post_created _ -> "post_created"
-  | Comment_created _ -> "comment_created"
-  | Thread_promoted _ -> "thread_promoted"
+  | Forum_thread_created _ -> "forum_thread_created"
+  | Forum_comment_created _ -> "forum_comment_created"
+  | Conversation_promoted _ -> "conversation_promoted"
   | Account_deleted -> "account_deleted"
 
 (* Community-scoped events carry $groups.community (§5.3); identity/lifecycle
    events do not. *)
 let event_community_id = function
-  | Signup_confirmed _ | Login_succeeded _ | Account_deleted -> None
+  | Account_signed_up _ | Account_logged_in _ | Account_deleted -> None
   | Community_joined { community_id; _ }
   | Community_left { community_id; _ }
   | Chat_message_sent { community_id; _ }
-  | Post_created { community_id; _ }
-  | Comment_created { community_id; _ }
-  | Thread_promoted { community_id; _ } ->
+  | Forum_thread_created { community_id; _ }
+  | Forum_comment_created { community_id; _ }
+  | Conversation_promoted { community_id; _ } ->
       Some community_id
 
 (* The closed §4.3 person properties, as the $set object. Only the two
-   identity events (signup_confirmed, login_succeeded) and the consent
+   identity events (account_signed_up, account_logged_in) and the consent
    transition may carry it; person properties never appear as ordinary
-   top-level event properties. *)
+   top-level event properties. Deliberately email-free: user:<id> is the
+   stable identity and no analytics need justifies ingesting email. *)
 let person_set_json (p : person_properties) =
   `Assoc
     [
       ("username", `String p.username);
-      ("email", `String p.email);
       ("signup_date", `String p.signup_date);
       ("is_admin", `Bool p.is_admin);
     ]
 
 let event_properties = function
-  | Signup_confirmed { user_id; person } ->
+  | Account_signed_up { user_id; person } ->
       [ ("user_id", `Int user_id); ("$set", person_set_json person) ]
-  | Login_succeeded { user_id; person } ->
+  | Account_logged_in { user_id; person } ->
       [ ("user_id", `Int user_id); ("$set", person_set_json person) ]
   | Community_joined { user_id; community_id; community_slug; community_visibility }
     ->
@@ -389,7 +388,7 @@ let event_properties = function
         ("content_length", `Int content_length);
         ("response_mode", `String (response_mode_to_string response_mode));
       ]
-  | Post_created
+  | Forum_thread_created
       { user_id; community_id; section_id; post_id; content_length; has_link;
         has_mention } ->
       [ ("user_id", `Int user_id); ("community_id", `Int community_id) ]
@@ -400,7 +399,7 @@ let event_properties = function
           ("has_link", `Bool has_link);
           ("has_mention", `Bool has_mention);
         ]
-  | Comment_created
+  | Forum_comment_created
       { user_id; community_id; post_id; comment_id; parent_comment_id;
         content_length; has_mention } ->
       [
@@ -414,7 +413,7 @@ let event_properties = function
           ("content_length", `Int content_length);
           ("has_mention", `Bool has_mention);
         ]
-  | Thread_promoted
+  | Conversation_promoted
       {
         user_id;
         community_id;
