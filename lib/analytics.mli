@@ -146,6 +146,15 @@ val capture_if_consented : Dream.request -> distinct_id:string -> event -> unit
 val sync_person_after_consent_grant :
   distinct_id:string -> person_properties -> unit
 
+(** Consent-gated [$groupidentify] for a community (§5.3): same request-cookie
+    gate as [capture_if_consented]; emits only the closed [community_group]
+    record. [distinct_id] MUST be the acting authenticated user's
+    ["user:<id>"] — never ["community:<id>"] or another synthetic value, which
+    would create a phantom PostHog person. Call only after a successful
+    create/update/join with the full authoritative record in scope. *)
+val identify_community_if_consented :
+  Dream.request -> distinct_id:string -> community_group -> unit
+
 (** Test seams: pure payload builders and a capture sink that replaces the
     HTTP transport. The sink only observes payloads produced by the closed
     API above — it is not a bypass capable of arbitrary capture. *)

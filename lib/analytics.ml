@@ -516,6 +516,22 @@ let sync_person_after_consent_grant ~distinct_id person =
     dispatch config
       (person_sync_payload ~api_key:config.project_token ~distinct_id person)
 
+(* $groupidentify shares capture_if_consented's exact gate: enabled AND the
+   request's consent cookie is exactly "granted". It accepts only the closed
+   community_group record — not a generic capture path — and the caller must
+   supply the acting authenticated user's "user:<id>" as distinct_id (PostHog
+   attributes the event to that person; a synthetic id would mint a phantom
+   person). *)
+let identify_community_if_consented request ~distinct_id group =
+  let config = current_config () in
+  if config.enabled then
+    match consent_of_cookie_header (Dream.header request "Cookie") with
+    | `Granted ->
+        dispatch config
+          (group_identify_payload ~api_key:config.project_token ~distinct_id
+             group)
+    | `Denied | `Unknown -> ()
+
 (* === Test seams === *)
 
 module For_testing = struct

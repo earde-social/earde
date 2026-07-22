@@ -431,16 +431,19 @@ module Community = struct
     | Error err -> Lwt.return (Error (Caqti_error.show err))
 
   (* Single UPDATE covers all editable fields — no partial-update complexity;
-     settings form always submits all four fields so overwrite is safe. *)
+     settings form always submits all four fields so overwrite is safe.
+     RETURNING hands back the authoritative updated row in the same round-trip;
+     None means the id matched no community (previously a silent no-op). *)
   let update_community_details_query =
     let open Caqti_request.Infix in
-    (Caqti_type.(t2 (t4 (option string) (option string) (option string) (option string)) int) ->. Caqti_type.unit)
-    "UPDATE communities SET description = $1, rules = $2, avatar_url = $3, banner_url = $4 WHERE id = $5"
+    (Caqti_type.(t2 (t4 (option string) (option string) (option string) (option string)) int) ->? community_row_type)
+    "UPDATE communities SET description = $1, rules = $2, avatar_url = $3, banner_url = $4 WHERE id = $5 RETURNING id, slug, name, description, rules, avatar_url, banner_url, allow_downvotes, sections_enabled, visibility, indexable"
 
   let update_community_details (module C : Caqti_lwt.CONNECTION) community_id description rules avatar_url banner_url =
-    C.exec update_community_details_query ((description, rules, avatar_url, banner_url), community_id)
+    C.find_opt update_community_details_query ((description, rules, avatar_url, banner_url), community_id)
     >>= function
-    | Ok () -> Lwt.return (Ok ())
+    | Ok (Some row) -> Lwt.return (Ok (Some (map_community_row row)))
+    | Ok None -> Lwt.return (Ok None)
     | Error err -> Lwt.return (Error (Caqti_error.show err))
 
   let toggle_downvotes_query =
@@ -458,15 +461,19 @@ module Community = struct
      stored TEXT mirrored by the CHECK constraint; we accept the closed [community_visibility]
      variant and stringify here so call sites never pass a raw, unvalidated string. The DB CHECK
      is the backstop. These touch only the SEO/access columns added in Slice B — no other field. *)
+  (* RETURNING the authoritative updated row: visibility is a closed PostHog
+     group property, so the handler needs the post-update record for its
+     $groupidentify without a second lookup. None = id matched no community. *)
   let update_community_visibility_query =
     let open Caqti_request.Infix in
-    (Caqti_type.(t2 string int) ->. Caqti_type.unit)
-    "UPDATE communities SET visibility = $1 WHERE id = $2"
+    (Caqti_type.(t2 string int) ->? community_row_type)
+    "UPDATE communities SET visibility = $1 WHERE id = $2 RETURNING id, slug, name, description, rules, avatar_url, banner_url, allow_downvotes, sections_enabled, visibility, indexable"
 
   let update_community_visibility (module C : Caqti_lwt.CONNECTION) community_id visibility =
-    C.exec update_community_visibility_query (community_visibility_to_string visibility, community_id)
+    C.find_opt update_community_visibility_query (community_visibility_to_string visibility, community_id)
     >>= function
-    | Ok () -> Lwt.return (Ok ())
+    | Ok (Some row) -> Lwt.return (Ok (Some (map_community_row row)))
+    | Ok None -> Lwt.return (Ok None)
     | Error err -> Lwt.return (Error (Caqti_error.show err))
 
   let update_community_indexable_query =
@@ -528,10 +535,13 @@ module User = struct
     | Ok exists -> Lwt.return (Ok exists)
     | Error e -> Lwt.return (Error (Caqti_error.show e))
 
+  (* Nested 7-column row: (id, username, email, created_at), (hash, is_admin,
+     is_banned). created_at rides the same lookup so a successful login has the
+     closed analytics person properties with no extra query. *)
   let get_user_for_login_query =
     let open Caqti_request.Infix in
-    (Caqti_type.string ->? Caqti_type.(t6 int string string string bool bool))
-    "SELECT id, username, email, password_hash, is_admin, is_banned FROM users WHERE username = $1 OR email = $1"
+    (Caqti_type.string ->? Caqti_type.(t2 (t4 int string string string) (t3 string bool bool)))
+    "SELECT id, username, email, created_at::text, password_hash, is_admin, is_banned FROM users WHERE username = $1 OR email = $1"
 
   let get_user_for_login (module C: Caqti_lwt.CONNECTION) identifier =
     with_query_timer ~name:"get_user_for_login" (fun () ->
@@ -1986,15 +1996,20 @@ module Membership = struct
     | Ok None -> Lwt.return (Ok false)
     | Error err -> Lwt.return (Error (Caqti_error.show err))
 
+  (* DELETE ... RETURNING so the caller can tell a real membership removal
+     (true) from a no-op non-member request (false) in the same round-trip —
+     the analytics wiring must not report a community_left that never
+     happened. (user_id, community_id) is unique, so at most one row. *)
   let leave_community_query =
     let open Caqti_request.Infix in
-    (Caqti_type.(t2 int int) ->. Caqti_type.unit)
-    "DELETE FROM community_members WHERE user_id = $1 AND community_id = $2"
+    (Caqti_type.(t2 int int) ->? Caqti_type.int)
+    "DELETE FROM community_members WHERE user_id = $1 AND community_id = $2 RETURNING community_id"
 
   let leave_community (module C : Caqti_lwt.CONNECTION) user_id community_id =
-    C.exec leave_community_query (user_id, community_id)
+    C.find_opt leave_community_query (user_id, community_id)
     >>= function
-    | Ok () -> Lwt.return (Ok ())
+    | Ok (Some _) -> Lwt.return (Ok true)
+    | Ok None -> Lwt.return (Ok false)
     | Error err -> Lwt.return (Error (Caqti_error.show err))
 
   (* Slice F: the allow-list for a private community, rendered as the member-management list on
@@ -2768,8 +2783,11 @@ module PendingSignup = struct
      is irrelevant to pending-signup users). *)
   let insert_user_query =
     let open Caqti_request.Infix in
-    (Caqti_type.(t3 string string string) ->! Caqti_type.int)
-    "INSERT INTO users (username, email, password_hash, is_email_verified) VALUES ($1, $2, $3, TRUE) RETURNING id"
+    (* created_at/is_admin come back from the same RETURNING so the caller has
+       the authoritative closed person properties (analytics §4.3) without a
+       post-transaction lookup. *)
+    (Caqti_type.(t3 string string string ->! t3 int string bool))
+    "INSERT INTO users (username, email, password_hash, is_email_verified) VALUES ($1, $2, $3, TRUE) RETURNING id, created_at::text, is_admin"
 
   let mark_consumed_query =
     let open Caqti_request.Infix in
@@ -2794,13 +2812,15 @@ module PendingSignup = struct
           | Ok false ->
             (C.find insert_user_query (username, email, password_hash) >>= function
              | Error e -> C.rollback () >>= fun _ -> Lwt.return (Error (Caqti_error.show e))
-             | Ok user_id ->
+             | Ok (user_id, created_at, is_admin) ->
                (C.exec mark_consumed_query id >>= function
                 | Error e -> C.rollback () >>= fun _ -> Lwt.return (Error (Caqti_error.show e))
                 | Ok () ->
                   (C.commit () >>= function
                    | Error e -> Lwt.return (Error (Caqti_error.show e))
-                   | Ok () -> Lwt.return (Ok (`Confirmed (user_id, username))))))))
+                   | Ok () ->
+                     Lwt.return
+                       (Ok (`Confirmed (user_id, username, email, created_at, is_admin))))))))
 end
 
 module Mod_action = struct
