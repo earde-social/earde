@@ -589,7 +589,9 @@ including this document and example files**):
 
 | Variable | Meaning | Production value shape |
 |---|---|---|
-| `POSTHOG_ENABLED` | master switch; when not `true`, no snippet is emitted, no server capture happens, no consent banner shows | `true` / `false` |
+| `POSTHOG_ENABLED` | master switch; when not `true`, no snippet is emitted, no server capture happens, no consent banner shows — and no other analytics variable is required | `true` / `false` |
+| `EARDE_DEPLOYMENT_ENVIRONMENT` | closed deployment environment (§14): exactly `production` \| `staging` \| `development`, parsed through a closed OCaml type. **Required whenever `POSTHOG_ENABLED=true`**; unknown, missing, blank or differently-cased values disable analytics with a startup diagnostic. Never inferred from hostname, branch or executable mode | `production` |
+| `POSTHOG_ALLOW_DEVELOPMENT` | explicit development opt-in (§14): only the exact value `true` enables analytics when the environment is `development`, and only against loopback origins and a non-production project; enabling it prints a diagnostic | unset |
 | `POSTHOG_PROJECT_TOKEN` | project API token (`phc_…`) | from PostHog project settings |
 | `POSTHOG_API_HOST` | ingest host | `https://eu.i.posthog.com` |
 | `POSTHOG_UI_HOST` | UI host (toolbar/links) and **private REST API host** for §3.3 | `https://eu.posthog.com` |
@@ -1018,3 +1020,102 @@ send them in the first place.
 `search_performed` semantics (§2.4), pageview URL/title sanitization (§2.3),
 and replay masking on public pages (§6). Future GitHub/private-repository
 data remains prohibited from analytics payloads (§12).
+
+## 14. Deployment environments and configuration preflight (2026-07)
+
+Implemented in `lib/analytics.ml` (closed environment model, activation
+rules, common envelope, `Preflight`), `bin/check_posthog_config.ml`,
+`static/js/analytics.js`, and tested in `test/test_earde.ml`.
+
+### 14.1 Closed environment model
+
+One closed server-side type with exactly three values — `production`,
+`staging`, `development` — set **only** by `EARDE_DEPLOYMENT_ENVIRONMENT`
+(§8). The raw string is parsed once through the closed type and never
+retained; nothing is inferred from hostname, branch name or executable mode.
+When `POSTHOG_ENABLED` is not `true`, the variable is not required and local
+development runs with no analytics variables at all. When it is `true`, an
+unknown, missing, blank or differently-cased value **disables analytics**
+with a startup diagnostic (fail-closed, never fail-open).
+
+### 14.2 Separate projects per environment
+
+Production and Staging use **separate PostHog projects**: separate project
+tokens, separate numeric project ids, separate personal API keys.
+Development is disabled unless explicitly connected to a **non-production**
+project (below). A single-project scheme separated only by an event property
+is explicitly rejected: the `deployment_environment` property (§14.4) is
+diagnostic context, **not** the security boundary — the project/token
+separation is the boundary, and the preflight (§14.5) verifies each
+deployment's token/project binding. No staging PostHog project exists yet;
+creating it is a separate operational step.
+
+### 14.3 Exact activation rules (all fail closed)
+
+Every enabled environment requires the complete configuration:
+`POSTHOG_PROJECT_TOKEN` present, `POSTHOG_API_HOST` and `POSTHOG_UI_HOST`
+HTTPS, `POSTHOG_PROJECT_ID` a positive integer, `POSTHOG_PERSONAL_API_KEY`
+present, plus the per-environment origin binding:
+
+| Environment | Additional requirements |
+|---|---|
+| `production` | `EARDE_PUBLIC_ORIGIN` **exactly** `https://earde.com` |
+| `staging` | `EARDE_PUBLIC_ORIGIN` HTTPS and **not** `https://earde.com` / `https://www.earde.com` (no staging hostname is hardcoded — none has been chosen) |
+| `development` | disabled by default; `POSTHOG_ALLOW_DEVELOPMENT=true` (exact) enables it, requires the complete configuration, allows **only** `localhost` / `127.0.0.1` / `::1` origins over HTTP/HTTPS, and prints a diagnostic that development analytics was explicitly enabled |
+
+Any violated requirement disables analytics with a named-variable diagnostic
+(values are never logged). Development is never silently treated as staging
+or production.
+
+### 14.4 `deployment_environment` — common event envelope
+
+The normalized closed value is added **once, centrally**, in the shared
+payload envelope (`capture_payload` in `lib/analytics.ml`) — never by the
+event constructors, whose closed property allowlists (§5.1) are unchanged.
+It therefore appears exactly once on every authoritative server domain
+event, on `$groupidentify`, and on the `$identify` person sync. The browser
+config (§2.1) carries it as the `data-ph-deployment-environment` attribute
+— validated in `analytics.js` against the exact closed set, and added by the
+central `sanitize_properties` path to manual `$pageview`, `$pageleave`,
+autocapture and `search_performed` (never at individual capture sites). A
+missing or invalid browser environment value means no SDK initialization and
+no PostHog request. It is never written to application database rows, URLs,
+HTML text or person identity, and `user:<id>` / `community:<id>` formats are
+unchanged. Private-community documents remain fully analytics-inert (§13).
+
+### 14.5 Credential/project preflight
+
+`bin/check_posthog_config.ml` (`dune exec bin/check_posthog_config.exe`)
+reuses the central configuration parser and then verifies the live binding
+via the documented private API on `POSTHOG_UI_HOST` (verified read-only
+against the official PostHog OpenAPI schema and API reference, 2026-07):
+
+- `GET /api/organizations/` — scope `organization:read`;
+- `GET /api/organizations/:organization_id/projects/:project_id/` — scope
+  `project:read`; the response's read-only `api_token` field **is** the
+  public project token, so the configured `POSTHOG_PROJECT_TOKEN` is compared
+  against the live token of `POSTHOG_PROJECT_ID` — not against another
+  variable from the same env file.
+
+It ingests **no event** (the ingest host is never contacted), uses
+`POSTHOG_PERSONAL_API_KEY` only server-side under a bounded timeout, exits
+`0` only when the project is positively verified, and exits nonzero on token
+mismatch, missing project, mismatched cloud-region hosts, malformed
+response, missing scope, redirect, network failure, timeout or incomplete
+configuration. Output contains only the deployment environment, project id,
+normalized hosts, a bounded failure class and a non-reversible SHA-256 token
+fingerprint — never a credential or response body. The personal API key
+therefore needs `organization:read` + `project:read` in addition to its §8
+scopes.
+
+**Deployment rule**: during production and staging deploys, run the
+preflight **before** migrations and before restarting the service; a nonzero
+exit aborts the deploy. No real project token or personal API key is ever
+committed to tracked files — this repository has no tracked env example
+file, and `.env` stays untracked (§8).
+
+### 14.6 Still unimplemented
+
+GitHub onboarding analytics (§12) remains unimplemented; the staging PostHog
+project and its credentials do not exist yet; `community_viewed` and
+`conversation_promotion_started` remain reserved.

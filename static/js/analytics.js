@@ -16,6 +16,18 @@
   var apiHost = banner.getAttribute("data-ph-api-host");
   if (!token || !apiHost) return;
 
+  /* Closed deployment environment, normalized by the server. It is the
+     diagnostic envelope value added to every captured event (see
+     sanitizeProperties); the real environment isolation is the separate
+     PostHog project/token the server config binds to. Missing or invalid
+     values mean a broken/foreign document: no SDK initialization and no
+     PostHog request of any kind. */
+  var DEPLOYMENT_ENVIRONMENTS = ["production", "staging", "development"];
+  var deploymentEnvironment = banner.getAttribute(
+    "data-ph-deployment-environment"
+  );
+  if (DEPLOYMENT_ENVIRONMENTS.indexOf(deploymentEnvironment) === -1) return;
+
   /* §4.2/§5.3 page context, rendered by the Dream layout: the authenticated
      identity is exactly "user:<database_id>" (absent on anonymous pages); the
      community group key is exactly "community:<database_id>" (absent on
@@ -124,6 +136,10 @@
       props.$elements = props.$elements.map(sanitizeElement);
     if (typeof props.$elements_chain === "string")
       props.$elements_chain = sanitizeElementsChain(props.$elements_chain);
+    /* Central envelope: every outbound event (manual $pageview, $pageleave,
+       autocapture, search_performed) carries the server-supplied closed
+       deployment environment — added here once, never at capture sites. */
+    props.deployment_environment = deploymentEnvironment;
     return props;
   }
 

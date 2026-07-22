@@ -276,7 +276,7 @@ let layout ?(noindex=false) ?user ?request ?(head_extra="") ?(full_bleed=false) 
         in
         ( "<script src='/static/js/analytics.js' defer></script>",
           Printf.sprintf
-            "<div id='analytics-consent' hidden data-ph-token='%s' data-ph-api-host='%s'%s%s%s class='fixed bottom-4 left-1/2 -translate-x-1/2 z-50 w-[calc(100%%-2rem)] max-w-md bg-white border border-[#E0D9CC] rounded-2xl shadow-xl p-4'>\
+            "<div id='analytics-consent' hidden data-ph-token='%s' data-ph-api-host='%s' data-ph-deployment-environment='%s'%s%s%s class='fixed bottom-4 left-1/2 -translate-x-1/2 z-50 w-[calc(100%%-2rem)] max-w-md bg-white border border-[#E0D9CC] rounded-2xl shadow-xl p-4'>\
                <p class='text-sm text-gray-700 mb-3'>Earde can collect anonymous usage analytics (PostHog) to improve the product. Nothing is collected until you choose.</p>\
                <div class='flex items-center gap-2'>\
                  <button type='button' data-analytics-accept class='px-4 py-1.5 text-sm font-semibold bg-[#C94C4C] text-white rounded-full hover:bg-[#A83A3A] transition'>Accept</button>\
@@ -286,6 +286,7 @@ let layout ?(noindex=false) ?user ?request ?(head_extra="") ?(full_bleed=false) 
              </div>"
             (html_escape cfg.Posthog.browser_token)
             (html_escape cfg.Posthog.browser_api_host)
+            (html_escape cfg.Posthog.browser_deployment_environment)
             identity_attr group_attr private_attr )
   in
   let auth_menu =

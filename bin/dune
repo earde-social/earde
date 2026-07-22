@@ -18,3 +18,15 @@
   (:standard -cclib -largon2))
  (preprocess
   (pps lwt_ppx)))
+
+; Server-only PostHog credential/project preflight (analytics spec §14): runs
+; the closed-environment configuration parser and verifies the token/project
+; binding against the private API, ingesting no event. Run before
+; migration/restart during production and staging deploys:
+;   dune exec bin/check_posthog_config.exe
+(executable
+ (name check_posthog_config)
+ (modules check_posthog_config)
+ (libraries earde logs lwt.unix)
+ (link_flags
+  (:standard -cclib -largon2)))

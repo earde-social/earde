@@ -817,8 +817,11 @@ let an_all_events =
     ("account_deleted", An.Account_deleted);
   ]
 
+(* Test payloads are built for the Development environment; the envelope
+   value is asserted separately in the analytics_envelope suite. *)
 let an_payload event =
-  AnT.event_payload ~api_key:"phc_test" ~distinct_id:"user:1" event
+  AnT.event_payload ~api_key:"phc_test" ~environment:An.Development
+    ~distinct_id:"user:1" event
 
 let check_keys name event expected =
   an_case name (fun () ->
@@ -1256,7 +1259,8 @@ module Step6_events = struct
          | [ p ] ->
              Alcotest.(check string) "event" "account_signed_up" (event_of p);
              Alcotest.(check (slist string compare))
-               "props keys" [ "user_id"; "$set" ] (prop_keys p);
+               "props keys" [ "user_id"; "$set"; "deployment_environment" ]
+               (prop_keys p);
              check_set_keys "closed $set"
                [ "username"; "signup_date"; "is_admin" ] p;
              (match List.assoc_opt "$set" (payload_props p) with
@@ -1315,7 +1319,8 @@ module Step6_events = struct
              Alcotest.(check string) "distinct id"
                ("user:" ^ string_of_int uid) (distinct_of p);
              Alcotest.(check (slist string compare))
-               "person fields only inside $set" [ "user_id"; "$set" ]
+               "person fields only inside $set"
+               [ "user_id"; "$set"; "deployment_environment" ]
                (prop_keys p);
              check_set_keys "closed $set"
                [ "username"; "signup_date"; "is_admin" ] p
@@ -1363,7 +1368,7 @@ module Step6_events = struct
              Alcotest.(check (slist string compare))
                "joined props keys"
                [ "user_id"; "community_id"; "community_slug";
-                 "community_visibility"; "$groups" ]
+                 "community_visibility"; "$groups"; "deployment_environment" ]
                (prop_keys joined);
              Alcotest.(check string) "groupidentify event" "$groupidentify"
                (event_of gi);
@@ -1426,7 +1431,9 @@ module Step6_events = struct
          | [ p ] ->
              Alcotest.(check string) "event" "community_left" (event_of p);
              Alcotest.(check (slist string compare))
-               "props keys" [ "user_id"; "community_id"; "$groups" ]
+               "props keys"
+               [ "user_id"; "community_id"; "$groups";
+                 "deployment_environment" ]
                (prop_keys p);
              Alcotest.(check (option string)) "$groups key"
                (Some ("community:" ^ string_of_int cid))
@@ -1559,7 +1566,7 @@ module Step6_events = struct
                "props keys"
                [ "user_id"; "community_id"; "community_slug"; "channel_id";
                  "channel_slug"; "message_id"; "content_length";
-                 "response_mode"; "$groups" ]
+                 "response_mode"; "$groups"; "deployment_environment" ]
                (prop_keys p);
              (* Length only — never the message text. *)
              Alcotest.(check (option int)) "content_length"
@@ -1610,7 +1617,8 @@ module Step6_events = struct
              Alcotest.(check (slist string compare))
                "props keys (no title/body/url)"
                [ "user_id"; "community_id"; "post_id"; "content_length";
-                 "has_link"; "has_mention"; "$groups" ]
+                 "has_link"; "has_mention"; "$groups";
+                 "deployment_environment" ]
                (prop_keys p);
              Alcotest.(check (option string)) "$groups key"
                (Some ("community:" ^ string_of_int cid))
@@ -1657,7 +1665,8 @@ module Step6_events = struct
              Alcotest.(check (slist string compare))
                "props keys (top-level comment: no parent_comment_id)"
                [ "user_id"; "community_id"; "post_id"; "comment_id";
-                 "content_length"; "has_mention"; "$groups" ]
+                 "content_length"; "has_mention"; "$groups";
+                 "deployment_environment" ]
                (prop_keys p);
              (match List.assoc_opt "comment_id" (payload_props p) with
               | Some (`Int comment_id) ->
@@ -1722,7 +1731,7 @@ module Step6_events = struct
                [ "user_id"; "community_id"; "community_slug"; "channel_id";
                  "channel_slug"; "post_id"; "message_id";
                  "promoted_message_count"; "promoted_participant_count";
-                 "$groups" ]
+                 "$groups"; "deployment_environment" ]
                (prop_keys p);
              Alcotest.(check (option string)) "$groups key"
                (Some ("community:" ^ string_of_int cid))
@@ -1887,8 +1896,9 @@ module Step6_events = struct
                  Alcotest.(check string) "constant non-user distinct id"
                    Earde.Analytics.account_deletion_distinct_id (distinct_of p);
                  Alcotest.(check (slist string compare))
-                   "personless: person processing off, nothing else"
-                   [ "$process_person_profile" ] (prop_keys p);
+                   "personless: person processing off, plus the envelope"
+                   [ "$process_person_profile"; "deployment_environment" ]
+                   (prop_keys p);
                  Alcotest.(check bool) "no user identity in the metric" false
                    (contains (Yojson.Safe.to_string p) did)
              | l ->
@@ -3280,6 +3290,128 @@ let sr_analytics_tag html =
       | None -> None
       | Some j -> Some (String.sub html i (j - i + 1)))
 
+(* --- Deployment environments: closed parsing, activation rules, envelope,
+   and the credential/project preflight (local stub only, never PostHog). --- *)
+
+(* Drives the pure validator with a COMPLETE dummy configuration by default,
+   so each case flips exactly the value under test. Dummy credentials only. *)
+let venv ?(enabled = "true") ?environment ?allow_development
+    ?(project_token = "phc_test_token")
+    ?(api_host = "https://eu.i.posthog.com")
+    ?(ui_host = "https://eu.posthog.com") ?(project_id = "42")
+    ?(personal_api_key = "phx_test_dummy") ?public_origin () =
+  AnT.validate_environment_configuration ~enabled ?environment
+    ?allow_development ~project_token ~api_host ~ui_host ~project_id
+    ~personal_api_key ?public_origin ()
+
+let check_env name ~expect_enabled ?expect_environment result =
+  an_case name (fun () ->
+      let enabled, environment, _diags = result in
+      Alcotest.(check bool) (name ^ " enabled") expect_enabled enabled;
+      match expect_environment with
+      | None -> ()
+      | Some expected ->
+          Alcotest.(check (option string)) (name ^ " environment") expected
+            environment)
+
+(* Full production-shaped raw values (dummy secrets), installable so
+   layout/browser-config tests exercise a validated production config. *)
+let install_production_config () =
+  AnT.install_validated_configuration ~enabled:"true"
+    ~environment:"production" ~project_token:"phc_test_token"
+    ~api_host:"https://eu.i.posthog.com" ~ui_host:"https://eu.posthog.com"
+    ~project_id:"654321" ~personal_api_key:"phx_secret_test_value"
+    ~public_origin:"https://earde.com" ()
+
+(* Preflight stub plumbing (Api_stub, same as the deletion-client tests): the
+   two documented private metadata endpoints, dummy values only. *)
+let preflight_org = "0196aaaa-bbbb-cccc-dddd-eeeeffff0001"
+let preflight_token = "phc_preflight_dummy_token"
+
+let preflight_orgs_body ids =
+  Printf.sprintf {|{"count": %d, "next": null, "results": [%s]}|}
+    (List.length ids)
+    (String.concat ", "
+       (List.map (fun id -> Printf.sprintf {|{"id": %S, "name": "o"}|} id) ids))
+
+let preflight_project_body ~id ~token =
+  Printf.sprintf {|{"id": %d, "name": "p", "api_token": %S}|} id token
+
+let preflight_handler ?(orgs_status = 200) ?orgs_override
+    ?(project_status = 200) ?project_override () (req : Api_stub.req) =
+  if req.Api_stub.path = "/api/organizations/" then
+    ( orgs_status,
+      match orgs_override with
+      | Some body -> body
+      | None -> preflight_orgs_body [ preflight_org ] )
+  else if
+    req.Api_stub.path
+    = Printf.sprintf "/api/organizations/%s/projects/42/" preflight_org
+  then
+    ( project_status,
+      match project_override with
+      | Some body -> body
+      | None -> preflight_project_body ~id:42 ~token:preflight_token )
+  else (404, "{}")
+
+(* Runs the real preflight against a local stub and returns
+   (result, requests the stub saw). *)
+let run_preflight ?(environment = An.Staging) handler =
+  let ( let* ) = Lwt.bind in
+  Lwt_main.run
+    (let* base_url, seen, stop = Api_stub.start handler in
+     AnT.use_preflight_test_configuration ~environment ~ui_host:base_url
+       ~project_id:"42" ~personal_api_key:deletion_test_key
+       ~project_token:preflight_token ();
+     Lwt.finalize
+       (fun () ->
+         let* result = An.Preflight.run () in
+         Lwt.return (result, !seen))
+       (fun () ->
+         AnT.clear_configuration_override ();
+         stop ();
+         Lwt.return_unit))
+
+let preflight_class = function
+  | Ok _ -> "verified"
+  | Error (failure_class, _) -> failure_class
+
+(* No request may leave the documented private metadata surface — above all,
+   nothing may reach an event-ingestion path. *)
+let check_preflight_requests_safe requests =
+  List.iter
+    (fun (req : Api_stub.req) ->
+      Alcotest.(check bool)
+        ("request stays on /api/organizations: " ^ req.Api_stub.path)
+        true
+        (String.length req.Api_stub.path >= 19
+        && String.sub req.Api_stub.path 0 19 = "/api/organizations/");
+      Alcotest.(check bool) "no ingestion path" false
+        (contains req.Api_stub.path "/i/v0/e"
+        || contains req.Api_stub.path "/capture"
+        || contains req.Api_stub.path "/batch"))
+    requests
+
+let check_preflight name ?environment handler expected_class =
+  an_case name (fun () ->
+      let result, requests = run_preflight ?environment handler in
+      Alcotest.(check string) name expected_class (preflight_class result);
+      check_preflight_requests_safe requests;
+      (* Neither credential may appear in any output, verified or failed. *)
+      let rendered =
+        match result with
+        | Ok r ->
+            String.concat "\n"
+              (r.An.Preflight.report_project_id
+               :: r.An.Preflight.report_token_fingerprint
+               :: r.An.Preflight.report_notes)
+        | Error (failure_class, detail) -> failure_class ^ "\n" ^ detail
+      in
+      Alcotest.(check bool) "output never contains the project token" false
+        (contains rendered preflight_token);
+      Alcotest.(check bool) "output never contains the personal key" false
+        (contains rendered deletion_test_key))
+
 let () =
   Alcotest.run "earde"
     [ ( "smoke"
@@ -3692,39 +3824,41 @@ let () =
           an_all_events
         @ [ check_keys "account_signed_up keys (incl. $set)"
               (List.assoc "account_signed_up" an_all_events)
-              [ "user_id"; "$set" ]
+              [ "user_id"; "$set"; "deployment_environment" ]
           ; check_keys "account_logged_in keys (incl. $set)"
               (List.assoc "account_logged_in" an_all_events)
-              [ "user_id"; "$set" ]
+              [ "user_id"; "$set"; "deployment_environment" ]
           ; check_keys "community_joined keys"
               (List.assoc "community_joined" an_all_events)
               [ "user_id"; "community_id"; "community_slug";
-                "community_visibility"; "$groups" ]
+                "community_visibility"; "$groups"; "deployment_environment" ]
           ; check_keys "community_left keys"
               (List.assoc "community_left" an_all_events)
-              [ "user_id"; "community_id"; "$groups" ]
+              [ "user_id"; "community_id"; "$groups"; "deployment_environment" ]
           ; check_keys "chat_message_sent keys"
               (List.assoc "chat_message_sent" an_all_events)
               [ "user_id"; "community_id"; "community_slug"; "channel_id";
                 "channel_slug"; "message_id"; "content_length";
-                "response_mode"; "$groups" ]
+                "response_mode"; "$groups"; "deployment_environment" ]
           ; check_keys "forum_thread_created keys"
               (List.assoc "forum_thread_created" an_all_events)
               [ "user_id"; "community_id"; "section_id"; "post_id";
-                "content_length"; "has_link"; "has_mention"; "$groups" ]
+                "content_length"; "has_link"; "has_mention"; "$groups";
+                "deployment_environment" ]
           ; check_keys "forum_comment_created keys (no parent -> omitted)"
               (List.assoc "forum_comment_created" an_all_events)
               [ "user_id"; "community_id"; "post_id"; "comment_id";
-                "content_length"; "has_mention"; "$groups" ]
+                "content_length"; "has_mention"; "$groups";
+                "deployment_environment" ]
           ; check_keys "conversation_promoted keys (no section -> omitted)"
               (List.assoc "conversation_promoted" an_all_events)
               [ "user_id"; "community_id"; "community_slug"; "channel_id";
                 "channel_slug"; "post_id"; "message_id";
                 "promoted_message_count"; "promoted_participant_count";
-                "$groups" ]
+                "$groups"; "deployment_environment" ]
           ; check_keys "account_deleted keys (personless: no user_id)"
               An.Account_deleted
-              [ "$process_person_profile" ]
+              [ "$process_person_profile"; "deployment_environment" ]
           ; an_case "community_joined full payload" (fun () ->
                 let expected : Yojson.Safe.t =
                   `Assoc
@@ -3739,6 +3873,7 @@ let () =
                           ; ("community_visibility", `String "public")
                           ; ( "$groups"
                             , `Assoc [ ("community", `String "community:7") ] )
+                          ; ("deployment_environment", `String "development")
                           ] )
                     ]
                 in
@@ -3840,7 +3975,7 @@ let () =
               check_set "account_logged_in"
                 (an_payload (List.assoc "account_logged_in" an_all_events));
               check_set "consent sync"
-                (AnT.person_sync_payload ~api_key:"phc_test"
+                (AnT.person_sync_payload ~api_key:"phc_test" ~environment:An.Development
                    ~distinct_id:"user:1" an_person))
         ] )
       (* $groups.community rides on community-scoped events only (§5.3). *)
@@ -3872,11 +4007,15 @@ let () =
                   [ ("api_key", `String "phc_test")
                   ; ("event", `String "$identify")
                   ; ("distinct_id", `String "user:9")
-                  ; ("properties", `Assoc [ ("$set", an_person_set) ])
+                  ; ( "properties"
+                    , `Assoc
+                        [ ("$set", an_person_set)
+                        ; ("deployment_environment", `String "development")
+                        ] )
                   ]
               in
               let actual =
-                AnT.person_sync_payload ~api_key:"phc_test"
+                AnT.person_sync_payload ~api_key:"phc_test" ~environment:An.Development
                   ~distinct_id:"user:9" an_person
               in
               Alcotest.check yojson "sync payload" expected actual)
@@ -3916,11 +4055,12 @@ let () =
                               ; ("community_visibility", `String "public")
                               ; ("created_at", `String "2026-01-01T00:00:00Z")
                               ] )
+                        ; ("deployment_environment", `String "development")
                         ] )
                   ]
               in
               let actual =
-                AnT.group_identify_payload ~api_key:"phc_test"
+                AnT.group_identify_payload ~api_key:"phc_test" ~environment:An.Development
                   ~distinct_id:"user:1"
                   { An.community_id = 7; community_slug = Some "ocaml";
                     community_name = Some "OCaml";
@@ -3930,7 +4070,7 @@ let () =
               Alcotest.check yojson "group identify payload" expected actual)
         ; an_case "created_at omitted when absent" (fun () ->
               let actual =
-                AnT.group_identify_payload ~api_key:"phc_test"
+                AnT.group_identify_payload ~api_key:"phc_test" ~environment:An.Development
                   ~distinct_id:"user:1"
                   { An.community_id = 7; community_slug = Some "ocaml";
                     community_name = Some "OCaml";
@@ -3950,7 +4090,7 @@ let () =
              community:<id>; readable identifiers never appear. *)
         ; an_case "private $groupidentify has no name or slug" (fun () ->
               let actual =
-                AnT.group_identify_payload ~api_key:"phc_test"
+                AnT.group_identify_payload ~api_key:"phc_test" ~environment:An.Development
                   ~distinct_id:"user:1" an_private_group
               in
               Alcotest.(check (option string)) "group key stays numeric"
@@ -3976,7 +4116,8 @@ let () =
               Alcotest.(check (slist string compare))
                 "private chat keys"
                 [ "user_id"; "community_id"; "channel_id"; "message_id";
-                  "content_length"; "response_mode"; "$groups" ]
+                  "content_length"; "response_mode"; "$groups";
+                  "deployment_environment" ]
                 (prop_keys chat);
               Alcotest.(check (option string)) "private chat group"
                 (Some "community:9") (an_group_key chat);
@@ -3989,7 +4130,7 @@ let () =
               Alcotest.(check (slist string compare))
                 "private join keys"
                 [ "user_id"; "community_id"; "community_visibility";
-                  "$groups" ]
+                  "$groups"; "deployment_environment" ]
                 (prop_keys joined);
               let promoted =
                 an_payload
@@ -4004,7 +4145,8 @@ let () =
                 "private promoted keys"
                 [ "user_id"; "community_id"; "channel_id"; "post_id";
                   "message_id"; "promoted_message_count";
-                  "promoted_participant_count"; "$groups" ]
+                  "promoted_participant_count"; "$groups";
+                  "deployment_environment" ]
                 (prop_keys promoted))
         ] )
       (* Disabled configuration and transport failures: never a capture, never
@@ -4809,7 +4951,8 @@ let () =
                     "user:7" (distinct_of p);
                   Alcotest.(check (slist string compare))
                     "props keys"
-                    [ "$group_type"; "$group_key"; "$group_set" ]
+                    [ "$group_type"; "$group_key"; "$group_set";
+                      "deployment_environment" ]
                     (prop_keys p);
                   Alcotest.(check (option string)) "group key"
                     (Some "community:7") (group_key_prop_of p);
@@ -4926,8 +5069,9 @@ let () =
                   Alcotest.(check string) "constant non-user distinct id"
                     An.account_deletion_distinct_id (distinct_of p);
                   Alcotest.(check (slist string compare))
-                    "person processing disabled, nothing else"
-                    [ "$process_person_profile" ] (prop_keys p);
+                    "person processing disabled, plus only the envelope"
+                    [ "$process_person_profile"; "deployment_environment" ]
+                    (prop_keys p);
                   (match
                      List.assoc_opt "$process_person_profile" (payload_props p)
                    with
@@ -4959,6 +5103,414 @@ let () =
               in
               Alcotest.(check int) "missing emits none" 0
                 (List.length missing))
+        ] )
+      (* Closed deployment-environment parsing: exact values only; unknown,
+         missing, blank and differently-cased values fail closed; disabled
+         analytics needs no environment at all. *)
+    ; ( "analytics_environment_parsing"
+      , [ check_env "production parses exactly" ~expect_enabled:true
+            ~expect_environment:(Some "production")
+            (venv ~environment:"production" ~public_origin:"https://earde.com"
+               ())
+        ; check_env "staging parses exactly" ~expect_enabled:true
+            ~expect_environment:(Some "staging")
+            (venv ~environment:"staging"
+               ~public_origin:"https://staging.example.com" ())
+        ; check_env "development parses with explicit opt-in"
+            ~expect_enabled:true ~expect_environment:(Some "development")
+            (venv ~environment:"development" ~allow_development:"true"
+               ~public_origin:"http://localhost:8080" ())
+        ; check_env "missing environment fails closed" ~expect_enabled:false
+            ~expect_environment:None
+            (venv ~public_origin:"https://earde.com" ())
+        ; check_env "blank environment fails closed" ~expect_enabled:false
+            ~expect_environment:None
+            (venv ~environment:"   " ~public_origin:"https://earde.com" ())
+        ; check_env "cased Production fails closed" ~expect_enabled:false
+            (venv ~environment:"Production" ~public_origin:"https://earde.com"
+               ())
+        ; check_env "cased STAGING fails closed" ~expect_enabled:false
+            (venv ~environment:"STAGING"
+               ~public_origin:"https://staging.example.com" ())
+        ; check_env "abbreviation prod fails closed" ~expect_enabled:false
+            (venv ~environment:"prod" ~public_origin:"https://earde.com" ())
+        ; check_env "arbitrary value fails closed" ~expect_enabled:false
+            (venv ~environment:"qa" ~public_origin:"https://earde.com" ())
+        ; an_case "missing environment produces a diagnostic" (fun () ->
+              let _, _, diags =
+                venv ~public_origin:"https://earde.com" ()
+              in
+              Alcotest.(check int) "one diagnostic" 1 (List.length diags))
+        ; an_case "disabled analytics permits an absent environment" (fun () ->
+              let enabled, environment, diags =
+                AnT.validate_environment_configuration ()
+              in
+              Alcotest.(check bool) "disabled" false enabled;
+              Alcotest.(check (option string)) "no environment" None
+                environment;
+              Alcotest.(check int) "no diagnostics" 0 (List.length diags))
+        ; check_env "POSTHOG_ENABLED must be exactly true" ~expect_enabled:false
+            (venv ~enabled:"TRUE" ~environment:"production"
+               ~public_origin:"https://earde.com" ())
+        ; check_env "development without opt-in stays disabled"
+            ~expect_enabled:false
+            (venv ~environment:"development"
+               ~public_origin:"http://localhost:8080" ())
+        ; an_case "development without opt-in explains itself" (fun () ->
+              let _, _, diags =
+                venv ~environment:"development"
+                  ~public_origin:"http://localhost:8080" ()
+              in
+              Alcotest.(check int) "one diagnostic" 1 (List.length diags))
+        ; check_env "opt-in must be exactly true (not TRUE)"
+            ~expect_enabled:false
+            (venv ~environment:"development" ~allow_development:"TRUE"
+               ~public_origin:"http://localhost:8080" ())
+        ; check_env "opt-in must be exactly true (not 1)" ~expect_enabled:false
+            (venv ~environment:"development" ~allow_development:"1"
+               ~public_origin:"http://localhost:8080" ())
+        ; an_case "explicit development enablement prints a diagnostic"
+            (fun () ->
+              let enabled, _, diags =
+                venv ~environment:"development" ~allow_development:"true"
+                  ~public_origin:"http://localhost:8080" ()
+              in
+              Alcotest.(check bool) "enabled" true enabled;
+              Alcotest.(check int) "one notice" 1 (List.length diags))
+        ] )
+      (* Origin/environment binding: production is bound exactly to
+         https://earde.com; staging to any OTHER https origin; the
+         development opt-in to loopback only. *)
+    ; ( "analytics_environment_origin"
+      , [ check_env "production accepts exactly https://earde.com"
+            ~expect_enabled:true
+            (venv ~environment:"production" ~public_origin:"https://earde.com"
+               ())
+        ; check_env "production rejects http" ~expect_enabled:false
+            (venv ~environment:"production" ~public_origin:"http://earde.com"
+               ())
+        ; check_env "production rejects www" ~expect_enabled:false
+            (venv ~environment:"production"
+               ~public_origin:"https://www.earde.com" ())
+        ; check_env "production rejects a staging origin" ~expect_enabled:false
+            (venv ~environment:"production"
+               ~public_origin:"https://staging.earde.com" ())
+        ; check_env "production rejects localhost" ~expect_enabled:false
+            (venv ~environment:"production"
+               ~public_origin:"http://localhost:8080" ())
+        ; check_env "production rejects a trailing slash" ~expect_enabled:false
+            (venv ~environment:"production"
+               ~public_origin:"https://earde.com/" ())
+        ; check_env "staging accepts a non-production https origin"
+            ~expect_enabled:true
+            (venv ~environment:"staging"
+               ~public_origin:"https://staging.example.com" ())
+        ; check_env "staging rejects the production origin"
+            ~expect_enabled:false
+            (venv ~environment:"staging" ~public_origin:"https://earde.com" ())
+        ; check_env "staging rejects the www production origin"
+            ~expect_enabled:false
+            (venv ~environment:"staging" ~public_origin:"https://www.earde.com"
+               ())
+        ; check_env "staging rejects http" ~expect_enabled:false
+            (venv ~environment:"staging"
+               ~public_origin:"http://staging.example.com" ())
+        ; check_env "development accepts http://localhost with port"
+            ~expect_enabled:true
+            (venv ~environment:"development" ~allow_development:"true"
+               ~public_origin:"http://localhost:8080" ())
+        ; check_env "development accepts https 127.0.0.1" ~expect_enabled:true
+            (venv ~environment:"development" ~allow_development:"true"
+               ~public_origin:"https://127.0.0.1:8443" ())
+        ; check_env "development accepts ::1" ~expect_enabled:true
+            (venv ~environment:"development" ~allow_development:"true"
+               ~public_origin:"http://[::1]:8080" ())
+        ; check_env "development rejects the production origin"
+            ~expect_enabled:false
+            (venv ~environment:"development" ~allow_development:"true"
+               ~public_origin:"https://earde.com" ())
+        ; check_env "development rejects arbitrary remote origins"
+            ~expect_enabled:false
+            (venv ~environment:"development" ~allow_development:"true"
+               ~public_origin:"https://remote.example.com" ())
+        ] )
+      (* Complete-configuration requirements and the public browser config:
+         incomplete token/host/project/key combinations disable analytics;
+         the browser sees only the public token, ingest host and normalized
+         environment — never the personal key or project id. *)
+    ; ( "analytics_environment_config"
+      , [ check_env "missing token disables" ~expect_enabled:false
+            (AnT.validate_environment_configuration ~enabled:"true"
+               ~environment:"production" ~api_host:"https://eu.i.posthog.com"
+               ~ui_host:"https://eu.posthog.com" ~project_id:"42"
+               ~personal_api_key:"phx_test_dummy"
+               ~public_origin:"https://earde.com" ())
+        ; check_env "missing project id disables" ~expect_enabled:false
+            (AnT.validate_environment_configuration ~enabled:"true"
+               ~environment:"production" ~project_token:"phc_test_token"
+               ~api_host:"https://eu.i.posthog.com"
+               ~ui_host:"https://eu.posthog.com"
+               ~personal_api_key:"phx_test_dummy"
+               ~public_origin:"https://earde.com" ())
+        ; check_env "zero project id disables" ~expect_enabled:false
+            (venv ~environment:"production" ~project_id:"0"
+               ~public_origin:"https://earde.com" ())
+        ; check_env "negative project id disables" ~expect_enabled:false
+            (venv ~environment:"production" ~project_id:"-3"
+               ~public_origin:"https://earde.com" ())
+        ; check_env "non-numeric project id disables" ~expect_enabled:false
+            (venv ~environment:"production" ~project_id:"abc"
+               ~public_origin:"https://earde.com" ())
+        ; check_env "missing personal key disables" ~expect_enabled:false
+            (AnT.validate_environment_configuration ~enabled:"true"
+               ~environment:"production" ~project_token:"phc_test_token"
+               ~api_host:"https://eu.i.posthog.com"
+               ~ui_host:"https://eu.posthog.com" ~project_id:"42"
+               ~public_origin:"https://earde.com" ())
+        ; check_env "http api host disables" ~expect_enabled:false
+            (venv ~environment:"production"
+               ~api_host:"http://eu.i.posthog.com"
+               ~public_origin:"https://earde.com" ())
+        ; check_env "http ui host disables" ~expect_enabled:false
+            (venv ~environment:"production" ~ui_host:"http://eu.posthog.com"
+               ~public_origin:"https://earde.com" ())
+        ; an_case "staging requires the complete configuration too" (fun () ->
+              let enabled, _, _ =
+                AnT.validate_environment_configuration ~enabled:"true"
+                  ~environment:"staging" ~project_token:"phc_test_token"
+                  ~api_host:"https://eu.i.posthog.com"
+                  ~ui_host:"https://eu.posthog.com"
+                  ~public_origin:"https://staging.example.com" ()
+              in
+              Alcotest.(check bool) "disabled without id+key" false enabled)
+        ; an_case "browser config carries only public values + environment"
+            (fun () ->
+              install_production_config ();
+              Fun.protect ~finally:AnT.clear_configuration_override (fun () ->
+                  match An.browser_config () with
+                  | None -> Alcotest.fail "expected browser config"
+                  | Some cfg ->
+                      Alcotest.(check string) "token" "phc_test_token"
+                        cfg.An.browser_token;
+                      Alcotest.(check string) "ingest host"
+                        "https://eu.i.posthog.com" cfg.An.browser_api_host;
+                      Alcotest.(check string) "normalized environment"
+                        "production" cfg.An.browser_deployment_environment))
+        ; an_case "invalid configuration yields no browser config" (fun () ->
+              AnT.install_validated_configuration ~enabled:"true"
+                ~environment:"production" ~project_token:"phc_test_token"
+                ~public_origin:"https://earde.com" ();
+              Fun.protect ~finally:AnT.clear_configuration_override (fun () ->
+                  Alcotest.(check bool) "no browser config" true
+                    (An.browser_config () = None)))
+        ; an_case "layout renders the environment attr and no secret" (fun () ->
+              install_production_config ();
+              Fun.protect ~finally:AnT.clear_configuration_override (fun () ->
+                  let html =
+                    Earde.Components.layout ~title:"T" "<p>body</p>"
+                  in
+                  Alcotest.(check bool) "environment attr" true
+                    (contains html
+                       "data-ph-deployment-environment='production'");
+                  Alcotest.(check bool) "no personal key" false
+                    (contains html "phx_secret_test_value");
+                  Alcotest.(check bool) "no project id" false
+                    (contains html "654321")))
+        ] )
+      (* The common event envelope: deployment_environment appears exactly
+         once on every server payload, follows the closed value, and the
+         browser adds it centrally in the sanitizer. *)
+    ; ( "analytics_envelope"
+      , [ an_case "every domain event carries the envelope exactly once"
+            (fun () ->
+              List.iter
+                (fun (name, event) ->
+                  let occurrences =
+                    List.length
+                      (List.filter
+                         (fun k -> k = "deployment_environment")
+                         (prop_keys (an_payload event)))
+                  in
+                  if occurrences <> 1 then
+                    Alcotest.failf "%s carries the envelope %d times" name
+                      occurrences)
+                an_all_events)
+        ; an_case "envelope value follows the closed environment" (fun () ->
+              List.iter
+                (fun (environment, expected) ->
+                  let payload =
+                    AnT.event_payload ~api_key:"phc_test" ~environment
+                      ~distinct_id:"user:1" an_login
+                  in
+                  Alcotest.(check (option string)) expected (Some expected)
+                    (match
+                       List.assoc_opt "deployment_environment"
+                         (payload_props payload)
+                     with
+                    | Some (`String v) -> Some v
+                    | _ -> None))
+                [ (An.Production, "production"); (An.Staging, "staging");
+                  (An.Development, "development") ])
+        ; an_case "$groupidentify carries the envelope exactly once" (fun () ->
+              let payload =
+                AnT.group_identify_payload ~api_key:"phc_test"
+                  ~environment:An.Production ~distinct_id:"user:1"
+                  (an_group ())
+              in
+              Alcotest.(check int) "once" 1
+                (List.length
+                   (List.filter
+                      (fun k -> k = "deployment_environment")
+                      (prop_keys payload)));
+              Alcotest.(check bool) "not inside $group_set" false
+                (List.mem_assoc "deployment_environment"
+                   (group_set_of payload)))
+        ; an_case "person sync carries the envelope exactly once" (fun () ->
+              let payload =
+                AnT.person_sync_payload ~api_key:"phc_test"
+                  ~environment:An.Staging ~distinct_id:"user:1" an_person
+              in
+              Alcotest.(check int) "once" 1
+                (List.length
+                   (List.filter
+                      (fun k -> k = "deployment_environment")
+                      (prop_keys payload)));
+              (match List.assoc_opt "$set" (payload_props payload) with
+              | Some (`Assoc set) ->
+                  Alcotest.(check bool) "not inside $set" false
+                    (List.mem_assoc "deployment_environment" set)
+              | _ -> Alcotest.fail "no $set"))
+        ; an_case "browser sanitizer adds the closed value centrally" (fun () ->
+              let js = read_analytics_js () in
+              (* the exact closed set, validated before any SDK work *)
+              Alcotest.(check bool) "closed set" true
+                (contains js
+                   "[\"production\", \"staging\", \"development\"]");
+              Alcotest.(check bool) "invalid environment bails out" true
+                (contains js
+                   "DEPLOYMENT_ENVIRONMENTS.indexOf(deploymentEnvironment) \
+                    === -1) return;");
+              (* one central assignment, inside sanitizeProperties *)
+              Alcotest.(check int) "single central assignment" 1
+                (count_sub js "props.deployment_environment =");
+              (match
+                 ( index_of js "function sanitizeProperties",
+                   index_of js "props.deployment_environment =",
+                   index_of js "MASK_TEXT_SELECTOR" )
+               with
+              | Some sanitize, Some assign, Some after ->
+                  Alcotest.(check bool) "assignment inside the sanitizer" true
+                    (sanitize < assign && assign < after)
+              | _ -> Alcotest.fail "sanitizer markers missing");
+              (* never added at capture call sites *)
+              Alcotest.(check int) "no per-capture property" 0
+                (count_sub js "deployment_environment:");
+              (* the gate precedes SDK loading, so an invalid environment can
+                 produce no PostHog request at all *)
+              match
+                (index_of js "DEPLOYMENT_ENVIRONMENTS.indexOf",
+                 index_of js "function loadSdk")
+              with
+              | Some gate, Some load ->
+                  Alcotest.(check bool) "gate precedes SDK load" true
+                    (gate < load)
+              | _ -> Alcotest.fail "gate markers missing")
+        ] )
+      (* Credential/project preflight against a LOCAL stub: verified only
+         when the configured project id exists and its live api_token equals
+         the configured token; every failure is a bounded class; no request
+         ever reaches an ingestion path; no credential is ever printed. *)
+    ; ( "analytics_preflight"
+      , [ check_preflight "matching project and token verifies"
+            (preflight_handler ()) "verified"
+        ; an_case "verified report carries the safe fields" (fun () ->
+              let result, requests = run_preflight (preflight_handler ()) in
+              (match result with
+              | Ok r ->
+                  Alcotest.(check string) "project id" "42"
+                    r.An.Preflight.report_project_id;
+                  Alcotest.(check bool) "staging environment" true
+                    (r.An.Preflight.report_environment = An.Staging);
+                  Alcotest.(check int) "short fingerprint" 12
+                    (String.length r.An.Preflight.report_token_fingerprint);
+                  Alcotest.(check bool) "fingerprint is not the token" false
+                    (contains preflight_token
+                       r.An.Preflight.report_token_fingerprint)
+              | Error (c, d) -> Alcotest.failf "expected Ok, got %s: %s" c d);
+              Alcotest.(check int) "exactly two metadata requests" 2
+                (List.length requests);
+              (match requests with
+              | [ orgs; project ] ->
+                  Alcotest.(check string) "orgs listing first"
+                    "/api/organizations/" orgs.Api_stub.path;
+                  Alcotest.(check string) "documented project retrieve"
+                    (Printf.sprintf "/api/organizations/%s/projects/42/"
+                       preflight_org)
+                    project.Api_stub.path
+              | _ -> Alcotest.fail "unexpected request sequence"))
+        ; check_preflight "wrong token fails"
+            (preflight_handler
+               ~project_override:
+                 (preflight_project_body ~id:42 ~token:"phc_other_token") ())
+            "token_mismatch"
+        ; check_preflight "missing project fails"
+            (preflight_handler ~project_status:404 ()) "project_not_found"
+        ; check_preflight "unauthorized key fails"
+            (preflight_handler ~orgs_status:401 ()) "unauthorized"
+        ; check_preflight "missing scope fails"
+            (preflight_handler ~orgs_status:403 ()) "missing_scope"
+        ; check_preflight "malformed organization listing fails"
+            (preflight_handler ~orgs_override:"not json" ())
+            "malformed_response"
+        ; check_preflight "malformed project metadata fails"
+            (preflight_handler ~project_override:{|{"unexpected": true}|} ())
+            "malformed_response"
+        ; check_preflight "different project id in the response fails"
+            (preflight_handler
+               ~project_override:
+                 (preflight_project_body ~id:99 ~token:preflight_token) ())
+            "project_id_mismatch"
+        ; check_preflight "server error on project retrieve fails"
+            (preflight_handler ~project_status:500 ()) "http_500"
+        ; check_preflight "redirect behavior fails safely"
+            (preflight_handler ~orgs_status:302 ()) "unexpected_redirect"
+        ; check_preflight "redirect on project retrieve fails safely"
+            (preflight_handler ~project_status:301 ()) "unexpected_redirect"
+        ; an_case "unreachable host fails as network_failure" (fun () ->
+              AnT.use_preflight_test_configuration ~environment:An.Staging
+                ~ui_host:"http://127.0.0.1:9" ~project_id:"42"
+                ~personal_api_key:deletion_test_key
+                ~project_token:preflight_token ();
+              Fun.protect ~finally:AnT.clear_configuration_override (fun () ->
+                  match Lwt_main.run (An.Preflight.run ()) with
+                  | Error ("network_failure", detail) ->
+                      Alcotest.(check bool) "no credential in detail" false
+                        (contains detail preflight_token
+                        || contains detail deletion_test_key)
+                  | Error (c, _) -> Alcotest.failf "unexpected class %s" c
+                  | Ok _ -> Alcotest.fail "must not verify"))
+        ; an_case "invalid configuration fails before any request" (fun () ->
+              AnT.use_disabled_test_configuration ();
+              Fun.protect ~finally:AnT.clear_configuration_override (fun () ->
+                  match Lwt_main.run (An.Preflight.run ()) with
+                  | Error ("configuration_invalid", _) -> ()
+                  | Error (c, _) -> Alcotest.failf "unexpected class %s" c
+                  | Ok _ -> Alcotest.fail "must not verify"))
+        ; an_case "mismatched cloud regions fail statically" (fun () ->
+              (* eu ingest host against the us private host: fails before any
+                 network request is attempted. *)
+              AnT.install_validated_configuration ~enabled:"true"
+                ~environment:"staging" ~project_token:"phc_test_token"
+                ~api_host:"https://eu.i.posthog.com"
+                ~ui_host:"https://us.posthog.com" ~project_id:"42"
+                ~personal_api_key:"phx_test_dummy"
+                ~public_origin:"https://staging.example.com" ()
+              ;
+              Fun.protect ~finally:AnT.clear_configuration_override (fun () ->
+                  match Lwt_main.run (An.Preflight.run ()) with
+                  | Error ("region_mismatch", _) -> ()
+                  | Error (c, _) -> Alcotest.failf "unexpected class %s" c
+                  | Ok _ -> Alcotest.fail "must not verify"))
         ] )
     ; ( "mod_delete_community_scope", Mod_scope.suite )
     ; ( "db_returning_ids", Returning_ids.suite )

@@ -8,6 +8,33 @@
     immediately; HTTP happens asynchronously, best-effort, and can never fail
     the calling request. *)
 
+(** Closed server-side deployment environment. Set ONLY by the
+    [EARDE_DEPLOYMENT_ENVIRONMENT] variable (exact lowercase values
+    ["production"] / ["staging"] / ["development"]) — never inferred from
+    hostname, branch name or executable mode, and never retained as an
+    arbitrary string. When [POSTHOG_ENABLED=true] the variable is REQUIRED:
+    unknown, missing, blank or differently-cased values disable analytics with
+    a startup diagnostic. When PostHog is disabled the variable is not needed.
+
+    Activation rules (all fail closed):
+    - production: complete PostHog configuration and [EARDE_PUBLIC_ORIGIN]
+      exactly [https://earde.com];
+    - staging: complete PostHog configuration and an HTTPS origin that is NOT
+      a production origin (no staging hostname is hardcoded);
+    - development: disabled by default; [POSTHOG_ALLOW_DEVELOPMENT=true]
+      explicitly enables it with loopback-only origins and a diagnostic.
+
+    Production and staging use SEPARATE PostHog projects — separate tokens,
+    project ids and personal API keys. That project separation is the
+    isolation boundary; the [deployment_environment] event property this type
+    feeds is diagnostic context only, and [Preflight] verifies each
+    deployment's token/project binding. *)
+type deployment_environment = Production | Staging | Development
+
+(** ["production"] / ["staging"] / ["development"] — the normalized closed
+    value used in event payloads and the browser configuration. *)
+val deployment_environment_to_string : deployment_environment -> string
+
 (** Closed person-property record (§4.3). Emitted only as the [$set] object —
     on [Account_signed_up] / [Account_logged_in] payloads and in
     [sync_person_after_consent_grant] — never as ordinary event properties.
@@ -115,13 +142,17 @@ val community_group_key : int -> string
     Groups-API cleanup client. *)
 val community_group_type_index : int
 
-(** Strictly public browser configuration: the write-only project token and
-    the ingest host, nothing else. [None] when analytics is disabled or the
-    required configuration is invalid — in that case no banner, no config
-    attributes, and no PostHog request may be produced. Server-only values
-    ([POSTHOG_PERSONAL_API_KEY], [POSTHOG_PROJECT_ID]) are not reachable
-    through this interface. *)
-type browser_config = { browser_token : string; browser_api_host : string }
+(** Strictly public browser configuration: the write-only project token, the
+    ingest host and the normalized closed deployment environment, nothing
+    else. [None] when analytics is disabled or the required configuration is
+    invalid — in that case no banner, no config attributes, and no PostHog
+    request may be produced. Server-only values ([POSTHOG_PERSONAL_API_KEY],
+    [POSTHOG_PROJECT_ID]) are not reachable through this interface. *)
+type browser_config = {
+  browser_token : string;
+  browser_api_host : string;
+  browser_deployment_environment : string;
+}
 
 val browser_config : unit -> browser_config option
 
@@ -154,7 +185,10 @@ val sanitize_url_for_analytics : string -> string
 (** Captures the event iff analytics is enabled and the request carries
     [earde_analytics_consent=granted]. Missing, denied, or malformed consent
     produces no side effect. Community-scoped events automatically carry
-    [$groups.community = "community:<id>"]. *)
+    [$groups.community = "community:<id>"]. Every payload built by this
+    module additionally carries the closed [deployment_environment] value,
+    added exactly once by the shared payload envelope — never by event
+    constructors and never as an arbitrary string. *)
 val capture_if_consented : Dream.request -> distinct_id:string -> event -> unit
 
 (** Consent-transition person-property sync (§3.1/§9). Deliberately does not
@@ -200,6 +234,36 @@ val capture_account_deleted_sequenced : Dream.request -> unit Lwt.t
 val identify_community_if_consented :
   Dream.request -> distinct_id:string -> community_group -> unit
 
+(** Server-only credential/project preflight. Verifies — without ingesting
+    any event — that [POSTHOG_PROJECT_ID] exists on the configured private
+    API host and that its live [api_token] equals [POSTHOG_PROJECT_TOKEN],
+    via the documented endpoints
+    [GET /api/organizations/] (scope [organization:read]) and
+    [GET /api/organizations/:org/projects/:id/] (scope [project:read]).
+    Reuses the central configuration parser (an invalid configuration fails
+    before any request), uses [POSTHOG_PERSONAL_API_KEY] only server-side
+    under one bounded timeout, and reports only bounded failure classes —
+    never the token, the key, or any response body. Run by
+    [bin/check_posthog_config.ml] before migration/restart during production
+    and staging deployments. *)
+module Preflight : sig
+  type report = {
+    report_environment : deployment_environment;
+    report_project_id : string;
+    report_api_host : string;
+    report_ui_host : string;
+    report_token_fingerprint : string;
+        (** non-reversible SHA-256 prefix of the verified token *)
+    report_notes : string list;  (** safe, human-readable verified facts *)
+  }
+
+  (** [Ok report] only when the configured project was positively verified.
+      [Error (class, safe_detail)] on mismatch, missing project, wrong
+      region, malformed response, missing scope, network failure, timeout or
+      incomplete configuration. *)
+  val run : unit -> (report, string * string) result Lwt.t
+end
+
 (** Test seams: pure payload builders and a capture sink that replaces the
     HTTP transport. The sink only observes payloads produced by the closed
     API above — it is not a bypass capable of arbitrary capture. *)
@@ -208,13 +272,25 @@ module For_testing : sig
     string option -> [ `Granted | `Denied | `Unknown ]
 
   val event_payload :
-    api_key:string -> distinct_id:string -> event -> Yojson.Safe.t
+    api_key:string ->
+    environment:deployment_environment ->
+    distinct_id:string ->
+    event ->
+    Yojson.Safe.t
 
   val person_sync_payload :
-    api_key:string -> distinct_id:string -> person_properties -> Yojson.Safe.t
+    api_key:string ->
+    environment:deployment_environment ->
+    distinct_id:string ->
+    person_properties ->
+    Yojson.Safe.t
 
   val group_identify_payload :
-    api_key:string -> distinct_id:string -> community_group -> Yojson.Safe.t
+    api_key:string ->
+    environment:deployment_environment ->
+    distinct_id:string ->
+    community_group ->
+    Yojson.Safe.t
 
   (** When set, capture dispatch calls the sink synchronously instead of
       performing HTTP. Sink exceptions are swallowed like transport errors. *)
@@ -236,6 +312,50 @@ module For_testing : sig
     unit
 
   val use_disabled_test_configuration : unit -> unit
+
+  (** Preflight tests: a fully populated enabled configuration whose private
+      API host points at a local HTTP stub. Dummy values only. *)
+  val use_preflight_test_configuration :
+    environment:deployment_environment ->
+    ui_host:string ->
+    project_id:string ->
+    personal_api_key:string ->
+    project_token:string ->
+    unit ->
+    unit
+
+  (** Pure drive of the closed environment/activation validator on raw
+      values, exactly as if they came from the process environment. Returns
+      [(analytics_enabled, normalized_environment, diagnostics)]. *)
+  val validate_environment_configuration :
+    ?enabled:string ->
+    ?environment:string ->
+    ?allow_development:string ->
+    ?project_token:string ->
+    ?api_host:string ->
+    ?ui_host:string ->
+    ?project_id:string ->
+    ?personal_api_key:string ->
+    ?public_origin:string ->
+    unit ->
+    bool * string option * string list
+
+  (** Installs the configuration the validator produced from the given raw
+      values, so layout/browser-config tests exercise exactly what a given
+      environment would run with. *)
+  val install_validated_configuration :
+    ?enabled:string ->
+    ?environment:string ->
+    ?allow_development:string ->
+    ?project_token:string ->
+    ?api_host:string ->
+    ?ui_host:string ->
+    ?project_id:string ->
+    ?personal_api_key:string ->
+    ?public_origin:string ->
+    unit ->
+    unit
+
   val clear_configuration_override : unit -> unit
 
   (** [(env var name, is set)] pairs for the active configuration — presence

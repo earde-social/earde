@@ -100,9 +100,32 @@ let community_group_key community_id = Printf.sprintf "community:%d" community_i
    so its group_type_index is 0. Used by the §13 private Groups-API cleanup. *)
 let community_group_type_index = 0
 
+(* === Closed deployment environment === *)
+
+(* One closed server-side model of "where is this process running". It is set
+   ONLY by EARDE_DEPLOYMENT_ENVIRONMENT — never inferred from hostname, branch
+   name or executable mode — and never retained as an arbitrary string. *)
+type deployment_environment = Production | Staging | Development
+
+let deployment_environment_to_string = function
+  | Production -> "production"
+  | Staging -> "staging"
+  | Development -> "development"
+
+(* Exact closed parse: the canonical lowercase spellings only. Case variants,
+   abbreviations and unknown values are rejected so the caller fails closed
+   instead of guessing. *)
+let deployment_environment_of_string = function
+  | "production" -> Some Production
+  | "staging" -> Some Staging
+  | "development" -> Some Development
+  | _ -> None
+
 (* === Configuration === *)
 
 let enabled_env = "POSTHOG_ENABLED"
+let deployment_environment_env = "EARDE_DEPLOYMENT_ENVIRONMENT"
+let allow_development_env = "POSTHOG_ALLOW_DEVELOPMENT"
 let project_token_env = "POSTHOG_PROJECT_TOKEN"
 let api_host_env = "POSTHOG_API_HOST"
 let ui_host_env = "POSTHOG_UI_HOST"
@@ -113,12 +136,21 @@ let public_origin_env = "EARDE_PUBLIC_ORIGIN"
 let default_api_host = "https://eu.i.posthog.com"
 let default_ui_host = "https://eu.posthog.com"
 
+(* The one exact production browser origin. Production analytics binds to it
+   exactly; staging must be a DIFFERENT https origin (no staging hostname is
+   hardcoded here — none has been chosen). *)
+let production_origin = "https://earde.com"
+let production_www_origin = "https://www.earde.com"
+
 type config = {
   enabled : bool;
+  (* Some ⇒ the closed environment parsed exactly; [enabled] additionally
+     requires it (analytics never runs without a validated environment). *)
+  environment : deployment_environment option;
   project_token : string;
   api_host : string;
-  (* Held for the later steps that consume them (§3.3 deletion lifecycle, §9
-     consent endpoint). personal_api_key and project_id are server-only and
+  (* Held for the consumers below (§3.3 deletion lifecycle, §9 consent
+     endpoint, preflight). personal_api_key and project_id are server-only and
      must never be rendered into browser configuration or logged. *)
   ui_host : string;
   project_id : string option;
@@ -126,49 +158,183 @@ type config = {
   public_origin : string option;
 }
 
-let getenv_nonempty name =
-  match Sys.getenv_opt name with
-  | None -> None
-  | Some value ->
-      let value = String.trim value in
-      if value = "" then None else Some value
-
 let strip_trailing_slash value =
   let len = String.length value in
   if len > 0 && value.[len - 1] = '/' then String.sub value 0 (len - 1)
   else value
 
+let starts_with ~prefix s =
+  String.length s >= String.length prefix
+  && String.sub s 0 (String.length prefix) = prefix
+
+let is_https url = starts_with ~prefix:"https://" url
+
+let is_positive_int s =
+  match int_of_string_opt s with Some n -> n > 0 | None -> false
+
+(* Development opt-in accepts only loopback origins — localhost, 127.0.0.1 or
+   ::1, any port — over http or https. Everything else (including the
+   production origin and arbitrary remote hosts) is rejected. *)
+let is_local_origin origin =
+  let uri = Uri.of_string origin in
+  (match Uri.scheme uri with Some "http" | Some "https" -> true | _ -> false)
+  && (match Uri.host uri with
+     | Some ("localhost" | "127.0.0.1" | "::1") -> true
+     | _ -> false)
+
+(* Pure fail-closed resolution of the raw environment values. Returns the
+   resolved config plus startup diagnostics (variable NAMES and requirements
+   only — never values). Every rule here is per-environment activation:
+
+   - POSTHOG_ENABLED anything but exactly "true" ⇒ analytics off, and no other
+     variable is required (local development keeps working with nothing set).
+   - enabled ⇒ EARDE_DEPLOYMENT_ENVIRONMENT is REQUIRED and must parse through
+     the closed type: unknown, missing, blank or differently-cased values
+     disable analytics with a diagnostic.
+   - development is additionally disabled unless POSTHOG_ALLOW_DEVELOPMENT is
+     exactly "true" (an explicit, diagnosed opt-in to a NON-production
+     project).
+   - every enabled environment requires the complete PostHog configuration:
+     project token, https api/ui hosts, positive-integer project id, personal
+     API key, and an origin bound to the environment (production: exactly
+     https://earde.com; staging: any OTHER https origin; development opt-in:
+     loopback only).
+
+   Production and staging are expected to point at SEPARATE PostHog projects
+   (separate tokens, ids and personal keys); that project separation — not the
+   deployment_environment event property — is the isolation boundary, and the
+   preflight below verifies each deployment's token/project binding. *)
+let validate_configuration ~enabled ~environment ~allow_development
+    ~project_token ~api_host ~ui_host ~project_id ~personal_api_key
+    ~public_origin =
+  let norm v =
+    match v with
+    | None -> None
+    | Some s ->
+        let s = String.trim s in
+        if s = "" then None else Some s
+  in
+  let host_or raw default =
+    match norm raw with Some h -> strip_trailing_slash h | None -> default
+  in
+  let api_host = host_or api_host default_api_host in
+  let ui_host = host_or ui_host default_ui_host in
+  let project_id = norm project_id in
+  let personal_api_key = norm personal_api_key in
+  let public_origin = norm public_origin in
+  let parsed_environment =
+    Option.bind (norm environment) deployment_environment_of_string
+  in
+  let base ~enabled ~project_token =
+    {
+      enabled;
+      environment = parsed_environment;
+      project_token;
+      api_host;
+      ui_host;
+      project_id;
+      personal_api_key;
+      public_origin;
+    }
+  in
+  let disabled diagnostics = (base ~enabled:false ~project_token:"", diagnostics) in
+  if norm enabled <> Some "true" then disabled []
+  else
+    match parsed_environment with
+    | None ->
+        disabled
+          [
+            Printf.sprintf
+              "%s must be exactly production, staging or development when \
+               %s=true; unknown, missing, blank or differently-cased values \
+               disable analytics"
+              deployment_environment_env enabled_env;
+          ]
+    | Some Development when norm allow_development <> Some "true" ->
+        disabled
+          [
+            Printf.sprintf
+              "%s=development keeps analytics disabled by default; set \
+               %s=true to explicitly connect local analytics to a \
+               non-production PostHog project"
+              deployment_environment_env allow_development_env;
+          ]
+    | Some env -> (
+        let diagnostics = ref [] in
+        let fail msg = diagnostics := !diagnostics @ [ msg ] in
+        (match norm project_token with
+        | None -> fail (project_token_env ^ " is required when analytics is enabled")
+        | Some _ -> ());
+        if not (is_https api_host) then fail (api_host_env ^ " must use HTTPS");
+        if not (is_https ui_host) then fail (ui_host_env ^ " must use HTTPS");
+        (match project_id with
+        | None -> fail (project_id_env ^ " is required when analytics is enabled")
+        | Some id when not (is_positive_int id) ->
+            fail (project_id_env ^ " must be a positive integer")
+        | Some _ -> ());
+        (match personal_api_key with
+        | None ->
+            fail (personal_api_key_env ^ " is required when analytics is enabled")
+        | Some _ -> ());
+        (match public_origin with
+        | None -> fail (public_origin_env ^ " is required when analytics is enabled")
+        | Some origin -> (
+            match env with
+            | Production ->
+                if origin <> production_origin then
+                  fail
+                    (Printf.sprintf "%s must be exactly %s in production"
+                       public_origin_env production_origin)
+            | Staging ->
+                if not (is_https origin) then
+                  fail (public_origin_env ^ " must be an HTTPS origin in staging")
+                else if origin = production_origin || origin = production_www_origin
+                then
+                  fail
+                    (public_origin_env
+                   ^ " must not be a production origin in staging")
+            | Development ->
+                if not (is_local_origin origin) then
+                  fail
+                    (public_origin_env
+                   ^ " must be a localhost, 127.0.0.1 or ::1 origin (http or \
+                      https) for the development opt-in")));
+        match (!diagnostics, norm project_token) with
+        | [], Some token ->
+            let notices =
+              match env with
+              | Development ->
+                  [
+                    Printf.sprintf
+                      "development analytics EXPLICITLY ENABLED via %s=true; \
+                       events will be sent to the configured (non-production) \
+                       PostHog project"
+                      allow_development_env;
+                  ]
+              | Production | Staging -> []
+            in
+            (base ~enabled:true ~project_token:token, notices)
+        | diags, _ -> disabled diags)
+
 let config_from_env () =
-  let enabled_flag = getenv_nonempty enabled_env = Some "true" in
-  let token = getenv_nonempty project_token_env in
-  let origin = getenv_nonempty public_origin_env in
-  let enabled, project_token =
-    match (enabled_flag, token, origin) with
-    | true, Some t, Some _ -> (true, t)
-    | true, _, _ ->
-        (* Misconfigured: enabled without a token or without the public origin
-           the §9 consent endpoint needs. Disable safely rather than break the
-           product; log the variable names, never any value. *)
-        Logs.warn (fun m ->
-            m "%s=true but %s or %s is unset; analytics disabled" enabled_env
-              project_token_env public_origin_env);
-        (false, "")
-    | false, _, _ -> (false, "")
+  let config, diagnostics =
+    validate_configuration
+      ~enabled:(Sys.getenv_opt enabled_env)
+      ~environment:(Sys.getenv_opt deployment_environment_env)
+      ~allow_development:(Sys.getenv_opt allow_development_env)
+      ~project_token:(Sys.getenv_opt project_token_env)
+      ~api_host:(Sys.getenv_opt api_host_env)
+      ~ui_host:(Sys.getenv_opt ui_host_env)
+      ~project_id:(Sys.getenv_opt project_id_env)
+      ~personal_api_key:(Sys.getenv_opt personal_api_key_env)
+      ~public_origin:(Sys.getenv_opt public_origin_env)
   in
-  let host_or env_name default =
-    match getenv_nonempty env_name with
-    | Some h -> strip_trailing_slash h
-    | None -> default
-  in
-  {
-    enabled;
-    project_token;
-    api_host = host_or api_host_env default_api_host;
-    ui_host = host_or ui_host_env default_ui_host;
-    project_id = getenv_nonempty project_id_env;
-    personal_api_key = getenv_nonempty personal_api_key_env;
-    public_origin = getenv_nonempty public_origin_env;
-  }
+  List.iter
+    (fun msg ->
+      if config.enabled then Logs.warn (fun m -> m "PostHog analytics: %s" msg)
+      else Logs.warn (fun m -> m "PostHog analytics disabled: %s" msg))
+    diagnostics;
+  config
 
 (* Lazy because analytics is not wired in bin/main.ml yet; the first caller
    resolves the environment once. Tests install an override instead so they
@@ -181,18 +347,40 @@ let current_config () =
   | Some config -> config
   | None -> Lazy.force env_config
 
+(* Enabled analytics implies a validated closed environment; any other shape
+   (possible only through a hand-built test override) is treated as disabled. *)
+let active_config () =
+  let c = current_config () in
+  match (c.enabled, c.environment) with
+  | true, Some environment -> Some (c, environment)
+  | _ -> None
+
 (* === Browser configuration (strictly public values) === *)
 
-type browser_config = { browser_token : string; browser_api_host : string }
+type browser_config = {
+  browser_token : string;
+  browser_api_host : string;
+  (* The normalized closed deployment environment — the only environment
+     value the browser ever sees, so its events can carry the same
+     diagnostic property as server events. *)
+  browser_deployment_environment : string;
+}
 
-(* Only the public write-only project token and the ingest host ever reach the
-   browser. personal_api_key and project_id are deliberately unreachable from
-   here. None ⇒ render no banner, no config attributes, no scripts. *)
+(* Only the public write-only project token, the ingest host and the
+   normalized closed deployment environment ever reach the browser.
+   personal_api_key and project_id are deliberately unreachable from here.
+   None ⇒ render no banner, no config attributes, no scripts. *)
 let browser_config () =
-  let c = current_config () in
-  if c.enabled then
-    Some { browser_token = c.project_token; browser_api_host = c.api_host }
-  else None
+  match active_config () with
+  | Some (c, environment) ->
+      Some
+        {
+          browser_token = c.project_token;
+          browser_api_host = c.api_host;
+          browser_deployment_environment =
+            deployment_environment_to_string environment;
+        }
+  | None -> None
 
 (* === Private Persons-API configuration (server-only, §3.3) === *)
 
@@ -449,16 +637,30 @@ let event_properties = function
          no other properties — an aggregate counter only. *)
       [ ("$process_person_profile", `Bool false) ]
 
-let capture_payload ~api_key ~distinct_id ~name ~properties : Yojson.Safe.t =
+(* The one shared payload envelope. deployment_environment is appended HERE,
+   exactly once, for every eligible PostHog payload (domain events,
+   $groupidentify, the $identify person sync) — event constructors cannot
+   carry it (closed variants), so it can never be duplicated or spoofed with
+   an arbitrary string. It is diagnostic context only: the isolation boundary
+   between environments is the separate PostHog project/token, not this
+   property. *)
+let capture_payload ~api_key ~environment ~distinct_id ~name ~properties :
+    Yojson.Safe.t =
   `Assoc
     [
       ("api_key", `String api_key);
       ("event", `String name);
       ("distinct_id", `String distinct_id);
-      ("properties", `Assoc properties);
+      ( "properties",
+        `Assoc
+          (properties
+          @ [
+              ( "deployment_environment",
+                `String (deployment_environment_to_string environment) );
+            ]) );
     ]
 
-let event_payload ~api_key ~distinct_id event =
+let event_payload ~api_key ~environment ~distinct_id event =
   let groups =
     match event_community_id event with
     | None -> []
@@ -469,16 +671,18 @@ let event_payload ~api_key ~distinct_id event =
           );
         ]
   in
-  capture_payload ~api_key ~distinct_id ~name:(event_name event)
+  capture_payload ~api_key ~environment ~distinct_id ~name:(event_name event)
     ~properties:(event_properties event @ groups)
 
 (* Consent-transition sync: a dedicated $identify payload carrying the same
    closed $set object, used only by sync_person_after_consent_grant. *)
-let person_sync_payload ~api_key ~distinct_id (p : person_properties) =
-  capture_payload ~api_key ~distinct_id ~name:"$identify"
+let person_sync_payload ~api_key ~environment ~distinct_id
+    (p : person_properties) =
+  capture_payload ~api_key ~environment ~distinct_id ~name:"$identify"
     ~properties:[ ("$set", person_set_json p) ]
 
-let group_identify_payload ~api_key ~distinct_id (g : community_group) =
+let group_identify_payload ~api_key ~environment ~distinct_id
+    (g : community_group) =
   let group_set =
     [ ("community_id", `Int g.community_id) ]
     @ opt_string "community_slug" g.community_slug
@@ -486,7 +690,7 @@ let group_identify_payload ~api_key ~distinct_id (g : community_group) =
     @ [ ("community_visibility", `String g.community_visibility) ]
     @ opt_string "created_at" g.created_at
   in
-  capture_payload ~api_key ~distinct_id ~name:"$groupidentify"
+  capture_payload ~api_key ~environment ~distinct_id ~name:"$groupidentify"
     ~properties:
       [
         ("$group_type", `String "community");
@@ -554,19 +758,23 @@ let dispatch config payload =
 (* === Public API === *)
 
 let capture_if_consented request ~distinct_id event =
-  let config = current_config () in
-  if config.enabled then
-    match consent_of_cookie_header (Dream.header request "Cookie") with
-    | `Granted ->
-        dispatch config
-          (event_payload ~api_key:config.project_token ~distinct_id event)
-    | `Denied | `Unknown -> ()
+  match active_config () with
+  | None -> ()
+  | Some (config, environment) -> (
+      match consent_of_cookie_header (Dream.header request "Cookie") with
+      | `Granted ->
+          dispatch config
+            (event_payload ~api_key:config.project_token ~environment
+               ~distinct_id event)
+      | `Denied | `Unknown -> ())
 
 let sync_person_after_consent_grant ~distinct_id person =
-  let config = current_config () in
-  if config.enabled then
-    dispatch config
-      (person_sync_payload ~api_key:config.project_token ~distinct_id person)
+  match active_config () with
+  | None -> ()
+  | Some (config, environment) ->
+      dispatch config
+        (person_sync_payload ~api_key:config.project_token ~environment
+           ~distinct_id person)
 
 (* Narrow §3.3 orchestration seam for the account-deletion flow only. The
    metric is PERSONLESS by construction — constant system distinct id,
@@ -577,15 +785,15 @@ let sync_person_after_consent_grant ~distinct_id person =
    analytics or absent/denied consent resolves immediately with no side
    effect — and it can emit only the closed Account_deleted event. *)
 let capture_account_deleted_sequenced request =
-  let config = current_config () in
-  if not config.enabled then Lwt.return_unit
-  else
-    match consent_of_cookie_header (Dream.header request "Cookie") with
-    | `Granted ->
-        dispatch_await config
-          (event_payload ~api_key:config.project_token
-             ~distinct_id:account_deletion_distinct_id Account_deleted)
-    | `Denied | `Unknown -> Lwt.return_unit
+  match active_config () with
+  | None -> Lwt.return_unit
+  | Some (config, environment) -> (
+      match consent_of_cookie_header (Dream.header request "Cookie") with
+      | `Granted ->
+          dispatch_await config
+            (event_payload ~api_key:config.project_token ~environment
+               ~distinct_id:account_deletion_distinct_id Account_deleted)
+      | `Denied | `Unknown -> Lwt.return_unit)
 
 (* $groupidentify shares capture_if_consented's exact gate: enabled AND the
    request's consent cookie is exactly "granted". It accepts only the closed
@@ -594,14 +802,279 @@ let capture_account_deleted_sequenced request =
    attributes the event to that person; a synthetic id would mint a phantom
    person). *)
 let identify_community_if_consented request ~distinct_id group =
-  let config = current_config () in
-  if config.enabled then
-    match consent_of_cookie_header (Dream.header request "Cookie") with
-    | `Granted ->
-        dispatch config
-          (group_identify_payload ~api_key:config.project_token ~distinct_id
-             group)
-    | `Denied | `Unknown -> ()
+  match active_config () with
+  | None -> ()
+  | Some (config, environment) -> (
+      match consent_of_cookie_header (Dream.header request "Cookie") with
+      | `Granted ->
+          dispatch config
+            (group_identify_payload ~api_key:config.project_token ~environment
+               ~distinct_id group)
+      | `Denied | `Unknown -> ())
+
+(* === Credential/project preflight (server-only) ==========================
+   Verifies, WITHOUT ingesting any event, that the configured deployment
+   really points at the PostHog project it claims to: POSTHOG_PROJECT_ID
+   exists on the configured region host, and its api_token equals
+   POSTHOG_PROJECT_TOKEN — i.e. the binding is checked against the live
+   project metadata, never by merely comparing two variables from the same
+   env file.
+
+   Documented mechanism (verified read-only against the official PostHog
+   OpenAPI schema and API reference, 2026-07):
+     GET /api/organizations/                                   scope organization:read
+     GET /api/organizations/:organization_id/projects/:id/     scope project:read
+   The project serializer (ProjectBackwardCompat) exposes the read-only
+   [api_token] field, which IS the public project token. Both requests run
+   against the private-API host (POSTHOG_UI_HOST) with the personal API key —
+   never the ingest host, never the capture endpoint. *)
+
+module Preflight = struct
+  type report = {
+    report_environment : deployment_environment;
+    report_project_id : string;
+    report_api_host : string;
+    report_ui_host : string;
+    (* Non-reversible short fingerprint (SHA-256 prefix) of the verified
+       project token, so operators can tell WHICH token a deployment carries
+       without the output ever revealing it. *)
+    report_token_fingerprint : string;
+    report_notes : string list;
+  }
+
+  let timeout_seconds = 10.0
+
+  let token_fingerprint token =
+    String.sub Digestif.SHA256.(to_hex (digest_string token)) 0 12
+
+  (* Known PostHog Cloud hosts, for the static ingest/private-API region
+     pairing check. Unknown hosts (self-hosted, local test stubs) skip the
+     static check — the live project lookup still validates them. *)
+  let cloud_region host =
+    if host = "https://eu.i.posthog.com" || host = "https://eu.posthog.com" then
+      Some "eu"
+    else if host = "https://us.i.posthog.com" || host = "https://us.posthog.com"
+    then Some "us"
+    else None
+
+  let auth_header key =
+    Cohttp.Header.init () |> fun h ->
+    Cohttp.Header.add h "authorization" ("Bearer " ^ key)
+
+  (* Organization ids are spliced into request paths; accept only plausible
+     UUID characters so a malformed listing can never rewrite the URL. *)
+  let is_safe_path_id s =
+    s <> ""
+    && String.for_all
+         (function
+           | 'a' .. 'z' | 'A' .. 'Z' | '0' .. '9' | '-' -> true | _ -> false)
+         s
+
+  (* Bounded failure classes only. Response bodies are parsed, never echoed;
+     credentials never appear in any class or detail. *)
+  let classify_error_status status =
+    if status = 401 then "unauthorized"
+    else if status = 403 then "missing_scope"
+    else if status >= 300 && status < 400 then "unexpected_redirect"
+    else Printf.sprintf "http_%d" status
+
+  let http_get ~api_key uri =
+    Cohttp_lwt_unix.Client.get ~headers:(auth_header api_key) uri
+    >>= fun (response, body) ->
+    Cohttp_lwt.Body.to_string body >|= fun body ->
+    (Cohttp.Response.status response |> Cohttp.Code.code_of_status, body)
+
+  let parse_organization_ids body =
+    match Yojson.Safe.from_string body with
+    | exception _ -> Error ("malformed_response", "organization listing did not parse")
+    | `Assoc fields -> (
+        match List.assoc_opt "results" fields with
+        | Some (`List orgs) ->
+            let ids =
+              List.filter_map
+                (function
+                  | `Assoc o -> (
+                      match List.assoc_opt "id" o with
+                      | Some (`String id) when is_safe_path_id id -> Some id
+                      | _ -> None)
+                  | _ -> None)
+                orgs
+            in
+            if orgs = [] then
+              Error
+                ( "no_organizations",
+                  "the personal API key can read no organization on this host" )
+            else if List.length ids <> List.length orgs then
+              Error
+                ( "malformed_response",
+                  "organization listing contained an unusable entry" )
+            else Ok ids
+        | _ -> Error ("malformed_response", "organization listing did not parse"))
+    | _ -> Error ("malformed_response", "organization listing did not parse")
+
+  (* The project response must carry the configured numeric id and the
+     read-only api_token; the token comparison is the actual binding proof. *)
+  let parse_project_body ~project_id body =
+    match Yojson.Safe.from_string body with
+    | exception _ -> Error ("malformed_response", "project metadata did not parse")
+    | `Assoc fields -> (
+        match (List.assoc_opt "id" fields, List.assoc_opt "api_token" fields) with
+        | Some (`Int id), Some (`String token)
+          when string_of_int id = project_id ->
+            Ok token
+        | Some (`Int _), Some (`String _) ->
+            Error
+              ( "project_id_mismatch",
+                "the project endpoint returned metadata for a different \
+                 project id" )
+        | _ -> Error ("malformed_response", "project metadata did not parse"))
+    | _ -> Error ("malformed_response", "project metadata did not parse")
+
+  let rec find_project ~config ~api_key ~project_id = function
+    | [] ->
+        Lwt.return
+          (Error
+             ( "project_not_found",
+               Printf.sprintf
+                 "project %s was not found in any organization readable by \
+                  the personal API key on %s (wrong project id, wrong \
+                  region, or a key for another project)"
+                 project_id config.ui_host ))
+    | org_id :: rest ->
+        http_get ~api_key
+          (Uri.of_string
+             (Printf.sprintf "%s/api/organizations/%s/projects/%s/"
+                config.ui_host org_id project_id))
+        >>= fun (status, body) ->
+        if status = 404 then find_project ~config ~api_key ~project_id rest
+        else if status >= 200 && status < 300 then (
+          match parse_project_body ~project_id body with
+          | Error e -> Lwt.return (Error e)
+          | Ok live_token ->
+              if String.equal live_token config.project_token then
+                Lwt.return (Ok org_id)
+              else
+                Lwt.return
+                  (Error
+                     ( "token_mismatch",
+                       Printf.sprintf
+                         "POSTHOG_PROJECT_TOKEN does not match the api_token \
+                          of project %s (configured token fingerprint \
+                          sha256:%s, live token fingerprint sha256:%s)"
+                         project_id
+                         (token_fingerprint config.project_token)
+                         (token_fingerprint live_token) )))
+        else
+          Lwt.return
+            (Error
+               ( classify_error_status status,
+                 Printf.sprintf "project retrieve answered HTTP %d" status ))
+
+  let verify ~config ~environment ~api_key ~project_id =
+    match (cloud_region config.api_host, cloud_region config.ui_host) with
+    | Some a, Some b when a <> b ->
+        Lwt.return
+          (Error
+             ( "region_mismatch",
+               Printf.sprintf
+                 "%s is a %s-cloud host but %s is a %s-cloud host" api_host_env
+                 a ui_host_env b ))
+    | api_region, _ ->
+        (* limit=100 keeps the single documented listing call sufficient for
+           any realistic key; pagination beyond that is reported as not-found
+           rather than guessed at. *)
+        http_get ~api_key
+          (Uri.with_query'
+             (Uri.of_string (config.ui_host ^ "/api/organizations/"))
+             [ ("limit", "100") ])
+        >>= fun (status, body) ->
+        if status >= 200 && status < 300 then (
+          match parse_organization_ids body with
+          | Error e -> Lwt.return (Error e)
+          | Ok org_ids -> (
+              find_project ~config ~api_key ~project_id org_ids >|= function
+              | Error e -> Error e
+              | Ok org_id ->
+                  Ok
+                    {
+                      report_environment = environment;
+                      report_project_id = project_id;
+                      report_api_host = config.api_host;
+                      report_ui_host = config.ui_host;
+                      report_token_fingerprint =
+                        token_fingerprint config.project_token;
+                      report_notes =
+                        [
+                          Printf.sprintf
+                            "project %s found in organization %s on %s"
+                            project_id org_id config.ui_host;
+                          "POSTHOG_PROJECT_TOKEN matches the project's live \
+                           api_token";
+                        ]
+                        @ (match api_region with
+                          | Some region ->
+                              [
+                                Printf.sprintf
+                                  "api/ui hosts are the matching %s-cloud pair"
+                                  region;
+                              ]
+                          | None ->
+                              [
+                                "hosts are not known PostHog Cloud hosts; \
+                                 static region pairing not checked";
+                              ]);
+                    }))
+        else
+          Lwt.return
+            (Error
+               ( classify_error_status status,
+                 Printf.sprintf "organization listing answered HTTP %d" status
+               ))
+
+  (* Reuses the central configuration parser: an invalid or disabled
+     configuration fails the preflight before any network request. Performs
+     no event ingestion — the only requests are the two documented private
+     metadata reads above, under one bounded timeout. *)
+  let run () =
+    match active_config () with
+    | None ->
+        Lwt.return
+          (Error
+             ( "configuration_invalid",
+               "analytics is disabled by the current environment \
+                configuration; fix the startup diagnostics before deploying" ))
+    | Some (config, environment) -> (
+        match (config.project_id, config.personal_api_key) with
+        | Some project_id, Some api_key ->
+            Lwt.catch
+              (fun () ->
+                Lwt.pick
+                  [
+                    ( verify ~config ~environment ~api_key ~project_id
+                    >|= fun r -> `Done r );
+                    ( Lwt_unix.sleep timeout_seconds >|= fun () -> `Timeout );
+                  ]
+                >|= function
+                | `Done r -> r
+                | `Timeout ->
+                    Error
+                      ( "timeout",
+                        Printf.sprintf "no verdict within %.0fs"
+                          timeout_seconds ))
+              (fun _exn ->
+                (* Exception text can embed hosts/URLs; a bounded class is all
+                   that may be reported. *)
+                Lwt.return
+                  (Error
+                     ( "network_failure",
+                       "the private API host could not be reached" )))
+        | _ ->
+            Lwt.return
+              (Error
+                 ( "configuration_invalid",
+                   project_id_env ^ " and " ^ personal_api_key_env
+                   ^ " are required for the preflight" )))
+end
 
 (* === Test seams === *)
 
@@ -616,6 +1089,10 @@ module For_testing = struct
   let test_config ~enabled =
     {
       enabled;
+      (* Development stands in for "an enabled non-production environment";
+         the record is installed directly (not parsed), so tests exercising
+         the validator use validate_environment_configuration instead. *)
+      environment = (if enabled then Some Development else None);
       (* Dummy token/origin, not real values. *)
       project_token = (if enabled then "phc_test_token" else "");
       api_host = default_api_host;
@@ -644,12 +1121,55 @@ module For_testing = struct
   let use_disabled_test_configuration () =
     config_override := Some (test_config ~enabled:false)
 
+  (* Preflight tests: a fully populated enabled configuration whose private
+     API host points at a local stub. Dummy values only. *)
+  let use_preflight_test_configuration ~environment ~ui_host ~project_id
+      ~personal_api_key ~project_token () =
+    config_override :=
+      Some
+        {
+          (test_config ~enabled:true) with
+          environment = Some environment;
+          project_token;
+          ui_host = strip_trailing_slash ui_host;
+          project_id = Some project_id;
+          personal_api_key = Some personal_api_key;
+        }
+
+  (* Pure drive of the closed environment/activation validator on raw values,
+     as if they came from the process environment. Returns
+     (analytics enabled, parsed environment, diagnostics). *)
+  let validate_environment_configuration ?enabled ?environment
+      ?allow_development ?project_token ?api_host ?ui_host ?project_id
+      ?personal_api_key ?public_origin () =
+    let config, diagnostics =
+      validate_configuration ~enabled ~environment ~allow_development
+        ~project_token ~api_host ~ui_host ~project_id ~personal_api_key
+        ~public_origin
+    in
+    ( config.enabled,
+      Option.map deployment_environment_to_string config.environment,
+      diagnostics )
+
+  (* Installs the config the validator produced, so layout/browser-config
+     tests can exercise exactly what a given environment would run with. *)
+  let install_validated_configuration ?enabled ?environment ?allow_development
+      ?project_token ?api_host ?ui_host ?project_id ?personal_api_key
+      ?public_origin () =
+    let config, _diagnostics =
+      validate_configuration ~enabled ~environment ~allow_development
+        ~project_token ~api_host ~ui_host ~project_id ~personal_api_key
+        ~public_origin
+    in
+    config_override := Some config
+
   let clear_configuration_override () = config_override := None
 
   let config_report () =
     let c = current_config () in
     [
       (enabled_env, c.enabled);
+      (deployment_environment_env, c.environment <> None);
       (project_token_env, c.project_token <> "");
       (api_host_env, c.api_host <> "");
       (ui_host_env, c.ui_host <> "");
