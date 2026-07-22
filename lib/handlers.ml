@@ -343,7 +343,10 @@ let confirm_email_handler request =
       let token_hash = Db.pending_signup_hash_token token in
       Dream.sql request (fun db ->
         match%lwt Db.pending_signup_confirm db token_hash with
-        | Ok (`Confirmed username) ->
+        | Ok (`Confirmed (user_id, username)) ->
+            (* user_id is bound for step 6 (signup_confirmed capture); unused
+               until analytics is wired. *)
+            ignore (user_id : int);
             Dream.html (Pages.msg_page ~auth:true ~title:"Email Confirmed!" ~message:(Printf.sprintf "Your account u/%s is now active. You can log in." username) ~alert_type:"success" ~return_url:"/login" request)
         | Ok `Invalid ->
             Dream.html (Pages.msg_page ~auth:true ~title:"Confirmation Failed" ~message:"This confirmation link is invalid or has expired. Please sign up again." ~alert_type:"error" ~return_url:"/signup" request)
@@ -3066,7 +3069,10 @@ let create_comment_handler request =
                     Dream.respond ~status:`Forbidden (Pages.msg_page ~user:username ~title:"Banned from Community" ~message:"You are banned from commenting in this community." ~alert_type:"error" ~return_url:("/p/" ^ string_of_int post_id) request)
                 | _ ->
                     (match%lwt Db.create_comment db content post_id user_id parent_id_opt with
-                    | Ok () ->
+                    | Ok comment_id ->
+                        (* comment_id is bound for step 6 (comment_created
+                           capture); unused until analytics is wired. *)
+                        ignore (comment_id : int);
                         let%lwt _ = Db.increment_local_comment_count db user_id post.community_id in
                         (* Bump last_activity_at so the post rises in "active" sorted feeds. *)
                         let%lwt _ = Db.touch_post_last_activity db post_id in

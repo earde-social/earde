@@ -1038,15 +1038,17 @@ module Comment = struct
         Lwt.return (Ok comments)
     | Error err -> Lwt.return (Error (Caqti_error.show err))
 
+  (* RETURNING id: the inserted comment id is part of the success payload so
+     later consumers (e.g. analytics) never need a second lookup query. *)
   let create_comment_query =
     let open Caqti_request.Infix in
-    (Caqti_type.(t4 string int int (option int)) ->. Caqti_type.unit)
-    "INSERT INTO comments (content, post_id, user_id, parent_id) VALUES ($1, $2, $3, $4)"
+    (Caqti_type.(t4 string int int (option int)) ->! Caqti_type.int)
+    "INSERT INTO comments (content, post_id, user_id, parent_id) VALUES ($1, $2, $3, $4) RETURNING id"
 
   let create_comment (module C : Caqti_lwt.CONNECTION) content post_id user_id parent_id =
-    C.exec create_comment_query (content, post_id, user_id, parent_id)
+    C.find create_comment_query (content, post_id, user_id, parent_id)
     >>= function
-    | Ok () -> Lwt.return (Ok ())
+    | Ok comment_id -> Lwt.return (Ok comment_id)
     | Error err -> Lwt.return (Error (Caqti_error.show err))
 
   (* Bumped on every new comment so the "active" sort reflects engagement recency, not creation time. *)
@@ -2753,8 +2755,8 @@ module PendingSignup = struct
      is irrelevant to pending-signup users). *)
   let insert_user_query =
     let open Caqti_request.Infix in
-    (Caqti_type.(t3 string string string) ->. Caqti_type.unit)
-    "INSERT INTO users (username, email, password_hash, is_email_verified) VALUES ($1, $2, $3, TRUE)"
+    (Caqti_type.(t3 string string string) ->! Caqti_type.int)
+    "INSERT INTO users (username, email, password_hash, is_email_verified) VALUES ($1, $2, $3, TRUE) RETURNING id"
 
   let mark_consumed_query =
     let open Caqti_request.Infix in
@@ -2763,7 +2765,8 @@ module PendingSignup = struct
 
   (* Confirms a pending in one transaction so a token is consumed exactly once:
      find -> re-check users -> insert user -> mark consumed -> commit. Any failure
-     rolls the whole thing back. Returns the new username for the success page. *)
+     rolls the whole thing back. Returns the new user id (from the insert's
+     RETURNING, no later lookup) and the username for the success page. *)
   let confirm (module C : Caqti_lwt.CONNECTION) token_hash =
     C.start () >>= function
     | Error e -> Lwt.return (Error (Caqti_error.show e))
@@ -2776,15 +2779,15 @@ module PendingSignup = struct
           | Error e -> C.rollback () >>= fun _ -> Lwt.return (Error (Caqti_error.show e))
           | Ok true -> C.rollback () >>= fun _ -> Lwt.return (Ok `Conflict)
           | Ok false ->
-            (C.exec insert_user_query (username, email, password_hash) >>= function
+            (C.find insert_user_query (username, email, password_hash) >>= function
              | Error e -> C.rollback () >>= fun _ -> Lwt.return (Error (Caqti_error.show e))
-             | Ok () ->
+             | Ok user_id ->
                (C.exec mark_consumed_query id >>= function
                 | Error e -> C.rollback () >>= fun _ -> Lwt.return (Error (Caqti_error.show e))
                 | Ok () ->
                   (C.commit () >>= function
                    | Error e -> Lwt.return (Error (Caqti_error.show e))
-                   | Ok () -> Lwt.return (Ok (`Confirmed username)))))))
+                   | Ok () -> Lwt.return (Ok (`Confirmed (user_id, username))))))))
 end
 
 module Mod_action = struct

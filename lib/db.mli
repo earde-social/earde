@@ -336,7 +336,7 @@ end
 
 module Comment : sig
   val get_comments : (module Caqti_lwt.CONNECTION) -> int -> (comment list, string) result Lwt.t
-  val create_comment : (module Caqti_lwt.CONNECTION) -> string -> int -> int -> int option -> (unit, string) result Lwt.t
+  val create_comment : (module Caqti_lwt.CONNECTION) -> string -> int -> int -> int option -> (int, string) result Lwt.t
   val touch_last_activity : (module Caqti_lwt.CONNECTION) -> int -> (unit, string) result Lwt.t
   val vote_comment : (module Caqti_lwt.CONNECTION) -> int -> int -> int -> (unit, string) result Lwt.t
   val get_comments_by_user : (module Caqti_lwt.CONNECTION) -> int -> ((int * string * string * int * string * int) list, string) result Lwt.t
@@ -472,11 +472,12 @@ module PendingSignup : sig
     username:string -> email:string -> password_hash:string -> token_hash:string ->
     ip:string option -> user_agent:string option -> (unit, string) result Lwt.t
   val sweep_expired : (module Caqti_lwt.CONNECTION) -> (unit, string) result Lwt.t
-  (* `Confirmed username = user row created; `Invalid = token missing/expired/already used;
+  (* `Confirmed (user_id, username) = user row created (id from the insert's
+     RETURNING); `Invalid = token missing/expired/already used;
      `Conflict = username/email taken in users since signup. *)
   val confirm :
     (module Caqti_lwt.CONNECTION) -> string ->
-    ([ `Confirmed of string | `Invalid | `Conflict ], string) result Lwt.t
+    ([ `Confirmed of int * string | `Invalid | `Conflict ], string) result Lwt.t
 end
 
 module Community_user_stats : sig
@@ -532,7 +533,7 @@ val get_post_by_id : (module Caqti_lwt.CONNECTION) -> int -> (post option, strin
 val get_posts_by_user : (module Caqti_lwt.CONNECTION) -> int -> (post list, string) result Lwt.t
 val get_post_communities : (module Caqti_lwt.CONNECTION) -> int list -> ((int * int * string * bool * bool) list, string) result Lwt.t
 val soft_delete_post : (module Caqti_lwt.CONNECTION) -> int -> int -> (unit, string) result Lwt.t
-val create_comment : (module Caqti_lwt.CONNECTION) -> string -> int -> int -> int option -> (unit, string) result Lwt.t
+val create_comment : (module Caqti_lwt.CONNECTION) -> string -> int -> int -> int option -> (int, string) result Lwt.t
 val touch_post_last_activity : (module Caqti_lwt.CONNECTION) -> int -> (unit, string) result Lwt.t
 val get_comments : (module Caqti_lwt.CONNECTION) -> int -> (comment list, string) result Lwt.t
 val get_comments_by_user : (module Caqti_lwt.CONNECTION) -> int -> ((int * string * string * int * string * int) list, string) result Lwt.t
@@ -657,7 +658,8 @@ val pending_signup_upsert :
 val pending_signup_sweep_expired : (module Caqti_lwt.CONNECTION) -> (unit, string) result Lwt.t
 val pending_signup_confirm :
   (module Caqti_lwt.CONNECTION) -> string ->
-  ([ `Confirmed of string | `Invalid | `Conflict ], string) result Lwt.t
+  ([ `Confirmed of int * string  (* new user id, username *)
+   | `Invalid | `Conflict ], string) result Lwt.t
 
 val ensure_community_user_stats : (module Caqti_lwt.CONNECTION) -> int -> int -> (unit, string) result Lwt.t
 val increment_local_post_count : (module Caqti_lwt.CONNECTION) -> int -> int -> (unit, string) result Lwt.t
