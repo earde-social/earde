@@ -1360,7 +1360,7 @@ let render_sidebar (community : community) (nav_groups : nav_group list) =
    that differ only in the local sidebar and which rail tile is active.
    `main`/`sidebar`/`right_pane` are caller-rendered HTML fragments. *)
 let global_shell ?user ?request ?noindex ?(rail_communities=[]) ~(rail_active : rail_active)
-    ?sidebar ?right_pane ?(head_extra="") ?analytics_community ~title ~main () =
+    ?sidebar ?right_pane ?(head_extra="") ?analytics_community ?(main_extra_class="") ~title ~main () =
   let rail = render_global_rail ~active:rail_active rail_communities in
   let sidebar_html = Option.value sidebar ~default:"" in
   let aside = match right_pane with
@@ -1374,9 +1374,14 @@ let global_shell ?user ?request ?noindex ?(rail_communities=[]) ~(rail_active : 
   let base = "community-shell app-shell" in
   let base = if sidebar = None then base ^ " feed-shell" else base in
   let shell_cls = if right_pane = None then base else base ^ " with-aside" in
+  (* main_extra_class rides on the <main> element itself (never a wrapper div):
+     .cs-main is a flex column whose panes (head / scroller / composer) must be
+     its DIRECT children, so an interposed box would collapse the height chain. *)
+  let main_cls =
+    if main_extra_class = "" then "cs-main" else "cs-main " ^ main_extra_class in
   let grid =
-    Printf.sprintf "<div class='%s'>%s%s<main class='cs-main'>%s</main>%s</div>"
-      shell_cls rail sidebar_html main aside
+    Printf.sprintf "<div class='%s'>%s%s<main class='%s'>%s</main>%s</div>"
+      shell_cls rail sidebar_html main_cls main aside
   in
   (* head_extra lets a shell page add per-page <head> tags (canonical, meta description, a
      page-scoped script) after the shell stylesheet; default "" keeps pages byte-for-byte
@@ -1397,11 +1402,15 @@ let private_replay_guard ~(community : Db.community) body =
 let community_shell ?user ?request ?noindex ?(rail_communities=[]) ?active_slug
     ?right_pane ?(head_extra="") ~title ~community ~nav_groups ~main () =
   let sidebar = render_sidebar community nav_groups in
-  (* Private communities: the whole main column is excluded from replay. *)
-  let main = private_replay_guard ~community main in
+  (* Private communities: the whole main column is excluded from replay. The
+     class goes on <main class='cs-main'> itself rather than through
+     [private_replay_guard]: wrapping the fragment in a div would break the
+     .cs-main flex column, whose panes must be direct flex children. *)
+  let main_extra_class =
+    if Db.community_is_private community.Db.visibility then "ph-no-capture" else "" in
   let rail_active = match active_slug with Some s -> Rail_community s | None -> Rail_none in
   global_shell ?user ?request ?noindex ~rail_communities ~rail_active
-    ~sidebar ?right_pane ~head_extra
+    ~sidebar ?right_pane ~head_extra ~main_extra_class
     ~analytics_community:(community.id, community.Db.visibility) ~title ~main ()
 
 (* The global Feed shell: the same app shell with NO community sidebar (Feed lives outside any

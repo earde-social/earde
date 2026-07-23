@@ -154,8 +154,9 @@ val private_replay_guard : community:Db.community -> string -> string
 
 (** The persistent in-app community shell (community rail · sidebar · main · optional
     right pane). Wraps [layout] internally with the shell stylesheet and full-bleed main.
-    [main]/[right_pane] are caller-rendered HTML fragments. Private communities get the
-    [private_replay_guard] applied to [main]. *)
+    [main]/[right_pane] are caller-rendered HTML fragments. Private communities get
+    PostHog's ph-no-capture class on the <main> element itself (never a wrapper div,
+    which would break the .cs-main flex column that sizes the chat/thread panes). *)
 val community_shell :
   ?user:string -> ?request:Dream.request -> ?noindex:bool ->
   ?rail_communities:Db.community list -> ?active_slug:string -> ?right_pane:string ->
