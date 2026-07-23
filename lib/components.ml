@@ -141,7 +141,7 @@ let post_thumbnail ?(alt="Post image") ~img_class image_url =
    can omit it and get is_admin=false by default — no forced parameter threading. *)
 (* head_extra/full_bleed are opt-in per page (default to today's behavior) so feature
    pages — e.g. the community shell — can pull in their own stylesheet and go edge-to-edge
-   without affecting any existing call site. See docs/earde-frontend-architecture.md. *)
+   without affecting any existing call site. *)
 
 (* The App command bar: the mono, app-like topbar used by every shell surface (feed + community
    channel/section/thread). It is deliberately distinct from the warm Site navbar so the in-app

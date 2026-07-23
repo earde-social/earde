@@ -1,4 +1,4 @@
-(* PostHog server-side analytics (spec: docs/features/posthog-analytics.md).
+(* PostHog server-side analytics.
    Precedents: lib/turnstile.ml (env-driven optional external HTTP service) and
    lib/realtime.ml (fire-and-forget Cohttp POST with timeout). Payloads target
    the Capture API single-event endpoint POST <api_host>/i/v0/e/ with

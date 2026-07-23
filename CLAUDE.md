@@ -24,12 +24,10 @@ valuable discussion can be kept and found later rather than scrolling away.
 
 ## Architecture style
 
-- Prefer a few cohesive, feature-oriented macro-modules over many tiny files. The main
-  modules today are `lib/db.ml`, `lib/handlers.ml`, `lib/pages.ml`, and
-  `lib/components.ml`.
-- A new top-level module is fine only when it is cohesive and feature-oriented; avoid
-  scattering a single feature across many tiny files without a strong reason.
-- Group related logic with inner modules rather than splitting into more files.
+- Prefer feature-oriented modules with clear boundaries. Do not add unrelated
+  responsibilities to legacy macro-modules.
+- Refactor incrementally when touching an existing feature. Avoid repository-wide
+  refactors without a concrete product need.
 
 ## Interface discipline
 

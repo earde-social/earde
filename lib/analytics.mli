@@ -1,4 +1,4 @@
-(** PostHog server-side analytics (spec: docs/features/posthog-analytics.md §3.1).
+(** PostHog server-side analytics.
 
     Consent is enforced by construction: the only capture path for domain
     events is [capture_if_consented], which requires the Dream request and

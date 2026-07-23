@@ -24,8 +24,8 @@ let community_visibility_of_string = function
 
 (* === Effective access/indexability rules (PURE — no DB, no IO) ===
    Privacy is the strictly stronger property and is evaluated first: a private community is
-   always effectively non-indexable, regardless of any [indexable] flag. These encode §1A /
-   §2.8 of docs/private-access-indexability-audit.md and are unit-tested in test_earde.ml. *)
+   always effectively non-indexable, regardless of any [indexable] flag. These rules are
+   unit-tested in test_earde.ml. *)
 
 let community_is_private = function
   | Community_private -> true
