@@ -98,6 +98,176 @@ let same_origin_request config request =
       | Some "same-origin" -> true
       | _ -> false)
 
+(* --- GitHub App setup return (GET /integrations/github/install/return) --- *)
+
+(* Every setup-return outcome must move the browser away from the callback
+   URL: no branch may render HTML while state sits in the address bar, the
+   redirect must not be cached, and Referrer-Policy: no-referrer keeps the
+   state-bearing URL from reaching the next destination as a Referer — both
+   for local /bring failures and for the external GitHub redirect. *)
+let clean_redirect location =
+  Dream.response ~status:`See_Other
+    ~headers:
+      [ ("Location", location);
+        ("Cache-Control", "no-store");
+        ("Pragma", "no-cache");
+        ("Referrer-Policy", "no-referrer");
+      ]
+    ""
+
+let bring_redirect () = clean_redirect "/bring"
+
+(* Strict single-occurrence extraction of one raw query value from the
+   original request target. Dream.query silently tolerates duplicate keys,
+   so the target is split by hand: only the substring after the first '?',
+   stopped at a raw '#', components on raw '&', each component at its first
+   '='. Keys are case-sensitive; unrelated parameters are ignored (GitHub
+   may append optional setup metadata). The value is used byte-for-byte —
+   the canonical state alphabet needs no percent-decoding, and decoding
+   would create aliases of one stored state. *)
+let raw_query_value ~key target =
+  match String.index_opt target '?' with
+  | None -> Error ()
+  | Some q -> (
+      let query = String.sub target (q + 1) (String.length target - q - 1) in
+      let query =
+        match String.index_opt query '#' with
+        | None -> query
+        | Some h -> String.sub query 0 h
+      in
+      let values =
+        List.filter_map
+          (fun component ->
+            match String.index_opt component '=' with
+            | None ->
+                (* A bare required key carries no usable value and must fail
+                   the exactly-one rule; anything else is unrelated. *)
+                if String.equal component key then Some None else None
+            | Some eq ->
+                if String.equal (String.sub component 0 eq) key then
+                  Some
+                    (Some
+                       (String.sub component (eq + 1)
+                          (String.length component - eq - 1)))
+                else None)
+          (String.split_on_char '&' query)
+      in
+      match values with
+      | [ Some value ] when not (String.equal value "") -> Ok value
+      | _ -> Error ())
+
+(* GitHub echoes installation_id as an untrusted decimal BIGINT: accept
+   ASCII digits only, require the value to fit int64 and be positive.
+   Leading zeroes are tolerated — they cannot alias a different id — but
+   signs, whitespace, decimal points, and overflow are rejected. *)
+let installation_id_of_string value =
+  let is_digit = function '0' .. '9' -> true | _ -> false in
+  if String.equal value "" || not (String.for_all is_digit value) then None
+  else
+    let rec accumulate i acc =
+      if i = String.length value then Some acc
+      else
+        let d = Int64.of_int (Char.code value.[i] - Char.code '0') in
+        if Int64.compare acc (Int64.div (Int64.sub Int64.max_int d) 10L) > 0
+        then None
+        else accumulate (i + 1) (Int64.add (Int64.mul acc 10L) d)
+    in
+    match accumulate 0 0L with
+    | Some id when Int64.compare id 0L > 0 -> Some id
+    | _ -> None
+
+(* Both required parameters, or one payload-free rejection — attacker input
+   never surfaces in a message or log. *)
+let parse_setup_return_target target =
+  match raw_query_value ~key:"state" target with
+  | Error () -> Error ()
+  | Ok raw_state -> (
+      match Github_onboarding_crypto.state_of_callback raw_state with
+      | Error Github_onboarding_crypto.Invalid_format -> Error ()
+      | Ok state -> (
+          match raw_query_value ~key:"installation_id" target with
+          | Error () -> Error ()
+          | Ok raw_id -> (
+              match installation_id_of_string raw_id with
+              | None -> Error ()
+              | Some installation_id -> Ok (state, installation_id))))
+
+let make_setup_return_handler ~mode ~load_config request =
+  match mode with
+  | Project_onboarding.Off ->
+      (* Kill switch: no configuration read, no parsing, no cookie access,
+         no SQL. Still a clean redirect rather than a 404 — the browser is
+         mid-flow at a URL carrying a live state. *)
+      Lwt.return (bring_redirect ())
+  | Project_onboarding.Admins | Project_onboarding.Public -> (
+      (* Deliberately no Dream-session gate: this arrives on a cross-site
+         top-level redirect from GitHub that the login session cookie is not
+         guaranteed to accompany. Authorization is possession-based — the
+         raw state plus the per-flow cookie — and the owning user was
+         recorded by the authenticated start endpoint. *)
+      match load_config () with
+      | Error _ -> Lwt.return (bring_redirect ())
+      | Ok config -> (
+          match parse_setup_return_target (Dream.target request) with
+          | Error () -> Lwt.return (bring_redirect ())
+          | Ok (state, installation_id) -> (
+              match Github_onboarding_cookie.load config ~request ~state with
+              | Error Github_onboarding_cookie.Missing ->
+                  (* Another browser, or cleared data: leave the state and
+                     any other browser's cookie intact so the original
+                     browser can still finish. No SQL was touched. *)
+                  Lwt.return (bring_redirect ())
+              | Error Github_onboarding_cookie.Invalid ->
+                  (* Undecryptable or undecodable material is useless;
+                     delete it. Whether decryption or decoding failed stays
+                     private. *)
+                  let response = bring_redirect () in
+                  Github_onboarding_cookie.drop config ~request ~response
+                    ~state;
+                  Lwt.return response
+              | Ok data -> (
+                  let%lwt attached =
+                    Dream.sql request (fun db ->
+                        Github_onboarding_state_store
+                        .attach_pending_installation db ~state
+                          ~session_binding_hash:
+                            (Github_onboarding_session_data
+                             .session_binding_hash data)
+                          ~flow:Github_onboarding.Project_onboarding
+                          ~pending_github_installation_id:installation_id)
+                  in
+                  match attached with
+                  | Ok () ->
+                      (* The per-flow cookie is left untouched — not
+                         refreshed, not re-emitted: the OAuth callback still
+                         needs its binding proof and PKCE verifier under the
+                         original lifetime. *)
+                      Lwt.return
+                        (clean_redirect
+                           (Github_onboarding_urls.authorization_url config
+                              ~state
+                              ~code_challenge:
+                                (Github_onboarding_session_data.code_challenge
+                                   data)))
+                  | Error
+                      ( Github_onboarding_state_store.State_unavailable
+                      | Github_onboarding_state_store
+                        .Invalid_pending_installation_id ) ->
+                      (* One collapsed answer for every dead-state cause —
+                         unknown, expired, consumed, mismatched, or a
+                         conflicting installation — so the endpoint is not a
+                         state-probing oracle. The cookie cannot succeed
+                         against this row again, so drop it. *)
+                      let response = bring_redirect () in
+                      Github_onboarding_cookie.drop config ~request ~response
+                        ~state;
+                      Lwt.return response
+                  | Error Github_onboarding_state_store.Storage_error ->
+                      (* Transient database failure: keep the cookie so a
+                         browser refresh can retry while the state is still
+                         live. *)
+                      Lwt.return (bring_redirect ())))))
+
 let make_start_installation_handler ~mode ~load_config request =
   match mode with
   (* Off: controlled 404 before configuration, session material, or SQL. *)

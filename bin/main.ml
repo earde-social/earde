@@ -91,6 +91,19 @@ let () =
              ~mode:(Earde.Project_onboarding.mode_from_env ())
              ~load_config:Earde.Github_app_config.from_env
              request));
+    (* GitHub App setup return: GET only, and deliberately NOT wrapped in
+       Rate_limit.middleware — malformed or cookieless requests are rejected
+       before any database access, a valid encrypted per-flow cookie is
+       required before the single attach UPDATE, and the limiter's blocked
+       page is rendered HTML, while this state-bearing callback URL must only
+       ever answer with a clean redirect away. Request-target redaction keeps
+       the state out of Dream logging and analytics. *)
+    Dream.get "/integrations/github/install/return"
+      (fun request ->
+        Earde.Github_onboarding_handlers.make_setup_return_handler
+          ~mode:(Earde.Project_onboarding.mode_from_env ())
+          ~load_config:Earde.Github_app_config.from_env
+          request);
     Dream.get "/new-community" Earde.Handlers.new_community_page;
     Dream.post "/communities" Earde.Handlers.create_community_handler;
     Dream.post "/join" Earde.Handlers.join_community_handler;
