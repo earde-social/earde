@@ -174,7 +174,7 @@ let render_app_topbar ?user ?request:_ ~is_admin () =
            Log out stays a POST form — unchanged route semantics. The notifications link keeps
            id='notif-badge' exactly where the layout's polling JS expects it. *)
         Printf.sprintf "
-          <a class='app-start' href='/new-community'>+ Start community</a>
+          <a class='app-start' href='/bring'>Connect a project</a>
           <a class='app-bell' href='/notifications' title='Notifications' aria-label='Notifications'><svg class='app-icon' aria-hidden='true' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'><path d='M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9'></path><path d='M10 21h4'></path></svg><span id='notif-badge' class='app-badge hidden'>0</span></a>
           <details class='app-user'>
             <summary><span class='app-avatar'>%s</span><span class='app-uname'>u/%s</span></summary>
@@ -1199,7 +1199,7 @@ let left_sidebar ?user ~moderated_communities (user_communities : community list
       "<div class='bg-[#EDE9DF] p-4 rounded-xl border border-[#D8D0C0]'><h3 class='font-semibold text-[#3C3630] mb-1 text-sm'>Join Earde</h3><p class='text-xs text-[#5C5248] mb-3'>Create an account to follow communities and join the conversation.</p><a href='/signup' class='block w-full bg-[#C94C4C] text-[#F7F3E8] text-center py-2 rounded-xl font-semibold text-sm hover:bg-[#A83A3A] transition'>Sign Up</a></div><div class='mt-4 bg-stone-50 border border-stone-200 rounded-xl p-4'><h3 class='text-xs font-semibold text-stone-500 uppercase tracking-wider mb-2'>Learn More</h3><ul class='space-y-2'><li><a href='/privacy' class='flex items-center gap-2 text-sm text-stone-700 hover:underline transition'><span>&#128737;&#65039;</span><span>Privacy Policy</span></a></li></ul></div>"
   | Some _ ->
       if user_communities = [] && moderated_communities = [] then
-        "<div class='p-4 bg-white rounded-xl border border-[#E0D9CC] shadow-[0_2px_8px_rgba(60,54,48,0.06)]'><p class='text-sm text-gray-500 mb-3'>You haven't joined any communities yet.</p><a href='/new-community' class='text-[#C94C4C] font-bold text-sm hover:underline'>Create one &rarr;</a></div>"
+        "<div class='p-4 bg-white rounded-xl border border-[#E0D9CC] shadow-[0_2px_8px_rgba(60,54,48,0.06)]'><p class='text-sm text-gray-500 mb-3'>You haven't joined any communities yet.</p><a href='/bring' class='text-[#C94C4C] font-bold text-sm hover:underline'>Connect a project &rarr;</a></div>"
       else
         (* Dedup: following list excludes communities the user already moderates. *)
         let mod_ids = List.map (fun (a : community) -> a.id) moderated_communities in
@@ -1322,7 +1322,7 @@ let render_global_rail ~(active : rail_active) (communities : community list) =
       cls (html_escape c.slug) (html_escape c.slug) face
   ) communities in
   let add =
-    "<a class='cs-rail-item cs-rail-add' href='/new-community' title='Join or start a community'>+</a>" in
+    "<a class='cs-rail-item cs-rail-add' href='/bring' title='Connect a project'>+</a>" in
   Printf.sprintf "<nav class='cs-rail'>%s%s%s</nav>"
     home (String.concat "\n" tiles) add
 
@@ -1420,7 +1420,7 @@ let feed_shell ?user ?request ?noindex ?(rail_communities=[]) ?right_pane ?(head
     ?right_pane ~head_extra ~title ~main ()
 
 (* Focused in-product creation layout: the mono app command bar (so the page stays in
-   the app, coherent with the topbar's "+ Start community" CTA) over a single centered
+   the app, coherent with the topbar's "Connect a project" CTA) over a single centered
    cool-grey panel on a graph-paper background (create.css), with no rail/sidebar — long
    forms read better in one column than wedged into the multi-pane shell grid. shell.css
    is loaded for the .app-topbar styles; create.css owns everything under .create-shell.

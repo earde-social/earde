@@ -3503,6 +3503,90 @@ let bring_shared_cases =
     (fun mode -> List.map (bring_shared_case mode) bring_viewers)
     bring_modes
 
+(* Ordinary navigation entry points — pure renderers (no server, no session
+   middleware). Generic community creation is admin-only and reachable only by
+   typing /new-community manually; normal navigation (topbar, rail, sidebars,
+   creation-flow fallbacks) must advertise the /bring onboarding entry point
+   instead — including for global admins. *)
+let nav_case name f = Alcotest.test_case name `Quick f
+
+let nav_check html =
+  let must s = Alcotest.(check bool) ("contains: " ^ s) true (contains html s) in
+  let must_not s =
+    Alcotest.(check bool) ("must not contain: " ^ s) false (contains html s)
+  in
+  (must, must_not)
+
+let nav_test_community : Earde.Db.community =
+  { id = 1; slug = "ocaml"; name = "OCaml"; description = None; rules = None
+  ; avatar_url = None; banner_url = None; allow_downvotes = true
+  ; sections_enabled = true; visibility = Earde.Db.Community_public
+  ; indexable = true }
+
+let nav_entry_cases =
+  [ nav_case "logged-in topbar advertises /bring" (fun () ->
+        let html =
+          Earde.Components.render_app_topbar ~user:"alice" ~is_admin:false () in
+        let must, must_not = nav_check html in
+        must "href='/bring'";
+        must "Connect a project";
+        must_not "Start community";
+        must_not "/new-community")
+  ; nav_case "logged-in topbar keeps unrelated actions" (fun () ->
+        let html =
+          Earde.Components.render_app_topbar ~user:"alice" ~is_admin:false () in
+        let must, _ = nav_check html in
+        must "href='/notifications'";
+        must "notif-badge";
+        must "href='/settings'";
+        must "Log out")
+  ; nav_case "admin topbar offers /bring, not the legacy route" (fun () ->
+        let html =
+          Earde.Components.render_app_topbar ~user:"root" ~is_admin:true () in
+        let must, must_not = nav_check html in
+        must "href='/admin'";
+        must "href='/bring'";
+        must_not "/new-community")
+  ; nav_case "anonymous topbar unchanged" (fun () ->
+        let html = Earde.Components.render_app_topbar ~is_admin:false () in
+        let must, must_not = nav_check html in
+        must "href='/login'";
+        must "href='/signup'";
+        must_not "/new-community";
+        must_not "/bring")
+  ; nav_case "empty communities sidebar links to /bring" (fun () ->
+        let html =
+          Earde.Components.left_sidebar ~user:"alice" ~moderated_communities:[] [] in
+        let must, must_not = nav_check html in
+        must "href='/bring'";
+        must "Connect a project";
+        must_not "/new-community")
+  ; nav_case "anonymous sidebar unchanged" (fun () ->
+        let html = Earde.Components.left_sidebar ~moderated_communities:[] [] in
+        let must, must_not = nav_check html in
+        must "href='/signup'";
+        must_not "/new-community")
+  ; nav_case "app shell rail add-tile targets /bring" (fun () ->
+        let html =
+          Earde.Components.feed_shell ~user:"alice" ~title:"Feed" ~main:"" () in
+        let must, must_not = nav_check html in
+        must "cs-rail-add' href='/bring'";
+        must_not "/new-community")
+  ; nav_case "choose-community fallback connects a project" (fun () ->
+        let html =
+          Earde.Pages.choose_community_page ~user:"alice" [ nav_test_community ] in
+        let must, must_not = nav_check html in
+        must "href='/bring'";
+        must "Connect a project";
+        must "Post here";
+        must_not "/new-community";
+        must_not "Start a community")
+  ; nav_case "admin creation form renderer retained" (fun () ->
+        (* Compile-time retention check: the admin-only legacy form (and its
+           request-taking signature) must not be removed by this de-linking. *)
+        ignore (Earde.Pages.new_community_form : ?user:string -> Dream.request -> string))
+  ]
+
 let () =
   Alcotest.run "earde"
     [ ( "smoke"
@@ -5782,4 +5866,7 @@ let () =
               Alcotest.(check bool) "feed link" true
                 (contains html "href='/feed'"))
         ] )
+      (* Ordinary navigation must advertise /bring, never the admin-only
+         /new-community flow (see nav_entry_cases). *)
+    ; ( "app_nav_entry_points", nav_entry_cases )
     ]
