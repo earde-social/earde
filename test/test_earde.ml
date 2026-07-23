@@ -7083,6 +7083,1082 @@ module Gh_setup_return = struct
       db_missing_cookie_case; parallel_case ]
 end
 
+(* === GitHub OAuth authorization callback (Github_onboarding_handlers) ===
+   GET /integrations/github/authorize/callback: the terminal, sessionless
+   leg of onboarding. Every outcome must be a clean 303 with the
+   no-store/no-cache/no-referrer headers and an empty body, to exactly
+   /bring?github=connected or /bring?github=failed — never a rendered page,
+   never a distinguishable internal stage. DB-free cases use injected
+   mode/config/credentials and fake transports under the fixed test secret;
+   no session middleware is ever installed, because the handler must not
+   need one. Reaching the missing sql_pool boundary IS the assertion that
+   parsing, the cookie gate, and the credentials gate all passed with no
+   SQL and no transport call. Raw states, codes, bindings, verifiers,
+   secrets, and tokens never reach assertion output — material comparisons
+   are boolean. *)
+module Gh_oauth_callback = struct
+  let ( let* ) = Lwt.bind
+
+  open Caqti_request.Infix
+
+  let case = go_case
+
+  let path = "/integrations/github/authorize/callback"
+
+  let make ~mode ~load_config ~load_credentials ~exchange ~installations =
+    Earde.Github_onboarding_handlers.make_oauth_callback_handler ~mode
+      ~load_config ~load_credentials ~exchange_transport:exchange
+      ~installations_transport:installations
+
+  let counting_loader = Gh_start_handler.counting_loader
+  let ok_loader = Gh_start_handler.ok_loader
+  let status_of = Gh_start_handler.status_of
+  let check_safety_headers = Gh_setup_return.check_safety_headers
+  let check_deletion = Gh_setup_return.check_deletion
+
+  (* Deterministic printable state fixture, distinct from every other
+     suite's. *)
+  let fixture_state_string = goc_fixture 'K'
+  let fixture_state () = goc_state_exn fixture_state_string
+
+  (* Opaque but raw-query-safe authorization code fixture: parsing splits
+     on '&' and '#', so those bytes cannot appear, while '=' inside the
+     value must survive byte-for-byte. *)
+  let fixture_code = "cb-c0de.fixture~ok=="
+
+  let target_of params = path ^ "?" ^ String.concat "&" params
+
+  let code_target =
+    target_of [ "state=" ^ fixture_state_string; "code=" ^ fixture_code ]
+
+  let error_target =
+    target_of [ "state=" ^ fixture_state_string; "error=access_denied" ]
+
+  let ok_credentials () = Ok (gte_credentials ())
+  let failed_credentials () = Error (GCS.Missing GCS.Client_secret)
+
+  (* Success bodies for the fake transports. The token body uses the
+     expiring configuration so a refresh token exists and must never leak
+     anywhere. *)
+  let access_fixture = "ghcb-access.TOKEN~1"
+  let refresh_fixture = "ghcb-refresh.TOKEN~2"
+
+  let token_body =
+    {|{"access_token":"ghcb-access.TOKEN~1","token_type":"bearer","scope":"","expires_in":28800,"refresh_token":"ghcb-refresh.TOKEN~2","refresh_token_expires_in":15811200}|}
+
+  let oauth_rejected_body =
+    {|{"error":"bad_verification_code","error_description":"The code passed is incorrect or expired.","error_uri":"https://docs.github.com/x"}|}
+
+  (* Counting fake transports. The exchange stub repeats one scripted
+     result; the installations stub answers a finite script and fails the
+     test outright if over-called. *)
+  let exchange_stub result calls =
+    (module struct
+      let post ~uri:_ ~headers:_ ~body:_ =
+        incr calls;
+        Lwt.return result
+    end : GTE.TRANSPORT)
+
+  let installations_stub responses calls =
+    let remaining = ref responses in
+    (module struct
+      let get ~uri:_ ~headers:_ =
+        incr calls;
+        match !remaining with
+        | [] -> Alcotest.fail "installations transport over-called"
+        | response :: rest ->
+            remaining := rest;
+            Lwt.return response
+    end : GUI.TRANSPORT)
+
+  (* A one-page listing that contains [installation_id], via the shared
+     gui_entry derivation (account id = id + 1, login "owner-<id>",
+     organization target). *)
+  let listing_for installation_id =
+    Ok (200, gui_body ~total:1 [ installation_id ])
+
+  (* DB-free run under the fixed test secret: no session middleware, no
+     sql_pool — reaching Dream.sql raises, marking the boundary. Returns
+     the outcome plus the credentials/exchange/installations call counts
+     observed by the injected fakes. *)
+  let gate_run ?(cookies = []) ?(mode = Ob.Public)
+      ?(load_config = fun () -> ok_loader ())
+      ?(credentials_result = ok_credentials ()) ~target () =
+    let cred_calls = ref 0 and ex_calls = ref 0 and inst_calls = ref 0 in
+    let handler =
+      make ~mode ~load_config
+        ~load_credentials:(fun () ->
+          incr cred_calls;
+          credentials_result)
+        ~exchange:(exchange_stub (Ok (200, token_body)) ex_calls)
+        ~installations:(installations_stub [ listing_for 12345L ] inst_calls)
+    in
+    let headers =
+      match cookies with
+      | [] -> []
+      | pairs -> [ ("Cookie", gck_cookie_header pairs) ]
+    in
+    let request = Dream.request ~method_:`GET ~target ~headers "" in
+    let outcome =
+      match Lwt_main.run (Dream.set_secret gck_secret handler request) with
+      | response -> `Response response
+      | exception _ -> `Db_boundary
+    in
+    (outcome, (!cred_calls, !ex_calls, !inst_calls))
+
+  let gate_response label = function
+    | `Response response -> response
+    | `Db_boundary -> Alcotest.failf "%s: unexpectedly reached the DB" label
+
+  let check_db_boundary label = function
+    | `Db_boundary -> ()
+    | `Response response ->
+        Alcotest.failf "%s: rejected with status %d" label
+          (status_of response)
+
+  (* The full clean-failure contract; the Location is always the literal
+     failure target, so nothing sensitive can be printed. *)
+  let check_failure label response =
+    Alcotest.(check int) (label ^ ": exactly 303") 303 (status_of response);
+    Alcotest.(check (option string)) (label ^ ": Location")
+      (Some "/bring?github=failed")
+      (Dream.header response "Location");
+    check_safety_headers label response;
+    Alcotest.(check string) (label ^ ": empty body") ""
+      (Lwt_main.run (Dream.body response))
+
+  let check_no_calls label (cred, ex, inst) =
+    Alcotest.(check int) (label ^ ": credentials never loaded") 0 cred;
+    Alcotest.(check int) (label ^ ": exchange never called") 0 ex;
+    Alcotest.(check int) (label ^ ": installations never called") 0 inst
+
+  (* One parse rejection: clean failure, no deletion cookie, and — because
+     parsing precedes configuration — the config loader is never called. *)
+  let rejected label target =
+    let loader, config_calls = counting_loader (ok_loader ()) in
+    let outcome, calls = gate_run ~load_config:loader ~target () in
+    let response = gate_response label outcome in
+    check_failure label response;
+    Alcotest.(check int) (label ^ ": no Set-Cookie") 0
+      (List.length (Dream.headers response "Set-Cookie"));
+    Alcotest.(check int) (label ^ ": config loader never called") 0
+      !config_calls;
+    check_no_calls label calls
+
+  let with_fixture_cookie label f =
+    let state = fixture_state () in
+    let name, value, _ =
+      gck_stored (label ^ " cookie") (gck_https_config ()) state
+        (GSD.create ())
+    in
+    f (name, value)
+
+  let off_case =
+    case "Off: clean failure redirect, nothing else runs" (fun () ->
+        let loader, config_calls = counting_loader (ok_loader ()) in
+        with_fixture_cookie "off" (fun cookie ->
+            let outcome, calls =
+              gate_run ~mode:Ob.Off ~load_config:loader ~cookies:[ cookie ]
+                ~target:code_target ()
+            in
+            let response = gate_response "off" outcome in
+            check_failure "off" response;
+            Alcotest.(check int) "config loader never called" 0 !config_calls;
+            check_no_calls "off" calls;
+            Alcotest.(check int) "no Set-Cookie" 0
+              (List.length (Dream.headers response "Set-Cookie"))))
+
+  let state_rejection_case =
+    case "strict parsing: state problems redirect cleanly" (fun () ->
+        List.iter
+          (fun (label, params) -> rejected label (target_of params))
+          [ ("missing state", [ "code=" ^ fixture_code ])
+          ; ("blank state", [ "state="; "code=" ^ fixture_code ])
+          ; ("bare state key", [ "state"; "code=" ^ fixture_code ])
+          ; ( "malformed state",
+              [ "state=not+canonical"; "code=" ^ fixture_code ] )
+          ; ( "padded state",
+              [ "state=" ^ fixture_state_string ^ "=";
+                "code=" ^ fixture_code ] )
+          ; ( "duplicate state",
+              [ "state=" ^ fixture_state_string;
+                "state=" ^ fixture_state_string; "code=" ^ fixture_code ] )
+          ; ( "uppercase State does not satisfy the canonical key",
+              [ "State=" ^ fixture_state_string; "code=" ^ fixture_code ] )
+          ];
+        rejected "no query at all" path;
+        rejected "empty query" (path ^ "?"))
+
+  let shape_rejection_case =
+    case "strict parsing: code/error shape problems redirect cleanly"
+      (fun () ->
+        List.iter
+          (fun (label, params) ->
+            rejected label
+              (target_of (("state=" ^ fixture_state_string) :: params)))
+          [ ("neither code nor error", [])
+          ; ( "both code and error",
+              [ "code=" ^ fixture_code; "error=access_denied" ] )
+          ; ( "duplicate code",
+              [ "code=" ^ fixture_code; "code=" ^ fixture_code ] )
+          ; ( "duplicate error",
+              [ "error=access_denied"; "error=access_denied" ] )
+          ; ( "duplicate code beside a valid error",
+              [ "code=" ^ fixture_code; "code=" ^ fixture_code;
+                "error=access_denied" ] )
+          ; ("blank code", [ "code=" ])
+          ; ("bare code key", [ "code" ])
+          ; ("blank error", [ "error=" ])
+          ; ("bare error key", [ "error" ])
+          ; ("code with a space is invalid", [ "code=bad code" ])
+          ; ("code with a control byte is invalid", [ "code=bad\x01code" ])
+          ; ( "uppercase Code does not satisfy the canonical key",
+              [ "Code=" ^ fixture_code ] )
+          ; ( "uppercase ERROR does not satisfy the canonical key",
+              [ "ERROR=access_denied" ] )
+          ; ( "error_description alone is not an error",
+              [ "error_description=denied" ] )
+          ; ( "fragment cuts the query",
+              [ "state2=x#code=" ^ fixture_code ] )
+          ])
+
+  let config_failure_case =
+    case "configuration failure: clean failure, nothing later runs"
+      (fun () ->
+        let loader, config_calls =
+          counting_loader (gac_of_values ~origin:None ())
+        in
+        with_fixture_cookie "config failure" (fun cookie ->
+            let outcome, calls =
+              gate_run ~load_config:loader ~cookies:[ cookie ]
+                ~target:code_target ()
+            in
+            let response = gate_response "config failure" outcome in
+            check_failure "config failure" response;
+            Alcotest.(check int) "loader called once" 1 !config_calls;
+            check_no_calls "config failure" calls;
+            (* Without configuration there is no cookie policy: no deletion
+               may be attempted. *)
+            Alcotest.(check int) "no Set-Cookie" 0
+              (List.length (Dream.headers response "Set-Cookie"))))
+
+  let missing_cookie_case =
+    case "missing per-flow cookie: failure with no SQL and no deletion"
+      (fun () ->
+        let outcome, calls = gate_run ~target:code_target () in
+        let response = gate_response "missing cookie" outcome in
+        check_failure "missing cookie" response;
+        check_no_calls "missing cookie" calls;
+        Alcotest.(check int) "no Set-Cookie" 0
+          (List.length (Dream.headers response "Set-Cookie"));
+        (* Another state's cookie does not satisfy this flow either. *)
+        let other = goc_state_exn (goc_fixture 'L') in
+        let name, value, _ =
+          gck_stored "other flow" (gck_https_config ()) other (GSD.create ())
+        in
+        let outcome, calls =
+          gate_run ~cookies:[ (name, value) ] ~target:code_target ()
+        in
+        let response = gate_response "other state's cookie" outcome in
+        check_failure "other state's cookie" response;
+        check_no_calls "other state's cookie" calls;
+        Alcotest.(check int) "still no Set-Cookie" 0
+          (List.length (Dream.headers response "Set-Cookie")))
+
+  let invalid_cookie_case =
+    case "invalid per-flow cookie: failure plus matching deletion, no SQL"
+      (fun () ->
+        let state = fixture_state () in
+        let name, value, _ =
+          gck_stored "victim" (gck_https_config ()) state (GSD.create ())
+        in
+        let outcome, calls =
+          gate_run ~cookies:[ (name, "AAAA" ^ value) ] ~target:code_target ()
+        in
+        let response = gate_response "invalid cookie" outcome in
+        check_failure "invalid cookie" response;
+        check_no_calls "invalid cookie" calls;
+        check_deletion "invalid cookie" ~cookie_name:name ~stored_value:value
+          response)
+
+  let github_rejection_case =
+    case "GitHub rejection: cookie deleted, no credentials, SQL, or GitHub"
+      (fun () ->
+        with_fixture_cookie "rejection" (fun (name, value) ->
+            List.iter
+              (fun (label, target) ->
+                let outcome, calls =
+                  gate_run ~cookies:[ (name, value) ] ~target ()
+                in
+                (* A returned response IS the no-SQL proof: consumption
+                   would have raised at the missing pool. *)
+                let response = gate_response label outcome in
+                check_failure label response;
+                check_no_calls label calls;
+                check_deletion label ~cookie_name:name ~stored_value:value
+                  response)
+              [ ("rejection", error_target)
+              ; ( "rejection with remote metadata ignored",
+                  target_of
+                    [ "state=" ^ fixture_state_string; "error=access_denied";
+                      "error_description=The+user+denied+access";
+                      "error_uri=https%3A%2F%2Fdocs.github.com%2Fx" ] )
+              ]))
+
+  let credential_failure_case =
+    case "credential failure: cookie kept, no SQL, no transport" (fun () ->
+        with_fixture_cookie "credentials" (fun cookie ->
+            let outcome, (cred, ex, inst) =
+              gate_run ~credentials_result:(failed_credentials ())
+                ~cookies:[ cookie ] ~target:code_target ()
+            in
+            let response = gate_response "credential failure" outcome in
+            check_failure "credential failure" response;
+            Alcotest.(check int) "credentials loader called once" 1 cred;
+            Alcotest.(check int) "exchange never called" 0 ex;
+            Alcotest.(check int) "installations never called" 0 inst;
+            (* The state is untouched, so the cookie must survive for a
+               retry after the deployment is repaired. *)
+            Alcotest.(check int) "no Set-Cookie" 0
+              (List.length (Dream.headers response "Set-Cookie"))))
+
+  let sql_boundary_case =
+    case "valid code, cookie, and credentials reach consumption first"
+      (fun () ->
+        with_fixture_cookie "boundary" (fun cookie ->
+            (* No session middleware is installed anywhere in this suite;
+               reaching the SQL boundary in both modes proves no session
+               field gated the way, and the still-zero transport counters
+               prove consumption strictly precedes any GitHub call. *)
+            List.iter
+              (fun (label, mode) ->
+                let outcome, (cred, ex, inst) =
+                  gate_run ~mode ~cookies:[ cookie ] ~target:code_target ()
+                in
+                check_db_boundary label outcome;
+                Alcotest.(check int)
+                  (label ^ ": credentials loaded once")
+                  1 cred;
+                Alcotest.(check int) (label ^ ": exchange not yet called") 0
+                  ex;
+                Alcotest.(check int)
+                  (label ^ ": installations not yet called")
+                  0 inst)
+              [ ("Public", Ob.Public); ("Admins", Ob.Admins) ]))
+
+  let unrelated_params_case =
+    case "unrelated extra query parameters are accepted" (fun () ->
+        with_fixture_cookie "extras" (fun cookie ->
+            let outcome, _ =
+              gate_run ~cookies:[ cookie ]
+                ~target:
+                  (target_of
+                     [ "ref=x"; "state=" ^ fixture_state_string;
+                       "setup_action=install"; "State=UP"; "bare";
+                       "code=" ^ fixture_code; "code2=9";
+                       "error_description=ignored"; "error_uri=ignored" ])
+                ()
+            in
+            check_db_boundary "extras ignored" outcome))
+
+  let no_leakage_case =
+    case "failure responses never echo state, code, or error values"
+      (fun () ->
+        List.iter
+          (fun (label, target) ->
+            let outcome, _ = gate_run ~target () in
+            let response = gate_response label outcome in
+            let body = Lwt_main.run (Dream.body response) in
+            let location =
+              Option.value (Dream.header response "Location") ~default:""
+            in
+            List.iter
+              (fun needle ->
+                Alcotest.(check bool) (label ^ ": absent from the body")
+                  false
+                  (goc_contains ~needle body);
+                Alcotest.(check bool)
+                  (label ^ ": absent from the Location")
+                  false
+                  (goc_contains ~needle location))
+              [ fixture_state_string; fixture_code; "access_denied" ])
+          [ ("code shape", code_target); ("error shape", error_target) ])
+
+  let gate_suite =
+    [ off_case; state_rejection_case; shape_rejection_case;
+      config_failure_case; missing_cookie_case; invalid_cookie_case;
+      github_rejection_case; credential_failure_case; sql_boundary_case;
+      unrelated_params_case; no_leakage_case ]
+
+  (* --- Database-gated: the real start + setup-return flow first, then
+     the callback over sql_pool + secret, still with no session middleware
+     and with fake transports only. --- *)
+
+  let or_fail = Gh_start_handler.or_fail
+
+  (* Reserved installation-id range for this suite: 936000001-936000999
+     (the installation-store suite owns 935xxx). *)
+  let q_cleanup =
+    List.map
+      (fun sql -> (Caqti_type.unit ->. Caqti_type.unit) sql)
+      [ "DELETE FROM github_onboarding_states WHERE user_id IN \
+         (SELECT id FROM users WHERE username LIKE 'ghoauth_%')"
+      ; "DELETE FROM github_installations \
+         WHERE github_installation_id BETWEEN 936000001 AND 936000999"
+      ; "DELETE FROM users WHERE username LIKE 'ghoauth_%'"
+      ]
+
+  let db_case name f =
+    Alcotest.test_case name `Quick (fun () ->
+        match Sys.getenv_opt "EARDE_TEST_DATABASE_URL" with
+        | None | Some "" -> Alcotest.skip ()
+        | Some url ->
+            Lwt_main.run
+              (let* conn = Caqti_lwt_unix.connect (Uri.of_string url) in
+               let* conn = or_fail "connect" conn in
+               let (module C : Caqti_lwt.CONNECTION) = conn in
+               let cleanup () =
+                 Lwt_list.iter_s
+                   (fun q ->
+                     let* r = C.exec q () in
+                     let* () = or_fail "cleanup" r in
+                     Lwt.return_unit)
+                   q_cleanup
+               in
+               let* () = cleanup () in
+               Lwt.finalize
+                 (fun () -> f ~url (module C : Caqti_lwt.CONNECTION))
+                 (fun () ->
+                   (* Unlike the older suites this one runs many requests,
+                      so it must not leak its per-case connection. *)
+                   let* () = cleanup () in
+                   C.disconnect ())))
+
+  let state_hash_of = Gh_setup_return.state_hash_of
+
+  let q_state_row =
+    (Caqti_type.(string ->! t2 (option int64) bool))
+    "SELECT pending_github_installation_id, consumed_at IS NULL
+     FROM github_onboarding_states WHERE state_hash = $1"
+
+  let q_installation_row =
+    (Caqti_type.(int64 ->! t2 (t3 int64 string string) (option int)))
+    "SELECT github_account_id, github_account_login, github_account_type,
+            connected_by_user_id
+     FROM github_installations WHERE github_installation_id = $1"
+
+  let q_installation_count =
+    (Caqti_type.int64 ->! Caqti_type.int)
+    "SELECT COUNT(*) FROM github_installations
+     WHERE github_installation_id = $1"
+
+  (* Full rows as one text value each, for boolean secret-absence sweeps
+     over everything either table stores. *)
+  let q_installation_text =
+    (Caqti_type.int64 ->! Caqti_type.string)
+    "SELECT ROW(t.*)::text FROM github_installations t
+     WHERE t.github_installation_id = $1"
+
+  let q_state_text =
+    (Caqti_type.string ->! Caqti_type.string)
+    "SELECT ROW(t.*)::text FROM github_onboarding_states t
+     WHERE t.state_hash = $1"
+
+  (* Future-dated lifetime: the row stays live (unexpired, unconsumed),
+     but consume's UPDATE of consumed_at = NOW() then violates the
+     consumed_after_created CHECK — a real storage error at the handler
+     boundary without weakening any production constraint. *)
+  let q_future =
+    (Caqti_type.string ->. Caqti_type.unit)
+    "UPDATE github_onboarding_states
+     SET created_at = NOW() + INTERVAL '1 hour',
+         expires_at = NOW() + INTERVAL '2 hours'
+     WHERE state_hash = $1"
+
+  (* Pre-existing terminally revoked row, so a later verified persistence
+     of the same installation id must fail without modifying it. *)
+  let q_insert_revoked =
+    (Caqti_type.(t2 int64 int64 ->. unit))
+    "INSERT INTO github_installations
+       (github_installation_id, github_account_id, github_account_login,
+        github_account_type, status, revoked_at)
+     VALUES ($1, $2, 'revoked-owner', 'organization', 'revoked', NOW())"
+
+  let fixture_user (module C : Caqti_lwt.CONNECTION) name =
+    let* uid = C.find Gh_start_handler.q_insert_user name in
+    or_fail "fixture user" uid
+
+  (* One shared single-connection sql_pool pipeline for the whole suite:
+     nothing ever closes a Dream.sql_pool, and this suite runs enough
+     requests (start + setup return + callback per case) that a fresh pool
+     per request would exhaust Postgres max_connections. The inner handler
+     is swapped per request; cases run sequentially. *)
+  let shared_handler : Dream.handler ref =
+    ref (fun _ -> Alcotest.fail "no handler installed")
+
+  let shared_pipeline = ref None
+
+  let run_shared ~url handler request =
+    let pipeline =
+      match !shared_pipeline with
+      | Some pipeline -> pipeline
+      | None ->
+          let pipeline =
+            Dream.sql_pool ~size:1 url
+            @@ Dream.set_secret gck_secret
+            @@ fun req -> !shared_handler req
+          in
+          shared_pipeline := Some pipeline;
+          pipeline
+    in
+    shared_handler := handler;
+    pipeline request
+
+  let cookie_jar_headers = function
+    | [] -> []
+    | pairs -> [ ("Cookie", gck_cookie_header pairs) ]
+
+  (* Lwt-native gck_stored: db cases already run inside Lwt_main.run, so
+     crafting a cookie (e.g. the forged-binding one) must compose instead
+     of nesting run. *)
+  let stored_lwt label config state data =
+    let headers = ref None in
+    let* (_ : Dream.response) =
+      Dream.set_secret gck_secret
+        (fun request ->
+          let response = Dream.response "" in
+          GCK.store config ~request ~response ~state data;
+          headers := Some (Dream.headers response "Set-Cookie");
+          Dream.respond "")
+        (Dream.request "")
+    in
+    match !headers with
+    | Some [ header ] ->
+        let name, value, _ = gck_parse_set_cookie header in
+        Lwt.return (name, value)
+    | _ -> Alcotest.failf "%s: expected exactly one stored Set-Cookie" label
+
+  (* The real preceding flow over the shared pool: the authenticated start
+     (memory session for the fixture user), then the setup return attaching
+     [installation]; yields the state plus the untouched per-flow cookie
+     exactly as the browser holds them. *)
+  let onboard ~url ~uid ~installation label =
+    let start_handler =
+      Dream.memory_sessions (fun req ->
+          let* () =
+            Dream.set_session_field req "user_id" (string_of_int uid)
+          in
+          Earde.Github_onboarding_handlers.make_start_installation_handler
+            ~mode:Ob.Public
+            ~load_config:(fun () -> ok_loader ())
+            req)
+    in
+    let* response =
+      run_shared ~url start_handler
+        (Dream.request ~method_:`POST
+           ~target:"/integrations/github/install/start"
+           ~headers:[ ("Origin", "https://earde.com") ]
+           "")
+    in
+    let _, state, name, value =
+      Gh_start_handler.successful_start (label ^ ": start") response
+    in
+    let cookie = (name, value) in
+    let return_handler =
+      Gh_setup_return.make ~mode:Ob.Public ~load_config:(fun () ->
+          ok_loader ())
+    in
+    let* response =
+      run_shared ~url return_handler
+        (Dream.request ~method_:`GET
+           ~target:
+             (Gh_setup_return.target_of
+                [ "state=" ^ GOC.state_to_string state;
+                  "installation_id=" ^ Int64.to_string installation ])
+           ~headers:(cookie_jar_headers [ cookie ])
+           "")
+    in
+    Alcotest.(check int) (label ^ ": setup return 303") 303
+      (status_of response);
+    (match Dream.header response "Location" with
+    | Some location ->
+        Alcotest.(check bool) (label ^ ": setup return reached GitHub") true
+          (goc_contains ~needle:"github.com" location)
+    | None -> Alcotest.fail (label ^ ": setup return had no Location"));
+    Lwt.return (state, cookie)
+
+  let callback_target state code =
+    target_of [ "state=" ^ GOC.state_to_string state; "code=" ^ code ]
+
+  (* The callback over the real pipeline: shared sql_pool + secret,
+     deliberately no session middleware and no session fields. *)
+  let run_callback ~url ?(jar = []) ?(credentials = ok_credentials ())
+      ~exchange ~installations ~target () =
+    let handler =
+      make ~mode:Ob.Public
+        ~load_config:(fun () -> ok_loader ())
+        ~load_credentials:(fun () -> credentials)
+        ~exchange ~installations
+    in
+    run_shared ~url handler
+      (Dream.request ~method_:`GET ~target
+         ~headers:(cookie_jar_headers jar)
+         "")
+
+  (* Lwt-safe response contracts. *)
+  let check_redirect_lwt label ~location response =
+    Alcotest.(check int) (label ^ ": exactly 303") 303 (status_of response);
+    Alcotest.(check (option string)) (label ^ ": Location") (Some location)
+      (Dream.header response "Location");
+    check_safety_headers label response;
+    let* body = Dream.body response in
+    Alcotest.(check string) (label ^ ": empty body") "" body;
+    Lwt.return_unit
+
+  let check_failure_lwt label response =
+    check_redirect_lwt label ~location:"/bring?github=failed" response
+
+  let check_success_lwt label response =
+    check_redirect_lwt label ~location:"/bring?github=connected" response
+
+  let state_row (module C : Caqti_lwt.CONNECTION) label state =
+    let* row = C.find q_state_row (state_hash_of state) in
+    or_fail (label ^ ": state row") row
+
+  let installation_count (module C : Caqti_lwt.CONNECTION) label id =
+    let* count = C.find q_installation_count id in
+    or_fail (label ^ ": installation count") count
+
+  (* One terminal failure: generic redirect plus this flow's cookie
+     deletion, and no verified installation row. *)
+  let check_terminal_failure (module C : Caqti_lwt.CONNECTION) label
+      ~cookie ~installation response =
+    let* () = check_failure_lwt label response in
+    check_deletion label ~cookie_name:(fst cookie)
+      ~stored_value:(snd cookie) response;
+    let* count = installation_count (module C) label installation in
+    Alcotest.(check int) (label ^ ": no installation row") 0 count;
+    Lwt.return_unit
+
+  let success_case =
+    db_case
+      "successful callback: consume + exchange + verify + persist + clean \
+       redirect"
+      (fun ~url (module C : Caqti_lwt.CONNECTION) ->
+        let* uid = fixture_user (module C) "ghoauth_user" in
+        let installation = 936000001L in
+        let config = gck_https_config () in
+        let* state, cookie = onboard ~url ~uid ~installation "success" in
+        let* data = Gh_start_handler.load_cookie config state [ cookie ] in
+        let ex_calls = ref 0 and inst_calls = ref 0 in
+        let* response =
+          run_callback ~url ~jar:[ cookie ]
+            ~exchange:(exchange_stub (Ok (200, token_body)) ex_calls)
+            ~installations:
+              (installations_stub [ listing_for installation ] inst_calls)
+            ~target:(callback_target state fixture_code)
+            ()
+        in
+        let* () = check_success_lwt "success" response in
+        Alcotest.(check int) "one token exchange" 1 !ex_calls;
+        Alcotest.(check int) "one installation listing" 1 !inst_calls;
+        (* The flow's cookie is deleted, and only it — memoryless of any
+           session because none exists. *)
+        check_deletion "success" ~cookie_name:(fst cookie)
+          ~stored_value:(snd cookie) response;
+        (* State consumed; the untrusted pending id was exactly what got
+           verified and persisted. *)
+        let* pending, consumed_null = state_row (module C) "success" state in
+        Alcotest.(check bool) "pending id retained" true
+          (pending = Some installation);
+        Alcotest.(check bool) "state consumed" false consumed_null;
+        let* row = C.find q_installation_row installation in
+        let* (account_id, login, account_type), connected_by =
+          or_fail "installation row" row
+        in
+        (* Identity exactly as the verification response derived it
+           (gui_entry: account id = id + 1, login "owner-<id>",
+           organization). *)
+        Alcotest.(check bool) "account id from verification" true
+          (account_id = Int64.add installation 1L);
+        Alcotest.(check string) "account login from verification"
+          (Printf.sprintf "owner-%Ld" installation)
+          login;
+        Alcotest.(check string) "organization target" "organization"
+          account_type;
+        (* The connected user is the start-handler fixture user, read back
+           from the consumed state — no session existed at the callback. *)
+        Alcotest.(check (option int)) "connected by the stored owner"
+          (Some uid) connected_by;
+        let* count = installation_count (module C) "success" installation in
+        Alcotest.(check int) "exactly one installation row" 1 count;
+        (* Privacy sweep: nothing secret in any stored text value of either
+           row — tokens, code, raw state, raw binding, raw verifier, client
+           secret. *)
+        let* installation_text = C.find q_installation_text installation in
+        let* installation_text =
+          or_fail "installation text" installation_text
+        in
+        let* state_text = C.find q_state_text (state_hash_of state) in
+        let* state_text = or_fail "state text" state_text in
+        let stored = installation_text ^ "|" ^ state_text in
+        let raw_binding, raw_verifier =
+          match String.split_on_char '.' (GSD.encode data) with
+          | [ _version; binding; verifier ] -> (binding, verifier)
+          | _ -> Alcotest.fail "unexpected cookie plaintext shape"
+        in
+        List.iter
+          (fun needle ->
+            Alcotest.(check bool) "absent from every stored text value"
+              false
+              (goc_contains ~needle stored))
+          [ access_fixture; refresh_fixture; fixture_code;
+            GOC.state_to_string state; raw_binding; raw_verifier;
+            gte_client_secret ];
+        (* And nothing sensitive in the response itself. *)
+        let location =
+          Option.value (Dream.header response "Location") ~default:""
+        in
+        List.iter
+          (fun needle ->
+            Alcotest.(check bool) "absent from the Location" false
+              (goc_contains ~needle location))
+          [ GOC.state_to_string state; fixture_code; access_fixture;
+            refresh_fixture; Int64.to_string installation ];
+        Lwt.return_unit)
+
+  let replay_case =
+    db_case "replay after success: generic failure, no second effect"
+      (fun ~url (module C : Caqti_lwt.CONNECTION) ->
+        let* uid = fixture_user (module C) "ghoauth_replay" in
+        let installation = 936000002L in
+        let* state, cookie = onboard ~url ~uid ~installation "replay" in
+        let ex_calls = ref 0 and inst_calls = ref 0 in
+        let exchange = exchange_stub (Ok (200, token_body)) ex_calls in
+        let installations =
+          installations_stub [ listing_for installation ] inst_calls
+        in
+        let target = callback_target state fixture_code in
+        let* first =
+          run_callback ~url ~jar:[ cookie ] ~exchange ~installations ~target
+            ()
+        in
+        let* () = check_success_lwt "first callback" first in
+        (* Identical replay with the original cookie value. *)
+        let* second =
+          run_callback ~url ~jar:[ cookie ] ~exchange ~installations ~target
+            ()
+        in
+        let* () = check_failure_lwt "replay" second in
+        check_deletion "replay" ~cookie_name:(fst cookie)
+          ~stored_value:(snd cookie) second;
+        Alcotest.(check int) "no second token exchange" 1 !ex_calls;
+        Alcotest.(check int) "no second listing" 1 !inst_calls;
+        let* _, consumed_null = state_row (module C) "replay" state in
+        Alcotest.(check bool) "state remains consumed" false consumed_null;
+        let* count = installation_count (module C) "replay" installation in
+        Alcotest.(check int) "still one installation row" 1 count;
+        Lwt.return_unit)
+
+  (* A consume-stage terminal failure: transports must never run and the
+     cookie is deleted. [prepare] mutates the issued state row first. *)
+  let consume_failure_case name ~username ~installation ~prepare
+      ~check_consumed =
+    db_case name (fun ~url (module C : Caqti_lwt.CONNECTION) ->
+        let* uid = fixture_user (module C) username in
+        let* state, cookie = onboard ~url ~uid ~installation name in
+        let* () = prepare (module C : Caqti_lwt.CONNECTION) state in
+        let ex_calls = ref 0 and inst_calls = ref 0 in
+        let* response =
+          run_callback ~url ~jar:[ cookie ]
+            ~exchange:(exchange_stub (Ok (200, token_body)) ex_calls)
+            ~installations:(installations_stub [] inst_calls)
+            ~target:(callback_target state fixture_code)
+            ()
+        in
+        let* () =
+          check_terminal_failure (module C) name ~cookie ~installation
+            response
+        in
+        Alcotest.(check int) (name ^ ": exchange never called") 0 !ex_calls;
+        Alcotest.(check int)
+          (name ^ ": installations never called")
+          0 !inst_calls;
+        let* _, consumed_null = state_row (module C) name state in
+        check_consumed consumed_null;
+        Lwt.return_unit)
+
+  let expired_case =
+    consume_failure_case "expired state: failure, no transport, no burn"
+      ~username:"ghoauth_expired" ~installation:936000003L
+      ~prepare:(fun (module C : Caqti_lwt.CONNECTION) state ->
+        let* r = C.exec Gh_setup_return.q_expire (state_hash_of state) in
+        or_fail "expire" r)
+      ~check_consumed:(fun consumed_null ->
+        Alcotest.(check bool) "expired row left unconsumed" true
+          consumed_null)
+
+  let already_consumed_case =
+    consume_failure_case
+      "already-consumed state: failure, no transport, stays consumed"
+      ~username:"ghoauth_consumed" ~installation:936000004L
+      ~prepare:(fun (module C : Caqti_lwt.CONNECTION) state ->
+        let* r = C.exec Gh_setup_return.q_consume_now (state_hash_of state) in
+        or_fail "consume" r)
+      ~check_consumed:(fun consumed_null ->
+        Alcotest.(check bool) "row stays consumed" false consumed_null)
+
+  let binding_mismatch_case =
+    db_case "session-binding mismatch: durable burn, no transport"
+      (fun ~url (module C : Caqti_lwt.CONNECTION) ->
+        let* uid = fixture_user (module C) "ghoauth_mismatch" in
+        let installation = 936000005L in
+        let* state, cookie = onboard ~url ~uid ~installation "mismatch" in
+        (* A forged cookie for the same state carrying fresh (wrong)
+           material: decrypts fine, but its binding hash cannot match the
+           issued row, so consume burns the state. *)
+        let* forged_name, forged_value =
+          stored_lwt "forged" (gck_https_config ()) state (GSD.create ())
+        in
+        let ex_calls = ref 0 and inst_calls = ref 0 in
+        let* response =
+          run_callback ~url
+            ~jar:[ (forged_name, forged_value) ]
+            ~exchange:(exchange_stub (Ok (200, token_body)) ex_calls)
+            ~installations:(installations_stub [] inst_calls)
+            ~target:(callback_target state fixture_code)
+            ()
+        in
+        let* () =
+          check_terminal_failure (module C) "mismatch"
+            ~cookie:(forged_name, forged_value) ~installation response
+        in
+        Alcotest.(check int) "exchange never called" 0 !ex_calls;
+        Alcotest.(check int) "installations never called" 0 !inst_calls;
+        let* _, consumed_null = state_row (module C) "mismatch" state in
+        Alcotest.(check bool) "state durably burned" false consumed_null;
+        (* The burn is terminal: the genuine cookie cannot finish either. *)
+        let* retry =
+          run_callback ~url ~jar:[ cookie ]
+            ~exchange:(exchange_stub (Ok (200, token_body)) ex_calls)
+            ~installations:(installations_stub [] inst_calls)
+            ~target:(callback_target state fixture_code)
+            ()
+        in
+        let* () = check_failure_lwt "post-burn retry" retry in
+        Alcotest.(check int) "still no exchange" 0 !ex_calls;
+        Lwt.return_unit)
+
+  (* An exchange-stage terminal failure: verification and persistence must
+     never run; the state is already consumed. *)
+  let exchange_failure_case name ~username ~installation ~exchange_result =
+    db_case name (fun ~url (module C : Caqti_lwt.CONNECTION) ->
+        let* uid = fixture_user (module C) username in
+        let* state, cookie = onboard ~url ~uid ~installation name in
+        let ex_calls = ref 0 and inst_calls = ref 0 in
+        let* response =
+          run_callback ~url ~jar:[ cookie ]
+            ~exchange:(exchange_stub exchange_result ex_calls)
+            ~installations:(installations_stub [] inst_calls)
+            ~target:(callback_target state fixture_code)
+            ()
+        in
+        let* () =
+          check_terminal_failure (module C) name ~cookie ~installation
+            response
+        in
+        Alcotest.(check int) (name ^ ": one exchange attempt") 1 !ex_calls;
+        Alcotest.(check int)
+          (name ^ ": verification never ran")
+          0 !inst_calls;
+        let* _, consumed_null = state_row (module C) name state in
+        Alcotest.(check bool) (name ^ ": state consumed first") false
+          consumed_null;
+        Lwt.return_unit)
+
+  let exchange_transport_case =
+    exchange_failure_case "exchange transport failure: terminal"
+      ~username:"ghoauth_extransport" ~installation:936000006L
+      ~exchange_result:(Error ())
+
+  let oauth_rejected_case =
+    exchange_failure_case "OAuth-rejected token response: terminal"
+      ~username:"ghoauth_exrejected" ~installation:936000007L
+      ~exchange_result:(Ok (200, oauth_rejected_body))
+
+  (* A verification-stage terminal failure: persistence must never run. *)
+  let verification_failure_case name ~username ~installation ~responses
+      ~expected_listing_calls =
+    db_case name (fun ~url (module C : Caqti_lwt.CONNECTION) ->
+        let* uid = fixture_user (module C) username in
+        let* state, cookie = onboard ~url ~uid ~installation name in
+        let ex_calls = ref 0 and inst_calls = ref 0 in
+        let* response =
+          run_callback ~url ~jar:[ cookie ]
+            ~exchange:(exchange_stub (Ok (200, token_body)) ex_calls)
+            ~installations:(installations_stub responses inst_calls)
+            ~target:(callback_target state fixture_code)
+            ()
+        in
+        let* () =
+          check_terminal_failure (module C) name ~cookie ~installation
+            response
+        in
+        Alcotest.(check int) (name ^ ": one exchange") 1 !ex_calls;
+        Alcotest.(check int)
+          (name ^ ": listing requests")
+          expected_listing_calls !inst_calls;
+        let* _, consumed_null = state_row (module C) name state in
+        Alcotest.(check bool) (name ^ ": state consumed first") false
+          consumed_null;
+        Lwt.return_unit)
+
+  let not_accessible_case =
+    verification_failure_case
+      "installation not accessible: terminal, nothing persisted"
+      ~username:"ghoauth_inaccessible" ~installation:936000008L
+      ~responses:[ Ok (200, gui_body ~total:1 [ 936000998L ]) ]
+      ~expected_listing_calls:1
+
+  let pagination_limit_case =
+    verification_failure_case
+      "pagination limit: terminal, nothing persisted"
+      ~username:"ghoauth_pagination" ~installation:936000009L
+      ~responses:
+        (List.init 5 (fun page ->
+             gui_page_of ~total:600
+               (gui_ids ~from:(Int64.of_int (1000 + (page * 100))) 100)))
+      ~expected_listing_calls:5
+
+  let persistence_failure_case =
+    db_case
+      "revoked installation: persistence fails only after every stage"
+      (fun ~url (module C : Caqti_lwt.CONNECTION) ->
+        let* uid = fixture_user (module C) "ghoauth_revoked" in
+        let installation = 936000010L in
+        (* Terminal revoked row for the same installation id, with the
+           account identity the verification response will carry. *)
+        let* r =
+          C.exec q_insert_revoked (installation, Int64.add installation 1L)
+        in
+        let* () = or_fail "revoked fixture" r in
+        let* state, cookie = onboard ~url ~uid ~installation "revoked" in
+        let ex_calls = ref 0 and inst_calls = ref 0 in
+        let* response =
+          run_callback ~url ~jar:[ cookie ]
+            ~exchange:(exchange_stub (Ok (200, token_body)) ex_calls)
+            ~installations:
+              (installations_stub [ listing_for installation ] inst_calls)
+            ~target:(callback_target state fixture_code)
+            ()
+        in
+        let* () = check_failure_lwt "revoked" response in
+        check_deletion "revoked" ~cookie_name:(fst cookie)
+          ~stored_value:(snd cookie) response;
+        (* Persistence was attempted last: consume, exchange, and
+           verification all really ran first. *)
+        Alcotest.(check int) "one exchange" 1 !ex_calls;
+        Alcotest.(check int) "one listing" 1 !inst_calls;
+        let* _, consumed_null = state_row (module C) "revoked" state in
+        Alcotest.(check bool) "state consumed" false consumed_null;
+        (* The revoked row is untouched — still revoked, still alone. *)
+        let* row = C.find q_installation_row installation in
+        let* (_, login, _), _ = or_fail "revoked row" row in
+        Alcotest.(check string) "revoked row untouched" "revoked-owner"
+          login;
+        let* count = installation_count (module C) "revoked" installation in
+        Alcotest.(check int) "still exactly one row" 1 count;
+        Lwt.return_unit)
+
+  let consume_storage_error_case =
+    db_case "consume storage error: cookie kept, no transport" (fun ~url
+        (module C : Caqti_lwt.CONNECTION) ->
+        let* uid = fixture_user (module C) "ghoauth_storage" in
+        let installation = 936000011L in
+        let* state, cookie = onboard ~url ~uid ~installation "storage" in
+        let* r = C.exec q_future (state_hash_of state) in
+        let* () = or_fail "future-date" r in
+        let ex_calls = ref 0 and inst_calls = ref 0 in
+        let* response =
+          run_callback ~url ~jar:[ cookie ]
+            ~exchange:(exchange_stub (Ok (200, token_body)) ex_calls)
+            ~installations:(installations_stub [] inst_calls)
+            ~target:(callback_target state fixture_code)
+            ()
+        in
+        let* () = check_failure_lwt "storage error" response in
+        (* No committed outcome: the cookie must survive for a retry. *)
+        Alcotest.(check int) "no Set-Cookie" 0
+          (List.length (Dream.headers response "Set-Cookie"));
+        Alcotest.(check int) "exchange never called" 0 !ex_calls;
+        Alcotest.(check int) "installations never called" 0 !inst_calls;
+        let* count =
+          installation_count (module C) "storage error" installation
+        in
+        Alcotest.(check int) "nothing persisted" 0 count;
+        Lwt.return_unit)
+
+  let parallel_case =
+    db_case "parallel flows: completing A leaves B fully intact" (fun ~url
+        (module C : Caqti_lwt.CONNECTION) ->
+        let* uid = fixture_user (module C) "ghoauth_parallel" in
+        let installation_a = 936000012L and installation_b = 936000013L in
+        let config = gck_https_config () in
+        let* state_a, cookie_a =
+          onboard ~url ~uid ~installation:installation_a "flow A"
+        in
+        let* state_b, cookie_b =
+          onboard ~url ~uid ~installation:installation_b "flow B"
+        in
+        Alcotest.(check bool) "distinct cookie names" false
+          (String.equal (fst cookie_a) (fst cookie_b));
+        let jar = [ cookie_a; cookie_b ] in
+        let ex_calls = ref 0 and inst_calls = ref 0 in
+        let* response =
+          run_callback ~url ~jar
+            ~exchange:(exchange_stub (Ok (200, token_body)) ex_calls)
+            ~installations:
+              (installations_stub [ listing_for installation_a ] inst_calls)
+            ~target:(callback_target state_a fixture_code)
+            ()
+        in
+        let* () = check_success_lwt "flow A" response in
+        (* Only A's cookie is deleted. *)
+        check_deletion "flow A" ~cookie_name:(fst cookie_a)
+          ~stored_value:(snd cookie_a) response;
+        (* Only A's state is consumed; only A's installation exists. *)
+        let* pending_a, consumed_a = state_row (module C) "row A" state_a in
+        Alcotest.(check bool) "A pending kept" true
+          (pending_a = Some installation_a);
+        Alcotest.(check bool) "A consumed" false consumed_a;
+        let* pending_b, consumed_b = state_row (module C) "row B" state_b in
+        Alcotest.(check bool) "B pending kept" true
+          (pending_b = Some installation_b);
+        Alcotest.(check bool) "B unconsumed" true consumed_b;
+        let* count_a =
+          installation_count (module C) "flow A" installation_a
+        in
+        Alcotest.(check int) "A persisted" 1 count_a;
+        let* count_b =
+          installation_count (module C) "flow B" installation_b
+        in
+        Alcotest.(check int) "B not persisted" 0 count_b;
+        (* B's cookie still carries B's own material — no crossover. *)
+        let* data_a = Gh_start_handler.load_cookie config state_a jar in
+        let* data_b = Gh_start_handler.load_cookie config state_b jar in
+        Alcotest.(check bool) "distinct verifiers" false
+          (String.equal (gsd_verifier data_a) (gsd_verifier data_b));
+        Alcotest.(check bool) "distinct bindings" false
+          (String.equal (gsd_binding_hash data_a) (gsd_binding_hash data_b));
+        Lwt.return_unit)
+
+  let db_suite =
+    [ success_case; replay_case; expired_case; already_consumed_case;
+      binding_mismatch_case; exchange_transport_case; oauth_rejected_case;
+      not_accessible_case; pagination_limit_case; persistence_failure_case;
+      consume_storage_error_case; parallel_case ]
+end
+
 (* === REQUEST-TARGET REDACTION ===
    Pure redaction/path-only behavior plus the middleware pair, all DB-free.
    Fixture "secrets" are obviously fake placeholders, and assertions on the
@@ -10006,6 +11082,15 @@ let () =
          sql_pool + secret, no session middleware); EARDE_TEST_DATABASE_URL
          gate. *)
     ; ( "github_setup_return_db", Gh_setup_return.db_suite )
+      (* OAuth-callback handler gates: DB-free with injected
+         mode/config/credentials, real encrypted cookies, and fake
+         transports — every outcome must be a clean 303 to one of the two
+         generic targets, with no stage distinguishable. *)
+    ; ( "github_oauth_callback_gates", Gh_oauth_callback.gate_suite )
+      (* OAuth callback over the real pipeline (start + setup return first,
+         then sql_pool + secret with fake transports, no session
+         middleware); EARDE_TEST_DATABASE_URL gate. *)
+    ; ( "github_oauth_callback_db", Gh_oauth_callback.db_suite )
       (* Valid shapes and canonicalization: accessors must return the stored
          canonical values (trimmed, lowercase scheme/host, no trailing slash,
          no default port), not the raw environment spellings. *)

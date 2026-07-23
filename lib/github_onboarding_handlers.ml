@@ -117,44 +117,47 @@ let clean_redirect location =
 
 let bring_redirect () = clean_redirect "/bring"
 
-(* Strict single-occurrence extraction of one raw query value from the
-   original request target. Dream.query silently tolerates duplicate keys,
-   so the target is split by hand: only the substring after the first '?',
-   stopped at a raw '#', components on raw '&', each component at its first
-   '='. Keys are case-sensitive; unrelated parameters are ignored (GitHub
-   may append optional setup metadata). The value is used byte-for-byte —
-   the canonical state alphabet needs no percent-decoding, and decoding
-   would create aliases of one stored state. *)
-let raw_query_value ~key target =
+(* Every occurrence of one raw query key in the original request target, in
+   order: [Some value] for [key=value] (the value byte-for-byte after the
+   first '='), [None] for a bare [key]. Dream.query silently tolerates
+   duplicate keys, so the target is split by hand: only the substring after
+   the first '?', stopped at a raw '#', components on raw '&'. Keys are
+   case-sensitive; unrelated parameters are ignored (GitHub may append
+   optional metadata). Values are never percent-decoded — the canonical
+   state alphabet needs none, and decoding would create aliases of one
+   stored value. Distinguishing an absent key ([]) from a malformed one
+   lets the OAuth callback enforce code-XOR-error strictly. *)
+let raw_query_occurrences ~key target =
   match String.index_opt target '?' with
-  | None -> Error ()
-  | Some q -> (
+  | None -> []
+  | Some q ->
       let query = String.sub target (q + 1) (String.length target - q - 1) in
       let query =
         match String.index_opt query '#' with
         | None -> query
         | Some h -> String.sub query 0 h
       in
-      let values =
-        List.filter_map
-          (fun component ->
-            match String.index_opt component '=' with
-            | None ->
-                (* A bare required key carries no usable value and must fail
-                   the exactly-one rule; anything else is unrelated. *)
-                if String.equal component key then Some None else None
-            | Some eq ->
-                if String.equal (String.sub component 0 eq) key then
-                  Some
-                    (Some
-                       (String.sub component (eq + 1)
-                          (String.length component - eq - 1)))
-                else None)
-          (String.split_on_char '&' query)
-      in
-      match values with
-      | [ Some value ] when not (String.equal value "") -> Ok value
-      | _ -> Error ())
+      List.filter_map
+        (fun component ->
+          match String.index_opt component '=' with
+          | None ->
+              (* A bare required key carries no usable value and must fail
+                 the exactly-one rule; anything else is unrelated. *)
+              if String.equal component key then Some None else None
+          | Some eq ->
+              if String.equal (String.sub component 0 eq) key then
+                Some
+                  (Some
+                     (String.sub component (eq + 1)
+                        (String.length component - eq - 1)))
+              else None)
+        (String.split_on_char '&' query)
+
+(* Strict single-occurrence extraction: exactly one non-empty value. *)
+let raw_query_value ~key target =
+  match raw_query_occurrences ~key target with
+  | [ Some value ] when not (String.equal value "") -> Ok value
+  | _ -> Error ()
 
 (* GitHub echoes installation_id as an untrusted decimal BIGINT: accept
    ASCII digits only, require the value to fit int64 and be positive.
@@ -331,3 +334,202 @@ let make_start_installation_handler ~mode ~load_config request =
                       with
                       | Some response -> Lwt.return response
                       | None -> unavailable_page request))))
+
+(* --- OAuth authorization callback
+   (GET /integrations/github/authorize/callback) --- *)
+
+(* The whole callback has exactly two clean local outcomes. One shared
+   failure target for every internal stage — malformed callback, GitHub
+   rejection, cookie, configuration, credentials, consumption, exchange,
+   verification, persistence — so the browser can never learn which stage
+   failed, and no sensitive value rides in either Location. *)
+let callback_failure () = clean_redirect "/bring?github=failed"
+let callback_success () = clean_redirect "/bring?github=connected"
+
+(* Applies this flow's cookie deletion to an already-built clean redirect.
+   Dropping can only raise if the runtime secret middleware is
+   misconfigured; the clean redirect still wins over surfacing that
+   exception. Cookie material is never inspected or logged. *)
+let redirect_dropping_cookie config ~request ~state response =
+  (try Github_onboarding_cookie.drop config ~request ~response ~state
+   with _ -> ());
+  response
+
+let callback_failure_dropping config ~request ~state =
+  redirect_dropping_cookie config ~request ~state (callback_failure ())
+
+(* The two accepted callback shapes: GitHub sent an authorization code, or
+   GitHub reported the authorization as rejected. The remote error value is
+   deliberately not carried — never inspected, classified, decoded, or
+   logged. *)
+type oauth_callback_shape =
+  | Authorization_granted of Github_oauth_token_exchange.authorization_code
+  | Authorization_rejected
+
+(* Exactly one non-empty canonical [state], then code XOR error: a single
+   non-empty valid [code] with no canonical [error] parameter, or a single
+   non-empty [error] with no canonical [code] parameter. Duplicates,
+   blanks, bare keys, both-present, and neither-present are all one
+   payload-free rejection; unrelated keys (error_description, error_uri,
+   uppercase lookalikes) never reach the occurrence scan's key match. *)
+let parse_oauth_callback_target target =
+  match raw_query_value ~key:"state" target with
+  | Error () -> Error ()
+  | Ok raw_state -> (
+      match Github_onboarding_crypto.state_of_callback raw_state with
+      | Error Github_onboarding_crypto.Invalid_format -> Error ()
+      | Ok state -> (
+          match
+            ( raw_query_occurrences ~key:"code" target,
+              raw_query_occurrences ~key:"error" target )
+          with
+          | [ Some raw_code ], [] when not (String.equal raw_code "") -> (
+              match
+                Github_oauth_token_exchange.authorization_code_of_callback
+                  raw_code
+              with
+              | Ok code -> Ok (state, Authorization_granted code)
+              | Error Github_oauth_token_exchange.Invalid_code -> Error ())
+          | [], [ Some raw_error ] when not (String.equal raw_error "") ->
+              Ok (state, Authorization_rejected)
+          | _ -> Error ()))
+
+(* Consume → exchange → verify → persist, in that order. The two Dream.sql
+   scopes are separate and short on purpose: no database-pool connection is
+   ever held across an outbound GitHub call. Every branch past a successful
+   consumption is terminal — the state is burned or spent either way — so
+   each deletes the per-flow cookie on its way out. *)
+let finish_authorization ~config ~credentials ~exchange_transport
+    ~installations_transport ~request ~state ~data ~code =
+  let%lwt consumed =
+    Dream.sql request (fun db ->
+        Github_onboarding_state_store.consume db ~state
+          ~session_binding_hash:
+            (Github_onboarding_session_data.session_binding_hash data)
+          ~flow:Github_onboarding.Project_onboarding)
+  in
+  match consumed with
+  | Error Github_onboarding_state_store.Storage_error ->
+      (* No committed outcome is known, so the cookie survives: if the
+         database recovers while the state is still live, a browser
+         refresh can retry. No GitHub call is made. *)
+      Lwt.return (callback_failure ())
+  | Error
+      ( Github_onboarding_state_store.State_not_found
+      | Github_onboarding_state_store.State_expired
+      | Github_onboarding_state_store.State_already_consumed
+      | Github_onboarding_state_store.Session_binding_mismatch
+      | Github_onboarding_state_store.Flow_mismatch
+      | Github_onboarding_state_store.Missing_pending_installation ) ->
+      (* One collapsed answer whether the state was already dead or was
+         just atomically burned by a mismatch — which one stays private,
+         and the cookie can never succeed against this row again. *)
+      Lwt.return (callback_failure_dropping config ~request ~state)
+  | Ok
+      {
+        Github_onboarding_state_store.user_id;
+        flow = _;
+        pending_github_installation_id;
+      } -> (
+      let%lwt exchanged =
+        Github_oauth_token_exchange.exchange ~transport:exchange_transport
+          ~config ~credentials ~code
+          ~verifier:(Github_onboarding_session_data.verifier data)
+      in
+      match exchanged with
+      | Error
+          ( Github_oauth_token_exchange.Transport_error
+          | Github_oauth_token_exchange.Unexpected_http_status _
+          | Github_oauth_token_exchange.OAuth_rejected
+          | Github_oauth_token_exchange.Invalid_response ) ->
+          (* The state is already consumed: onboarding must restart. *)
+          Lwt.return (callback_failure_dropping config ~request ~state)
+      | Ok token_set -> (
+          let%lwt verification =
+            Github_user_installations.verify
+              ~transport:installations_transport ~token_set
+              ~installation_id:pending_github_installation_id
+          in
+          match verification with
+          | Error
+              ( Github_user_installations.Invalid_installation_id
+              | Github_user_installations.Transport_error
+              | Github_user_installations.Unexpected_http_status _
+              | Github_user_installations.Invalid_response
+              | Github_user_installations.Installation_not_accessible
+              | Github_user_installations.Pagination_limit ) ->
+              Lwt.return (callback_failure_dropping config ~request ~state)
+          | Ok verified_installation -> (
+              (* The token set stays behind in memory on purpose: only the
+                 verified identity crosses into persistence. *)
+              let%lwt persisted =
+                Dream.sql request (fun db ->
+                    Github_installation_store.record_verified db
+                      ~connected_by_user_id:user_id verified_installation)
+              in
+              match persisted with
+              | Error
+                  ( Github_installation_store.Invalid_connected_by_user_id
+                  | Github_installation_store.Installation_unavailable
+                  | Github_installation_store.Storage_error ) ->
+                  Lwt.return
+                    (callback_failure_dropping config ~request ~state)
+              | Ok () ->
+                  Lwt.return
+                    (redirect_dropping_cookie config ~request ~state
+                       (callback_success ())))))
+
+let make_oauth_callback_handler ~mode ~load_config ~load_credentials
+    ~exchange_transport ~installations_transport request =
+  match mode with
+  | Project_onboarding.Off ->
+      (* Kill switch: no parsing, no configuration or credential read, no
+         cookie access, no SQL, no GitHub. Still a clean redirect — the
+         browser sits at a URL carrying a live code and state. *)
+      Lwt.return (callback_failure ())
+  | Project_onboarding.Admins | Project_onboarding.Public -> (
+      (* Sessionless like the setup return: this arrives on a cross-site
+         top-level redirect from GitHub. Authorization is possession-based
+         — the raw state plus the encrypted per-flow cookie — and the
+         owning user comes back from the consumed state row, never from a
+         Dream session. *)
+      match parse_oauth_callback_target (Dream.target request) with
+      | Error () -> Lwt.return (callback_failure ())
+      | Ok (state, shape) -> (
+          match load_config () with
+          | Error _ ->
+              (* Without configuration there is no cookie policy either,
+                 so no deletion is attempted; credentials, SQL, and GitHub
+                 stay untouched. *)
+              Lwt.return (callback_failure ())
+          | Ok config -> (
+              match Github_onboarding_cookie.load config ~request ~state with
+              | Error Github_onboarding_cookie.Missing ->
+                  (* Another browser, or cleared data: nothing to delete,
+                     and any other browser's cookie can still finish. No
+                     credentials, SQL, or GitHub. *)
+                  Lwt.return (callback_failure ())
+              | Error Github_onboarding_cookie.Invalid ->
+                  (* Undecryptable material is useless; delete it. Still no
+                     credentials, SQL, or GitHub. *)
+                  Lwt.return
+                    (callback_failure_dropping config ~request ~state)
+              | Ok data -> (
+                  match shape with
+                  | Authorization_rejected ->
+                      (* The user said no at GitHub: end the flow without
+                         credentials, SQL, or GitHub calls. The untouched
+                         state row expires on its own. *)
+                      Lwt.return
+                        (callback_failure_dropping config ~request ~state)
+                  | Authorization_granted code -> (
+                      match load_credentials () with
+                      | Error _ ->
+                          (* Deployment problem with the state untouched:
+                             keep the cookie so a manual refresh can retry
+                             once the configuration is repaired. *)
+                          Lwt.return (callback_failure ())
+                      | Ok credentials ->
+                          finish_authorization ~config ~credentials
+                            ~exchange_transport ~installations_transport
+                            ~request ~state ~data ~code)))))

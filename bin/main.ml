@@ -104,6 +104,24 @@ let () =
           ~mode:(Earde.Project_onboarding.mode_from_env ())
           ~load_config:Earde.Github_app_config.from_env
           request);
+    (* Final OAuth authorization callback: GET only and, like the setup
+       return, deliberately NOT wrapped in Rate_limit.middleware — the
+       limiter's blocked page is rendered HTML, while this code/state-bearing
+       callback URL must only ever answer a clean redirect away, and
+       request-target redaction already keeps code and state out of Dream
+       logging and analytics. Secret credentials and both GitHub transports
+       are injected here so the handler stays testable offline. *)
+    Dream.get "/integrations/github/authorize/callback"
+      (fun request ->
+        Earde.Github_onboarding_handlers.make_oauth_callback_handler
+          ~mode:(Earde.Project_onboarding.mode_from_env ())
+          ~load_config:Earde.Github_app_config.from_env
+          ~load_credentials:Earde.Github_oauth_credentials.from_env
+          ~exchange_transport:
+            (module Earde.Github_oauth_token_exchange.Cohttp_transport)
+          ~installations_transport:
+            (module Earde.Github_user_installations.Cohttp_transport)
+          request);
     Dream.get "/new-community" Earde.Handlers.new_community_page;
     Dream.post "/communities" Earde.Handlers.create_community_handler;
     Dream.post "/join" Earde.Handlers.join_community_handler;

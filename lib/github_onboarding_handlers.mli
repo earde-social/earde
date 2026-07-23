@@ -1,6 +1,7 @@
 (** HTTP layer for the GitHub App installation flow
-    (POST /integrations/github/install/start and
-    GET /integrations/github/install/return), kept out of the legacy
+    (POST /integrations/github/install/start,
+    GET /integrations/github/install/return, and
+    GET /integrations/github/authorize/callback), kept out of the legacy
     [Handlers] macro-module. *)
 
 val make_start_installation_handler :
@@ -67,3 +68,50 @@ val make_setup_return_handler :
     [Invalid_pending_installation_id]) redirect to /bring and drop the
     cookie; [Storage_error] redirects to /bring keeping the cookie so a
     refresh can retry. *)
+
+val make_oauth_callback_handler :
+  mode:Project_onboarding.mode ->
+  load_config:
+    (unit -> (Github_app_config.t, Github_app_config.error) result) ->
+  load_credentials:
+    (unit ->
+     (Github_oauth_credentials.t, Github_oauth_credentials.error) result) ->
+  exchange_transport:(module Github_oauth_token_exchange.TRANSPORT) ->
+  installations_transport:(module Github_user_installations.TRANSPORT) ->
+  Dream.handler
+(** Handler factory for the final GitHub OAuth authorization callback.
+    Sessionless like the setup return: authorization is possession-based
+    (the raw callback [state] plus this flow's encrypted per-flow cookie),
+    and the authoritative user is read back from the consumed state row —
+    never from a Dream session.
+
+    Every outcome is a 303 with an empty body, [Cache-Control: no-store],
+    [Pragma: no-cache], and [Referrer-Policy: no-referrer], to exactly one
+    of two clean local targets: [/bring?github=connected] on full success,
+    [/bring?github=failed] for every failure. Which internal stage failed —
+    parsing, GitHub rejection, cookie, configuration, credentials, state
+    consumption, token exchange, installation verification, or persistence
+    — is deliberately indistinguishable, and no callback value, token,
+    verifier, binding, or identity ever appears in a response.
+
+    Order: [Off] (the kill switch) answers the failure redirect before
+    parsing, configuration, cookies, SQL, or GitHub. Then strict parsing of
+    the raw target — exactly one case-sensitive canonical [state], plus
+    either exactly one valid [code] and no [error] (authorization success)
+    or exactly one non-empty [error] and no [code] (authorization
+    rejection, its value never inspected); everything else is rejected.
+    Then [load_config]; then the per-flow cookie ([Missing] fails without
+    deletion, [Invalid] fails and deletes it).
+
+    A parsed rejection ends there: the cookie is deleted, and credentials,
+    SQL, and GitHub stay untouched — the state row expires naturally. For
+    an authorization code, [load_credentials] runs next (failure keeps the
+    cookie and touches nothing else); then the state is consumed in one
+    short [Dream.sql] scope ([Storage_error] keeps the cookie; every other
+    consume error deletes it), the code is exchanged and the pending
+    installation verified over the injected transports with no pooled
+    database connection held, and the verified installation is persisted
+    via [Github_installation_store.record_verified] in a second, separate
+    [Dream.sql] scope under the consumed row's stored user. All terminal
+    branches — success included — delete the per-flow cookie; no token is
+    ever persisted or passed to the persistence layer. *)
