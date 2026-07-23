@@ -4703,7 +4703,9 @@ let () =
                     (Some "community:9")
                     (attr_value html "data-analytics-group");
                   Alcotest.(check bool) "public: no replay block" false
-                    (contains html "ph-no-capture")))
+                    (contains html "ph-no-capture");
+                  Alcotest.(check bool) "main content is a direct child of cs-main" true
+                    (contains html "<main class='cs-main'>MAIN</main>")))
         ; an_case
             "community_shell (private) keeps group key + ph-no-capture only"
             (fun () ->
@@ -4718,8 +4720,14 @@ let () =
                   Alcotest.(check (option string)) "group attr"
                     (Some "community:9")
                     (attr_value html "data-analytics-group");
+                  (* Replay-blocked via the class on <main class='cs-main'>
+                     itself. A wrapper div here is a layout regression: it
+                     detaches the chat head/scroller/composer from the
+                     .cs-main flex column and collapses the message pane. *)
                   Alcotest.(check bool) "content replay-blocked" true
-                    (contains html "class='ph-no-capture'>MAIN");
+                    (contains html "<main class='cs-main ph-no-capture'>MAIN</main>");
+                  Alcotest.(check bool) "no wrapper div between cs-main and content" false
+                    (contains html "<div class='ph-no-capture'>");
                   (* only the group attribute — no identity (no request) and
                      no visibility/name leak *)
                   Alcotest.(check int) "one group attr" 1
