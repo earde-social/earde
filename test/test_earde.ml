@@ -3666,6 +3666,45 @@ let nc_valid_case name expected ~is_network_community ~onboarding_state
         (NC.lifecycle_state_valid ~is_network_community ~onboarding_state
            ~visibility ~indexable ~discoverable))
 
+(* === Settings-flow lifecycle gate (Handlers.visibility_update_rejection) ===
+   The exact decision function update_community_visibility_handler consults on
+   the loaded record before writing. These prove the settings flow invokes the
+   lifecycle rule; the exhaustive matrix lives in network_visibility_change. *)
+let vis_gate_community ~is_network_community ~onboarding_state ~visibility :
+    Earde.Db.community =
+  { id = 7; slug = "gate"; name = "Gate"; description = None; rules = None
+  ; avatar_url = None; banner_url = None; allow_downvotes = true
+  ; sections_enabled = false; visibility; indexable = true
+  ; is_network_community; onboarding_state; discoverable = true }
+
+let vis_gate_allowed name ~is_network_community ~onboarding_state ~visibility
+    ~requested_visibility =
+  nc_case name (fun () ->
+      let community =
+        vis_gate_community ~is_network_community ~onboarding_state ~visibility in
+      match
+        Earde.Handlers.visibility_update_rejection community
+          ~requested_visibility
+      with
+      | None -> ()
+      | Some m -> Alcotest.failf "expected update to proceed, got %S" m)
+
+let vis_gate_rejected name ~is_network_community ~onboarding_state ~visibility
+    ~requested_visibility =
+  nc_case name (fun () ->
+      let community =
+        vis_gate_community ~is_network_community ~onboarding_state ~visibility in
+      match
+        Earde.Handlers.visibility_update_rejection community
+          ~requested_visibility
+      with
+      | Some message ->
+          Alcotest.(check string) "rejection copy"
+            "Published network communities must remain public. Private \
+             channels and sections may still be used."
+            message
+      | None -> Alcotest.fail "expected rejection, update was allowed")
+
 let () =
   Alcotest.run "earde"
     [ ( "smoke"
@@ -6058,6 +6097,47 @@ let () =
         ; nc_vis_case "network published -> private forbidden" false
             ~is_network_community:true
             ~onboarding_state:Earde.Db.Community_published
+            ~requested_visibility:Earde.Db.Community_private
+        ] )
+      (* Settings-flow gate: the decision the visibility POST handler acts on.
+         None = the existing update flow continues; Some = `Conflict before any
+         DB write. Legacy behavior (including existing private communities) is
+         untouched; only published network communities refuse -> private. *)
+    ; ( "settings_visibility_gate"
+      , [ vis_gate_allowed "legacy published -> private still allowed"
+            ~is_network_community:false
+            ~onboarding_state:Earde.Db.Community_published
+            ~visibility:Earde.Db.Community_public
+            ~requested_visibility:Earde.Db.Community_private
+        ; vis_gate_allowed "legacy draft-shaped -> private still allowed"
+            ~is_network_community:false
+            ~onboarding_state:Earde.Db.Community_draft
+            ~visibility:Earde.Db.Community_public
+            ~requested_visibility:Earde.Db.Community_private
+        ; vis_gate_allowed "legacy existing private -> public unaffected"
+            ~is_network_community:false
+            ~onboarding_state:Earde.Db.Community_published
+            ~visibility:Earde.Db.Community_private
+            ~requested_visibility:Earde.Db.Community_public
+        ; vis_gate_allowed "legacy existing private -> private unaffected"
+            ~is_network_community:false
+            ~onboarding_state:Earde.Db.Community_published
+            ~visibility:Earde.Db.Community_private
+            ~requested_visibility:Earde.Db.Community_private
+        ; vis_gate_allowed "network draft -> private allowed"
+            ~is_network_community:true
+            ~onboarding_state:Earde.Db.Community_draft
+            ~visibility:Earde.Db.Community_private
+            ~requested_visibility:Earde.Db.Community_private
+        ; vis_gate_allowed "network published -> public allowed"
+            ~is_network_community:true
+            ~onboarding_state:Earde.Db.Community_published
+            ~visibility:Earde.Db.Community_public
+            ~requested_visibility:Earde.Db.Community_public
+        ; vis_gate_rejected "network published -> private rejected"
+            ~is_network_community:true
+            ~onboarding_state:Earde.Db.Community_published
+            ~visibility:Earde.Db.Community_public
             ~requested_visibility:Earde.Db.Community_private
         ] )
       (* Whole-state validity: legacy always passes; drafts must be fully

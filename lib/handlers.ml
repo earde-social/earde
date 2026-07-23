@@ -3632,6 +3632,24 @@ let toggle_downvotes_handler request =
    regular mod hitting these POSTs directly is rejected `Forbidden, mirroring toggle_downvotes
    (top_mod || is_admin). These never change read gates or noindex behavior; they only flip the
    Slice B columns the gate/resolver already consult. *)
+
+(* Extracted so the settings flow's lifecycle decision is unit-testable without
+   Dream/DB plumbing: the handler consults exactly this, on the authoritative
+   record it just loaded, before any write. The rule itself lives in
+   Network_communities — this only maps the record's fields onto it and picks
+   the user-facing rejection copy. *)
+let visibility_update_rejection (community : Db.community) ~requested_visibility =
+  if
+    Network_communities.visibility_change_allowed
+      ~is_network_community:community.is_network_community
+      ~onboarding_state:community.onboarding_state
+      ~requested_visibility
+  then None
+  else
+    Some
+      "Published network communities must remain public. Private channels and \
+       sections may still be used."
+
 let update_community_visibility_handler request =
   let slug = Dream.param request "slug" in
   let user = Dream.session_field request "username" in
@@ -3659,6 +3677,13 @@ let update_community_visibility_handler request =
                       if not (is_top_mod || is_admin) then
                         Dream.respond ~status:`Forbidden (Pages.msg_page ?user ~title:"Access Denied" ~message:"Only Top Mods and admins can change visibility." ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/settings") request)
                       else
+                        match visibility_update_rejection community ~requested_visibility:visibility with
+                        | Some message ->
+                            (* Server-side lifecycle gate: a forged POST must not
+                               reach the update. `Conflict, not a redirect — the
+                               transition is refused, never silently dropped. *)
+                            Dream.respond ~status:`Conflict (Pages.msg_page ?user ~title:"Visibility unavailable" ~message ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/settings") request)
+                        | None ->
                         match%lwt Db.update_community_visibility_and_enqueue_group_cleanup db community.id visibility with
                         | Ok (Some updated, cleanup_job) ->
                             (* Visibility is a closed group property: refresh
