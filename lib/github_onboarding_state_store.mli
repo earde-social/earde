@@ -1,6 +1,7 @@
-(** Issuance and persistence of GitHub onboarding callback states — the
-    issuing half of the state lifecycle only (lookup/consumption is a
-    separate slice). This feature module owns its SQL; nothing here belongs
+(** Issuance and persistence of GitHub onboarding callback states, plus
+    mid-flow attachment of the untrusted installation id from the GitHub App
+    setup return (lookup/consumption is a separate slice). This feature
+    module owns its SQL; nothing here belongs
     to the legacy [Db] macro-module. The database only ever receives the
     deterministic lookup hashes: the raw state lives solely in the returned
     abstract value, and the raw session binding never reaches this module at
@@ -33,3 +34,40 @@ val issue :
     state is returned only after the insert succeeds. Earlier unconsumed
     states for the same user/session/flow are left untouched — each open tab
     may hold its own individually single-use state. *)
+
+type attach_error =
+  | Invalid_user_id  (** [user_id <= 0]; rejected before any SQL runs. *)
+  | Invalid_pending_installation_id
+      (** [pending_github_installation_id <= 0]; rejected before any SQL
+          runs. GitHub installation ids are positive [BIGINT]s. *)
+  | State_unavailable
+      (** No attachable row matched. Deliberately collapses every zero-row
+          cause — state unknown, expired, already consumed, user mismatch,
+          session-binding mismatch, flow mismatch, or a {e different}
+          installation id already attached — so callers (and attackers
+          driving the setup return) cannot use the store as a state-probing
+          oracle. *)
+  | Storage_error
+      (** Any actual Caqti/PostgreSQL execution failure. Raw database errors
+          are dropped, never returned or logged: they can echo SQL
+          parameters (the hashes). *)
+
+val attach_pending_installation :
+  (module Caqti_lwt.CONNECTION) ->
+  user_id:int ->
+  state:Github_onboarding_crypto.state ->
+  session_binding_hash:Github_onboarding_crypto.session_binding_hash ->
+  flow:Github_onboarding.flow ->
+  pending_github_installation_id:int64 ->
+  (unit, attach_error) result Lwt.t
+(** Atomically attaches the untrusted installation id echoed back by the
+    GitHub App setup return to the caller's still-live state row, in one
+    UPDATE — no read-then-write. The row must match the supplied state's
+    hash, [user_id], session-binding hash, and canonical flow string, be
+    unconsumed and unexpired, and have either no pending installation id yet
+    or exactly the supplied one (making an identical retry — e.g. a browser
+    refresh — idempotent [Ok ()], while a different id never overwrites the
+    first). Only [pending_github_installation_id] ever changes: the state is
+    {e not} consumed here, no rows are created or deleted, and other states
+    are untouched. Only hashes cross the SQL boundary — the raw state and
+    raw session binding never do. *)
