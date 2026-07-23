@@ -297,6 +297,91 @@ CREATE TABLE public.dream_session (
 
 
 --
+-- Name: github_installations; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.github_installations (
+    id bigint NOT NULL,
+    github_installation_id bigint NOT NULL,
+    github_account_id bigint NOT NULL,
+    github_account_login text NOT NULL,
+    github_account_type text NOT NULL,
+    connected_by_user_id integer,
+    status text DEFAULT 'active'::text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    revoked_at timestamp with time zone,
+    CONSTRAINT github_installations_github_account_id_check CHECK ((github_account_id > 0)),
+    CONSTRAINT github_installations_github_account_login_check CHECK ((btrim(github_account_login) <> ''::text)),
+    CONSTRAINT github_installations_github_account_type_check CHECK ((github_account_type = ANY (ARRAY['user'::text, 'organization'::text]))),
+    CONSTRAINT github_installations_github_installation_id_check CHECK ((github_installation_id > 0)),
+    CONSTRAINT github_installations_revoked_at_check CHECK (((revoked_at IS NULL) OR (status = 'revoked'::text))),
+    CONSTRAINT github_installations_status_check CHECK ((status = ANY (ARRAY['active'::text, 'revoked'::text, 'inaccessible'::text])))
+);
+
+
+--
+-- Name: github_installations_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.github_installations_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: github_installations_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.github_installations_id_seq OWNED BY public.github_installations.id;
+
+
+--
+-- Name: github_onboarding_states; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.github_onboarding_states (
+    id bigint NOT NULL,
+    state_hash text NOT NULL,
+    user_id integer NOT NULL,
+    session_binding_hash text NOT NULL,
+    flow text NOT NULL,
+    pending_github_installation_id bigint,
+    expires_at timestamp with time zone NOT NULL,
+    consumed_at timestamp with time zone,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT github_onboarding_states_consumed_after_created_check CHECK (((consumed_at IS NULL) OR (consumed_at >= created_at))),
+    CONSTRAINT github_onboarding_states_expires_after_created_check CHECK ((expires_at > created_at)),
+    CONSTRAINT github_onboarding_states_flow_check CHECK ((flow = 'project_onboarding'::text)),
+    CONSTRAINT github_onboarding_states_pending_github_installation_id_check CHECK (((pending_github_installation_id IS NULL) OR (pending_github_installation_id > 0))),
+    CONSTRAINT github_onboarding_states_session_binding_hash_check CHECK ((btrim(session_binding_hash) <> ''::text)),
+    CONSTRAINT github_onboarding_states_state_hash_check CHECK ((btrim(state_hash) <> ''::text))
+);
+
+
+--
+-- Name: github_onboarding_states_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.github_onboarding_states_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: github_onboarding_states_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.github_onboarding_states_id_seq OWNED BY public.github_onboarding_states.id;
+
+
+--
 -- Name: mod_actions; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -754,6 +839,20 @@ ALTER TABLE ONLY public.community_user_stats ALTER COLUMN id SET DEFAULT nextval
 
 
 --
+-- Name: github_installations id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.github_installations ALTER COLUMN id SET DEFAULT nextval('public.github_installations_id_seq'::regclass);
+
+
+--
+-- Name: github_onboarding_states id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.github_onboarding_states ALTER COLUMN id SET DEFAULT nextval('public.github_onboarding_states_id_seq'::regclass);
+
+
+--
 -- Name: mod_actions id; Type: DEFAULT; Schema: public; Owner: -
 --
 
@@ -944,6 +1043,38 @@ ALTER TABLE ONLY public.dream_session
 
 
 --
+-- Name: github_installations github_installations_github_installation_id_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.github_installations
+    ADD CONSTRAINT github_installations_github_installation_id_key UNIQUE (github_installation_id);
+
+
+--
+-- Name: github_installations github_installations_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.github_installations
+    ADD CONSTRAINT github_installations_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: github_onboarding_states github_onboarding_states_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.github_onboarding_states
+    ADD CONSTRAINT github_onboarding_states_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: github_onboarding_states github_onboarding_states_state_hash_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.github_onboarding_states
+    ADD CONSTRAINT github_onboarding_states_state_hash_key UNIQUE (state_hash);
+
+
+--
 -- Name: mod_actions mod_actions_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -1129,6 +1260,20 @@ CREATE INDEX idx_community_user_stats_community_karma ON public.community_user_s
 --
 
 CREATE INDEX idx_community_user_stats_community_post_count ON public.community_user_stats USING btree (community_id, local_post_count);
+
+
+--
+-- Name: idx_github_onboarding_states_expires_at; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_github_onboarding_states_expires_at ON public.github_onboarding_states USING btree (expires_at);
+
+
+--
+-- Name: idx_github_onboarding_states_user_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_github_onboarding_states_user_id ON public.github_onboarding_states USING btree (user_id);
 
 
 --
@@ -1324,6 +1469,22 @@ ALTER TABLE ONLY public.community_user_stats
 
 
 --
+-- Name: github_installations github_installations_connected_by_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.github_installations
+    ADD CONSTRAINT github_installations_connected_by_user_id_fkey FOREIGN KEY (connected_by_user_id) REFERENCES public.users(id) ON DELETE SET NULL;
+
+
+--
+-- Name: github_onboarding_states github_onboarding_states_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.github_onboarding_states
+    ADD CONSTRAINT github_onboarding_states_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+
+
+--
 -- Name: mod_actions mod_actions_community_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -1488,4 +1649,5 @@ INSERT INTO public.schema_migrations (version) VALUES
     ('20260622120000'),
     ('20260722120000'),
     ('20260722200000'),
-    ('20260723120000');
+    ('20260723120000'),
+    ('20260723150000');
