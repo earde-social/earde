@@ -3412,6 +3412,29 @@ let check_preflight name ?environment handler expected_class =
       Alcotest.(check bool) "output never contains the personal key" false
         (contains rendered deletion_test_key))
 
+(* GitHub onboarding configuration mode — pure parsing/serialization/policy.
+   The parser is tested directly on string options; the process environment is
+   never mutated. *)
+module Ob = Earde.Project_onboarding
+
+let ob_mode_str = function
+  | Ob.Off -> "off"
+  | Ob.Admins -> "admins"
+  | Ob.Public -> "public"
+
+let check_ob_parse name expected raw =
+  Alcotest.test_case name `Quick (fun () ->
+      Alcotest.(check string) name (ob_mode_str expected)
+        (ob_mode_str (Ob.mode_of_string raw)))
+
+let check_ob_string name expected mode =
+  Alcotest.test_case name `Quick (fun () ->
+      Alcotest.(check string) name expected (Ob.mode_to_string mode))
+
+let check_ob_avail name expected mode ~is_admin =
+  Alcotest.test_case name `Quick (fun () ->
+      Alcotest.(check bool) name expected (Ob.onboarding_available mode ~is_admin))
+
 let () =
   Alcotest.run "earde"
     [ ( "smoke"
@@ -5565,4 +5588,33 @@ let () =
     ; ( "analytics_step6_events", Step6_events.suite )
     ; ( "posthog_deletion_jobs", Step7_deletion.suite )
     ; ( "posthog_group_cleanup", Group_cleanup.suite )
+      (* GitHub onboarding mode parsing: exact canonical values after trimming,
+         everything else fails closed to Off. *)
+    ; ( "project_onboarding_parse"
+      , [ check_ob_parse "none" Ob.Off None
+        ; check_ob_parse "empty string" Ob.Off (Some "")
+        ; check_ob_parse "whitespace only" Ob.Off (Some "   \t ")
+        ; check_ob_parse "off" Ob.Off (Some "off")
+        ; check_ob_parse "admins" Ob.Admins (Some "admins")
+        ; check_ob_parse "public" Ob.Public (Some "public")
+        ; check_ob_parse "trims surrounding whitespace" Ob.Admins (Some "  admins ")
+        ; check_ob_parse "trims around public" Ob.Public (Some "\tpublic\n")
+        ; check_ob_parse "uppercase PUBLIC rejected" Ob.Off (Some "PUBLIC")
+        ; check_ob_parse "mixed case Admin rejected" Ob.Off (Some "Admin")
+        ; check_ob_parse "unknown value" Ob.Off (Some "on")
+        ; check_ob_parse "unknown word" Ob.Off (Some "everyone")
+        ] )
+    ; ( "project_onboarding_to_string"
+      , [ check_ob_string "off" "off" Ob.Off
+        ; check_ob_string "admins" "admins" Ob.Admins
+        ; check_ob_string "public" "public" Ob.Public
+        ] )
+    ; ( "project_onboarding_available"
+      , [ check_ob_avail "off rejects admin" false Ob.Off ~is_admin:true
+        ; check_ob_avail "off rejects non-admin" false Ob.Off ~is_admin:false
+        ; check_ob_avail "admins accepts admin" true Ob.Admins ~is_admin:true
+        ; check_ob_avail "admins rejects non-admin" false Ob.Admins ~is_admin:false
+        ; check_ob_avail "public accepts admin" true Ob.Public ~is_admin:true
+        ; check_ob_avail "public accepts non-admin" true Ob.Public ~is_admin:false
+        ] )
     ]
