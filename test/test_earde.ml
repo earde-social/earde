@@ -4975,6 +4975,493 @@ module Gh_state_store = struct
       consume_invalid_user_case; consume_concurrent_case ]
 end
 
+(* === GitHub onboarding start handler (Github_onboarding_handlers) ===
+   The factory takes the mode and config loader by injection, so gate cases
+   run DB-free with fixed values and never touch the process environment.
+   A request that passes every gate stops at the missing sql_pool — reaching
+   that boundary IS the assertion that the gates let it through with no SQL
+   executed. Database-gated cases run the real pipeline (sql_pool + secret +
+   memory sessions) under the usual EARDE_TEST_DATABASE_URL opt-in with
+   'ghstart_%' fixtures cleaned up around each case. Raw states, bindings,
+   verifiers, cookie values, and hashes never reach assertion output —
+   material comparisons are boolean. *)
+module Gh_start_handler = struct
+  let ( let* ) = Lwt.bind
+
+  open Caqti_request.Infix
+
+  let case = go_case
+
+  let target = "/integrations/github/install/start"
+
+  let make ~mode ~load_config =
+    Earde.Github_onboarding_handlers.make_start_installation_handler ~mode
+      ~load_config
+
+  (* Loader that records whether the handler ever asked for configuration. *)
+  let counting_loader result =
+    let calls = ref 0 in
+    ( (fun () ->
+        incr calls;
+        result),
+      calls )
+
+  let ok_loader () = gac_of_values ()
+
+  (* Only the per-flow cookies; memory_sessions appends its own session
+     Set-Cookie, which is not under test here. *)
+  let flow_cookies response =
+    List.filter
+      (fun header -> goc_contains ~needle:gsd_cookie_prefix header)
+      (Dream.headers response "Set-Cookie")
+
+  let status_of response = Dream.status_to_int (Dream.status response)
+
+  (* DB-free run. [session = None] means no session middleware at all — the
+     handler must read that as anonymous, exactly like production before
+     login. *)
+  let gate_run ?session ?(headers = []) ~mode ~load_config () =
+    let handler = make ~mode ~load_config in
+    let pipeline =
+      match session with
+      | None -> handler
+      | Some fields ->
+          Dream.memory_sessions (fun req ->
+              let* () =
+                Lwt_list.iter_s
+                  (fun (k, v) -> Dream.set_session_field req k v)
+                  fields
+              in
+              handler req)
+    in
+    let request = Dream.request ~method_:`POST ~target ~headers "" in
+    match Lwt_main.run (pipeline request) with
+    | response -> `Response response
+    | exception _ -> `Db_boundary
+
+  let gate_response label = function
+    | `Response response -> response
+    | `Db_boundary -> Alcotest.failf "%s: unexpectedly reached the DB" label
+
+  let check_db_boundary label = function
+    | `Db_boundary -> ()
+    | `Response response ->
+        Alcotest.failf "%s: gate rejected with status %d" label
+          (status_of response)
+
+  let logged_in = [ ("user_id", "42") ]
+
+  let off_case =
+    case "Off: controlled 404, loader and cookies untouched" (fun () ->
+        let loader, calls = counting_loader (ok_loader ()) in
+        let response =
+          gate_response "off"
+            (gate_run ~session:logged_in ~mode:Ob.Off ~load_config:loader ())
+        in
+        Alcotest.(check int) "404" 404 (status_of response);
+        Alcotest.(check int) "loader never called" 0 !calls;
+        Alcotest.(check int) "no flow cookie" 0
+          (List.length (flow_cookies response)))
+
+  let anonymous_case =
+    case "Public: anonymous POST redirects to /login" (fun () ->
+        let loader, calls = counting_loader (ok_loader ()) in
+        let response =
+          gate_response "anonymous"
+            (gate_run ~mode:Ob.Public ~load_config:loader ())
+        in
+        Alcotest.(check int) "redirect" 303 (status_of response);
+        Alcotest.(check (option string)) "to /login" (Some "/login")
+          (Dream.header response "Location");
+        Alcotest.(check int) "loader never called" 0 !calls)
+
+  let malformed_session_case =
+    case "Public: malformed session user_id redirects to /login" (fun () ->
+        List.iter
+          (fun raw ->
+            let response =
+              gate_response "malformed"
+                (gate_run
+                   ~session:[ ("user_id", raw) ]
+                   ~mode:Ob.Public
+                   ~load_config:(fun () -> ok_loader ())
+                   ())
+            in
+            Alcotest.(check (option string)) "to /login" (Some "/login")
+              (Dream.header response "Location"))
+          [ "not-a-number"; ""; "0"; "-3" ])
+
+  let admins_non_admin_case =
+    case "Admins: authenticated non-admin is 403, loader untouched"
+      (fun () ->
+        let loader, calls = counting_loader (ok_loader ()) in
+        List.iter
+          (fun session ->
+            let response =
+              gate_response "non-admin"
+                (gate_run ~session ~mode:Ob.Admins ~load_config:loader ())
+            in
+            Alcotest.(check int) "403" 403 (status_of response))
+          [ logged_in; logged_in @ [ ("is_admin", "false") ] ];
+        Alcotest.(check int) "loader never called" 0 !calls)
+
+  let config_failure_case =
+    case "Public: configuration error is a generic 503" (fun () ->
+        let loader, calls =
+          counting_loader (gac_of_values ~origin:None ())
+        in
+        let response =
+          gate_response "config failure"
+            (gate_run ~session:logged_in ~mode:Ob.Public ~load_config:loader
+               ())
+        in
+        Alcotest.(check int) "503" 503 (status_of response);
+        Alcotest.(check int) "loader called once" 1 !calls;
+        Alcotest.(check int) "no flow cookie" 0
+          (List.length (flow_cookies response));
+        let body = Lwt_main.run (Dream.body response) in
+        List.iter
+          (fun needle ->
+            Alcotest.(check bool)
+              ("body does not leak " ^ needle)
+              false
+              (goc_contains ~needle body))
+          [ "EARDE_PUBLIC_ORIGIN"; "Missing"; "Invalid"; "public_origin" ])
+
+  (* One rejected-origin run: Public mode, valid session, fixed config. *)
+  let origin_rejected label ?(sec_fetch_site = None) origin =
+    let headers =
+      (match origin with Some o -> [ ("Origin", o) ] | None -> [])
+      @
+      match sec_fetch_site with
+      | Some v -> [ ("Sec-Fetch-Site", v) ]
+      | None -> []
+    in
+    let response =
+      gate_response label
+        (gate_run ~session:logged_in ~headers ~mode:Ob.Public
+           ~load_config:(fun () -> ok_loader ())
+           ())
+    in
+    Alcotest.(check int) (label ^ ": 403") 403 (status_of response);
+    Alcotest.(check int)
+      (label ^ ": no flow cookie")
+      0
+      (List.length (flow_cookies response))
+
+  let cross_origin_case =
+    case "origin gate: cross-origin Origin is 403" (fun () ->
+        origin_rejected "cross-origin" (Some "https://evil.example");
+        origin_rejected "same-site subdomain" (Some "https://www.earde.com");
+        origin_rejected "wrong scheme" (Some "http://earde.com");
+        origin_rejected "wrong port" (Some "https://earde.com:8443"))
+
+  let malformed_origin_case =
+    case "origin gate: malformed Origin is 403" (fun () ->
+        origin_rejected "null" (Some "null");
+        origin_rejected "blank" (Some "");
+        origin_rejected "no scheme" (Some "earde.com");
+        origin_rejected "trailing path" (Some "https://earde.com/");
+        origin_rejected "userinfo" (Some "https://u@earde.com");
+        origin_rejected "query" (Some "https://earde.com?x=1"))
+
+  let origin_beats_fetch_site_case =
+    case "origin gate: mismatching Origin loses to Sec-Fetch-Site"
+      (fun () ->
+        origin_rejected "mismatch + same-origin"
+          ~sec_fetch_site:(Some "same-origin")
+          (Some "https://evil.example");
+        origin_rejected "malformed + same-origin"
+          ~sec_fetch_site:(Some "same-origin") (Some "null"))
+
+  let missing_signals_case =
+    case "origin gate: missing Origin and Sec-Fetch-Site is 403" (fun () ->
+        origin_rejected "no signals" None;
+        origin_rejected "cross-site" ~sec_fetch_site:(Some "cross-site") None;
+        origin_rejected "same-site" ~sec_fetch_site:(Some "same-site") None;
+        origin_rejected "none" ~sec_fetch_site:(Some "none") None)
+
+  let matching_origin_case =
+    case "origin gate: matching Origin passes" (fun () ->
+        check_db_boundary "exact origin"
+          (gate_run ~session:logged_in
+             ~headers:[ ("Origin", "https://earde.com") ]
+             ~mode:Ob.Public
+             ~load_config:(fun () -> ok_loader ())
+             ());
+        (* Effective-port normalization: an explicit default port is the
+           same origin. *)
+        check_db_boundary "explicit default port"
+          (gate_run ~session:logged_in
+             ~headers:[ ("Origin", "https://earde.com:443") ]
+             ~mode:Ob.Public
+             ~load_config:(fun () -> ok_loader ())
+             ()))
+
+  let fetch_metadata_pass_case =
+    case "origin gate: no Origin + Sec-Fetch-Site same-origin passes"
+      (fun () ->
+        check_db_boundary "fetch metadata"
+          (gate_run ~session:logged_in
+             ~headers:[ ("Sec-Fetch-Site", "same-origin") ]
+             ~mode:Ob.Public
+             ~load_config:(fun () -> ok_loader ())
+             ()))
+
+  let gate_suite =
+    [ off_case; anonymous_case; malformed_session_case;
+      admins_non_admin_case; config_failure_case; cross_origin_case;
+      malformed_origin_case; origin_beats_fetch_site_case;
+      missing_signals_case; matching_origin_case; fetch_metadata_pass_case ]
+
+  (* --- Database-gated: the real success and failure paths. --- *)
+
+  let or_fail label = function
+    | Ok v -> Lwt.return v
+    | Error e -> Alcotest.failf "%s: %s" label (Caqti_error.show e)
+
+  let q_cleanup =
+    List.map
+      (fun sql -> (Caqti_type.unit ->. Caqti_type.unit) sql)
+      [ "DELETE FROM github_onboarding_states WHERE user_id IN \
+         (SELECT id FROM users WHERE username LIKE 'ghstart_%')"
+      ; "DELETE FROM users WHERE username LIKE 'ghstart_%'"
+      ]
+
+  let db_case name f =
+    Alcotest.test_case name `Quick (fun () ->
+        match Sys.getenv_opt "EARDE_TEST_DATABASE_URL" with
+        | None | Some "" -> Alcotest.skip ()
+        | Some url ->
+            Lwt_main.run
+              (let* conn = Caqti_lwt_unix.connect (Uri.of_string url) in
+               let* conn = or_fail "connect" conn in
+               let (module C : Caqti_lwt.CONNECTION) = conn in
+               let cleanup () =
+                 Lwt_list.iter_s
+                   (fun q ->
+                     let* r = C.exec q () in
+                     let* () = or_fail "cleanup" r in
+                     Lwt.return_unit)
+                   q_cleanup
+               in
+               let* () = cleanup () in
+               Lwt.finalize
+                 (fun () -> f ~url (module C : Caqti_lwt.CONNECTION))
+                 cleanup))
+
+  let q_insert_user =
+    (Caqti_type.string ->! Caqti_type.int)
+    "INSERT INTO users (username, email, password_hash, is_email_verified)
+     VALUES ($1, $1 || '@test.invalid', 'x', TRUE) RETURNING id"
+
+  let q_absent_user_id =
+    (Caqti_type.unit ->! Caqti_type.int)
+    "SELECT COALESCE(MAX(id), 0) + 1000000 FROM users"
+
+  (* Everything stored for one issued state, keyed by its lookup hash. *)
+  let q_row_by_state_hash =
+    (Caqti_type.(string ->* t2 (t3 int string string) (t3 bool bool float)))
+    "SELECT user_id, session_binding_hash, flow,
+            pending_github_installation_id IS NULL,
+            consumed_at IS NULL,
+            EXTRACT(EPOCH FROM (expires_at - created_at))::float8
+     FROM github_onboarding_states WHERE state_hash = $1"
+
+  let q_count_for_user =
+    (Caqti_type.int ->! Caqti_type.int)
+    "SELECT COUNT(*) FROM github_onboarding_states WHERE user_id = $1"
+
+  (* Lwt variant of gck_loaded: db cases already run inside Lwt_main.run,
+     so the browser simulation must compose instead of nesting run. *)
+  let load_cookie config state jar =
+    let result = ref None in
+    let* (_ : Dream.response) =
+      Dream.set_secret gck_secret
+        (fun request ->
+          result := Some (GCK.load config ~request ~state);
+          Dream.respond "")
+        (Dream.request ~headers:[ ("Cookie", gck_cookie_header jar) ] "")
+    in
+    match !result with
+    | Some (Ok data) -> Lwt.return data
+    | Some (Error GCK.Missing) -> Alcotest.fail "cookie load: Missing"
+    | Some (Error GCK.Invalid) -> Alcotest.fail "cookie load: Invalid"
+    | None -> Alcotest.fail "secret middleware did not run the loader"
+
+  (* Real pipeline for one authenticated same-origin POST. gck_secret keeps
+     the encrypted cookie interoperable with the load_cookie simulation. *)
+  let run_start ~url ~session_user_id =
+    let handler =
+      make ~mode:Ob.Public ~load_config:(fun () -> ok_loader ())
+    in
+    let pipeline =
+      Dream.sql_pool url @@ Dream.set_secret gck_secret
+      @@ Dream.memory_sessions
+      @@ fun req ->
+      let* () =
+        Dream.set_session_field req "user_id" (string_of_int session_user_id)
+      in
+      handler req
+    in
+    pipeline
+      (Dream.request ~method_:`POST ~target
+         ~headers:[ ("Origin", "https://earde.com") ]
+         "")
+
+  (* Parses one successful start: exact 303, the state from the Location
+     query, and the single per-flow Set-Cookie pair. *)
+  let successful_start label response =
+    Alcotest.(check int) (label ^ ": exactly 303") 303 (status_of response);
+    let location =
+      match Dream.header response "Location" with
+      | Some l -> l
+      | None -> Alcotest.fail (label ^ ": no Location header")
+    in
+    let uri = Uri.of_string location in
+    let raw_state =
+      match Uri.get_query_param uri "state" with
+      | Some s -> s
+      | None -> Alcotest.fail (label ^ ": no state parameter")
+    in
+    let state =
+      match GOC.state_of_callback raw_state with
+      | Ok s -> s
+      | Error GOC.Invalid_format ->
+          Alcotest.fail (label ^ ": state parameter is not canonical")
+    in
+    let name, value, _ =
+      gck_single_set_cookie
+        (label ^ ": per-flow cookie")
+        (flow_cookies response)
+    in
+    (location, state, name, value)
+
+  (* The stored row for a state, as (binding_hash, all text columns). *)
+  let row_of_state (module C : Caqti_lwt.CONNECTION) label ~uid state =
+    let state_hash = GOC.state_hash_to_string (GOC.hash_state state) in
+    let* rows = C.collect_list q_row_by_state_hash state_hash in
+    let* rows = or_fail (label ^ ": row") rows in
+    match rows with
+    | [ ( (row_uid, binding_hash, flow),
+          (pending_null, consumed_null, ttl) ) ] ->
+        Alcotest.(check int) (label ^ ": row belongs to the session user")
+          uid row_uid;
+        Alcotest.(check string) (label ^ ": flow") "project_onboarding" flow;
+        Alcotest.(check bool) (label ^ ": pending installation NULL") true
+          pending_null;
+        Alcotest.(check bool) (label ^ ": consumed_at NULL") true
+          consumed_null;
+        Alcotest.(check bool) (label ^ ": expiry ~15 minutes") true
+          (Float.abs (ttl -. 900.) <= 5.);
+        Lwt.return
+          ( binding_hash,
+            String.concat "|" [ state_hash; binding_hash; flow ] )
+    | rows ->
+        Alcotest.failf "%s: expected exactly one row, found %d" label
+          (List.length rows)
+
+  let success_case =
+    db_case "successful start: 303 + hashed row + encrypted per-flow cookie"
+      (fun ~url (module C : Caqti_lwt.CONNECTION) ->
+        let* uid = C.find q_insert_user "ghstart_user" in
+        let* uid = or_fail "user" uid in
+        let config = gck_https_config () in
+        let* response = run_start ~url ~session_user_id:uid in
+        let location, state, name, value =
+          successful_start "start" response
+        in
+        Alcotest.(check bool) "Location is exactly installation_url" true
+          (String.equal location (GOU.installation_url config ~state));
+        let* stored_binding_hash, text_columns =
+          row_of_state (module C) "start" ~uid state
+        in
+        Alcotest.(check string) "browser-visible name derives from the state"
+          ("__Secure-" ^ GSD.cookie_name state)
+          name;
+        let* loaded = load_cookie config state [ (name, value) ] in
+        Alcotest.(check bool) "cookie binding hash matches the stored row"
+          true
+          (String.equal (gsd_binding_hash loaded) stored_binding_hash);
+        let verifier =
+          match GPK.verifier_of_string (gsd_verifier loaded) with
+          | Ok v -> v
+          | Error GPK.Invalid_format ->
+              Alcotest.fail "cookie verifier is not canonical"
+        in
+        Alcotest.(check bool) "challenge is S256 of the verifier" true
+          (String.equal (gsd_challenge loaded)
+             (GPK.challenge_to_string (GPK.challenge_of_verifier verifier)));
+        (* Only hashes cross the SQL boundary: neither raw token from the
+           cookie plaintext appears in any stored text column. *)
+        (match String.split_on_char '.' (GSD.encode loaded) with
+        | [ _version; raw_binding; raw_verifier ] ->
+            Alcotest.(check bool) "raw binding absent from the row" false
+              (goc_contains ~needle:raw_binding text_columns);
+            Alcotest.(check bool) "raw verifier absent from the row" false
+              (goc_contains ~needle:raw_verifier text_columns)
+        | _ -> Alcotest.fail "unexpected cookie plaintext shape");
+        Lwt.return_unit)
+
+  (* FK failure on a positive-but-nonexistent session user: real storage
+     error at the handler boundary without weakening any constraint. *)
+  let storage_failure_case =
+    db_case "storage failure: 503, no cookie, no GitHub Location"
+      (fun ~url (module C : Caqti_lwt.CONNECTION) ->
+        let* ghost = C.find q_absent_user_id () in
+        let* ghost = or_fail "absent user id" ghost in
+        let* response = run_start ~url ~session_user_id:ghost in
+        Alcotest.(check int) "503" 503 (status_of response);
+        Alcotest.(check (option string)) "no Location" None
+          (Dream.header response "Location");
+        Alcotest.(check int) "no flow cookie" 0
+          (List.length (flow_cookies response));
+        let* count = C.find q_count_for_user ghost in
+        let* count = or_fail "count" count in
+        Alcotest.(check int) "no orphan row" 0 count;
+        Lwt.return_unit)
+
+  let multiple_starts_case =
+    db_case "two starts: independent rows and per-flow cookies"
+      (fun ~url (module C : Caqti_lwt.CONNECTION) ->
+        let* uid = C.find q_insert_user "ghstart_multi" in
+        let* uid = or_fail "user" uid in
+        let config = gck_https_config () in
+        let start label =
+          let* response = run_start ~url ~session_user_id:uid in
+          let _, state, name, value = successful_start label response in
+          Lwt.return (state, name, value)
+        in
+        let* state_a, name_a, value_a = start "first" in
+        let* state_b, name_b, value_b = start "second" in
+        Alcotest.(check bool) "distinct state rows" false
+          (String.equal
+             (GOC.state_hash_to_string (GOC.hash_state state_a))
+             (GOC.state_hash_to_string (GOC.hash_state state_b)));
+        Alcotest.(check bool) "distinct cookie names" false
+          (String.equal name_a name_b);
+        let* count = C.find q_count_for_user uid in
+        let* count = or_fail "count" count in
+        Alcotest.(check int) "two rows" 2 count;
+        (* Neither flow overwrites the other: with both cookies in one
+           browser, each state still loads its own material, bound to its
+           own row. *)
+        let jar = [ (name_a, value_a); (name_b, value_b) ] in
+        let* loaded_a = load_cookie config state_a jar in
+        let* loaded_b = load_cookie config state_b jar in
+        let* binding_a, _ = row_of_state (module C) "row A" ~uid state_a in
+        let* binding_b, _ = row_of_state (module C) "row B" ~uid state_b in
+        Alcotest.(check bool) "A bound to its row" true
+          (String.equal (gsd_binding_hash loaded_a) binding_a);
+        Alcotest.(check bool) "B bound to its row" true
+          (String.equal (gsd_binding_hash loaded_b) binding_b);
+        Alcotest.(check bool) "flows use distinct bindings" false
+          (String.equal binding_a binding_b);
+        Lwt.return_unit)
+
+  let db_suite = [ success_case; storage_failure_case; multiple_starts_case ]
+end
+
 let () =
   Alcotest.run "earde"
     [ ( "smoke"
@@ -7739,6 +8226,13 @@ let () =
             Alcotest.(check int) "ttl" 900
               Earde.Github_onboarding_state_store.ttl_seconds)
         :: Gh_state_store.suite )
+      (* Start-installation handler gates: DB-free with injected mode and
+         config — rejections must produce controlled statuses without
+         configuration reads, SQL, or cookies. *)
+    ; ( "github_start_handler_gates", Gh_start_handler.gate_suite )
+      (* Start-installation handler over the real pipeline (sql_pool +
+         secret + memory sessions); EARDE_TEST_DATABASE_URL gate. *)
+    ; ( "github_start_handler_db", Gh_start_handler.db_suite )
       (* Valid shapes and canonicalization: accessors must return the stored
          canonical values (trimmed, lowercase scheme/host, no trailing slash,
          no default port), not the raw environment spellings. *)

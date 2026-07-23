@@ -115,6 +115,17 @@ let () =
     (* Entry point for the GitHub-anchored open-source onboarding. Public and
        informational only in this slice — no POST or GitHub callback routes. *)
     Dream.get "/bring" Earde.Project_onboarding_handlers.bring_page_handler;
+    (* Starts GitHub App installation: rate-limited like the other sensitive
+       POSTs. The mode is re-read per request via the existing
+       Project_onboarding API (uncached, matching /bring) and the validated
+       GitHub App configuration is loaded per request from the environment.
+       No GET variant and no callback routes in this slice. *)
+    Dream.post "/integrations/github/install/start"
+      (Earde.Handlers.Rate_limit.middleware (fun request ->
+           Earde.Github_onboarding_handlers.make_start_installation_handler
+             ~mode:(Earde.Project_onboarding.mode_from_env ())
+             ~load_config:Earde.Github_app_config.from_env
+             request));
     Dream.get "/new-community" Earde.Handlers.new_community_page;
     Dream.post "/communities" Earde.Handlers.create_community_handler;
     Dream.post "/join" Earde.Handlers.join_community_handler;
