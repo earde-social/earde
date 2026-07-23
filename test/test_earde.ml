@@ -3435,6 +3435,50 @@ let check_ob_avail name expected mode ~is_admin =
   Alcotest.test_case name `Quick (fun () ->
       Alcotest.(check bool) name expected (Ob.onboarding_available mode ~is_admin))
 
+(* /bring page renderer — pure (no server, no session middleware): the mode
+   and viewer context are plain arguments and the layout renders without a
+   request. Assertions are substring checks on stable copy/markup. *)
+let render_bring ?user ~is_admin mode =
+  Earde.Project_onboarding_pages.bring_page ?user ~is_admin ~mode ()
+
+let bring_case name f = Alcotest.test_case name `Quick f
+
+let bring_viewers =
+  [ ("anonymous", None, false)
+  ; ("member", Some "alice", false)
+  ; ("admin", Some "root", true)
+  ]
+
+let bring_modes = [ ("off", Ob.Off); ("admins", Ob.Admins); ("public", Ob.Public) ]
+
+(* Shared invariants: every mode × viewer explains that members do not need
+   GitHub, describes both destinations for a verified project, stays noindex,
+   and never emits the forbidden "Official ..." claims or links to routes
+   outside this slice (GitHub install/callback, /new-community, /projects/new). *)
+let bring_shared_case (mode_name, mode) (viewer_name, user, is_admin) =
+  bring_case
+    (Printf.sprintf "%s mode, %s viewer" mode_name viewer_name)
+    (fun () ->
+      let html = render_bring ?user ~is_admin mode in
+      let must s = Alcotest.(check bool) ("contains: " ^ s) true (contains html s) in
+      let must_not s =
+        Alcotest.(check bool) ("must not contain: " ^ s) false (contains html s)
+      in
+      must "do not need a GitHub account";
+      must "create its own Earde community";
+      must "existing broader Earde community";
+      must "noindex";
+      must_not "Official community";
+      must_not "Official home";
+      must_not "/integrations/github";
+      must_not "/new-community";
+      must_not "/projects/new")
+
+let bring_shared_cases =
+  List.concat_map
+    (fun mode -> List.map (bring_shared_case mode) bring_viewers)
+    bring_modes
+
 let () =
   Alcotest.run "earde"
     [ ( "smoke"
@@ -5616,5 +5660,74 @@ let () =
         ; check_ob_avail "admins rejects non-admin" false Ob.Admins ~is_admin:false
         ; check_ob_avail "public accepts admin" true Ob.Public ~is_admin:true
         ; check_ob_avail "public accepts non-admin" true Ob.Public ~is_admin:false
+        ] )
+      (* /bring renderer: shared copy/link invariants across every mode ×
+         viewer combination (see bring_shared_case). *)
+    ; ( "bring_page_shared", bring_shared_cases )
+      (* Mode-specific states: each closed mode renders its own controlled
+         status, and only the Admins-mode admin view carries the (disabled,
+         informational) action-shaped element. *)
+    ; ( "bring_page_modes"
+      , [ bring_case "off: clear not-enabled state" (fun () ->
+              let html = render_bring ~is_admin:false Ob.Off in
+              Alcotest.(check bool) "unavailable state" true
+                (contains html "not currently enabled"))
+        ; bring_case "off: no onboarding start action" (fun () ->
+              let html = render_bring ~is_admin:false Ob.Off in
+              Alcotest.(check bool) "no connect action" false
+                (contains html "Connect a repository");
+              Alcotest.(check bool) "no button at all" false
+                (contains html "auth-btn"))
+        ; bring_case "admins: admin sees private testing state" (fun () ->
+              let html = render_bring ~user:"root" ~is_admin:true Ob.Admins in
+              Alcotest.(check bool) "admin testing state" true
+                (contains html "Private administrator testing is enabled");
+              (* Status element exists but is inert — no install route to link. *)
+              Alcotest.(check bool) "status element is disabled" true
+                (contains html "class='auth-btn' disabled"))
+        ; bring_case "admins: non-admin sees limited state only" (fun () ->
+              let html = render_bring ~user:"alice" ~is_admin:false Ob.Admins in
+              Alcotest.(check bool) "limited/private state" true
+                (contains html "limited to a small private group");
+              Alcotest.(check bool) "no admin-testing claim" false
+                (contains html "Private administrator testing");
+              Alcotest.(check bool) "no connect action" false
+                (contains html "Connect a repository"))
+        ; bring_case "admins: anonymous sees limited state only" (fun () ->
+              let html = render_bring ~is_admin:false Ob.Admins in
+              Alcotest.(check bool) "limited/private state" true
+                (contains html "limited to a small private group");
+              Alcotest.(check bool) "no admin-testing claim" false
+                (contains html "Private administrator testing"))
+        ; bring_case "public: config-enabled but flow in preparation" (fun () ->
+              let html = render_bring ~is_admin:false Ob.Public in
+              Alcotest.(check bool) "config-level enablement" true
+                (contains html "enabled at the configuration level");
+              Alcotest.(check bool) "flow still being prepared" true
+                (contains html "still being prepared"))
+        ; bring_case "public: no dead start link" (fun () ->
+              let html = render_bring ~is_admin:false Ob.Public in
+              Alcotest.(check bool) "no connect action" false
+                (contains html "Connect a repository");
+              Alcotest.(check bool) "no button at all" false
+                (contains html "auth-btn"))
+        ] )
+      (* Viewer-aware navigation: anonymous gets real login/signup links;
+         authenticated viewers are never offered signup. *)
+    ; ( "bring_page_nav"
+      , [ bring_case "anonymous: login and signup links" (fun () ->
+              let html = render_bring ~is_admin:false Ob.Off in
+              Alcotest.(check bool) "login link" true
+                (contains html "href='/login'");
+              Alcotest.(check bool) "signup link" true
+                (contains html "href='/signup'"))
+        ; bring_case "authenticated: no signup, feed link stays" (fun () ->
+              let html = render_bring ~user:"alice" ~is_admin:false Ob.Off in
+              Alcotest.(check bool) "no signup anywhere" false
+                (contains html "/signup");
+              Alcotest.(check bool) "no login link" false
+                (contains html "href='/login'");
+              Alcotest.(check bool) "feed link" true
+                (contains html "href='/feed'"))
         ] )
     ]

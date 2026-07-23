@@ -112,6 +112,9 @@ let () =
        the repo has no permanent-redirect (301/308) pattern. *)
     Dream.get "/all" (fun request -> Dream.redirect request "/feed");
     Dream.get "/feed" Earde.Handlers.feed_handler;
+    (* Entry point for the GitHub-anchored open-source onboarding. Public and
+       informational only in this slice — no POST or GitHub callback routes. *)
+    Dream.get "/bring" Earde.Project_onboarding_handlers.bring_page_handler;
     Dream.get "/new-community" Earde.Handlers.new_community_page;
     Dream.post "/communities" Earde.Handlers.create_community_handler;
     Dream.post "/join" Earde.Handlers.join_community_handler;
