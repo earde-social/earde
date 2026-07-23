@@ -3921,6 +3921,51 @@ let gac_err name expected result =
       | Ok _ -> Alcotest.fail "expected Error, got Ok"
       | Error e -> Alcotest.check gac_error "error" expected e)
 
+(* === GitHub onboarding URLs (Github_onboarding_urls) ===
+   Structural assertions over [Uri.of_string]-parsed output. The fixtures
+   are deterministic printable values, but state and challenge comparisons
+   still use boolean checks so no raw token material reaches test output. *)
+module GOU = Earde.Github_onboarding_urls
+
+let gou_case = go_case
+
+let gou_config () = gac_ok_exn "url fixture config" (gac_of_values ())
+
+let gou_state_string = goc_fixture 'S'
+
+let gou_state () = goc_state_exn gou_state_string
+
+(* The verifier string is retained so leakage tests can assert it never
+   appears in a URL; only its derived challenge may. *)
+let gou_verifier_string = goc_fixture 'V'
+
+let gou_challenge () =
+  GPK.challenge_of_verifier (gpk_verifier_exn gou_verifier_string)
+
+let gou_installation () =
+  GOU.installation_url (gou_config ()) ~state:(gou_state ())
+
+let gou_authorization ?config () =
+  let config = match config with Some c -> c | None -> gou_config () in
+  GOU.authorization_url config ~state:(gou_state ())
+    ~code_challenge:(gou_challenge ())
+
+let gou_keys uri = List.map fst (Uri.query uri)
+
+let gou_entries key uri =
+  List.filter (fun (k, _) -> String.equal k key) (Uri.query uri)
+
+(* The decoded value of [key], requiring the key to appear exactly once
+   with exactly one value. *)
+let gou_single label key uri =
+  match gou_entries key uri with
+  | [ (_, [ v ]) ] -> v
+  | _ -> Alcotest.failf "%s: expected exactly one %s value" label key
+
+let gou_authorization_keys =
+  [ "client_id"; "redirect_uri"; "state"; "code_challenge";
+    "code_challenge_method" ]
+
 (* === GitHub onboarding state issuance (Github_onboarding_state_store) ===
    The security contract lives in the SQL — only hashes reach the table,
    expiry comes from Postgres NOW(), issuance never disturbs earlier states —
@@ -7793,5 +7838,146 @@ let () =
                     (goc_contains ~needle:"SECRET" msg);
                   Alcotest.(check bool) "names the field" true
                     (goc_contains ~needle:"GITHUB_APP_CLIENT_ID" msg))
+        ] )
+      (* Installation URL: fixed GitHub origin, slug-derived path, and
+         exactly one query parameter — the raw one-time state. *)
+    ; ( "github_onboarding_urls_installation"
+      , [ gou_case "scheme and host are fixed" (fun () ->
+              let uri = Uri.of_string (gou_installation ()) in
+              Alcotest.(check (option string)) "scheme" (Some "https")
+                (Uri.scheme uri);
+              Alcotest.(check (option string)) "host" (Some "github.com")
+                (Uri.host uri))
+        ; gou_case "path is the slug installation path" (fun () ->
+              let uri = Uri.of_string (gou_installation ()) in
+              Alcotest.(check string) "path"
+                "/apps/earde-connect/installations/new" (Uri.path uri))
+        ; gou_case "query is exactly one state" (fun () ->
+              let uri = Uri.of_string (gou_installation ()) in
+              Alcotest.(check (list string)) "keys" [ "state" ]
+                (gou_keys uri);
+              Alcotest.(check bool) "state round-trips" true
+                (String.equal gou_state_string
+                   (gou_single "installation" "state" uri)))
+        ; gou_case "no fragment or userinfo" (fun () ->
+              let uri = Uri.of_string (gou_installation ()) in
+              Alcotest.(check (option string)) "fragment" None
+                (Uri.fragment uri);
+              Alcotest.(check (option string)) "userinfo" None
+                (Uri.userinfo uri))
+        ; gou_case "state is not in the path" (fun () ->
+              let uri = Uri.of_string (gou_installation ()) in
+              Alcotest.(check bool) "path free of state" false
+                (goc_contains ~needle:gou_state_string (Uri.path uri)))
+        ; gou_case "construction is deterministic" (fun () ->
+              Alcotest.(check bool) "equal urls" true
+                (String.equal (gou_installation ()) (gou_installation ())))
+        ] )
+      (* Authorization URL: fixed GitHub origin, the exact five OAuth+PKCE
+         parameters once each, and the registered callback emitted
+         verbatim. *)
+    ; ( "github_onboarding_urls_authorization"
+      , [ gou_case "scheme and host are fixed" (fun () ->
+              let uri = Uri.of_string (gou_authorization ()) in
+              Alcotest.(check (option string)) "scheme" (Some "https")
+                (Uri.scheme uri);
+              Alcotest.(check (option string)) "host" (Some "github.com")
+                (Uri.host uri))
+        ; gou_case "path is the authorize endpoint" (fun () ->
+              let uri = Uri.of_string (gou_authorization ()) in
+              Alcotest.(check string) "path" "/login/oauth/authorize"
+                (Uri.path uri))
+        ; gou_case "query keys are exactly the five, once each" (fun () ->
+              let uri = Uri.of_string (gou_authorization ()) in
+              Alcotest.(check (list string)) "keys" gou_authorization_keys
+                (gou_keys uri))
+        ; gou_case "values match their sources" (fun () ->
+              let config = gou_config () in
+              let uri = Uri.of_string (gou_authorization ~config ()) in
+              Alcotest.(check string) "client_id" (GAC.client_id config)
+                (gou_single "authorization" "client_id" uri);
+              Alcotest.(check string) "redirect_uri"
+                "https://earde.com/integrations/github/authorize/callback"
+                (gou_single "authorization" "redirect_uri" uri);
+              Alcotest.(check bool) "state round-trips" true
+                (String.equal gou_state_string
+                   (gou_single "authorization" "state" uri));
+              Alcotest.(check bool) "challenge round-trips" true
+                (String.equal
+                   (GPK.challenge_to_string (gou_challenge ()))
+                   (gou_single "authorization" "code_challenge" uri));
+              Alcotest.(check string) "method" "S256"
+                (gou_single "authorization" "code_challenge_method" uri))
+        ; gou_case "no forbidden parameters" (fun () ->
+              let uri = Uri.of_string (gou_authorization ()) in
+              List.iter
+                (fun key ->
+                  Alcotest.(check int) key 0
+                    (List.length (gou_entries key uri)))
+                [ "scope"; "client_secret"; "code_verifier";
+                  "installation_id"; "allow_signup"; "login" ])
+        ; gou_case "no setup URL" (fun () ->
+              let config = gou_config () in
+              let url = gou_authorization ~config () in
+              let values =
+                List.concat_map snd (Uri.query (Uri.of_string url))
+              in
+              Alcotest.(check bool) "no setup value" false
+                (List.exists (String.equal (GAC.setup_url config)) values);
+              Alcotest.(check bool) "no setup path" false
+                (goc_contains ~needle:"install/return" url))
+        ; gou_case "no fragment or userinfo" (fun () ->
+              let uri = Uri.of_string (gou_authorization ()) in
+              Alcotest.(check (option string)) "fragment" None
+                (Uri.fragment uri);
+              Alcotest.(check (option string)) "userinfo" None
+                (Uri.userinfo uri))
+        ; gou_case "construction is deterministic" (fun () ->
+              Alcotest.(check bool) "equal urls" true
+                (String.equal (gou_authorization ()) (gou_authorization ())))
+        ] )
+      (* Reserved characters in opaque values must be query-encoded, so a
+         hostile-looking client id can neither split the query nor smuggle
+         extra parameters. *)
+    ; ( "github_onboarding_urls_encoding"
+      , [ gou_case "client id with reserved characters round-trips" (fun () ->
+              let client = "Iv1.a&b=c+d?e" in
+              let config =
+                gac_ok_exn "reserved client id"
+                  (gac_of_values ~client:(Some client) ())
+              in
+              let uri = Uri.of_string (gou_authorization ~config ()) in
+              Alcotest.(check string) "client_id" client
+                (gou_single "encoding" "client_id" uri);
+              Alcotest.(check (list string)) "keys unchanged"
+                gou_authorization_keys (gou_keys uri))
+        ] )
+      (* Nothing secret-shaped may appear in either URL: no verifier, no
+         secret-marker parameter names, and the installation URL carries no
+         OAuth material at all. *)
+    ; ( "github_onboarding_urls_no_leakage"
+      , [ gou_case "verifier absent from authorization URL" (fun () ->
+              Alcotest.(check bool) "verifier absent" false
+                (goc_contains ~needle:gou_verifier_string
+                   (gou_authorization ())))
+        ; gou_case "no secret-marker names in either URL" (fun () ->
+              List.iter
+                (fun url ->
+                  List.iter
+                    (fun needle ->
+                      Alcotest.(check bool) needle false
+                        (goc_contains ~needle url))
+                    [ "client_secret"; "code_verifier"; "private_key";
+                      "access_token" ])
+                [ gou_installation (); gou_authorization () ])
+        ; gou_case "installation URL has no client id or callback" (fun () ->
+              let config = gou_config () in
+              let url = gou_installation () in
+              Alcotest.(check bool) "no client id" false
+                (goc_contains ~needle:(GAC.client_id config) url);
+              Alcotest.(check bool) "no callback url" false
+                (goc_contains ~needle:(GAC.callback_url config) url);
+              Alcotest.(check bool) "no callback path" false
+                (goc_contains ~needle:"authorize/callback" url))
         ] )
     ]
