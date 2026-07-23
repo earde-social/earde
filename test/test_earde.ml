@@ -3435,6 +3435,30 @@ let check_ob_avail name expected mode ~is_admin =
   Alcotest.test_case name `Quick (fun () ->
       Alcotest.(check bool) name expected (Ob.onboarding_available mode ~is_admin))
 
+(* Legacy community-creation gate — pure request decisions, exercised directly
+   so no Dream server or session middleware is needed. Anonymous visitors and
+   authenticated non-admins both carry is_admin:false (the session flag is only
+   ever set to "true" for authenticated global admins). *)
+let ob_decision_str = function
+  | Ob.Show_form -> "show_form"
+  | Ob.Redirect_to_bring -> "redirect_to_bring"
+  | Ob.Forbid -> "forbid"
+
+let check_ob_legacy name expected ~is_admin =
+  Alcotest.test_case name `Quick (fun () ->
+      Alcotest.(check bool) name expected
+        (Ob.can_use_legacy_community_creation ~is_admin))
+
+let check_ob_legacy_get name expected ~is_admin =
+  Alcotest.test_case name `Quick (fun () ->
+      Alcotest.(check string) name (ob_decision_str expected)
+        (ob_decision_str (Ob.legacy_creation_get_decision ~is_admin)))
+
+let check_ob_legacy_post name expected ~is_admin =
+  Alcotest.test_case name `Quick (fun () ->
+      Alcotest.(check string) name (ob_decision_str expected)
+        (ob_decision_str (Ob.legacy_creation_post_decision ~is_admin)))
+
 (* /bring page renderer — pure (no server, no session middleware): the mode
    and viewer context are plain arguments and the layout renders without a
    request. Assertions are substring checks on stable copy/markup. *)
@@ -5660,6 +5684,34 @@ let () =
         ; check_ob_avail "admins rejects non-admin" false Ob.Admins ~is_admin:false
         ; check_ob_avail "public accepts admin" true Ob.Public ~is_admin:true
         ; check_ob_avail "public accepts non-admin" true Ob.Public ~is_admin:false
+        ] )
+      (* Legacy generic community creation is global-admin only, and the
+         policy is independent of the GitHub onboarding mode: Public must
+         never reopen arbitrary community creation. *)
+    ; ( "legacy_community_creation"
+      , [ check_ob_legacy "admin allowed" true ~is_admin:true
+        ; check_ob_legacy "non-admin denied" false ~is_admin:false
+        ; check_ob_legacy_get "admin GET shows form" Ob.Show_form ~is_admin:true
+        ; check_ob_legacy_get "authenticated non-admin GET resolves to /bring"
+            Ob.Redirect_to_bring ~is_admin:false
+        ; check_ob_legacy_get "anonymous GET resolves to /bring"
+            Ob.Redirect_to_bring ~is_admin:false
+        ; check_ob_legacy_post "admin POST proceeds" Ob.Show_form ~is_admin:true
+        ; check_ob_legacy_post "authenticated non-admin POST forbidden"
+            Ob.Forbid ~is_admin:false
+        ; check_ob_legacy_post "anonymous POST forbidden" Ob.Forbid
+            ~is_admin:false
+        ; Alcotest.test_case "Public onboarding mode does not reopen legacy creation"
+            `Quick (fun () ->
+              Alcotest.(check bool) "onboarding itself is open to non-admins"
+                true
+                (Ob.onboarding_available Ob.Public ~is_admin:false);
+              Alcotest.(check bool) "legacy creation still denied" false
+                (Ob.can_use_legacy_community_creation ~is_admin:false);
+              Alcotest.(check string) "legacy POST still forbidden"
+                (ob_decision_str Ob.Forbid)
+                (ob_decision_str
+                   (Ob.legacy_creation_post_decision ~is_admin:false)))
         ] )
       (* /bring renderer: shared copy/link invariants across every mode ×
          viewer combination (see bring_shared_case). *)

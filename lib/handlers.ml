@@ -789,6 +789,15 @@ let search_handler request =
 (* === COMMUNITY === *)
 
 let new_community_page request =
+  (* Legacy generic creation is global-admin only; everyone else lands on the
+     onboarding explainer. Admins keep the pre-existing flow untouched. *)
+  match
+    Project_onboarding.legacy_creation_get_decision
+      ~is_admin:(Dream.session_field request "is_admin" = Some "true")
+  with
+  | Project_onboarding.Redirect_to_bring | Project_onboarding.Forbid ->
+      Dream.redirect request "/bring"
+  | Project_onboarding.Show_form ->
   match Dream.session_field request "user_id" with
   | None ->
       Dream.redirect request "/login"
@@ -797,6 +806,16 @@ let new_community_page request =
       Dream.html (Pages.new_community_form ?user request)
 
 let create_community_handler request =
+  (* Server-side admin gate before any form parsing, so a forged form from a
+     non-admin session (or no session) is rejected outright. *)
+  match
+    Project_onboarding.legacy_creation_post_decision
+      ~is_admin:(Dream.session_field request "is_admin" = Some "true")
+  with
+  | Project_onboarding.Forbid | Project_onboarding.Redirect_to_bring ->
+      Dream.respond ~status:`Forbidden
+        "Forbidden: community creation is restricted to Earde administrators."
+  | Project_onboarding.Show_form ->
   match Dream.session_field request "user_id" with
   | None ->
       Dream.redirect request "/login"

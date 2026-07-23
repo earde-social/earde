@@ -23,3 +23,20 @@ val mode_to_string : mode -> string
 val onboarding_available : mode -> is_admin:bool -> bool
 (** Whether GitHub onboarding is available: [Off] for no one, [Admins] for
     global admins only, [Public] for everyone. *)
+
+val can_use_legacy_community_creation : is_admin:bool -> bool
+(** Whether the legacy generic community-creation flow (GET /new-community,
+    POST /communities) is available: global admins only. Independent of
+    [mode] — [Public] onboarding never reopens arbitrary community
+    creation. *)
+
+type legacy_creation_decision =
+  | Show_form  (** Proceed into the existing creation flow unchanged. *)
+  | Redirect_to_bring  (** GET by a non-admin (or anonymous) visitor. *)
+  | Forbid  (** POST by a non-admin (or anonymous) visitor: controlled 403. *)
+
+val legacy_creation_get_decision : is_admin:bool -> legacy_creation_decision
+(** [Show_form] for global admins, [Redirect_to_bring] otherwise. *)
+
+val legacy_creation_post_decision : is_admin:bool -> legacy_creation_decision
+(** [Show_form] for global admins, [Forbid] otherwise. *)

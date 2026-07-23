@@ -39,3 +39,19 @@ let onboarding_available mode ~is_admin =
   | Off -> false
   | Admins -> is_admin
   | Public -> true
+
+(* Deliberately independent of [mode]: setting GitHub onboarding to Public
+   must never reopen arbitrary community creation. *)
+let can_use_legacy_community_creation ~is_admin = is_admin
+
+type legacy_creation_decision =
+  | Show_form
+  | Redirect_to_bring
+  | Forbid
+
+let legacy_creation_get_decision ~is_admin =
+  if can_use_legacy_community_creation ~is_admin then Show_form
+  else Redirect_to_bring
+
+let legacy_creation_post_decision ~is_admin =
+  if can_use_legacy_community_creation ~is_admin then Show_form else Forbid
