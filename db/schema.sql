@@ -476,6 +476,80 @@ CREATE TABLE public.post_votes (
 
 
 --
+-- Name: posthog_group_cleanup_jobs; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.posthog_group_cleanup_jobs (
+    id bigint NOT NULL,
+    group_key text NOT NULL,
+    status text DEFAULT 'pending'::text NOT NULL,
+    attempts integer DEFAULT 0 NOT NULL,
+    last_error text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    last_attempt_at timestamp with time zone,
+    completed_at timestamp with time zone,
+    CONSTRAINT posthog_group_cleanup_jobs_attempts_check CHECK ((attempts >= 0)),
+    CONSTRAINT posthog_group_cleanup_jobs_status_check CHECK ((status = ANY (ARRAY['pending'::text, 'completed'::text])))
+);
+
+
+--
+-- Name: posthog_group_cleanup_jobs_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.posthog_group_cleanup_jobs_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: posthog_group_cleanup_jobs_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.posthog_group_cleanup_jobs_id_seq OWNED BY public.posthog_group_cleanup_jobs.id;
+
+
+--
+-- Name: posthog_person_deletion_jobs; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.posthog_person_deletion_jobs (
+    id bigint NOT NULL,
+    distinct_id text NOT NULL,
+    status text DEFAULT 'pending'::text NOT NULL,
+    attempts integer DEFAULT 0 NOT NULL,
+    last_error text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    last_attempt_at timestamp with time zone,
+    completed_at timestamp with time zone,
+    CONSTRAINT posthog_person_deletion_jobs_attempts_check CHECK ((attempts >= 0)),
+    CONSTRAINT posthog_person_deletion_jobs_status_check CHECK ((status = ANY (ARRAY['pending'::text, 'completed'::text])))
+);
+
+
+--
+-- Name: posthog_person_deletion_jobs_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.posthog_person_deletion_jobs_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: posthog_person_deletion_jobs_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.posthog_person_deletion_jobs_id_seq OWNED BY public.posthog_person_deletion_jobs.id;
+
+
+--
 -- Name: posts; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -711,6 +785,20 @@ ALTER TABLE ONLY public.pending_signups ALTER COLUMN id SET DEFAULT nextval('pub
 
 
 --
+-- Name: posthog_group_cleanup_jobs id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.posthog_group_cleanup_jobs ALTER COLUMN id SET DEFAULT nextval('public.posthog_group_cleanup_jobs_id_seq'::regclass);
+
+
+--
+-- Name: posthog_person_deletion_jobs id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.posthog_person_deletion_jobs ALTER COLUMN id SET DEFAULT nextval('public.posthog_person_deletion_jobs_id_seq'::regclass);
+
+
+--
 -- Name: posts id; Type: DEFAULT; Schema: public; Owner: -
 --
 
@@ -916,6 +1004,38 @@ ALTER TABLE ONLY public.post_votes
 
 
 --
+-- Name: posthog_group_cleanup_jobs posthog_group_cleanup_jobs_group_key_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.posthog_group_cleanup_jobs
+    ADD CONSTRAINT posthog_group_cleanup_jobs_group_key_key UNIQUE (group_key);
+
+
+--
+-- Name: posthog_group_cleanup_jobs posthog_group_cleanup_jobs_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.posthog_group_cleanup_jobs
+    ADD CONSTRAINT posthog_group_cleanup_jobs_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: posthog_person_deletion_jobs posthog_person_deletion_jobs_distinct_id_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.posthog_person_deletion_jobs
+    ADD CONSTRAINT posthog_person_deletion_jobs_distinct_id_key UNIQUE (distinct_id);
+
+
+--
+-- Name: posthog_person_deletion_jobs posthog_person_deletion_jobs_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.posthog_person_deletion_jobs
+    ADD CONSTRAINT posthog_person_deletion_jobs_pkey PRIMARY KEY (id);
+
+
+--
 -- Name: posts posts_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -1026,6 +1146,20 @@ CREATE INDEX idx_pending_signups_expires_at ON public.pending_signups USING btre
 --
 
 CREATE UNIQUE INDEX idx_pending_signups_username_active ON public.pending_signups USING btree (lower(username)) WHERE (consumed_at IS NULL);
+
+
+--
+-- Name: idx_posthog_deletion_jobs_pending; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_posthog_deletion_jobs_pending ON public.posthog_person_deletion_jobs USING btree (created_at) WHERE (status = 'pending'::text);
+
+
+--
+-- Name: idx_posthog_group_cleanup_pending; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_posthog_group_cleanup_pending ON public.posthog_group_cleanup_jobs USING btree (created_at) WHERE (status = 'pending'::text);
 
 
 --
@@ -1347,4 +1481,6 @@ INSERT INTO public.schema_migrations (version) VALUES
     ('20260616120000'),
     ('20260619120000'),
     ('20260620140000'),
-    ('20260622120000');
+    ('20260622120000'),
+    ('20260722120000'),
+    ('20260722200000');
