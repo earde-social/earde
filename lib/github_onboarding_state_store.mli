@@ -89,7 +89,6 @@ type consumed_state = {
     row itself — never reconstructed from caller input. *)
 
 type consume_error =
-  | Invalid_user_id  (** [user_id <= 0]; rejected before any SQL runs. *)
   | State_not_found
       (** No row carries the supplied state's hash. Nothing is created or
           mutated. *)
@@ -99,8 +98,6 @@ type consume_error =
   | State_already_consumed
       (** The row was consumed earlier; its original [consumed_at] is
           preserved. Reported even when the row is also expired. *)
-  | User_mismatch
-      (** The state belongs to a different user. The state is burned. *)
   | Session_binding_mismatch
       (** The stored session-binding hash differs from the supplied one. The
           state is burned. *)
@@ -119,7 +116,6 @@ type consume_error =
 
 val consume :
   (module Caqti_lwt.CONNECTION) ->
-  user_id:int ->
   state:Github_onboarding_crypto.state ->
   session_binding_hash:Github_onboarding_crypto.session_binding_hash ->
   flow:Github_onboarding.flow ->
@@ -127,18 +123,29 @@ val consume :
 (** Atomically consumes a state exactly once. Runs a transaction on the
     supplied connection that locks the row by state hash ([SELECT … FOR
     UPDATE]; [state_hash] is UNIQUE) and classifies under the lock, in
-    order: already consumed, expired, user mismatch, session-binding
-    mismatch, flow mismatch, missing pending installation, valid. Expiry and
-    prior consumption are judged by the database clock, and dead states
-    (missing, expired, replayed) are never written to.
+    order: already consumed, expired, session-binding mismatch, flow
+    mismatch, missing pending installation, valid. Expiry and prior
+    consumption are judged by the database clock, and dead states (missing,
+    expired, replayed) are never written to.
 
-    Burn-on-mismatch: the four mismatch errors set [consumed_at = NOW()] on
-    the locked row and commit {e before} the error is returned — presenting
-    a real state from the wrong user/session/context destroys it and forces
-    onboarding to restart. Only [consumed_at] ever changes, for burns and
-    valid consumption alike; identity and lifecycle columns are untouched.
-    If the burn or its commit fails, the result is [Storage_error], not the
-    mismatch.
+    Like {!attach_pending_installation}, there is deliberately no user id
+    input and no login-session dependency: the final callback arrives on a
+    cross-site redirect the SameSite=Strict Dream session cookie is not
+    guaranteed to accompany. Authorization is possession-based — the raw
+    state plus the session-binding hash recovered from the SameSite=Lax
+    encrypted per-flow cookie, matched against the row's flow. The
+    authoritative user is the [user_id] written at the authenticated start
+    endpoint, read back from the locked row and returned in
+    [consumed_state]; it is never compared against any caller-supplied
+    identity.
+
+    Burn-on-mismatch: the three mismatch errors set [consumed_at = NOW()]
+    on the locked row and commit {e before} the error is returned —
+    presenting a real state from the wrong session/context destroys it and
+    forces onboarding to restart. Only [consumed_at] ever changes, for
+    burns and valid consumption alike; identity and lifecycle columns are
+    untouched. If the burn or its commit fails, the result is
+    [Storage_error], not the mismatch.
 
     On success the returned record carries the locked row's stored user id,
     parsed flow, and positive pending installation id, and the state is

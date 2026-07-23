@@ -122,11 +122,9 @@ type consumed_state = {
 }
 
 type consume_error =
-  | Invalid_user_id
   | State_not_found
   | State_expired
   | State_already_consumed
-  | User_mismatch
   | Session_binding_mismatch
   | Flow_mismatch
   | Missing_pending_installation
@@ -160,80 +158,85 @@ let mark_consumed_query =
    with the row locked FOR UPDATE; concurrent consumers of the same state
    serialize on that lock, so exactly one can ever see it unconsumed.
 
-   Mismatch classifications (wrong user, wrong binding, wrong flow, missing
+   Like attachment, consumption takes no caller user id: the final callback
+   is a cross-site redirect the SameSite=Strict login-session cookie need
+   not accompany, so authorization is possession of the state plus the
+   session-binding hash proven by the SameSite=Lax per-flow cookie, matched
+   against the flow. The authoritative user is read from the locked row —
+   written at the authenticated start endpoint — and returned, never
+   compared against caller input.
+
+   Mismatch classifications (wrong binding, wrong flow, missing
    installation id) burn the state before reporting: presenting a real state
    in the wrong context destroys it and forces onboarding to restart, and
    the mismatch error is only returned once that burn has committed. Dead
    states (not found / expired / already consumed) are reported without
    writing anything — an expired row stays for cleanup/audit and a replayed
    row keeps its original consumed_at. *)
-let consume (module C : Caqti_lwt.CONNECTION) ~user_id ~state
-    ~session_binding_hash ~flow =
-  if not (valid_user_id user_id) then Lwt.return (Error Invalid_user_id)
-  else
-    let state_hash =
-      Github_onboarding_crypto.state_hash_to_string
-        (Github_onboarding_crypto.hash_state state)
-    in
-    let session_binding_hash =
-      Github_onboarding_crypto.session_binding_hash_to_string
-        session_binding_hash
-    in
-    (* As elsewhere in this module every Caqti error is dropped payload-free;
-       rollback failure adds nothing a caller may act on either. *)
-    let rollback_to err = C.rollback () >>= fun _ -> Lwt.return (Error err) in
-    let burn row_id err =
-      C.exec mark_consumed_query row_id >>= function
-      | Error _ -> rollback_to Storage_error
-      | Ok () -> (
-          C.commit () >>= function
-          | Error _ -> Lwt.return (Error Storage_error)
-          | Ok () -> Lwt.return (Error err))
-    in
-    C.start () >>= function
-    | Error _ -> Lwt.return (Error Storage_error)
+let consume (module C : Caqti_lwt.CONNECTION) ~state ~session_binding_hash
+    ~flow =
+  let state_hash =
+    Github_onboarding_crypto.state_hash_to_string
+      (Github_onboarding_crypto.hash_state state)
+  in
+  let session_binding_hash =
+    Github_onboarding_crypto.session_binding_hash_to_string
+      session_binding_hash
+  in
+  (* As elsewhere in this module every Caqti error is dropped payload-free;
+     rollback failure adds nothing a caller may act on either. *)
+  let rollback_to err = C.rollback () >>= fun _ -> Lwt.return (Error err) in
+  let burn row_id err =
+    C.exec mark_consumed_query row_id >>= function
+    | Error _ -> rollback_to Storage_error
     | Ok () -> (
-        C.find_opt lock_state_query state_hash >>= function
-        | Error _ -> rollback_to Storage_error
-        | Ok None -> rollback_to State_not_found
-        | Ok
-            (Some
-              ( (row_id, stored_user_id, stored_binding_hash, stored_flow),
-                (pending, expired, consumed) )) -> (
-            if consumed then rollback_to State_already_consumed
-            else if expired then rollback_to State_expired
-            else if stored_user_id <> user_id then burn row_id User_mismatch
-            else if not (String.equal stored_binding_hash session_binding_hash)
-            then burn row_id Session_binding_mismatch
-            else
-              (* The CHECK constraint should make a parse failure impossible;
-                 if it happens anyway, that is storage corruption, never a
-                 reason to substitute a flow. *)
-              match Github_onboarding.flow_of_string stored_flow with
-              | Error _ -> rollback_to Storage_error
-              | Ok parsed_flow -> (
-                  if parsed_flow <> flow then burn row_id Flow_mismatch
-                  else
-                    match pending with
-                    | None -> burn row_id Missing_pending_installation
-                    | Some pending_id
-                      when not (valid_pending_installation_id pending_id) ->
-                        (* The schema forbids non-positive ids; a row holding
-                           one is corrupt and must not be trusted or burned
-                           as a mere mismatch. *)
-                        rollback_to Storage_error
-                    | Some pending_id -> (
-                        C.exec mark_consumed_query row_id >>= function
-                        | Error _ -> rollback_to Storage_error
-                        | Ok () -> (
-                            C.commit () >>= function
-                            | Error _ -> Lwt.return (Error Storage_error)
-                            | Ok () ->
-                                Lwt.return
-                                  (Ok
-                                     {
-                                       user_id = stored_user_id;
-                                       flow = parsed_flow;
-                                       pending_github_installation_id =
-                                         pending_id;
-                                     }))))))
+        C.commit () >>= function
+        | Error _ -> Lwt.return (Error Storage_error)
+        | Ok () -> Lwt.return (Error err))
+  in
+  C.start () >>= function
+  | Error _ -> Lwt.return (Error Storage_error)
+  | Ok () -> (
+      C.find_opt lock_state_query state_hash >>= function
+      | Error _ -> rollback_to Storage_error
+      | Ok None -> rollback_to State_not_found
+      | Ok
+          (Some
+            ( (row_id, stored_user_id, stored_binding_hash, stored_flow),
+              (pending, expired, consumed) )) -> (
+          if consumed then rollback_to State_already_consumed
+          else if expired then rollback_to State_expired
+          else if not (String.equal stored_binding_hash session_binding_hash)
+          then burn row_id Session_binding_mismatch
+          else
+            (* The CHECK constraint should make a parse failure impossible;
+               if it happens anyway, that is storage corruption, never a
+               reason to substitute a flow. *)
+            match Github_onboarding.flow_of_string stored_flow with
+            | Error _ -> rollback_to Storage_error
+            | Ok parsed_flow -> (
+                if parsed_flow <> flow then burn row_id Flow_mismatch
+                else
+                  match pending with
+                  | None -> burn row_id Missing_pending_installation
+                  | Some pending_id
+                    when not (valid_pending_installation_id pending_id) ->
+                      (* The schema forbids non-positive ids; a row holding
+                         one is corrupt and must not be trusted or burned
+                         as a mere mismatch. *)
+                      rollback_to Storage_error
+                  | Some pending_id -> (
+                      C.exec mark_consumed_query row_id >>= function
+                      | Error _ -> rollback_to Storage_error
+                      | Ok () -> (
+                          C.commit () >>= function
+                          | Error _ -> Lwt.return (Error Storage_error)
+                          | Ok () ->
+                              Lwt.return
+                                (Ok
+                                   {
+                                     user_id = stored_user_id;
+                                     flow = parsed_flow;
+                                     pending_github_installation_id =
+                                       pending_id;
+                                   }))))))

@@ -4664,17 +4664,21 @@ module Gh_state_store = struct
      states/bindings never reach assertion messages; hash comparisons are
      boolean so hash values cannot appear in failure output either.
 
+     Like attach, consume takes no user id: the final callback is a
+     cross-site redirect the SameSite=Strict login-session cookie need not
+     accompany, so authorization is the state hash + the session-binding
+     hash from the SameSite=Lax per-flow cookie + the flow, and the
+     authoritative user comes back from the locked row itself.
+
      Flow mismatch has no case for the same reason as attach: the branch is
      structurally implemented, but with a single domain variant and the
      schema CHECK admitting only 'project_onboarding', no valid current data
      can produce it. *)
 
   let consume_error_str : Store.consume_error -> string = function
-    | Store.Invalid_user_id -> "Invalid_user_id"
     | Store.State_not_found -> "State_not_found"
     | Store.State_expired -> "State_expired"
     | Store.State_already_consumed -> "State_already_consumed"
-    | Store.User_mismatch -> "User_mismatch"
     | Store.Session_binding_mismatch -> "Session_binding_mismatch"
     | Store.Flow_mismatch -> "Flow_mismatch"
     | Store.Missing_pending_installation -> "Missing_pending_installation"
@@ -4724,18 +4728,18 @@ module Gh_state_store = struct
     in
     Lwt.return (uid, state, binding, binding_hash)
 
-  let do_consume conn ~user_id ~state ~binding_hash =
-    Store.consume conn ~user_id ~state ~session_binding_hash:binding_hash
+  let do_consume conn ~state ~binding_hash =
+    Store.consume conn ~state ~session_binding_hash:binding_hash
       ~flow:GO.Project_onboarding
 
-  let consume_ok conn ~user_id ~state ~binding_hash =
-    let* r = do_consume conn ~user_id ~state ~binding_hash in
+  let consume_ok conn ~state ~binding_hash =
+    let* r = do_consume conn ~state ~binding_hash in
     match r with
     | Ok consumed -> Lwt.return consumed
     | Error e -> Alcotest.failf "consume: %s" (consume_error_str e)
 
-  let consume_expect label expected conn ~user_id ~state ~binding_hash =
-    let* r = do_consume conn ~user_id ~state ~binding_hash in
+  let consume_expect label expected conn ~state ~binding_hash =
+    let* r = do_consume conn ~state ~binding_hash in
     match r with
     | Error e ->
         Alcotest.(check string) label expected (consume_error_str e);
@@ -4751,9 +4755,10 @@ module Gh_state_store = struct
         let* () = attach_ok conn ~state ~binding_hash 123456789L in
         let* before = single_row conn uid in
         let ((state_hash0, binding_hash0, flow0), (_, _, times0)) = before in
-        let* consumed =
-          consume_ok conn ~user_id:uid ~state ~binding_hash
-        in
+        (* The call carries only the state, binding hash, and flow — no
+           caller user id exists in the consume API at all; the owner comes
+           back from the locked row. *)
+        let* consumed = consume_ok conn ~state ~binding_hash in
         Alcotest.(check int) "returned user_id is the stored one" uid
           consumed.Store.user_id;
         (match consumed.Store.flow with
@@ -4795,7 +4800,7 @@ module Gh_state_store = struct
           consume_fixture conn "ghconsume_replay"
         in
         let* () = attach_ok conn ~state ~binding_hash 42L in
-        let* _ = consume_ok conn ~user_id:uid ~state ~binding_hash in
+        let* _ = consume_ok conn ~state ~binding_hash in
         let* first = C.find q_consumed_epoch_for_user uid in
         let* first = or_fail "consumed_at" first in
         let first =
@@ -4804,8 +4809,8 @@ module Gh_state_store = struct
           | None -> Alcotest.fail "first consume left consumed_at NULL"
         in
         let* () =
-          consume_expect "replay" "State_already_consumed" conn ~user_id:uid
-            ~state ~binding_hash
+          consume_expect "replay" "State_already_consumed" conn ~state
+            ~binding_hash
         in
         let* second = C.find q_consumed_epoch_for_user uid in
         let* second = or_fail "consumed_at after replay" second in
@@ -4827,8 +4832,8 @@ module Gh_state_store = struct
         (* Generated but never issued: no row anywhere carries its hash. *)
         let state = GOC.generate_state () in
         let* () =
-          consume_expect "unknown state" "State_not_found" conn ~user_id:uid
-            ~state ~binding_hash
+          consume_expect "unknown state" "State_not_found" conn ~state
+            ~binding_hash
         in
         let* count = C.find q_count_for_user uid in
         let* count = or_fail "count" count in
@@ -4846,38 +4851,54 @@ module Gh_state_store = struct
         let* r = C.exec q_expire_states_for_user uid in
         let* () = or_fail "expire fixture" r in
         let* () =
-          consume_expect "expired" "State_expired" conn ~user_id:uid ~state
-            ~binding_hash
+          consume_expect "expired" "State_expired" conn ~state ~binding_hash
         in
         let* _, (_, consumed_null, _) = single_row conn uid in
         Alcotest.(check bool) "consumed_at still NULL" true consumed_null;
         Lwt.return_unit)
 
-  let consume_wrong_user_case =
-    consume_case "consume: wrong user burns the state"
-      ~users:[ "ghconsume_wu_a"; "ghconsume_wu_b" ] (fun conn ->
+  (* Ownership preservation: with no user id in the consume API, consuming
+     A's state must yield A's stored identity while B's independent state —
+     and its stored ownership — stay completely untouched. single_row
+     filters on user_id, so retrieving each row under its own user is
+     itself the ownership assertion. *)
+  let consume_ownership_case =
+    consume_case "consume: yields the stored owner, other states stay put"
+      ~users:[ "ghconsume_own_a"; "ghconsume_own_b" ] (fun conn ->
         let (module C : Caqti_lwt.CONNECTION) = conn in
-        let* uid, state, _, binding_hash =
-          consume_fixture conn "ghconsume_wu_a"
+        let* uid_a, state_a, _, binding_hash_a =
+          consume_fixture conn "ghconsume_own_a"
         in
-        let* other = C.find q_insert_named_user "ghconsume_wu_b" in
-        let* other = or_fail "second user" other in
-        let* () = attach_ok conn ~state ~binding_hash 42L in
+        let* uid_b = C.find q_insert_named_user "ghconsume_own_b" in
+        let* uid_b = or_fail "second user" uid_b in
+        let binding_hash_b =
+          GOC.hash_session_binding (GOC.generate_session_binding ())
+        in
+        let* _state_b =
+          issue_ok conn ~user_id:uid_b ~session_binding_hash:binding_hash_b
+        in
         let* () =
-          consume_expect "wrong user" "User_mismatch" conn ~user_id:other
-            ~state ~binding_hash
+          attach_ok conn ~state:state_a ~binding_hash:binding_hash_a 42L
         in
-        let* _, (pending, consumed_null, _) = single_row conn uid in
-        Alcotest.(check bool) "state burned" false consumed_null;
-        Alcotest.(check (option int64)) "pending id untouched by burn"
-          (Some 42L) pending;
-        (* The burn is durable: even the rightful caller is locked out. *)
-        consume_expect "correct retry after burn" "State_already_consumed"
-          conn ~user_id:uid ~state ~binding_hash)
+        (* Nothing about B — no id, session, or state — enters this call. *)
+        let* consumed =
+          consume_ok conn ~state:state_a ~binding_hash:binding_hash_a
+        in
+        Alcotest.(check int) "consumed state belongs to user A" uid_a
+          consumed.Store.user_id;
+        let* _, (pending_a, consumed_a, _) = single_row conn uid_a in
+        Alcotest.(check bool) "state A consumed" false consumed_a;
+        Alcotest.(check (option int64)) "state A pending id kept" (Some 42L)
+          pending_a;
+        (* single_row on uid_b proves B still owns its row. *)
+        let* row_b = single_row conn uid_b in
+        check_untouched_unconsumed "state B" row_b;
+        Lwt.return_unit)
 
   let consume_wrong_binding_case =
     consume_case "consume: session-binding mismatch burns the state"
       ~users:[ "ghconsume_wb" ] (fun conn ->
+        let (module C : Caqti_lwt.CONNECTION) = conn in
         let* uid, state, _, binding_hash =
           consume_fixture conn "ghconsume_wb"
         in
@@ -4887,12 +4908,26 @@ module Gh_state_store = struct
         in
         let* () =
           consume_expect "wrong binding" "Session_binding_mismatch" conn
-            ~user_id:uid ~state ~binding_hash:other_hash
+            ~state ~binding_hash:other_hash
         in
-        let* _, (_, consumed_null, _) = single_row conn uid in
-        Alcotest.(check bool) "state burned" false consumed_null;
-        consume_expect "correct retry after burn" "State_already_consumed"
-          conn ~user_id:uid ~state ~binding_hash)
+        let* burned_at = C.find q_consumed_epoch_for_user uid in
+        let* burned_at = or_fail "consumed_at" burned_at in
+        let burned_at =
+          match burned_at with
+          | Some epoch -> epoch
+          | None -> Alcotest.fail "mismatch left consumed_at NULL"
+        in
+        (* The burn is durable: even the rightful binding is locked out,
+           and the retry must not rewrite the original burn timestamp. *)
+        let* () =
+          consume_expect "correct retry after burn" "State_already_consumed"
+            conn ~state ~binding_hash
+        in
+        let* after = C.find q_consumed_epoch_for_user uid in
+        let* after = or_fail "consumed_at after retry" after in
+        Alcotest.(check (option (float 0.))) "original consumed_at kept"
+          (Some burned_at) after;
+        Lwt.return_unit)
 
   let consume_missing_pending_case =
     consume_case "consume: missing installation id burns, blocks attach"
@@ -4903,25 +4938,12 @@ module Gh_state_store = struct
         (* Deliberately no attach: the flow never reached the setup return. *)
         let* () =
           consume_expect "missing pending" "Missing_pending_installation"
-            conn ~user_id:uid ~state ~binding_hash
+            conn ~state ~binding_hash
         in
         let* _, (pending, consumed_null, _) = single_row conn uid in
         Alcotest.(check bool) "state burned" false consumed_null;
         Alcotest.(check (option int64)) "pending still NULL" None pending;
         attach_unavailable "attach after burn" conn ~state ~binding_hash 42L)
-
-  let consume_invalid_user_case =
-    db_case "consume: non-positive user ids rejected before SQL" (fun conn ->
-        let state = GOC.generate_state () in
-        let binding_hash =
-          GOC.hash_session_binding (GOC.generate_session_binding ())
-        in
-        let* () =
-          consume_expect "user id 0" "Invalid_user_id" conn ~user_id:0 ~state
-            ~binding_hash
-        in
-        consume_expect "user id -1" "Invalid_user_id" conn ~user_id:(-1)
-          ~state ~binding_hash)
 
   (* Two independent connections race on one state: the second blocks on the
      first's FOR UPDATE row lock, then re-reads the committed row and must
@@ -4947,8 +4969,8 @@ module Gh_state_store = struct
           (fun () ->
             let* r1, r2 =
               Lwt.both
-                (do_consume conn ~user_id:uid ~state ~binding_hash)
-                (do_consume conn2 ~user_id:uid ~state ~binding_hash)
+                (do_consume conn ~state ~binding_hash)
+                (do_consume conn2 ~state ~binding_hash)
             in
             let classify label = function
               | Ok consumed ->
@@ -4978,9 +5000,9 @@ module Gh_state_store = struct
       attach_missing_state_case; attach_ownership_case;
       attach_wrong_binding_case; attach_expired_case; attach_consumed_case;
       consume_success_case; consume_replay_case; consume_unknown_state_case;
-      consume_expired_case; consume_wrong_user_case;
+      consume_expired_case; consume_ownership_case;
       consume_wrong_binding_case; consume_missing_pending_case;
-      consume_invalid_user_case; consume_concurrent_case ]
+      consume_concurrent_case ]
 end
 
 (* === GitHub onboarding start handler (Github_onboarding_handlers) ===
