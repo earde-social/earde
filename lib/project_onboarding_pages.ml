@@ -10,7 +10,7 @@
    GitHub install/callback routes do not exist yet, and the generic
    community-creation route is deliberately not offered here — which is also
    why this page uses the chrome-free auth layout instead of the App command
-   bar (whose logged-in topbar carries the "+ Start community" link). *)
+   bar (whose logged-in topbar carries the "Connect a project" link). *)
 
 (* Uppercase micro-heading + paragraph in the auth-card idiom; all inputs are
    static literals, so no escaping is needed at this call site. *)

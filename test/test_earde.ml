@@ -93,6 +93,24 @@ let check_vis_none name s =
   Alcotest.test_case name `Quick (fun () ->
       Alcotest.(check bool) name true (D.community_visibility_of_string s = None))
 
+(* Onboarding-state enum (network-community lifecycle foundation): result-based
+   decode — off-enum values are an explicit Error, never a silent published. *)
+let check_onb_decodes name s v =
+  Alcotest.test_case name `Quick (fun () ->
+      Alcotest.(check bool) name true
+        (D.community_onboarding_state_of_string s = Ok v))
+
+let check_onb_serializes name v s =
+  Alcotest.test_case name `Quick (fun () ->
+      Alcotest.(check string) name s (D.string_of_community_onboarding_state v))
+
+let check_onb_error name s =
+  Alcotest.test_case name `Quick (fun () ->
+      Alcotest.(check bool) name true
+        (match D.community_onboarding_state_of_string s with
+         | Error _ -> true
+         | Ok _ -> false))
+
 let check_idx_community name expected vis ~community_indexable =
   Alcotest.test_case name `Quick (fun () ->
       Alcotest.(check bool) name expected
@@ -3259,7 +3277,9 @@ let with_enabled_config f =
 let test_community ~id ~visibility : Earde.Db.community =
   { Earde.Db.id; slug = "testc"; name = "Test Community"; description = None;
     rules = None; avatar_url = None; banner_url = None; allow_downvotes = true;
-    sections_enabled = true; visibility; indexable = true }
+    sections_enabled = true; visibility; indexable = true;
+    is_network_community = false; onboarding_state = Earde.Db.Community_published;
+    discoverable = true }
 
 (* Renders the search results page through real session middleware (the page
    embeds a CSRF tag). Analytics configuration is whatever the caller
@@ -3521,7 +3541,8 @@ let nav_test_community : Earde.Db.community =
   { id = 1; slug = "ocaml"; name = "OCaml"; description = None; rules = None
   ; avatar_url = None; banner_url = None; allow_downvotes = true
   ; sections_enabled = true; visibility = Earde.Db.Community_public
-  ; indexable = true }
+  ; indexable = true; is_network_community = false
+  ; onboarding_state = Earde.Db.Community_published; discoverable = true }
 
 let nav_entry_cases =
   [ nav_case "logged-in topbar advertises /bring" (fun () ->
@@ -3770,6 +3791,17 @@ let () =
         ; check_vis_none "unknown" "secret"
         ; check_vis_none "unlisted not a value yet" "unlisted"
         ; check_vis_none "case-sensitive" "Public"
+        ] )
+      (* Onboarding-state enum: canonical decode + serialize; off-enum is an explicit Error. *)
+    ; ( "community_onboarding_state"
+      , [ check_onb_decodes "draft decodes" "draft" D.Community_draft
+        ; check_onb_decodes "published decodes" "published" D.Community_published
+        ; check_onb_serializes "draft serializes" D.Community_draft "draft"
+        ; check_onb_serializes "published serializes" D.Community_published "published"
+        ; check_onb_error "unknown is an error" "archived"
+        ; check_onb_error "blank is an error" ""
+        ; check_onb_error "case-sensitive: Draft rejected" "Draft"
+        ; check_onb_error "case-sensitive: PUBLISHED rejected" "PUBLISHED"
         ] )
       (* Effective COMMUNITY indexability: private is always non-indexable; public follows the flag. *)
     ; ( "effective_indexable_community"

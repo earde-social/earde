@@ -151,6 +151,10 @@ CREATE TABLE public.communities (
     sections_enabled boolean DEFAULT true NOT NULL,
     visibility text DEFAULT 'public'::text NOT NULL,
     indexable boolean DEFAULT true NOT NULL,
+    is_network_community boolean DEFAULT false NOT NULL,
+    onboarding_state text DEFAULT 'published'::text NOT NULL,
+    discoverable boolean DEFAULT true NOT NULL,
+    CONSTRAINT communities_onboarding_state_check CHECK ((onboarding_state = ANY (ARRAY['draft'::text, 'published'::text]))),
     CONSTRAINT communities_visibility_check CHECK ((visibility = ANY (ARRAY['public'::text, 'private'::text])))
 );
 
@@ -1483,4 +1487,5 @@ INSERT INTO public.schema_migrations (version) VALUES
     ('20260620140000'),
     ('20260622120000'),
     ('20260722120000'),
-    ('20260722200000');
+    ('20260722200000'),
+    ('20260723120000');

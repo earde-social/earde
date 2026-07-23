@@ -26,11 +26,28 @@ type community_visibility = Community_public | Community_private
 val community_visibility_to_string : community_visibility -> string
 val community_visibility_of_string : string -> community_visibility option
 
+(** Network-community setup lifecycle (storage foundation only — no enforcement yet).
+    [Community_draft] = a provisioned community still being configured;
+    [Community_published] = live. Mirrors the DB CHECK on communities.onboarding_state.
+    [_of_string] returns [Error] for off-enum values — never silently published. *)
+type community_onboarding_state =
+  | Community_draft
+  | Community_published
+
+val string_of_community_onboarding_state : community_onboarding_state -> string
+val community_onboarding_state_of_string :
+  string -> (community_onboarding_state, string) result
+
 type community = {
   id : int; slug : string; name : string; description : string option;
   rules : string option; avatar_url : string option; banner_url : string option;
   allow_downvotes : bool; sections_enabled : bool;
   visibility : community_visibility; indexable : bool;
+  (* Lifecycle foundation: [discoverable] = Earde's own discovery surfaces (distinct
+     from external-SEO [indexable]). No query behavior attached yet. *)
+  is_network_community : bool;
+  onboarding_state : community_onboarding_state;
+  discoverable : bool;
 }
 
 type community_section = {

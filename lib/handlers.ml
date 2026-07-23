@@ -2731,7 +2731,8 @@ let view_post_handler request =
         let community_for_page : Db.community = match community_res with
           | Ok (Some a) -> a
           | _ -> { id = post.community_id; slug = post.community_slug; name = post.community_slug;
-                   description = None; rules = None; avatar_url = None; banner_url = None; allow_downvotes = true; sections_enabled = false; visibility = Db.Community_public; indexable = true }
+                   description = None; rules = None; avatar_url = None; banner_url = None; allow_downvotes = true; sections_enabled = false; visibility = Db.Community_public; indexable = true;
+                   is_network_community = false; onboarding_state = Db.Community_published; discoverable = true }
         in
         let%lwt noindex = thread_noindex db community_for_page post in
         (match comments_result, is_member_result with
@@ -2836,7 +2837,8 @@ let view_thread_handler request =
           let community_for_page : Db.community = match community_res with
             | Ok (Some a) -> a
             | _ -> { id = post.community_id; slug = post.community_slug; name = post.community_slug;
-                     description = None; rules = None; avatar_url = None; banner_url = None; allow_downvotes = true; sections_enabled = false; visibility = Db.Community_public; indexable = true } in
+                     description = None; rules = None; avatar_url = None; banner_url = None; allow_downvotes = true; sections_enabled = false; visibility = Db.Community_public; indexable = true;
+                     is_network_community = false; onboarding_state = Db.Community_published; discoverable = true } in
           let%lwt noindex = thread_noindex db community_for_page post in
           match comments_result, is_member_result with
           | Ok comments, Ok is_member ->
