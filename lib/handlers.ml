@@ -88,9 +88,12 @@ module Rate_limit = struct
     match%lwt Dream.sql request (fun db -> Db.Rate_limit.check db ip endpoint) with
     | Ok `Blocked ->
         let user = Dream.session_field request "username" in
+        (* The blocked page's return link reuses the path-only endpoint: echoing
+           the full target would leak query secrets (OAuth code/state, reset
+           tokens) into the rendered HTML. *)
         Dream.html (Pages.msg_page ~auth:true ?user ~title:"Too Many Attempts"
           ~message:"Too many attempts. Please try again later."
-          ~alert_type:"error" ~return_url:(Dream.target request) request)
+          ~alert_type:"error" ~return_url:endpoint request)
     | Ok `Allowed -> inner_handler request
     | Error _ -> inner_handler request
 end
