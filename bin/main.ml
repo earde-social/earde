@@ -77,9 +77,15 @@ let () =
        the repo has no permanent-redirect (301/308) pattern. *)
     Dream.get "/all" (fun request -> Dream.redirect request "/feed");
     Dream.get "/feed" Earde.Handlers.feed_handler;
-    (* Entry point for the GitHub-anchored open-source onboarding. Public and
-       informational only in this slice — no POST or GitHub callback routes. *)
-    Dream.get "/bring" Earde.Project_onboarding_handlers.bring_page_handler;
+    (* Entry and return page for GitHub onboarding: offers the start action
+       when the viewer passes the onboarding policy and shows the one-time
+       connected/failed callback feedback. Informational GET, deliberately
+       not rate-limited; the mode is re-read per request (uncached, matching
+       the other onboarding routes below). *)
+    Dream.get "/bring" (fun request ->
+        Earde.Github_onboarding_handlers.make_bring_handler
+          ~mode:(Earde.Project_onboarding.mode_from_env ())
+          request);
     (* Starts GitHub App installation: rate-limited like the other sensitive
        POSTs. The mode is re-read per request via the existing
        Project_onboarding API (uncached, matching /bring) and the validated

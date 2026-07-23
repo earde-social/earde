@@ -479,6 +479,50 @@ let finish_authorization ~config ~credentials ~exchange_transport
                     (redirect_dropping_cookie config ~request ~state
                        (callback_success ())))))
 
+(* --- Onboarding entry and return page (GET /bring) --- *)
+
+(* Strict interpretation of the callback's two clean redirect targets.
+   Case-sensitive exact values, duplicate-aware via raw_query_occurrences:
+   anything but exactly one recognized value — missing, blank, bare,
+   unknown, differently-cased, duplicated, or conflicting — means no
+   banner, and the raw value never reaches the page or a log (only a closed
+   variant crosses). Presentation-only: the parameter never changes which
+   action the page offers. *)
+let bring_feedback_of_target target =
+  match raw_query_occurrences ~key:"github" target with
+  | [ Some "connected" ] -> Some Github_onboarding_pages.Connected
+  | [ Some "failed" ] -> Some Github_onboarding_pages.Failed
+  | _ -> None
+
+let make_bring_handler ~mode request =
+  let user_id = authenticated_user_id request in
+  let access =
+    match (mode : Project_onboarding.mode) with
+    | Off -> Github_onboarding_pages.Onboarding_disabled
+    | Admins | Public -> (
+        match user_id with
+        | None -> Github_onboarding_pages.Login_required
+        | Some _ ->
+            let is_admin =
+              session_field_opt request "is_admin" = Some "true"
+            in
+            if Project_onboarding.onboarding_available mode ~is_admin then
+              Github_onboarding_pages.Ready
+            else Github_onboarding_pages.Rollout_limited)
+  in
+  (* Chrome identity under the same validity rule as the access state: a
+     session username without a valid positive user_id stays anonymous. *)
+  let user = match user_id with None -> None | Some _ -> session_user request in
+  (* no-store: the page reflects session identity, rollout mode, and
+     one-time callback feedback; no-referrer keeps the feedback query out
+     of outbound Referers. *)
+  Dream.html
+    ~headers:
+      [ ("Cache-Control", "no-store"); ("Referrer-Policy", "no-referrer") ]
+    (Github_onboarding_pages.bring_page ?user ~request ~access
+       ~feedback:(bring_feedback_of_target (Dream.target request))
+       ())
+
 let make_oauth_callback_handler ~mode ~load_config ~load_credentials
     ~exchange_transport ~installations_transport request =
   match mode with

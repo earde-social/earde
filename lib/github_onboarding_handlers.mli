@@ -69,6 +69,36 @@ val make_setup_return_handler :
     cookie; [Storage_error] redirects to /bring keeping the cookie so a
     refresh can retry. *)
 
+val make_bring_handler :
+  mode:Project_onboarding.mode ->
+  Dream.handler
+(** Handler factory for the onboarding entry and return page (GET /bring).
+    Requires no GitHub configuration, credentials, database connection, or
+    outbound HTTP: every state is a normal 200 HTML page in the shared
+    layout, with [Cache-Control: no-store] and [Referrer-Policy:
+    no-referrer] — the page reflects session identity, rollout mode, and
+    one-time callback feedback, so it must never be cached or leak its
+    query onward.
+
+    Access is derived only from the closed [mode] and the Dream session
+    (a [user_id] counts only when it parses as a positive integer;
+    [is_admin = "true"] matters only alongside a valid user), through the
+    existing [Project_onboarding.onboarding_available] policy: [Off]
+    explains that project onboarding is currently unavailable; a permitted
+    mode without a valid user shows a plain /login link (no return URL);
+    [Admins] for a non-admin shows the rollout-limited state; an authorized
+    viewer gets the single parameter-free POST form to
+    /integrations/github/install/start, whose handler remains authoritative
+    and repeats every access and same-origin check.
+
+    The callback's [github] query parameter is interpreted strictly and
+    duplicate-aware: exactly one [github=connected] renders the success
+    banner, exactly one [github=failed] the generic anti-oracle failure
+    banner, and anything else — missing, blank, bare, unknown,
+    differently-cased, duplicated, or conflicting — renders none. The raw
+    value never reaches the rendered page or a log, and feedback never
+    changes feature or user access. *)
+
 val make_oauth_callback_handler :
   mode:Project_onboarding.mode ->
   load_config:

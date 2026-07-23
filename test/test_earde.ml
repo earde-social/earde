@@ -3483,49 +3483,373 @@ let check_ob_legacy_post name expected ~is_admin =
       Alcotest.(check string) name (ob_decision_str expected)
         (ob_decision_str (Ob.legacy_creation_post_decision ~is_admin)))
 
-(* /bring page renderer — pure (no server, no session middleware): the mode
-   and viewer context are plain arguments and the layout renders without a
-   request. Assertions are substring checks on stable copy/markup. *)
-let render_bring ?user ~is_admin mode =
-  Earde.Project_onboarding_pages.bring_page ?user ~is_admin ~mode ()
+(* /bring page renderer — pure (no server, no session middleware): the closed
+   access state and callback feedback are plain arguments and the layout
+   renders without a request. Assertions are substring checks on stable
+   copy/markup; access derivation, feedback-query parsing, and response
+   headers are covered on the handler in Gh_bring below. *)
+module Gp = Earde.Github_onboarding_pages
+
+let render_bring ?user ?(feedback = None) access =
+  Gp.bring_page ?user ~access ~feedback ()
 
 let bring_case name f = Alcotest.test_case name `Quick f
 
-let bring_viewers =
-  [ ("anonymous", None, false)
-  ; ("member", Some "alice", false)
-  ; ("admin", Some "root", true)
+let bring_accesses =
+  [ ("disabled", Gp.Onboarding_disabled)
+  ; ("login-required", Gp.Login_required)
+  ; ("rollout-limited", Gp.Rollout_limited)
+  ; ("ready", Gp.Ready)
   ]
 
-let bring_modes = [ ("off", Ob.Off); ("admins", Ob.Admins); ("public", Ob.Public) ]
+let bring_feedbacks =
+  [ ("no feedback", None)
+  ; ("connected", Some Gp.Connected)
+  ; ("failed", Some Gp.Failed)
+  ]
 
-(* Shared invariants: every mode × viewer explains that members do not need
-   GitHub, describes both destinations for a verified project, stays noindex,
-   and never emits the forbidden "Official ..." claims or links to routes
-   outside this slice (GitHub install/callback, /new-community, /projects/new). *)
-let bring_shared_case (mode_name, mode) (viewer_name, user, is_admin) =
+(* Shared invariants: every access × feedback state explains that members do
+   not need GitHub and what connecting does, keeps the factual verification
+   language, stays noindex, and never emits a forbidden endorsement claim
+   (checked case-insensitively) or a link to the admin-only legacy route. *)
+let bring_shared_case (access_name, access) (feedback_name, feedback) =
   bring_case
-    (Printf.sprintf "%s mode, %s viewer" mode_name viewer_name)
+    (Printf.sprintf "%s, %s" access_name feedback_name)
     (fun () ->
-      let html = render_bring ?user ~is_admin mode in
+      let html = render_bring ~feedback access in
+      let lower = String.lowercase_ascii html in
       let must s = Alcotest.(check bool) ("contains: " ^ s) true (contains html s) in
-      let must_not s =
-        Alcotest.(check bool) ("must not contain: " ^ s) false (contains html s)
+      let must_not_ci s =
+        Alcotest.(check bool) ("must not contain: " ^ s) false
+          (contains lower (String.lowercase_ascii s))
       in
       must "do not need a GitHub account";
-      must "create its own Earde community";
-      must "existing broader Earde community";
+      must "verify project maintainers and their public repositories";
+      must "does not automatically grant moderation rights";
+      must "Project connected through GitHub";
+      must "Verified through GitHub";
       must "noindex";
-      must_not "Official community";
-      must_not "Official home";
-      must_not "/integrations/github";
-      must_not "/new-community";
-      must_not "/projects/new")
+      must_not_ci "official community";
+      must_not_ci "official home";
+      must_not_ci "GitHub-approved";
+      must_not_ci "GitHub-endorsed";
+      must_not_ci "/new-community";
+      must_not_ci "/projects/new")
 
 let bring_shared_cases =
   List.concat_map
-    (fun mode -> List.map (bring_shared_case mode) bring_viewers)
-    bring_modes
+    (fun access -> List.map (bring_shared_case access) bring_feedbacks)
+    bring_accesses
+
+(* /bring handler (Github_onboarding_handlers.make_bring_handler) — DB-free:
+   the factory takes only the closed mode and needs no configuration loader,
+   credentials, database, or GitHub access, so the full request → HTML path
+   runs offline. Session middleware is always installed (the shared layout
+   assumes it, exactly like production); anonymous is an empty session. Raw
+   feedback-query values are asserted absent from the page. *)
+module Gh_bring = struct
+  let ( let* ) = Lwt.bind
+
+  let case = bring_case
+
+  let run ?(session = []) ?(mode = Ob.Public) ?(target = "/bring") () =
+    let handler = Earde.Github_onboarding_handlers.make_bring_handler ~mode in
+    let pipeline =
+      Dream.memory_sessions (fun req ->
+          let* () =
+            Lwt_list.iter_s
+              (fun (k, v) -> Dream.set_session_field req k v)
+              session
+          in
+          handler req)
+    in
+    Lwt_main.run (pipeline (Dream.request ~method_:`GET ~target ""))
+
+  let body_of response = Lwt_main.run (Dream.body response)
+
+  let status_of response = Dream.status_to_int (Dream.status response)
+
+  let member = [ ("user_id", "42"); ("username", "alice") ]
+  let admin = member @ [ ("is_admin", "true") ]
+
+  let success_copy = "GitHub installation connected successfully."
+  let failure_copy = "We couldn't complete the GitHub connection."
+  let login_copy = "An Earde account is required to connect a project"
+  let start_action = "action='/integrations/github/install/start'"
+  let button_copy = "Connect a GitHub project"
+
+  let count_occurrences haystack needle =
+    let nl = String.length needle in
+    let rec loop from acc =
+      if from + nl > String.length haystack then acc
+      else if String.sub haystack from nl = needle then loop (from + nl) (acc + 1)
+      else loop (from + 1) acc
+    in
+    loop 0 0
+
+  (* Every /bring state is a normal, uncacheable, referrer-free 200. *)
+  let check_page label response =
+    Alcotest.(check int) (label ^ ": 200") 200 (status_of response);
+    Alcotest.(check (option string)) (label ^ ": no-store") (Some "no-store")
+      (Dream.header response "Cache-Control");
+    Alcotest.(check (option string))
+      (label ^ ": no-referrer")
+      (Some "no-referrer")
+      (Dream.header response "Referrer-Policy")
+
+  let checked_body label response =
+    check_page label response;
+    body_of response
+
+  let check_banner label body expected =
+    let expect_success, expect_failure =
+      match expected with
+      | `Success -> (true, false)
+      | `Failure -> (false, true)
+      | `None -> (false, false)
+    in
+    Alcotest.(check bool) (label ^ ": success banner") expect_success
+      (contains body success_copy);
+    Alcotest.(check bool) (label ^ ": failure banner") expect_failure
+      (contains body failure_copy)
+
+  let check_no_form label body =
+    Alcotest.(check bool) (label ^ ": no form") false (contains body "<form");
+    Alcotest.(check bool) (label ^ ": no start action") false
+      (contains body start_action)
+
+  (* Strict duplicate-aware feedback interpretation: only the two exact
+     lowercase callback values, exactly once, render a banner. *)
+  let feedback_matrix =
+    [ ("missing query", "/bring", `None)
+    ; ("connected", "/bring?github=connected", `Success)
+    ; ("failed", "/bring?github=failed", `Failure)
+    ; ("blank value", "/bring?github=", `None)
+    ; ("bare key", "/bring?github", `None)
+    ; ("unknown value", "/bring?github=done", `None)
+    ; ("uppercase value", "/bring?github=Connected", `None)
+    ; ("all-caps value", "/bring?github=FAILED", `None)
+    ; ("duplicate connected", "/bring?github=connected&github=connected", `None)
+    ; ("connected and failed", "/bring?github=connected&github=failed", `None)
+    ; ("failed and connected", "/bring?github=failed&github=connected", `None)
+    ; ( "unrelated parameters ignored"
+      , "/bring?utm_source=x&github=connected&ref=y"
+      , `Success )
+    ]
+
+  let feedback_cases =
+    List.map
+      (fun (label, target, expected) ->
+        case ("feedback: " ^ label) (fun () ->
+            let body =
+              checked_body label (run ~session:member ~target ())
+            in
+            check_banner label body expected))
+      feedback_matrix
+
+  let raw_value_case =
+    case "feedback: raw query values never reach the page" (fun () ->
+        List.iter
+          (fun (target, marker) ->
+            let body = body_of (run ~session:member ~target ()) in
+            Alcotest.(check bool) ("marker absent: " ^ marker) false
+              (contains body marker))
+          [ ("/bring?github=zqxmarker1", "zqxmarker1")
+          ; ("/bring?github=%3Cscript%3Ezqxmarker2%3C%2Fscript%3E", "zqxmarker2")
+          ; ("/bring?github=connectedzqxmarker3", "zqxmarker3")
+          ; ("/bring?github=connected&github=zqxmarker4", "zqxmarker4")
+          ])
+
+  let no_empty_banner_case =
+    case "feedback: no banner means no alert element at all" (fun () ->
+        (* Ready is the only state whose action panel is not an alert, so
+           any auth-alert here could only be a leftover feedback shell. *)
+        let body = body_of (run ~session:member ~mode:Ob.Public ()) in
+        Alcotest.(check bool) "no alert element" false
+          (contains body "auth-alert"))
+
+  let off_case =
+    case "off: unavailable copy, no action, no false login prompt" (fun () ->
+        List.iter
+          (fun (label, session) ->
+            let body =
+              checked_body label (run ~session ~mode:Ob.Off ())
+            in
+            Alcotest.(check bool) (label ^ ": unavailable copy") true
+              (contains body "Project onboarding is currently unavailable");
+            check_no_form label body;
+            (* Authenticated viewers must not be told to log in. *)
+            Alcotest.(check bool) (label ^ ": no login copy") false
+              (contains body login_copy);
+            Alcotest.(check bool) (label ^ ": no login link") false
+              (contains body "href='/login'"))
+          [ ("member", member); ("admin", admin) ])
+
+  let off_feedback_case =
+    case "off: callback feedback shows without enabling the action" (fun () ->
+        List.iter
+          (fun (label, target, expected) ->
+            let body =
+              checked_body label (run ~session:member ~mode:Ob.Off ~target ())
+            in
+            check_banner label body expected;
+            check_no_form label body)
+          [ ("connected", "/bring?github=connected", `Success)
+          ; ("failed", "/bring?github=failed", `Failure)
+          ])
+
+  let anonymous_case =
+    case "anonymous: login link, no form, no hidden data" (fun () ->
+        List.iter
+          (fun (label, mode) ->
+            let body = checked_body label (run ~mode ()) in
+            Alcotest.(check bool) (label ^ ": login copy") true
+              (contains body login_copy);
+            Alcotest.(check bool) (label ^ ": login link") true
+              (contains body "href='/login'");
+            check_no_form label body;
+            Alcotest.(check bool) (label ^ ": no hidden input") false
+              (contains body "type='hidden'"))
+          [ ("public", Ob.Public); ("admins", Ob.Admins) ])
+
+  let anonymous_feedback_case =
+    case "anonymous: feedback does not bypass authentication" (fun () ->
+        let body =
+          checked_body "anonymous connected"
+            (run ~mode:Ob.Public ~target:"/bring?github=connected" ())
+        in
+        check_banner "anonymous connected" body `Success;
+        Alcotest.(check bool) "still the login state" true
+          (contains body login_copy);
+        check_no_form "anonymous connected" body)
+
+  let admins_non_admin_case =
+    case "admins: authenticated non-admin sees the rollout state" (fun () ->
+        List.iter
+          (fun (label, session) ->
+            let body =
+              checked_body label (run ~session ~mode:Ob.Admins ())
+            in
+            Alcotest.(check bool) (label ^ ": rollout copy") true
+              (contains body "limited to the early-access rollout");
+            check_no_form label body;
+            Alcotest.(check bool) (label ^ ": no login copy") false
+              (contains body login_copy))
+          [ ("member", member)
+          ; ("explicit false", member @ [ ("is_admin", "false") ])
+          ])
+
+  let admins_admin_case =
+    case "admins: authenticated admin gets the start form" (fun () ->
+        let body = checked_body "admin" (run ~session:admin ~mode:Ob.Admins ()) in
+        Alcotest.(check bool) "start form" true (contains body start_action);
+        Alcotest.(check bool) "button copy" true (contains body button_copy))
+
+  let invalid_session_case =
+    case "session: invalid user_id reads as anonymous" (fun () ->
+        List.iter
+          (fun raw ->
+            let label = "user_id " ^ (if raw = "" then "<empty>" else raw) in
+            let body =
+              checked_body label
+                (run ~session:[ ("user_id", raw) ] ~mode:Ob.Public ())
+            in
+            Alcotest.(check bool) (label ^ ": login copy") true
+              (contains body login_copy);
+            check_no_form label body)
+          [ "not-a-number"; ""; "0"; "-3" ])
+
+  let admin_flag_without_user_case =
+    case "session: is_admin alone is not authentication" (fun () ->
+        List.iter
+          (fun (label, session) ->
+            let body =
+              checked_body label (run ~session ~mode:Ob.Admins ())
+            in
+            Alcotest.(check bool) (label ^ ": login copy") true
+              (contains body login_copy);
+            check_no_form label body)
+          [ ("no user_id", [ ("is_admin", "true") ])
+          ; ("zero user_id", [ ("user_id", "0"); ("is_admin", "true") ])
+          ; ("negative user_id", [ ("user_id", "-1"); ("is_admin", "true") ])
+          ])
+
+  let public_ready_case =
+    case "public: authenticated user gets exactly one clean POST form"
+      (fun () ->
+        let body = checked_body "ready" (run ~session:member ()) in
+        Alcotest.(check int) "exactly one form" 1
+          (count_occurrences body "<form");
+        Alcotest.(check bool) "method is POST" true
+          (contains body "<form method='POST'");
+        Alcotest.(check bool) "exact action" true (contains body start_action);
+        Alcotest.(check bool) "button copy" true (contains body button_copy);
+        List.iter
+          (fun needle ->
+            Alcotest.(check bool) ("no " ^ needle) false
+              (contains body needle))
+          [ "type='hidden'"; "name='user_id'"; "name='state'"
+          ; "name='redirect'"; "client_id"; "installation_id" ])
+
+  let retry_case =
+    case "ready: failure banner and start form appear together" (fun () ->
+        let body =
+          checked_body "retry"
+            (run ~session:member ~target:"/bring?github=failed" ())
+        in
+        check_banner "retry" body `Failure;
+        Alcotest.(check bool) "start form" true (contains body start_action);
+        let body =
+          checked_body "again"
+            (run ~session:member ~target:"/bring?github=connected" ())
+        in
+        check_banner "again" body `Success;
+        Alcotest.(check bool) "start form" true (contains body start_action))
+
+  (* One representative session/mode pair per user-facing state. *)
+  let all_states =
+    [ ("off", admin, Ob.Off)
+    ; ("anonymous", [], Ob.Public)
+    ; ("rollout-limited", member, Ob.Admins)
+    ; ("ready", member, Ob.Public)
+    ; ("admin ready", admin, Ob.Admins)
+    ]
+
+  let copy_case =
+    case "copy: no endorsement claims, members-without-GitHub stated"
+      (fun () ->
+        List.iter
+          (fun (label, session, mode) ->
+            let body =
+              String.lowercase_ascii (body_of (run ~session ~mode ()))
+            in
+            List.iter
+              (fun phrase ->
+                Alcotest.(check bool) (label ^ " lacks " ^ phrase) false
+                  (contains body phrase))
+              [ "official community"; "official home"; "github-approved"
+              ; "github-endorsed" ];
+            Alcotest.(check bool) (label ^ ": members need no GitHub") true
+              (contains body "do not need a github account"))
+          all_states)
+
+  let headers_case =
+    case "headers: every state answers 200 no-store no-referrer" (fun () ->
+        List.iter
+          (fun (label, session, mode) ->
+            check_page label (run ~session ~mode ());
+            check_page (label ^ " + feedback")
+              (run ~session ~mode ~target:"/bring?github=failed" ()))
+          all_states)
+
+  let suite =
+    feedback_cases
+    @ [ raw_value_case; no_empty_banner_case; off_case; off_feedback_case;
+        anonymous_case; anonymous_feedback_case; admins_non_admin_case;
+        admins_admin_case; invalid_session_case;
+        admin_flag_without_user_case; public_ready_case; retry_case;
+        copy_case; headers_case ]
+end
 
 (* Ordinary navigation entry points — pure renderers (no server, no session
    middleware). Generic community creation is admin-only and reachable only by
@@ -10520,68 +10844,79 @@ let () =
                 (ob_decision_str
                    (Ob.legacy_creation_post_decision ~is_admin:false)))
         ] )
-      (* /bring renderer: shared copy/link invariants across every mode ×
-         viewer combination (see bring_shared_case). *)
+      (* /bring renderer: shared copy invariants across every access ×
+         feedback combination (see bring_shared_case). *)
     ; ( "bring_page_shared", bring_shared_cases )
-      (* Mode-specific states: each closed mode renders its own controlled
-         status, and only the Admins-mode admin view carries the (disabled,
-         informational) action-shaped element. *)
-    ; ( "bring_page_modes"
-      , [ bring_case "off: clear not-enabled state" (fun () ->
-              let html = render_bring ~is_admin:false Ob.Off in
+      (* State-specific rendering: each closed access state renders its own
+         controlled panel, and only Ready carries the start form. *)
+    ; ( "bring_page_states"
+      , [ bring_case "disabled: unavailable state, no start action" (fun () ->
+              let html = render_bring Gp.Onboarding_disabled in
               Alcotest.(check bool) "unavailable state" true
-                (contains html "not currently enabled"))
-        ; bring_case "off: no onboarding start action" (fun () ->
-              let html = render_bring ~is_admin:false Ob.Off in
-              Alcotest.(check bool) "no connect action" false
-                (contains html "Connect a repository");
-              Alcotest.(check bool) "no button at all" false
-                (contains html "auth-btn"))
-        ; bring_case "admins: admin sees private testing state" (fun () ->
-              let html = render_bring ~user:"root" ~is_admin:true Ob.Admins in
-              Alcotest.(check bool) "admin testing state" true
-                (contains html "Private administrator testing is enabled");
-              (* Status element exists but is inert — no install route to link. *)
-              Alcotest.(check bool) "status element is disabled" true
-                (contains html "class='auth-btn' disabled"))
-        ; bring_case "admins: non-admin sees limited state only" (fun () ->
-              let html = render_bring ~user:"alice" ~is_admin:false Ob.Admins in
-              Alcotest.(check bool) "limited/private state" true
-                (contains html "limited to a small private group");
-              Alcotest.(check bool) "no admin-testing claim" false
-                (contains html "Private administrator testing");
-              Alcotest.(check bool) "no connect action" false
-                (contains html "Connect a repository"))
-        ; bring_case "admins: anonymous sees limited state only" (fun () ->
-              let html = render_bring ~is_admin:false Ob.Admins in
-              Alcotest.(check bool) "limited/private state" true
-                (contains html "limited to a small private group");
-              Alcotest.(check bool) "no admin-testing claim" false
-                (contains html "Private administrator testing"))
-        ; bring_case "public: config-enabled but flow in preparation" (fun () ->
-              let html = render_bring ~is_admin:false Ob.Public in
-              Alcotest.(check bool) "config-level enablement" true
-                (contains html "enabled at the configuration level");
-              Alcotest.(check bool) "flow still being prepared" true
-                (contains html "still being prepared"))
-        ; bring_case "public: no dead start link" (fun () ->
-              let html = render_bring ~is_admin:false Ob.Public in
-              Alcotest.(check bool) "no connect action" false
-                (contains html "Connect a repository");
-              Alcotest.(check bool) "no button at all" false
-                (contains html "auth-btn"))
+                (contains html "Project onboarding is currently unavailable");
+              Alcotest.(check bool) "no form" false (contains html "<form");
+              Alcotest.(check bool) "no start action" false
+                (contains html "/integrations/github/install/start"))
+        ; bring_case "login-required: plain /login link, no form" (fun () ->
+              let html = render_bring Gp.Login_required in
+              Alcotest.(check bool) "account-required copy" true
+                (contains html "An Earde account is required");
+              Alcotest.(check bool) "login link" true
+                (contains html "href='/login'");
+              Alcotest.(check bool) "no return-url parameter" false
+                (contains html "/login?");
+              Alcotest.(check bool) "no form" false (contains html "<form"))
+        ; bring_case "rollout-limited: early-access copy only" (fun () ->
+              let html = render_bring ~user:"alice" Gp.Rollout_limited in
+              Alcotest.(check bool) "rollout copy" true
+                (contains html "limited to the early-access rollout");
+              Alcotest.(check bool) "no form" false (contains html "<form");
+              (* Nothing may read as a GitHub-side permission problem or
+                 name a configuration flag. *)
+              Alcotest.(check bool) "no GitHub-permission claim" false
+                (contains html "GitHub permission");
+              Alcotest.(check bool) "no flag name" false
+                (contains html "EARDE_GITHUB_ONBOARDING_ENABLED"))
+        ; bring_case "ready: one parameter-free POST form" (fun () ->
+              let html = render_bring ~user:"alice" Gp.Ready in
+              Alcotest.(check bool) "POST form" true
+                (contains html "<form method='POST' \
+                                action='/integrations/github/install/start'>");
+              Alcotest.(check bool) "button copy" true
+                (contains html "Connect a GitHub project");
+              Alcotest.(check bool) "no hidden input" false
+                (contains html "type='hidden'"))
+        ; bring_case "feedback: banners are the required copy" (fun () ->
+              let connected =
+                render_bring ~feedback:(Some Gp.Connected) Gp.Ready in
+              Alcotest.(check bool) "success copy" true
+                (contains connected
+                   "GitHub installation connected successfully.");
+              let failed = render_bring ~feedback:(Some Gp.Failed) Gp.Ready in
+              Alcotest.(check bool) "failure copy" true
+                (contains failed
+                   "We couldn't complete the GitHub connection. Please try \
+                    again.");
+              Alcotest.(check bool) "failure styled as error" true
+                (contains failed "auth-alert--error"))
+        ; bring_case "feedback: none renders no alert element" (fun () ->
+              (* Ready's action panel is the only one that is not an alert,
+                 so any auth-alert here would be an empty feedback shell. *)
+              let html = render_bring ~user:"alice" Gp.Ready in
+              Alcotest.(check bool) "no alert element" false
+                (contains html "auth-alert"))
         ] )
       (* Viewer-aware navigation: anonymous gets real login/signup links;
          authenticated viewers are never offered signup. *)
     ; ( "bring_page_nav"
       , [ bring_case "anonymous: login and signup links" (fun () ->
-              let html = render_bring ~is_admin:false Ob.Off in
+              let html = render_bring Gp.Login_required in
               Alcotest.(check bool) "login link" true
                 (contains html "href='/login'");
               Alcotest.(check bool) "signup link" true
                 (contains html "href='/signup'"))
         ; bring_case "authenticated: no signup, feed link stays" (fun () ->
-              let html = render_bring ~user:"alice" ~is_admin:false Ob.Off in
+              let html = render_bring ~user:"alice" Gp.Ready in
               Alcotest.(check bool) "no signup anywhere" false
                 (contains html "/signup");
               Alcotest.(check bool) "no login link" false
@@ -10589,6 +10924,10 @@ let () =
               Alcotest.(check bool) "feed link" true
                 (contains html "href='/feed'"))
         ] )
+      (* /bring handler: DB-free request → HTML coverage of feedback-query
+         parsing, session-derived access states, copy constraints, and the
+         no-store/no-referrer headers (see Gh_bring). *)
+    ; ( "bring_handler", Gh_bring.suite )
       (* Ordinary navigation must advertise /bring, never the admin-only
          /new-community flow (see nav_entry_cases). *)
     ; ( "app_nav_entry_points", nav_entry_cases )
