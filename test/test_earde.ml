@@ -4330,12 +4330,336 @@ module Gh_state_store = struct
         Alcotest.(check bool) "row stayed consumed" false consumed_null;
         Lwt.return_unit)
 
+  (* === consume ===
+     consume starts (and commits) its own transaction, so these cases cannot
+     run inside the rolled-back tx_case wrapper: a nested BEGIN would make
+     consume's COMMIT commit the outer fixture transaction. Instead each case
+     runs in autocommit with per-case usernames, deleting its fixture users
+     both before (stale rows from a crashed run) and after — the users FK is
+     ON DELETE CASCADE, so the state rows die with them. As above, raw
+     states/bindings never reach assertion messages; hash comparisons are
+     boolean so hash values cannot appear in failure output either.
+
+     Flow mismatch has no case for the same reason as attach: the branch is
+     structurally implemented, but with a single domain variant and the
+     schema CHECK admitting only 'project_onboarding', no valid current data
+     can produce it. *)
+
+  let consume_error_str : Store.consume_error -> string = function
+    | Store.Invalid_user_id -> "Invalid_user_id"
+    | Store.State_not_found -> "State_not_found"
+    | Store.State_expired -> "State_expired"
+    | Store.State_already_consumed -> "State_already_consumed"
+    | Store.User_mismatch -> "User_mismatch"
+    | Store.Session_binding_mismatch -> "Session_binding_mismatch"
+    | Store.Flow_mismatch -> "Flow_mismatch"
+    | Store.Missing_pending_installation -> "Missing_pending_installation"
+    | Store.Storage_error -> "Storage_error"
+
+  let q_insert_named_user =
+    (Caqti_type.string ->! Caqti_type.int)
+    "INSERT INTO users (username, email, password_hash, is_email_verified)
+     VALUES ($1, $1 || '@test.invalid', 'x', TRUE) RETURNING id"
+
+  let q_delete_named_user =
+    (Caqti_type.string ->. Caqti_type.unit)
+    "DELETE FROM users WHERE username = $1"
+
+  let q_consumed_epoch_for_user =
+    (Caqti_type.(int ->! option float))
+    "SELECT EXTRACT(EPOCH FROM consumed_at)::float8
+     FROM github_onboarding_states WHERE user_id = $1"
+
+  let q_consumed_count_for_user =
+    (Caqti_type.int ->! Caqti_type.int)
+    "SELECT COUNT(*) FROM github_onboarding_states
+     WHERE user_id = $1 AND consumed_at IS NOT NULL"
+
+  let consume_case name ~users f =
+    db_case name (fun conn ->
+        let (module C : Caqti_lwt.CONNECTION) = conn in
+        let delete_users () =
+          Lwt_list.iter_s
+            (fun u ->
+              let* r = C.exec q_delete_named_user u in
+              or_fail "cleanup" r)
+            users
+        in
+        let* () = delete_users () in
+        Lwt.finalize (fun () -> f conn) delete_users)
+
+  (* Fixture: a named committed user holding one freshly issued state. *)
+  let consume_fixture conn username =
+    let (module C : Caqti_lwt.CONNECTION) = conn in
+    let* uid = C.find q_insert_named_user username in
+    let* uid = or_fail "user" uid in
+    let binding = GOC.generate_session_binding () in
+    let binding_hash = GOC.hash_session_binding binding in
+    let* state =
+      issue_ok conn ~user_id:uid ~session_binding_hash:binding_hash
+    in
+    Lwt.return (uid, state, binding, binding_hash)
+
+  let do_consume conn ~user_id ~state ~binding_hash =
+    Store.consume conn ~user_id ~state ~session_binding_hash:binding_hash
+      ~flow:GO.Project_onboarding
+
+  let consume_ok conn ~user_id ~state ~binding_hash =
+    let* r = do_consume conn ~user_id ~state ~binding_hash in
+    match r with
+    | Ok consumed -> Lwt.return consumed
+    | Error e -> Alcotest.failf "consume: %s" (consume_error_str e)
+
+  let consume_expect label expected conn ~user_id ~state ~binding_hash =
+    let* r = do_consume conn ~user_id ~state ~binding_hash in
+    match r with
+    | Error e ->
+        Alcotest.(check string) label expected (consume_error_str e);
+        Lwt.return_unit
+    | Ok _ -> Alcotest.failf "%s: expected %s, got Ok" label expected
+
+  let consume_success_case =
+    consume_case "consume: valid state returns stored row, burns once"
+      ~users:[ "ghconsume_ok" ] (fun conn ->
+        let* uid, state, binding, binding_hash =
+          consume_fixture conn "ghconsume_ok"
+        in
+        let* () =
+          attach_ok conn ~user_id:uid ~state ~binding_hash 123456789L
+        in
+        let* before = single_row conn uid in
+        let ((state_hash0, binding_hash0, flow0), (_, _, times0)) = before in
+        let* consumed =
+          consume_ok conn ~user_id:uid ~state ~binding_hash
+        in
+        Alcotest.(check int) "returned user_id is the stored one" uid
+          consumed.Store.user_id;
+        (match consumed.Store.flow with
+        | GO.Project_onboarding -> ());
+        Alcotest.(check int64) "returned pending id is the stored one"
+          123456789L consumed.Store.pending_github_installation_id;
+        let* row = single_row conn uid in
+        let ( (state_hash, stored_binding_hash, flow),
+              (pending, consumed_null, (created, expires)) ) =
+          row
+        in
+        Alcotest.(check bool) "consumed_at now set" false consumed_null;
+        Alcotest.(check bool) "state_hash unchanged" true
+          (String.equal state_hash0 state_hash);
+        Alcotest.(check bool) "binding hash unchanged" true
+          (String.equal binding_hash0 stored_binding_hash);
+        Alcotest.(check string) "flow unchanged" flow0 flow;
+        Alcotest.(check (option int64)) "pending id unchanged"
+          (Some 123456789L) pending;
+        let created0, expires0 = times0 in
+        Alcotest.(check (float 0.001)) "created_at unchanged" created0 created;
+        Alcotest.(check (float 0.001)) "expires_at unchanged" expires0 expires;
+        (* Consumption sends only hashes over SQL; the text columns must
+           still hold no raw token material. *)
+        let text =
+          String.concat "|" [ state_hash; stored_binding_hash; flow ]
+        in
+        Alcotest.(check bool) "raw state absent from text columns" false
+          (goc_contains ~needle:(GOC.state_to_string state) text);
+        Alcotest.(check bool) "raw binding absent from text columns" false
+          (goc_contains ~needle:(GOC.session_binding_to_string binding) text);
+        Lwt.return_unit)
+
+  let consume_replay_case =
+    consume_case "consume: replay preserves the original consumed_at"
+      ~users:[ "ghconsume_replay" ] (fun conn ->
+        let (module C : Caqti_lwt.CONNECTION) = conn in
+        let* uid, state, _, binding_hash =
+          consume_fixture conn "ghconsume_replay"
+        in
+        let* () = attach_ok conn ~user_id:uid ~state ~binding_hash 42L in
+        let* _ = consume_ok conn ~user_id:uid ~state ~binding_hash in
+        let* first = C.find q_consumed_epoch_for_user uid in
+        let* first = or_fail "consumed_at" first in
+        let first =
+          match first with
+          | Some epoch -> epoch
+          | None -> Alcotest.fail "first consume left consumed_at NULL"
+        in
+        let* () =
+          consume_expect "replay" "State_already_consumed" conn ~user_id:uid
+            ~state ~binding_hash
+        in
+        let* second = C.find q_consumed_epoch_for_user uid in
+        let* second = or_fail "consumed_at after replay" second in
+        (* Exact float equality: the stored microsecond timestamp must
+           round-trip untouched — any rewrite by the replay would differ. *)
+        Alcotest.(check (option (float 0.))) "original consumed_at kept"
+          (Some first) second;
+        Lwt.return_unit)
+
+  let consume_unknown_state_case =
+    consume_case "consume: unknown state is State_not_found, creates no row"
+      ~users:[ "ghconsume_unknown" ] (fun conn ->
+        let (module C : Caqti_lwt.CONNECTION) = conn in
+        let* uid = C.find q_insert_named_user "ghconsume_unknown" in
+        let* uid = or_fail "user" uid in
+        let binding_hash =
+          GOC.hash_session_binding (GOC.generate_session_binding ())
+        in
+        (* Generated but never issued: no row anywhere carries its hash. *)
+        let state = GOC.generate_state () in
+        let* () =
+          consume_expect "unknown state" "State_not_found" conn ~user_id:uid
+            ~state ~binding_hash
+        in
+        let* count = C.find q_count_for_user uid in
+        let* count = or_fail "count" count in
+        Alcotest.(check int) "no row created" 0 count;
+        Lwt.return_unit)
+
+  let consume_expired_case =
+    consume_case "consume: expired state stays unconsumed for cleanup"
+      ~users:[ "ghconsume_expired" ] (fun conn ->
+        let (module C : Caqti_lwt.CONNECTION) = conn in
+        let* uid, state, _, binding_hash =
+          consume_fixture conn "ghconsume_expired"
+        in
+        let* () = attach_ok conn ~user_id:uid ~state ~binding_hash 42L in
+        let* r = C.exec q_expire_states_for_user uid in
+        let* () = or_fail "expire fixture" r in
+        let* () =
+          consume_expect "expired" "State_expired" conn ~user_id:uid ~state
+            ~binding_hash
+        in
+        let* _, (_, consumed_null, _) = single_row conn uid in
+        Alcotest.(check bool) "consumed_at still NULL" true consumed_null;
+        Lwt.return_unit)
+
+  let consume_wrong_user_case =
+    consume_case "consume: wrong user burns the state"
+      ~users:[ "ghconsume_wu_a"; "ghconsume_wu_b" ] (fun conn ->
+        let (module C : Caqti_lwt.CONNECTION) = conn in
+        let* uid, state, _, binding_hash =
+          consume_fixture conn "ghconsume_wu_a"
+        in
+        let* other = C.find q_insert_named_user "ghconsume_wu_b" in
+        let* other = or_fail "second user" other in
+        let* () = attach_ok conn ~user_id:uid ~state ~binding_hash 42L in
+        let* () =
+          consume_expect "wrong user" "User_mismatch" conn ~user_id:other
+            ~state ~binding_hash
+        in
+        let* _, (pending, consumed_null, _) = single_row conn uid in
+        Alcotest.(check bool) "state burned" false consumed_null;
+        Alcotest.(check (option int64)) "pending id untouched by burn"
+          (Some 42L) pending;
+        (* The burn is durable: even the rightful caller is locked out. *)
+        consume_expect "correct retry after burn" "State_already_consumed"
+          conn ~user_id:uid ~state ~binding_hash)
+
+  let consume_wrong_binding_case =
+    consume_case "consume: session-binding mismatch burns the state"
+      ~users:[ "ghconsume_wb" ] (fun conn ->
+        let* uid, state, _, binding_hash =
+          consume_fixture conn "ghconsume_wb"
+        in
+        let* () = attach_ok conn ~user_id:uid ~state ~binding_hash 42L in
+        let other_hash =
+          GOC.hash_session_binding (GOC.generate_session_binding ())
+        in
+        let* () =
+          consume_expect "wrong binding" "Session_binding_mismatch" conn
+            ~user_id:uid ~state ~binding_hash:other_hash
+        in
+        let* _, (_, consumed_null, _) = single_row conn uid in
+        Alcotest.(check bool) "state burned" false consumed_null;
+        consume_expect "correct retry after burn" "State_already_consumed"
+          conn ~user_id:uid ~state ~binding_hash)
+
+  let consume_missing_pending_case =
+    consume_case "consume: missing installation id burns, blocks attach"
+      ~users:[ "ghconsume_mp" ] (fun conn ->
+        let* uid, state, _, binding_hash =
+          consume_fixture conn "ghconsume_mp"
+        in
+        (* Deliberately no attach: the flow never reached the setup return. *)
+        let* () =
+          consume_expect "missing pending" "Missing_pending_installation"
+            conn ~user_id:uid ~state ~binding_hash
+        in
+        let* _, (pending, consumed_null, _) = single_row conn uid in
+        Alcotest.(check bool) "state burned" false consumed_null;
+        Alcotest.(check (option int64)) "pending still NULL" None pending;
+        attach_unavailable "attach after burn" conn ~user_id:uid ~state
+          ~binding_hash 42L)
+
+  let consume_invalid_user_case =
+    db_case "consume: non-positive user ids rejected before SQL" (fun conn ->
+        let state = GOC.generate_state () in
+        let binding_hash =
+          GOC.hash_session_binding (GOC.generate_session_binding ())
+        in
+        let* () =
+          consume_expect "user id 0" "Invalid_user_id" conn ~user_id:0 ~state
+            ~binding_hash
+        in
+        consume_expect "user id -1" "Invalid_user_id" conn ~user_id:(-1)
+          ~state ~binding_hash)
+
+  (* Two independent connections race on one state: the second blocks on the
+     first's FOR UPDATE row lock, then re-reads the committed row and must
+     see it consumed. Exactly one winner, one burn. *)
+  let consume_concurrent_case =
+    consume_case "consume: concurrent consumers serialize on the row lock"
+      ~users:[ "ghconsume_race" ] (fun conn ->
+        let (module C : Caqti_lwt.CONNECTION) = conn in
+        let* uid, state, _, binding_hash =
+          consume_fixture conn "ghconsume_race"
+        in
+        let* () = attach_ok conn ~user_id:uid ~state ~binding_hash 42L in
+        let url =
+          (* db_case only runs under the gate, so the URL is present. *)
+          match Sys.getenv_opt "EARDE_TEST_DATABASE_URL" with
+          | Some url -> url
+          | None -> Alcotest.fail "EARDE_TEST_DATABASE_URL vanished mid-run"
+        in
+        let* conn2 = Caqti_lwt_unix.connect (Uri.of_string url) in
+        let* conn2 = or_fail "second connect" conn2 in
+        let (module C2 : Caqti_lwt.CONNECTION) = conn2 in
+        Lwt.finalize
+          (fun () ->
+            let* r1, r2 =
+              Lwt.both
+                (do_consume conn ~user_id:uid ~state ~binding_hash)
+                (do_consume conn2 ~user_id:uid ~state ~binding_hash)
+            in
+            let classify label = function
+              | Ok consumed ->
+                  Alcotest.(check int64)
+                    (label ^ ": winner sees stored pending id") 42L
+                    consumed.Store.pending_github_installation_id;
+                  `Won
+              | Error Store.State_already_consumed -> `Lost
+              | Error e ->
+                  Alcotest.failf "%s: unexpected %s" label
+                    (consume_error_str e)
+            in
+            (match (classify "first" r1, classify "second" r2) with
+            | `Won, `Lost | `Lost, `Won -> ()
+            | `Won, `Won -> Alcotest.fail "both consumers won"
+            | `Lost, `Lost -> Alcotest.fail "no consumer won");
+            let* burned = C.find q_consumed_count_for_user uid in
+            let* burned = or_fail "burn count" burned in
+            Alcotest.(check int) "exactly one non-null consumed_at" 1 burned;
+            Lwt.return_unit)
+          (fun () -> C2.disconnect ()))
+
   let suite =
     [ single_issue_case; multiplicity_case; invalid_user_case;
       missing_user_case; attach_validation_case; attach_success_case;
       attach_idempotent_case; attach_conflict_case;
       attach_missing_state_case; attach_wrong_user_case;
-      attach_wrong_binding_case; attach_expired_case; attach_consumed_case ]
+      attach_wrong_binding_case; attach_expired_case; attach_consumed_case;
+      consume_success_case; consume_replay_case; consume_unknown_state_case;
+      consume_expired_case; consume_wrong_user_case;
+      consume_wrong_binding_case; consume_missing_pending_case;
+      consume_invalid_user_case; consume_concurrent_case ]
 end
 
 let () =

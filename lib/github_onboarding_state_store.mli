@@ -71,3 +71,69 @@ val attach_pending_installation :
     {e not} consumed here, no rows are created or deleted, and other states
     are untouched. Only hashes cross the SQL boundary — the raw state and
     raw session binding never do. *)
+
+type consumed_state = {
+  user_id : int;
+  flow : Github_onboarding.flow;
+  pending_github_installation_id : int64;
+}
+(** What a successful consumption yields, read back from the locked database
+    row itself — never reconstructed from caller input. *)
+
+type consume_error =
+  | Invalid_user_id  (** [user_id <= 0]; rejected before any SQL runs. *)
+  | State_not_found
+      (** No row carries the supplied state's hash. Nothing is created or
+          mutated. *)
+  | State_expired
+      (** The row exists but [expires_at <= NOW()] by the database clock.
+          Left untouched ([consumed_at] stays NULL) for cleanup/audit. *)
+  | State_already_consumed
+      (** The row was consumed earlier; its original [consumed_at] is
+          preserved. Reported even when the row is also expired. *)
+  | User_mismatch
+      (** The state belongs to a different user. The state is burned. *)
+  | Session_binding_mismatch
+      (** The stored session-binding hash differs from the supplied one. The
+          state is burned. *)
+  | Flow_mismatch
+      (** The stored flow differs from the requested one. The state is
+          burned. Structurally present, but unreachable while the domain and
+          schema CHECK admit only [project_onboarding]. *)
+  | Missing_pending_installation
+      (** The row is otherwise valid but no installation id was ever
+          attached. The state is burned. *)
+  | Storage_error
+      (** Any Caqti/PostgreSQL failure, or corrupt stored data (an
+          unparseable flow despite the CHECK, a non-positive pending id).
+          Raw database errors are dropped, never returned or logged: they
+          can echo SQL parameters (the hashes). *)
+
+val consume :
+  (module Caqti_lwt.CONNECTION) ->
+  user_id:int ->
+  state:Github_onboarding_crypto.state ->
+  session_binding_hash:Github_onboarding_crypto.session_binding_hash ->
+  flow:Github_onboarding.flow ->
+  (consumed_state, consume_error) result Lwt.t
+(** Atomically consumes a state exactly once. Runs a transaction on the
+    supplied connection that locks the row by state hash ([SELECT … FOR
+    UPDATE]; [state_hash] is UNIQUE) and classifies under the lock, in
+    order: already consumed, expired, user mismatch, session-binding
+    mismatch, flow mismatch, missing pending installation, valid. Expiry and
+    prior consumption are judged by the database clock, and dead states
+    (missing, expired, replayed) are never written to.
+
+    Burn-on-mismatch: the four mismatch errors set [consumed_at = NOW()] on
+    the locked row and commit {e before} the error is returned — presenting
+    a real state from the wrong user/session/context destroys it and forces
+    onboarding to restart. Only [consumed_at] ever changes, for burns and
+    valid consumption alike; identity and lifecycle columns are untouched.
+    If the burn or its commit fails, the result is [Storage_error], not the
+    mismatch.
+
+    On success the returned record carries the locked row's stored user id,
+    parsed flow, and positive pending installation id, and the state is
+    permanently unavailable to every later consume or attach attempt. Only
+    hashes cross the SQL boundary — the raw state and raw session binding
+    never do. *)
