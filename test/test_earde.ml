@@ -4189,7 +4189,6 @@ module Gh_state_store = struct
     | Store.Storage_error -> "Storage_error"
 
   let attach_error_str : Store.attach_error -> string = function
-    | Store.Invalid_user_id -> "Invalid_user_id"
     | Store.Invalid_pending_installation_id ->
         "Invalid_pending_installation_id"
     | Store.State_unavailable -> "State_unavailable"
@@ -4389,11 +4388,15 @@ module Gh_state_store = struct
         Lwt.return_unit)
 
   (* === attach_pending_installation ===
-     Same gate and rollback discipline as issuance. Flow mismatch has no
-     dedicated case: the model has a single flow variant and the schema
-     CHECK forbids any other flow string, so a mismatched-flow row cannot
-     exist even as a SQL fixture; the flow comparison sits in the same
-     conjunctive WHERE as the user/binding columns that are tested. *)
+     Same gate and rollback discipline as issuance. Attachment takes no user
+     id: the GitHub setup return is a cross-site redirect the SameSite=Strict
+     login-session cookie need not accompany, so authorization is the state
+     hash + the session-binding hash from the SameSite=Lax per-flow cookie +
+     the flow; ownership stays pinned to the user_id written at issuance.
+     Flow mismatch has no dedicated case: the model has a single flow variant
+     and the schema CHECK forbids any other flow string, so a mismatched-flow
+     row cannot exist even as a SQL fixture; the flow comparison sits in the
+     same conjunctive WHERE as the binding column that is tested. *)
 
   let q_insert_second_user =
     (Caqti_type.unit ->! Caqti_type.int)
@@ -4429,19 +4432,19 @@ module Gh_state_store = struct
     "UPDATE github_onboarding_states SET consumed_at = NOW()
      WHERE user_id = $1"
 
-  let attach conn ~user_id ~state ~binding_hash id =
-    Store.attach_pending_installation conn ~user_id ~state
+  let attach conn ~state ~binding_hash id =
+    Store.attach_pending_installation conn ~state
       ~session_binding_hash:binding_hash ~flow:GO.Project_onboarding
       ~pending_github_installation_id:id
 
-  let attach_ok conn ~user_id ~state ~binding_hash id =
-    let* r = attach conn ~user_id ~state ~binding_hash id in
+  let attach_ok conn ~state ~binding_hash id =
+    let* r = attach conn ~state ~binding_hash id in
     match r with
     | Ok () -> Lwt.return_unit
     | Error e -> Alcotest.failf "attach: %s" (attach_error_str e)
 
-  let attach_unavailable label conn ~user_id ~state ~binding_hash id =
-    let* r = attach conn ~user_id ~state ~binding_hash id in
+  let attach_unavailable label conn ~state ~binding_hash id =
+    let* r = attach conn ~state ~binding_hash id in
     match r with
     | Error Store.State_unavailable -> Lwt.return_unit
     | Error e ->
@@ -4477,29 +4480,26 @@ module Gh_state_store = struct
     Alcotest.(check bool) (label ^ ": still unconsumed") true consumed_null
 
   let attach_validation_case =
-    db_case "attach: invalid inputs rejected before SQL" (fun conn ->
+    db_case "attach: invalid installation ids rejected before SQL"
+      (fun conn ->
         let state = GOC.generate_state () in
         let binding_hash =
           GOC.hash_session_binding (GOC.generate_session_binding ())
         in
-        let check_rejected label expected ~user_id id =
-          let* r = attach conn ~user_id ~state ~binding_hash id in
+        let check_rejected label id =
+          let* r = attach conn ~state ~binding_hash id in
           match r with
+          | Error Store.Invalid_pending_installation_id -> Lwt.return_unit
           | Error e ->
-              Alcotest.(check string) label expected (attach_error_str e);
-              Lwt.return_unit
-          | Ok () -> Alcotest.failf "%s: expected %s, got Ok" label expected
+              Alcotest.failf
+                "%s: expected Invalid_pending_installation_id, got %s" label
+                (attach_error_str e)
+          | Ok () ->
+              Alcotest.failf
+                "%s: expected Invalid_pending_installation_id, got Ok" label
         in
-        let* () = check_rejected "user id 0" "Invalid_user_id" ~user_id:0 1L in
-        let* () =
-          check_rejected "user id -1" "Invalid_user_id" ~user_id:(-1) 1L
-        in
-        let* () =
-          check_rejected "installation id 0"
-            "Invalid_pending_installation_id" ~user_id:1 0L
-        in
-        check_rejected "negative installation id"
-          "Invalid_pending_installation_id" ~user_id:1 (-42L))
+        let* () = check_rejected "installation id 0" 0L in
+        check_rejected "negative installation id" (-42L))
 
   let attach_success_case =
     tx_case "attach: first attachment sets only the pending id" (fun conn ->
@@ -4510,9 +4510,11 @@ module Gh_state_store = struct
         in
         Alcotest.(check (option int64)) "pending NULL before attach" None
           pending0;
-        let* () =
-          attach_ok conn ~user_id:uid ~state ~binding_hash 123456789L
-        in
+        (* The call carries only the state, binding hash, flow, and
+           installation id — no user id exists in the attach API at all. *)
+        let* () = attach_ok conn ~state ~binding_hash 123456789L in
+        (* single_row filters on user_id = uid: getting the row back at all
+           proves the stored ownership still points at the issuing user. *)
         let* row = single_row conn uid in
         let ( (state_hash, stored_binding_hash, flow),
               (pending, consumed_null, (created, expires)) ) =
@@ -4543,8 +4545,8 @@ module Gh_state_store = struct
     tx_case "attach: identical retry succeeds on the same single row"
       (fun conn ->
         let* uid, state, _, binding_hash = issued_fixture conn in
-        let* () = attach_ok conn ~user_id:uid ~state ~binding_hash 42L in
-        let* () = attach_ok conn ~user_id:uid ~state ~binding_hash 42L in
+        let* () = attach_ok conn ~state ~binding_hash 42L in
+        let* () = attach_ok conn ~state ~binding_hash 42L in
         (* single_row also proves the retry created no extra row. *)
         let* _, (pending, consumed_null, _) = single_row conn uid in
         Alcotest.(check (option int64)) "still the same id" (Some 42L)
@@ -4555,10 +4557,9 @@ module Gh_state_store = struct
   let attach_conflict_case =
     tx_case "attach: a different id never overwrites the first" (fun conn ->
         let* uid, state, _, binding_hash = issued_fixture conn in
-        let* () = attach_ok conn ~user_id:uid ~state ~binding_hash 42L in
+        let* () = attach_ok conn ~state ~binding_hash 42L in
         let* () =
-          attach_unavailable "conflicting id" conn ~user_id:uid ~state
-            ~binding_hash 43L
+          attach_unavailable "conflicting id" conn ~state ~binding_hash 43L
         in
         let* _, (pending, consumed_null, _) = single_row conn uid in
         Alcotest.(check (option int64)) "first id retained" (Some 42L)
@@ -4578,26 +4579,38 @@ module Gh_state_store = struct
         (* Generated but never issued: no row anywhere carries its hash. *)
         let state = GOC.generate_state () in
         let* () =
-          attach_unavailable "unknown state" conn ~user_id:uid ~state
-            ~binding_hash 42L
+          attach_unavailable "unknown state" conn ~state ~binding_hash 42L
         in
         let* count = C.find q_count_for_user uid in
         let* count = or_fail "count" count in
         Alcotest.(check int) "no row created" 0 count;
         Lwt.return_unit)
 
-  let attach_wrong_user_case =
-    tx_case "attach: another user cannot attach to the state" (fun conn ->
+  (* Ownership preservation: with no user id in the attach API, prove that
+     possession-based attachment stays scoped to the one row the state hash
+     names, and that each row's user_id — written at issuance — survives
+     attachment untouched. single_row filters on user_id, so retrieving each
+     row under its own user is itself the ownership assertion. *)
+  let attach_ownership_case =
+    tx_case "attach: touches only its own state, ownership stays put"
+      (fun conn ->
         let (module C : Caqti_lwt.CONNECTION) = conn in
-        let* uid, state, _, binding_hash = issued_fixture conn in
-        let* other = C.find q_insert_second_user () in
-        let* other = or_fail "second user" other in
-        let* () =
-          attach_unavailable "wrong user" conn ~user_id:other ~state
-            ~binding_hash 42L
+        let* uid_a, state_a, _, binding_hash_a = issued_fixture conn in
+        let* uid_b = C.find q_insert_second_user () in
+        let* uid_b = or_fail "second user" uid_b in
+        let binding_hash_b =
+          GOC.hash_session_binding (GOC.generate_session_binding ())
         in
-        let* row = single_row conn uid in
-        check_untouched_unconsumed "wrong user" row;
+        let* _state_b =
+          issue_ok conn ~user_id:uid_b ~session_binding_hash:binding_hash_b
+        in
+        let* () = attach_ok conn ~state:state_a ~binding_hash:binding_hash_a 42L in
+        let* _, (pending_a, consumed_a, _) = single_row conn uid_a in
+        Alcotest.(check (option int64)) "state A attached" (Some 42L)
+          pending_a;
+        Alcotest.(check bool) "state A unconsumed" true consumed_a;
+        let* row_b = single_row conn uid_b in
+        check_untouched_unconsumed "state B" row_b;
         Lwt.return_unit)
 
   let attach_wrong_binding_case =
@@ -4607,7 +4620,7 @@ module Gh_state_store = struct
           GOC.hash_session_binding (GOC.generate_session_binding ())
         in
         let* () =
-          attach_unavailable "wrong binding" conn ~user_id:uid ~state
+          attach_unavailable "wrong binding" conn ~state
             ~binding_hash:other_hash 42L
         in
         let* row = single_row conn uid in
@@ -4621,8 +4634,7 @@ module Gh_state_store = struct
         let* r = C.exec q_expire_states_for_user uid in
         let* () = or_fail "expire fixture" r in
         let* () =
-          attach_unavailable "expired" conn ~user_id:uid ~state ~binding_hash
-            42L
+          attach_unavailable "expired" conn ~state ~binding_hash 42L
         in
         let* row = single_row conn uid in
         check_untouched_unconsumed "expired" row;
@@ -4635,8 +4647,7 @@ module Gh_state_store = struct
         let* r = C.exec q_consume_states_for_user uid in
         let* () = or_fail "consume fixture" r in
         let* () =
-          attach_unavailable "consumed" conn ~user_id:uid ~state
-            ~binding_hash 42L
+          attach_unavailable "consumed" conn ~state ~binding_hash 42L
         in
         let* _, (pending, consumed_null, _) = single_row conn uid in
         Alcotest.(check (option int64)) "pending still NULL" None pending;
@@ -4737,9 +4748,7 @@ module Gh_state_store = struct
         let* uid, state, binding, binding_hash =
           consume_fixture conn "ghconsume_ok"
         in
-        let* () =
-          attach_ok conn ~user_id:uid ~state ~binding_hash 123456789L
-        in
+        let* () = attach_ok conn ~state ~binding_hash 123456789L in
         let* before = single_row conn uid in
         let ((state_hash0, binding_hash0, flow0), (_, _, times0)) = before in
         let* consumed =
@@ -4785,7 +4794,7 @@ module Gh_state_store = struct
         let* uid, state, _, binding_hash =
           consume_fixture conn "ghconsume_replay"
         in
-        let* () = attach_ok conn ~user_id:uid ~state ~binding_hash 42L in
+        let* () = attach_ok conn ~state ~binding_hash 42L in
         let* _ = consume_ok conn ~user_id:uid ~state ~binding_hash in
         let* first = C.find q_consumed_epoch_for_user uid in
         let* first = or_fail "consumed_at" first in
@@ -4833,7 +4842,7 @@ module Gh_state_store = struct
         let* uid, state, _, binding_hash =
           consume_fixture conn "ghconsume_expired"
         in
-        let* () = attach_ok conn ~user_id:uid ~state ~binding_hash 42L in
+        let* () = attach_ok conn ~state ~binding_hash 42L in
         let* r = C.exec q_expire_states_for_user uid in
         let* () = or_fail "expire fixture" r in
         let* () =
@@ -4853,7 +4862,7 @@ module Gh_state_store = struct
         in
         let* other = C.find q_insert_named_user "ghconsume_wu_b" in
         let* other = or_fail "second user" other in
-        let* () = attach_ok conn ~user_id:uid ~state ~binding_hash 42L in
+        let* () = attach_ok conn ~state ~binding_hash 42L in
         let* () =
           consume_expect "wrong user" "User_mismatch" conn ~user_id:other
             ~state ~binding_hash
@@ -4872,7 +4881,7 @@ module Gh_state_store = struct
         let* uid, state, _, binding_hash =
           consume_fixture conn "ghconsume_wb"
         in
-        let* () = attach_ok conn ~user_id:uid ~state ~binding_hash 42L in
+        let* () = attach_ok conn ~state ~binding_hash 42L in
         let other_hash =
           GOC.hash_session_binding (GOC.generate_session_binding ())
         in
@@ -4899,8 +4908,7 @@ module Gh_state_store = struct
         let* _, (pending, consumed_null, _) = single_row conn uid in
         Alcotest.(check bool) "state burned" false consumed_null;
         Alcotest.(check (option int64)) "pending still NULL" None pending;
-        attach_unavailable "attach after burn" conn ~user_id:uid ~state
-          ~binding_hash 42L)
+        attach_unavailable "attach after burn" conn ~state ~binding_hash 42L)
 
   let consume_invalid_user_case =
     db_case "consume: non-positive user ids rejected before SQL" (fun conn ->
@@ -4925,7 +4933,7 @@ module Gh_state_store = struct
         let* uid, state, _, binding_hash =
           consume_fixture conn "ghconsume_race"
         in
-        let* () = attach_ok conn ~user_id:uid ~state ~binding_hash 42L in
+        let* () = attach_ok conn ~state ~binding_hash 42L in
         let url =
           (* db_case only runs under the gate, so the URL is present. *)
           match Sys.getenv_opt "EARDE_TEST_DATABASE_URL" with
@@ -4967,7 +4975,7 @@ module Gh_state_store = struct
     [ single_issue_case; multiplicity_case; invalid_user_case;
       missing_user_case; attach_validation_case; attach_success_case;
       attach_idempotent_case; attach_conflict_case;
-      attach_missing_state_case; attach_wrong_user_case;
+      attach_missing_state_case; attach_ownership_case;
       attach_wrong_binding_case; attach_expired_case; attach_consumed_case;
       consume_success_case; consume_replay_case; consume_unknown_state_case;
       consume_expired_case; consume_wrong_user_case;
