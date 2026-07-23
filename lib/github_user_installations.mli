@@ -17,19 +17,42 @@
     no token, response body, JSON fragment, installation list, remote error
     text, or exception text can travel inside an error. The module itself
     never logs, persists nothing, and returns nothing beyond the verified
-    installation ID. *)
+    installation's identity fields. *)
+
+type account_type =
+  | User
+  | Organization
+      (** The installation's target type, mapped only from the exact
+          installation-level [target_type] strings ["User"] and
+          ["Organization"]. [account.type] is ignored; [target_type] alone
+          is authoritative. The variant is closed on purpose: any other
+          value or type rejects the whole page. *)
 
 type verified_installation
 (** Proof that the requested positive installation ID appeared in a valid
     response from [GET /user/installations] authenticated with the supplied
     user access token. Deliberately abstract, with no serializer or printer;
-    only the verified ID is retained — account metadata, permissions,
-    repository selection, and URLs from the response are dropped at parse
-    time. Additional metadata can be added later when persistence
-    requirements are known. *)
+    exactly four fields of the matching entry are retained — installation
+    ID, account ID, account login, and target type. The raw JSON, account
+    URLs, avatar data, permissions, repository selection, and everything
+    about nonmatching entries are dropped at parse time. *)
 
 val installation_id : verified_installation -> int64
 (** The verified installation ID, exactly as requested. *)
+
+val account_id : verified_installation -> int64
+(** GitHub account ID of the installation target, validated as a positive
+    integer exactly representable as [int64]. *)
+
+val account_login : verified_installation -> string
+(** GitHub account login of the installation target, preserved
+    byte-for-byte. Guaranteed non-empty and free of ASCII whitespace, NUL,
+    other ASCII control bytes, and DEL; no length cap, case, or username
+    grammar is imposed beyond that. *)
+
+val account_type : verified_installation -> account_type
+(** Whether the installation targets a user or an organization, taken from
+    the entry's [target_type] field. *)
 
 module type TRANSPORT = sig
   val get :
@@ -59,7 +82,8 @@ type error =
   | Invalid_response
       (** A 200 body was not a well-formed installations page. No JSON or
           parser diagnostics are preserved, and a page with any malformed
-          entry is rejected whole — even when an earlier entry matched. *)
+          entry — including malformed account metadata or target type —
+          is rejected whole, even when an earlier entry matched. *)
   | Installation_not_accessible
       (** The full list was searched to its definitive end and the
           requested ID was not in it. *)

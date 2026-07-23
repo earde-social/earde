@@ -7,9 +7,21 @@
    and nothing in this module logs — see the .mli for the privacy
    contract. *)
 
-type verified_installation = { id : int64 }
+type account_type =
+  | User
+  | Organization
+
+type verified_installation = {
+  id : int64;
+  account_id : int64;
+  account_login : string;
+  account_type : account_type;
+}
 
 let installation_id verified = verified.id
+let account_id verified = verified.account_id
+let account_login verified = verified.account_login
+let account_type verified = verified.account_type
 
 module type TRANSPORT = sig
   val get :
@@ -122,15 +134,69 @@ let int64_of_json = function
   | `Intlit literal -> Int64.of_string_opt literal
   | _ -> None
 
-(* Exactly one positive-int64 "id" field; every other installation field
-   (account, permissions, repository selection, URLs) is ignored and
-   dropped, never retained. *)
-let entry_id = function
+(* GitHub issues installation and account IDs as positive integers; zero
+   or negative values only arise from a malformed or hostile page. *)
+let positive_id_of_json json =
+  match int64_of_json json with
+  | Some id when Int64.compare id 0L > 0 -> Some id
+  | _ -> None
+
+(* Exactly-once lookup: a missing recognized field and a duplicated one
+   both make the object ambiguous, so both collapse to None. *)
+let unique_field fields key =
+  match List.filter (fun (k, _) -> String.equal k key) fields with
+  | [ (_, json) ] -> Some json
+  | _ -> None
+
+(* Only the exact strings GitHub documents. The variant is closed, so an
+   unrecognized target type rejects the page rather than defaulting. *)
+let account_type_of_json = function
+  | `String "User" -> Some User
+  | `String "Organization" -> Some Organization
+  | _ -> None
+
+(* The login will later be stored and rendered, so ASCII whitespace, NUL,
+   other control bytes, and DEL are rejected outright rather than trimmed
+   or repaired; every other byte passes through untouched. No length cap
+   or username grammar is imposed — GitHub, not this module, owns the
+   login format. *)
+let valid_login login =
+  String.length login > 0
+  && String.for_all
+       (fun byte -> Char.code byte > 0x20 && Char.code byte <> 0x7f)
+       login
+
+(* Exactly one "id" and one "login"; every other account field — including
+   "type", which target_type at the installation level overrides — is
+   ignored and dropped, never retained. *)
+let parse_account = function
   | `Assoc fields -> (
-      match List.filter (fun (k, _) -> String.equal k "id") fields with
-      | [ (_, id_json) ] -> (
-          match int64_of_json id_json with
-          | Some id when Int64.compare id 0L > 0 -> Some id
+      match (unique_field fields "id", unique_field fields "login") with
+      | Some id_json, Some (`String login) -> (
+          match positive_id_of_json id_json with
+          | Some account_id when valid_login login -> Some (account_id, login)
+          | _ -> None)
+      | _ -> None)
+  | _ -> None
+
+(* Exactly one occurrence each of "id", "account", and "target_type";
+   every other installation field (permissions, repository selection,
+   URLs) is ignored and dropped. *)
+let parse_entry = function
+  | `Assoc fields -> (
+      match
+        ( unique_field fields "id",
+          unique_field fields "account",
+          unique_field fields "target_type" )
+      with
+      | Some id_json, Some account_json, Some target_json -> (
+          match
+            ( positive_id_of_json id_json,
+              parse_account account_json,
+              account_type_of_json target_json )
+          with
+          | Some id, Some (account_id, account_login), Some account_type ->
+              Some { id; account_id; account_login; account_type }
           | _ -> None)
       | _ -> None)
   | _ -> None
@@ -138,15 +204,19 @@ let entry_id = function
 (* All entries validate or the page is rejected whole — a malformed entry
    anywhere poisons the page even when another entry already matched, so a
    match can never be returned from a page that was not fully understood. *)
-let rec entry_ids validated = function
+let rec validated_entries validated = function
   | [] -> Some (List.rev validated)
   | entry :: rest -> (
-      match entry_id entry with
-      | Some id when not (List.exists (Int64.equal id) validated) ->
-          entry_ids (id :: validated) rest
+      match parse_entry entry with
+      | Some parsed
+        when not
+               (List.exists
+                  (fun previous -> Int64.equal previous.id parsed.id)
+                  validated) ->
+          validated_entries (parsed :: validated) rest
       | _ -> None)
 
-let parse_page body =
+let parse_page ~requested body =
   match Yojson.Safe.from_string body with
   | exception _ -> Error Invalid_response
   | `Assoc fields -> (
@@ -162,10 +232,17 @@ let parse_page body =
         with
         | Some total_json, Some (`List entries)
           when List.length entries <= per_page -> (
-            match (int64_of_json total_json, entry_ids [] entries) with
-            | Some total_count, Some ids
+            match (int64_of_json total_json, validated_entries [] entries) with
+            | Some total_count, Some parsed
               when Int64.compare total_count 0L >= 0 ->
-                Ok (total_count, ids)
+                (* Only the requested entry survives page validation; the
+                   metadata of every nonmatching entry dies with the page. *)
+                Ok
+                  ( total_count,
+                    List.length parsed,
+                    List.find_opt
+                      (fun entry -> Int64.equal entry.id requested)
+                      parsed )
             | _ -> Error Invalid_response)
         | _ -> Error Invalid_response)
   | _ -> Error Invalid_response
@@ -183,12 +260,11 @@ let verify ~transport:(module Transport : TRANSPORT) ~token_set
       match result with
       | Error () -> Lwt.return (Error Transport_error)
       | Ok (200, body) -> (
-          match parse_page body with
+          match parse_page ~requested:installation_id body with
           | Error error -> Lwt.return (Error error)
-          | Ok (total_count, ids) ->
-              if List.exists (Int64.equal installation_id) ids then
-                Lwt.return (Ok { id = installation_id })
-              else if List.length ids < per_page then
+          | Ok (_, _, Some verified) -> Lwt.return (Ok verified)
+          | Ok (total_count, entry_count, None) ->
+              if entry_count < per_page then
                 (* A short page is the definitive end of the list. *)
                 Lwt.return (Error Installation_not_accessible)
               else if

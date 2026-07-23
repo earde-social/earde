@@ -4401,13 +4401,39 @@ let gui_verified_exn label outcome =
 let gui_ids ~from count =
   List.init count (fun i -> Int64.add from (Int64.of_int i))
 
-let gui_entries ids =
-  String.concat ","
-    (List.map (fun id -> Printf.sprintf {|{"id":%Ld}|} id) ids)
+(* A fully valid installation entry: account ID and login are derived from
+   the installation ID so filler entries stay distinct. *)
+let gui_entry id =
+  Printf.sprintf
+    {|{"id":%Ld,"account":{"id":%Ld,"login":"owner-%Ld"},"target_type":"Organization"}|}
+    id (Int64.add id 1L) id
+
+let gui_entries ids = String.concat "," (List.map gui_entry ids)
 
 let gui_body ~total ids =
   Printf.sprintf {|{"total_count":%d,"installations":[%s]}|} total
     (gui_entries ids)
+
+(* A single-entry page whose entry JSON is supplied raw, so each rejection
+   case varies exactly the malformed part. *)
+let gui_entry_page entry_json =
+  Printf.sprintf {|{"total_count":1,"installations":[%s]}|} entry_json
+
+(* Entry and account bodies with substitutable raw JSON per field, so a
+   rejection case changes one field and inherits valid defaults for the
+   rest. *)
+let gui_raw_entry ?(id = "424242")
+    ?(account = {|{"id":424243,"login":"owner-424242"}|})
+    ?(target = {|"Organization"|}) () =
+  Printf.sprintf {|{"id":%s,"account":%s,"target_type":%s}|} id account
+    target
+
+let gui_raw_account ?(id = "424243") ?(login = {|"owner-424242"|}) () =
+  Printf.sprintf {|{"id":%s,"login":%s}|} id login
+
+let gui_show_account_type = function
+  | GUI.User -> "User"
+  | GUI.Organization -> "Organization"
 
 let gui_page_of ~total ids = Ok (200, gui_body ~total ids)
 
@@ -10621,7 +10647,7 @@ let () =
                 gui_verify
                   [ Ok
                       ( 200,
-                        {|{"total_count":2,"github_future_field":[1,2],"installations":[{"id":7,"account":{"login":"someone"}},{"id":424242,"app_id":9,"repository_selection":"all","html_url":"https://github.com/x"}]}|}
+                        {|{"total_count":2,"github_future_field":[1,2],"installations":[{"id":7,"account":{"id":70,"login":"someone"},"target_type":"User"},{"id":424242,"account":{"id":9099,"login":"earde-owner"},"target_type":"Organization","app_id":9,"repository_selection":"all","html_url":"https://github.com/x"}]}|}
                       )
                   ]
               in
@@ -10645,6 +10671,83 @@ let () =
                 (GUI.installation_id verified);
               Alcotest.(check int) "only one request" 1
                 (List.length requests))
+        ] )
+      (* Account identity: the verified result carries exactly the matching
+         entry's account ID, login, and target type, with target_type — not
+         account.type — deciding the variant. *)
+    ; ( "github_user_installations_account"
+      , [ gui_case "organization identity is preserved" (fun () ->
+              let outcome, _ =
+                gui_verify
+                  [ Ok
+                      ( 200,
+                        gui_entry_page
+                          {|{"id":424242,"account":{"id":9999,"login":"Café-Owner_1","avatar_url":"https://example.invalid/a.png"},"target_type":"Organization"}|}
+                      )
+                  ]
+              in
+              let verified = gui_verified_exn "organization" outcome in
+              Alcotest.(check int64) "installation ID" gui_target
+                (GUI.installation_id verified);
+              Alcotest.(check int64) "account ID as int64" 9999L
+                (GUI.account_id verified);
+              (* Mixed case, punctuation, and a multibyte UTF-8 sequence:
+                 accepted logins come back byte-for-byte. *)
+              Alcotest.(check string) "login byte-for-byte" "Café-Owner_1"
+                (GUI.account_login verified);
+              Alcotest.(check string) "target type" "Organization"
+                (gui_show_account_type (GUI.account_type verified)))
+        ; gui_case "user identity is preserved" (fun () ->
+              let outcome, _ =
+                gui_verify
+                  [ Ok
+                      ( 200,
+                        gui_entry_page
+                          (gui_raw_entry ~target:{|"User"|} ()) )
+                  ]
+              in
+              let verified = gui_verified_exn "user" outcome in
+              Alcotest.(check int64) "installation ID" gui_target
+                (GUI.installation_id verified);
+              Alcotest.(check int64) "account ID as int64" 424243L
+                (GUI.account_id verified);
+              Alcotest.(check string) "login byte-for-byte" "owner-424242"
+                (GUI.account_login verified);
+              Alcotest.(check string) "target type" "User"
+                (gui_show_account_type (GUI.account_type verified)))
+        ; gui_case "account ID beyond OCaml int range round-trips" (fun () ->
+              (* 2^62 does not fit a 63-bit OCaml int, so Yojson yields an
+                 `Intlit` for the account ID; the exact value must
+                 survive. *)
+              let outcome, _ =
+                gui_verify
+                  [ Ok
+                      ( 200,
+                        gui_entry_page
+                          (gui_raw_entry
+                             ~account:
+                               (gui_raw_account ~id:"4611686018427387904" ())
+                             ()) )
+                  ]
+              in
+              let verified = gui_verified_exn "big account id" outcome in
+              Alcotest.(check int64) "exact int64 round-trip"
+                4611686018427387904L
+                (GUI.account_id verified))
+        ; gui_case "target_type is authoritative over account.type"
+            (fun () ->
+              let outcome, _ =
+                gui_verify
+                  [ Ok
+                      ( 200,
+                        gui_entry_page
+                          {|{"id":424242,"account":{"id":9999,"login":"earde-owner","type":"User"},"target_type":"Organization"}|}
+                      )
+                  ]
+              in
+              let verified = gui_verified_exn "authority" outcome in
+              Alcotest.(check string) "account.type ignored" "Organization"
+                (gui_show_account_type (GUI.account_type verified)))
         ] )
       (* Definitive absence: a complete search that ends without the target
          reports Installation_not_accessible. *)
@@ -10728,30 +10831,42 @@ let () =
          a malformed entry poisons the whole page even after a match. *)
     ; ( "github_user_installations_invalid"
       , [ gui_invalid "invalid JSON" "not json at all"
-        ; gui_invalid "top-level array" {|[{"id":424242}]|}
+        ; gui_invalid "top-level array"
+            (Printf.sprintf {|[%s]|} (gui_entry gui_target))
         ; gui_invalid "top-level scalar" "42"
         ; gui_invalid "top-level null" "null"
         ; gui_invalid "missing total_count"
-            {|{"installations":[{"id":424242}]}|}
+            (Printf.sprintf {|{"installations":[%s]}|} (gui_entry gui_target))
         ; gui_invalid "missing installations" {|{"total_count":1}|}
         ; gui_invalid "duplicate total_count"
-            {|{"total_count":1,"total_count":1,"installations":[{"id":424242}]}|}
+            (Printf.sprintf
+               {|{"total_count":1,"total_count":1,"installations":[%s]}|}
+               (gui_entry gui_target))
         ; gui_invalid "duplicate installations"
-            {|{"total_count":1,"installations":[{"id":424242}],"installations":[{"id":424242}]}|}
+            (Printf.sprintf
+               {|{"total_count":1,"installations":[%s],"installations":[%s]}|}
+               (gui_entry gui_target) (gui_entry gui_target))
         ; gui_invalid "negative total_count"
             {|{"total_count":-1,"installations":[]}|}
         ; gui_invalid "float total_count"
-            {|{"total_count":1.0,"installations":[{"id":424242}]}|}
+            (Printf.sprintf {|{"total_count":1.0,"installations":[%s]}|}
+               (gui_entry gui_target))
         ; gui_invalid "string total_count"
-            {|{"total_count":"1","installations":[{"id":424242}]}|}
+            (Printf.sprintf {|{"total_count":"1","installations":[%s]}|}
+               (gui_entry gui_target))
         ; gui_invalid "null total_count"
-            {|{"total_count":null,"installations":[{"id":424242}]}|}
+            (Printf.sprintf {|{"total_count":null,"installations":[%s]}|}
+               (gui_entry gui_target))
         ; gui_invalid "boolean total_count"
-            {|{"total_count":true,"installations":[{"id":424242}]}|}
+            (Printf.sprintf {|{"total_count":true,"installations":[%s]}|}
+               (gui_entry gui_target))
         ; gui_invalid "overflowing total_count"
-            {|{"total_count":9223372036854775808,"installations":[{"id":424242}]}|}
+            (Printf.sprintf
+               {|{"total_count":9223372036854775808,"installations":[%s]}|}
+               (gui_entry gui_target))
         ; gui_invalid "installations not an array"
-            {|{"total_count":1,"installations":{"id":424242}}|}
+            (Printf.sprintf {|{"total_count":1,"installations":%s}|}
+               (gui_entry gui_target))
         ; gui_case "more than 100 entries" (fun () ->
               let outcome, _ =
                 gui_verify
@@ -10761,23 +10876,139 @@ let () =
         ; gui_invalid "entry not an object"
             {|{"total_count":1,"installations":[42]}|}
         ; gui_invalid "entry missing id"
-            {|{"total_count":1,"installations":[{"app_id":9}]}|}
+            (gui_entry_page
+               {|{"account":{"id":424243,"login":"owner-424242"},"target_type":"Organization"}|})
         ; gui_invalid "duplicate id field in one entry"
-            {|{"total_count":1,"installations":[{"id":424242,"id":424242}]}|}
-        ; gui_invalid "zero id"
-            {|{"total_count":1,"installations":[{"id":0}]}|}
+            (gui_entry_page
+               {|{"id":424242,"id":424242,"account":{"id":424243,"login":"owner-424242"},"target_type":"Organization"}|})
+        ; gui_invalid "zero id" (gui_entry_page (gui_raw_entry ~id:"0" ()))
         ; gui_invalid "negative id"
-            {|{"total_count":1,"installations":[{"id":-7}]}|}
+            (gui_entry_page (gui_raw_entry ~id:"-7" ()))
         ; gui_invalid "float id"
-            {|{"total_count":1,"installations":[{"id":424242.0}]}|}
+            (gui_entry_page (gui_raw_entry ~id:"424242.0" ()))
         ; gui_invalid "numeric-string id"
-            {|{"total_count":1,"installations":[{"id":"424242"}]}|}
+            (gui_entry_page (gui_raw_entry ~id:{|"424242"|} ()))
         ; gui_invalid "overflowing id"
-            {|{"total_count":1,"installations":[{"id":9223372036854775808}]}|}
+            (gui_entry_page (gui_raw_entry ~id:"9223372036854775808" ()))
         ; gui_invalid "duplicate id across entries"
-            {|{"total_count":2,"installations":[{"id":7},{"id":7}]}|}
+            (Printf.sprintf {|{"total_count":2,"installations":[%s,%s]}|}
+               (gui_entry 7L) (gui_entry 7L))
         ; gui_invalid "malformed unrelated entry after a matching entry"
-            {|{"total_count":2,"installations":[{"id":424242},{"id":"bad"}]}|}
+            (Printf.sprintf
+               {|{"total_count":2,"installations":[%s,{"id":"bad"}]}|}
+               (gui_entry gui_target))
+        ; gui_invalid "invalid account metadata after a matching entry"
+            (Printf.sprintf
+               {|{"total_count":2,"installations":[%s,{"id":7,"account":{"id":0,"login":"owner-7"},"target_type":"User"}]}|}
+               (gui_entry gui_target))
+        ] )
+      (* Invalid account metadata: each case takes an otherwise fully valid
+         matching entry and breaks exactly one account or target_type
+         aspect; all of them must poison the page as Invalid_response. *)
+    ; ( "github_user_installations_account_invalid"
+      , [ gui_invalid "missing account"
+            (gui_entry_page {|{"id":424242,"target_type":"Organization"}|})
+        ; gui_invalid "duplicate account"
+            (gui_entry_page
+               (Printf.sprintf
+                  {|{"id":424242,"account":%s,"account":%s,"target_type":"Organization"}|}
+                  (gui_raw_account ()) (gui_raw_account ())))
+        ; gui_invalid "account not an object"
+            (gui_entry_page (gui_raw_entry ~account:"42" ()))
+        ; gui_invalid "account is an array"
+            (gui_entry_page
+               (gui_raw_entry
+                  ~account:(Printf.sprintf "[%s]" (gui_raw_account ())) ()))
+        ; gui_invalid "missing account id"
+            (gui_entry_page
+               (gui_raw_entry ~account:{|{"login":"owner-424242"}|} ()))
+        ; gui_invalid "duplicate account id"
+            (gui_entry_page
+               (gui_raw_entry
+                  ~account:
+                    {|{"id":424243,"id":424243,"login":"owner-424242"}|}
+                  ()))
+        ; gui_invalid "zero account id"
+            (gui_entry_page
+               (gui_raw_entry ~account:(gui_raw_account ~id:"0" ()) ()))
+        ; gui_invalid "negative account id"
+            (gui_entry_page
+               (gui_raw_entry ~account:(gui_raw_account ~id:"-9" ()) ()))
+        ; gui_invalid "float account id"
+            (gui_entry_page
+               (gui_raw_entry ~account:(gui_raw_account ~id:"424243.0" ()) ()))
+        ; gui_invalid "numeric-string account id"
+            (gui_entry_page
+               (gui_raw_entry
+                  ~account:(gui_raw_account ~id:{|"424243"|} ()) ()))
+        ; gui_invalid "overflowing account id"
+            (gui_entry_page
+               (gui_raw_entry
+                  ~account:(gui_raw_account ~id:"9223372036854775808" ()) ()))
+        ; gui_invalid "missing login"
+            (gui_entry_page (gui_raw_entry ~account:{|{"id":424243}|} ()))
+        ; gui_invalid "duplicate login"
+            (gui_entry_page
+               (gui_raw_entry
+                  ~account:{|{"id":424243,"login":"a","login":"a"}|} ()))
+        ; gui_invalid "blank login"
+            (gui_entry_page
+               (gui_raw_entry ~account:(gui_raw_account ~login:{|""|} ()) ()))
+        ; gui_invalid "whitespace-only login"
+            (gui_entry_page
+               (gui_raw_entry ~account:(gui_raw_account ~login:{|" "|} ()) ()))
+        ; gui_invalid "leading whitespace in login"
+            (gui_entry_page
+               (gui_raw_entry
+                  ~account:(gui_raw_account ~login:{|" owner"|} ()) ()))
+        ; gui_invalid "trailing whitespace in login"
+            (gui_entry_page
+               (gui_raw_entry
+                  ~account:(gui_raw_account ~login:{|"owner "|} ()) ()))
+        ; gui_invalid "internal whitespace in login"
+            (gui_entry_page
+               (gui_raw_entry
+                  ~account:(gui_raw_account ~login:{|"own er"|} ()) ()))
+        ; gui_invalid "tab in login"
+            (gui_entry_page
+               (gui_raw_entry
+                  ~account:(gui_raw_account ~login:{|"own\ter"|} ()) ()))
+        ; gui_invalid "newline in login"
+            (gui_entry_page
+               (gui_raw_entry
+                  ~account:(gui_raw_account ~login:{|"own\ner"|} ()) ()))
+        ; gui_invalid "control byte in login"
+            (gui_entry_page
+               (gui_raw_entry
+                  ~account:(gui_raw_account ~login:{|"own\u0001er"|} ()) ()))
+        ; gui_invalid "NUL in login"
+            (gui_entry_page
+               (gui_raw_entry
+                  ~account:(gui_raw_account ~login:{|"own\u0000er"|} ()) ()))
+        ; gui_invalid "DEL in login"
+            (gui_entry_page
+               (gui_raw_entry
+                  ~account:(gui_raw_account ~login:{|"own\u007fer"|} ()) ()))
+        ; gui_invalid "login of the wrong JSON type"
+            (gui_entry_page
+               (gui_raw_entry ~account:(gui_raw_account ~login:"42" ()) ()))
+        ; gui_invalid "missing target_type"
+            (gui_entry_page
+               (Printf.sprintf {|{"id":424242,"account":%s}|}
+                  (gui_raw_account ())))
+        ; gui_invalid "duplicate target_type"
+            (gui_entry_page
+               (Printf.sprintf
+                  {|{"id":424242,"account":%s,"target_type":"Organization","target_type":"Organization"}|}
+                  (gui_raw_account ())))
+        ; gui_invalid "non-string target_type"
+            (gui_entry_page (gui_raw_entry ~target:"1" ()))
+        ; gui_invalid "unknown target type"
+            (gui_entry_page (gui_raw_entry ~target:{|"Enterprise"|} ()))
+        ; gui_invalid "lowercase user"
+            (gui_entry_page (gui_raw_entry ~target:{|"user"|} ()))
+        ; gui_invalid "lowercase organization"
+            (gui_entry_page (gui_raw_entry ~target:{|"organization"|} ()))
         ] )
       (* Transport and status failures: constructors carry at most the
          status integer, the remote body is never parsed or preserved, and
