@@ -1776,8 +1776,12 @@ module Step6_events = struct
         let (module C : Caqti_lwt.CONNECTION) = c in
         let* uid = C.find q_insert_user ("step6_founder", "x") in
         let* uid = or_fail "user" uid in
+        (* Legacy community creation is admin-gated (server-side session
+           check); the founder must carry the authoritative admin field to
+           reach the analytics behavior under test. *)
         let session =
-          [ ("user_id", string_of_int uid); ("username", "step6_founder") ]
+          [ ("user_id", string_of_int uid); ("username", "step6_founder");
+            ("is_admin", "true") ]
         in
         let* status, payloads =
           run_handler ~url ~session ~target:"/create-community"
@@ -3849,6 +3853,223 @@ let goc_contains ~needle haystack =
     i + n <= h && (String.equal (String.sub haystack i n) needle || at (i + 1))
   in
   n > 0 && at 0
+
+(* === GitHub onboarding state issuance (Github_onboarding_state_store) ===
+   The security contract lives in the SQL — only hashes reach the table,
+   expiry comes from Postgres NOW(), issuance never disturbs earlier states —
+   so only a DB-backed check can pin it down. Same EARDE_TEST_DATABASE_URL
+   opt-in gate as Mod_scope; each fixture-writing case runs inside a
+   transaction that is rolled back (the FK-failure case relies on the failed
+   INSERT's own atomicity instead), so no rows outlive a run. Raw generated
+   state/binding values never reach assertion messages or test output. *)
+module Gh_state_store = struct
+  let ( let* ) = Lwt.bind
+
+  open Caqti_request.Infix
+
+  module Store = Earde.Github_onboarding_state_store
+
+  let issue_error_str = function
+    | Store.Invalid_user_id -> "Invalid_user_id"
+    | Store.Storage_error -> "Storage_error"
+
+  let or_fail label = function
+    | Ok v -> Lwt.return v
+    | Error e -> Alcotest.failf "%s: %s" label (Caqti_error.show e)
+
+  let q_insert_user =
+    (Caqti_type.unit ->! Caqti_type.int)
+    "INSERT INTO users (username, email, password_hash, is_email_verified)
+     VALUES ('ghstate_user', 'ghstate_user@test.invalid', 'x', TRUE) RETURNING id"
+
+  (* Everything stored for a user's states: the three text columns (no other
+     column in the table can hold token material), NULL-ness of the two
+     lifecycle columns, and the Postgres-computed expiry delta. *)
+  let q_rows_for_user =
+    (Caqti_type.(int ->* t2 (t3 string string string) (t3 bool bool float)))
+    "SELECT state_hash, session_binding_hash, flow,
+            pending_github_installation_id IS NULL,
+            consumed_at IS NULL,
+            EXTRACT(EPOCH FROM (expires_at - created_at))::float8
+     FROM github_onboarding_states WHERE user_id = $1 ORDER BY id"
+
+  let q_count_for_user =
+    (Caqti_type.int ->! Caqti_type.int)
+    "SELECT COUNT(*) FROM github_onboarding_states WHERE user_id = $1"
+
+  (* A positive user id guaranteed absent from users, for the FK-failure
+     case. *)
+  let q_absent_user_id =
+    (Caqti_type.unit ->! Caqti_type.int)
+    "SELECT COALESCE(MAX(id), 0) + 1000000 FROM users"
+
+  let db_case name f =
+    Alcotest.test_case name `Quick (fun () ->
+        match Sys.getenv_opt "EARDE_TEST_DATABASE_URL" with
+        | None | Some "" -> Alcotest.skip ()
+        | Some url ->
+            Lwt_main.run
+              (let* conn = Caqti_lwt_unix.connect (Uri.of_string url) in
+               let* conn = or_fail "connect" conn in
+               f conn))
+
+  (* Fixture user and issued rows live only inside this transaction; the
+     rollback runs even when an assertion fails mid-case. *)
+  let tx_case name f =
+    db_case name (fun conn ->
+        let (module C : Caqti_lwt.CONNECTION) = conn in
+        let* r = C.start () in
+        let* () = or_fail "begin" r in
+        Lwt.finalize
+          (fun () -> f conn)
+          (fun () ->
+            let* r = C.rollback () in
+            let* () = or_fail "rollback" r in
+            Lwt.return_unit))
+
+  let issue_ok conn ~user_id ~session_binding_hash =
+    let* r =
+      Store.issue conn ~user_id ~session_binding_hash
+        ~flow:GO.Project_onboarding
+    in
+    match r with
+    | Ok state -> Lwt.return state
+    | Error e -> Alcotest.failf "issue: %s" (issue_error_str e)
+
+  let single_issue_case =
+    tx_case "issue: one row, hashes only, Postgres 15-minute expiry"
+      (fun conn ->
+        let (module C : Caqti_lwt.CONNECTION) = conn in
+        let* uid = C.find q_insert_user () in
+        let* uid = or_fail "user" uid in
+        let binding = GOC.generate_session_binding () in
+        let binding_hash = GOC.hash_session_binding binding in
+        let* state =
+          issue_ok conn ~user_id:uid ~session_binding_hash:binding_hash
+        in
+        let raw_state = GOC.state_to_string state in
+        (match GOC.state_of_callback raw_state with
+        | Ok _ -> ()
+        | Error GOC.Invalid_format ->
+            Alcotest.fail "issued state does not pass state_of_callback");
+        let* rows = C.collect_list q_rows_for_user uid in
+        let* rows = or_fail "rows" rows in
+        (match rows with
+        | [ ( (state_hash, stored_binding_hash, flow),
+              (pending_null, consumed_null, ttl) ) ] ->
+            Alcotest.(check string) "stored state_hash is the derived hash"
+              (GOC.state_hash_to_string (GOC.hash_state state))
+              state_hash;
+            Alcotest.(check string) "stored binding hash is the supplied hash"
+              (GOC.session_binding_hash_to_string binding_hash)
+              stored_binding_hash;
+            Alcotest.(check string) "flow" "project_onboarding" flow;
+            let text_columns =
+              String.concat "|" [ state_hash; stored_binding_hash; flow ]
+            in
+            Alcotest.(check bool) "raw state absent from text columns" false
+              (goc_contains ~needle:raw_state text_columns);
+            Alcotest.(check bool) "raw binding absent from text columns" false
+              (goc_contains
+                 ~needle:(GOC.session_binding_to_string binding)
+                 text_columns);
+            Alcotest.(check bool) "pending installation id NULL" true
+              pending_null;
+            Alcotest.(check bool) "consumed_at NULL" true consumed_null;
+            Alcotest.(check bool) "expiry ~15 minutes after creation" true
+              (Float.abs (ttl -. 900.) <= 5.)
+        | rows ->
+            Alcotest.failf "expected exactly one row, found %d"
+              (List.length rows));
+        Lwt.return_unit)
+
+  let multiplicity_case =
+    tx_case "issue: repeat issuance leaves independent unconsumed rows"
+      (fun conn ->
+        let (module C : Caqti_lwt.CONNECTION) = conn in
+        let* uid = C.find q_insert_user () in
+        let* uid = or_fail "user" uid in
+        let binding_hash =
+          GOC.hash_session_binding (GOC.generate_session_binding ())
+        in
+        let* first =
+          issue_ok conn ~user_id:uid ~session_binding_hash:binding_hash
+        in
+        let* second =
+          issue_ok conn ~user_id:uid ~session_binding_hash:binding_hash
+        in
+        let hash_of s = GOC.state_hash_to_string (GOC.hash_state s) in
+        let* rows = C.collect_list q_rows_for_user uid in
+        let* rows = or_fail "rows" rows in
+        (match rows with
+        | [ ((hash_a, _, _), (_, consumed_a, _));
+            ((hash_b, _, _), (_, consumed_b, _)) ] ->
+            Alcotest.(check bool) "first row unconsumed" true consumed_a;
+            Alcotest.(check bool) "second row unconsumed" true consumed_b;
+            Alcotest.(check bool) "distinct state hashes" false
+              (String.equal hash_a hash_b);
+            (* Rows are id-ordered, so they pair with issuance order. *)
+            Alcotest.(check string) "first row is the first state"
+              (hash_of first) hash_a;
+            Alcotest.(check string) "second row is the second state"
+              (hash_of second) hash_b
+        | rows ->
+            Alcotest.failf "expected exactly two rows, found %d"
+              (List.length rows));
+        Lwt.return_unit)
+
+  let invalid_user_case =
+    db_case "issue: non-positive user ids rejected before SQL" (fun conn ->
+        let binding_hash =
+          GOC.hash_session_binding (GOC.generate_session_binding ())
+        in
+        let check_rejected uid =
+          let* r =
+            Store.issue conn ~user_id:uid ~session_binding_hash:binding_hash
+              ~flow:GO.Project_onboarding
+          in
+          match r with
+          | Error Store.Invalid_user_id -> Lwt.return_unit
+          | Error Store.Storage_error ->
+              Alcotest.failf "user id %d: expected Invalid_user_id, got \
+                             Storage_error" uid
+          | Ok _ ->
+              Alcotest.failf "user id %d: expected Invalid_user_id, got Ok"
+                uid
+        in
+        let* () = check_rejected 0 in
+        check_rejected (-1))
+
+  (* Autocommit on purpose: the failed INSERT is atomic on its own, which is
+     exactly the "no partial row" contract; a wrapping transaction would be
+     aborted by the FK error and block the follow-up count. *)
+  let missing_user_case =
+    db_case "issue: nonexistent user id is Storage_error, no partial row"
+      (fun conn ->
+        let (module C : Caqti_lwt.CONNECTION) = conn in
+        let* ghost = C.find q_absent_user_id () in
+        let* ghost = or_fail "absent user id" ghost in
+        let binding_hash =
+          GOC.hash_session_binding (GOC.generate_session_binding ())
+        in
+        let* r =
+          Store.issue conn ~user_id:ghost ~session_binding_hash:binding_hash
+            ~flow:GO.Project_onboarding
+        in
+        (match r with
+        | Error Store.Storage_error -> ()
+        | Error Store.Invalid_user_id ->
+            Alcotest.fail "expected Storage_error, got Invalid_user_id"
+        | Ok _ -> Alcotest.fail "expected Storage_error, got Ok");
+        let* count = C.find q_count_for_user ghost in
+        let* count = or_fail "count" count in
+        Alcotest.(check int) "no partial row" 0 count;
+        Lwt.return_unit)
+
+  let suite =
+    [ single_issue_case; multiplicity_case; invalid_user_case;
+      missing_user_case ]
+end
 
 let () =
   Alcotest.run "earde"
@@ -6524,4 +6745,12 @@ let () =
               Alcotest.(check bool) "no token material" false
                 (goc_contains ~needle:token (goc_binding_hash token)))
         ] )
+      (* State issuance: the TTL constant is checkable DB-free; the SQL
+         contract needs Postgres and follows the EARDE_TEST_DATABASE_URL
+         gate (each DB case skips without it). *)
+    ; ( "github_state_store"
+      , go_case "ttl_seconds is 900" (fun () ->
+            Alcotest.(check int) "ttl" 900
+              Earde.Github_onboarding_state_store.ttl_seconds)
+        :: Gh_state_store.suite )
     ]
