@@ -40,55 +40,16 @@ let () =
      | None -> ());
     handler request
   in
-  (* Private per-request slot holding the ORIGINAL (unredacted) target. Redaction
-     stashes it here before overwriting the target, and restore_token_target_middleware
-     puts it back for the route handlers. Without this, token=[REDACTED] reaches
-     Dream.query and silently breaks every token GET route (/verify, /reset-password,
-     /confirm-email). *)
-  let original_target_field : string Dream.field = Dream.new_field ~name:"earde.raw_target" () in
-  (* Mutates the request target before Dream.logger and analytics_middleware read it,
-     replacing token=<value> with token=[REDACTED] so raw tokens never appear in access
-     logs or page_views. Dream.set_target is internal; we reach it via dream-pure's
-     Message module, which is the same mutable record Dream.target reads. *)
-  let redact_token_middleware handler request =
-    let target = Dream.target request in
-    let needle = "token=" in
-    let nlen = String.length needle in
-    let tlen = String.length target in
-    let buf = Buffer.create tlen in
-    let i = ref 0 in
-    while !i < tlen do
-      if !i + nlen <= tlen && String.sub target !i nlen = needle then begin
-        Buffer.add_string buf needle;
-        Buffer.add_string buf "[REDACTED]";
-        i := !i + nlen;
-        while !i < tlen && target.[!i] <> '&' do incr i done
-      end else begin
-        Buffer.add_char buf target.[!i];
-        incr i
-      end
-    done;
-    let redacted = Buffer.contents buf in
-    if redacted <> target then begin
-      (* Keep the real target so restore_token_target_middleware can hand the
-         unredacted token to the route handler after logging/analytics ran. *)
-      Dream.set_field request original_target_field target;
-      Dream_pure.Message.set_target request redacted
-    end;
-    handler request
-  in
-  (* Runs AFTER Dream.logger and analytics_middleware (both must see the redacted
-     target) but BEFORE the router, so only the route handler gets the real token
-     back via Dream.query. No-op for requests that had no token to redact. *)
-  let restore_token_target_middleware handler request =
-    (match Dream.field request original_target_field with
-     | Some original -> Dream_pure.Message.set_target request original
-     | None -> ());
-    handler request
-  in
   Dream.run ~interface ~port:8080
   @@ proxy
-  @@ redact_token_middleware
+  (* Replaces sensitive query parameter values (token=, state=, code=) with
+     [REDACTED] before Dream.logger and analytics_middleware read the target,
+     so those secrets never appear in access logs or page_views. The original
+     target is stashed in a field private to Request_target_redaction and put
+     back by its restore_middleware below, just before the router — without
+     that, [REDACTED] would reach Dream.query and silently break every
+     sensitive-parameter GET route (/verify, /reset-password, /confirm-email). *)
+  @@ Earde.Request_target_redaction.redact_middleware
   @@ Dream.logger
   @@ Dream.sql_pool ~size:db_pool_size db_url
   @@ secret_middleware
@@ -101,7 +62,11 @@ let () =
      cannot take last_active_at (moderator auto-demotion input) down with it. *)
   @@ Earde.Handlers.presence_middleware
   @@ Earde.Handlers.analytics_middleware
-  @@ restore_token_target_middleware
+  (* Runs AFTER Dream.logger and analytics_middleware (both must see the
+     redacted target) but BEFORE the router, so only the route handler gets
+     the real sensitive query parameters back via Dream.query. No-op for
+     requests that had nothing to redact. *)
+  @@ Earde.Request_target_redaction.restore_middleware
   @@ Dream.router [
     (* / now redirects to the new global Feed. home_handler is kept (still in
        handlers.mli) so / can become a real landing page later — hence a

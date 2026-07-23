@@ -81,7 +81,10 @@ let process_image_upload ~max_bytes ~resize image_bytes =
 module Rate_limit = struct
   let middleware inner_handler request =
     let ip = Dream.client request in
-    let endpoint = Dream.target request in
+    (* Path only: the rate-limit table must never persist query values (reset
+       tokens, OAuth state/code, search terms), and /login?x=y must share
+       /login's bucket rather than minting a fresh one per query string. *)
+    let endpoint = Request_target_redaction.path_only (Dream.target request) in
     match%lwt Dream.sql request (fun db -> Db.Rate_limit.check db ip endpoint) with
     | Ok `Blocked ->
         let user = Dream.session_field request "username" in

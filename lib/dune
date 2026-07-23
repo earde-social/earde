@@ -3,6 +3,7 @@
  (public_name earde)
  (libraries
   dream
+  dream-pure
   caqti
   caqti-lwt
   caqti-lwt.unix
