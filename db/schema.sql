@@ -678,6 +678,98 @@ ALTER SEQUENCE public.posts_id_seq OWNED BY public.posts.id;
 
 
 --
+-- Name: project_onboarding_draft_repositories; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.project_onboarding_draft_repositories (
+    id bigint NOT NULL,
+    draft_id bigint NOT NULL,
+    "position" integer NOT NULL,
+    github_repository_id bigint NOT NULL,
+    github_owner_id bigint NOT NULL,
+    owner_login text NOT NULL,
+    name text NOT NULL,
+    full_name text NOT NULL,
+    html_url text NOT NULL,
+    description text,
+    default_branch text NOT NULL,
+    is_archived boolean NOT NULL,
+    is_selected boolean DEFAULT false NOT NULL,
+    is_primary boolean DEFAULT false NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT project_onboarding_draft_repos_github_repository_id_check CHECK ((github_repository_id > 0)),
+    CONSTRAINT project_onboarding_draft_repositories_default_branch_check CHECK ((btrim(default_branch) <> ''::text)),
+    CONSTRAINT project_onboarding_draft_repositories_full_name_check CHECK ((btrim(full_name) <> ''::text)),
+    CONSTRAINT project_onboarding_draft_repositories_github_owner_id_check CHECK ((github_owner_id > 0)),
+    CONSTRAINT project_onboarding_draft_repositories_html_url_check CHECK ((btrim(html_url) <> ''::text)),
+    CONSTRAINT project_onboarding_draft_repositories_name_check CHECK ((btrim(name) <> ''::text)),
+    CONSTRAINT project_onboarding_draft_repositories_owner_login_check CHECK ((btrim(owner_login) <> ''::text)),
+    CONSTRAINT project_onboarding_draft_repositories_position_check CHECK (("position" > 0)),
+    CONSTRAINT project_onboarding_draft_repositories_primary_selected_check CHECK ((is_selected OR (NOT is_primary)))
+);
+
+
+--
+-- Name: project_onboarding_draft_repositories_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.project_onboarding_draft_repositories_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: project_onboarding_draft_repositories_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.project_onboarding_draft_repositories_id_seq OWNED BY public.project_onboarding_draft_repositories.id;
+
+
+--
+-- Name: project_onboarding_drafts; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.project_onboarding_drafts (
+    id bigint NOT NULL,
+    user_id integer NOT NULL,
+    github_installation_record_id bigint NOT NULL,
+    status text DEFAULT 'active'::text NOT NULL,
+    expires_at timestamp with time zone NOT NULL,
+    completed_at timestamp with time zone,
+    cancelled_at timestamp with time zone,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT project_onboarding_drafts_expires_after_created_check CHECK ((expires_at > created_at)),
+    CONSTRAINT project_onboarding_drafts_lifecycle_check CHECK ((((status = 'active'::text) AND (completed_at IS NULL) AND (cancelled_at IS NULL)) OR ((status = 'completed'::text) AND (completed_at IS NOT NULL) AND (cancelled_at IS NULL)) OR ((status = 'cancelled'::text) AND (completed_at IS NULL) AND (cancelled_at IS NOT NULL)))),
+    CONSTRAINT project_onboarding_drafts_status_check CHECK ((status = ANY (ARRAY['active'::text, 'completed'::text, 'cancelled'::text]))),
+    CONSTRAINT project_onboarding_drafts_updated_after_created_check CHECK ((updated_at >= created_at))
+);
+
+
+--
+-- Name: project_onboarding_drafts_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.project_onboarding_drafts_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: project_onboarding_drafts_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.project_onboarding_drafts_id_seq OWNED BY public.project_onboarding_drafts.id;
+
+
+--
 -- Name: rate_limits; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -906,6 +998,20 @@ ALTER TABLE ONLY public.posthog_person_deletion_jobs ALTER COLUMN id SET DEFAULT
 --
 
 ALTER TABLE ONLY public.posts ALTER COLUMN id SET DEFAULT nextval('public.posts_id_seq'::regclass);
+
+
+--
+-- Name: project_onboarding_draft_repositories id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.project_onboarding_draft_repositories ALTER COLUMN id SET DEFAULT nextval('public.project_onboarding_draft_repositories_id_seq'::regclass);
+
+
+--
+-- Name: project_onboarding_drafts id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.project_onboarding_drafts ALTER COLUMN id SET DEFAULT nextval('public.project_onboarding_drafts_id_seq'::regclass);
 
 
 --
@@ -1179,6 +1285,46 @@ ALTER TABLE ONLY public.posts
 
 
 --
+-- Name: project_onboarding_draft_repositories project_onboarding_draft_repos_draft_full_name_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.project_onboarding_draft_repositories
+    ADD CONSTRAINT project_onboarding_draft_repos_draft_full_name_key UNIQUE (draft_id, full_name);
+
+
+--
+-- Name: project_onboarding_draft_repositories project_onboarding_draft_repos_draft_position_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.project_onboarding_draft_repositories
+    ADD CONSTRAINT project_onboarding_draft_repos_draft_position_key UNIQUE (draft_id, "position");
+
+
+--
+-- Name: project_onboarding_draft_repositories project_onboarding_draft_repos_draft_repository_id_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.project_onboarding_draft_repositories
+    ADD CONSTRAINT project_onboarding_draft_repos_draft_repository_id_key UNIQUE (draft_id, github_repository_id);
+
+
+--
+-- Name: project_onboarding_draft_repositories project_onboarding_draft_repositories_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.project_onboarding_draft_repositories
+    ADD CONSTRAINT project_onboarding_draft_repositories_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: project_onboarding_drafts project_onboarding_drafts_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.project_onboarding_drafts
+    ADD CONSTRAINT project_onboarding_drafts_pkey PRIMARY KEY (id);
+
+
+--
 -- Name: rate_limits rate_limits_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -1312,10 +1458,38 @@ CREATE INDEX idx_posthog_group_cleanup_pending ON public.posthog_group_cleanup_j
 
 
 --
+-- Name: idx_project_onboarding_drafts_installation_record_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_project_onboarding_drafts_installation_record_id ON public.project_onboarding_drafts USING btree (github_installation_record_id);
+
+
+--
+-- Name: idx_project_onboarding_drafts_user_id_active; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_project_onboarding_drafts_user_id_active ON public.project_onboarding_drafts USING btree (user_id) WHERE (status = 'active'::text);
+
+
+--
 -- Name: idx_reports_community_status; Type: INDEX; Schema: public; Owner: -
 --
 
 CREATE INDEX idx_reports_community_status ON public.reports USING btree (community_id, status, created_at DESC);
+
+
+--
+-- Name: uniq_project_onboarding_draft_repos_primary_per_draft; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX uniq_project_onboarding_draft_repos_primary_per_draft ON public.project_onboarding_draft_repositories USING btree (draft_id) WHERE is_primary;
+
+
+--
+-- Name: uniq_project_onboarding_drafts_active_per_user_installation; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX uniq_project_onboarding_drafts_active_per_user_installation ON public.project_onboarding_drafts USING btree (user_id, github_installation_record_id) WHERE (status = 'active'::text);
 
 
 --
@@ -1573,6 +1747,30 @@ ALTER TABLE ONLY public.posts
 
 
 --
+-- Name: project_onboarding_draft_repositories project_onboarding_draft_repositories_draft_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.project_onboarding_draft_repositories
+    ADD CONSTRAINT project_onboarding_draft_repositories_draft_id_fkey FOREIGN KEY (draft_id) REFERENCES public.project_onboarding_drafts(id) ON DELETE CASCADE;
+
+
+--
+-- Name: project_onboarding_drafts project_onboarding_drafts_github_installation_record_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.project_onboarding_drafts
+    ADD CONSTRAINT project_onboarding_drafts_github_installation_record_id_fkey FOREIGN KEY (github_installation_record_id) REFERENCES public.github_installations(id) ON DELETE RESTRICT;
+
+
+--
+-- Name: project_onboarding_drafts project_onboarding_drafts_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.project_onboarding_drafts
+    ADD CONSTRAINT project_onboarding_drafts_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+
+
+--
 -- Name: reports reports_community_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -1650,4 +1848,5 @@ INSERT INTO public.schema_migrations (version) VALUES
     ('20260722120000'),
     ('20260722200000'),
     ('20260723120000'),
-    ('20260723150000');
+    ('20260723150000'),
+    ('20260724120000');
