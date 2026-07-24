@@ -169,7 +169,17 @@ let feedback_of_target target =
   | [ Some "stale" ] -> Some Pages_ps.Selection_stale
   | [ Some "invalid" ] -> Some Pages_ps.Selection_invalid
   | [ Some "unavailable" ] -> Some Pages_ps.Draft_unavailable
+  | [ Some "required" ] -> Some Pages_ps.Repository_selection_required
   | _ -> None
+
+(* The identity step is entered by exactly one case-sensitive [step=details].
+   Every other shape — absent, blank, bare, duplicated, unknown, re-cased, or
+   a percent-encoded lookalike — is the normal repository step, with no
+   diagnostic: the raw value is never decoded, repaired, or reflected. *)
+let details_step_of_target target =
+  match raw_query_occurrences ~key:"step" target with
+  | [ Some "details" ] -> true
+  | _ -> false
 
 (* --- Read model → page view models (mechanical, public accessors only;
    installation ids, account ids, GitHub repository ids, provenance, and
@@ -206,6 +216,42 @@ let configuration_of_view view : Pages_ps.configuration =
       List.map repository_option_of_read (Read.repositories view);
   }
 
+let identity_repository_of_read repository : Pages_ps.identity_repository =
+  {
+    Pages_ps.snapshot_id = Read.snapshot_id repository;
+    full_name = Read.full_name repository;
+    is_archived = Read.is_archived repository;
+  }
+
+(* The permanent identity is the user's to state: nothing is prefilled from
+   the account login, repository names, or GitHub metadata, and no primary is
+   inferred even from a single selected repository. *)
+let initial_identity_values : Pages_ps.identity_values =
+  {
+    Pages_ps.kind = Project_identity.Project;
+    name = "";
+    slug = "";
+    description = "";
+    website_url = "";
+    primary_snapshot_id = None;
+  }
+
+(* Only currently selected rows cross into the identity step, in snapshot
+   order — the same public-accessor discipline as the repository step, minus
+   URLs, descriptions, and branches the step does not show. *)
+let identity_configuration_of_view view : Pages_ps.identity_configuration =
+  {
+    Pages_ps.draft = draft_option_of_summary (Read.summary view);
+    selected_repositories =
+      List.filter_map
+        (fun repository ->
+          if Read.is_selected repository then
+            Some (identity_repository_of_read repository)
+          else None)
+        (Read.repositories view);
+    values = initial_identity_values;
+  }
+
 (* --- GET /projects/new --- *)
 
 (* The session username is layout display context only — never an
@@ -216,6 +262,27 @@ let render_page request ~state ~feedback =
     (Pages_ps.project_setup_page
        ?user:(session_user request)
        ~request ~state ~feedback ())
+
+(* One owner-authorized view, rendered for the requested step. The read model
+   is authoritative on every GET: entering the identity step with no
+   currently selected row — including the legitimate race where a GitHub
+   refresh replaced the snapshot between the selection POST and the
+   redirected GET — falls back to the repository step with its dedicated
+   feedback, which overrides any cosmetic query feedback. *)
+let render_view request ~details ~feedback view =
+  if not details then
+    render_page request
+      ~state:(Pages_ps.Configure_repositories (configuration_of_view view))
+      ~feedback
+  else if List.exists Read.is_selected (Read.repositories view) then
+    render_page request
+      ~state:
+        (Pages_ps.Configure_identity (identity_configuration_of_view view))
+      ~feedback
+  else
+    render_page request
+      ~state:(Pages_ps.Configure_repositories (configuration_of_view view))
+      ~feedback:(Some Pages_ps.Repository_selection_required)
 
 let list_available request ~user_id =
   Dream.sql request (fun db -> Read.list_available db ~user_id)
@@ -230,7 +297,7 @@ let load_available request ~user_id ~draft_id =
    summary-only data. If it disappears between list and load, the list
    decision is repeated exactly once and a still-singular list falls back to
    the chooser: bounded, never a loop. *)
-let render_from_list request ~user_id ~feedback =
+let render_from_list request ~user_id ~details ~feedback =
   let%lwt listed = list_available request ~user_id in
   match listed with
   | Error _ -> server_error_page request
@@ -241,10 +308,7 @@ let render_from_list request ~user_id ~feedback =
       in
       match loaded with
       | Error _ -> server_error_page request
-      | Ok (Some view) ->
-          render_page request
-            ~state:(Pages_ps.Configure_repositories (configuration_of_view view))
-            ~feedback
+      | Ok (Some view) -> render_view request ~details ~feedback view
       | Ok None -> (
           let%lwt relisted = list_available request ~user_id in
           match relisted with
@@ -281,28 +345,27 @@ let make_new_project_handler ~mode request =
           else
             let target = Dream.target request in
             let feedback = feedback_of_target target in
+            let details = details_step_of_target target in
             (match draft_selector_of_target target with
             | Requested_draft draft_id -> (
                 let%lwt loaded = load_available request ~user_id ~draft_id in
                 match loaded with
                 | Error _ -> server_error_page request
                 | Ok (Some view) ->
-                    render_page request
-                      ~state:
-                        (Pages_ps.Configure_repositories
-                           (configuration_of_view view))
-                      ~feedback
+                    render_view request ~details ~feedback view
                 | Ok None ->
                     (* Nonexistent, foreign, expired, terminal, and revoked
                        stay indistinguishable; the generic unavailable
-                       feedback overrides any supplied one. *)
-                    render_from_list request ~user_id
+                       feedback overrides any supplied one, and the requested
+                       step is dropped with the draft so the fallback stays
+                       the established chooser/empty behavior. *)
+                    render_from_list request ~user_id ~details:false
                       ~feedback:(Some Pages_ps.Draft_unavailable))
             | Invalid_draft_selector ->
-                render_from_list request ~user_id
+                render_from_list request ~user_id ~details:false
                   ~feedback:(Some Pages_ps.Draft_unavailable)
             | No_draft_requested ->
-                render_from_list request ~user_id ~feedback))
+                render_from_list request ~user_id ~details ~feedback))
 
 (* --- POST /projects/new/repositories --- *)
 
@@ -322,6 +385,16 @@ let draft_redirect ~draft_id selection =
           ~query:
             [ ("draft", [ Int64.to_string draft_id ]);
               ("selection", [ selection ]);
+            ]
+          ()))
+
+let details_redirect ~draft_id =
+  clean_redirect
+    (Uri.to_string
+       (Uri.make ~path:"/projects/new"
+          ~query:
+            [ ("draft", [ Int64.to_string draft_id ]);
+              ("step", [ "details" ]);
             ]
           ()))
 
@@ -376,7 +449,19 @@ let make_repository_selection_handler ~mode ~load_config request =
                           in
                           match replaced with
                           | Ok () ->
-                              Lwt.return (draft_redirect ~draft_id "saved")
+                              if Form.selected_snapshot_ids form = [] then
+                                (* The empty selection is deliberately
+                                   saved, but the identity step needs at
+                                   least one repository: stay on the
+                                   repository step with its dedicated
+                                   feedback. *)
+                                Lwt.return (draft_redirect ~draft_id "required")
+                              else
+                                (* Straight to the project-details step; the
+                                   redirected GET re-reads the authoritative
+                                   selection rather than trusting that this
+                                   one survived. *)
+                                Lwt.return (details_redirect ~draft_id)
                           | Error Sel.Selection_stale ->
                               (* The next GET reloads the fresh snapshot. *)
                               Lwt.return (draft_redirect ~draft_id "stale")

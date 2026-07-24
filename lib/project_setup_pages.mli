@@ -18,6 +18,10 @@ type feedback =
   | Draft_unavailable
       (** The draft is gone for any reason — nonexistent, foreign, expired,
           terminal, or revoked installation stay indistinguishable. *)
+  | Repository_selection_required
+      (** The identity step needs at least one currently selected
+          repository; the saved selection is empty. Cosmetic, like every
+          other variant: no id or repository is identified. *)
   | Identity_form_invalid
       (** The identity submission failed the strict form parser. *)
   | Identity_name_invalid

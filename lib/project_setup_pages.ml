@@ -24,6 +24,7 @@ type feedback =
   | Selection_stale
   | Selection_invalid
   | Draft_unavailable
+  | Repository_selection_required
   | Identity_form_invalid
   | Identity_name_invalid
   | Identity_slug_invalid
@@ -119,6 +120,9 @@ let feedback_html = function
   | Some Draft_unavailable ->
       "<div class='ps-alert ps-alert--error'>That project setup is no \
        longer available.</div>"
+  | Some Repository_selection_required ->
+      "<div class='ps-alert ps-alert--error'>Select at least one public \
+       repository before continuing.</div>"
   (* Identity/finalization feedback. All copy is generic by design: no
      submitted value, id, conflicting repository, constraint name, or raw
      error ever reaches an alert. *)

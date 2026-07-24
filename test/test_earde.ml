@@ -14223,6 +14223,10 @@ let psp_feedback_cases =
       Psp.Draft_unavailable
       ~copy:"That project setup is no longer available."
       ~class_:"ps-alert--error"
+  ; psp_feedback_check "required: generic empty-selection copy"
+      Psp.Repository_selection_required
+      ~copy:"Select at least one public repository before continuing."
+      ~class_:"ps-alert--error"
   ; psp_case "no feedback renders no alert container in any state" (fun () ->
         List.iter
           (fun state ->
@@ -14263,6 +14267,7 @@ let psp_copy_feedbacks =
   ; ("stale", Some Psp.Selection_stale)
   ; ("invalid", Some Psp.Selection_invalid)
   ; ("unavailable", Some Psp.Draft_unavailable)
+  ; ("required", Some Psp.Repository_selection_required)
   ]
 
 let psp_copy_case (state_name, state) (feedback_name, feedback) =
@@ -14917,10 +14922,14 @@ module Ps_handlers = struct
             ("?selection=stale", Some "repository list changed");
             ("?selection=invalid", Some "We couldn't save");
             ("?selection=unavailable", Some "no longer available");
+            ("?selection=required",
+             Some "Select at least one public repository");
             ("?selection=saved&selection=saved", None);
+            ("?selection=required&selection=required", None);
             ("?selection=", None);
             ("?selection", None);
             ("?selection=Saved", None);
+            ("?selection=Required", None);
             ("?selection=zzfeedbackzz", None);
             ("?unrelated=zz9zz", None);
           ]
@@ -15185,15 +15194,364 @@ module Ps_handlers = struct
         must frag "ps-empty";
         Lwt.return_unit)
 
+  (* === step=details: raw grammar, identity rendering, isolation === *)
+
+  let seed_selection label conn ~user_id ~draft_id ids =
+    let* r =
+      Sel.replace conn ~user_id ~draft_id ~selected_snapshot_ids:ids
+        ~primary_snapshot_id:None
+    in
+    (match r with
+    | Ok () -> ()
+    | Error _ -> Alcotest.fail (label ^ ": seed selection failed"));
+    Lwt.return_unit
+
+  (* The identity step's stable markers. "action='/projects'" needs the
+     closing quote so it can never match the repository form's action. *)
+  let check_identity_step label frag =
+    must frag "Project details";
+    must frag "<form method='POST' action='/projects'";
+    must_not frag "action='/projects/new/repositories'";
+    ignore label
+
+  let check_repository_step label frag =
+    must frag "<form method='POST' action='/projects/new/repositories'";
+    must_not frag "Project details";
+    must_not frag "ps-id-form";
+    must_not frag "name='slug'";
+    must_not frag "name='kind'";
+    ignore label
+
+  let get_step_grammar_case =
+    db_case "GET: strict step=details grammar, raw values never reflected"
+      (fun ~url conn ->
+        let* uid = insert_user conn "psetup_a" in
+        let* _, draft =
+          make_draft conn ~user:uid ~ext_id:941000081L (fun account_id ->
+              [ repo ~account_id ~id:941600811L "alpha"
+              ; repo ~account_id ~id:941600812L "beta"
+              ])
+        in
+        let* ids = snapshot_ids conn draft in
+        let* () =
+          seed_selection "grammar" conn ~user_id:uid ~draft_id:draft
+            [ List.nth ids 0 ]
+        in
+        let pipeline = app_pipeline ~url ~session_user_id:uid in
+        let target query =
+          Printf.sprintf "%s?draft=%Ld%s" get_target draft query
+        in
+        (* Exactly one lowercase step=details enters the identity step;
+           unrelated keys ride along ignored. *)
+        let* () =
+          Lwt_list.iter_s
+            (fun query ->
+              let* frag =
+                get_fragment ("details " ^ query) ~target:(target query)
+                  pipeline
+              in
+              check_identity_step ("details " ^ query) frag;
+              must_not frag "zz9zz";
+              Lwt.return_unit)
+            [ "&step=details"; "&step=details&unrelated=zz9zz" ]
+        in
+        (* Every other shape is the normal repository step — and produces
+           no parsing diagnostic (no alert at all). *)
+        let* () =
+          Lwt_list.iter_s
+            (fun query ->
+              let* frag =
+                get_fragment ("repository " ^ query) ~target:(target query)
+                  pipeline
+              in
+              check_repository_step ("repository " ^ query) frag;
+              must_not frag "ps-alert";
+              (* Raw step fixtures never enter the page. *)
+              must_not frag "zzstepzz";
+              must_not frag "%64etails";
+              must_not frag "details%20";
+              Lwt.return_unit)
+            [ ""; "&step="; "&step"; "&step=details&step=details";
+              "&step=zzstepzz"; "&step=Details"; "&Step=details";
+              "&step=%64etails"; "&step=details%20" ]
+        in
+        Lwt.return_unit)
+
+  let get_identity_step_case =
+    db_case "GET step=details: identity form maps only selected rows"
+      (fun ~url conn ->
+        let* uid = insert_user conn "psetup_a" in
+        let* _, draft =
+          make_draft conn ~user:uid ~ext_id:941000082L (fun account_id ->
+              [ repo ~account_id ~id:941600821L "alpha"
+              ; repo ~account_id ~id:941600822L "beta"
+              ; repo ~account_id ~archived:true ~id:941600823L "legacy"
+              ])
+        in
+        let* ids = snapshot_ids conn draft in
+        let s1 = List.nth ids 0
+        and s2 = List.nth ids 1
+        and s3 = List.nth ids 2 in
+        (* Submitted out of snapshot order: the page must follow the
+           snapshot, not the submission. *)
+        let* () =
+          seed_selection "identity" conn ~user_id:uid ~draft_id:draft
+            [ s3; s1 ]
+        in
+        let pipeline = app_pipeline ~url ~session_user_id:uid in
+        let* frag =
+          get_fragment "identity"
+            ~target:
+              (Printf.sprintf "%s?draft=%Ld&step=details" get_target draft)
+            pipeline
+        in
+        check_identity_step "identity" frag;
+        must frag "Verified through GitHub";
+        Alcotest.(check int) "one form" 1 (ps_count frag "<form");
+        (* Selected rows only, snapshot order, archived state preserved;
+           the unselected row is absent everywhere. *)
+        must frag
+          (Printf.sprintf "<option value='%Ld'>psetup-owner/alpha</option>" s1);
+        must frag
+          (Printf.sprintf
+             "<option value='%Ld'>psetup-owner/legacy (Archived)</option>" s3);
+        ps_order frag
+          (Printf.sprintf "value='%Ld'" s1)
+          (Printf.sprintf "value='%Ld'" s3);
+        Alcotest.(check int) "one summary archived marker" 1
+          (ps_count frag "ps-repo-archived");
+        must_not frag "psetup-owner/beta";
+        must_not frag (Printf.sprintf "'%Ld'" s2);
+        (* Initial identity values: kind project, everything blank, the
+           blank primary option selected — never an automatic primary. *)
+        must frag "<option value='project' selected>";
+        must frag "name='name' maxlength='120' value=''";
+        must frag "name='slug' maxlength='80' value=''";
+        must frag
+          "<textarea name='description' maxlength='2000' rows='6'></textarea>";
+        must frag "name='website_url' maxlength='2048' value=''";
+        must frag "<option value='' selected>No primary repository</option>";
+        Alcotest.(check int) "selected kind and blank primary only" 2
+          (ps_count frag " selected");
+        (* No prefills derived from the account or repositories. *)
+        must_not frag "value='psetup-owner'";
+        must_not frag "value='alpha'";
+        (* Dream's CSRF field plus exactly one application hidden field;
+           no selected-snapshot hidden fields or checkboxes. *)
+        must frag csrf_field_marker;
+        Alcotest.(check int) "one application hidden field" 1
+          (ps_count frag "type='hidden'");
+        must frag
+          (Printf.sprintf "<input type='hidden' name='draft_id' value='%Ld'>"
+             draft);
+        must_not frag "type='checkbox'";
+        must_not frag "name='repository'";
+        (* No GitHub repository, owner, installation, account, or
+           provenance identifiers. *)
+        must_not frag "941000082";
+        must_not frag "941100082";
+        must_not frag "941600821";
+        must_not frag "941600822";
+        must_not frag "941600823";
+        must_not frag "installation";
+        must_not frag "connected_by";
+        Lwt.return_unit)
+
+  let get_details_zero_selection_case =
+    db_case "GET step=details: zero selected rows fall back with feedback"
+      (fun ~url conn ->
+        let* uid = insert_user conn "psetup_a" in
+        let* _, draft =
+          make_draft conn ~user:uid ~ext_id:941000083L (fun account_id ->
+              [ repo ~account_id ~id:941600831L "alpha"
+              ; repo ~account_id ~id:941600832L "beta"
+              ])
+        in
+        let pipeline = app_pipeline ~url ~session_user_id:uid in
+        let* frag =
+          get_fragment "zero selected"
+            ~target:
+              (Printf.sprintf "%s?draft=%Ld&step=details" get_target draft)
+            pipeline
+        in
+        check_repository_step "zero selected" frag;
+        must frag "Select at least one public repository before continuing.";
+        must frag "ps-alert--error";
+        Alcotest.(check int) "two checkboxes" 2
+          (ps_count frag "type='checkbox'");
+        (* No permanent identity fields exist on the fallback. *)
+        must_not frag "name='name'";
+        must_not frag "name='website_url'";
+        must_not frag "primary_snapshot_id";
+        Lwt.return_unit)
+
+  let get_details_isolation_case =
+    db_case "GET step=details: foreign and unavailable drafts stay hidden"
+      (fun ~url conn ->
+        let* uid = insert_user conn "psetup_a" in
+        let* other = insert_user conn "psetup_b" in
+        (* Every probed draft has a saved selection, so any authorization
+           slip would render the identity form. *)
+        let* _, foreign =
+          make_draft ~login:"psetup-foreign" conn ~user:other
+            ~ext_id:941000084L (fun account_id ->
+              [ repo ~account_id ~id:941600841L "foreign-repo" ])
+        in
+        let* foreign_ids = snapshot_ids conn foreign in
+        let* () =
+          seed_selection "foreign" conn ~user_id:other ~draft_id:foreign
+            foreign_ids
+        in
+        let* _, expired =
+          make_draft ~login:"psetup-expired" conn ~user:uid
+            ~ext_id:941000085L (fun account_id ->
+              [ repo ~account_id ~id:941600851L "expired-repo" ])
+        in
+        let* expired_ids = snapshot_ids conn expired in
+        let* () =
+          seed_selection "expired" conn ~user_id:uid ~draft_id:expired
+            expired_ids
+        in
+        let* () = exec conn "expire" Pod_store.q_backdate_draft expired in
+        let* _, completed =
+          make_draft ~login:"psetup-completed" conn ~user:uid
+            ~ext_id:941000086L (fun account_id ->
+              [ repo ~account_id ~id:941600861L "completed-repo" ])
+        in
+        let* completed_ids = snapshot_ids conn completed in
+        let* () =
+          seed_selection "completed" conn ~user_id:uid ~draft_id:completed
+            completed_ids
+        in
+        let* () =
+          exec conn "complete" Pod_store.q_complete_draft completed
+        in
+        let* rev_inst, revoked =
+          make_draft ~login:"psetup-revoked" conn ~user:uid
+            ~ext_id:941000087L (fun account_id ->
+              [ repo ~account_id ~id:941600871L "revoked-repo" ])
+        in
+        let* revoked_ids = snapshot_ids conn revoked in
+        let* () =
+          seed_selection "revoked" conn ~user_id:uid ~draft_id:revoked
+            revoked_ids
+        in
+        let* () =
+          exec conn "revoke" Pod_read.q_set_installation_status
+            (rev_inst, "revoked", true)
+        in
+        let pipeline = app_pipeline ~url ~session_user_id:uid in
+        let* () =
+          Lwt_list.iter_s
+            (fun (label, draft_id, probed_ids) ->
+              let* frag =
+                get_fragment label
+                  ~target:
+                    (Printf.sprintf "%s?draft=%Ld&step=details" get_target
+                       draft_id)
+                  pipeline
+              in
+              (* The existing anti-enumeration state: generic unavailable
+                 feedback, no identity form, no form values, and nothing
+                 about the probed draft. *)
+              must frag "no longer available";
+              must_not frag "Project details";
+              must_not frag "ps-id-form";
+              must_not frag "action='/projects'";
+              must_not frag (label ^ "-repo");
+              must_not frag ("psetup-" ^ label);
+              List.iter
+                (fun id ->
+                  must_not frag (Printf.sprintf "value='%Ld'" id))
+                probed_ids;
+              Lwt.return_unit)
+            [ ("foreign", foreign, foreign_ids);
+              ("expired", expired, expired_ids);
+              ("completed", completed, completed_ids);
+              ("revoked", revoked, revoked_ids);
+            ]
+        in
+        Lwt.return_unit)
+
+  let get_details_list_case =
+    db_case "GET step=details without a draft: list behavior applies"
+      (fun ~url conn ->
+        let details_target = get_target ^ "?step=details" in
+        (* Zero drafts: the plain empty state. *)
+        let* u0 = insert_user conn "psetup_a" in
+        let* frag =
+          get_fragment "zero drafts" ~target:details_target
+            (app_pipeline ~url ~session_user_id:u0)
+        in
+        must frag "ps-empty";
+        must_not frag "Project details";
+        must_not frag "<form";
+        (* One draft with a saved selection: loaded and taken to the
+           identity step. *)
+        let* u1 = insert_user conn "psetup_b" in
+        let* _, d1 =
+          make_draft conn ~user:u1 ~ext_id:941000088L (fun account_id ->
+              [ repo ~account_id ~id:941600881L "alpha"
+              ; repo ~account_id ~id:941600882L "beta"
+              ])
+        in
+        let* ids = snapshot_ids conn d1 in
+        let* () =
+          seed_selection "one selected" conn ~user_id:u1 ~draft_id:d1
+            [ List.nth ids 0 ]
+        in
+        let pipeline1 = app_pipeline ~url ~session_user_id:u1 in
+        let* frag =
+          get_fragment "one with selection" ~target:details_target pipeline1
+        in
+        check_identity_step "one with selection" frag;
+        (* One draft without a selection: the selected-repository rule
+           keeps the repository step with the dedicated feedback. *)
+        let* u2 = insert_user conn "psetup_c" in
+        let* _, _ =
+          make_draft ~login:"psetup-bare" conn ~user:u2 ~ext_id:941000089L
+            (fun account_id ->
+              [ repo ~account_id ~id:941600891L "gamma" ])
+        in
+        let* frag =
+          get_fragment "one without selection" ~target:details_target
+            (app_pipeline ~url ~session_user_id:u2)
+        in
+        check_repository_step "one without selection" frag;
+        must frag "Select at least one public repository before continuing.";
+        (* Several drafts: always the chooser — never the most recent one,
+           and nothing selected automatically. *)
+        let* _, d2 =
+          make_draft ~login:"psetup-second" conn ~user:u1
+            ~ext_id:941000090L (fun account_id ->
+              [ repo ~account_id ~id:941600901L "delta" ])
+        in
+        let* ids2 = snapshot_ids conn d2 in
+        let* () =
+          seed_selection "second" conn ~user_id:u1 ~draft_id:d2 ids2
+        in
+        let* frag =
+          get_fragment "several" ~target:details_target pipeline1
+        in
+        must frag "ps-draft-list";
+        must_not frag "Project details";
+        must_not frag "<form";
+        must_not frag " checked";
+        must frag (Printf.sprintf "href='/projects/new?draft=%Ld'" d1);
+        must frag (Printf.sprintf "href='/projects/new?draft=%Ld'" d2);
+        Lwt.return_unit)
+
   let get_db_suite =
     [ get_empty_and_grammar_case; get_single_draft_case; get_chooser_case;
       get_hidden_states_case; get_selection_state_case;
-      get_server_error_case ]
+      get_server_error_case; get_step_grammar_case; get_identity_step_case;
+      get_details_zero_selection_case; get_details_isolation_case;
+      get_details_list_case ]
 
   (* === POST behavior === *)
 
   let post_success_case =
-    db_case "POST: selection replaced, PRG redirect, saved feedback"
+    db_case "POST: selection replaced, PRG redirect to the details step"
       (fun ~url conn ->
         let* uid = insert_user conn "psetup_a" in
         let* _, draft =
@@ -15221,9 +15579,9 @@ module Ps_handlers = struct
             pipeline
         in
         let location =
-          Printf.sprintf "/projects/new?draft=%Ld&selection=saved" draft
+          Printf.sprintf "/projects/new?draft=%Ld&step=details" draft
         in
-        let* () = check_redirect_lwt "saved" location response in
+        let* () = check_redirect_lwt "details" location response in
         let* () =
           check_flags "complete replacement"
             [ flag_sig s1 ~selected:true ~primary:false;
@@ -15235,12 +15593,24 @@ module Ps_handlers = struct
         let* _, (_, (_, _, expires_after)) = Pod_store.draft_row conn draft in
         Alcotest.(check (float 0.)) "expiry unchanged" expires_before
           expires_after;
-        (* The redirect target renders the saved feedback with the state
-           checked — and, being a GET, repeating it mutates nothing. *)
+        (* The redirect target is the project-details step over the two
+           selected rows — no repository-success alert — and, being a GET,
+           repeating it mutates nothing. *)
         let* frag =
           get_fragment "follow-up" ~cookie ~target:location pipeline
         in
-        must frag "Repository selection saved.";
+        must frag "Project details";
+        must frag "<form method='POST' action='/projects'";
+        must_not frag "Repository selection saved.";
+        must frag (Printf.sprintf "<option value='%Ld'>" s1);
+        must frag (Printf.sprintf "<option value='%Ld'>" s3);
+        must_not frag (Printf.sprintf "'%Ld'" s2);
+        (* The repository step still reflects the durable selection. *)
+        let* frag =
+          get_fragment "repository step" ~cookie
+            ~target:(Printf.sprintf "%s?draft=%Ld" get_target draft)
+            pipeline
+        in
         must frag (Printf.sprintf "value='%Ld' checked" s1);
         must frag (Printf.sprintf "value='%Ld' checked" s3);
         Alcotest.(check int) "two checked" 2 (ps_count frag " checked");
@@ -15252,7 +15622,8 @@ module Ps_handlers = struct
           conn draft)
 
   let post_empty_selection_case =
-    db_case "POST: empty selection clears every repository" (fun ~url conn ->
+    db_case "POST: empty selection clears every repository, stays on the step"
+      (fun ~url conn ->
         let* uid = insert_user conn "psetup_a" in
         let* _, draft =
           make_draft conn ~user:uid ~ext_id:941000062L (fun account_id ->
@@ -15277,16 +15648,27 @@ module Ps_handlers = struct
               [ ("draft_id", Int64.to_string draft); ("dream.csrf", token) ]
             pipeline
         in
-        let* () =
-          check_redirect_lwt "cleared"
-            (Printf.sprintf "/projects/new?draft=%Ld&selection=saved" draft)
-            response
+        (* The empty selection is saved, but the flow stays on the
+           repository step with the dedicated feedback — never step=details. *)
+        let location =
+          Printf.sprintf "/projects/new?draft=%Ld&selection=required" draft
         in
-        check_flags "everything unselected"
-          [ flag_sig s1 ~selected:false ~primary:false;
-            flag_sig s2 ~selected:false ~primary:false;
-          ]
-          conn draft)
+        let* () = check_redirect_lwt "cleared" location response in
+        let* () =
+          check_flags "everything unselected"
+            [ flag_sig s1 ~selected:false ~primary:false;
+              flag_sig s2 ~selected:false ~primary:false;
+            ]
+            conn draft
+        in
+        let* frag =
+          get_fragment "follow-up" ~cookie ~target:location pipeline
+        in
+        must frag "Select at least one public repository before continuing.";
+        must frag "<form method='POST' action='/projects/new/repositories'";
+        must_not frag "Project details";
+        must_not frag " checked";
+        Lwt.return_unit)
 
   let post_stale_case =
     db_case "POST: refreshed snapshot turns old ids into stale feedback"
@@ -15637,11 +16019,66 @@ module Ps_handlers = struct
           ]
           conn draft)
 
+  let post_details_race_case =
+    db_case "POST then refresh: redirected GET falls back to repositories"
+      (fun ~url conn ->
+        let* uid = insert_user conn "psetup_a" in
+        let* _, draft =
+          make_draft conn ~user:uid ~ext_id:941000091L (fun account_id ->
+              [ repo ~account_id ~id:941600911L "old-alpha"
+              ; repo ~account_id ~id:941600912L "old-beta"
+              ])
+        in
+        let* old_ids = snapshot_ids conn draft in
+        let pipeline = app_pipeline ~url ~session_user_id:uid in
+        let* cookie, token, _ = open_form "form" pipeline in
+        let* response =
+          do_post ~cookie
+            ~fields:
+              (( "draft_id", Int64.to_string draft )
+               :: List.map
+                    (fun id -> ("repository", Int64.to_string id))
+                    old_ids
+               @ [ ("dream.csrf", token) ])
+            pipeline
+        in
+        let location =
+          Printf.sprintf "/projects/new?draft=%Ld&step=details" draft
+        in
+        let* () = check_redirect_lwt "details" location response in
+        (* A GitHub refresh replaces the snapshot between the successful
+           POST and the redirected GET: the saved selection is gone. *)
+        let* () =
+          refresh_snapshot conn ~user:uid ~ext_id:941000091L
+            (fun account_id ->
+              [ repo ~account_id ~id:941600913L "fresh-alpha"
+              ; repo ~account_id ~id:941600914L "fresh-beta"
+              ])
+        in
+        let* frag =
+          get_fragment "raced follow-up" ~cookie ~target:location pipeline
+        in
+        (* The database is authoritative: back to the repository step with
+           the dedicated feedback, no identity form, no stale snapshot ids,
+           nothing checked. *)
+        must frag "Select at least one public repository before continuing.";
+        must frag "<form method='POST' action='/projects/new/repositories'";
+        must_not frag "Project details";
+        must_not frag "ps-id-form";
+        must frag "psetup-owner/fresh-alpha";
+        must frag "psetup-owner/fresh-beta";
+        must_not frag "old-alpha";
+        must_not frag " checked";
+        List.iter
+          (fun id -> must_not frag (Printf.sprintf "value='%Ld'" id))
+          old_ids;
+        Lwt.return_unit)
+
   let post_db_suite =
     [ post_success_case; post_empty_selection_case; post_stale_case;
       post_invalid_form_db_case; post_unavailable_case;
       post_rejected_no_mutation_case; post_storage_error_case;
-      post_inconsistent_case ]
+      post_inconsistent_case; post_details_race_case ]
 end
 
 (* --- Page rendering with a live request: the framework CSRF field.
