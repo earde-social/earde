@@ -16132,6 +16132,766 @@ let pi_privacy_cases =
           rejections)
   ]
 
+(* ===== Project identity form: strict pure parser =====
+   DB-free. Only field grammar and scalar identifiers are asserted here —
+   content rules stay with Project_identity, and the delegation cases prove
+   the domain errors originate from create_identity, not from the parser.
+   Rejection fixtures are distinctive and only ever asserted through
+   booleans against the nullary Invalid_form (no public printer exists —
+   a compile-time property of the mli), so no submitted byte can reach
+   test output. *)
+module Pif = Earde.Project_identity_form
+
+let pif_case name f = Alcotest.test_case name `Quick f
+
+(* Structurally valid baseline; every case overrides only what it probes.
+   The default kind is organization so a blank primary stays domain-valid
+   in delegation cases. *)
+let pif_fields ?(draft = "7") ?(kind = "organization") ?(name = "Example")
+    ?(slug = "example") ?(description = "") ?(website = "") ?(primary = "")
+    () =
+  [ ("draft_id", draft)
+  ; ("kind", kind)
+  ; ("name", name)
+  ; ("slug", slug)
+  ; ("description", description)
+  ; ("website_url", website)
+  ; ("primary_snapshot_id", primary)
+  ]
+
+let pif_expect_ok fields =
+  match Pif.of_fields fields with
+  | Ok t -> t
+  | Error Pif.Invalid_form -> Alcotest.fail "expected a valid form"
+
+let pif_ok ?draft ?kind ?name ?slug ?description ?website ?primary () =
+  pif_expect_ok
+    (pif_fields ?draft ?kind ?name ?slug ?description ?website ?primary ())
+
+let pif_reject name fields =
+  pif_case name (fun () ->
+      Alcotest.(check bool) "rejected" true
+        (match Pif.of_fields fields with
+        | Error Pif.Invalid_form -> true
+        | Ok _ -> false))
+
+let pif_recognized_fields =
+  [ "draft_id"; "kind"; "name"; "slug"; "description"; "website_url";
+    "primary_snapshot_id" ]
+
+let pif_valid_cases =
+  [ pif_case "every canonical kind parses to its variant" (fun () ->
+        List.iter
+          (fun (raw, expected) ->
+            Alcotest.(check bool) ("kind " ^ raw) true
+              (Pif.kind (pif_ok ~kind:raw ()) = expected))
+          [ ("project", Pi.Project)
+          ; ("organization", Pi.Organization)
+          ; ("ecosystem", Pi.Ecosystem)
+          ; ("foundation", Pi.Foundation)
+          ; ("working_group", Pi.Working_group)
+          ; ("other", Pi.Other)
+          ])
+  ; pif_case "text fields preserved byte-exactly, never canonicalized"
+      (fun () ->
+        let t =
+          pif_ok ~name:"  Progetto Citt\xc3\xa0  " ~slug:"  OCaml-Platform  "
+            ~description:"line one\r\nline two"
+            ~website:" HTTPS://Example.com/caff\xc3\xa8 " ()
+        in
+        Alcotest.(check string) "name untouched" "  Progetto Citt\xc3\xa0  "
+          (Pif.name t);
+        Alcotest.(check string) "slug untouched" "  OCaml-Platform  "
+          (Pif.slug t);
+        Alcotest.(check string) "description untouched" "line one\r\nline two"
+          (Pif.description t);
+        Alcotest.(check string) "website untouched"
+          " HTTPS://Example.com/caff\xc3\xa8 "
+          (Pif.website_url t))
+  ; pif_case "empty description and website are retained as empty strings"
+      (fun () ->
+        let t = pif_ok ~description:"" ~website:"" () in
+        Alcotest.(check string) "description" "" (Pif.description t);
+        Alcotest.(check string) "website" "" (Pif.website_url t))
+  ; pif_case "blank primary parses to None" (fun () ->
+        Alcotest.(check (option int64)) "primary" None
+          (Pif.primary_snapshot_id (pif_ok ~primary:"" ())))
+  ; pif_case "positive primary parses exactly" (fun () ->
+        Alcotest.(check (option int64)) "primary" (Some 31L)
+          (Pif.primary_snapshot_id (pif_ok ~primary:"31" ())))
+  ; pif_case "leading zeroes accepted for draft and primary ids" (fun () ->
+        let t = pif_ok ~draft:"007" ~primary:"0042" () in
+        Alcotest.(check int64) "draft id" 7L (Pif.draft_id t);
+        Alcotest.(check (option int64)) "primary" (Some 42L)
+          (Pif.primary_snapshot_id t))
+  ; pif_case "largest representable int64 accepted for both ids" (fun () ->
+        let big = Int64.to_string Int64.max_int in
+        let t = pif_ok ~draft:big ~primary:big () in
+        Alcotest.(check int64) "draft id" Int64.max_int (Pif.draft_id t);
+        Alcotest.(check (option int64)) "primary" (Some Int64.max_int)
+          (Pif.primary_snapshot_id t))
+  ; pif_case "field order does not matter" (fun () ->
+        let t = pif_expect_ok (List.rev (pif_fields ~primary:"5" ())) in
+        Alcotest.(check int64) "draft id" 7L (Pif.draft_id t);
+        Alcotest.(check (option int64)) "primary" (Some 5L)
+          (Pif.primary_snapshot_id t))
+  ]
+
+let pif_missing_cases =
+  List.map
+    (fun field ->
+      pif_reject ("missing " ^ field)
+        (List.filter (fun (k, _) -> k <> field) (pif_fields ())))
+    pif_recognized_fields
+
+let pif_duplicate_cases =
+  List.map
+    (fun field ->
+      pif_reject ("duplicate " ^ field)
+        (let fields = pif_fields ~primary:"5" () in
+         fields @ List.filter (fun (k, _) -> k = field) fields))
+    pif_recognized_fields
+
+(* Renames one recognized field, producing an unknown name (and a missing
+   recognized one) in a single otherwise-valid submission. *)
+let pif_rename field replacement =
+  List.map
+    (fun (k, v) -> if k = field then (replacement, v) else (k, v))
+    (pif_fields ())
+
+let pif_grammar_cases =
+  pif_missing_cases @ pif_duplicate_cases
+  @ [ pif_reject "empty field set" []
+    ; pif_reject "unknown repository field"
+        (pif_fields () @ [ ("repository", "1") ])
+    ; pif_reject "unknown submit-style field"
+        (pif_fields () @ [ ("submit", "create") ])
+    ; pif_reject "dream.csrf is not recognized by the pure parser"
+        (pif_fields () @ [ ("dream.csrf", "token") ])
+    ; pif_reject "capitalized draft_id name" (pif_rename "draft_id" "Draft_id")
+    ; pif_reject "capitalized kind name" (pif_rename "kind" "Kind")
+    ; pif_reject "uppercase name field" (pif_rename "name" "NAME")
+    ; pif_reject "capitalized slug name" (pif_rename "slug" "Slug")
+    ; pif_reject "capitalized description name"
+        (pif_rename "description" "Description")
+    ; pif_reject "capitalized website name"
+        (pif_rename "website_url" "Website_url")
+    ; pif_reject "capitalized primary name"
+        (pif_rename "primary_snapshot_id" "Primary_snapshot_id")
+    ; pif_reject "field name with trailing space" (pif_rename "name" "name ")
+    ; pif_reject "field name with leading space" (pif_rename "slug" " slug")
+    ]
+
+let pif_draft_cases =
+  List.map
+    (fun (label, raw) ->
+      pif_reject ("draft id: " ^ label) (pif_fields ~draft:raw ()))
+    [ ("blank", "")
+    ; ("zero", "0")
+    ; ("all zeroes", "000")
+    ; ("negative", "-5")
+    ; ("plus-signed", "+5")
+    ; ("leading whitespace", " 5")
+    ; ("trailing whitespace", "5 ")
+    ; ("newline-suffixed", "5\n")
+    ; ("decimal point", "5.0")
+    ; ("hexadecimal", "0x10")
+    ; ("underscore separator", "1_000")
+    ; ("int64 overflow", "9223372036854775808")
+    ]
+
+let pif_kind_cases =
+  List.map
+    (fun (label, raw) ->
+      pif_reject ("kind: " ^ label) (pif_fields ~kind:raw ()))
+    [ ("blank", "")
+    ; ("capitalized", "Project")
+    ; ("uppercase", "PROJECT")
+    ; ("leading whitespace", " project")
+    ; ("trailing whitespace", "project ")
+    ; ("hyphenated working group", "working-group")
+    ; ("collapsed working group", "workinggroup")
+    ; ("alias org", "org")
+    ; ("alias github_organization", "github_organization")
+    ; ("alias initiative", "initiative")
+    ; ("unknown value", "unknown")
+    ]
+
+let pif_primary_cases =
+  List.map
+    (fun (label, raw) ->
+      pif_reject ("primary id: " ^ label) (pif_fields ~primary:raw ()))
+    [ ("zero", "0")
+    ; ("all zeroes", "000")
+    ; ("negative", "-3")
+    ; ("plus-signed", "+3")
+    ; ("leading whitespace", " 3")
+    ; ("trailing whitespace", "3 ")
+    ; ("decimal point", "3.0")
+    ; ("hexadecimal", "0x3")
+    ; ("underscore separator", "1_0")
+    ; ("int64 overflow", "9223372036854775808")
+    ]
+
+(* Exact propagation: structurally valid forms whose content the domain
+   rejects. The parser accepted every one of these submissions, so the
+   errors demonstrably come from Project_identity.create. *)
+let pif_domain_error name expected result =
+  pif_case name (fun () ->
+      Alcotest.(check bool) "exact domain error" true
+        (match result with Error e -> e = expected | Ok _ -> false))
+
+let pif_delegation_cases =
+  [ pif_case "create_identity canonicalizes through the real domain"
+      (fun () ->
+        let t =
+          pif_ok ~kind:"project" ~name:"  OCaml Platform  " ~slug:" OCaml "
+            ~description:"  " ~website:"  " ~primary:"20" ()
+        in
+        match Pif.create_identity t ~selected_snapshot_ids:[ 10L; 20L ] with
+        | Ok identity ->
+            Alcotest.(check bool) "kind survives" true
+              (Pi.kind identity = Pi.Project);
+            Alcotest.(check string) "canonical name" "OCaml Platform"
+              (Pi.name identity);
+            Alcotest.(check string) "canonical slug" "ocaml"
+              (Pi.slug identity);
+            Alcotest.(check (option string))
+              "empty description collapses to None" None
+              (Pi.description identity);
+            Alcotest.(check (option string)) "empty website collapses to None"
+              None
+              (Pi.website_url identity);
+            Alcotest.(check (option int64)) "primary" (Some 20L)
+              (Pi.primary_snapshot_id identity)
+        | Error _ -> Alcotest.fail "expected a valid identity")
+  ; pif_case "selected context is call context, never parser state" (fun () ->
+        (* One parsed value, two verdicts: membership of the same primary
+           depends only on the supplied authoritative list, so no selection
+           can have been retained in t. *)
+        let t = pif_ok ~primary:"20" () in
+        (match Pif.create_identity t ~selected_snapshot_ids:[ 20L ] with
+        | Ok _ -> ()
+        | Error _ -> Alcotest.fail "expected a valid identity");
+        Alcotest.(check bool) "different context rejects the same t" true
+          (match Pif.create_identity t ~selected_snapshot_ids:[ 21L ] with
+          | Error Pi.Invalid_primary_repository -> true
+          | Ok _ | Error _ -> false))
+  ; pif_domain_error "invalid selected context propagates"
+      Pi.Invalid_repository_selection
+      (Pif.create_identity (pif_ok ()) ~selected_snapshot_ids:[ 0L ])
+  ; pif_domain_error "empty selected context propagates"
+      Pi.No_repositories_selected
+      (Pif.create_identity (pif_ok ()) ~selected_snapshot_ids:[])
+  ; pif_domain_error "invalid name propagates" Pi.Invalid_name
+      (Pif.create_identity (pif_ok ~name:"   " ()) ~selected_snapshot_ids:[ 1L ])
+  ; pif_domain_error "invalid slug propagates" Pi.Invalid_slug
+      (Pif.create_identity
+         (pif_ok ~slug:"bad slug" ())
+         ~selected_snapshot_ids:[ 1L ])
+  ; pif_domain_error "reserved slug propagates" Pi.Reserved_slug
+      (Pif.create_identity (pif_ok ~slug:"new" ()) ~selected_snapshot_ids:[ 1L ])
+  ; pif_domain_error "invalid description propagates" Pi.Invalid_description
+      (Pif.create_identity
+         (pif_ok ~description:(String.make 2001 'a') ())
+         ~selected_snapshot_ids:[ 1L ])
+  ; pif_domain_error "invalid website propagates" Pi.Invalid_website_url
+      (Pif.create_identity
+         (pif_ok ~website:"example.com" ())
+         ~selected_snapshot_ids:[ 1L ])
+  ; pif_domain_error "non-member primary propagates"
+      Pi.Invalid_primary_repository
+      (Pif.create_identity (pif_ok ~primary:"31" ()) ~selected_snapshot_ids:[ 1L ])
+  ; pif_domain_error "missing project primary propagates"
+      Pi.Primary_repository_required
+      (Pif.create_identity
+         (pif_ok ~kind:"project" ~primary:"" ())
+         ~selected_snapshot_ids:[ 1L ])
+  ]
+
+let pif_privacy_cases =
+  [ pif_case "every rejection is the same payload-free error" (fun () ->
+        (* Distinctive fixture markers: were Invalid_form to carry any
+           payload, these equalities could not all hold. *)
+        let rejections =
+          [ Pif.of_fields (pif_fields ~draft:"pif-fixture-draft-zz1" ())
+          ; Pif.of_fields (pif_fields ~kind:"pif-fixture-kind-zz2" ())
+          ; Pif.of_fields (pif_fields ~primary:"pif-fixture-primary-zz3" ())
+          ; Pif.of_fields
+              (pif_fields () @ [ ("pif-fixture-field-zz4", "zz5") ])
+          ; Pif.of_fields
+              (List.filter (fun (k, _) -> k <> "name") (pif_fields ()))
+          ; Pif.of_fields []
+          ]
+        in
+        List.iter
+          (fun r ->
+            Alcotest.(check bool) "Invalid_form" true
+              (r = Error Pif.Invalid_form))
+          rejections)
+  ]
+
+(* ===== Identity page state (Configure_identity) =====
+   Same fragment-scoped technique as the repository-selection page tests:
+   assertions pin only what the feature templates introduce inside the
+   shared create-flow layout. *)
+
+let pip_case = psp_case
+
+let pip_repo ?(id = 501L) ?(full_name = "octo-org/widgets")
+    ?(archived = false) () : Psp.identity_repository =
+  { Psp.snapshot_id = id; full_name; is_archived = archived }
+
+let pip_values ?(kind = Pi.Organization) ?(name = "Widgets")
+    ?(slug = "widgets") ?(description = "") ?(website = "") ?primary () :
+    Psp.identity_values =
+  { Psp.kind; name; slug; description; website_url = website;
+    primary_snapshot_id = primary }
+
+let pip_config ?draft ?(repos = [ pip_repo () ]) ?values () :
+    Psp.identity_configuration =
+  { Psp.draft = (match draft with Some d -> d | None -> ps_cfg_draft);
+    selected_repositories = repos;
+    values = (match values with Some v -> v | None -> pip_values ()) }
+
+let pip_r1 = pip_repo ~id:101L ~full_name:"octo-org/first" ()
+
+let pip_r2 = pip_repo ~id:102L ~full_name:"octo-org/second" ~archived:true ()
+
+let pip_r3 = pip_repo ~id:103L ~full_name:"octo-org/legacy" ()
+
+let pip_cfg =
+  pip_config
+    ~repos:[ pip_r1; pip_r2; pip_r3 ]
+    ~values:
+      (pip_values ~kind:Pi.Ecosystem ~name:"Widgets" ~slug:"widgets"
+         ~description:"A toolkit" ~website:"https://example.com"
+         ~primary:102L ())
+    ()
+
+let pip_render ?feedback state = ps_fragment (render_ps ?feedback state)
+
+(* One named <select> element in isolation, so selected-option assertions
+   cannot leak across the kind and primary controls. *)
+let pip_select frag select_name =
+  let marker = Printf.sprintf "<select name='%s'>" select_name in
+  match ps_index_of frag marker 0 with
+  | None -> Alcotest.fail "expected select element"
+  | Some s -> (
+      match ps_index_of frag "</select>" s with
+      | None -> Alcotest.fail "unterminated select element"
+      | Some e -> String.sub frag s (e - s))
+
+let pip_structure_cases =
+  [ pip_case "separate project-details step with one POST /projects form"
+      (fun () ->
+        let frag = pip_render (Psp.Configure_identity pip_cfg) in
+        ps_must frag "Project details";
+        ps_must frag
+          "Describe the verified project before choosing its community home.";
+        ps_must frag "Verified through GitHub";
+        Alcotest.(check int) "one form" 1 (ps_count frag "<form");
+        ps_must frag "<form method='POST' action='/projects'";
+        ps_must_not frag "action='/projects/new/repositories'")
+  ; pip_case "application field set is exactly the seven identity fields"
+      (fun () ->
+        let frag = pip_render (Psp.Configure_identity pip_cfg) in
+        Alcotest.(check int) "one hidden input" 1
+          (ps_count frag "type='hidden'");
+        ps_must frag "<input type='hidden' name='draft_id' value='11'>";
+        Alcotest.(check int) "named fields" 7 (ps_count frag " name='");
+        List.iter
+          (fun field -> ps_must frag (Printf.sprintf "name='%s'" field))
+          [ "draft_id"; "kind"; "name"; "slug"; "description"; "website_url";
+            "primary_snapshot_id" ];
+        ps_must_not frag "installation_id";
+        ps_must_not frag "account_id";
+        ps_must_not frag "name='user_id'";
+        ps_must_not frag "github_repository_id";
+        ps_must_not frag "name='state'";
+        ps_must_not frag "token";
+        ps_must_not frag "redirect")
+  ; pip_case "nameless submit button with the required copy" (fun () ->
+        let frag = pip_render (Psp.Configure_identity pip_cfg) in
+        ps_must frag "Create project</button>";
+        ps_must_not frag "<button type='submit' name=";
+        ps_must_not frag "button name=")
+  ; pip_case "no community-home fields or chooser in the identity state"
+      (fun () ->
+        let frag = pip_render (Psp.Configure_identity pip_cfg) in
+        ps_must_not frag "name='community";
+        ps_must_not frag "community_id";
+        ps_must_not frag "community_slug";
+        ps_must_not frag "Choose which GitHub project setup")
+  ]
+
+let pip_kind_cases =
+  [ pip_case "exactly the six canonical kind values, no aliases" (fun () ->
+        let sel =
+          pip_select (pip_render (Psp.Configure_identity pip_cfg)) "kind"
+        in
+        Alcotest.(check int) "six options" 6 (ps_count sel "<option");
+        List.iter
+          (fun value ->
+            Alcotest.(check int)
+              ("one option " ^ value)
+              1
+              (ps_count sel (Printf.sprintf "<option value='%s'" value)))
+          [ "project"; "organization"; "ecosystem"; "foundation";
+            "working_group"; "other" ];
+        ps_must_not sel "value='working-group'";
+        ps_must_not sel "value='github_organization'";
+        ps_must_not sel "value='initiative'";
+        ps_must sel "A project";
+        ps_must sel "A GitHub organization";
+        ps_must sel "An ecosystem";
+        ps_must sel "A foundation";
+        ps_must sel "A working group";
+        ps_must sel "Another open-source initiative")
+  ; pip_case "exactly the represented kind is selected" (fun () ->
+        let sel =
+          pip_select (pip_render (Psp.Configure_identity pip_cfg)) "kind"
+        in
+        ps_must sel "<option value='ecosystem' selected>";
+        Alcotest.(check int) "one selected kind" 1 (ps_count sel " selected"))
+  ; pip_case "every kind value renders as the selected one" (fun () ->
+        List.iter
+          (fun kind ->
+            let config =
+              pip_config ~values:(pip_values ~kind ()) ()
+            in
+            let sel =
+              pip_select (pip_render (Psp.Configure_identity config)) "kind"
+            in
+            ps_must sel
+              (Printf.sprintf "<option value='%s' selected>"
+                 (Pi.string_of_kind kind));
+            Alcotest.(check int) "one selected kind" 1
+              (ps_count sel " selected"))
+          pi_all_kinds)
+  ]
+
+let pip_value_cases =
+  [ pip_case "values populate their fields exactly" (fun () ->
+        let frag = pip_render (Psp.Configure_identity pip_cfg) in
+        ps_must frag
+          "<input type='text' name='name' maxlength='120' value='Widgets'>";
+        ps_must frag
+          "<input type='text' name='slug' maxlength='80' value='widgets'>";
+        ps_must frag
+          "<textarea name='description' maxlength='2000' rows='6'>A \
+           toolkit</textarea>";
+        ps_must frag
+          "<input type='url' name='website_url' maxlength='2048' \
+           value='https://example.com'>";
+        (* The website is an editable value, never an actionable link. *)
+        ps_must_not frag "href='https://example.com'")
+  ; pip_case "hostile values are escaped everywhere" (fun () ->
+        let hostile_values =
+          pip_values ~name:"x<b>&\"y'" ~slug:"sl<u>g"
+            ~description:"a & b <i>italic</i>"
+            ~website:"https://example.com/'><img src=x onerror=alert(1)>" ()
+        in
+        let hostile_repo =
+          pip_repo ~id:77L ~full_name:"evil<script>alert(1)</script>" ()
+        in
+        let frag =
+          pip_render
+            (Psp.Configure_identity
+               (pip_config ~repos:[ hostile_repo ] ~values:hostile_values ()))
+        in
+        ps_must_not frag "<b>";
+        ps_must frag "x&lt;b&gt;&amp;&quot;y&#39;";
+        ps_must_not frag "<u>";
+        ps_must frag "sl&lt;u&gt;g";
+        ps_must_not frag "<i>";
+        ps_must frag "a &amp; b &lt;i&gt;italic&lt;/i&gt;";
+        (* The repository name is escaped both in the summary and in its
+           option label. *)
+        ps_must_not frag "<script";
+        Alcotest.(check int) "escaped twice" 2
+          (ps_count frag "evil&lt;script&gt;");
+        (* The hostile URL cannot break out of the value attribute. *)
+        ps_must_not frag "'><img";
+        ps_must_not frag "<img")
+  ]
+
+let pip_primary_cases =
+  [ pip_case "blank option plus one option per repository, supplied order"
+      (fun () ->
+        let sel =
+          pip_select
+            (pip_render (Psp.Configure_identity pip_cfg))
+            "primary_snapshot_id"
+        in
+        Alcotest.(check int) "four options" 4 (ps_count sel "<option");
+        ps_must sel "<option value=''>No primary repository</option>";
+        ps_must sel "<option value='101'>octo-org/first</option>";
+        ps_must sel
+          "<option value='102' selected>octo-org/second (Archived)</option>";
+        ps_must sel "<option value='103'>octo-org/legacy</option>";
+        ps_order sel "value='101'" "value='102'";
+        ps_order sel "value='102'" "value='103'";
+        Alcotest.(check int) "one selected option" 1 (ps_count sel " selected"))
+  ; pip_case "no primary renders the blank option selected" (fun () ->
+        let config = pip_config ~repos:[ pip_r1; pip_r2; pip_r3 ] () in
+        let sel =
+          pip_select
+            (pip_render (Psp.Configure_identity config))
+            "primary_snapshot_id"
+        in
+        ps_must sel "<option value='' selected>No primary repository</option>";
+        Alcotest.(check int) "one selected option" 1 (ps_count sel " selected"))
+  ; pip_case "archived marker in summary and option label" (fun () ->
+        let frag = pip_render (Psp.Configure_identity pip_cfg) in
+        Alcotest.(check int) "one summary archived marker" 1
+          (ps_count frag "ps-repo-archived");
+        ps_must frag "octo-org/second (Archived)";
+        (* Archived repositories stay offered, never disabled. *)
+        ps_must_not frag "disabled")
+  ]
+
+let pip_separation_cases =
+  [ pip_case "no repository checkboxes or hidden snapshot ids" (fun () ->
+        let frag = pip_render (Psp.Configure_identity pip_cfg) in
+        ps_must_not frag "type='checkbox'";
+        ps_must_not frag "name='repository'";
+        Alcotest.(check int) "single hidden field" 1
+          (ps_count frag "type='hidden'"))
+  ; pip_case "summary lists selected repositories in supplied order"
+      (fun () ->
+        let frag = pip_render (Psp.Configure_identity pip_cfg) in
+        ps_order frag "octo-org/first" "octo-org/second";
+        ps_order frag "octo-org/second" "octo-org/legacy")
+  ; pip_case "structural link back to the repository-selection step"
+      (fun () ->
+        let frag = pip_render (Psp.Configure_identity pip_cfg) in
+        ps_must frag "href='/projects/new?draft=11'";
+        ps_must frag "Change repository selection";
+        (* No snapshot id rides in the back link: the draft id is the only
+           query parameter, and no query key carries a snapshot id. *)
+        ps_must_not frag "draft=11&";
+        ps_must_not frag "snapshot_id=")
+  ]
+
+let pip_corrupt_cases =
+  [ pip_case "zero selected repositories renders no identity form" (fun () ->
+        let frag =
+          pip_render (Psp.Configure_identity (pip_config ~repos:[] ()))
+        in
+        ps_must_not frag "<form";
+        ps_must_not frag "type='hidden'";
+        ps_must frag "Select at least one repository";
+        ps_must frag "href='/projects/new?draft=11'";
+        ps_must frag "Change repository selection")
+  ; pip_case "non-positive draft id renders no form and leaks no id"
+      (fun () ->
+        List.iter
+          (fun id ->
+            let frag =
+              pip_render
+                (Psp.Configure_identity
+                   (pip_config ~draft:(ps_draft ~id ()) ()))
+            in
+            ps_must_not frag "<form";
+            ps_must_not frag "name='draft_id'";
+            ps_must_not frag (Printf.sprintf "draft=%Ld" id);
+            ps_must_not frag (Printf.sprintf "value='%Ld'" id))
+          [ 0L; -7L ])
+  ; pip_case "non-positive snapshot ids never become option values" (fun () ->
+        let corrupt_zero = pip_repo ~id:0L ~full_name:"octo-org/czero" () in
+        let corrupt_neg =
+          pip_repo ~id:(-424242L) ~full_name:"octo-org/cneg" ()
+        in
+        let frag =
+          pip_render
+            (Psp.Configure_identity
+               (pip_config ~repos:[ pip_r1; corrupt_zero; corrupt_neg ] ()))
+        in
+        let sel = pip_select frag "primary_snapshot_id" in
+        Alcotest.(check int) "blank plus the one valid option" 2
+          (ps_count sel "<option");
+        ps_must_not frag "value='0'";
+        ps_must_not frag "value='-424242'";
+        (* Corrupt rows may stay visible as non-actionable information. *)
+        ps_must frag "octo-org/czero")
+  ; pip_case "all-corrupt repositories render no identity form" (fun () ->
+        let frag =
+          pip_render
+            (Psp.Configure_identity
+               (pip_config ~repos:[ pip_repo ~id:0L () ] ()))
+        in
+        ps_must_not frag "<form";
+        ps_must frag "Select at least one repository")
+  ; pip_case "unknown selected primary falls back to the blank option"
+      (fun () ->
+        let config =
+          pip_config
+            ~repos:[ pip_r1; pip_r3 ]
+            ~values:(pip_values ~primary:424242L ())
+            ()
+        in
+        let frag = pip_render (Psp.Configure_identity config) in
+        let sel = pip_select frag "primary_snapshot_id" in
+        ps_must sel "<option value='' selected>";
+        ps_must_not frag "value='424242'";
+        Alcotest.(check int) "one selected option" 1 (ps_count sel " selected"))
+  ; pip_case "corrupt primary pointing at a corrupt row also falls back"
+      (fun () ->
+        let config =
+          pip_config
+            ~repos:[ pip_r1; pip_repo ~id:0L () ]
+            ~values:(pip_values ~primary:0L ())
+            ()
+        in
+        let sel =
+          pip_select
+            (pip_render (Psp.Configure_identity config))
+            "primary_snapshot_id"
+        in
+        ps_must sel "<option value='' selected>";
+        ps_must_not sel "value='0'")
+  ; pip_case "Configure_identity never raises on malformed view models"
+      (fun () ->
+        List.iter
+          (fun state -> ignore (pip_render state : string))
+          [ Psp.Configure_identity (pip_config ~repos:[] ())
+          ; Psp.Configure_identity
+              (pip_config ~draft:(ps_draft ~id:(-1L) ()) ~repos:[] ())
+          ; Psp.Configure_identity
+              (pip_config
+                 ~repos:[ pip_repo ~id:0L (); pip_repo ~id:(-2L) () ]
+                 ~values:(pip_values ~primary:(-9L) ())
+                 ())
+          ])
+  ]
+
+(* Every identity feedback variant: exact copy, error styling, and generic
+   contents — no fixture value, id, or conflicting repository ever reaches
+   the alert — while the form contract stays untouched. *)
+let pip_feedback_check name feedback ~copy =
+  pip_case name (fun () ->
+      let frag =
+        pip_render ~feedback:(Some feedback) (Psp.Configure_identity pip_cfg)
+      in
+      ps_must frag copy;
+      ps_must frag "ps-alert--error";
+      Alcotest.(check int) "one form" 1 (ps_count frag "<form");
+      ps_must frag "<input type='hidden' name='draft_id' value='11'>";
+      Alcotest.(check int) "named fields" 7 (ps_count frag " name='");
+      let alert = ps_alert_fragment frag in
+      List.iter
+        (fun fixture ->
+          Alcotest.(check bool) "no fixture value in alert" false
+            (contains alert fixture))
+        [ "Widgets"; "widgets"; "octo-org"; "https://example.com"; "102";
+          "draft" ])
+
+let pip_feedback_cases =
+  [ pip_feedback_check "form invalid" Psp.Identity_form_invalid
+      ~copy:
+        "We couldn't read those project details. Review the form and try \
+         again."
+  ; pip_feedback_check "name invalid" Psp.Identity_name_invalid
+      ~copy:"Enter a valid project name."
+  ; pip_feedback_check "slug invalid" Psp.Identity_slug_invalid
+      ~copy:
+        "Enter a valid project slug using lowercase letters, numbers and \
+         single hyphens."
+  ; pip_feedback_check "slug reserved" Psp.Identity_slug_reserved
+      ~copy:"That project slug is reserved. Choose another one."
+  ; pip_feedback_check "description invalid" Psp.Identity_description_invalid
+      ~copy:"Enter a valid description of at most 2,000 characters."
+  ; pip_feedback_check "website invalid" Psp.Identity_website_invalid
+      ~copy:"Enter a valid HTTP or HTTPS website address."
+  ; pip_feedback_check "primary invalid" Psp.Identity_primary_invalid
+      ~copy:
+        "Choose a primary repository from the currently selected \
+         repositories."
+  ; pip_feedback_check "primary required" Psp.Identity_primary_required
+      ~copy:"A project must have a primary repository."
+  ; pip_feedback_check "namespace mismatch" Psp.Identity_namespace_mismatch
+      ~copy:
+        "A GitHub organization project must be connected through a GitHub \
+         organization."
+  ; pip_feedback_check "slug unavailable" Psp.Identity_slug_unavailable
+      ~copy:"That project slug is already in use."
+  ; pip_feedback_check "repository already connected"
+      Psp.Identity_repository_already_connected
+      ~copy:
+        "One or more selected repositories are already connected to \
+         another Earde project."
+  ; pip_feedback_check "creation failed" Psp.Identity_creation_failed
+      ~copy:"We couldn't create the project. Try again."
+  ; pip_case "no feedback renders no alert container" (fun () ->
+        ps_must_not (pip_render (Psp.Configure_identity pip_cfg)) "ps-alert")
+  ; pip_case "identity feedback never changes which state renders" (fun () ->
+        let frag =
+          pip_render
+            ~feedback:(Some Psp.Identity_creation_failed)
+            (Psp.Configure_identity (pip_config ~repos:[] ()))
+        in
+        ps_must frag "We couldn't create the project. Try again.";
+        ps_must_not frag "<form")
+  ]
+
+(* Copy and future-design constraints over the identity states, reusing the
+   established matrix checker: factual verification language, no
+   endorsement claims, and no style/script/redirect constructs inside the
+   feature fragment. *)
+let pip_copy_cases =
+  let states =
+    [ ("identity", Psp.Configure_identity pip_cfg)
+    ; ( "identity empty repos"
+      , Psp.Configure_identity (pip_config ~repos:[] ()) )
+    ; ( "identity corrupt draft"
+      , Psp.Configure_identity (pip_config ~draft:(ps_draft ~id:0L ()) ()) )
+    ]
+  in
+  let feedbacks =
+    psp_copy_feedbacks
+    @ [ ("identity form invalid", Some Psp.Identity_form_invalid)
+      ; ("identity slug unavailable", Some Psp.Identity_slug_unavailable)
+      ; ( "identity repository connected"
+        , Some Psp.Identity_repository_already_connected )
+      ; ("identity creation failed", Some Psp.Identity_creation_failed)
+      ]
+  in
+  List.concat_map
+    (fun state -> List.map (psp_copy_case state) feedbacks)
+    states
+
+let pip_csrf_cases =
+  [ pip_case "with request: one framework field inside the identity form"
+      (fun () ->
+        let frag = ps_fragment (psc_render (Psp.Configure_identity pip_cfg)) in
+        Alcotest.(check int) "one framework field" 1
+          (ps_count frag "name=\"dream.csrf\"");
+        Alcotest.(check int) "framework field is hidden" 1
+          (ps_count frag "type=\"hidden\"");
+        Alcotest.(check int) "one application hidden field" 1
+          (ps_count frag "type='hidden'");
+        ps_must frag "<input type='hidden' name='draft_id' value='11'>";
+        match
+          ( ps_index_of frag "<form" 0,
+            ps_index_of frag "name=\"dream.csrf\"" 0,
+            ps_index_of frag "</form>" 0 )
+        with
+        | Some f, Some c, Some e ->
+            Alcotest.(check bool) "CSRF inside the form" true (f < c && c < e)
+        | _ -> Alcotest.fail "form or CSRF field missing")
+  ; pip_case "pure rendering without a request stays CSRF-free" (fun () ->
+        ps_must_not (pip_render (Psp.Configure_identity pip_cfg)) "dream.csrf")
+  ; pip_case "form-free identity states emit no framework field" (fun () ->
+        List.iter
+          (fun state ->
+            ps_must_not (ps_fragment (psc_render state)) "dream.csrf")
+          [ Psp.Configure_identity (pip_config ~repos:[] ())
+          ; Psp.Configure_identity
+              (pip_config ~draft:(ps_draft ~id:0L ()) ())
+          ])
+  ]
+
 (* === Project finalization store (Project_finalization_store) ===
    The draft→project transaction lives entirely in Postgres — the
    draft-first lock order shared with the refresh and selection stores,
@@ -23567,4 +24327,28 @@ let () =
     ; ("project_identity_accessors", pi_accessor_cases)
     ; ("project_identity_ordering", pi_ordering_cases)
     ; ("project_identity_privacy", pi_privacy_cases)
+      (* Project-identity form parser: closed seven-field grammar, strict
+         scalar identifiers, byte-exact text passthrough, exact domain
+         delegation through Project_identity.create, payload-free
+         rejection. *)
+    ; ("project_identity_form_valid", pif_valid_cases)
+    ; ("project_identity_form_grammar", pif_grammar_cases)
+    ; ("project_identity_form_draft", pif_draft_cases)
+    ; ("project_identity_form_kind", pif_kind_cases)
+    ; ("project_identity_form_primary", pif_primary_cases)
+    ; ("project_identity_form_delegation", pif_delegation_cases)
+    ; ("project_identity_form_privacy", pif_privacy_cases)
+      (* Configure_identity page state: separate project-details step, exact
+         application field set, kind/primary option contracts, escaping,
+         defensive degradation, identity feedback, copy constraints, and
+         framework CSRF only with a live request. *)
+    ; ("project_identity_page_structure", pip_structure_cases)
+    ; ("project_identity_page_kind", pip_kind_cases)
+    ; ("project_identity_page_values", pip_value_cases)
+    ; ("project_identity_page_primary", pip_primary_cases)
+    ; ("project_identity_page_separation", pip_separation_cases)
+    ; ("project_identity_page_corrupt", pip_corrupt_cases)
+    ; ("project_identity_page_feedback", pip_feedback_cases)
+    ; ("project_identity_page_copy", pip_copy_cases)
+    ; ("project_identity_page_csrf", pip_csrf_cases)
     ]

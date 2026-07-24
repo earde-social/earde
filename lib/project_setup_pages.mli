@@ -18,6 +18,24 @@ type feedback =
   | Draft_unavailable
       (** The draft is gone for any reason — nonexistent, foreign, expired,
           terminal, or revoked installation stay indistinguishable. *)
+  | Identity_form_invalid
+      (** The identity submission failed the strict form parser. *)
+  | Identity_name_invalid
+  | Identity_slug_invalid
+  | Identity_slug_reserved
+  | Identity_description_invalid
+  | Identity_website_invalid
+  | Identity_primary_invalid
+      (** The primary is not among the currently selected repositories. *)
+  | Identity_primary_required  (** Kind [project] demands a primary. *)
+  | Identity_namespace_mismatch
+      (** An organization project needs an organization installation. *)
+  | Identity_slug_unavailable  (** Finalization lost the slug race. *)
+  | Identity_repository_already_connected
+      (** Some selected repository is claimed by another project; which one
+          stays unidentified. *)
+  | Identity_creation_failed
+      (** Any other finalization failure, indistinguishably. *)
 
 (** One usable draft as the chooser card needs it. [draft_id] is an internal
     routing identifier, not a bearer secret — the future handler
@@ -51,10 +69,40 @@ type configuration = {
   repositories : repository_option list;
 }
 
+(** One already-selected repository as the identity step needs it: display
+    name, archived flag, and the local snapshot id used only as a
+    [primary_snapshot_id] option value. No GitHub repository id, owner or
+    installation identifier, and no hidden selected-set field ever reaches
+    this step — the selection is server-owned. *)
+type identity_repository = {
+  snapshot_id : int64;
+  full_name : string;
+  is_archived : bool;
+}
+
+(** Identity form values: either initial prefills chosen by the later
+    handler or a failed submission being re-rendered. Every string is
+    escaped normally at render time. *)
+type identity_values = {
+  kind : Project_identity.kind;
+  name : string;
+  slug : string;
+  description : string;
+  website_url : string;
+  primary_snapshot_id : int64 option;
+}
+
+type identity_configuration = {
+  draft : draft_option;
+  selected_repositories : identity_repository list;
+  values : identity_values;
+}
+
 type state =
   | No_available_drafts
   | Choose_draft of draft_option list
   | Configure_repositories of configuration
+  | Configure_identity of identity_configuration
 
 val project_setup_page :
   ?user:string ->
@@ -81,6 +129,22 @@ val project_setup_page :
     framework data, never an application form field, and it is absent from
     pure rendering calls where no request exists. Chooser links are built
     structurally ([Uri]) as [/projects/new?draft=<id>].
+
+    [Configure_identity] renders a visibly separate "Project details" step:
+    a read-only summary of the selected repositories (with a structural link
+    back to [/projects/new?draft=<id>]) and exactly one [POST /projects]
+    form whose application field set is exactly [draft_id] (hidden), [kind]
+    (a select of the six canonical wire values), [name], [slug],
+    [description], [website_url], and [primary_snapshot_id] (a select with
+    a blank "no primary" option plus one option per valid selected
+    repository, valued by local snapshot id). The same CSRF rule applies.
+    No repository checkboxes, hidden snapshot ids, community chooser, or
+    JavaScript appear; archived repositories stay offered with an [Archived]
+    marker. Defensively: an empty or all-corrupt selected-repository list
+    renders no identity form (only an explanation and the back link), a
+    non-positive snapshot id never becomes an option value, and a
+    [values.primary_snapshot_id] that matches no rendered repository falls
+    back to the blank option.
 
     Feedback is cosmetic only — it never changes which state or form is
     rendered — and [None] renders no alert element at all. All copy stays
