@@ -452,6 +452,59 @@ ALTER SEQUENCE public.notifications_id_seq OWNED BY public.notifications.id;
 
 
 --
+-- Name: open_source_projects; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.open_source_projects (
+    id bigint NOT NULL,
+    source_onboarding_draft_id bigint,
+    name text NOT NULL,
+    slug text NOT NULL,
+    description text,
+    website_url text,
+    kind text NOT NULL,
+    forge text DEFAULT 'github'::text NOT NULL,
+    forge_namespace_id bigint NOT NULL,
+    forge_namespace_login text NOT NULL,
+    forge_namespace_type text NOT NULL,
+    verification_status text DEFAULT 'verified'::text NOT NULL,
+    created_by_user_id integer,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT open_source_projects_description_check CHECK (((description IS NULL) OR (char_length(description) <= 2000))),
+    CONSTRAINT open_source_projects_forge_check CHECK ((forge = 'github'::text)),
+    CONSTRAINT open_source_projects_forge_namespace_id_check CHECK ((forge_namespace_id > 0)),
+    CONSTRAINT open_source_projects_forge_namespace_login_check CHECK (((forge_namespace_login = btrim(forge_namespace_login)) AND (forge_namespace_login <> ''::text) AND (char_length(forge_namespace_login) <= 255))),
+    CONSTRAINT open_source_projects_forge_namespace_type_check CHECK ((forge_namespace_type = ANY (ARRAY['user'::text, 'organization'::text]))),
+    CONSTRAINT open_source_projects_kind_check CHECK ((kind = ANY (ARRAY['project'::text, 'organization'::text, 'ecosystem'::text, 'foundation'::text, 'working_group'::text, 'other'::text]))),
+    CONSTRAINT open_source_projects_name_check CHECK (((name = btrim(name)) AND ((char_length(name) >= 1) AND (char_length(name) <= 120)))),
+    CONSTRAINT open_source_projects_slug_check CHECK (((slug ~ '^[a-z0-9]+(-[a-z0-9]+)*$'::text) AND (char_length(slug) <= 80))),
+    CONSTRAINT open_source_projects_updated_after_created_check CHECK ((updated_at >= created_at)),
+    CONSTRAINT open_source_projects_verification_status_check CHECK ((verification_status = ANY (ARRAY['verified'::text, 'stale'::text, 'revoked'::text]))),
+    CONSTRAINT open_source_projects_website_url_check CHECK (((website_url IS NULL) OR ((website_url = btrim(website_url)) AND (website_url <> ''::text) AND (char_length(website_url) <= 2048))))
+);
+
+
+--
+-- Name: open_source_projects_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.open_source_projects_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: open_source_projects_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.open_source_projects_id_seq OWNED BY public.open_source_projects.id;
+
+
+--
 -- Name: page_views; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -770,6 +823,65 @@ ALTER SEQUENCE public.project_onboarding_drafts_id_seq OWNED BY public.project_o
 
 
 --
+-- Name: project_repositories; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.project_repositories (
+    id bigint NOT NULL,
+    project_id bigint NOT NULL,
+    "position" integer NOT NULL,
+    github_repository_id bigint NOT NULL,
+    full_name text NOT NULL,
+    html_url text NOT NULL,
+    description text,
+    default_branch text NOT NULL,
+    is_primary boolean DEFAULT false NOT NULL,
+    is_archived boolean NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT project_repositories_default_branch_check CHECK ((btrim(default_branch) <> ''::text)),
+    CONSTRAINT project_repositories_full_name_check CHECK ((btrim(full_name) <> ''::text)),
+    CONSTRAINT project_repositories_github_repository_id_check CHECK ((github_repository_id > 0)),
+    CONSTRAINT project_repositories_html_url_check CHECK ((btrim(html_url) <> ''::text)),
+    CONSTRAINT project_repositories_position_check CHECK (("position" > 0)),
+    CONSTRAINT project_repositories_updated_after_created_check CHECK ((updated_at >= created_at))
+);
+
+
+--
+-- Name: project_repositories_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.project_repositories_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: project_repositories_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.project_repositories_id_seq OWNED BY public.project_repositories.id;
+
+
+--
+-- Name: project_stewards; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.project_stewards (
+    project_id bigint NOT NULL,
+    user_id integer NOT NULL,
+    github_installation_record_id bigint NOT NULL,
+    role text DEFAULT 'steward'::text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT project_stewards_role_check CHECK ((role = 'steward'::text))
+);
+
+
+--
 -- Name: rate_limits; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -959,6 +1071,13 @@ ALTER TABLE ONLY public.notifications ALTER COLUMN id SET DEFAULT nextval('publi
 
 
 --
+-- Name: open_source_projects id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.open_source_projects ALTER COLUMN id SET DEFAULT nextval('public.open_source_projects_id_seq'::regclass);
+
+
+--
 -- Name: page_views id; Type: DEFAULT; Schema: public; Owner: -
 --
 
@@ -1012,6 +1131,13 @@ ALTER TABLE ONLY public.project_onboarding_draft_repositories ALTER COLUMN id SE
 --
 
 ALTER TABLE ONLY public.project_onboarding_drafts ALTER COLUMN id SET DEFAULT nextval('public.project_onboarding_drafts_id_seq'::regclass);
+
+
+--
+-- Name: project_repositories id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.project_repositories ALTER COLUMN id SET DEFAULT nextval('public.project_repositories_id_seq'::regclass);
 
 
 --
@@ -1197,6 +1323,22 @@ ALTER TABLE ONLY public.notifications
 
 
 --
+-- Name: open_source_projects open_source_projects_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.open_source_projects
+    ADD CONSTRAINT open_source_projects_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: open_source_projects open_source_projects_slug_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.open_source_projects
+    ADD CONSTRAINT open_source_projects_slug_key UNIQUE (slug);
+
+
+--
 -- Name: page_views page_views_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -1325,6 +1467,46 @@ ALTER TABLE ONLY public.project_onboarding_drafts
 
 
 --
+-- Name: project_repositories project_repositories_github_repository_id_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.project_repositories
+    ADD CONSTRAINT project_repositories_github_repository_id_key UNIQUE (github_repository_id);
+
+
+--
+-- Name: project_repositories project_repositories_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.project_repositories
+    ADD CONSTRAINT project_repositories_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: project_repositories project_repositories_project_full_name_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.project_repositories
+    ADD CONSTRAINT project_repositories_project_full_name_key UNIQUE (project_id, full_name);
+
+
+--
+-- Name: project_repositories project_repositories_project_position_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.project_repositories
+    ADD CONSTRAINT project_repositories_project_position_key UNIQUE (project_id, "position");
+
+
+--
+-- Name: project_stewards project_stewards_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.project_stewards
+    ADD CONSTRAINT project_stewards_pkey PRIMARY KEY (project_id, user_id);
+
+
+--
 -- Name: rate_limits rate_limits_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -1423,6 +1605,20 @@ CREATE INDEX idx_github_onboarding_states_user_id ON public.github_onboarding_st
 
 
 --
+-- Name: idx_open_source_projects_namespace; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_open_source_projects_namespace ON public.open_source_projects USING btree (forge_namespace_id, forge_namespace_type);
+
+
+--
+-- Name: idx_open_source_projects_verification_status; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_open_source_projects_verification_status ON public.open_source_projects USING btree (verification_status);
+
+
+--
 -- Name: idx_pending_signups_email_active; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -1472,10 +1668,38 @@ CREATE INDEX idx_project_onboarding_drafts_user_id_active ON public.project_onbo
 
 
 --
+-- Name: idx_project_repositories_project_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_project_repositories_project_id ON public.project_repositories USING btree (project_id);
+
+
+--
+-- Name: idx_project_stewards_installation_record_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_project_stewards_installation_record_id ON public.project_stewards USING btree (github_installation_record_id);
+
+
+--
+-- Name: idx_project_stewards_user_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_project_stewards_user_id ON public.project_stewards USING btree (user_id);
+
+
+--
 -- Name: idx_reports_community_status; Type: INDEX; Schema: public; Owner: -
 --
 
 CREATE INDEX idx_reports_community_status ON public.reports USING btree (community_id, status, created_at DESC);
+
+
+--
+-- Name: uniq_open_source_projects_source_draft; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX uniq_open_source_projects_source_draft ON public.open_source_projects USING btree (source_onboarding_draft_id) WHERE (source_onboarding_draft_id IS NOT NULL);
 
 
 --
@@ -1490,6 +1714,13 @@ CREATE UNIQUE INDEX uniq_project_onboarding_draft_repos_primary_per_draft ON pub
 --
 
 CREATE UNIQUE INDEX uniq_project_onboarding_drafts_active_per_user_installation ON public.project_onboarding_drafts USING btree (user_id, github_installation_record_id) WHERE (status = 'active'::text);
+
+
+--
+-- Name: uniq_project_repositories_primary_per_project; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX uniq_project_repositories_primary_per_project ON public.project_repositories USING btree (project_id) WHERE is_primary;
 
 
 --
@@ -1691,6 +1922,22 @@ ALTER TABLE ONLY public.notifications
 
 
 --
+-- Name: open_source_projects open_source_projects_created_by_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.open_source_projects
+    ADD CONSTRAINT open_source_projects_created_by_user_id_fkey FOREIGN KEY (created_by_user_id) REFERENCES public.users(id) ON DELETE SET NULL;
+
+
+--
+-- Name: open_source_projects open_source_projects_source_onboarding_draft_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.open_source_projects
+    ADD CONSTRAINT open_source_projects_source_onboarding_draft_id_fkey FOREIGN KEY (source_onboarding_draft_id) REFERENCES public.project_onboarding_drafts(id) ON DELETE SET NULL;
+
+
+--
 -- Name: password_resets password_resets_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -1768,6 +2015,38 @@ ALTER TABLE ONLY public.project_onboarding_drafts
 
 ALTER TABLE ONLY public.project_onboarding_drafts
     ADD CONSTRAINT project_onboarding_drafts_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+
+
+--
+-- Name: project_repositories project_repositories_project_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.project_repositories
+    ADD CONSTRAINT project_repositories_project_id_fkey FOREIGN KEY (project_id) REFERENCES public.open_source_projects(id) ON DELETE CASCADE;
+
+
+--
+-- Name: project_stewards project_stewards_github_installation_record_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.project_stewards
+    ADD CONSTRAINT project_stewards_github_installation_record_id_fkey FOREIGN KEY (github_installation_record_id) REFERENCES public.github_installations(id) ON DELETE RESTRICT;
+
+
+--
+-- Name: project_stewards project_stewards_project_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.project_stewards
+    ADD CONSTRAINT project_stewards_project_id_fkey FOREIGN KEY (project_id) REFERENCES public.open_source_projects(id) ON DELETE CASCADE;
+
+
+--
+-- Name: project_stewards project_stewards_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.project_stewards
+    ADD CONSTRAINT project_stewards_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
 
 
 --
@@ -1849,4 +2128,5 @@ INSERT INTO public.schema_migrations (version) VALUES
     ('20260722200000'),
     ('20260723120000'),
     ('20260723150000'),
-    ('20260724120000');
+    ('20260724120000'),
+    ('20260724130000');
