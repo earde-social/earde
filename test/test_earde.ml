@@ -7042,6 +7042,1098 @@ module Pod_schema = struct
       credential_columns_case ]
 end
 
+(* === Project-onboarding draft store (Project_onboarding_draft_store) ===
+   The whole contract lives in one explicit transaction — authoritative
+   installation lookup, index-arbitrated create-or-refresh, complete
+   snapshot replacement — so only Postgres can pin it down. Same
+   EARDE_TEST_DATABASE_URL opt-in gate as Mod_scope. Autocommit on purpose:
+   the store manages its own transaction on the connection (an outer test
+   transaction would collide with its START) and the concurrency cases need
+   rows visible across two connections. Fixtures use a reserved
+   external-installation-id range and podstore_% usernames, cleaned before
+   and after each case. Abstract inputs go through the real clients —
+   Github_oauth_token_exchange.exchange, Github_user_installations.verify,
+   Github_user_installation_repositories.list_public — against scripted
+   transports; no test-only constructor exists. Credential-fixture
+   assertions are boolean, so no token bytes reach test output on
+   failure. *)
+module Pod_store = struct
+  let ( let* ) = Lwt.bind
+
+  open Caqti_request.Infix
+
+  module Store = Earde.Project_onboarding_draft_store
+
+  let error_str : Store.error -> string = function
+    | Store.Invalid_user_id -> "Invalid_user_id"
+    | Store.Installation_unavailable -> "Installation_unavailable"
+    | Store.Storage_error -> "Storage_error"
+
+  let or_fail label = function
+    | Ok v -> Lwt.return v
+    | Error e -> Alcotest.failf "%s: %s" label (Caqti_error.show e)
+
+  let pods_access_fixture = "pods-access.TOKEN~1"
+  let pods_refresh_fixture = "pods-refresh.TOKEN~2"
+
+  let default_token_body =
+    {|{"access_token":"pods-access.TOKEN~1","token_type":"bearer","scope":""}|}
+
+  (* An expiring configuration, so the credential-absence case also holds a
+     refresh token that must never reach either table. *)
+  let refresh_token_body =
+    {|{"access_token":"pods-access.TOKEN~1","token_type":"bearer","scope":"","expires_in":28800,"refresh_token":"pods-refresh.TOKEN~2","refresh_token_expires_in":15811200}|}
+
+  (* Lwt-native token fixture, as in the installation-store suite. *)
+  let token_set_lwt body =
+    let captured = ref None in
+    let* outcome =
+      GTE.exchange
+        ~transport:(gte_transport (Ok (200, body)) captured)
+        ~config:(gte_config ())
+        ~credentials:(gte_credentials ())
+        ~code:(gte_code_exn gte_code_string)
+        ~verifier:(gte_verifier ())
+    in
+    match outcome with
+    | Ok tokens -> Lwt.return tokens
+    | Error e -> Alcotest.failf "token fixture: %s" (gte_show_error e)
+
+  (* Abstract verified-installation fixture through the real verify against
+     a one-page scripted listing. *)
+  let verified ?(token_body = default_token_body) ~installation_id
+      ~account_id ~login ~target () =
+    let* token_set = token_set_lwt token_body in
+    let body =
+      Printf.sprintf
+        {|{"total_count":1,"installations":[{"id":%Ld,"account":{"id":%Ld,"login":"%s"},"target_type":"%s"}]}|}
+        installation_id account_id login target
+    in
+    let captured = ref [] in
+    let* outcome =
+      GUI.verify
+        ~transport:(gui_transport [ Ok (200, body) ] captured)
+        ~token_set ~installation_id
+    in
+    match outcome with
+    | Ok v -> Lwt.return v
+    | Error e -> Alcotest.failf "verified fixture: %s" (gui_show_error e)
+
+  (* Abstract repository-set fixture through the real list_public against a
+     one-page scripted listing; entries are gur_repo JSON owned by the
+     verified installation's account. *)
+  let repo_set ?(token_body = default_token_body) ~installation entries =
+    let* token_set = token_set_lwt token_body in
+    let body = gur_body ~total:(List.length entries) entries in
+    let captured = ref [] in
+    let* outcome =
+      GUR.list_public
+        ~transport:(gur_transport [ Ok (200, body) ] captured)
+        ~token_set ~installation
+    in
+    match outcome with
+    | Ok set -> Lwt.return set
+    | Error e ->
+        Alcotest.failf "repository-set fixture: %s" (gur_show_error e)
+
+  (* Expected snapshot signature, mirroring q_sigs below: the client
+     derives full_name and html_url from login and name, and the store must
+     always reset both selection flags. *)
+  let sig_of ~position ~id ~account_id ~login ?(description = "<null>")
+      ?(branch = "main") ?(archived = false) name =
+    Printf.sprintf "%d|%Ld|%Ld|%s|%s|%s/%s|https://github.com/%s/%s|%s|%s|%b|false|false"
+      position id account_id login name login name login name description
+      branch archived
+
+  (* Fixtures — reserved external-installation-id range
+     938000001..938000999 and podstore_% usernames so cleanup is targeted
+     and idempotent. Drafts go first (installations are RESTRICT-protected
+     while referenced); snapshots cascade from drafts. *)
+  let q_cleanup =
+    List.map
+      (fun sql -> (Caqti_type.unit ->. Caqti_type.unit) sql)
+      [ "DELETE FROM project_onboarding_drafts \
+         WHERE github_installation_record_id IN \
+           (SELECT id FROM github_installations \
+            WHERE github_installation_id BETWEEN 938000001 AND 938000999)"
+      ; "DELETE FROM users WHERE username LIKE 'podstore_%'"
+      ; "DELETE FROM github_installations \
+         WHERE github_installation_id BETWEEN 938000001 AND 938000999"
+      ]
+
+  let q_insert_user =
+    (Caqti_type.string ->! Caqti_type.int)
+    "INSERT INTO users (username, email, password_hash, is_email_verified)
+     VALUES ($1, $1 || '@test.invalid', 'x', TRUE) RETURNING id"
+
+  (* Direct installation-row fixture: these cases pin the store's
+     authorization against arbitrary row states (inaccessible, revoked,
+     mismatched identity), which the installation store deliberately never
+     produces on demand. *)
+  let q_insert_installation =
+    (Caqti_type.(t2 (t4 int64 int64 string string)
+                    (t3 string bool (option int)))
+     ->! Caqti_type.int64)
+    "INSERT INTO github_installations
+       (github_installation_id, github_account_id, github_account_login,
+        github_account_type, status, revoked_at, connected_by_user_id)
+     VALUES ($1, $2, $3, $4, $5, CASE WHEN $6 THEN NOW() END, $7)
+     RETURNING id"
+
+  (* A positive user id guaranteed absent from users, for the FK-failure
+     case. *)
+  let q_absent_user_id =
+    (Caqti_type.unit ->! Caqti_type.int)
+    "SELECT COALESCE(MAX(id), 0) + 1000000 FROM users"
+
+  (* Everything durable on one draft row: ownership, installation record,
+     lifecycle shape, and the three timestamp epochs. *)
+  let q_draft_row =
+    (Caqti_type.(int64 ->! t2 (t3 int int64 string)
+                              (t2 (t2 bool bool) (t3 float float float))))
+    "SELECT user_id, github_installation_record_id, status,
+            completed_at IS NULL, cancelled_at IS NULL,
+            EXTRACT(EPOCH FROM created_at)::float8,
+            EXTRACT(EPOCH FROM updated_at)::float8,
+            EXTRACT(EPOCH FROM expires_at)::float8
+     FROM project_onboarding_drafts WHERE id = $1"
+
+  let q_lifecycle_epochs =
+    (Caqti_type.(int64 ->! t2 (option float) (option float)))
+    "SELECT EXTRACT(EPOCH FROM completed_at)::float8,
+            EXTRACT(EPOCH FROM cancelled_at)::float8
+     FROM project_onboarding_drafts WHERE id = $1"
+
+  let q_active_draft_id =
+    (Caqti_type.(t2 int int64) ->? Caqti_type.int64)
+    "SELECT id FROM project_onboarding_drafts
+     WHERE user_id = $1 AND github_installation_record_id = $2
+       AND status = 'active'"
+
+  let q_count_for_user =
+    (Caqti_type.int ->! Caqti_type.int)
+    "SELECT COUNT(*) FROM project_onboarding_drafts WHERE user_id = $1"
+
+  let q_count_active_for_user =
+    (Caqti_type.int ->! Caqti_type.int)
+    "SELECT COUNT(*) FROM project_onboarding_drafts
+     WHERE user_id = $1 AND status = 'active'"
+
+  (* One text signature per snapshot row, ordered by position — pins the
+     exact stored metadata, the ordering, and both selection flags in a
+     single comparison (mirrored by sig_of above). *)
+  let q_sigs =
+    (Caqti_type.int64 ->* Caqti_type.string)
+    "SELECT position::text || '|' || github_repository_id::text || '|' ||
+            github_owner_id::text || '|' || owner_login || '|' || name
+            || '|' || full_name || '|' || html_url || '|' ||
+            COALESCE(description, '<null>') || '|' || default_branch
+            || '|' || is_archived::text || '|' || is_selected::text
+            || '|' || is_primary::text
+     FROM project_onboarding_draft_repositories
+     WHERE draft_id = $1 ORDER BY position"
+
+  (* Old-snapshot fixture: flags a refresh must reset. Primary rides on
+     position 1 so primary-implies-selected holds. *)
+  let q_mark_selected =
+    (Caqti_type.int64 ->. Caqti_type.unit)
+    "UPDATE project_onboarding_draft_repositories
+     SET is_selected = TRUE, is_primary = (position = 1)
+     WHERE draft_id = $1"
+
+  (* Expired-but-still-active fixture: created_at moves too (expires_at >
+     created_at is a CHECK), and updated_at moves with it so the refresh's
+     renewal is observable. *)
+  let q_backdate_draft =
+    (Caqti_type.int64 ->. Caqti_type.unit)
+    "UPDATE project_onboarding_drafts
+     SET created_at = NOW() - INTERVAL '2 days',
+         updated_at = NOW() - INTERVAL '2 days',
+         expires_at = NOW() - INTERVAL '1 day'
+     WHERE id = $1"
+
+  (* Derived expiry, judged by the database clock — the schema has no
+     'expired' status. *)
+  let q_is_expired =
+    (Caqti_type.int64 ->! Caqti_type.bool)
+    "SELECT expires_at <= NOW() FROM project_onboarding_drafts WHERE id = $1"
+
+  let q_complete_draft =
+    (Caqti_type.int64 ->. Caqti_type.unit)
+    "UPDATE project_onboarding_drafts
+     SET status = 'completed', completed_at = NOW(), updated_at = NOW()
+     WHERE id = $1"
+
+  let q_cancel_draft =
+    (Caqti_type.int64 ->. Caqti_type.unit)
+    "UPDATE project_onboarding_drafts
+     SET status = 'cancelled', cancelled_at = NOW(), updated_at = NOW()
+     WHERE id = $1"
+
+  (* Test-only failure injection for the rollback case: a trigger scoped to
+     one reserved fixture repository id. Installed and dropped inside that
+     case alone (IF EXISTS drops keep the cleanup idempotent even after a
+     mid-case failure); production migrations are untouched. The function
+     body uses plain string quoting — Caqti templates reserve '$'. *)
+  let podstore_poison_repo_id = 938999999L
+
+  let q_create_fail_fn =
+    (Caqti_type.unit ->. Caqti_type.unit)
+    "CREATE FUNCTION podstore_fail_insert_fn() RETURNS trigger
+     LANGUAGE plpgsql
+     AS 'BEGIN RAISE EXCEPTION ''podstore fixture failure''; END'"
+
+  let q_create_fail_trigger =
+    (Caqti_type.unit ->. Caqti_type.unit)
+    "CREATE TRIGGER podstore_fail_insert
+     BEFORE INSERT ON project_onboarding_draft_repositories
+     FOR EACH ROW WHEN (NEW.github_repository_id = 938999999)
+     EXECUTE FUNCTION podstore_fail_insert_fn()"
+
+  let q_drop_fail_trigger =
+    (Caqti_type.unit ->. Caqti_type.unit)
+    "DROP TRIGGER IF EXISTS podstore_fail_insert
+     ON project_onboarding_draft_repositories"
+
+  let q_drop_fail_fn =
+    (Caqti_type.unit ->. Caqti_type.unit)
+    "DROP FUNCTION IF EXISTS podstore_fail_insert_fn()"
+
+  (* Each case gets a fresh connection and a clean fixture slate; cleanup
+     runs again afterwards even when an assertion fails mid-way. *)
+  let db_case name f =
+    Alcotest.test_case name `Quick (fun () ->
+        match Sys.getenv_opt "EARDE_TEST_DATABASE_URL" with
+        | None | Some "" -> Alcotest.skip ()
+        | Some url ->
+            Lwt_main.run
+              (let* conn = Caqti_lwt_unix.connect (Uri.of_string url) in
+               let* conn = or_fail "connect" conn in
+               let (module C : Caqti_lwt.CONNECTION) = conn in
+               let cleanup () =
+                 Lwt_list.iter_s
+                   (fun q ->
+                     let* r = C.exec q () in
+                     let* _ = or_fail "cleanup" r in
+                     Lwt.return_unit)
+                   q_cleanup
+               in
+               let* () = cleanup () in
+               Lwt.finalize (fun () -> f conn) cleanup))
+
+  let insert_user conn username =
+    let (module C : Caqti_lwt.CONNECTION) = conn in
+    let* uid = C.find q_insert_user username in
+    or_fail ("user " ^ username) uid
+
+  let insert_installation ?(login = "podstore-account")
+      ?(account_type = "user") ?(status = "active") ?(revoked = false)
+      ?connected_by conn ~ext_id ~account_id =
+    let (module C : Caqti_lwt.CONNECTION) = conn in
+    let* rid =
+      C.find q_insert_installation
+        ((ext_id, account_id, login, account_type),
+         (status, revoked, connected_by))
+    in
+    or_fail "installation row" rid
+
+  let refresh conn ~user v set =
+    Store.refresh_verified conn ~user_id:user ~installation:v
+      ~repositories:set
+
+  let refresh_ok label conn ~user v set =
+    let* r = refresh conn ~user v set in
+    match r with
+    | Ok draft -> Lwt.return draft
+    | Error e -> Alcotest.failf "%s: %s" label (error_str e)
+
+  let refresh_expect label expected conn ~user v set =
+    let* r = refresh conn ~user v set in
+    match r with
+    | Ok _ ->
+        Alcotest.failf "%s: expected %s, got Ok" label (error_str expected)
+    | Error e ->
+        Alcotest.(check string) label (error_str expected) (error_str e);
+        Lwt.return_unit
+
+  let draft_row conn id =
+    let (module C : Caqti_lwt.CONNECTION) = conn in
+    let* r = C.find q_draft_row id in
+    or_fail "draft row" r
+
+  let sigs conn draft =
+    let (module C : Caqti_lwt.CONNECTION) = conn in
+    let* r = C.collect_list q_sigs draft in
+    or_fail "signatures" r
+
+  let count_for_user conn uid =
+    let (module C : Caqti_lwt.CONNECTION) = conn in
+    let* r = C.find q_count_for_user uid in
+    or_fail "draft count" r
+
+  let count_active_for_user conn uid =
+    let (module C : Caqti_lwt.CONNECTION) = conn in
+    let* r = C.find q_count_active_for_user uid in
+    or_fail "active draft count" r
+
+  let active_draft_id conn ~user ~installation =
+    let (module C : Caqti_lwt.CONNECTION) = conn in
+    let* r = C.find_opt q_active_draft_id (user, installation) in
+    or_fail "active draft id" r
+
+  (* Componentwise identity: pins that an operation left every persisted
+     field of a draft row exactly as captured. *)
+  let check_same_draft_row label
+      ((u_b, i_b, status_b), ((nc_b, nx_b), (created_b, updated_b, expires_b)))
+      ((u_a, i_a, status_a), ((nc_a, nx_a), (created_a, updated_a, expires_a)))
+      =
+    Alcotest.(check int) (label ^ ": user") u_b u_a;
+    Alcotest.(check int64) (label ^ ": installation record") i_b i_a;
+    Alcotest.(check string) (label ^ ": status") status_b status_a;
+    Alcotest.(check bool) (label ^ ": completed_at NULL-ness") nc_b nc_a;
+    Alcotest.(check bool) (label ^ ": cancelled_at NULL-ness") nx_b nx_a;
+    Alcotest.(check (float 0.)) (label ^ ": created_at") created_b created_a;
+    Alcotest.(check (float 0.)) (label ^ ": updated_at") updated_b updated_a;
+    Alcotest.(check (float 0.)) (label ^ ": expires_at") expires_b expires_a
+
+  (* === input validation === *)
+
+  let invalid_user_case =
+    db_case "refresh: non-positive user ids rejected before SQL" (fun conn ->
+        let* v =
+          verified ~installation_id:938000001L ~account_id:938100001L
+            ~login:"podstore-owner" ~target:"User" ()
+        in
+        let* set =
+          repo_set ~installation:v
+            [ gur_repo ~owner_id:938100001L ~owner_login:"podstore-owner"
+                ~id:938600001L ~name:"alpha" () ]
+        in
+        let* () = refresh_expect "user id 0" Store.Invalid_user_id conn
+            ~user:0 v set in
+        refresh_expect "negative user id" Store.Invalid_user_id conn
+          ~user:(-7) v set)
+
+  (* === installation authorization === *)
+
+  (* One rejected-authorization scaffold: [prepare] installs (or omits) the
+     local row variant; the refresh must classify as unavailable and leave
+     the user draftless. *)
+  let auth_reject_case name ~ext_id ~target prepare =
+    db_case name (fun conn ->
+        let account_id = Int64.add ext_id 100000L in
+        let* uid = insert_user conn "podstore_a" in
+        let* v =
+          verified ~installation_id:ext_id ~account_id
+            ~login:"podstore-owner" ~target ()
+        in
+        let* set =
+          repo_set ~installation:v
+            [ gur_repo ~owner_id:account_id ~owner_login:"podstore-owner"
+                ~id:(Int64.add ext_id 600000L) ~name:"alpha" () ]
+        in
+        let* () = prepare conn ~ext_id ~account_id in
+        let* () =
+          refresh_expect name Store.Installation_unavailable conn ~user:uid
+            v set
+        in
+        let* n = count_for_user conn uid in
+        Alcotest.(check int) "no draft created or modified" 0 n;
+        Lwt.return_unit)
+
+  let missing_installation_case =
+    auth_reject_case "refresh: missing installation row is unavailable"
+      ~ext_id:938000011L ~target:"User"
+      (fun _conn ~ext_id:_ ~account_id:_ -> Lwt.return_unit)
+
+  let inaccessible_installation_case =
+    auth_reject_case "refresh: inaccessible installation is unavailable"
+      ~ext_id:938000012L ~target:"User"
+      (fun conn ~ext_id ~account_id ->
+        let* _ =
+          insert_installation ~status:"inaccessible" conn ~ext_id ~account_id
+        in
+        Lwt.return_unit)
+
+  let revoked_installation_case =
+    auth_reject_case "refresh: revoked installation is unavailable"
+      ~ext_id:938000013L ~target:"User"
+      (fun conn ~ext_id ~account_id ->
+        let* _ =
+          insert_installation ~status:"revoked" ~revoked:true conn ~ext_id
+            ~account_id
+        in
+        Lwt.return_unit)
+
+  let account_id_mismatch_case =
+    auth_reject_case "refresh: account-id mismatch is unavailable"
+      ~ext_id:938000014L ~target:"User"
+      (fun conn ~ext_id ~account_id ->
+        let* _ =
+          insert_installation conn ~ext_id
+            ~account_id:(Int64.add account_id 1L)
+        in
+        Lwt.return_unit)
+
+  let account_type_mismatch_case =
+    auth_reject_case "refresh: account-type mismatch is unavailable"
+      ~ext_id:938000015L ~target:"User"
+      (fun conn ~ext_id ~account_id ->
+        let* _ =
+          insert_installation ~account_type:"organization" conn ~ext_id
+            ~account_id
+        in
+        Lwt.return_unit)
+
+  let login_difference_case =
+    db_case "refresh: a changed account login never blocks authorization"
+      (fun conn ->
+        let* uid = insert_user conn "podstore_a" in
+        let* inst =
+          insert_installation ~login:"stale-stored-login" conn
+            ~ext_id:938000016L ~account_id:938100016L
+        in
+        let* v =
+          verified ~installation_id:938000016L ~account_id:938100016L
+            ~login:"fresh-login" ~target:"User" ()
+        in
+        let* set =
+          repo_set ~installation:v
+            [ gur_repo ~owner_id:938100016L ~owner_login:"fresh-login"
+                ~id:938600016L ~name:"alpha" () ]
+        in
+        let* draft = refresh_ok "refresh" conn ~user:uid v set in
+        let* stored = active_draft_id conn ~user:uid ~installation:inst in
+        Alcotest.(check (option int64)) "draft created despite login drift"
+          (Some (Store.draft_id draft)) stored;
+        Lwt.return_unit)
+
+  let provenance_case =
+    db_case "refresh: connected_by_user_id neither authorizes nor owns"
+      (fun conn ->
+        let* a = insert_user conn "podstore_a" in
+        let* b = insert_user conn "podstore_b" in
+        (* B connected the installation; A refreshes. *)
+        let* inst =
+          insert_installation ~connected_by:b conn ~ext_id:938000017L
+            ~account_id:938100017L
+        in
+        let* v =
+          verified ~installation_id:938000017L ~account_id:938100017L
+            ~login:"podstore-owner" ~target:"User" ()
+        in
+        let* set =
+          repo_set ~installation:v
+            [ gur_repo ~owner_id:938100017L ~owner_login:"podstore-owner"
+                ~id:938600017L ~name:"alpha" () ]
+        in
+        let* draft = refresh_ok "refresh as A" conn ~user:a v set in
+        let* (owner, _, _), _ = draft_row conn (Store.draft_id draft) in
+        Alcotest.(check int) "draft owned by the caller, not the connector"
+          a owner;
+        let* stored = active_draft_id conn ~user:a ~installation:inst in
+        Alcotest.(check (option int64)) "slot keyed on the caller"
+          (Some (Store.draft_id draft)) stored;
+        let* n = count_for_user conn b in
+        Alcotest.(check int) "connector holds no draft" 0 n;
+        Lwt.return_unit)
+
+  (* === fresh create === *)
+
+  let fresh_create_case =
+    db_case "refresh: fresh create stores draft and snapshot exactly"
+      (fun conn ->
+        let* uid = insert_user conn "podstore_a" in
+        let* inst =
+          insert_installation conn ~ext_id:938000021L
+            ~account_id:938100021L
+        in
+        let* v =
+          verified ~installation_id:938000021L ~account_id:938100021L
+            ~login:"podstore-owner" ~target:"User" ()
+        in
+        (* NULL description, UTF-8 description, slash-containing branch,
+           archived — every metadata shape the schema admits. *)
+        let* set =
+          repo_set ~installation:v
+            [ gur_repo ~owner_id:938100021L ~owner_login:"podstore-owner"
+                ~id:938600021L ~name:"alpha"
+                ~description:{|"Prima descrizione — byte exact"|} ()
+            ; gur_repo ~owner_id:938100021L ~owner_login:"podstore-owner"
+                ~id:938600022L ~name:"beta" ~default_branch:"release/v1"
+                ~archived:true ()
+            ]
+        in
+        let* draft = refresh_ok "create" conn ~user:uid v set in
+        let* stored = active_draft_id conn ~user:uid ~installation:inst in
+        Alcotest.(check (option int64)) "returned id is the stored id"
+          (Some (Store.draft_id draft)) stored;
+        let* n = count_for_user conn uid in
+        Alcotest.(check int) "exactly one draft" 1 n;
+        let* ( (owner, installation_record, status),
+               ((no_completed, no_cancelled), (created, updated, expires)) ) =
+          draft_row conn (Store.draft_id draft)
+        in
+        Alcotest.(check int) "owner is the supplied Earde user" uid owner;
+        Alcotest.(check int64) "local installation record stored" inst
+          installation_record;
+        Alcotest.(check string) "status active" "active" status;
+        Alcotest.(check bool) "completed_at NULL" true no_completed;
+        Alcotest.(check bool) "cancelled_at NULL" true no_cancelled;
+        Alcotest.(check (float 0.5)) "expiry is 24h from database creation"
+          86400.0 (expires -. created);
+        Alcotest.(check (float 0.5)) "updated_at rides the same clock"
+          created updated;
+        let* stored_sigs = sigs conn (Store.draft_id draft) in
+        Alcotest.(check (list string))
+          "complete snapshot in source order, metadata byte-exact, \
+           unselected and non-primary"
+          [ sig_of ~position:1 ~id:938600021L ~account_id:938100021L
+              ~login:"podstore-owner"
+              ~description:"Prima descrizione — byte exact" "alpha"
+          ; sig_of ~position:2 ~id:938600022L ~account_id:938100021L
+              ~login:"podstore-owner" ~branch:"release/v1" ~archived:true
+              "beta"
+          ]
+          stored_sigs;
+        Lwt.return_unit)
+
+  (* === active refresh === *)
+
+  let active_refresh_case =
+    db_case "refresh: active draft refreshes in place, snapshot replaced"
+      (fun conn ->
+        let (module C : Caqti_lwt.CONNECTION) = conn in
+        let* uid = insert_user conn "podstore_a" in
+        let* _ =
+          insert_installation conn ~ext_id:938000022L
+            ~account_id:938100022L
+        in
+        let* v =
+          verified ~installation_id:938000022L ~account_id:938100022L
+            ~login:"podstore-owner" ~target:"User" ()
+        in
+        let* set1 =
+          repo_set ~installation:v
+            [ gur_repo ~owner_id:938100022L ~owner_login:"podstore-owner"
+                ~id:938600201L ~name:"alpha" ()
+            ; gur_repo ~owner_id:938100022L ~owner_login:"podstore-owner"
+                ~id:938600202L ~name:"beta" ()
+            ]
+        in
+        let* d1 = refresh_ok "create" conn ~user:uid v set1 in
+        (* Selection state a refresh must wipe. *)
+        let* r = C.exec q_mark_selected (Store.draft_id d1) in
+        let* () = or_fail "mark selected" r in
+        let* _, (_, (created1, updated1, expires1)) =
+          draft_row conn (Store.draft_id d1)
+        in
+        (* Same repository id with fully changed metadata, plus a new
+           repository, in a new order; beta disappears. *)
+        let* set2 =
+          repo_set ~installation:v
+            [ gur_repo ~owner_id:938100022L ~owner_login:"podstore-owner"
+                ~id:938600203L ~name:"gamma" ()
+            ; gur_repo ~owner_id:938100022L ~owner_login:"podstore-owner"
+                ~id:938600201L ~name:"alpha-renamed"
+                ~description:{|"Nuova descrizione"|}
+                ~default_branch:"release/v2" ~archived:true ()
+            ]
+        in
+        let* d2 = refresh_ok "refresh" conn ~user:uid v set2 in
+        Alcotest.(check int64) "draft id unchanged" (Store.draft_id d1)
+          (Store.draft_id d2);
+        let* n = count_for_user conn uid in
+        Alcotest.(check int) "still exactly one draft" 1 n;
+        let* ( (_, _, status),
+               ((no_completed, no_cancelled), (created2, updated2, expires2)) ) =
+          draft_row conn (Store.draft_id d1)
+        in
+        Alcotest.(check string) "still active" "active" status;
+        Alcotest.(check bool) "completed_at still NULL" true no_completed;
+        Alcotest.(check bool) "cancelled_at still NULL" true no_cancelled;
+        Alcotest.(check (float 0.)) "created_at unchanged" created1 created2;
+        Alcotest.(check bool) "updated_at advances or stays database-equal"
+          true (updated2 >= updated1);
+        Alcotest.(check bool) "expires_at renewed" true
+          (expires2 >= expires1);
+        Alcotest.(check (float 0.5)) "renewed expiry is 24h from the refresh"
+          86400.0 (expires2 -. updated2);
+        let* stored_sigs = sigs conn (Store.draft_id d1) in
+        Alcotest.(check (list string))
+          "only the new complete set, positions rebuilt from 1, metadata \
+           refreshed exactly, selection reset"
+          [ sig_of ~position:1 ~id:938600203L ~account_id:938100022L
+              ~login:"podstore-owner" "gamma"
+          ; sig_of ~position:2 ~id:938600201L ~account_id:938100022L
+              ~login:"podstore-owner" ~description:"Nuova descrizione"
+              ~branch:"release/v2" ~archived:true "alpha-renamed"
+          ]
+          stored_sigs;
+        Lwt.return_unit)
+
+  (* === expired active refresh === *)
+
+  let expired_refresh_case =
+    db_case "refresh: expired-but-active draft is refreshed in place"
+      (fun conn ->
+        let (module C : Caqti_lwt.CONNECTION) = conn in
+        let* uid = insert_user conn "podstore_a" in
+        let* _ =
+          insert_installation conn ~ext_id:938000023L
+            ~account_id:938100023L
+        in
+        let* v =
+          verified ~installation_id:938000023L ~account_id:938100023L
+            ~login:"podstore-owner" ~target:"User" ()
+        in
+        let* set1 =
+          repo_set ~installation:v
+            [ gur_repo ~owner_id:938100023L ~owner_login:"podstore-owner"
+                ~id:938600231L ~name:"alpha" () ]
+        in
+        let* d1 = refresh_ok "create" conn ~user:uid v set1 in
+        let* r = C.exec q_backdate_draft (Store.draft_id d1) in
+        let* () = or_fail "backdate" r in
+        let* _, (_, (created1, _, expires1)) =
+          draft_row conn (Store.draft_id d1)
+        in
+        let* expired = C.find q_is_expired (Store.draft_id d1) in
+        let* expired = or_fail "expired probe" expired in
+        Alcotest.(check bool) "fixture is expired while still active" true
+          expired;
+        let* set2 =
+          repo_set ~installation:v
+            [ gur_repo ~owner_id:938100023L ~owner_login:"podstore-owner"
+                ~id:938600232L ~name:"beta" () ]
+        in
+        let* d2 = refresh_ok "refresh" conn ~user:uid v set2 in
+        Alcotest.(check int64) "same draft id reused" (Store.draft_id d1)
+          (Store.draft_id d2);
+        let* n = count_for_user conn uid in
+        Alcotest.(check int) "no second draft" 1 n;
+        let* ( (_, _, status), (_, (created2, updated2, expires2)) ) =
+          draft_row conn (Store.draft_id d1)
+        in
+        Alcotest.(check string) "still active" "active" status;
+        Alcotest.(check (float 0.)) "backdated created_at preserved"
+          created1 created2;
+        Alcotest.(check bool) "expiry renewed into the future" true
+          (expires2 > expires1);
+        Alcotest.(check (float 0.5)) "renewed expiry is 24h from the refresh"
+          86400.0 (expires2 -. updated2);
+        let* stored_sigs = sigs conn (Store.draft_id d1) in
+        Alcotest.(check (list string)) "snapshot replaced"
+          [ sig_of ~position:1 ~id:938600232L ~account_id:938100023L
+              ~login:"podstore-owner" "beta"
+          ]
+          stored_sigs;
+        Lwt.return_unit)
+
+  (* === terminal drafts === *)
+
+  let terminal_case =
+    db_case "refresh: terminal drafts stay untouched, a new active is made"
+      (fun conn ->
+        let (module C : Caqti_lwt.CONNECTION) = conn in
+        let* uid = insert_user conn "podstore_a" in
+        let* _ =
+          insert_installation conn ~ext_id:938000024L
+            ~account_id:938100024L
+        in
+        let* v =
+          verified ~installation_id:938000024L ~account_id:938100024L
+            ~login:"podstore-owner" ~target:"User" ()
+        in
+        let set_for ~id ~name =
+          repo_set ~installation:v
+            [ gur_repo ~owner_id:938100024L ~owner_login:"podstore-owner"
+                ~id ~name () ]
+        in
+        (* One round per terminal state: seal the current draft, refresh,
+           and pin that only a new active draft appeared. *)
+        let terminal_round label seal previous =
+          let* r = C.exec seal (Store.draft_id previous) in
+          let* () = or_fail (label ^ ": seal") r in
+          let* before = draft_row conn (Store.draft_id previous) in
+          let* lifecycle_before =
+            C.find q_lifecycle_epochs (Store.draft_id previous)
+          in
+          let* lifecycle_before = or_fail "lifecycle" lifecycle_before in
+          let* sigs_before = sigs conn (Store.draft_id previous) in
+          let* set =
+            set_for ~id:(Int64.add 938600240L (Store.draft_id previous))
+              ~name:(label ^ "-repo")
+          in
+          let* next = refresh_ok (label ^ ": refresh") conn ~user:uid v set in
+          Alcotest.(check bool) (label ^ ": fresh draft id") false
+            (Int64.equal (Store.draft_id previous) (Store.draft_id next));
+          let* after = draft_row conn (Store.draft_id previous) in
+          check_same_draft_row (label ^ ": terminal row") before after;
+          let* lifecycle_after =
+            C.find q_lifecycle_epochs (Store.draft_id previous)
+          in
+          let* lifecycle_after = or_fail "lifecycle" lifecycle_after in
+          let lb_c, lb_x = lifecycle_before in
+          let la_c, la_x = lifecycle_after in
+          Alcotest.(check (option (float 0.)))
+            (label ^ ": completed_at preserved") lb_c la_c;
+          Alcotest.(check (option (float 0.)))
+            (label ^ ": cancelled_at preserved") lb_x la_x;
+          let* sigs_after = sigs conn (Store.draft_id previous) in
+          Alcotest.(check (list string)) (label ^ ": old snapshot kept")
+            sigs_before sigs_after;
+          let* new_sigs = sigs conn (Store.draft_id next) in
+          Alcotest.(check int) (label ^ ": new draft has its own snapshot")
+            1 (List.length new_sigs);
+          let* active = count_active_for_user conn uid in
+          Alcotest.(check int) (label ^ ": exactly one active draft") 1
+            active;
+          Lwt.return next
+        in
+        let* set1 = set_for ~id:938600241L ~name:"first" in
+        let* d1 = refresh_ok "create" conn ~user:uid v set1 in
+        let* d2 = terminal_round "completed" q_complete_draft d1 in
+        let* _ = terminal_round "cancelled" q_cancel_draft d2 in
+        let* total = count_for_user conn uid in
+        Alcotest.(check int) "two terminal drafts plus one active" 3 total;
+        Lwt.return_unit)
+
+  (* === ownership combinations === *)
+
+  let ownership_case =
+    db_case "refresh: drafts key on caller and installation independently"
+      (fun conn ->
+        let* a = insert_user conn "podstore_a" in
+        let* b = insert_user conn "podstore_b" in
+        (* Provenance deliberately points at B for both installations. *)
+        let* i1 =
+          insert_installation ~connected_by:b conn ~ext_id:938000031L
+            ~account_id:938100031L
+        in
+        let* i2 =
+          insert_installation ~connected_by:b conn ~ext_id:938000032L
+            ~account_id:938100032L
+        in
+        let* v1 =
+          verified ~installation_id:938000031L ~account_id:938100031L
+            ~login:"podstore-owner" ~target:"User" ()
+        in
+        let* v2 =
+          verified ~installation_id:938000032L ~account_id:938100032L
+            ~login:"podstore-owner" ~target:"User" ()
+        in
+        let* set1 =
+          repo_set ~installation:v1
+            [ gur_repo ~owner_id:938100031L ~owner_login:"podstore-owner"
+                ~id:938600311L ~name:"alpha" () ]
+        in
+        let* set2 =
+          repo_set ~installation:v2
+            [ gur_repo ~owner_id:938100032L ~owner_login:"podstore-owner"
+                ~id:938600321L ~name:"beta" () ]
+        in
+        let* da1 = refresh_ok "A on I1" conn ~user:a v1 set1 in
+        let* db1 = refresh_ok "B on I1" conn ~user:b v1 set1 in
+        let* da2 = refresh_ok "A on I2" conn ~user:a v2 set2 in
+        Alcotest.(check bool) "same installation, two users, two drafts"
+          false
+          (Int64.equal (Store.draft_id da1) (Store.draft_id db1));
+        Alcotest.(check bool) "same user, two installations, two drafts"
+          false
+          (Int64.equal (Store.draft_id da1) (Store.draft_id da2));
+        let* sa1 = active_draft_id conn ~user:a ~installation:i1 in
+        let* sb1 = active_draft_id conn ~user:b ~installation:i1 in
+        let* sa2 = active_draft_id conn ~user:a ~installation:i2 in
+        Alcotest.(check (option int64)) "A's I1 slot"
+          (Some (Store.draft_id da1)) sa1;
+        Alcotest.(check (option int64)) "B's I1 slot"
+          (Some (Store.draft_id db1)) sb1;
+        Alcotest.(check (option int64)) "A's I2 slot"
+          (Some (Store.draft_id da2)) sa2;
+        let* na = count_active_for_user conn a in
+        let* nb = count_active_for_user conn b in
+        Alcotest.(check int) "A holds two active drafts" 2 na;
+        (* B connected both installations but called refresh once: exactly
+           one draft — ownership never follows connected_by_user_id. *)
+        Alcotest.(check int) "B holds one active draft" 1 nb;
+        Lwt.return_unit)
+
+  (* === concurrency === *)
+
+  (* Second connection for the races; db_case only runs under the gate, so
+     the URL is present. *)
+  let with_second_connection f =
+    let url =
+      match Sys.getenv_opt "EARDE_TEST_DATABASE_URL" with
+      | Some url -> url
+      | None -> Alcotest.fail "EARDE_TEST_DATABASE_URL vanished mid-run"
+    in
+    let* conn2 = Caqti_lwt_unix.connect (Uri.of_string url) in
+    let* conn2 = or_fail "second connect" conn2 in
+    let (module C2 : Caqti_lwt.CONNECTION) = conn2 in
+    Lwt.finalize (fun () -> f conn2) (fun () -> C2.disconnect ())
+
+  let concurrent_identical_case =
+    db_case "refresh: concurrent identical refreshes converge on one draft"
+      (fun conn ->
+        let* uid = insert_user conn "podstore_a" in
+        let* inst =
+          insert_installation conn ~ext_id:938000041L
+            ~account_id:938100041L
+        in
+        let* v =
+          verified ~installation_id:938000041L ~account_id:938100041L
+            ~login:"podstore-owner" ~target:"User" ()
+        in
+        let* set =
+          repo_set ~installation:v
+            [ gur_repo ~owner_id:938100041L ~owner_login:"podstore-owner"
+                ~id:938600411L ~name:"alpha" ()
+            ; gur_repo ~owner_id:938100041L ~owner_login:"podstore-owner"
+                ~id:938600412L ~name:"beta" ()
+            ]
+        in
+        with_second_connection (fun conn2 ->
+            let* r1, r2 =
+              Lwt.both (refresh conn ~user:uid v set)
+                (refresh conn2 ~user:uid v set)
+            in
+            let id_of label = function
+              | Ok draft -> Store.draft_id draft
+              | Error e -> Alcotest.failf "%s: %s" label (error_str e)
+            in
+            let id1 = id_of "first refresher" r1 in
+            let id2 = id_of "second refresher" r2 in
+            Alcotest.(check int64) "both name the same draft" id1 id2;
+            let* n = count_active_for_user conn uid in
+            Alcotest.(check int) "exactly one active draft" 1 n;
+            let* stored = active_draft_id conn ~user:uid ~installation:inst in
+            Alcotest.(check (option int64)) "it is the returned draft"
+              (Some id1) stored;
+            let* stored_sigs = sigs conn id1 in
+            Alcotest.(check (list string)) "one complete valid snapshot"
+              [ sig_of ~position:1 ~id:938600411L ~account_id:938100041L
+                  ~login:"podstore-owner" "alpha"
+              ; sig_of ~position:2 ~id:938600412L ~account_id:938100041L
+                  ~login:"podstore-owner" "beta"
+              ]
+              stored_sigs;
+            Lwt.return_unit))
+
+  let concurrent_competing_case =
+    db_case "refresh: competing snapshots leave one complete winner"
+      (fun conn ->
+        let* uid = insert_user conn "podstore_a" in
+        let* _ =
+          insert_installation conn ~ext_id:938000042L
+            ~account_id:938100042L
+        in
+        let* v =
+          verified ~installation_id:938000042L ~account_id:938100042L
+            ~login:"podstore-owner" ~target:"User" ()
+        in
+        let* set1 =
+          repo_set ~installation:v
+            [ gur_repo ~owner_id:938100042L ~owner_login:"podstore-owner"
+                ~id:938600421L ~name:"alpha" ()
+            ; gur_repo ~owner_id:938100042L ~owner_login:"podstore-owner"
+                ~id:938600422L ~name:"beta" ()
+            ]
+        in
+        let* set2 =
+          repo_set ~installation:v
+            [ gur_repo ~owner_id:938100042L ~owner_login:"podstore-owner"
+                ~id:938600423L ~name:"gamma" () ]
+        in
+        let sigs1 =
+          [ sig_of ~position:1 ~id:938600421L ~account_id:938100042L
+              ~login:"podstore-owner" "alpha"
+          ; sig_of ~position:2 ~id:938600422L ~account_id:938100042L
+              ~login:"podstore-owner" "beta"
+          ]
+        in
+        let sigs2 =
+          [ sig_of ~position:1 ~id:938600423L ~account_id:938100042L
+              ~login:"podstore-owner" "gamma"
+          ]
+        in
+        with_second_connection (fun conn2 ->
+            let* r1, r2 =
+              Lwt.both (refresh conn ~user:uid v set1)
+                (refresh conn2 ~user:uid v set2)
+            in
+            let id_of label = function
+              | Ok draft -> Store.draft_id draft
+              | Error e -> Alcotest.failf "%s: %s" label (error_str e)
+            in
+            let id1 = id_of "set1 refresher" r1 in
+            let id2 = id_of "set2 refresher" r2 in
+            Alcotest.(check int64) "both identify the same draft" id1 id2;
+            let* n = count_active_for_user conn uid in
+            Alcotest.(check int) "exactly one active draft" 1 n;
+            let* stored_sigs = sigs conn id1 in
+            (* Which transaction wins is not asserted; the surviving
+               snapshot must be one COMPLETE input set — never a mixture,
+               duplicates, or stale leftovers (the exact-signature-list
+               comparison rules all three out). *)
+            let is_set1 = stored_sigs = sigs1 in
+            let is_set2 = stored_sigs = sigs2 in
+            Alcotest.(check bool)
+              "snapshot equals one complete input set" true
+              (is_set1 || is_set2);
+            Lwt.return_unit))
+
+  (* === failure rollback === *)
+
+  let rollback_case =
+    db_case "refresh: a failed snapshot insert rolls back everything"
+      (fun conn ->
+        let (module C : Caqti_lwt.CONNECTION) = conn in
+        let* uid = insert_user conn "podstore_a" in
+        let* _ =
+          insert_installation conn ~ext_id:938000051L
+            ~account_id:938100051L
+        in
+        let* v =
+          verified ~installation_id:938000051L ~account_id:938100051L
+            ~login:"podstore-owner" ~target:"User" ()
+        in
+        let* set1 =
+          repo_set ~installation:v
+            [ gur_repo ~owner_id:938100051L ~owner_login:"podstore-owner"
+                ~id:938600511L ~name:"alpha" ()
+            ; gur_repo ~owner_id:938100051L ~owner_login:"podstore-owner"
+                ~id:938600512L ~name:"beta" ()
+            ]
+        in
+        let* d1 = refresh_ok "create" conn ~user:uid v set1 in
+        let* before = draft_row conn (Store.draft_id d1) in
+        let* sigs_before = sigs conn (Store.draft_id d1) in
+        (* Test-only trigger, scoped to the reserved poison repository id;
+           dropped in the finalizer even when an assertion fails. *)
+        let exec_ddl label q =
+          let* r = C.exec q () in
+          let* () = or_fail label r in
+          Lwt.return_unit
+        in
+        let* () = exec_ddl "pre-drop trigger" q_drop_fail_trigger in
+        let* () = exec_ddl "pre-drop function" q_drop_fail_fn in
+        let* () = exec_ddl "create function" q_create_fail_fn in
+        let* () = exec_ddl "create trigger" q_create_fail_trigger in
+        Lwt.finalize
+          (fun () ->
+            let* set2 =
+              repo_set ~installation:v
+                [ gur_repo ~owner_id:938100051L
+                    ~owner_login:"podstore-owner" ~id:938600513L
+                    ~name:"gamma" ()
+                ; gur_repo ~owner_id:938100051L
+                    ~owner_login:"podstore-owner"
+                    ~id:podstore_poison_repo_id ~name:"poison" ()
+                ]
+            in
+            let* () =
+              refresh_expect "poisoned refresh" Store.Storage_error conn
+                ~user:uid v set2
+            in
+            let* after = draft_row conn (Store.draft_id d1) in
+            check_same_draft_row "draft after rollback" before after;
+            let* sigs_after = sigs conn (Store.draft_id d1) in
+            Alcotest.(check (list string))
+              "previous complete snapshot intact, no partial new rows"
+              sigs_before sigs_after;
+            let* n = count_for_user conn uid in
+            Alcotest.(check int) "still exactly one draft" 1 n;
+            Lwt.return_unit)
+          (fun () ->
+            let* () = exec_ddl "drop trigger" q_drop_fail_trigger in
+            exec_ddl "drop function" q_drop_fail_fn))
+
+  (* === user foreign-key absence === *)
+
+  let ghost_user_case =
+    db_case "refresh: nonexistent positive user id is Storage_error, no draft"
+      (fun conn ->
+        let (module C : Caqti_lwt.CONNECTION) = conn in
+        let* ghost = C.find q_absent_user_id () in
+        let* ghost = or_fail "absent user id" ghost in
+        let* inst =
+          insert_installation conn ~ext_id:938000052L
+            ~account_id:938100052L
+        in
+        let* v =
+          verified ~installation_id:938000052L ~account_id:938100052L
+            ~login:"podstore-owner" ~target:"User" ()
+        in
+        let* set =
+          repo_set ~installation:v
+            [ gur_repo ~owner_id:938100052L ~owner_login:"podstore-owner"
+                ~id:938600521L ~name:"alpha" () ]
+        in
+        let* () =
+          refresh_expect "ghost user" Store.Storage_error conn ~user:ghost v
+            set
+        in
+        let* n = count_for_user conn ghost in
+        Alcotest.(check int) "no draft row" 0 n;
+        let* stored = active_draft_id conn ~user:ghost ~installation:inst in
+        Alcotest.(check (option int64)) "slot empty" None stored;
+        Lwt.return_unit)
+
+  (* === credential prohibition === *)
+
+  let credential_case =
+    db_case "refresh: no credential material reaches stored values"
+      (fun conn ->
+        let* uid = insert_user conn "podstore_a" in
+        let* _ =
+          insert_installation conn ~ext_id:938000053L
+            ~account_id:938100053L
+        in
+        (* Every fixture in the chain rides the refresh-token exchange, so
+           an access token, refresh token, code, verifier, and secret all
+           exist to leak — and must not. *)
+        let* v =
+          verified ~token_body:refresh_token_body
+            ~installation_id:938000053L ~account_id:938100053L
+            ~login:"podstore-owner" ~target:"User" ()
+        in
+        let* set =
+          repo_set ~token_body:refresh_token_body ~installation:v
+            [ gur_repo ~owner_id:938100053L ~owner_login:"podstore-owner"
+                ~id:938600531L ~name:"alpha"
+                ~description:{|"benign description"|} ()
+            ]
+        in
+        let* draft = refresh_ok "refresh" conn ~user:uid v set in
+        let* (_, _, status), _ = draft_row conn (Store.draft_id draft) in
+        let* stored_sigs = sigs conn (Store.draft_id draft) in
+        (* Every text value either table stores for this draft. *)
+        let blob = String.concat "|" (status :: stored_sigs) in
+        List.iter
+          (fun (label, needle) ->
+            Alcotest.(check bool) (label ^ " absent from stored values")
+              false
+              (goc_contains ~needle blob))
+          [ ("access token", pods_access_fixture)
+          ; ("refresh token", pods_refresh_fixture)
+          ; ("authorization code", gte_code_string)
+          ; ("PKCE verifier", gte_verifier_string)
+          ; ("client secret", gte_client_secret)
+          ];
+        Lwt.return_unit)
+
+  let suite =
+    [ invalid_user_case; missing_installation_case;
+      inaccessible_installation_case; revoked_installation_case;
+      account_id_mismatch_case; account_type_mismatch_case;
+      login_difference_case; provenance_case; fresh_create_case;
+      active_refresh_case; expired_refresh_case; terminal_case;
+      ownership_case; concurrent_identical_case; concurrent_competing_case;
+      rollback_case; ghost_user_case; credential_case ]
+end
+
 (* === GitHub onboarding start handler (Github_onboarding_handlers) ===
    The factory takes the mode and config loader by injection, so gate cases
    run DB-free with fixed values and never touch the process environment.
@@ -12204,6 +13296,12 @@ let () =
          Postgres; same EARDE_TEST_DATABASE_URL gate (each case skips
          without it). *)
     ; ( "project_onboarding_drafts_schema", Pod_schema.suite )
+      (* Draft store: the transactional create-or-refresh plus complete
+         snapshot replacement lives in Postgres — installation
+         authorization, index-arbitrated slot, rollback atomicity,
+         concurrency; same EARDE_TEST_DATABASE_URL gate (each case skips
+         without it). *)
+    ; ( "project_onboarding_draft_store", Pod_store.suite )
       (* Start-installation handler gates: DB-free with injected mode and
          config — rejections must produce controlled statuses without
          configuration reads, SQL, or cookies. *)
