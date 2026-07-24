@@ -134,16 +134,45 @@ let repositories_html repositories =
      </section>"
     (String.concat "\n" (List.map repository_html repositories))
 
-(* The continuation is copy only: the community-home choice is a later
-   slice, so no form, button, or disabled control pretends otherwise. *)
-let next_step_html =
-  "<section class='phs-next'>\
-   <h2 class='phs-next-title'>Choose a community home</h2>\
-   <p class='create-sub phs-next-copy'>Next, you will be able to create a \
-   community home for this project, or connect the project to an existing \
-   community.</p>\
-   <p class='phs-next-note'>This step is not configured yet.</p>\
-   </section>"
+(* The same canonical grammar the request-home route and read model
+   require. A project slug outside it never becomes a navigation link. *)
+let valid_project_slug value =
+  let length = String.length value in
+  let is_alnum c = (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') in
+  let rec check i =
+    i >= length
+    ||
+    match value.[i] with
+    | c when is_alnum c -> check (i + 1)
+    | '-' -> i > 0 && is_alnum value.[i - 1] && check (i + 1)
+    | _ -> false
+  in
+  length >= 1 && length <= 80 && is_alnum value.[length - 1] && check 0
+
+(* The continuation: connecting to an existing community is a real
+   navigable step now, while dedicated-home creation remains future copy —
+   no form, button, or disabled control pretends otherwise. The link is
+   built only over a canonical slug, so corrupt data never becomes
+   actionable. *)
+let next_step_html project =
+  let connect_link =
+    if valid_project_slug project.slug then
+      Printf.sprintf
+        "<p class='phs-next-connect'><a href='%s' class='create-link \
+         phs-next-request-link'>Connect to an existing community</a></p>"
+        (Components.safe_internal_path
+           ("/projects/" ^ project.slug ^ "/request-home"))
+    else ""
+  in
+  Printf.sprintf
+    "<section class='phs-next'>\
+     <h2 class='phs-next-title'>Choose a community home</h2>\
+     <p class='create-sub phs-next-copy'>Connect this project to an \
+     existing Earde community, or create a community home for it.</p>\
+     %s<p class='phs-next-note'>Create a community home: this option is \
+     not available yet.</p>\
+     </section>"
+    connect_link
 
 let project_home_setup_page ?user ?request ~project () =
   let body =
@@ -152,7 +181,7 @@ let project_home_setup_page ?user ?request ~project () =
        class='create-panel'>%s%s%s%s</div></div>"
       heading (summary_html project)
       (repositories_html project.repositories)
-      next_step_html
+      (next_step_html project)
   in
   (* noindex: a steward-only setup surface — not for search indexes. *)
   Components.create_page ?user ?request ~noindex:true ~title:"Project created"

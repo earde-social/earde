@@ -165,6 +165,23 @@ let () =
         Earde.Project_creation_handlers.make_project_home_setup_handler
           ~mode:(Earde.Project_onboarding.mode_from_env ())
           request);
+    (* Existing-community home request for a verified project. The
+       steward-only GET is informational and deliberately not rate-limited,
+       matching the other project-setup GETs; the request-creating POST
+       shares the sensitive-POST rate limit and per-request configuration
+       load of the project POSTs above (origin policy only — no GitHub
+       credential, no outbound HTTP). *)
+    Dream.get "/projects/:slug/request-home" (fun request ->
+        Earde.Project_home_request_handlers.make_project_home_choice_handler
+          ~mode:(Earde.Project_onboarding.mode_from_env ())
+          request);
+    Dream.post "/projects/:slug/request-home"
+      (Earde.Handlers.Rate_limit.middleware (fun request ->
+           Earde.Project_home_request_handlers
+           .make_project_home_request_handler
+             ~mode:(Earde.Project_onboarding.mode_from_env ())
+             ~load_config:Earde.Github_app_config.from_env
+             request));
     Dream.get "/new-community" Earde.Handlers.new_community_page;
     Dream.post "/communities" Earde.Handlers.create_community_handler;
     Dream.post "/join" Earde.Handlers.join_community_handler;
