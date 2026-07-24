@@ -115,8 +115,8 @@ let () =
        limiter's blocked page is rendered HTML, while this code/state-bearing
        callback URL must only ever answer a clean redirect away, and
        request-target redaction already keeps code and state out of Dream
-       logging and analytics. Secret credentials and both GitHub transports
-       are injected here so the handler stays testable offline. *)
+       logging and analytics. Secret credentials and the three GitHub
+       transports are injected here so the handler stays testable offline. *)
     Dream.get "/integrations/github/authorize/callback"
       (fun request ->
         Earde.Github_onboarding_handlers.make_oauth_callback_handler
@@ -127,6 +127,9 @@ let () =
             (module Earde.Github_oauth_token_exchange.Cohttp_transport)
           ~installations_transport:
             (module Earde.Github_user_installations.Cohttp_transport)
+          ~repositories_transport:
+            (module Earde.Github_user_installation_repositories
+                    .Cohttp_transport)
           request);
     Dream.get "/new-community" Earde.Handlers.new_community_page;
     Dream.post "/communities" Earde.Handlers.create_community_handler;

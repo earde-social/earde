@@ -394,13 +394,16 @@ let parse_oauth_callback_target target =
               Ok (state, Authorization_rejected)
           | _ -> Error ()))
 
-(* Consume → exchange → verify → persist, in that order. The two Dream.sql
-   scopes are separate and short on purpose: no database-pool connection is
-   ever held across an outbound GitHub call. Every branch past a successful
-   consumption is terminal — the state is burned or spent either way — so
-   each deletes the per-flow cookie on its way out. *)
+(* Consume → exchange → verify → list repositories → persist, in that
+   order. The two Dream.sql scopes are separate and short on purpose: no
+   database-pool connection is ever held across an outbound GitHub call,
+   and the complete repository set is materialized before the second scope
+   opens. Every branch past a successful consumption is terminal — the
+   state is burned or spent either way — so each deletes the per-flow
+   cookie on its way out. *)
 let finish_authorization ~config ~credentials ~exchange_transport
-    ~installations_transport ~request ~state ~data ~code =
+    ~installations_transport ~repositories_transport ~request ~state ~data
+    ~code =
   let%lwt consumed =
     Dream.sql request (fun db ->
         Github_onboarding_state_store.consume db ~state
@@ -460,24 +463,80 @@ let finish_authorization ~config ~credentials ~exchange_transport
               | Github_user_installations.Pagination_limit ) ->
               Lwt.return (callback_failure_dropping config ~request ~state)
           | Ok verified_installation -> (
-              (* The token set stays behind in memory on purpose: only the
-                 verified identity crosses into persistence. *)
-              let%lwt persisted =
-                Dream.sql request (fun db ->
-                    Github_installation_store.record_verified db
-                      ~connected_by_user_id:user_id verified_installation)
+              let%lwt listed =
+                Github_user_installation_repositories.list_public
+                  ~transport:repositories_transport ~token_set
+                  ~installation:verified_installation
               in
-              match persisted with
+              match listed with
               | Error
-                  ( Github_installation_store.Invalid_connected_by_user_id
-                  | Github_installation_store.Installation_unavailable
-                  | Github_installation_store.Storage_error ) ->
+                  ( Github_user_installation_repositories.Transport_error
+                  | Github_user_installation_repositories
+                    .Unexpected_http_status _
+                  | Github_user_installation_repositories.Invalid_response
+                  | Github_user_installation_repositories
+                    .No_public_repositories
+                  | Github_user_installation_repositories.Pagination_limit
+                    ) ->
+                  (* Nothing is persisted when the listing fails: the
+                     installation record and draft only exist together
+                     with a complete snapshot source. *)
                   Lwt.return
                     (callback_failure_dropping config ~request ~state)
-              | Ok () ->
-                  Lwt.return
-                    (redirect_dropping_cookie config ~request ~state
-                       (callback_success ())))))
+              | Ok repository_set -> (
+                  (* The token set stays behind in memory on purpose: only
+                     the verified identity and the validated public
+                     snapshot cross into persistence, and the repository
+                     set is fully materialized before this second scope
+                     opens. record_verified commits on its own before
+                     refresh_verified's transaction begins; if the draft
+                     refresh then fails, the surviving installation row is
+                     intentional — a fresh onboarding attempt reuses it
+                     idempotently and recreates the draft. *)
+                  let%lwt persisted =
+                    Dream.sql request (fun db ->
+                        let%lwt recorded =
+                          Github_installation_store.record_verified db
+                            ~connected_by_user_id:user_id
+                            verified_installation
+                        in
+                        match recorded with
+                        | Error
+                            ( Github_installation_store
+                              .Invalid_connected_by_user_id
+                            | Github_installation_store
+                              .Installation_unavailable
+                            | Github_installation_store.Storage_error ) ->
+                            Lwt.return (Error ())
+                        | Ok () -> (
+                            let%lwt refreshed =
+                              Project_onboarding_draft_store.refresh_verified
+                                db ~user_id
+                                ~installation:verified_installation
+                                ~repositories:repository_set
+                            in
+                            match refreshed with
+                            | Error
+                                ( Project_onboarding_draft_store
+                                  .Invalid_user_id
+                                | Project_onboarding_draft_store
+                                  .Installation_unavailable
+                                | Project_onboarding_draft_store
+                                  .Storage_error ) ->
+                                Lwt.return (Error ())
+                            | Ok _draft ->
+                                (* The draft id stays private until an
+                                   owner-authorized setup route exists. *)
+                                Lwt.return (Ok ())))
+                  in
+                  match persisted with
+                  | Error () ->
+                      Lwt.return
+                        (callback_failure_dropping config ~request ~state)
+                  | Ok () ->
+                      Lwt.return
+                        (redirect_dropping_cookie config ~request ~state
+                           (callback_success ()))))))
 
 (* --- Onboarding entry and return page (GET /bring) --- *)
 
@@ -524,7 +583,8 @@ let make_bring_handler ~mode request =
        ())
 
 let make_oauth_callback_handler ~mode ~load_config ~load_credentials
-    ~exchange_transport ~installations_transport request =
+    ~exchange_transport ~installations_transport ~repositories_transport
+    request =
   match mode with
   | Project_onboarding.Off ->
       (* Kill switch: no parsing, no configuration or credential read, no
@@ -576,4 +636,5 @@ let make_oauth_callback_handler ~mode ~load_config ~load_credentials
                       | Ok credentials ->
                           finish_authorization ~config ~credentials
                             ~exchange_transport ~installations_transport
-                            ~request ~state ~data ~code)))))
+                            ~repositories_transport ~request ~state ~data
+                            ~code)))))

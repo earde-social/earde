@@ -108,6 +108,8 @@ val make_oauth_callback_handler :
      (Github_oauth_credentials.t, Github_oauth_credentials.error) result) ->
   exchange_transport:(module Github_oauth_token_exchange.TRANSPORT) ->
   installations_transport:(module Github_user_installations.TRANSPORT) ->
+  repositories_transport:
+    (module Github_user_installation_repositories.TRANSPORT) ->
   Dream.handler
 (** Handler factory for the final GitHub OAuth authorization callback.
     Sessionless like the setup return: authorization is possession-based
@@ -138,10 +140,20 @@ val make_oauth_callback_handler :
     an authorization code, [load_credentials] runs next (failure keeps the
     cookie and touches nothing else); then the state is consumed in one
     short [Dream.sql] scope ([Storage_error] keeps the cookie; every other
-    consume error deletes it), the code is exchanged and the pending
-    installation verified over the injected transports with no pooled
-    database connection held, and the verified installation is persisted
-    via [Github_installation_store.record_verified] in a second, separate
-    [Dream.sql] scope under the consumed row's stored user. All terminal
-    branches — success included — delete the per-flow cookie; no token is
-    ever persisted or passed to the persistence layer. *)
+    consume error deletes it), and — with no pooled database connection
+    held — the code is exchanged, the pending installation verified, and
+    the verified installation's public repositories listed over the
+    injected transports, the complete repository set materialized before
+    any further SQL. A second, separate [Dream.sql] scope then runs
+    [Github_installation_store.record_verified] under the consumed row's
+    stored user and, only after it succeeds,
+    [Project_onboarding_draft_store.refresh_verified] for that same user —
+    sequentially on the one supplied connection, with no outer transaction
+    (the draft store owns its own). A draft failure after the installation
+    committed is terminal for the flow but intentionally leaves the
+    installation row active: a fresh onboarding attempt reuses it
+    idempotently and recreates the draft. Success is reported only after
+    the draft refresh succeeds; the draft id never appears in any
+    response. All terminal branches — success included — delete the
+    per-flow cookie; no token is ever persisted or passed to the
+    persistence layer. *)
