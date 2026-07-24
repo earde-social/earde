@@ -149,6 +149,22 @@ let () =
              ~mode:(Earde.Project_onboarding.mode_from_env ())
              ~load_config:Earde.Github_app_config.from_env
              request));
+    (* Permanent project creation and its PRG destination. The POST shares
+       the sensitive-POST rate limit and per-request configuration load of
+       the selection POST above (origin policy only — no GitHub credential,
+       no outbound HTTP); the owner-only GET is informational and
+       deliberately not rate-limited, matching the other project-setup
+       GETs. *)
+    Dream.post "/projects"
+      (Earde.Handlers.Rate_limit.middleware (fun request ->
+           Earde.Project_creation_handlers.make_project_creation_handler
+             ~mode:(Earde.Project_onboarding.mode_from_env ())
+             ~load_config:Earde.Github_app_config.from_env
+             request));
+    Dream.get "/projects/:slug/setup" (fun request ->
+        Earde.Project_creation_handlers.make_project_home_setup_handler
+          ~mode:(Earde.Project_onboarding.mode_from_env ())
+          request);
     Dream.get "/new-community" Earde.Handlers.new_community_page;
     Dream.post "/communities" Earde.Handlers.create_community_handler;
     Dream.post "/join" Earde.Handlers.join_community_handler;
