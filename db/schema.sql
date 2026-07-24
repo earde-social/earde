@@ -213,6 +213,53 @@ CREATE TABLE public.community_moderators (
 
 
 --
+-- Name: community_projects; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.community_projects (
+    id bigint NOT NULL,
+    project_id bigint NOT NULL,
+    community_id integer NOT NULL,
+    relation_type text DEFAULT 'home'::text NOT NULL,
+    status text NOT NULL,
+    requested_by_user_id integer,
+    reviewed_by_user_id integer,
+    request_note text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    reviewed_at timestamp with time zone,
+    removed_at timestamp with time zone,
+    CONSTRAINT community_projects_relation_type_check CHECK ((relation_type = 'home'::text)),
+    CONSTRAINT community_projects_removed_after_created_check CHECK (((removed_at IS NULL) OR (removed_at >= created_at))),
+    CONSTRAINT community_projects_removed_after_reviewed_check CHECK (((removed_at IS NULL) OR (reviewed_at IS NULL) OR (removed_at >= reviewed_at))),
+    CONSTRAINT community_projects_request_note_check CHECK (((request_note IS NULL) OR (char_length(request_note) <= 2000))),
+    CONSTRAINT community_projects_reviewed_after_created_check CHECK (((reviewed_at IS NULL) OR (reviewed_at >= created_at))),
+    CONSTRAINT community_projects_status_check CHECK ((status = ANY (ARRAY['pending'::text, 'accepted'::text, 'rejected'::text, 'removed'::text]))),
+    CONSTRAINT community_projects_status_shape_check CHECK ((((status = 'pending'::text) AND (reviewed_at IS NULL) AND (removed_at IS NULL) AND (reviewed_by_user_id IS NULL)) OR ((status = 'accepted'::text) AND (reviewed_at IS NOT NULL) AND (removed_at IS NULL)) OR ((status = 'rejected'::text) AND (reviewed_at IS NOT NULL) AND (removed_at IS NULL)) OR ((status = 'removed'::text) AND (reviewed_at IS NOT NULL) AND (removed_at IS NOT NULL)))),
+    CONSTRAINT community_projects_updated_after_created_check CHECK ((updated_at >= created_at))
+);
+
+
+--
+-- Name: community_projects_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.community_projects_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: community_projects_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.community_projects_id_seq OWNED BY public.community_projects.id;
+
+
+--
 -- Name: community_sections; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -1029,6 +1076,13 @@ ALTER TABLE ONLY public.communities ALTER COLUMN id SET DEFAULT nextval('public.
 
 
 --
+-- Name: community_projects id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.community_projects ALTER COLUMN id SET DEFAULT nextval('public.community_projects_id_seq'::regclass);
+
+
+--
 -- Name: community_sections id; Type: DEFAULT; Schema: public; Owner: -
 --
 
@@ -1232,6 +1286,14 @@ ALTER TABLE ONLY public.community_members
 
 ALTER TABLE ONLY public.community_moderators
     ADD CONSTRAINT community_moderators_pkey PRIMARY KEY (user_id, community_id);
+
+
+--
+-- Name: community_projects community_projects_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.community_projects
+    ADD CONSTRAINT community_projects_pkey PRIMARY KEY (id);
 
 
 --
@@ -1563,6 +1625,13 @@ ALTER TABLE ONLY public.users
 
 
 --
+-- Name: community_projects_one_active_home_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX community_projects_one_active_home_idx ON public.community_projects USING btree (project_id) WHERE ((relation_type = 'home'::text) AND (status = ANY (ARRAY['pending'::text, 'accepted'::text])));
+
+
+--
 -- Name: idx_chat_messages_channel_id; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -1574,6 +1643,20 @@ CREATE INDEX idx_chat_messages_channel_id ON public.chat_messages USING btree (c
 --
 
 CREATE INDEX idx_chat_messages_search_tsv ON public.chat_messages USING gin (search_tsv);
+
+
+--
+-- Name: idx_community_projects_community_status; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_community_projects_community_status ON public.community_projects USING btree (community_id, status, created_at);
+
+
+--
+-- Name: idx_community_projects_project_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_community_projects_project_id ON public.community_projects USING btree (project_id);
 
 
 --
@@ -1847,6 +1930,38 @@ ALTER TABLE ONLY public.community_moderators
 
 ALTER TABLE ONLY public.community_moderators
     ADD CONSTRAINT community_moderators_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+
+
+--
+-- Name: community_projects community_projects_community_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.community_projects
+    ADD CONSTRAINT community_projects_community_id_fkey FOREIGN KEY (community_id) REFERENCES public.communities(id) ON DELETE CASCADE;
+
+
+--
+-- Name: community_projects community_projects_project_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.community_projects
+    ADD CONSTRAINT community_projects_project_id_fkey FOREIGN KEY (project_id) REFERENCES public.open_source_projects(id) ON DELETE CASCADE;
+
+
+--
+-- Name: community_projects community_projects_requested_by_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.community_projects
+    ADD CONSTRAINT community_projects_requested_by_user_id_fkey FOREIGN KEY (requested_by_user_id) REFERENCES public.users(id) ON DELETE SET NULL;
+
+
+--
+-- Name: community_projects community_projects_reviewed_by_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.community_projects
+    ADD CONSTRAINT community_projects_reviewed_by_user_id_fkey FOREIGN KEY (reviewed_by_user_id) REFERENCES public.users(id) ON DELETE SET NULL;
 
 
 --
@@ -2129,4 +2244,5 @@ INSERT INTO public.schema_migrations (version) VALUES
     ('20260723120000'),
     ('20260723150000'),
     ('20260724120000'),
-    ('20260724130000');
+    ('20260724130000'),
+    ('20260724140000');
