@@ -12946,6 +12946,574 @@ module Rate_limit_blocked_page = struct
   let suite = [ callback_case; login_case ]
 end
 
+(* ===== Project setup: repository-selection form parser + page renderer =====
+   Both pure and DB-free. Parser rejection labels name only the malformed
+   category — never the fixture value — and rejection is asserted as a bare
+   boolean, so no form value can reach Alcotest output; the error type itself
+   is payload-free by construction. *)
+module Psf = Earde.Project_setup_repository_form
+module Psp = Earde.Project_setup_pages
+
+let psf_case name f = Alcotest.test_case name `Quick f
+
+let psf_ok name fields ~draft ~repos =
+  psf_case name (fun () ->
+      match Psf.of_fields fields with
+      | Ok t ->
+          Alcotest.(check int64) "draft id" draft (Psf.draft_id t);
+          Alcotest.(check (list int64)) "snapshot ids" repos
+            (Psf.selected_snapshot_ids t)
+      | Error Psf.Invalid_form -> Alcotest.fail "expected a valid form")
+
+let psf_reject name fields =
+  psf_case name (fun () ->
+      Alcotest.(check bool) "rejected" true
+        (match Psf.of_fields fields with
+        | Error Psf.Invalid_form -> true
+        | Ok _ -> false))
+
+let psf_repo_fields values = List.map (fun v -> ("repository", v)) values
+
+let psf_fields_of_size n =
+  ("draft_id", "1")
+  :: psf_repo_fields (List.init n (fun i -> string_of_int (i + 1)))
+
+let psf_cases =
+  [ psf_ok "draft id alone: empty selection is valid" [ ("draft_id", "7") ]
+      ~draft:7L ~repos:[]
+  ; psf_ok "one repository"
+      [ ("draft_id", "7"); ("repository", "31") ]
+      ~draft:7L ~repos:[ 31L ]
+  ; psf_ok "several repositories preserve form order"
+      (("draft_id", "8") :: psf_repo_fields [ "5"; "3"; "9"; "4" ])
+      ~draft:8L ~repos:[ 5L; 3L; 9L; 4L ]
+  ; psf_ok "draft id position between repositories does not matter"
+      [ ("repository", "2"); ("draft_id", "7"); ("repository", "1") ]
+      ~draft:7L ~repos:[ 2L; 1L ]
+  ; psf_case "exactly 2000 repositories accepted, order intact" (fun () ->
+        match Psf.of_fields (psf_fields_of_size 2000) with
+        | Ok t ->
+            let ids = Psf.selected_snapshot_ids t in
+            Alcotest.(check int) "count" 2000 (List.length ids);
+            Alcotest.(check int64) "first preserved" 1L (List.hd ids);
+            Alcotest.(check int64) "last preserved" 2000L (List.nth ids 1999)
+        | Error Psf.Invalid_form -> Alcotest.fail "expected a valid form")
+  ; psf_ok "leading zeroes accepted when the value is positive"
+      [ ("draft_id", "007"); ("repository", "0042") ]
+      ~draft:7L ~repos:[ 42L ]
+  ; psf_case "largest representable int64 accepted" (fun () ->
+        let fields =
+          [ ("draft_id", Int64.to_string Int64.max_int)
+          ; ("repository", Int64.to_string Int64.max_int)
+          ]
+        in
+        match Psf.of_fields fields with
+        | Ok t ->
+            Alcotest.(check int64) "draft id" Int64.max_int (Psf.draft_id t);
+            Alcotest.(check (list int64)) "snapshot ids" [ Int64.max_int ]
+              (Psf.selected_snapshot_ids t)
+        | Error Psf.Invalid_form -> Alcotest.fail "expected a valid form")
+    (* Draft id: exactly one, strict positive decimal int64. *)
+  ; psf_reject "empty field set" []
+  ; psf_reject "missing draft id" (psf_repo_fields [ "1" ])
+  ; psf_reject "duplicate draft id field"
+      [ ("draft_id", "1"); ("draft_id", "1") ]
+  ; psf_reject "blank draft id" [ ("draft_id", "") ]
+  ; psf_reject "zero draft id" [ ("draft_id", "0") ]
+  ; psf_reject "all-zero draft id" [ ("draft_id", "000") ]
+  ; psf_reject "negative draft id" [ ("draft_id", "-5") ]
+  ; psf_reject "plus-signed draft id" [ ("draft_id", "+5") ]
+  ; psf_reject "leading-whitespace draft id" [ ("draft_id", " 5") ]
+  ; psf_reject "trailing-whitespace draft id" [ ("draft_id", "5 ") ]
+  ; psf_reject "newline-suffixed draft id" [ ("draft_id", "5\n") ]
+  ; psf_reject "decimal-point draft id" [ ("draft_id", "5.0") ]
+  ; psf_reject "hexadecimal draft id" [ ("draft_id", "0x10") ]
+  ; psf_reject "underscore-separated draft id" [ ("draft_id", "1_000") ]
+  ; psf_reject "int64-overflow draft id"
+      [ ("draft_id", "9223372036854775808") ]
+    (* Repository ids: same strict grammar; one bad value rejects the whole
+       form. *)
+  ; psf_reject "blank repository id" [ ("draft_id", "1"); ("repository", "") ]
+  ; psf_reject "zero repository id" [ ("draft_id", "1"); ("repository", "0") ]
+  ; psf_reject "negative repository id"
+      [ ("draft_id", "1"); ("repository", "-3") ]
+  ; psf_reject "plus-signed repository id"
+      [ ("draft_id", "1"); ("repository", "+3") ]
+  ; psf_reject "leading-whitespace repository id"
+      [ ("draft_id", "1"); ("repository", " 3") ]
+  ; psf_reject "trailing-whitespace repository id"
+      [ ("draft_id", "1"); ("repository", "3 ") ]
+  ; psf_reject "decimal-point repository id"
+      [ ("draft_id", "1"); ("repository", "3.0") ]
+  ; psf_reject "hexadecimal repository id"
+      [ ("draft_id", "1"); ("repository", "0x3") ]
+  ; psf_reject "int64-overflow repository id"
+      [ ("draft_id", "1"); ("repository", "9223372036854775808") ]
+  ; psf_reject "one invalid among valid repositories rejects the whole form"
+      (("draft_id", "1") :: psf_repo_fields [ "4"; "x"; "6" ])
+  ; psf_reject "duplicate repository ids"
+      (("draft_id", "1") :: psf_repo_fields [ "4"; "4" ])
+  ; psf_reject "duplicate repository ids across leading-zero spellings"
+      (("draft_id", "1") :: psf_repo_fields [ "7"; "007" ])
+  ; psf_reject "2001 repository fields" (psf_fields_of_size 2001)
+    (* Closed field set: everything but draft_id/repository rejects,
+       byte-exactly. *)
+  ; psf_reject "unknown field" [ ("draft_id", "1"); ("primary", "2") ]
+  ; psf_reject "unknown submit-style field"
+      [ ("draft_id", "1"); ("submit", "save") ]
+  ; psf_reject "capitalized field name" [ ("Draft_id", "1") ]
+  ; psf_reject "field name with trailing space"
+      [ ("draft_id", "1"); ("repository ", "2") ]
+  ; psf_case "every rejection is the same payload-free error" (fun () ->
+        let rejections =
+          [ Psf.of_fields [ ("draft_id", "0") ]
+          ; Psf.of_fields [ ("draft_id", "1"); ("unknown", "field") ]
+          ; Psf.of_fields (("draft_id", "1") :: psf_repo_fields [ "4"; "4" ])
+          ]
+        in
+        List.iter
+          (fun r ->
+            Alcotest.(check bool) "Invalid_form" true
+              (r = Error Psf.Invalid_form))
+          rejections)
+  ]
+
+(* --- Page renderer. Assertions scope to the feature fragment (the
+   create-shell contents inside <main>): the shared layout legitimately emits
+   its own scripts and styles, and these tests must pin only what the feature
+   templates introduce. --- *)
+
+let render_ps ?user ?(feedback = None) state =
+  Psp.project_setup_page ?user ~state ~feedback ()
+
+let ps_index_of haystack needle from =
+  let hl = String.length haystack and nl = String.length needle in
+  let rec go i =
+    if i + nl > hl then None
+    else if String.sub haystack i nl = needle then Some i
+    else go (i + 1)
+  in
+  go from
+
+let ps_count haystack needle =
+  let nl = String.length needle in
+  let rec go from acc =
+    match ps_index_of haystack needle from with
+    | None -> acc
+    | Some i -> go (i + nl) (acc + 1)
+  in
+  go 0 0
+
+let ps_fragment html =
+  let start_marker = "<div class='create-shell'>" in
+  match ps_index_of html start_marker 0 with
+  | None -> Alcotest.fail "create shell missing from page"
+  | Some s -> (
+      match ps_index_of html "</main>" s with
+      | None -> Alcotest.fail "unterminated main element"
+      | Some e -> String.sub html s (e - s))
+
+let ps_must frag s =
+  Alcotest.(check bool) ("contains: " ^ s) true (contains frag s)
+
+let ps_must_not frag s =
+  Alcotest.(check bool) ("must not contain: " ^ s) false (contains frag s)
+
+let ps_order frag first second =
+  match (ps_index_of frag first 0, ps_index_of frag second 0) with
+  | Some i, Some j ->
+      Alcotest.(check bool)
+        (Printf.sprintf "'%s' before '%s'" first second)
+        true (i < j)
+  | _ -> Alcotest.fail "expected both order markers present"
+
+let psp_case name f = Alcotest.test_case name `Quick f
+
+let ps_draft ?(id = 11L) ?(login = "octo-org") ?(atype = Psp.Organization)
+    ?(repos = 3) ?(selected = 0) () : Psp.draft_option =
+  { Psp.draft_id = id; account_login = login; account_type = atype;
+    repository_count = repos; selected_repository_count = selected }
+
+let ps_repo ?(id = 501L) ?(full_name = "octo-org/widgets")
+    ?(url = "https://github.com/octo-org/widgets") ?description
+    ?(branch = "main") ?(archived = false) ?(selected = false) () :
+    Psp.repository_option =
+  { Psp.snapshot_id = id; full_name; html_url = url; description;
+    default_branch = branch; is_archived = archived; is_selected = selected }
+
+let ps_config ?draft ?(repos = [ ps_repo () ]) () : Psp.configuration =
+  { Psp.draft = (match draft with Some d -> d | None -> ps_draft ());
+    repositories = repos }
+
+let ps_chooser_a =
+  ps_draft ~id:5L ~login:"alpha-dev" ~atype:Psp.Personal ~repos:1 ~selected:0
+    ()
+
+let ps_chooser_b =
+  ps_draft ~id:9L ~login:"beta-org" ~atype:Psp.Organization ~repos:12
+    ~selected:4 ()
+
+let ps_cfg_draft = ps_draft ~id:11L ~login:"octo-org" ()
+
+let ps_r1 =
+  ps_repo ~id:101L ~full_name:"octo-org/first"
+    ~url:"https://github.com/octo-org/first" ~selected:true ()
+
+let ps_r2 =
+  ps_repo ~id:102L ~full_name:"octo-org/second"
+    ~url:"https://github.com/octo-org/second" ~description:"A second tool"
+    ~branch:"release/2.x" ()
+
+let ps_r3 =
+  ps_repo ~id:103L ~full_name:"octo-org/legacy"
+    ~url:"https://github.com/octo-org/legacy" ~archived:true ()
+
+let ps_cfg = ps_config ~draft:ps_cfg_draft ~repos:[ ps_r1; ps_r2; ps_r3 ] ()
+
+let psp_no_draft_cases =
+  [ psp_case "/bring link, no form, no chooser, no hidden draft input"
+      (fun () ->
+        let frag = ps_fragment (render_ps Psp.No_available_drafts) in
+        ps_must frag "Create a project";
+        ps_must frag "href='/bring'";
+        ps_must frag "Connect a GitHub project";
+        ps_must_not frag "<form";
+        ps_must_not frag "type='hidden'";
+        ps_must_not frag "name='draft_id'";
+        ps_must_not frag "ps-draft-list")
+  ; psp_case "no feedback renders no alert container" (fun () ->
+        let frag = ps_fragment (render_ps Psp.No_available_drafts) in
+        ps_must_not frag "ps-alert")
+  ]
+
+let psp_chooser_cases =
+  [ psp_case "options in supplied order with type copy and counts" (fun () ->
+        let frag =
+          ps_fragment
+            (render_ps ~user:"alice"
+               (Psp.Choose_draft [ ps_chooser_a; ps_chooser_b ]))
+        in
+        ps_order frag "alpha-dev" "beta-org";
+        ps_must frag "Personal account";
+        ps_must frag "Organization";
+        ps_must frag "1 repository<";
+        ps_must frag "12 repositories, 4 selected";
+        ps_must_not frag "0 selected";
+        ps_must_not frag "1 repositories")
+  ; psp_case "structured /projects/new?draft= links, nothing automatic"
+      (fun () ->
+        let frag =
+          ps_fragment
+            (render_ps (Psp.Choose_draft [ ps_chooser_a; ps_chooser_b ]))
+        in
+        ps_must frag "href='/projects/new?draft=5'";
+        ps_must frag "href='/projects/new?draft=9'";
+        (* No form and no checked control: nothing is selected for the
+           user, and only the permitted draft id appears — no installation,
+           account, or user identifiers. *)
+        ps_must_not frag "<form";
+        ps_must_not frag "checked";
+        ps_must_not frag "installation";
+        ps_must_not frag "connected_by";
+        ps_must_not frag "account_id")
+  ; psp_case "empty chooser falls back to the safe empty state" (fun () ->
+        let frag = ps_fragment (render_ps (Psp.Choose_draft [])) in
+        ps_must frag "href='/bring'";
+        ps_must_not frag "ps-draft-list";
+        ps_must_not frag "<form")
+  ; psp_case "non-positive draft ids never become actionable links" (fun () ->
+        let corrupt_zero = ps_draft ~id:0L ~login:"zero-corrupt" () in
+        let corrupt_neg = ps_draft ~id:(-3L) ~login:"neg-corrupt" () in
+        let frag =
+          ps_fragment
+            (render_ps (Psp.Choose_draft [ corrupt_zero; corrupt_neg ]))
+        in
+        ps_must frag "zero-corrupt";
+        ps_must frag "neg-corrupt";
+        ps_must_not frag "draft=0";
+        ps_must_not frag "draft=-3";
+        ps_must_not frag "<a ")
+  ; psp_case "negative counts are clamped, never rendered as metrics"
+      (fun () ->
+        let corrupt =
+          ps_draft ~id:5L ~login:"count-corrupt" ~repos:(-4) ~selected:(-2) ()
+        in
+        let frag = ps_fragment (render_ps (Psp.Choose_draft [ corrupt ])) in
+        ps_must_not frag "-4";
+        ps_must_not frag "-2";
+        ps_must frag "0 repositories")
+  ]
+
+let psp_configure_cases =
+  [ psp_case "exactly one POST form with the exact action" (fun () ->
+        let frag =
+          ps_fragment (render_ps (Psp.Configure_repositories ps_cfg))
+        in
+        Alcotest.(check int) "one form" 1 (ps_count frag "<form");
+        ps_must frag
+          "<form method='POST' action='/projects/new/repositories'";
+        ps_must frag "octo-org";
+        ps_must frag "Organization")
+  ; psp_case "hidden field set is exactly draft_id" (fun () ->
+        let frag =
+          ps_fragment (render_ps (Psp.Configure_repositories ps_cfg))
+        in
+        Alcotest.(check int) "one hidden input" 1
+          (ps_count frag "type='hidden'");
+        ps_must frag "<input type='hidden' name='draft_id' value='11'>";
+        (* Only draft_id plus the three repository checkboxes carry a form
+           name — the submit button and everything else stay nameless. *)
+        Alcotest.(check int) "named fields" 4 (ps_count frag " name='");
+        ps_must_not frag "name='primary'";
+        ps_must_not frag "primary_repository";
+        ps_must_not frag "github_repository_id";
+        ps_must_not frag "name='user_id'";
+        ps_must_not frag "installation_id";
+        ps_must_not frag "name='state'";
+        ps_must_not frag "token")
+  ; psp_case "one checkbox per repository valued by snapshot id" (fun () ->
+        let frag =
+          ps_fragment (render_ps (Psp.Configure_repositories ps_cfg))
+        in
+        Alcotest.(check int) "three checkboxes" 3
+          (ps_count frag "type='checkbox'");
+        ps_must frag "name='repository' value='101' checked";
+        ps_must frag "name='repository' value='102'";
+        ps_must frag "name='repository' value='103'";
+        Alcotest.(check int) "only the selected row is checked" 1
+          (ps_count frag " checked"))
+  ; psp_case "nameless submit button with the required copy" (fun () ->
+        let frag =
+          ps_fragment (render_ps (Psp.Configure_repositories ps_cfg))
+        in
+        ps_must frag "Save repository selection";
+        ps_must_not frag "<button type='submit' name=";
+        ps_must_not frag "button name=")
+  ; psp_case "repository order, description omission, archived marker"
+      (fun () ->
+        let frag =
+          ps_fragment (render_ps (Psp.Configure_repositories ps_cfg))
+        in
+        ps_order frag "octo-org/first" "octo-org/second";
+        ps_order frag "octo-org/second" "octo-org/legacy";
+        Alcotest.(check int) "one description" 1
+          (ps_count frag "ps-repo-desc");
+        ps_must frag "A second tool";
+        Alcotest.(check int) "one archived marker" 1
+          (ps_count frag "ps-repo-archived");
+        ps_must frag "Archived";
+        (* Archived repositories stay selectable. *)
+        Alcotest.(check int) "still three checkboxes" 3
+          (ps_count frag "type='checkbox'"))
+  ; psp_case "slash-containing default branch is text, never a URL" (fun () ->
+        let frag =
+          ps_fragment (render_ps (Psp.Configure_repositories ps_cfg))
+        in
+        ps_must frag "<code class='ps-repo-branch'>release/2.x</code>";
+        ps_must_not frag "/release/2.x";
+        ps_must_not frag "/tree/";
+        ps_must frag "href='https://github.com/octo-org/second'")
+  ; psp_case "canonical repository links rendered for every row" (fun () ->
+        let frag =
+          ps_fragment (render_ps (Psp.Configure_repositories ps_cfg))
+        in
+        ps_must frag "href='https://github.com/octo-org/first'";
+        ps_must frag "href='https://github.com/octo-org/legacy'")
+  ; psp_case "empty repository list renders no actionable form" (fun () ->
+        let frag =
+          ps_fragment
+            (render_ps
+               (Psp.Configure_repositories (ps_config ~repos:[] ())))
+        in
+        ps_must_not frag "<form";
+        ps_must_not frag "type='checkbox'";
+        ps_must_not frag "value='11'";
+        ps_must frag "href='/bring'")
+  ; psp_case "non-positive draft id renders no form and leaks no id"
+      (fun () ->
+        let frag =
+          ps_fragment
+            (render_ps
+               (Psp.Configure_repositories
+                  (ps_config ~draft:(ps_draft ~id:0L ()) ())))
+        in
+        ps_must_not frag "<form";
+        ps_must_not frag "value='0'";
+        ps_must_not frag "name='draft_id'")
+  ; psp_case "non-positive snapshot id renders no form control" (fun () ->
+        let corrupt = ps_repo ~id:0L ~full_name:"octo-org/corrupt" () in
+        let frag =
+          ps_fragment
+            (render_ps
+               (Psp.Configure_repositories
+                  (ps_config ~draft:ps_cfg_draft ~repos:[ ps_r1; corrupt ] ())))
+        in
+        Alcotest.(check int) "one checkbox" 1
+          (ps_count frag "type='checkbox'");
+        ps_must_not frag "value='0'";
+        ps_must frag "octo-org/corrupt")
+  ]
+
+let psp_escaping_cases =
+  [ psp_case "chooser login is escaped, not raw HTML" (fun () ->
+        let hostile = ps_draft ~id:21L ~login:"x<b>&\"y'" () in
+        let frag = ps_fragment (render_ps (Psp.Choose_draft [ hostile ])) in
+        ps_must_not frag "<b>";
+        ps_must frag "x&lt;b&gt;&amp;&quot;y&#39;")
+  ; psp_case "repository display strings are escaped" (fun () ->
+        let hostile =
+          ps_repo ~id:31L ~full_name:"evil<script>alert(1)</script>"
+            ~url:"https://github.com/octo-org/ok'><img src=x onerror=alert(1)>"
+            ~description:"a & b <i>italic</i>" ~branch:"feat/<img src=x>" ()
+        in
+        let frag =
+          ps_fragment
+            (render_ps
+               (Psp.Configure_repositories
+                  (ps_config ~draft:ps_cfg_draft ~repos:[ hostile ] ())))
+        in
+        ps_must_not frag "<script";
+        ps_must frag "evil&lt;script&gt;";
+        ps_must_not frag "<img";
+        ps_must_not frag "<i>";
+        (* The hostile URL cannot break out of the href attribute. *)
+        ps_must_not frag "'><img";
+        ps_must frag "a &amp; b &lt;i&gt;italic&lt;/i&gt;";
+        ps_must frag "feat/&lt;img src=x&gt;")
+  ; psp_case "non-http repository URL collapses to an inert href" (fun () ->
+        let hostile =
+          ps_repo ~id:32L ~full_name:"octo-org/js"
+            ~url:"javascript:alert(1)" ()
+        in
+        let frag =
+          ps_fragment
+            (render_ps
+               (Psp.Configure_repositories
+                  (ps_config ~draft:ps_cfg_draft ~repos:[ hostile ] ())))
+        in
+        ps_must_not frag "javascript:";
+        ps_must frag "href='#'")
+  ]
+
+(* Alert element contents in isolation: copy only, no fixture data. *)
+let ps_alert_fragment frag =
+  match ps_index_of frag "<div class='ps-alert" 0 with
+  | None -> Alcotest.fail "expected an alert element"
+  | Some s -> (
+      match ps_index_of frag "</div>" s with
+      | None -> Alcotest.fail "unterminated alert element"
+      | Some e -> String.sub frag s (e - s))
+
+let psp_feedback_check name feedback ~copy ~class_ =
+  psp_case name (fun () ->
+      let frag =
+        ps_fragment
+          (render_ps ~feedback:(Some feedback)
+             (Psp.Configure_repositories ps_cfg))
+      in
+      ps_must frag copy;
+      ps_must frag class_;
+      (* Cosmetic only: the same single form with the same hidden field
+         renders regardless of feedback. *)
+      Alcotest.(check int) "one form" 1 (ps_count frag "<form");
+      ps_must frag "<input type='hidden' name='draft_id' value='11'>";
+      (* Alert copy is generic: no id, count, or submitted value ever
+         reaches it. *)
+      let alert = ps_alert_fragment frag in
+      Alcotest.(check bool) "no digits in alert copy" false
+        (String.exists (fun c -> c >= '0' && c <= '9') alert))
+
+let psp_feedback_cases =
+  [ psp_feedback_check "saved: success alert" Psp.Selection_saved
+      ~copy:"Repository selection saved." ~class_:"ps-alert--success"
+  ; psp_feedback_check "stale: generic refresh warning" Psp.Selection_stale
+      ~copy:
+        "The GitHub repository list changed. Review the current \
+         repositories and save again."
+      ~class_:"ps-alert--error"
+  ; psp_feedback_check "invalid: generic error" Psp.Selection_invalid
+      ~copy:"We couldn't save that repository selection. Review it and try \
+             again."
+      ~class_:"ps-alert--error"
+  ; psp_feedback_check "unavailable: indistinguishable copy"
+      Psp.Draft_unavailable
+      ~copy:"That project setup is no longer available."
+      ~class_:"ps-alert--error"
+  ; psp_case "no feedback renders no alert container in any state" (fun () ->
+        List.iter
+          (fun state ->
+            let frag = ps_fragment (render_ps state) in
+            ps_must_not frag "ps-alert")
+          [ Psp.No_available_drafts
+          ; Psp.Choose_draft [ ps_chooser_a ]
+          ; Psp.Configure_repositories ps_cfg
+          ])
+  ; psp_case "feedback never changes which state renders" (fun () ->
+        let frag =
+          ps_fragment
+            (render_ps ~feedback:(Some Psp.Draft_unavailable)
+               Psp.No_available_drafts)
+        in
+        ps_must frag "That project setup is no longer available.";
+        ps_must frag "href='/bring'";
+        ps_must_not frag "<form")
+  ]
+
+(* Copy and future-design constraints across every state × feedback pair:
+   factual verification language, no endorsement claims, and none of the
+   style/script/redirect constructs the feature templates must not
+   introduce. Scoped to the feature fragment: the shared layout's own
+   scripts are out of scope here. *)
+let psp_copy_states =
+  [ ("no drafts", Psp.No_available_drafts)
+  ; ("chooser", Psp.Choose_draft [ ps_chooser_a; ps_chooser_b ])
+  ; ("configure", Psp.Configure_repositories ps_cfg)
+  ; ("empty chooser", Psp.Choose_draft [])
+  ; ( "corrupt configure"
+    , Psp.Configure_repositories (ps_config ~repos:[] ()) )
+  ]
+
+let psp_copy_feedbacks =
+  [ ("no feedback", None)
+  ; ("saved", Some Psp.Selection_saved)
+  ; ("stale", Some Psp.Selection_stale)
+  ; ("invalid", Some Psp.Selection_invalid)
+  ; ("unavailable", Some Psp.Draft_unavailable)
+  ]
+
+let psp_copy_case (state_name, state) (feedback_name, feedback) =
+  psp_case
+    (Printf.sprintf "%s, %s" state_name feedback_name)
+    (fun () ->
+      let frag = ps_fragment (render_ps ~feedback state) in
+      let lower = String.lowercase_ascii frag in
+      let must_ci s =
+        Alcotest.(check bool) ("contains: " ^ s) true
+          (contains lower (String.lowercase_ascii s))
+      in
+      let must_not_ci s =
+        Alcotest.(check bool) ("must not contain: " ^ s) false
+          (contains lower (String.lowercase_ascii s))
+      in
+      must_ci "Create a project";
+      must_ci "verified through GitHub";
+      must_not_ci "official project";
+      must_not_ci "official community";
+      must_not_ci "official home";
+      must_not_ci "GitHub-approved";
+      must_not_ci "GitHub-endorsed";
+      must_not_ci "<style";
+      must_not_ci "style=";
+      must_not_ci "<script";
+      must_not_ci "<meta http-equiv";
+      must_not_ci "window.location";
+      must_not_ci "location.href")
+
+let psp_copy_cases =
+  List.concat_map
+    (fun state -> List.map (psp_copy_case state) psp_copy_feedbacks)
+    psp_copy_states
+
 let () =
   Alcotest.run "earde"
     [ ( "smoke"
@@ -18632,4 +19200,16 @@ let () =
         ] )
       (* Blocked-page return link over the real middleware + Postgres. *)
     ; ("rate_limit_blocked_page", Rate_limit_blocked_page.suite)
+      (* Repository-selection form parser: closed grammar, strict positive
+         decimal int64 ids, order preservation, payload-free rejection. *)
+    ; ("project_setup_form", psf_cases)
+      (* /projects/new renderer: one suite per page state, plus escaping,
+         feedback, and copy/future-design constraints. All assertions scope
+         to the feature fragment inside the shared create-flow layout. *)
+    ; ("project_setup_page_no_drafts", psp_no_draft_cases)
+    ; ("project_setup_page_chooser", psp_chooser_cases)
+    ; ("project_setup_page_configure", psp_configure_cases)
+    ; ("project_setup_page_escaping", psp_escaping_cases)
+    ; ("project_setup_page_feedback", psp_feedback_cases)
+    ; ("project_setup_page_copy", psp_copy_cases)
     ]
