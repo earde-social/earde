@@ -423,7 +423,10 @@ module Mod_scope = struct
                    q_cleanup
                in
                let* () = cleanup () in
-               Lwt.finalize (fun () -> f conn (module C : Caqti_lwt.CONNECTION)) cleanup))
+               Lwt.finalize
+                 (fun () -> f conn (module C : Caqti_lwt.CONNECTION))
+                 (fun () ->
+                   Lwt.finalize cleanup (fun () -> C.disconnect ()))))
 
   (* Two communities, one author, a post (with image) in each. *)
   let setup_posts (module C : Caqti_lwt.CONNECTION) =
@@ -600,7 +603,10 @@ module Returning_ids = struct
                    q_cleanup
                in
                let* () = cleanup () in
-               Lwt.finalize (fun () -> f conn (module C : Caqti_lwt.CONNECTION)) cleanup))
+               Lwt.finalize
+                 (fun () -> f conn (module C : Caqti_lwt.CONNECTION))
+                 (fun () ->
+                   Lwt.finalize cleanup (fun () -> C.disconnect ()))))
 
   let comment_returning_case =
     db_case "create_comment returns the real inserted id" (fun conn c ->
@@ -1126,7 +1132,8 @@ module Step6_events = struct
                let* () = cleanup () in
                Lwt.finalize
                  (fun () -> f ~url conn (module C : Caqti_lwt.CONNECTION))
-                 cleanup))
+                 (fun () ->
+                   Lwt.finalize cleanup (fun () -> C.disconnect ()))))
 
   let q_insert_user =
     (Caqti_type.(t2 string string) ->! Caqti_type.int)
@@ -2152,7 +2159,8 @@ module Step7_deletion = struct
                let* () = cleanup () in
                Lwt.finalize
                  (fun () -> f ~url conn (module C : Caqti_lwt.CONNECTION))
-                 cleanup))
+                 (fun () ->
+                   Lwt.finalize cleanup (fun () -> C.disconnect ()))))
 
   let q_insert_job =
     (Caqti_type.string ->! Caqti_type.int)
@@ -2878,7 +2886,8 @@ module Group_cleanup = struct
                let* () = cleanup () in
                Lwt.finalize
                  (fun () -> f ~url conn (module C : Caqti_lwt.CONNECTION))
-                 cleanup))
+                 (fun () ->
+                   Lwt.finalize cleanup (fun () -> C.disconnect ()))))
 
   let q_insert_community =
     (Caqti_type.(t3 string string string) ->! Caqti_type.int)
@@ -5053,7 +5062,8 @@ module Gh_state_store = struct
             Lwt_main.run
               (let* conn = Caqti_lwt_unix.connect (Uri.of_string url) in
                let* conn = or_fail "connect" conn in
-               f conn))
+               let (module C : Caqti_lwt.CONNECTION) = conn in
+               Lwt.finalize (fun () -> f conn) (fun () -> C.disconnect ())))
 
   (* Fixture user and issued rows live only inside this transaction; the
      rollback runs even when an assertion fails mid-case. *)
@@ -5995,7 +6005,10 @@ module Gh_installation_store = struct
                    q_cleanup
                in
                let* () = cleanup () in
-               Lwt.finalize (fun () -> f conn) cleanup))
+               Lwt.finalize
+                 (fun () -> f conn)
+                 (fun () ->
+                   Lwt.finalize cleanup (fun () -> C.disconnect ()))))
 
   let insert_user conn username =
     let (module C : Caqti_lwt.CONNECTION) = conn in
@@ -6689,7 +6702,10 @@ module Pod_schema = struct
                    q_cleanup
                in
                let* () = cleanup () in
-               Lwt.finalize (fun () -> f conn) cleanup))
+               Lwt.finalize
+                 (fun () -> f conn)
+                 (fun () ->
+                   Lwt.finalize cleanup (fun () -> C.disconnect ()))))
 
   let insert_user conn username =
     let (module C : Caqti_lwt.CONNECTION) = conn in
@@ -7319,7 +7335,10 @@ module Pod_store = struct
                    q_cleanup
                in
                let* () = cleanup () in
-               Lwt.finalize (fun () -> f conn) cleanup))
+               Lwt.finalize
+                 (fun () -> f conn)
+                 (fun () ->
+                   Lwt.finalize cleanup (fun () -> C.disconnect ()))))
 
   let insert_user conn username =
     let (module C : Caqti_lwt.CONNECTION) = conn in
@@ -8304,7 +8323,10 @@ module Pod_read = struct
                    q_cleanup
                in
                let* () = cleanup () in
-               Lwt.finalize (fun () -> f conn) cleanup))
+               Lwt.finalize
+                 (fun () -> f conn)
+                 (fun () ->
+                   Lwt.finalize cleanup (fun () -> C.disconnect ()))))
 
   let exec conn label q arg =
     let (module C : Caqti_lwt.CONNECTION) = conn in
@@ -9146,7 +9168,10 @@ module Pod_select = struct
                    q_cleanup
                in
                let* () = cleanup () in
-               Lwt.finalize (fun () -> f conn) cleanup))
+               Lwt.finalize
+                 (fun () -> f conn)
+                 (fun () ->
+                   Lwt.finalize cleanup (fun () -> C.disconnect ()))))
 
   let repo ~account_id ?description ?default_branch ?archived ~id name =
     gur_repo ~owner_id:account_id ~owner_login:"podsel-owner"
@@ -10205,7 +10230,10 @@ module Osp_schema = struct
                    q_cleanup
                in
                let* () = cleanup () in
-               Lwt.finalize (fun () -> f conn) cleanup))
+               Lwt.finalize
+                 (fun () -> f conn)
+                 (fun () ->
+                   Lwt.finalize cleanup (fun () -> C.disconnect ()))))
 
   let insert_user conn username =
     let (module C : Caqti_lwt.CONNECTION) = conn in
@@ -10966,7 +10994,10 @@ module Cprj_schema = struct
                    q_cleanup
                in
                let* () = cleanup () in
-               Lwt.finalize (fun () -> f conn) cleanup))
+               Lwt.finalize
+                 (fun () -> f conn)
+                 (fun () ->
+                   Lwt.finalize cleanup (fun () -> C.disconnect ()))))
 
   let insert_user conn username =
     let (module C : Caqti_lwt.CONNECTION) = conn in
@@ -11758,7 +11789,8 @@ module Gh_start_handler = struct
                let* () = cleanup () in
                Lwt.finalize
                  (fun () -> f ~url (module C : Caqti_lwt.CONNECTION))
-                 cleanup))
+                 (fun () ->
+                   Lwt.finalize cleanup (fun () -> C.disconnect ()))))
 
   let q_insert_user =
     (Caqti_type.string ->! Caqti_type.int)
@@ -12300,7 +12332,8 @@ module Gh_setup_return = struct
                let* () = cleanup () in
                Lwt.finalize
                  (fun () -> f ~url (module C : Caqti_lwt.CONNECTION))
-                 cleanup))
+                 (fun () ->
+                   Lwt.finalize cleanup (fun () -> C.disconnect ()))))
 
   let q_row =
     (Caqti_type.(string ->! t2 (t3 int string string) (t2 (option int64) bool)))
@@ -14386,7 +14419,10 @@ module Rate_limit_blocked_page = struct
                  or_fail "cleanup" r
                in
                let* () = cleanup () in
-               Lwt.finalize (fun () -> f ~url) cleanup))
+               Lwt.finalize
+                 (fun () -> f ~url)
+                 (fun () ->
+                   Lwt.finalize cleanup (fun () -> C.disconnect ()))))
 
   (* Repeats the same GET through the real middleware until the limiter
      blocks (bounded well past the production limit, which stays private to
@@ -15485,7 +15521,10 @@ module Ps_handlers = struct
                    q_cleanup
                in
                let* () = cleanup () in
-               Lwt.finalize (fun () -> f ~url conn) cleanup))
+               Lwt.finalize
+                 (fun () -> f ~url conn)
+                 (fun () ->
+                   Lwt.finalize cleanup (fun () -> C.disconnect ()))))
 
   let repo ~account_id ?description ?default_branch ?archived ~id name =
     gur_repo ~owner_id:account_id ~owner_login:"psetup-owner" ?description
@@ -18289,7 +18328,10 @@ module Pfin = struct
                    q_cleanup
                in
                let* () = cleanup () in
-               Lwt.finalize (fun () -> f conn) cleanup))
+               Lwt.finalize
+                 (fun () -> f conn)
+                 (fun () ->
+                   Lwt.finalize cleanup (fun () -> C.disconnect ()))))
 
   let repo ?(owner_login = "pfin-owner") ~account_id ?description
       ?default_branch ?archived ~id name =
@@ -19829,7 +19871,10 @@ module Pch = struct
                    q_cleanup
                in
                let* () = cleanup () in
-               Lwt.finalize (fun () -> f ~url conn) cleanup))
+               Lwt.finalize
+                 (fun () -> f ~url conn)
+                 (fun () ->
+                   Lwt.finalize cleanup (fun () -> C.disconnect ()))))
 
   let repo ?(owner_login = "pcreate-owner") ~account_id ?description
       ?default_branch ?archived ~id name =
@@ -21963,6 +22008,1081 @@ let phr_privacy_cases =
                 Alcotest.(check bool) "nullary error" true (List.mem e all))
           rejections)
   ]
+
+(* === Project home request store (Project_home_request_store) ===
+   Transactional creation of a pending home-relation request, driven over
+   verified permanent projects built through the real draft/selection/
+   finalization chain. Database-gated (EARDE_TEST_DATABASE_URL, same
+   opt-in as Mod_scope) with its own reserved external-installation-id
+   range 944200001..944200999 (hence account ids 944300001..944300999,
+   which also scope the permanent-project cleanup), phrq_% usernames, and
+   phrq-% community slugs so no suite shares fixtures. Pure validation is
+   proven pre-SQL against a deliberately disconnected connection. The
+   pure relation values come only from Project_home_relation's real
+   constructors. Credential assertions are boolean, so no fixture byte
+   reaches test output on failure. *)
+module Phrq = struct
+  let ( let* ) = Lwt.bind
+
+  open Caqti_request.Infix
+
+  module Rq = Earde.Project_home_request_store
+  module Fin = Earde.Project_finalization_store
+
+  let error_str : Rq.error -> string = function
+    | Rq.Invalid_user_id -> "Invalid_user_id"
+    | Rq.Invalid_project_slug -> "Invalid_project_slug"
+    | Rq.Invalid_community_id -> "Invalid_community_id"
+    | Rq.Invalid_relation -> "Invalid_relation"
+    | Rq.Project_unavailable -> "Project_unavailable"
+    | Rq.Community_unavailable -> "Community_unavailable"
+    | Rq.Active_home_exists -> "Active_home_exists"
+    | Rq.Inconsistent_data -> "Inconsistent_data"
+    | Rq.Storage_error -> "Storage_error"
+
+  let or_fail = Pod_store.or_fail
+  let insert_user = Pod_store.insert_user
+  let exec = Pod_read.exec
+  let find = Pod_read.find
+  let contains = Cprj_schema.contains
+
+  (* Projects first (stewards, repositories, and home relations cascade
+     from them, and stewards RESTRICT-protect installations); drafts next
+     (installations are RESTRICT-protected while referenced); communities
+     cascade their remaining relations; installations last. The LIKE
+     pattern also catches deliberately corrupted phrq- slugs. *)
+  let q_cleanup =
+    List.map
+      (fun sql -> (Caqti_type.unit ->. Caqti_type.unit) sql)
+      [ "DELETE FROM open_source_projects \
+         WHERE forge_namespace_id BETWEEN 944300001 AND 944300999"
+      ; "DELETE FROM project_onboarding_drafts \
+         WHERE github_installation_record_id IN \
+           (SELECT id FROM github_installations \
+            WHERE github_installation_id BETWEEN 944200001 AND 944200999)"
+      ; "DELETE FROM communities WHERE slug LIKE 'phrq-%'"
+      ; "DELETE FROM users WHERE username LIKE 'phrq_%'"
+      ; "DELETE FROM github_installations \
+         WHERE github_installation_id BETWEEN 944200001 AND 944200999"
+      ]
+
+  (* Direct community fixtures: the dedicated-community provisioning
+     store does not exist yet, so lifecycle shapes are written exactly as
+     the durable columns represent them today. Defaults are the eligible
+     fully listed published network community. *)
+  let q_insert_community =
+    (Caqti_type.(t2 (t2 string string) (t2 (t2 bool bool) (t2 string bool)))
+     ->! Caqti_type.int)
+    "INSERT INTO communities \
+       (slug, name, visibility, indexable, is_network_community, \
+        onboarding_state, discoverable) \
+     VALUES ($1, $1, $2, $3, $4, $5, $6) RETURNING id"
+
+  let insert_community ?(visibility = "public") ?(indexable = true)
+      ?(network = true) ?(onboarding = "published") ?(discoverable = true)
+      conn slug =
+    let (module C : Caqti_lwt.CONNECTION) = conn in
+    let* cid =
+      C.find q_insert_community
+        ((slug, visibility), ((indexable, network), (onboarding, discoverable)))
+    in
+    or_fail ("community " ^ slug) cid
+
+  (* Everything durable on one relation row; timestamp columns reduce to
+     presence/ordering booleans (their exact values are NOW()-relative). *)
+  let q_relation_row =
+    (Caqti_type.(int64 ->!
+        t2 (t2 (t2 int64 int) (t2 string string))
+           (t2 (t2 (option int) (option int))
+               (t2 (option string) (t3 bool bool bool)))))
+    "SELECT project_id, community_id, relation_type, status, \
+            requested_by_user_id, reviewed_by_user_id, request_note, \
+            reviewed_at IS NOT NULL, removed_at IS NOT NULL, \
+            updated_at >= created_at \
+     FROM community_projects WHERE id = $1"
+
+  let relation_row conn id = find conn "relation row" q_relation_row id
+
+  (* One text signature per relation row, for exact unchanged-history
+     assertions. *)
+  let q_relation_sig =
+    (Caqti_type.int64 ->! Caqti_type.string)
+    "SELECT project_id::text || '|' || community_id::text || '|' || \
+            relation_type || '|' || status || '|' || \
+            COALESCE(requested_by_user_id::text, '<null>') || '|' || \
+            COALESCE(reviewed_by_user_id::text, '<null>') || '|' || \
+            COALESCE(request_note, '<null>') || '|' || \
+            (reviewed_at IS NOT NULL)::text || '|' || \
+            (removed_at IS NOT NULL)::text \
+     FROM community_projects WHERE id = $1"
+
+  let q_community_sig =
+    (Caqti_type.int ->! Caqti_type.string)
+    "SELECT slug || '|' || name || '|' || visibility || '|' || \
+            indexable::text || '|' || is_network_community::text || '|' || \
+            onboarding_state || '|' || discoverable::text \
+     FROM communities WHERE id = $1"
+
+  let q_project_sig =
+    (Caqti_type.int64 ->! Caqti_type.string)
+    "SELECT slug || '|' || verification_status \
+     FROM open_source_projects WHERE id = $1"
+
+  let q_count_for_project =
+    (Caqti_type.int64 ->! Caqti_type.int)
+    "SELECT COUNT(*) FROM community_projects WHERE project_id = $1"
+
+  let q_count_active_for_project =
+    (Caqti_type.int64 ->! Caqti_type.int)
+    "SELECT COUNT(*) FROM community_projects \
+     WHERE project_id = $1 AND status IN ('pending', 'accepted')"
+
+  let q_active_community_for_project =
+    (Caqti_type.int64 ->! Caqti_type.int)
+    "SELECT community_id FROM community_projects \
+     WHERE project_id = $1 AND status IN ('pending', 'accepted')"
+
+  let q_count_pending_for_community =
+    (Caqti_type.int ->! Caqti_type.int)
+    "SELECT COUNT(*) FROM community_projects \
+     WHERE community_id = $1 AND status = 'pending'"
+
+  let q_count_members =
+    (Caqti_type.int ->! Caqti_type.int)
+    "SELECT COUNT(*) FROM community_members WHERE community_id = $1"
+
+  let q_count_moderators =
+    (Caqti_type.int ->! Caqti_type.int)
+    "SELECT COUNT(*) FROM community_moderators WHERE community_id = $1"
+
+  let q_count_stewards_for_project =
+    (Caqti_type.int64 ->! Caqti_type.int)
+    "SELECT COUNT(*) FROM project_stewards WHERE project_id = $1"
+
+  (* Store-shaped lifecycle transitions with coherent timestamps, used to
+     free the active slot and to build accepted/historical fixtures.
+     Transition legality itself is Project_home_relation territory. *)
+  let q_mark_rejected =
+    (Caqti_type.int64 ->. Caqti_type.unit)
+    "UPDATE community_projects \
+     SET status = 'rejected', reviewed_at = NOW(), updated_at = NOW() \
+     WHERE id = $1"
+
+  let q_mark_accepted =
+    (Caqti_type.int64 ->. Caqti_type.unit)
+    "UPDATE community_projects \
+     SET status = 'accepted', reviewed_at = NOW(), updated_at = NOW() \
+     WHERE id = $1"
+
+  let q_mark_removed =
+    (Caqti_type.int64 ->. Caqti_type.unit)
+    "UPDATE community_projects \
+     SET status = 'removed', reviewed_at = COALESCE(reviewed_at, NOW()), \
+         removed_at = NOW(), updated_at = NOW() \
+     WHERE id = $1"
+
+  (* Project- and installation-side probes for the authorization cases. *)
+  let q_set_verification =
+    (Caqti_type.(t2 int64 string) ->. Caqti_type.unit)
+    "UPDATE open_source_projects SET verification_status = $2 WHERE id = $1"
+
+  let q_set_created_by =
+    (Caqti_type.(t2 int64 int) ->. Caqti_type.unit)
+    "UPDATE open_source_projects SET created_by_user_id = $2 WHERE id = $1"
+
+  let q_delete_steward =
+    (Caqti_type.(t2 int64 int) ->. Caqti_type.unit)
+    "DELETE FROM project_stewards WHERE project_id = $1 AND user_id = $2"
+
+  let q_insert_steward =
+    (Caqti_type.(t3 int64 int int64) ->. Caqti_type.unit)
+    "INSERT INTO project_stewards \
+       (project_id, user_id, github_installation_record_id, role) \
+     VALUES ($1, $2, $3, 'steward')"
+
+  let q_clear_installation_provenance =
+    (Caqti_type.int64 ->. Caqti_type.unit)
+    "UPDATE github_installations SET connected_by_user_id = NULL \
+     WHERE id = $1"
+
+  (* Community-side probes. *)
+  let q_delete_community =
+    (Caqti_type.int ->. Caqti_type.unit)
+    "DELETE FROM communities WHERE id = $1"
+
+  (* Positive ids guaranteed absent, for the missing-community probe. *)
+  let q_absent_community_id =
+    (Caqti_type.unit ->! Caqti_type.int)
+    "SELECT COALESCE(MAX(id), 0) + 1000000 FROM communities"
+
+  (* Targeted durable corruption: communities.slug carries no schema
+     grammar, so a non-addressable stored slug is directly producible;
+     the mixed published flag shape is likewise representable (the
+     lifecycle invariant is application-level). visibility and
+     onboarding_state off-enum corruption is blocked by their DB CHECKs,
+     and a non-positive returned relation id by BIGSERIAL — those
+     Inconsistent_data branches stay defensive. *)
+  let q_corrupt_community_slug =
+    (Caqti_type.(t2 int string) ->. Caqti_type.unit)
+    "UPDATE communities SET slug = $2 WHERE id = $1"
+
+  let q_mix_community_flags =
+    (Caqti_type.int ->. Caqti_type.unit)
+    "UPDATE communities SET indexable = TRUE, discoverable = FALSE \
+     WHERE id = $1"
+
+  (* Every text column of one relation row, and the same minus the note,
+     for the boolean credential-absence checks. *)
+  let q_relation_text_blob =
+    (Caqti_type.int64 ->! Caqti_type.string)
+    "SELECT project_id::text || '|' || community_id::text || '|' || \
+            relation_type || '|' || status || '|' || \
+            COALESCE(requested_by_user_id::text, '') || '|' || \
+            COALESCE(reviewed_by_user_id::text, '') || '|' || \
+            COALESCE(request_note, '') \
+     FROM community_projects WHERE id = $1"
+
+  let q_relation_nonnote_blob =
+    (Caqti_type.int64 ->! Caqti_type.string)
+    "SELECT project_id::text || '|' || community_id::text || '|' || \
+            relation_type || '|' || status || '|' || \
+            COALESCE(requested_by_user_id::text, '') || '|' || \
+            COALESCE(reviewed_by_user_id::text, '') \
+     FROM community_projects WHERE id = $1"
+
+  (* Test-only failure injection for the rollback case: an AFTER trigger
+     scoped to one reserved note value, so the failure fires only after
+     the insertion was genuinely attempted. Installed and dropped inside
+     that case alone (IF EXISTS drops keep the cleanup idempotent even
+     after a mid-case failure); production migrations are untouched. The
+     function body uses plain string quoting — Caqti templates reserve
+     '$'. *)
+  let phrq_poison_note = "phrq poison marker"
+
+  let q_create_fail_fn =
+    (Caqti_type.unit ->. Caqti_type.unit)
+    "CREATE FUNCTION phrq_fail_insert_fn() RETURNS trigger
+     LANGUAGE plpgsql
+     AS 'BEGIN RAISE EXCEPTION ''phrq fixture failure''; END'"
+
+  let q_create_fail_trigger =
+    (Caqti_type.unit ->. Caqti_type.unit)
+    "CREATE TRIGGER phrq_fail_insert
+     AFTER INSERT ON community_projects
+     FOR EACH ROW WHEN (NEW.request_note = 'phrq poison marker')
+     EXECUTE FUNCTION phrq_fail_insert_fn()"
+
+  let q_drop_fail_trigger =
+    (Caqti_type.unit ->. Caqti_type.unit)
+    "DROP TRIGGER IF EXISTS phrq_fail_insert ON community_projects"
+
+  let q_drop_fail_fn =
+    (Caqti_type.unit ->. Caqti_type.unit)
+    "DROP FUNCTION IF EXISTS phrq_fail_insert_fn()"
+
+  (* Each case gets a fresh connection and a clean fixture slate; cleanup
+     runs again afterwards even when an assertion fails mid-way. The
+     connection is disconnected deterministically — the gated suite is
+     large enough that leaving per-case connections to the GC brushes
+     against Postgres's max_connections. *)
+  let db_case name f =
+    Alcotest.test_case name `Quick (fun () ->
+        match Sys.getenv_opt "EARDE_TEST_DATABASE_URL" with
+        | None | Some "" -> Alcotest.skip ()
+        | Some url ->
+            Lwt_main.run
+              (let* conn = Caqti_lwt_unix.connect (Uri.of_string url) in
+               let* conn = or_fail "connect" conn in
+               let (module C : Caqti_lwt.CONNECTION) = conn in
+               let cleanup () =
+                 Lwt_list.iter_s
+                   (fun q ->
+                     let* r = C.exec q () in
+                     let* _ = or_fail "cleanup" r in
+                     Lwt.return_unit)
+                   q_cleanup
+               in
+               let* () = cleanup () in
+               Lwt.finalize
+                 (fun () -> f conn)
+                 (fun () ->
+                   Lwt.finalize cleanup (fun () -> C.disconnect ()))))
+
+  (* Verified permanent projects come only through the real chain —
+     draft store, selection store, finalization store — never fixture
+     INSERTs. Returns the installation record id (for steward fixtures)
+     and the permanent project id. *)
+  let make_project conn ~user ~ext_id ~slug =
+    let repo_id = Int64.add ext_id 400000L in
+    let* inst, draft, _, _ =
+      Pfin.make_draft conn ~user ~ext_id (fun account_id ->
+          [ Pfin.repo ~account_id ~id:repo_id "alpha" ])
+    in
+    let* ids = Pfin.snapshot_ids conn draft in
+    let s1 = List.nth ids 0 in
+    let* () =
+      Pod_select.replace_ok "seed selection" conn ~user ~draft ~primary:s1
+        [ s1 ]
+    in
+    let identity =
+      Pfin.identity_exn ~slug ~selected:[ s1 ] ~primary:s1 ()
+    in
+    let* created =
+      Pfin.finalize_ok "fixture project" conn ~user ~draft identity
+    in
+    Lwt.return (inst, Fin.project_id created)
+
+  (* === call helpers === *)
+
+  let create conn ~user ~slug ~community relation =
+    Rq.create conn ~user_id:user ~project_slug:slug
+      ~target_community_id:community ~relation
+
+  let create_ok label conn ~user ~slug ~community relation =
+    let* r = create conn ~user ~slug ~community relation in
+    match r with
+    | Ok created -> Lwt.return created
+    | Error e -> Alcotest.failf "%s: %s" label (error_str e)
+
+  let create_expect label expected conn ~user ~slug ~community relation =
+    let* r = create conn ~user ~slug ~community relation in
+    match r with
+    | Ok _ ->
+        Alcotest.failf "%s: expected %s, got Ok" label (error_str expected)
+    | Error e ->
+        Alcotest.(check string) label (error_str expected) (error_str e);
+        Lwt.return_unit
+
+  let count_for_project conn project =
+    find conn "relation count" q_count_for_project project
+
+  let check_no_relations label conn project =
+    let* n = count_for_project conn project in
+    Alcotest.(check int) label 0 n;
+    Lwt.return_unit
+
+  let mark label conn q relation =
+    exec conn label q relation
+
+  (* One winner plus one exact loser, order unasserted. *)
+  let ok_and_error label expected (r1, r2) =
+    match (r1, r2) with
+    | Ok created, Error e when e = expected -> created
+    | Error e, Ok created when e = expected -> created
+    | Ok _, Ok _ -> Alcotest.failf "%s: both succeeded" label
+    | Error a, Error b ->
+        Alcotest.failf "%s: both failed (%s, %s)" label (error_str a)
+          (error_str b)
+    | Ok _, Error e | Error e, Ok _ ->
+        Alcotest.failf "%s: unexpected loser error %s" label (error_str e)
+
+  (* === pure input validation === *)
+
+  let pure_inputs_case =
+    db_case "request: invalid inputs rejected before any SQL" (fun _conn ->
+        (* A deliberately unusable connection: pure validation must
+           return without touching it — were any SQL attempted, the
+           result would be Storage_error (or a test-failing exception),
+           never the expected input error. *)
+        let url =
+          match Sys.getenv_opt "EARDE_TEST_DATABASE_URL" with
+          | Some url -> url
+          | None -> Alcotest.fail "EARDE_TEST_DATABASE_URL vanished mid-run"
+        in
+        let* dead = Caqti_lwt_unix.connect (Uri.of_string url) in
+        let* dead = or_fail "dead connect" dead in
+        let (module Dead : Caqti_lwt.CONNECTION) = dead in
+        let* () = Dead.disconnect () in
+        let pending = phr_fresh_pending () in
+        let expect label e ~user ~slug ~community relation =
+          create_expect label e dead ~user ~slug ~community relation
+        in
+        let* () =
+          expect "user id 0" Rq.Invalid_user_id ~user:0 ~slug:"phrq-a"
+            ~community:1 pending
+        in
+        let* () =
+          expect "negative user id" Rq.Invalid_user_id ~user:(-7)
+            ~slug:"phrq-a" ~community:1 pending
+        in
+        let* () =
+          expect "user checked before slug" Rq.Invalid_user_id ~user:0
+            ~slug:"NOT A SLUG" ~community:0 pending
+        in
+        let* () =
+          Lwt_list.iter_s
+            (fun bad ->
+              expect "invalid project slug" Rq.Invalid_project_slug ~user:1
+                ~slug:bad ~community:1 pending)
+            [ ""
+            ; "Phrq-Upper"
+            ; "phrq slug"
+            ; " phrq-a"
+            ; "phrq-a "
+            ; "phrq_a"
+            ; "phrq/a"
+            ; "-phrq"
+            ; "phrq-"
+            ; "phrq--a"
+            ; String.make 81 'a'
+            ]
+        in
+        let* () =
+          expect "community id 0" Rq.Invalid_community_id ~user:1
+            ~slug:"phrq-a" ~community:0 pending
+        in
+        let* () =
+          expect "negative community id" Rq.Invalid_community_id ~user:1
+            ~slug:"phrq-a" ~community:(-4) pending
+        in
+        let* () =
+          expect "accepted relation" Rq.Invalid_relation ~user:1
+            ~slug:"phrq-a" ~community:1
+            (phr_fresh_accepted ())
+        in
+        let* () =
+          expect "rejected relation" Rq.Invalid_relation ~user:1
+            ~slug:"phrq-a" ~community:1
+            (phr_fresh_rejected ())
+        in
+        expect "removed relation" Rq.Invalid_relation ~user:1 ~slug:"phrq-a"
+          ~community:1
+          (phr_fresh_removed ()))
+
+  (* === successful request === *)
+
+  let success_case =
+    db_case "request: complete pending request round-trips exactly"
+      (fun conn ->
+        let* uid = insert_user conn "phrq_a" in
+        let* _, project =
+          make_project conn ~user:uid ~ext_id:944200001L
+            ~slug:"phrq-success"
+        in
+        let* community = insert_community conn "phrq-home" in
+        let note =
+          "Prima riga — gi\xc3\xa0 discutiamo qui \xe2\x98\x95\n\
+           \tseconda riga indentata"
+        in
+        let relation =
+          phr_expect_ok (Phr.create_pending ~request_note:(Some note))
+        in
+        let* created =
+          create_ok "request" conn ~user:uid ~slug:"phrq-success" ~community
+            relation
+        in
+        Alcotest.(check bool) "relation id positive" true
+          (Rq.relation_id created > 0L);
+        let* ( ((rp, rc), (rtype, status))
+             , ((req, rev), (stored_note, (has_reviewed, has_removed, upd_ge)))
+             ) =
+          relation_row conn (Rq.relation_id created)
+        in
+        Alcotest.(check int64) "exact project fk" project rp;
+        Alcotest.(check int) "exact community fk" community rc;
+        Alcotest.(check string) "relation type home" "home" rtype;
+        Alcotest.(check string) "status pending" "pending" status;
+        Alcotest.(check (option int)) "requester is supplied user"
+          (Some uid) req;
+        Alcotest.(check (option int)) "no reviewer" None rev;
+        Alcotest.(check (option string)) "canonical note byte-exact"
+          (Some note) stored_note;
+        Alcotest.(check bool) "reviewed_at NULL" false has_reviewed;
+        Alcotest.(check bool) "removed_at NULL" false has_removed;
+        Alcotest.(check bool) "timestamps coherent" true upd_ge;
+        let* n = count_for_project conn project in
+        Alcotest.(check int) "exactly one relation" 1 n;
+        (* Submitting a request grants nothing: no membership, no
+           moderation, no stewardship change. *)
+        let* members = find conn "members" q_count_members community in
+        Alcotest.(check int) "no membership created" 0 members;
+        let* mods = find conn "moderators" q_count_moderators community in
+        Alcotest.(check int) "no moderator created" 0 mods;
+        let* stewards =
+          find conn "stewards" q_count_stewards_for_project project
+        in
+        Alcotest.(check int) "stewardship unchanged" 1 stewards;
+        Lwt.return_unit)
+
+  (* === note variants === *)
+
+  let note_variants_case =
+    db_case "request: note variants persist through the domain constructor"
+      (fun conn ->
+        let* uid = insert_user conn "phrq_a" in
+        let* _, _project =
+          make_project conn ~user:uid ~ext_id:944200002L ~slug:"phrq-notes"
+        in
+        let* community = insert_community conn "phrq-notes-home" in
+        let utf8 = "Progetto Citt\xc3\xa0\nseconda riga \xe2\x98\x95" in
+        let exact_2000 = String.make 2000 'a' in
+        Lwt_list.iter_s
+          (fun (label, raw, expected) ->
+            let relation =
+              phr_expect_ok (Phr.create_pending ~request_note:raw)
+            in
+            let* created =
+              create_ok label conn ~user:uid ~slug:"phrq-notes" ~community
+                relation
+            in
+            let* _, (_, (stored_note, _)) =
+              relation_row conn (Rq.relation_id created)
+            in
+            Alcotest.(check (option string)) label expected stored_note;
+            (* Free the active slot for the next variant; the historical
+               row stays behind. *)
+            mark "free slot" conn q_mark_rejected (Rq.relation_id created))
+          [ ("absent note stays NULL", None, None)
+          ; ("blank note canonicalizes to NULL", Some " \t\r\n ", None)
+          ; ("utf-8 multiline note", Some utf8, Some utf8)
+          ; ("exact 2000-character note", Some exact_2000, Some exact_2000)
+          ])
+
+  (* === project authorization === *)
+
+  let project_unavailable_case =
+    db_case "request: every unavailable-project cause collapses identically"
+      (fun conn ->
+        let* a = insert_user conn "phrq_a" in
+        let* b = insert_user conn "phrq_b" in
+        let* _, project =
+          make_project conn ~user:a ~ext_id:944200003L ~slug:"phrq-auth"
+        in
+        let* community = insert_community conn "phrq-auth-home" in
+        let pending () = phr_fresh_pending () in
+        let expect label ~user ~slug =
+          create_expect label Rq.Project_unavailable conn ~user ~slug
+            ~community (pending ())
+        in
+        (* Missing project: canonical grammar, nothing stored under it. *)
+        let* () = expect "missing project" ~user:a ~slug:"phrq-absent" in
+        (* Another user's project. *)
+        let* () = expect "foreign project" ~user:b ~slug:"phrq-auth" in
+        (* Stale, then revoked verification. *)
+        let* () =
+          exec conn "mark stale" q_set_verification (project, "stale")
+        in
+        let* () = expect "stale project" ~user:a ~slug:"phrq-auth" in
+        let* () =
+          exec conn "mark revoked" q_set_verification (project, "revoked")
+        in
+        let* () = expect "revoked project" ~user:a ~slug:"phrq-auth" in
+        let* () =
+          exec conn "restore verified" q_set_verification
+            (project, "verified")
+        in
+        (* Deleted stewardship: the creator keeps created_by provenance
+           but loses authorization entirely. *)
+        let* () = exec conn "drop steward" q_delete_steward (project, a) in
+        let* () =
+          expect "creator without stewardship" ~user:a ~slug:"phrq-auth"
+        in
+        check_no_relations "no insert from any cause" conn project)
+
+  let project_authorization_case =
+    db_case
+      "request: stewardship alone authorizes — provenance never does"
+      (fun conn ->
+        let* a = insert_user conn "phrq_a" in
+        let* b = insert_user conn "phrq_b" in
+        let* inst, project =
+          make_project conn ~user:a ~ext_id:944200004L ~slug:"phrq-auth2"
+        in
+        let* community = insert_community conn "phrq-auth2-home" in
+        (* Reassign creation provenance and erase installation
+           provenance: authorization must not move with either. *)
+        let* () = exec conn "created_by to b" q_set_created_by (project, b) in
+        let* () =
+          exec conn "clear provenance" q_clear_installation_provenance inst
+        in
+        let* created =
+          create_ok "steward still authorized" conn ~user:a
+            ~slug:"phrq-auth2" ~community (phr_fresh_pending ())
+        in
+        (* The new creator-of-record is still not a steward. *)
+        let* () =
+          create_expect "creator-of-record without stewardship"
+            Rq.Project_unavailable conn ~user:b ~slug:"phrq-auth2"
+            ~community (phr_fresh_pending ())
+        in
+        let* () =
+          mark "free slot" conn q_mark_rejected (Rq.relation_id created)
+        in
+        (* A second steward may submit. *)
+        let* () =
+          exec conn "second steward" q_insert_steward (project, b, inst)
+        in
+        let* created_b =
+          create_ok "second steward submits" conn ~user:b ~slug:"phrq-auth2"
+            ~community (phr_fresh_pending ())
+        in
+        let* ((_, rc), (_, status)), ((req, _), _) =
+          relation_row conn (Rq.relation_id created_b)
+        in
+        Alcotest.(check int) "second steward's request targets community"
+          community rc;
+        Alcotest.(check string) "second steward's request pending" "pending"
+          status;
+        Alcotest.(check (option int)) "requester is the second steward"
+          (Some b) req;
+        Lwt.return_unit)
+
+  (* === community eligibility === *)
+
+  let community_unavailable_case =
+    db_case
+      "request: every ineligible-community cause collapses identically"
+      (fun conn ->
+        let* uid = insert_user conn "phrq_a" in
+        let* _, project =
+          make_project conn ~user:uid ~ext_id:944200005L ~slug:"phrq-celig"
+        in
+        let expect label community =
+          create_expect label Rq.Community_unavailable conn ~user:uid
+            ~slug:"phrq-celig" ~community (phr_fresh_pending ())
+        in
+        (* Missing community. *)
+        let* absent = find conn "absent id" q_absent_community_id () in
+        let* () = expect "missing community" absent in
+        (* Legacy/general communities, both visibilities. *)
+        let* legacy = insert_community ~network:false conn "phrq-legacy" in
+        let* () = expect "legacy public community" legacy in
+        let* legacy_private =
+          insert_community ~network:false ~visibility:"private"
+            ~indexable:false ~discoverable:false conn "phrq-legacy-priv"
+        in
+        let* () = expect "legacy private community" legacy_private in
+        (* Network setup draft in its canonical private shape. *)
+        let* draft =
+          insert_community ~onboarding:"draft" ~visibility:"private"
+            ~indexable:false ~discoverable:false conn "phrq-draft"
+        in
+        let* () = expect "setup draft" draft in
+        (* A representable ineligible drift: draft state with public
+           flags is still unpublished. *)
+        let* draft_public =
+          insert_community ~onboarding:"draft" conn "phrq-draft-pub"
+        in
+        let* () = expect "unpublished public-flagged draft" draft_public in
+        (* Fully private published network community (representable —
+           the never-private-after-publish invariant is app-level). *)
+        let* private_network =
+          insert_community ~visibility:"private" ~indexable:false
+            ~discoverable:false conn "phrq-private"
+        in
+        let* () = expect "fully private network community" private_network in
+        (* Deletion boundary: an eligible community deleted before the
+           request locks it is unavailable, never an FK diagnostic. *)
+        let* deleted = insert_community conn "phrq-deleted" in
+        let* () = exec conn "delete community" q_delete_community deleted in
+        let* () = expect "deleted community" deleted in
+        check_no_relations "no insert from any cause" conn project)
+
+  let eligible_modes_case =
+    db_case "request: public and unlisted published networks both eligible"
+      (fun conn ->
+        let* uid = insert_user conn "phrq_a" in
+        let* _, _project =
+          make_project conn ~user:uid ~ext_id:944200006L ~slug:"phrq-modes"
+        in
+        let* public = insert_community conn "phrq-mode-public" in
+        let* unlisted =
+          insert_community ~indexable:false ~discoverable:false conn
+            "phrq-mode-unlisted"
+        in
+        let* created_public =
+          create_ok "public network" conn ~user:uid ~slug:"phrq-modes"
+            ~community:public (phr_fresh_pending ())
+        in
+        let* ((_, rc_pub), _), _ =
+          relation_row conn (Rq.relation_id created_public)
+        in
+        Alcotest.(check int) "public request targets public" public rc_pub;
+        let* () =
+          mark "free slot" conn q_mark_rejected
+            (Rq.relation_id created_public)
+        in
+        let* created_unlisted =
+          create_ok "unlisted network" conn ~user:uid ~slug:"phrq-modes"
+            ~community:unlisted (phr_fresh_pending ())
+        in
+        let* ((_, rc), _), _ =
+          relation_row conn (Rq.relation_id created_unlisted)
+        in
+        Alcotest.(check int) "unlisted request targets unlisted" unlisted rc;
+        Lwt.return_unit)
+
+  (* === existing active relation === *)
+
+  let active_relation_case =
+    db_case "request: any active home blocks a new request" (fun conn ->
+        let* uid = insert_user conn "phrq_a" in
+        let* _, project =
+          make_project conn ~user:uid ~ext_id:944200007L ~slug:"phrq-active"
+        in
+        let* c1 = insert_community conn "phrq-active-one" in
+        let* c2 = insert_community conn "phrq-active-two" in
+        let* created =
+          create_ok "first request" conn ~user:uid ~slug:"phrq-active"
+            ~community:c1 (phr_fresh_pending ())
+        in
+        let expect label community =
+          create_expect label Rq.Active_home_exists conn ~user:uid
+            ~slug:"phrq-active" ~community (phr_fresh_pending ())
+        in
+        (* Pending blocks, same target or another. *)
+        let* () = expect "pending blocks same target" c1 in
+        let* () = expect "pending blocks different target" c2 in
+        let* n = count_for_project conn project in
+        Alcotest.(check int) "still exactly one row" 1 n;
+        (* Accepted blocks identically. *)
+        let* () =
+          mark "accept home" conn q_mark_accepted (Rq.relation_id created)
+        in
+        let* () = expect "accepted blocks same target" c1 in
+        let* () = expect "accepted blocks different target" c2 in
+        let* n = count_for_project conn project in
+        Alcotest.(check int) "no second row" 1 n;
+        Lwt.return_unit)
+
+  (* === historical relations === *)
+
+  let historical_case =
+    db_case "request: rejected and removed history never blocks" (fun conn ->
+        let* uid = insert_user conn "phrq_a" in
+        let* _, project =
+          make_project conn ~user:uid ~ext_id:944200008L ~slug:"phrq-hist"
+        in
+        let* c1 = insert_community conn "phrq-hist-one" in
+        let* c2 = insert_community conn "phrq-hist-two" in
+        let* first =
+          create_ok "first request" conn ~user:uid ~slug:"phrq-hist"
+            ~community:c1 (phr_fresh_pending ())
+        in
+        let* () =
+          mark "reject first" conn q_mark_rejected (Rq.relation_id first)
+        in
+        let* rejected_sig =
+          find conn "rejected sig" q_relation_sig (Rq.relation_id first)
+        in
+        (* Rejected history: a fresh request succeeds. *)
+        let* second =
+          create_ok "after rejection" conn ~user:uid ~slug:"phrq-hist"
+            ~community:c2 (phr_fresh_pending ())
+        in
+        let* () =
+          mark "accept second" conn q_mark_accepted (Rq.relation_id second)
+        in
+        let* () =
+          mark "remove second" conn q_mark_removed (Rq.relation_id second)
+        in
+        let* removed_sig =
+          find conn "removed sig" q_relation_sig (Rq.relation_id second)
+        in
+        (* Removed history: a fresh request succeeds too. *)
+        let* third =
+          create_ok "after removal" conn ~user:uid ~slug:"phrq-hist"
+            ~community:c1 (phr_fresh_pending ())
+        in
+        let* rejected_after =
+          find conn "rejected sig after" q_relation_sig
+            (Rq.relation_id first)
+        in
+        let* removed_after =
+          find conn "removed sig after" q_relation_sig
+            (Rq.relation_id second)
+        in
+        Alcotest.(check string) "rejected history unchanged" rejected_sig
+          rejected_after;
+        Alcotest.(check string) "removed history unchanged" removed_sig
+          removed_after;
+        let* total = count_for_project conn project in
+        Alcotest.(check int) "full history retained" 3 total;
+        let* active =
+          find conn "active count" q_count_active_for_project project
+        in
+        Alcotest.(check int) "one active relation" 1 active;
+        let* ((_, rc), (_, status)), _ =
+          relation_row conn (Rq.relation_id third)
+        in
+        Alcotest.(check int) "fresh request target" c1 rc;
+        Alcotest.(check string) "fresh request pending" "pending" status;
+        Lwt.return_unit)
+
+  (* === concurrency === *)
+
+  let same_project_same_target_race_case =
+    db_case "request: concurrent identical requests leave one pending row"
+      (fun conn ->
+        let* uid = insert_user conn "phrq_a" in
+        let* _, project =
+          make_project conn ~user:uid ~ext_id:944200009L ~slug:"phrq-race"
+        in
+        let* community = insert_community conn "phrq-race-home" in
+        Pod_store.with_second_connection (fun conn2 ->
+            let* results =
+              Lwt.both
+                (create conn ~user:uid ~slug:"phrq-race" ~community
+                   (phr_fresh_pending ()))
+                (create conn2 ~user:uid ~slug:"phrq-race" ~community
+                   (phr_fresh_pending ()))
+            in
+            let _ =
+              ok_and_error "identical race" Rq.Active_home_exists results
+            in
+            let* total = count_for_project conn project in
+            Alcotest.(check int) "exactly one row" 1 total;
+            let* active =
+              find conn "active count" q_count_active_for_project project
+            in
+            Alcotest.(check int) "exactly one active row" 1 active;
+            Lwt.return_unit))
+
+  let same_project_different_targets_race_case =
+    db_case "request: concurrent different-target requests leave one winner"
+      (fun conn ->
+        let* uid = insert_user conn "phrq_a" in
+        let* _, project =
+          make_project conn ~user:uid ~ext_id:944200010L ~slug:"phrq-race2"
+        in
+        let* c1 = insert_community conn "phrq-race2-one" in
+        let* c2 = insert_community conn "phrq-race2-two" in
+        Pod_store.with_second_connection (fun conn2 ->
+            let* results =
+              Lwt.both
+                (create conn ~user:uid ~slug:"phrq-race2" ~community:c1
+                   (phr_fresh_pending ()))
+                (create conn2 ~user:uid ~slug:"phrq-race2" ~community:c2
+                   (phr_fresh_pending ()))
+            in
+            let _ =
+              ok_and_error "different-target race" Rq.Active_home_exists
+                results
+            in
+            let* total = count_for_project conn project in
+            Alcotest.(check int) "no partial second row" 1 total;
+            (* Which target won is deliberately unasserted. *)
+            let* winner =
+              find conn "winning target" q_active_community_for_project
+                project
+            in
+            Alcotest.(check bool) "winner is one of the two targets" true
+              (winner = c1 || winner = c2);
+            Lwt.return_unit))
+
+  let different_projects_race_case =
+    db_case "request: one community accepts concurrent distinct projects"
+      (fun conn ->
+        let* uid = insert_user conn "phrq_a" in
+        let* _, p1 =
+          make_project conn ~user:uid ~ext_id:944200011L ~slug:"phrq-multi-a"
+        in
+        let* _, p2 =
+          make_project conn ~user:uid ~ext_id:944200012L ~slug:"phrq-multi-b"
+        in
+        let* community = insert_community conn "phrq-multi-home" in
+        Pod_store.with_second_connection (fun conn2 ->
+            let* r1, r2 =
+              Lwt.both
+                (create conn ~user:uid ~slug:"phrq-multi-a" ~community
+                   (phr_fresh_pending ()))
+                (create conn2 ~user:uid ~slug:"phrq-multi-b" ~community
+                   (phr_fresh_pending ()))
+            in
+            let check_ok label = function
+              | Ok _ -> ()
+              | Error e -> Alcotest.failf "%s: %s" label (error_str e)
+            in
+            check_ok "first project" r1;
+            check_ok "second project" r2;
+            let* n1 =
+              find conn "p1 active" q_count_active_for_project p1
+            in
+            let* n2 =
+              find conn "p2 active" q_count_active_for_project p2
+            in
+            Alcotest.(check int) "one active relation each (a)" 1 n1;
+            Alcotest.(check int) "one active relation each (b)" 1 n2;
+            let* pending =
+              find conn "community pending" q_count_pending_for_community
+                community
+            in
+            Alcotest.(check int) "community hosts both requests" 2 pending;
+            Lwt.return_unit))
+
+  (* === failure rollback === *)
+
+  let rollback_case =
+    db_case "request: injected insert failure leaves no trace" (fun conn ->
+        let (module C : Caqti_lwt.CONNECTION) = conn in
+        let* uid = insert_user conn "phrq_a" in
+        let* _, project =
+          make_project conn ~user:uid ~ext_id:944200013L ~slug:"phrq-fail"
+        in
+        let* community = insert_community conn "phrq-fail-home" in
+        let* project_before = find conn "project sig" q_project_sig project in
+        let* community_before =
+          find conn "community sig" q_community_sig community
+        in
+        let exec_ddl label q =
+          let* r = C.exec q () in
+          let* () = or_fail label r in
+          Lwt.return_unit
+        in
+        let* () = exec_ddl "pre-drop trigger" q_drop_fail_trigger in
+        let* () = exec_ddl "pre-drop function" q_drop_fail_fn in
+        let* () = exec_ddl "create function" q_create_fail_fn in
+        let* () = exec_ddl "create trigger" q_create_fail_trigger in
+        Lwt.finalize
+          (fun () ->
+            let relation =
+              phr_expect_ok
+                (Phr.create_pending ~request_note:(Some phrq_poison_note))
+            in
+            let* () =
+              create_expect "poisoned request" Rq.Storage_error conn
+                ~user:uid ~slug:"phrq-fail" ~community relation
+            in
+            let* () =
+              check_no_relations "no relation persists" conn project
+            in
+            let* project_after =
+              find conn "project sig after" q_project_sig project
+            in
+            let* community_after =
+              find conn "community sig after" q_community_sig community
+            in
+            Alcotest.(check string) "project unchanged" project_before
+              project_after;
+            Alcotest.(check string) "community unchanged" community_before
+              community_after;
+            let* members = find conn "members" q_count_members community in
+            Alcotest.(check int) "no membership side effect" 0 members;
+            let* mods =
+              find conn "moderators" q_count_moderators community
+            in
+            Alcotest.(check int) "no moderator side effect" 0 mods;
+            let* stewards =
+              find conn "stewards" q_count_stewards_for_project project
+            in
+            Alcotest.(check int) "stewardship untouched" 1 stewards;
+            Lwt.return_unit)
+          (fun () ->
+            let* () = exec_ddl "drop trigger" q_drop_fail_trigger in
+            exec_ddl "drop function" q_drop_fail_fn))
+
+  (* === durable inconsistency === *)
+
+  let inconsistent_case =
+    db_case "request: malformed durable community data is corruption"
+      (fun conn ->
+        let* uid = insert_user conn "phrq_a" in
+        let* _, project =
+          make_project conn ~user:uid ~ext_id:944200014L ~slug:"phrq-corrupt"
+        in
+        (* A non-addressable stored slug (communities.slug carries no
+           schema grammar, so this corruption is directly producible). *)
+        let* bad_slug = insert_community conn "phrq-bad-slug" in
+        let* () =
+          exec conn "corrupt slug" q_corrupt_community_slug
+            (bad_slug, "phrq-bad slug")
+        in
+        let* () =
+          create_expect "corrupted slug" Rq.Inconsistent_data conn
+            ~user:uid ~slug:"phrq-corrupt" ~community:bad_slug
+            (phr_fresh_pending ())
+        in
+        (* The mixed published flag shape — neither fully listed nor
+           fully unlisted — is invalid per the shared lifecycle rule. *)
+        let* mixed = insert_community conn "phrq-mixed" in
+        let* () = exec conn "mix flags" q_mix_community_flags mixed in
+        let* () =
+          create_expect "mixed lifecycle flags" Rq.Inconsistent_data conn
+            ~user:uid ~slug:"phrq-corrupt" ~community:mixed
+            (phr_fresh_pending ())
+        in
+        (* visibility/onboarding off-enum corruption is blocked by their
+           DB CHECKs and a non-positive relation id by BIGSERIAL: those
+           store branches stay defensive and untestable without dropping
+           production constraints. *)
+        check_no_relations "no insert from corruption" conn project)
+
+  (* === credential and privacy sweep === *)
+
+  let credential_case =
+    db_case "request: no credential fixture reaches the relation row"
+      (fun conn ->
+        let* uid = insert_user conn "phrq_a" in
+        let* _, _project =
+          make_project conn ~user:uid ~ext_id:944200015L ~slug:"phrq-creds"
+        in
+        let* community = insert_community conn "phrq-creds-home" in
+        let credentials =
+          [ "phrq-access-token-A1x"
+          ; "phrq-refresh-token-B2x"
+          ; "phrq-authorization-code-C3x"
+          ; "phrq-pkce-verifier-D4x"
+          ; "phrq-client-secret-E5x"
+          ; "phrq-oauth-state-F6x"
+          ; "phrq-session-binding-G7x"
+          ; "944200999" (* installation id fixture *)
+          ; "944300999" (* account id fixture *)
+          ; "944699999" (* repository id fixture *)
+          ; "phrq-private-repo-name-H8x"
+          ; "phrq-private-repo-desc-I9x"
+          ]
+        in
+        let* created =
+          create_ok "ordinary request" conn ~user:uid ~slug:"phrq-creds"
+            ~community
+            (phr_expect_ok
+               (Phr.create_pending
+                  ~request_note:(Some "Ordinary private note.")))
+        in
+        let* blob =
+          find conn "row blob" q_relation_text_blob (Rq.relation_id created)
+        in
+        List.iter
+          (fun credential ->
+            Alcotest.(check bool) "credential absent from relation row"
+              false
+              (contains ~needle:credential blob))
+          credentials;
+        let* () =
+          mark "free slot" conn q_mark_rejected (Rq.relation_id created)
+        in
+        (* A credential-shaped value deliberately supplied as the note is
+           legitimate there — and only there. *)
+        let deliberate = List.hd credentials in
+        let* second =
+          create_ok "deliberate note" conn ~user:uid ~slug:"phrq-creds"
+            ~community
+            (phr_expect_ok
+               (Phr.create_pending ~request_note:(Some deliberate)))
+        in
+        let* _, (_, (stored_note, _)) =
+          relation_row conn (Rq.relation_id second)
+        in
+        Alcotest.(check bool) "deliberate note stored verbatim" true
+          (stored_note = Some deliberate);
+        let* nonnote =
+          find conn "non-note blob" q_relation_nonnote_blob
+            (Rq.relation_id second)
+        in
+        Alcotest.(check bool) "note value nowhere else in the row" false
+          (contains ~needle:deliberate nonnote);
+        Lwt.return_unit)
+
+  let suite =
+    [ pure_inputs_case; success_case; note_variants_case;
+      project_unavailable_case; project_authorization_case;
+      community_unavailable_case; eligible_modes_case;
+      active_relation_case; historical_case;
+      same_project_same_target_race_case;
+      same_project_different_targets_race_case;
+      different_projects_race_case; rollback_case; inconsistent_case;
+      credential_case ]
+end
 
 let () =
   Alcotest.run "earde"
@@ -27759,4 +28879,8 @@ let () =
     ; ("project_home_relation_fresh_rows", phr_fresh_row_cases)
     ; ("project_home_relation_ordering", phr_ordering_cases)
     ; ("project_home_relation_privacy", phr_privacy_cases)
+      (* Project home request store: transactional owner-authorized pending
+         request against an existing eligible published network community,
+         with index-arbitrated active-home races. Database-gated. *)
+    ; ("project_home_request_store", Phrq.suite)
     ]
