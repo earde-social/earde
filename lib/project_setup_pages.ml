@@ -194,46 +194,57 @@ let repository_row_html repository =
       (esc repository.full_name)
       (repository_details_html repository)
 
-(* The one selection form. Its only hidden field is draft_id: no user,
-   installation, account, GitHub repository, state, token, or redirect field
-   — the POST handler re-derives everything from the session and
-   re-authorizes the draft. The submit button has no name, so an empty
-   selection submits as draft_id alone. Archived repositories stay fully
-   selectable: archived is information, not a policy this page enforces. *)
-let configuration_html configuration =
+(* The one selection form. Its only application-owned hidden field is
+   draft_id: no user, installation, account, GitHub repository, state, token,
+   or redirect field — the POST handler re-derives everything from the
+   session and re-authorizes the draft. When a request is supplied, Dream's
+   own CSRF hidden field (Dream.csrf_tag) is emitted additionally; it is
+   framework-owned, carries no GitHub or draft-derived secret, and the form
+   layer strips it before the strict application parser runs. Pure rendering
+   calls (no request) omit it, keeping the page testable without a server.
+   The submit button has no name, so an empty selection submits as draft_id
+   alone. Archived repositories stay fully selectable: archived is
+   information, not a policy this page enforces. *)
+let configuration_html ?request configuration =
   if
     Int64.compare configuration.draft.draft_id 0L <= 0
     || configuration.repositories = []
   then corrupt_state_html
   else
+    let csrf_field =
+      match request with
+      | None -> ""
+      | Some request -> Dream.csrf_tag request
+    in
     Printf.sprintf
       "<p class='create-sub ps-configure-intro'>Setting up \
        <strong>%s</strong> (%s). Choose which of these public repositories \
        belong to the Earde project.</p>\
        <form method='POST' action='/projects/new/repositories' \
        class='create-form ps-repo-form'>\
-       <input type='hidden' name='draft_id' value='%Ld'>\
+       %s<input type='hidden' name='draft_id' value='%Ld'>\
        <ul class='ps-repo-list'>%s</ul>\
        <div class='create-actions'><button type='submit' class='create-btn \
        create-btn--block'>Save repository selection</button></div>\
        </form>"
       (esc configuration.draft.account_login)
       (account_type_copy configuration.draft.account_type)
-      configuration.draft.draft_id
+      csrf_field configuration.draft.draft_id
       (String.concat "\n"
          (List.map repository_row_html configuration.repositories))
 
-let state_html = function
+let state_html ?request = function
   | No_available_drafts | Choose_draft [] -> empty_state_html
   | Choose_draft options -> chooser_html options
-  | Configure_repositories configuration -> configuration_html configuration
+  | Configure_repositories configuration ->
+      configuration_html ?request configuration
 
 let project_setup_page ?user ?request ~state ~feedback () =
   let body =
     Printf.sprintf
       "<div class='create-wrap project-setup'><div \
        class='create-panel'>%s%s%s</div></div>"
-      heading (feedback_html feedback) (state_html state)
+      heading (feedback_html feedback) (state_html ?request state)
   in
   (* noindex: a session-dependent setup surface — not for search indexes. *)
   Components.create_page ?user ?request ~noindex:true ~title:"Create a project"

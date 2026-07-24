@@ -131,6 +131,24 @@ let () =
             (module Earde.Github_user_installation_repositories
                     .Cohttp_transport)
           request);
+    (* Project setup over verified GitHub drafts. The GET is informational
+       and deliberately not rate-limited (matching /bring); the
+       selection-replacing POST reuses the same sensitive-POST rate limit as
+       the other authenticated mutations above. Mode is re-read per request
+       (uncached, matching the onboarding routes), and the POST loads the
+       validated GitHub App configuration per request only to enforce the
+       same public-origin policy as the installation start — no GitHub
+       credential is used and no outbound HTTP occurs. *)
+    Dream.get "/projects/new" (fun request ->
+        Earde.Project_setup_handlers.make_new_project_handler
+          ~mode:(Earde.Project_onboarding.mode_from_env ())
+          request);
+    Dream.post "/projects/new/repositories"
+      (Earde.Handlers.Rate_limit.middleware (fun request ->
+           Earde.Project_setup_handlers.make_repository_selection_handler
+             ~mode:(Earde.Project_onboarding.mode_from_env ())
+             ~load_config:Earde.Github_app_config.from_env
+             request));
     Dream.get "/new-community" Earde.Handlers.new_community_page;
     Dream.post "/communities" Earde.Handlers.create_community_handler;
     Dream.post "/join" Earde.Handlers.join_community_handler;

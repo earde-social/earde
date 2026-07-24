@@ -73,11 +73,14 @@ val project_setup_page :
     counts are clamped rather than shown.
 
     [Configure_repositories] renders exactly one
-    [POST /projects/new/repositories] form whose only hidden field is
-    [draft_id]; each repository is one [repository] checkbox valued by its
-    local snapshot id, and the nameless submit button never enters the
-    field set. Chooser links are built structurally ([Uri]) as
-    [/projects/new?draft=<id>].
+    [POST /projects/new/repositories] form whose only application-owned
+    hidden field is [draft_id]; each repository is one [repository] checkbox
+    valued by its local snapshot id, and the nameless submit button never
+    enters the field set. When [request] is supplied, the form additionally
+    contains Dream's framework CSRF hidden field ([Dream.csrf_tag]) — it is
+    framework data, never an application form field, and it is absent from
+    pure rendering calls where no request exists. Chooser links are built
+    structurally ([Uri]) as [/projects/new?draft=<id>].
 
     Feedback is cosmetic only — it never changes which state or form is
     rendered — and [None] renders no alert element at all. All copy stays
