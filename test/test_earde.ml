@@ -23084,6 +23084,1211 @@ module Phrq = struct
       credential_case ]
 end
 
+(* ===== Existing-community home request form (Project_home_request_form) =====
+   Pure strict parser: exact two-field grammar, strict positive OCaml-int
+   community id, byte-exact note passthrough, and delegation to the real
+   relation domain. DB-free. Rejection labels name only the malformed
+   category, and every rejection is asserted against the nullary
+   constructor, so no fixture value reaches test output. *)
+
+module Phrf = Earde.Project_home_request_form
+
+let phrf_case name f = Alcotest.test_case name `Quick f
+
+let phrf_fields ?(target = "42") ?(note = "Please make this our home") () =
+  [ ("target_community_id", target); ("request_note", note) ]
+
+let phrf_expect_ok fields =
+  match Phrf.of_fields fields with
+  | Ok t -> t
+  | Error Phrf.Invalid_form -> Alcotest.fail "expected a valid form"
+
+let phrf_ok ?target ?note () = phrf_expect_ok (phrf_fields ?target ?note ())
+
+let phrf_reject name fields =
+  phrf_case name (fun () ->
+      Alcotest.(check bool) "rejected" true
+        (match Phrf.of_fields fields with
+        | Error Phrf.Invalid_form -> true
+        | Ok _ -> false))
+
+let phrf_rename field replacement =
+  List.map
+    (fun (k, v) -> if k = field then (replacement, v) else (k, v))
+    (phrf_fields ())
+
+let phrf_valid_cases =
+  [ phrf_case "ordinary submission parses exactly" (fun () ->
+        let t = phrf_ok () in
+        Alcotest.(check int) "target id" 42 (Phrf.target_community_id t);
+        Alcotest.(check string) "note" "Please make this our home"
+          (Phrf.request_note t))
+  ; phrf_case "field order does not matter" (fun () ->
+        let t = phrf_expect_ok (List.rev (phrf_fields ())) in
+        Alcotest.(check int) "target id" 42 (Phrf.target_community_id t))
+  ; phrf_case "empty note is preserved as the empty string" (fun () ->
+        Alcotest.(check string) "empty note" ""
+          (Phrf.request_note (phrf_ok ~note:"" ())))
+  ; phrf_case "blank note is preserved verbatim before domain creation"
+      (fun () ->
+        Alcotest.(check string) "blank note" " \t\r\n "
+          (Phrf.request_note (phrf_ok ~note:" \t\r\n " ())))
+  ; phrf_case "note preserved byte-exactly, never canonicalized" (fun () ->
+        let raw = "  Prima riga \xc3\xa8\r\nseconda\ttab \xe2\x98\x95  " in
+        Alcotest.(check string) "note untouched" raw
+          (Phrf.request_note (phrf_ok ~note:raw ())))
+  ; phrf_case "leading zeroes accepted for the community id" (fun () ->
+        Alcotest.(check int) "target id" 7
+          (Phrf.target_community_id (phrf_ok ~target:"007" ())))
+  ; phrf_case "largest representable int accepted" (fun () ->
+        Alcotest.(check int) "target id" max_int
+          (Phrf.target_community_id
+             (phrf_ok ~target:(string_of_int max_int) ())))
+  ]
+
+let phrf_grammar_cases =
+  [ phrf_reject "empty field set" []
+  ; phrf_reject "missing target_community_id"
+      [ ("request_note", "only a note") ]
+  ; phrf_reject "missing request_note" [ ("target_community_id", "42") ]
+  ; phrf_reject "duplicate target_community_id"
+      (("target_community_id", "42") :: phrf_fields ())
+  ; phrf_reject "duplicate request_note"
+      (("request_note", "again") :: phrf_fields ())
+  ; phrf_reject "unknown extra field"
+      (phrf_fields () @ [ ("community_slug", "alpine") ])
+  ; phrf_reject "unknown submit-style field"
+      (phrf_fields () @ [ ("submit", "send") ])
+  ; phrf_reject "project slug is never a form field"
+      (phrf_fields () @ [ ("project_slug", "widget-kit") ])
+  ; phrf_reject "dream.csrf is not recognized by the pure parser"
+      (phrf_fields () @ [ ("dream.csrf", "token") ])
+  ; phrf_reject "capitalized target name"
+      (phrf_rename "target_community_id" "Target_community_id")
+  ; phrf_reject "uppercase note name"
+      (phrf_rename "request_note" "REQUEST_NOTE")
+  ; phrf_reject "target name with leading space"
+      (phrf_rename "target_community_id" " target_community_id")
+  ; phrf_reject "note name with trailing space"
+      (phrf_rename "request_note" "request_note ")
+  ]
+
+let phrf_id_cases =
+  List.map
+    (fun (label, raw) ->
+      phrf_reject ("community id: " ^ label) (phrf_fields ~target:raw ()))
+    [ ("blank", "")
+    ; ("zero", "0")
+    ; ("all zeroes", "000")
+    ; ("negative", "-5")
+    ; ("plus-signed", "+5")
+    ; ("leading whitespace", " 5")
+    ; ("trailing whitespace", "5 ")
+    ; ("newline-suffixed", "5\n")
+    ; ("decimal point", "5.0")
+    ; ("hexadecimal", "0x10")
+    ; ("underscore separator", "1_000")
+    ; ("int64 overflow", "9223372036854775808")
+    ; ("ocaml int overflow", string_of_int max_int ^ "0")
+    ]
+
+let phrf_delegation_cases =
+  [ phrf_case "create_relation canonicalizes through the real domain"
+      (fun () ->
+        match
+          Phrf.create_relation (phrf_ok ~note:"  ciao\r\nmondo\t \r\n" ())
+        with
+        | Ok relation ->
+            Alcotest.(check bool) "pending" true
+              (Phr.status relation = Phr.Pending);
+            Alcotest.(check (option string)) "canonical note"
+              (Some "ciao\nmondo")
+              (Phr.request_note relation)
+        | Error _ -> Alcotest.fail "expected a valid relation")
+  ; phrf_case "blank note collapses to None only in the domain" (fun () ->
+        let t = phrf_ok ~note:" \t\r\n " () in
+        Alcotest.(check string) "parser preserves" " \t\r\n "
+          (Phrf.request_note t);
+        match Phrf.create_relation t with
+        | Ok relation ->
+            Alcotest.(check (option string)) "domain collapses" None
+              (Phr.request_note relation)
+        | Error _ -> Alcotest.fail "expected a valid relation")
+  ; phrf_case "invalid notes propagate the exact domain error" (fun () ->
+        List.iter
+          (fun raw ->
+            Alcotest.(check bool) "Invalid_request_note" true
+              (match Phrf.create_relation (phrf_ok ~note:raw ()) with
+              | Error Phr.Invalid_request_note -> true
+              | Ok _ | Error _ -> false))
+          [ "nul\x00byte"; "esc\x1bcontrol"; "\xff\xfe not utf-8";
+            String.make 2001 'a' ])
+  ]
+
+let phrf_privacy_cases =
+  [ phrf_case "every rejection is the same payload-free error" (fun () ->
+        (* Distinctive fixture markers: were Invalid_form to carry any
+           payload, these equalities could not all hold. *)
+        let rejections =
+          [ Phrf.of_fields []
+          ; Phrf.of_fields (phrf_fields ~target:"phrf-fixture-zz1" ())
+          ; Phrf.of_fields (phrf_fields () @ [ ("phrf-fixture-zz2", "z") ])
+          ; Phrf.of_fields [ ("request_note", "phrf-fixture-zz3") ]
+          ; Phrf.of_fields (phrf_fields () @ phrf_fields ())
+          ]
+        in
+        List.iter
+          (fun r ->
+            Alcotest.(check bool) "Invalid_form" true
+              (r = Error Phrf.Invalid_form))
+          rejections)
+  ]
+
+(* ===== Home choice page (Project_home_choice_pages) =====
+   Same fragment-scoped technique as the other create-flow page tests:
+   assertions pin only what the feature templates introduce inside the
+   shared layout. DB-free; no GitHub, installation, repository, or
+   credential fixtures exist anywhere in these view models. *)
+
+module Phcp = Earde.Project_home_choice_pages
+
+let phcp_case name f = Alcotest.test_case name `Quick f
+
+let phcp_project ?(name = "Widget Kit") ?(slug = "widget-kit")
+    ?(login = "octo-org") () : Phcp.project =
+  { Phcp.name; slug; namespace_login = login }
+
+let phcp_community ?(id = 31) ?(name = "Alpine Devs") ?(slug = "alpine")
+    ?description ?(visibility = Phcp.Public) () : Phcp.community =
+  { Phcp.id; name; slug; description; visibility }
+
+let phcp_c1 =
+  phcp_community ~id:31 ~name:"Alpine Devs" ~slug:"alpine"
+    ~description:"Shared alpine tooling talk" ()
+
+let phcp_c2 =
+  phcp_community ~id:32 ~name:"Beta Builders" ~slug:"beta"
+    ~visibility:Phcp.Unlisted ()
+
+let phcp_unavailable =
+  phcp_community ~id:33 ~name:"Gamma Sunset" ~slug:"gamma"
+    ~visibility:Phcp.Currently_unavailable ()
+
+let phcp_choose ?project ?(communities = [ phcp_c1; phcp_c2 ])
+    ?(note = "") () =
+  Phcp.Choose_existing
+    { project = (match project with Some p -> p | None -> phcp_project ());
+      communities; request_note = note }
+
+let phcp_render ?user ?(feedback = None) state =
+  Phcp.project_home_choice_page ?user ~state ~feedback ()
+
+let phcp_frag ?user ?feedback state =
+  ps_fragment (phcp_render ?user ?feedback state)
+
+let phcp_form_cases =
+  [ phcp_case "exact form method, action, and application field set"
+      (fun () ->
+        let frag = phcp_frag (phcp_choose ()) in
+        Alcotest.(check int) "one form" 1 (ps_count frag "<form");
+        ps_must frag
+          "<form method='POST' action='/projects/widget-kit/request-home' \
+           class='create-form phc-request-form'>";
+        Alcotest.(check int) "two radios" 2
+          (ps_count frag "name='target_community_id'");
+        Alcotest.(check int) "one note field" 1
+          (ps_count frag "name='request_note'");
+        (* Exactly the two application fields: no other name= attribute
+           exists in the fragment. *)
+        Alcotest.(check int) "exact application field set" 3
+          (ps_count frag "name='");
+        ps_must frag "<textarea name='request_note' maxlength='2000'";
+        (* The one nameless submit control, byte-exact. *)
+        ps_must frag
+          "<button type='submit' class='create-btn \
+           create-btn--block'>Send home request</button>";
+        (* No hidden project slug or identifiers of any kind. *)
+        ps_must_not frag "type='hidden'";
+        ps_must_not frag "name='project_slug'";
+        ps_must_not frag "name='slug'";
+        ps_must_not frag "name='user_id'";
+        ps_must_not frag "name='relation_id'";
+        ps_must_not frag "installation";
+        ps_must_not frag "return_url")
+  ; phcp_case "radio options in supplied order, never preselected"
+      (fun () ->
+        let frag = phcp_frag (phcp_choose ()) in
+        ps_order frag "Alpine Devs" "Beta Builders";
+        ps_order frag "value='31'" "value='32'";
+        ps_must_not frag "checked")
+  ; phcp_case "request note is escaped, never rendered as markup" (fun () ->
+        let frag =
+          phcp_frag
+            (phcp_choose ~note:"<script>alert('x')</script> & <b>bold</b>" ())
+        in
+        ps_must frag
+          "&lt;script&gt;alert(&#39;x&#39;)&lt;/script&gt; &amp; \
+           &lt;b&gt;bold&lt;/b&gt;";
+        ps_must_not frag "<script>alert";
+        ps_must_not frag "<b>bold</b>")
+  ; phcp_case "community identity, visibility labels, no invented metrics"
+      (fun () ->
+        let frag = phcp_frag (phcp_choose ()) in
+        ps_must frag "href='/c/alpine'";
+        ps_must frag "href='/c/beta'";
+        ps_must frag "phc-community-visibility'>Public<";
+        ps_must frag "phc-community-visibility'>Unlisted<";
+        ps_must frag "Shared alpine tooling talk";
+        ps_must_not frag "member";
+        ps_must_not frag "activity";
+        ps_must_not frag "karma";
+        ps_must_not frag "verified badge")
+  ; phcp_case "copy: factual verification, moderator review, no officiality"
+      (fun () ->
+        let frag = phcp_frag (phcp_choose ()) in
+        ps_must frag "Connect to an existing community";
+        ps_must frag "Request an eligible Earde community";
+        ps_must frag "Project connected through GitHub";
+        ps_must frag "moderators must review";
+        ps_must frag "grants no community moderation rights";
+        ps_must frag "visible only to";
+        ps_must_not frag "Official";
+        ps_must_not frag "GitHub-approved";
+        ps_must_not frag "GitHub-endorsed")
+  ; phcp_case "no GitHub, installation, repository, or credential material"
+      (fun () ->
+        let frag = phcp_frag (phcp_choose ()) in
+        ps_must_not frag "github.com";
+        ps_must_not frag "repository";
+        ps_must_not frag "installation";
+        ps_must_not frag "token";
+        ps_must_not frag "octo-org")
+  ; phcp_case "no inline styles, scripts, or handlers in the fragment"
+      (fun () ->
+        List.iter
+          (fun state ->
+            let frag = phcp_frag state in
+            ps_must_not frag "<script";
+            ps_must_not frag "style='";
+            ps_must_not frag "onclick";
+            ps_must_not frag "javascript:";
+            ps_must_not frag "http-equiv")
+          [ phcp_choose ()
+          ; Phcp.No_eligible_communities (phcp_project ())
+          ; Phcp.Active_relation
+              { project = phcp_project ();
+                relation = Phcp.Pending_request phcp_c1 }
+          ; Phcp.Active_relation
+              { project = phcp_project ();
+                relation = Phcp.Accepted_home phcp_c1 }
+          ])
+  ]
+
+let phcp_state_cases =
+  [ phcp_case "no eligible communities: explanation and setup link, no form"
+      (fun () ->
+        let frag =
+          phcp_frag (Phcp.No_eligible_communities (phcp_project ()))
+        in
+        ps_must frag "No eligible published network community";
+        ps_must frag "href='/projects/widget-kit/setup'";
+        ps_must frag "Back to project setup";
+        ps_must_not frag "<form";
+        ps_must_not frag "target_community_id";
+        ps_must_not frag "Send home request")
+  ; phcp_case "pending relation: status copy and target, no request controls"
+      (fun () ->
+        let frag =
+          phcp_frag
+            (Phcp.Active_relation
+               { project = phcp_project ();
+                 relation = Phcp.Pending_request phcp_c1 })
+        in
+        ps_must frag "Home request pending";
+        ps_must frag "Alpine Devs";
+        ps_must frag "href='/c/alpine'";
+        ps_must frag "accept or reject";
+        ps_must_not frag "<form";
+        ps_must_not frag "<textarea";
+        ps_must_not frag "target_community_id";
+        ps_must_not frag "Send home request";
+        ps_must_not frag "phc-note")
+  ; phcp_case "accepted relation: connected copy, no moderation implication"
+      (fun () ->
+        let frag =
+          phcp_frag
+            (Phcp.Active_relation
+               { project = phcp_project ();
+                 relation = Phcp.Accepted_home phcp_c1 })
+        in
+        ps_must frag "Community home connected";
+        ps_must frag "href='/c/alpine'";
+        ps_must frag "moderation stays with its moderators";
+        ps_must_not frag "<form";
+        ps_must_not frag "target_community_id";
+        ps_must_not frag "Send home request";
+        ps_must_not frag "Official")
+  ; phcp_case
+      "unavailable active target: generic label only, relation still shown"
+      (fun () ->
+        List.iter
+          (fun (relation, status_copy) ->
+            let frag =
+              phcp_frag
+                (Phcp.Active_relation
+                   { project = phcp_project (); relation })
+            in
+            ps_must frag status_copy;
+            ps_must frag "Gamma Sunset";
+            ps_must frag "href='/c/gamma'";
+            ps_must frag "Currently unavailable";
+            (* The generic label never becomes a reason or a false
+               publication state. *)
+            ps_must_not frag "Unlisted";
+            ps_must_not frag "Private";
+            ps_must_not frag "Draft";
+            ps_must_not frag "Legacy";
+            ps_must_not frag "indexable";
+            ps_must_not frag "discoverable";
+            ps_must_not frag "onboarding";
+            ps_must_not frag "network community";
+            (* Still no request controls and no target id. *)
+            ps_must_not frag "<form";
+            ps_must_not frag "target_community_id";
+            ps_must_not frag "Send home request";
+            ps_must_not frag "value='33'";
+            ps_must_not frag "'33'")
+          [ (Phcp.Pending_request phcp_unavailable, "Home request pending")
+          ; (Phcp.Accepted_home phcp_unavailable, "Community home connected")
+          ])
+  ]
+
+let phcp_defensive_cases =
+  [ phcp_case "invalid project slug: no form, no project-derived links"
+      (fun () ->
+        List.iter
+          (fun slug ->
+            let frag =
+              phcp_frag
+                (phcp_choose ~project:(phcp_project ~slug ()) ())
+            in
+            ps_must frag "Connect to an existing community";
+            ps_must_not frag "<form";
+            ps_must_not frag "request-home";
+            ps_must_not frag "/projects/")
+          [ ""; "Widget Kit"; "-widget"; "widget-"; "wid--get";
+            String.make 81 'a' ])
+  ; phcp_case "invalid project slug: no setup link either" (fun () ->
+        let frag =
+          phcp_frag
+            (Phcp.No_eligible_communities (phcp_project ~slug:"Bad Slug" ()))
+        in
+        ps_must frag "No eligible published network community";
+        ps_must_not frag "href='/projects";
+        ps_must_not frag "Bad Slug")
+  ; phcp_case "non-positive community ids never become radio inputs"
+      (fun () ->
+        let corrupt_zero = phcp_community ~id:0 ~name:"Zero Corrupt" () in
+        let corrupt_neg = phcp_community ~id:(-3) ~name:"Neg Corrupt" () in
+        let frag =
+          phcp_frag
+            (phcp_choose ~communities:[ corrupt_zero; corrupt_neg ] ())
+        in
+        (* With no valid option left there is no request form at all, so
+           nothing renders that could carry a corrupt id. *)
+        ps_must frag "Connect to an existing community";
+        ps_must_not frag "type='radio'";
+        ps_must_not frag "value='0'";
+        ps_must_not frag "value='-3'";
+        ps_must_not frag "<form")
+  ; phcp_case "a valid option keeps the form; corrupt rows stay inert"
+      (fun () ->
+        let corrupt = phcp_community ~id:0 ~name:"Zero Corrupt" () in
+        let frag =
+          phcp_frag (phcp_choose ~communities:[ phcp_c1; corrupt ] ())
+        in
+        Alcotest.(check int) "one form" 1 (ps_count frag "<form");
+        Alcotest.(check int) "one radio" 1 (ps_count frag "type='radio'");
+        ps_must frag "Zero Corrupt")
+  ; phcp_case "currently-unavailable community is never selectable"
+      (fun () ->
+        (* Alone: nothing actionable remains, so no form at all. *)
+        let alone =
+          phcp_frag (phcp_choose ~communities:[ phcp_unavailable ] ())
+        in
+        ps_must_not alone "<form";
+        ps_must_not alone "type='radio'";
+        ps_must_not alone "value='33'";
+        (* Beside a valid option: the form renders with exactly one radio,
+           and the unavailable row stays inert with the generic label. *)
+        let mixed =
+          phcp_frag
+            (phcp_choose ~communities:[ phcp_c1; phcp_unavailable ] ())
+        in
+        Alcotest.(check int) "one radio" 1 (ps_count mixed "type='radio'");
+        ps_must mixed "Gamma Sunset";
+        ps_must mixed "Currently unavailable";
+        ps_must_not mixed "value='33'")
+  ; phcp_case "invalid community slug renders no actionable link" (fun () ->
+        let broken =
+          phcp_community ~id:41 ~name:"Broken Slug" ~slug:"has space" ()
+        in
+        let frag = phcp_frag (phcp_choose ~communities:[ broken ] ()) in
+        ps_must frag "Broken Slug";
+        ps_must_not frag "<a href='/c/";
+        (* The identity still renders as inert text. *)
+        ps_must frag "/c/has space")
+  ; phcp_case "duplicate community ids render one actionable option"
+      (fun () ->
+        let duplicate = { phcp_c1 with Phcp.name = "Alpine Mirror" } in
+        let frag =
+          phcp_frag (phcp_choose ~communities:[ phcp_c1; duplicate ] ())
+        in
+        Alcotest.(check int) "one radio" 1 (ps_count frag "type='radio'");
+        Alcotest.(check int) "one value" 1 (ps_count frag "value='31'"))
+  ; phcp_case "empty community list renders no form" (fun () ->
+        let frag = phcp_frag (phcp_choose ~communities:[] ()) in
+        ps_must frag "Connect to an existing community";
+        ps_must_not frag "<form")
+  ]
+
+let phcp_feedback_cases =
+  [ phcp_case "each feedback variant renders its generic copy" (fun () ->
+        List.iter
+          (fun (feedback, marker) ->
+            let frag = phcp_frag ~feedback:(Some feedback) (phcp_choose ()) in
+            ps_must frag "phc-alert";
+            ps_must frag marker)
+          [ (Phcp.Request_form_invalid, "Review the form and try again")
+          ; (Phcp.Community_unavailable,
+             "no longer available for project requests")
+          ; (Phcp.Active_home_exists,
+             "already has a pending request or community home")
+          ; (Phcp.Request_failed, "Try again.")
+          ])
+  ; phcp_case "no feedback renders no alert container" (fun () ->
+        ps_must_not (phcp_frag (phcp_choose ())) "phc-alert")
+  ; phcp_case "feedback is cosmetic: an active relation still shows no form"
+      (fun () ->
+        let frag =
+          phcp_frag ~feedback:(Some Phcp.Active_home_exists)
+            (Phcp.Active_relation
+               { project = phcp_project ();
+                 relation = Phcp.Pending_request phcp_c1 })
+        in
+        ps_must frag "phc-alert";
+        ps_must_not frag "<form")
+  ]
+
+(* --- Page rendering with a live request: the framework CSRF field. --- *)
+
+let phcp_csrf_render state =
+  let captured = ref None in
+  let pipeline =
+    Dream.set_secret gck_secret @@ Dream.memory_sessions
+    @@ fun req ->
+    captured :=
+      Some
+        (Phcp.project_home_choice_page ~request:req ~state ~feedback:None ());
+    Dream.html ""
+  in
+  ignore
+    (Lwt_main.run
+       (pipeline
+          (Dream.request ~method_:`GET ~target:"/projects/widget-kit/home"
+             "")));
+  match !captured with
+  | Some html -> html
+  | None -> Alcotest.fail "renderer did not run"
+
+let phcp_csrf_cases =
+  [ phcp_case "choose with request: one framework field inside the form"
+      (fun () ->
+        let frag = ps_fragment (phcp_csrf_render (phcp_choose ())) in
+        Alcotest.(check int) "one framework field" 1
+          (ps_count frag "name=\"dream.csrf\"");
+        Alcotest.(check int) "framework field is hidden" 1
+          (ps_count frag "type=\"hidden\"");
+        (* Still zero application-owned hidden fields. *)
+        Alcotest.(check int) "no application hidden field" 0
+          (ps_count frag "type='hidden'");
+        match
+          ( ps_index_of frag "<form" 0,
+            ps_index_of frag "name=\"dream.csrf\"" 0,
+            ps_index_of frag "</form>" 0 )
+        with
+        | Some f, Some c, Some e ->
+            Alcotest.(check bool) "CSRF inside the form" true (f < c && c < e)
+        | _ -> Alcotest.fail "form or CSRF field missing")
+  ; phcp_case "form-free states emit no framework field even with a request"
+      (fun () ->
+        List.iter
+          (fun state ->
+            ps_must_not (ps_fragment (phcp_csrf_render state)) "dream.csrf")
+          [ Phcp.No_eligible_communities (phcp_project ())
+          ; Phcp.Active_relation
+              { project = phcp_project ();
+                relation = Phcp.Pending_request phcp_c1 }
+          ; Phcp.Active_relation
+              { project = phcp_project ();
+                relation = Phcp.Accepted_home phcp_c1 }
+          ; phcp_choose ~communities:[] ()
+          ])
+  ; phcp_case "pure rendering without a request stays CSRF-free" (fun () ->
+        ps_must_not (phcp_frag (phcp_choose ())) "dream.csrf")
+  ]
+
+(* === Project home choice read model (Project_home_choice_read_model) ===
+   Owner-authorized view behind the existing-community home choice: the
+   active relation or the eligible target list, driven over verified
+   permanent projects built through the real draft/selection/finalization
+   chain and pending relations written by the real request store.
+   Database-gated (EARDE_TEST_DATABASE_URL, same opt-in as Mod_scope) with
+   its own reserved external-installation-id range 944400001..944400999
+   (hence account ids 944500001..944500999, which also scope the
+   permanent-project cleanup), phcv_% usernames, and phcv-% community
+   slugs so no suite shares fixtures. The eligible-list predicate is
+   global, so exact assertions filter to phcv-% slugs — except under an
+   active relation, where the list is exactly empty by contract. *)
+module Phcv = struct
+  let ( let* ) = Lwt.bind
+
+  open Caqti_request.Infix
+
+  module Rm = Earde.Project_home_choice_read_model
+  module Rq = Earde.Project_home_request_store
+
+  let error_str : Rm.error -> string = function
+    | Rm.Invalid_user_id -> "Invalid_user_id"
+    | Rm.Invalid_project_slug -> "Invalid_project_slug"
+    | Rm.Inconsistent_data -> "Inconsistent_data"
+    | Rm.Storage_error -> "Storage_error"
+
+  let vis_str : Rm.visibility -> string = function
+    | Rm.Public -> "public"
+    | Rm.Unlisted -> "unlisted"
+    | Rm.Currently_unavailable -> "currently_unavailable"
+
+  let or_fail = Pod_store.or_fail
+  let insert_user = Pod_store.insert_user
+  let exec = Pod_read.exec
+  let make_project = Phrq.make_project
+
+  (* Same dependency order as the sibling suites; the LIKE pattern also
+     catches deliberately corrupted phcv- slugs. *)
+  let q_cleanup =
+    List.map
+      (fun sql -> (Caqti_type.unit ->. Caqti_type.unit) sql)
+      [ "DELETE FROM open_source_projects \
+         WHERE forge_namespace_id BETWEEN 944500001 AND 944500999"
+      ; "DELETE FROM project_onboarding_drafts \
+         WHERE github_installation_record_id IN \
+           (SELECT id FROM github_installations \
+            WHERE github_installation_id BETWEEN 944400001 AND 944400999)"
+      ; "DELETE FROM communities WHERE slug LIKE 'phcv-%'"
+      ; "DELETE FROM users WHERE username LIKE 'phcv_%'"
+      ; "DELETE FROM github_installations \
+         WHERE github_installation_id BETWEEN 944400001 AND 944400999"
+      ]
+
+  (* Direct community fixtures with display name and description control:
+     lifecycle shapes are written exactly as the durable columns represent
+     them today. Defaults are the eligible fully listed published network
+     community. *)
+  let q_insert_community =
+    (Caqti_type.(
+       t2
+         (t2 (t2 string string) (t2 (option string) string))
+         (t2 (t2 bool bool) (t2 string bool)))
+     ->! Caqti_type.int)
+    "INSERT INTO communities \
+       (slug, name, description, visibility, indexable, \
+        is_network_community, onboarding_state, discoverable) \
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id"
+
+  let insert_community ?name ?description ?(visibility = "public")
+      ?(indexable = true) ?(network = true) ?(onboarding = "published")
+      ?(discoverable = true) conn slug =
+    let (module C : Caqti_lwt.CONNECTION) = conn in
+    let name = match name with Some n -> n | None -> slug in
+    let* cid =
+      C.find q_insert_community
+        ( ((slug, name), (description, visibility)),
+          ((indexable, network), (onboarding, discoverable)) )
+    in
+    or_fail ("community " ^ slug) cid
+
+  (* Community-side lifecycle drift and targeted durable corruption. *)
+  let q_make_private =
+    (Caqti_type.int ->. Caqti_type.unit)
+    "UPDATE communities SET visibility = 'private', indexable = FALSE, \
+     discoverable = FALSE WHERE id = $1"
+
+  let q_make_unlisted =
+    (Caqti_type.int ->. Caqti_type.unit)
+    "UPDATE communities SET indexable = FALSE, discoverable = FALSE \
+     WHERE id = $1"
+
+  let q_make_listed =
+    (Caqti_type.int ->. Caqti_type.unit)
+    "UPDATE communities SET indexable = TRUE, discoverable = TRUE \
+     WHERE id = $1"
+
+  let q_make_draft_state =
+    (Caqti_type.int ->. Caqti_type.unit)
+    "UPDATE communities SET onboarding_state = 'draft', \
+     visibility = 'private', indexable = FALSE, discoverable = FALSE \
+     WHERE id = $1"
+
+  let q_make_legacy =
+    (Caqti_type.int ->. Caqti_type.unit)
+    "UPDATE communities SET is_network_community = FALSE WHERE id = $1"
+
+  let q_set_name =
+    (Caqti_type.(t2 int string) ->. Caqti_type.unit)
+    "UPDATE communities SET name = $2 WHERE id = $1"
+
+  let q_corrupt_description =
+    (Caqti_type.int ->. Caqti_type.unit)
+    "UPDATE communities SET description = 'phcv' || chr(1) || 'corrupt' \
+     WHERE id = $1"
+
+  (* Each case gets a fresh connection and a clean fixture slate; cleanup
+     runs again afterwards even when an assertion fails mid-way, and the
+     connection is disconnected deterministically. *)
+  let db_case name f =
+    Alcotest.test_case name `Quick (fun () ->
+        match Sys.getenv_opt "EARDE_TEST_DATABASE_URL" with
+        | None | Some "" -> Alcotest.skip ()
+        | Some url ->
+            Lwt_main.run
+              (let* conn = Caqti_lwt_unix.connect (Uri.of_string url) in
+               let* conn = or_fail "connect" conn in
+               let (module C : Caqti_lwt.CONNECTION) = conn in
+               let cleanup () =
+                 Lwt_list.iter_s
+                   (fun q ->
+                     let* r = C.exec q () in
+                     let* _ = or_fail "cleanup" r in
+                     Lwt.return_unit)
+                   q_cleanup
+               in
+               let* () = cleanup () in
+               Lwt.finalize
+                 (fun () -> f conn)
+                 (fun () ->
+                   Lwt.finalize cleanup (fun () -> C.disconnect ()))))
+
+  (* === call helpers === *)
+
+  let load conn ~user ~slug =
+    Rm.load_for_steward conn ~user_id:user ~project_slug:slug
+
+  let load_view label conn ~user ~slug =
+    let* r = load conn ~user ~slug in
+    match r with
+    | Ok (Some view) -> Lwt.return view
+    | Ok None -> Alcotest.failf "%s: unexpectedly absent" label
+    | Error e -> Alcotest.failf "%s: %s" label (error_str e)
+
+  let load_none label conn ~user ~slug =
+    let* r = load conn ~user ~slug in
+    match r with
+    | Ok None -> Lwt.return_unit
+    | Ok (Some _) -> Alcotest.failf "%s: unexpectedly present" label
+    | Error e -> Alcotest.failf "%s: %s" label (error_str e)
+
+  let load_expect label expected conn ~user ~slug =
+    let* r = load conn ~user ~slug in
+    match r with
+    | Ok None ->
+        Alcotest.failf "%s: expected %s, got Ok None" label
+          (error_str expected)
+    | Ok (Some _) ->
+        Alcotest.failf "%s: expected %s, got Ok Some" label
+          (error_str expected)
+    | Error e ->
+        Alcotest.(check string) label (error_str expected) (error_str e);
+        Lwt.return_unit
+
+  (* Pending relations come only through the real transactional store. *)
+  let request_pending label conn ~user ~slug ~community ?note () =
+    let relation = phr_expect_ok (Phr.create_pending ~request_note:note) in
+    let* r =
+      Rq.create conn ~user_id:user ~project_slug:slug
+        ~target_community_id:community ~relation
+    in
+    match r with
+    | Ok created -> Lwt.return (Rq.relation_id created)
+    | Error _ -> Alcotest.failf "%s: request fixture failed" label
+
+  let phcv_only communities =
+    List.filter
+      (fun c ->
+        let slug = Rm.community_slug c in
+        String.length slug >= 5 && String.sub slug 0 5 = "phcv-")
+      communities
+
+  let active_of label view =
+    match Rm.active_relation view with
+    | Some relation -> relation
+    | None -> Alcotest.failf "%s: expected an active relation" label
+
+  let check_no_active label view =
+    Alcotest.(check bool) label true
+      (match Rm.active_relation view with None -> true | Some _ -> false)
+
+  (* === pure input validation === *)
+
+  let pure_inputs_case =
+    db_case "choice: invalid inputs rejected before any SQL" (fun _conn ->
+        (* A deliberately unusable connection: pure validation must return
+           without touching it — were any SQL attempted, the driver would
+           raise on the finished connection and fail the test. *)
+        let url =
+          match Sys.getenv_opt "EARDE_TEST_DATABASE_URL" with
+          | Some url -> url
+          | None -> Alcotest.fail "EARDE_TEST_DATABASE_URL vanished mid-run"
+        in
+        let* dead = Caqti_lwt_unix.connect (Uri.of_string url) in
+        let* dead = or_fail "dead connect" dead in
+        let (module Dead : Caqti_lwt.CONNECTION) = dead in
+        let* () = Dead.disconnect () in
+        let expect label e ~user ~slug = load_expect label e dead ~user ~slug in
+        let* () = expect "user id 0" Rm.Invalid_user_id ~user:0 ~slug:"phcv-a" in
+        let* () =
+          expect "negative user id" Rm.Invalid_user_id ~user:(-7)
+            ~slug:"phcv-a"
+        in
+        let* () =
+          expect "user checked before slug" Rm.Invalid_user_id ~user:0
+            ~slug:"NOT A SLUG"
+        in
+        let* () =
+          Lwt_list.iter_s
+            (fun bad ->
+              expect "invalid project slug" Rm.Invalid_project_slug ~user:1
+                ~slug:bad)
+            [ ""
+            ; "Phcv-Upper"
+            ; "phcv slug"
+            ; " phcv-a"
+            ; "phcv-a "
+            ; "phcv_a"
+            ; "phcv/a"
+            ; "-phcv"
+            ; "phcv-"
+            ; "phcv--a"
+            ; String.make 81 'a'
+            ]
+        in
+        Lwt.return_unit)
+
+  (* A live connection whose unqualified table names stop resolving: a real
+     PostgreSQL request failure, collapsed payload-free. The path is
+     restored before the shared cleanup runs on the same connection. *)
+  let q_hide_tables =
+    (Caqti_type.unit ->. Caqti_type.unit) "SET search_path TO phcv_void"
+
+  let q_restore_tables =
+    (Caqti_type.unit ->. Caqti_type.unit) "SET search_path TO public"
+
+  let storage_case =
+    db_case "choice: database failure collapses to the payload-free error"
+      (fun conn ->
+        let* () = exec conn "hide tables" q_hide_tables () in
+        Lwt.finalize
+          (fun () ->
+            load_expect "storage error" Rm.Storage_error conn ~user:1
+              ~slug:"phcv-a")
+          (fun () -> exec conn "restore tables" q_restore_tables ()))
+
+  (* === steward authorization === *)
+
+  let steward_view_case =
+    db_case "choice: steward load; stewardship alone authorizes" (fun conn ->
+        let* a = insert_user conn "phcv_a" in
+        let* b = insert_user conn "phcv_b" in
+        let* inst, project =
+          make_project conn ~user:a ~ext_id:944400001L ~slug:"phcv-view"
+        in
+        let* view = load_view "owner load" conn ~user:a ~slug:"phcv-view" in
+        let p = Rm.project view in
+        Alcotest.(check string) "project name" "Pfin Fixture Project"
+          (Rm.project_name p);
+        Alcotest.(check string) "canonical slug" "phcv-view"
+          (Rm.project_slug p);
+        Alcotest.(check string) "namespace login" "pfin-owner"
+          (Rm.project_namespace_login p);
+        check_no_active "no active relation" view;
+        Alcotest.(check int) "no fixture-eligible targets" 0
+          (List.length (phcv_only (Rm.eligible_communities view)));
+        (* A second steward is equally authorized — membership or
+           moderation in any community is never consulted. *)
+        let* () =
+          exec conn "add steward" Phrq.q_insert_steward (project, b, inst)
+        in
+        let* view_b =
+          load_view "second steward" conn ~user:b ~slug:"phcv-view"
+        in
+        Alcotest.(check string) "same project" "phcv-view"
+          (Rm.project_slug (Rm.project view_b));
+        Lwt.return_unit)
+
+  let collapse_case =
+    db_case "choice: every unavailable-project cause collapses to absence"
+      (fun conn ->
+        let* a = insert_user conn "phcv_a" in
+        let* b = insert_user conn "phcv_b" in
+        let* _, project =
+          make_project conn ~user:a ~ext_id:944400002L ~slug:"phcv-auth"
+        in
+        let* () = load_none "missing project" conn ~user:a ~slug:"phcv-absent" in
+        let* () = load_none "foreign project" conn ~user:b ~slug:"phcv-auth" in
+        let* () =
+          exec conn "mark stale" Phrq.q_set_verification (project, "stale")
+        in
+        let* () = load_none "stale project" conn ~user:a ~slug:"phcv-auth" in
+        let* () =
+          exec conn "mark revoked" Phrq.q_set_verification (project, "revoked")
+        in
+        let* () = load_none "revoked project" conn ~user:a ~slug:"phcv-auth" in
+        let* () =
+          exec conn "restore verified" Phrq.q_set_verification
+            (project, "verified")
+        in
+        let* () = exec conn "drop steward" Phrq.q_delete_steward (project, a) in
+        load_none "creator without stewardship" conn ~user:a ~slug:"phcv-auth")
+
+  (* === eligible list === *)
+
+  let eligible_case =
+    db_case "choice: eligible predicate, mapping, and deterministic order"
+      (fun conn ->
+        let* a = insert_user conn "phcv_a" in
+        let* _, _project =
+          make_project conn ~user:a ~ext_id:944400003L ~slug:"phcv-elig"
+        in
+        let* unl =
+          insert_community conn "phcv-elig-unl" ~name:"phcv apple"
+            ~indexable:false ~discoverable:false
+        in
+        let* same_a =
+          insert_community conn "phcv-elig-same-a" ~name:"Phcv Same"
+        in
+        let* same_b =
+          insert_community conn "phcv-elig-same-b" ~name:"Phcv Same"
+        in
+        let* pub =
+          insert_community conn "phcv-elig-pub" ~name:"Phcv Zebra"
+            ~description:"Multi\nline\twith \xe2\x98\x95"
+        in
+        let* _legacy =
+          insert_community conn "phcv-elig-legacy" ~network:false
+        in
+        let* _draft =
+          insert_community conn "phcv-elig-draft" ~onboarding:"draft"
+            ~visibility:"private" ~indexable:false ~discoverable:false
+        in
+        let* _priv =
+          insert_community conn "phcv-elig-priv" ~visibility:"private"
+            ~indexable:false ~discoverable:false
+        in
+        let* view = load_view "eligible load" conn ~user:a ~slug:"phcv-elig" in
+        check_no_active "no active relation" view;
+        let eligible = phcv_only (Rm.eligible_communities view) in
+        (* lower(name) ASC, then slug ASC for the tied pair; the excluded
+           legacy, draft, and private slugs prove the predicate. *)
+        Alcotest.(check (list string)) "deterministic order"
+          [ "phcv-elig-unl"; "phcv-elig-same-a"; "phcv-elig-same-b";
+            "phcv-elig-pub" ]
+          (List.map Rm.community_slug eligible);
+        Alcotest.(check (list int)) "exact local ids"
+          [ unl; same_a; same_b; pub ]
+          (List.map Rm.community_id eligible);
+        let by_slug slug =
+          List.find (fun c -> Rm.community_slug c = slug) eligible
+        in
+        let pub_c = by_slug "phcv-elig-pub" in
+        Alcotest.(check string) "public name" "Phcv Zebra"
+          (Rm.community_name pub_c);
+        Alcotest.(check string) "fully listed maps to Public" "public"
+          (vis_str (Rm.community_visibility pub_c));
+        Alcotest.(check (option string)) "description byte-exact"
+          (Some "Multi\nline\twith \xe2\x98\x95")
+          (Rm.community_description pub_c);
+        let unl_c = by_slug "phcv-elig-unl" in
+        Alcotest.(check string) "fully unlisted maps to Unlisted" "unlisted"
+          (vis_str (Rm.community_visibility unl_c));
+        Alcotest.(check (option string)) "absent description stays None" None
+          (Rm.community_description unl_c);
+        Lwt.return_unit)
+
+  let mixed_flags_case =
+    db_case "choice: mixed publication flags on an eligible row are corrupt"
+      (fun conn ->
+        let* a = insert_user conn "phcv_a" in
+        let* _, _project =
+          make_project conn ~user:a ~ext_id:944400004L ~slug:"phcv-mix"
+        in
+        let* home = insert_community conn "phcv-mix-home" in
+        let* () = exec conn "mix flags" Phrq.q_mix_community_flags home in
+        let* () =
+          load_expect "mixed flags" Rm.Inconsistent_data conn ~user:a
+            ~slug:"phcv-mix"
+        in
+        (* The same durable rules bind an eligible row's identity. *)
+        let* () = exec conn "restore flags" q_make_unlisted home in
+        let* () =
+          exec conn "corrupt slug" Phrq.q_corrupt_community_slug
+            (home, "phcv-mix bad slug")
+        in
+        load_expect "corrupt eligible slug" Rm.Inconsistent_data conn ~user:a
+          ~slug:"phcv-mix")
+
+  (* === active relation === *)
+
+  let active_pending_case =
+    db_case "choice: active pending relation suppresses the eligible list"
+      (fun conn ->
+        let* a = insert_user conn "phcv_a" in
+        let* _, _project =
+          make_project conn ~user:a ~ext_id:944400005L ~slug:"phcv-pend"
+        in
+        let* home =
+          insert_community conn "phcv-pend-home" ~name:"Phcv Pending Home"
+        in
+        let* _other = insert_community conn "phcv-pend-other" in
+        let* _rid =
+          request_pending "pending fixture" conn ~user:a ~slug:"phcv-pend"
+            ~community:home ~note:"phcv secret note" ()
+        in
+        let* view = load_view "pending load" conn ~user:a ~slug:"phcv-pend" in
+        let relation = active_of "pending" view in
+        Alcotest.(check bool) "status pending" true
+          (Rm.active_relation_status relation = Phr.Pending);
+        let c = Rm.active_relation_community relation in
+        Alcotest.(check int) "target id" home (Rm.community_id c);
+        Alcotest.(check string) "target slug" "phcv-pend-home"
+          (Rm.community_slug c);
+        Alcotest.(check string) "target name" "Phcv Pending Home"
+          (Rm.community_name c);
+        Alcotest.(check string) "fully eligible target maps Public" "public"
+          (vis_str (Rm.community_visibility c));
+        (* The private note crosses nowhere: no accessor exists, and no
+           exposed field carries it. *)
+        List.iter
+          (fun v ->
+            Alcotest.(check bool) "no note leakage" false
+              (contains v "phcv secret note"))
+          [ Rm.community_name c; Rm.community_slug c;
+            (match Rm.community_description c with Some d -> d | None -> "")
+          ];
+        Alcotest.(check int) "eligible list exactly empty" 0
+          (List.length (Rm.eligible_communities view));
+        Lwt.return_unit)
+
+  let active_accepted_case =
+    db_case "choice: accepted home is the active relation" (fun conn ->
+        let* a = insert_user conn "phcv_a" in
+        let* _, _project =
+          make_project conn ~user:a ~ext_id:944400006L ~slug:"phcv-acc"
+        in
+        let* home = insert_community conn "phcv-acc-home" in
+        let* rid =
+          request_pending "accepted fixture" conn ~user:a ~slug:"phcv-acc"
+            ~community:home ()
+        in
+        let* () = exec conn "accept" Phrq.q_mark_accepted rid in
+        let* view = load_view "accepted load" conn ~user:a ~slug:"phcv-acc" in
+        let relation = active_of "accepted" view in
+        Alcotest.(check bool) "status accepted" true
+          (Rm.active_relation_status relation = Phr.Accepted);
+        Alcotest.(check string) "target slug" "phcv-acc-home"
+          (Rm.community_slug (Rm.active_relation_community relation));
+        Alcotest.(check string) "fully eligible target maps Public" "public"
+          (vis_str
+             (Rm.community_visibility
+                (Rm.active_relation_community relation)));
+        Alcotest.(check int) "eligible list exactly empty" 0
+          (List.length (Rm.eligible_communities view));
+        Lwt.return_unit)
+
+  let historical_case =
+    db_case "choice: historical rejected/removed rows never suppress the list"
+      (fun conn ->
+        let* a = insert_user conn "phcv_a" in
+        let* _, _project =
+          make_project conn ~user:a ~ext_id:944400007L ~slug:"phcv-hist"
+        in
+        let* home = insert_community conn "phcv-hist-home" in
+        let* rid =
+          request_pending "first request" conn ~user:a ~slug:"phcv-hist"
+            ~community:home ()
+        in
+        let* () = exec conn "reject" Phrq.q_mark_rejected rid in
+        let* view = load_view "after rejection" conn ~user:a ~slug:"phcv-hist" in
+        check_no_active "rejection leaves no active relation" view;
+        Alcotest.(check (list string)) "target eligible again"
+          [ "phcv-hist-home" ]
+          (List.map Rm.community_slug
+             (phcv_only (Rm.eligible_communities view)));
+        let* rid2 =
+          request_pending "second request" conn ~user:a ~slug:"phcv-hist"
+            ~community:home ()
+        in
+        let* () = exec conn "accept" Phrq.q_mark_accepted rid2 in
+        let* () = exec conn "remove" Phrq.q_mark_removed rid2 in
+        let* view2 = load_view "after removal" conn ~user:a ~slug:"phcv-hist" in
+        check_no_active "removal leaves no active relation" view2;
+        Alcotest.(check (list string)) "target eligible after removal"
+          [ "phcv-hist-home" ]
+          (List.map Rm.community_slug
+             (phcv_only (Rm.eligible_communities view2)));
+        Lwt.return_unit)
+
+  let drift_case =
+    db_case "choice: drifted active targets map exactly, reasons collapsed"
+      (fun conn ->
+        let* a = insert_user conn "phcv_a" in
+        (* Four projects, one active target each: the still-eligible
+           unlisted shape keeps its exact label; private, draft, and
+           legacy drift all collapse to the same unavailable state. *)
+        let* () =
+          Lwt_list.iter_s
+            (fun (ext_id, slug) ->
+              let* _ = make_project conn ~user:a ~ext_id ~slug in
+              Lwt.return_unit)
+            [ (944400008L, "phcv-drift-unl")
+            ; (944400009L, "phcv-drift-priv")
+            ; (944400011L, "phcv-drift-draft")
+            ; (944400012L, "phcv-drift-leg")
+            ]
+        in
+        let* unlisted_home =
+          insert_community conn "phcv-drift-unl-home"
+            ~name:"Phcv Drift Alpha"
+        in
+        let* private_home =
+          insert_community conn "phcv-drift-priv-home"
+            ~name:"Phcv Drift Beta"
+        in
+        let* draft_home =
+          insert_community conn "phcv-drift-draft-home"
+            ~name:"Phcv Drift Gamma"
+        in
+        let* legacy_home =
+          insert_community conn "phcv-drift-leg-home"
+            ~name:"Phcv Drift Delta"
+        in
+        let* () =
+          Lwt_list.iter_s
+            (fun (slug, community) ->
+              let* _ =
+                request_pending "drift fixture" conn ~user:a ~slug
+                  ~community ()
+              in
+              Lwt.return_unit)
+            [ ("phcv-drift-unl", unlisted_home)
+            ; ("phcv-drift-priv", private_home)
+            ; ("phcv-drift-draft", draft_home)
+            ; ("phcv-drift-leg", legacy_home)
+            ]
+        in
+        let* () = exec conn "make unlisted" q_make_unlisted unlisted_home in
+        let* () = exec conn "make private" q_make_private private_home in
+        let* () = exec conn "make draft" q_make_draft_state draft_home in
+        let* () = exec conn "make legacy" q_make_legacy legacy_home in
+        Lwt_list.iter_s
+          (fun (label, slug, home_slug, expected) ->
+            let* view = load_view label conn ~user:a ~slug in
+            let relation = active_of label view in
+            let c = Rm.active_relation_community relation in
+            Alcotest.(check string) (label ^ ": identity survives") home_slug
+              (Rm.community_slug c);
+            Alcotest.(check string) (label ^ ": exact mapping") expected
+              (vis_str (Rm.community_visibility c));
+            (* The reason never crosses: no accessor value names the
+               drifted lifecycle. *)
+            List.iter
+              (fun word ->
+                List.iter
+                  (fun v ->
+                    Alcotest.(check bool)
+                      (label ^ ": no " ^ word ^ " leakage") false
+                      (contains (String.lowercase_ascii v) word))
+                  [ Rm.community_name c
+                  ; vis_str (Rm.community_visibility c)
+                  ; (match Rm.community_description c with
+                    | Some d -> d
+                    | None -> "")
+                  ])
+              [ "private"; "draft"; "legacy"; "network" ];
+            (* The active relation still suppresses the chooser. *)
+            Alcotest.(check int) (label ^ ": eligible list exactly empty") 0
+              (List.length (Rm.eligible_communities view));
+            Lwt.return_unit)
+          [ ( "unlisted target", "phcv-drift-unl", "phcv-drift-unl-home",
+              "unlisted" )
+          ; ( "private target", "phcv-drift-priv", "phcv-drift-priv-home",
+              "currently_unavailable" )
+          ; ( "draft target", "phcv-drift-draft", "phcv-drift-draft-home",
+              "currently_unavailable" )
+          ; ( "legacy target", "phcv-drift-leg", "phcv-drift-leg-home",
+              "currently_unavailable" )
+          ])
+
+  let corrupt_active_case =
+    db_case "choice: malformed active-target metadata is corrupt, never partial"
+      (fun conn ->
+        let* a = insert_user conn "phcv_a" in
+        let* _, _project =
+          make_project conn ~user:a ~ext_id:944400010L ~slug:"phcv-corr"
+        in
+        let* home =
+          insert_community conn "phcv-corr-home" ~name:"Phcv Corr Home"
+        in
+        let* _ =
+          request_pending "corrupt fixture" conn ~user:a ~slug:"phcv-corr"
+            ~community:home ()
+        in
+        (* Flags that contradict each other are corruption even on an
+           active target — never Currently_unavailable. *)
+        let* () = exec conn "mix flags" Phrq.q_mix_community_flags home in
+        let* () =
+          load_expect "mixed flags on active target" Rm.Inconsistent_data
+            conn ~user:a ~slug:"phcv-corr"
+        in
+        let* () = exec conn "restore flags" q_make_listed home in
+        let* () =
+          exec conn "corrupt slug" Phrq.q_corrupt_community_slug
+            (home, "phcv-corr bad slug")
+        in
+        let* () =
+          load_expect "non-addressable target slug" Rm.Inconsistent_data conn
+            ~user:a ~slug:"phcv-corr"
+        in
+        let* () =
+          exec conn "restore slug" Phrq.q_corrupt_community_slug
+            (home, "phcv-corr-home")
+        in
+        let* () = exec conn "blank name" q_set_name (home, "   ") in
+        let* () =
+          load_expect "blank target name" Rm.Inconsistent_data conn ~user:a
+            ~slug:"phcv-corr"
+        in
+        let* () = exec conn "restore name" q_set_name (home, "Phcv Corr Home") in
+        let* () = exec conn "corrupt description" q_corrupt_description home in
+        load_expect "control-unsafe description" Rm.Inconsistent_data conn
+          ~user:a ~slug:"phcv-corr")
+
+  let suite =
+    [ pure_inputs_case; storage_case; steward_view_case; collapse_case;
+      eligible_case; mixed_flags_case; active_pending_case;
+      active_accepted_case; historical_case; drift_case;
+      corrupt_active_case ]
+end
+
 let () =
   Alcotest.run "earde"
     [ ( "smoke"
@@ -28883,4 +30088,23 @@ let () =
          request against an existing eligible published network community,
          with index-arbitrated active-home races. Database-gated. *)
     ; ("project_home_request_store", Phrq.suite)
+      (* Existing-community home request form: pure strict two-field parser
+         (target_community_id + request_note) delegating every note rule to
+         the relation domain. *)
+    ; ("project_home_request_form_valid", phrf_valid_cases)
+    ; ("project_home_request_form_grammar", phrf_grammar_cases)
+    ; ("project_home_request_form_id", phrf_id_cases)
+    ; ("project_home_request_form_delegation", phrf_delegation_cases)
+    ; ("project_home_request_form_privacy", phrf_privacy_cases)
+      (* Home choice read model: owner-authorized view of the active home
+         relation or the deterministic eligible target list.
+         Database-gated. *)
+    ; ("project_home_choice_read_model", Phcv.suite)
+      (* Home choice page: the one request form, active-relation states,
+         defensive degradation, feedback, and framework CSRF. *)
+    ; ("project_home_choice_page_form", phcp_form_cases)
+    ; ("project_home_choice_page_states", phcp_state_cases)
+    ; ("project_home_choice_page_defensive", phcp_defensive_cases)
+    ; ("project_home_choice_page_feedback", phcp_feedback_cases)
+    ; ("project_home_choice_page_csrf", phcp_csrf_cases)
     ]
