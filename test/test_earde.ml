@@ -22178,6 +22178,73 @@ module Ncid_relax = struct
      WHERE id = $1"
 end
 
+(* Scoped network-community lifecycle constraint (migration 20260726130000):
+   the same drop/restore pattern as Ncid_relax, for the fixtures that
+   deliberately write lifecycle shapes the CHECK now forbids at the database
+   — a published network community reverted to private, a leaking or public
+   draft, mixed published flags. Those durable shapes are no longer
+   producible in production, but the defensive branches that tolerate or
+   reject them are still worth exercising, so the affected fixtures relax
+   the constraint for the length of one case and restore it (validated)
+   after their rows are re-normalized or deleted. *)
+module Nclc_relax = struct
+  let ( let* ) = Lwt.bind
+
+  open Caqti_request.Infix
+
+  let ddl sql = (Caqti_type.unit ->. Caqti_type.unit) sql
+
+  let drop_statements =
+    [ ddl
+        "ALTER TABLE communities \
+         DROP CONSTRAINT IF EXISTS communities_network_lifecycle_check"
+    ]
+
+  let add_statements =
+    [ ddl
+        "ALTER TABLE communities \
+         ADD CONSTRAINT communities_network_lifecycle_check CHECK ( \
+           NOT is_network_community OR ( \
+             (onboarding_state = 'draft' \
+              AND visibility = 'private' \
+              AND NOT indexable \
+              AND NOT discoverable) \
+             OR \
+             (onboarding_state = 'published' \
+              AND visibility = 'public' \
+              AND indexable = discoverable)))"
+    ]
+
+  let run conn statements =
+    let (module C : Caqti_lwt.CONNECTION) = conn in
+    Lwt_list.iter_s
+      (fun q ->
+        let* r = C.exec q () in
+        let* _ = Pod_schema.or_fail "lifecycle constraint DDL" r in
+        Lwt.return_unit)
+      statements
+
+  let drop conn = run conn drop_statements
+  let restore conn = run conn add_statements
+
+  let run_cleanup conn queries =
+    let (module C : Caqti_lwt.CONNECTION) = conn in
+    Lwt_list.iter_s
+      (fun q ->
+        let* r = C.exec q () in
+        let* _ = Pod_schema.or_fail "relaxed cleanup" r in
+        Lwt.return_unit)
+      queries
+
+  (* Wrap one case body: the constraint is dropped before it runs, and the
+     given cleanup (normally the suite's own fixture deletes) removes every
+     drift row before the constraint is restored, validated, under
+     Lwt.finalize — even when an assertion fails mid-case. *)
+  let around conn ~cleanup f =
+    let* () = drop conn in
+    Lwt.finalize f (fun () -> Lwt.finalize cleanup (fun () -> restore conn))
+end
+
 (* === Project home request store (Project_home_request_store) ===
    Transactional creation of a pending home-relation request, driven over
    verified permanent projects built through the real draft/selection/
@@ -22476,6 +22543,17 @@ module Phrq = struct
                  (fun () -> f conn)
                  (fun () ->
                    Lwt.finalize cleanup (fun () -> C.disconnect ()))))
+
+  (* db_case with the scoped lifecycle CHECK (migration 20260726130000)
+     dropped for the whole case: these fixtures deliberately write drift
+     shapes the constraint now forbids at the database, and the defensive
+     branches they exercise stay covered. The suite cleanup removes every
+     fixture row before the constraint returns, validated. *)
+  let db_case_lifecycle_relaxed name f =
+    db_case name (fun conn ->
+        Nclc_relax.around conn
+          ~cleanup:(fun () -> Nclc_relax.run_cleanup conn q_cleanup)
+          (fun () -> f conn))
 
   (* Verified permanent projects come only through the real chain —
      draft store, selection store, finalization store — never fixture
@@ -22799,7 +22877,7 @@ module Phrq = struct
   (* === community eligibility === *)
 
   let community_unavailable_case =
-    db_case
+    db_case_lifecycle_relaxed
       "request: every ineligible-community cause collapses identically"
       (fun conn ->
         let* uid = insert_user conn "phrq_a" in
@@ -23143,7 +23221,7 @@ module Phrq = struct
   (* === durable inconsistency === *)
 
   let inconsistent_case =
-    db_case "request: malformed durable community data is corruption"
+    db_case_lifecycle_relaxed "request: malformed durable community data is corruption"
       (fun conn ->
         let* uid = insert_user conn "phrq_a" in
         let* _, project =
@@ -23984,6 +24062,17 @@ module Phcv = struct
                  (fun () ->
                    Lwt.finalize cleanup (fun () -> C.disconnect ()))))
 
+  (* db_case with the scoped lifecycle CHECK (migration 20260726130000)
+     dropped for the whole case: these fixtures deliberately write drift
+     shapes the constraint now forbids at the database, and the defensive
+     branches they exercise stay covered. The suite cleanup removes every
+     fixture row before the constraint returns, validated. *)
+  let db_case_lifecycle_relaxed name f =
+    db_case name (fun conn ->
+        Nclc_relax.around conn
+          ~cleanup:(fun () -> Nclc_relax.run_cleanup conn q_cleanup)
+          (fun () -> f conn))
+
   (* === call helpers === *)
 
   let load conn ~user ~slug =
@@ -24168,7 +24257,7 @@ module Phcv = struct
   (* === eligible list === *)
 
   let eligible_case =
-    db_case "choice: eligible predicate, mapping, and deterministic order"
+    db_case_lifecycle_relaxed "choice: eligible predicate, mapping, and deterministic order"
       (fun conn ->
         let* a = insert_user conn "phcv_a" in
         let* _, _project =
@@ -24230,7 +24319,7 @@ module Phcv = struct
         Lwt.return_unit)
 
   let mixed_flags_case =
-    db_case "choice: mixed publication flags on an eligible row are corrupt"
+    db_case_lifecycle_relaxed "choice: mixed publication flags on an eligible row are corrupt"
       (fun conn ->
         let* a = insert_user conn "phcv_a" in
         let* _, _project =
@@ -24365,7 +24454,7 @@ module Phcv = struct
         Lwt.return_unit)
 
   let drift_case =
-    db_case "choice: drifted active targets map exactly, reasons collapsed"
+    db_case_lifecycle_relaxed "choice: drifted active targets map exactly, reasons collapsed"
       (fun conn ->
         let* a = insert_user conn "phcv_a" in
         (* Four projects, one active target each: the still-eligible
@@ -24456,7 +24545,7 @@ module Phcv = struct
           ])
 
   let corrupt_active_case =
-    db_case "choice: malformed active-target metadata is corrupt, never partial"
+    db_case_lifecycle_relaxed "choice: malformed active-target metadata is corrupt, never partial"
       (fun conn ->
         let* a = insert_user conn "phcv_a" in
         let* _, _project =
@@ -24605,6 +24694,17 @@ module Phch = struct
                  (fun () -> f ~url conn)
                  (fun () ->
                    Lwt.finalize cleanup (fun () -> C.disconnect ()))))
+
+  (* db_case with the scoped lifecycle CHECK (migration 20260726130000)
+     dropped for the whole case: these fixtures deliberately write drift
+     shapes the constraint now forbids at the database, and the defensive
+     branches they exercise stay covered. The suite cleanup removes every
+     fixture row before the constraint returns, validated. *)
+  let db_case_lifecycle_relaxed name f =
+    db_case name (fun ~url conn ->
+        Nclc_relax.around conn
+          ~cleanup:(fun () -> Nclc_relax.run_cleanup conn q_cleanup)
+          (fun () -> f ~url conn))
 
   let q_pending_id =
     (Caqti_type.int64 ->! Caqti_type.int64)
@@ -25044,7 +25144,7 @@ module Phch = struct
         Lwt.return_unit)
 
   let get_active_states_case =
-    db_case "GET: pending, accepted, and drifted active targets render"
+    db_case_lifecycle_relaxed "GET: pending, accepted, and drifted active targets render"
       (fun ~url conn ->
         let* uid = insert_user conn "phch_a" in
         let* _inst, _project =
@@ -25145,7 +25245,7 @@ module Phch = struct
         expect_404 "creator without stewardship" owner "phch-auth")
 
   let get_inconsistent_case =
-    db_case "GET: durable corruption is one generic 500, never a page state"
+    db_case_lifecycle_relaxed "GET: durable corruption is one generic 500, never a page state"
       (fun ~url conn ->
         let* uid = insert_user conn "phch_a" in
         let* _inst, _project =
@@ -25463,7 +25563,7 @@ module Phch = struct
   (* === POST: community becomes unavailable === *)
 
   let post_community_unavailable_case =
-    db_case "POST: a drifted target is a 409 reload without the target"
+    db_case_lifecycle_relaxed "POST: a drifted target is a 409 reload without the target"
       (fun ~url conn ->
         let* uid = insert_user conn "phch_a" in
         let* _inst, project =
@@ -25864,6 +25964,17 @@ module Phrv = struct
                  (fun () -> f conn)
                  (fun () ->
                    Lwt.finalize cleanup (fun () -> C.disconnect ()))))
+
+  (* db_case with the scoped lifecycle CHECK (migration 20260726130000)
+     dropped for the whole case: these fixtures deliberately write drift
+     shapes the constraint now forbids at the database, and the defensive
+     branches they exercise stay covered. The suite cleanup removes every
+     fixture row before the constraint returns, validated. *)
+  let db_case_lifecycle_relaxed name f =
+    db_case name (fun conn ->
+        Nclc_relax.around conn
+          ~cleanup:(fun () -> Nclc_relax.run_cleanup conn q_cleanup)
+          (fun () -> f conn))
 
   (* === call helpers === *)
 
@@ -26475,7 +26586,7 @@ module Phrv = struct
   (* === community availability and validation === *)
 
   let community_cases =
-    db_case "review: missing community and durable community corruption"
+    db_case_lifecycle_relaxed "review: missing community and durable community corruption"
       (fun conn ->
         let* owner = insert_user conn "phrv_owner" in
         let* reviewer = insert_user conn "phrv_mod" in
@@ -26539,7 +26650,7 @@ module Phrv = struct
   (* === currently ineligible targets === *)
 
   let ineligible_target_case =
-    db_case
+    db_case_lifecycle_relaxed
       "review: valid ineligible targets refuse acceptance, allow rejection"
       (fun conn ->
         let* owner = insert_user conn "phrv_owner" in
@@ -26901,7 +27012,7 @@ module Phrv = struct
   (* === community-lifecycle serialization === *)
 
   let lifecycle_serialization_case =
-    db_case "review: lifecycle change serializes through the community lock"
+    db_case_lifecycle_relaxed "review: lifecycle change serializes through the community lock"
       (fun conn ->
         let* owner = insert_user conn "phrv_owner" in
         let* reviewer = insert_user conn "phrv_mod" in
@@ -27648,6 +27759,17 @@ module Phrr = struct
                  (fun () ->
                    Lwt.finalize cleanup (fun () -> C.disconnect ()))))
 
+  (* db_case with the scoped lifecycle CHECK (migration 20260726130000)
+     dropped for the whole case: these fixtures deliberately write drift
+     shapes the constraint now forbids at the database, and the defensive
+     branches they exercise stay covered. The suite cleanup removes every
+     fixture row before the constraint returns, validated. *)
+  let db_case_lifecycle_relaxed name f =
+    db_case name (fun conn ->
+        Nclc_relax.around conn
+          ~cleanup:(fun () -> Nclc_relax.run_cleanup conn q_cleanup)
+          (fun () -> f conn))
+
   (* === call helpers === *)
 
   let load conn ~reviewer ~community =
@@ -27815,7 +27937,7 @@ module Phrr = struct
   (* === community eligibility mapping === *)
 
   let eligibility_case =
-    db_case "review read: community host-eligibility mapping" (fun conn ->
+    db_case_lifecycle_relaxed "review read: community host-eligibility mapping" (fun conn ->
         let* reviewer = insert_user conn "phrr_emod" in
         let check label ~slug ~expect ?visibility ?indexable ?network
             ?onboarding ?discoverable () =
@@ -27848,7 +27970,7 @@ module Phrr = struct
           ~network:false ())
 
   let contradictory_flags_case =
-    db_case "review read: contradictory community flags are corruption"
+    db_case_lifecycle_relaxed "review read: contradictory community flags are corruption"
       (fun conn ->
         let* reviewer = insert_user conn "phrr_cmod" in
         let* stranger = insert_user conn "phrr_cstr" in
@@ -28224,6 +28346,17 @@ module Phhr = struct
                  (fun () -> f ~url conn)
                  (fun () ->
                    Lwt.finalize cleanup (fun () -> C.disconnect ()))))
+
+  (* db_case with the scoped lifecycle CHECK (migration 20260726130000)
+     dropped for the whole case: these fixtures deliberately write drift
+     shapes the constraint now forbids at the database, and the defensive
+     branches they exercise stay covered. The suite cleanup removes every
+     fixture row before the constraint returns, validated. *)
+  let db_case_lifecycle_relaxed name f =
+    db_case name (fun ~url conn ->
+        Nclc_relax.around conn
+          ~cleanup:(fun () -> Nclc_relax.run_cleanup conn q_cleanup)
+          (fun () -> f ~url conn))
 
   (* Durable authorization fixtures reused from the store suite: the real
      rows the read model and review store read. *)
@@ -28689,7 +28822,7 @@ module Phhr = struct
   (* === GET states === *)
 
   let get_states_case =
-    db_case "GET queue: empty, populated, note escaped, verification copy, \
+    db_case_lifecycle_relaxed "GET queue: empty, populated, note escaped, verification copy, \
              ineligible warning, closed rows absent, no ids" (fun ~url conn ->
         let* owner = insert_user conn "phhr_sowner" in
         let* reviewer = insert_user conn "phhr_smod" in
@@ -28955,7 +29088,7 @@ module Phhr = struct
   (* === Target becomes ineligible: accept 409 Target_ineligible, reject ok === *)
 
   let target_ineligible_case =
-    db_case "POST accept: target ineligible after GET is 409 Target_ineligible \
+    db_case_lifecycle_relaxed "POST accept: target ineligible after GET is 409 Target_ineligible \
              with no reason leak; reject then succeeds" (fun ~url conn ->
         let* owner = insert_user conn "phhr_tiowner" in
         let* reviewer = insert_user conn "phhr_timod" in
@@ -29148,7 +29281,7 @@ module Phhr = struct
         Lwt.return_unit)
 
   let get_inconsistent_case =
-    db_case "GET queue: durable community corruption is one generic 500"
+    db_case_lifecycle_relaxed "GET queue: durable community corruption is one generic 500"
       (fun ~url conn ->
         let* reviewer = insert_user conn "phhr_icmod" in
         (* Published public network community with indexable <> discoverable:
@@ -29432,6 +29565,17 @@ module Ccpr = struct
                  (fun () -> f conn)
                  (fun () ->
                    Lwt.finalize cleanup (fun () -> C.disconnect ()))))
+
+  (* db_case with the scoped lifecycle CHECK (migration 20260726130000)
+     dropped for the whole case: these fixtures deliberately write drift
+     shapes the constraint now forbids at the database, and the defensive
+     branches they exercise stay covered. The suite cleanup removes every
+     fixture row before the constraint returns, validated. *)
+  let db_case_lifecycle_relaxed name f =
+    db_case name (fun conn ->
+        Nclc_relax.around conn
+          ~cleanup:(fun () -> Nclc_relax.run_cleanup conn q_cleanup)
+          (fun () -> f conn))
 
   (* === call helpers === *)
 
@@ -29811,7 +29955,7 @@ module Ccpr = struct
           [ ("verified", "verified"); ("stale", "stale"); ("revoked", "revoked") ])
 
   let community_drift_case =
-    db_case "connected projects: public, unlisted and drifted (private, draft, \
+    db_case_lifecycle_relaxed "connected projects: public, unlisted and drifted (private, draft, \
              legacy) target communities all keep the accepted relation"
       (fun conn ->
         let* owner = insert_user conn "ccpr_drift_owner" in
@@ -30570,6 +30714,17 @@ module Ccph = struct
                  (fun () ->
                    Lwt.finalize cleanup (fun () -> C.disconnect ()))))
 
+  (* db_case with the scoped lifecycle CHECK (migration 20260726130000)
+     dropped for the whole case: these fixtures deliberately write drift
+     shapes the constraint now forbids at the database, and the defensive
+     branches they exercise stay covered. The suite cleanup removes every
+     fixture row before the constraint returns, validated. *)
+  let db_case_lifecycle_relaxed name f =
+    db_case name (fun ~url conn ->
+        Nclc_relax.around conn
+          ~cleanup:(fun () -> Nclc_relax.run_cleanup conn q_cleanup)
+          (fun () -> f ~url conn))
+
   (* === the real production pipeline shape === *)
 
   (* One shared single-connection sql_pool pipeline for the whole suite:
@@ -30988,7 +31143,7 @@ module Ccph = struct
         Lwt.return_unit)
 
   let private_case =
-    db_case "community page: only visitors the route already authorizes see a \
+    db_case_lifecycle_relaxed "community page: only visitors the route already authorizes see a \
              private community and its connected projects" (fun ~url conn ->
         let* owner = insert_user conn "ccph_priv_owner" in
         let* moderator = insert_user conn "ccph_priv_mod" in
@@ -31293,6 +31448,17 @@ module Phrm = struct
                  (fun () -> f conn)
                  (fun () ->
                    Lwt.finalize cleanup (fun () -> C.disconnect ()))))
+
+  (* db_case with the scoped lifecycle CHECK (migration 20260726130000)
+     dropped for the whole case: these fixtures deliberately write drift
+     shapes the constraint now forbids at the database, and the defensive
+     branches they exercise stay covered. The suite cleanup removes every
+     fixture row before the constraint returns, validated. *)
+  let db_case_lifecycle_relaxed name f =
+    db_case name (fun conn ->
+        Nclc_relax.around conn
+          ~cleanup:(fun () -> Nclc_relax.run_cleanup conn q_cleanup)
+          (fun () -> f conn))
 
   (* === call helpers === *)
 
@@ -31817,7 +31983,7 @@ module Phrm = struct
   (* === project and community availability === *)
 
   let availability_case =
-    db_case
+    db_case_lifecycle_relaxed
       "removal: missing project and community collapse; valid lifecycle \
        drift stays removable" (fun conn ->
         let* owner = insert_user conn "phrm_owner" in
@@ -31880,7 +32046,7 @@ module Phrm = struct
   (* === durable corruption === *)
 
   let corruption_case =
-    db_case "removal: malformed durable project, community and relation data"
+    db_case_lifecycle_relaxed "removal: malformed durable project, community and relation data"
       (fun conn ->
         let (module C : Caqti_lwt.CONNECTION) = conn in
         let* owner = insert_user conn "phrm_owner" in
@@ -33344,6 +33510,17 @@ module Phrh = struct
                  (fun () ->
                    Lwt.finalize cleanup (fun () -> C.disconnect ()))))
 
+  (* db_case with the scoped lifecycle CHECK (migration 20260726130000)
+     dropped for the whole case: these fixtures deliberately write drift
+     shapes the constraint now forbids at the database, and the defensive
+     branches they exercise stay covered. The suite cleanup removes every
+     fixture row before the constraint returns, validated. *)
+  let db_case_lifecycle_relaxed name f =
+    db_case name (fun ~url conn ->
+        Nclc_relax.around conn
+          ~cleanup:(fun () -> Nclc_relax.run_cleanup conn q_cleanup)
+          (fun () -> f ~url conn))
+
   (* === the real production pipeline shape ===
 
      One shared single-connection sql_pool for the whole suite: nothing ever
@@ -34314,7 +34491,7 @@ module Phrh = struct
   (* === lifecycle drift === *)
 
   let drift_case =
-    db_case "removal: both surfaces still remove across project verification \
+    db_case_lifecycle_relaxed "removal: both surfaces still remove across project verification \
              drift and community lifecycle drift" (fun ~url conn ->
         let* owner = insert_user conn "phrh_downer" in
         let* top = insert_user conn "phrh_dtop" in
@@ -34400,7 +34577,7 @@ module Phrh = struct
   (* === durable failures === *)
 
   let store_failure_case =
-    db_case "removal: a store storage failure or durable inconsistency is one \
+    db_case_lifecycle_relaxed "removal: a store storage failure or durable inconsistency is one \
              generic non-cacheable 500 with no partial mutation"
       (fun ~url conn ->
         let* owner = insert_user conn "phrh_gowner" in
@@ -36115,11 +36292,16 @@ module Ncid_schema = struct
     (Caqti_type.int ->! Caqti_type.(t2 (t2 string string) (option string)))
     "SELECT slug, name, description FROM communities WHERE id = $1"
 
+  (* Exactly the three identity constraints: the sibling scoped lifecycle
+     CHECK (communities_network_lifecycle_check, migration 20260726130000)
+     shares the prefix and has its own suite. *)
   let q_constraints =
     (Caqti_type.unit ->* Caqti_type.(t2 string bool))
     "SELECT conname, convalidated FROM pg_constraint \
      WHERE conrelid = 'communities'::regclass AND contype = 'c' \
-       AND conname LIKE 'communities_network_%' ORDER BY conname"
+       AND conname LIKE 'communities_network_%' \
+       AND conname <> 'communities_network_lifecycle_check' \
+     ORDER BY conname"
 
   let db_case name f =
     Alcotest.test_case name `Quick (fun () ->
@@ -36355,6 +36537,214 @@ module Ncid_schema = struct
   let suite =
     [ valid_case; slug_case; name_case; description_case; legacy_case;
       presence_case; roundtrip_case ]
+end
+
+(* === Scoped network-community lifecycle constraint (migration
+   20260726130000) ===
+   The durable whole-state defense behind Network_communities.
+   lifecycle_state_valid: the exact draft and two published network tuples
+   are accepted, every other network combination (public/leaking draft,
+   private published, both mixed publication-flag shapes) is rejected at
+   the database, legacy rows stay exempt, the constraint is present and
+   validated, and the down/up statement pair round-trips. Database-gated
+   (EARDE_TEST_DATABASE_URL, same opt-in as Mod_scope); nclc-% community
+   slugs so no suite shares fixtures. *)
+module Nclc_schema = struct
+  let ( let* ) = Lwt.bind
+
+  open Caqti_request.Infix
+
+  let or_fail = Pod_schema.or_fail
+  let reject = Pod_schema.reject
+
+  let q_cleanup =
+    List.map
+      (fun sql -> (Caqti_type.unit ->. Caqti_type.unit) sql)
+      [ "DELETE FROM communities WHERE slug LIKE 'nclc%'" ]
+
+  (* Full lifecycle control on one row; identity stays canonical so only
+     the lifecycle constraint can decide the outcome. The network marker is
+     a parameter so the same shapes prove the legacy exemption. *)
+  let q_insert =
+    (Caqti_type.(t2 (t3 string string bool) (t3 string string (t2 bool bool)))
+     ->! Caqti_type.int)
+    "INSERT INTO communities \
+       (slug, name, is_network_community, onboarding_state, visibility, \
+        indexable, discoverable) \
+     VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id"
+
+  let q_constraint =
+    (Caqti_type.unit ->* Caqti_type.(t2 string bool))
+    "SELECT conname, convalidated FROM pg_constraint \
+     WHERE conrelid = 'communities'::regclass AND contype = 'c' \
+       AND conname = 'communities_network_lifecycle_check' ORDER BY conname"
+
+  let db_case name f =
+    Alcotest.test_case name `Quick (fun () ->
+        match Sys.getenv_opt "EARDE_TEST_DATABASE_URL" with
+        | None | Some "" -> Alcotest.skip ()
+        | Some url ->
+            Lwt_main.run
+              (let* conn = Caqti_lwt_unix.connect (Uri.of_string url) in
+               let* conn = or_fail "connect" conn in
+               let (module C : Caqti_lwt.CONNECTION) = conn in
+               let cleanup () =
+                 Lwt_list.iter_s
+                   (fun q ->
+                     let* r = C.exec q () in
+                     let* _ = or_fail "cleanup" r in
+                     Lwt.return_unit)
+                   q_cleanup
+               in
+               let* () = cleanup () in
+               Lwt.finalize
+                 (fun () -> f conn)
+                 (fun () ->
+                   Lwt.finalize cleanup (fun () -> C.disconnect ()))))
+
+  let insert conn ?(network = true) ~onboarding ~visibility ~indexable
+      ~discoverable slug =
+    let (module C : Caqti_lwt.CONNECTION) = conn in
+    C.find q_insert
+      ( (slug, "Nclc Community", network),
+        (onboarding, visibility, (indexable, discoverable)) )
+
+  let accept label conn ?network ~onboarding ~visibility ~indexable
+      ~discoverable slug =
+    let* id =
+      insert conn ?network ~onboarding ~visibility ~indexable ~discoverable
+        slug
+    in
+    let* id = or_fail label id in
+    Alcotest.(check bool) (label ^ ": positive id") true (id > 0);
+    Lwt.return_unit
+
+  let refuse label conn ?network ~onboarding ~visibility ~indexable
+      ~discoverable slug =
+    let* r =
+      insert conn ?network ~onboarding ~visibility ~indexable ~discoverable
+        slug
+    in
+    reject label r
+
+  let constraint_rows conn =
+    let (module C : Caqti_lwt.CONNECTION) = conn in
+    let* rows = C.collect_list q_constraint () in
+    or_fail "constraint rows" rows
+
+  (* === the three durable network shapes === *)
+
+  let accepted_case =
+    db_case
+      "lifecycle: exactly the draft, published Public, and published \
+       Unlisted network tuples are accepted" (fun conn ->
+        let* () =
+          accept "private draft" conn ~onboarding:"draft"
+            ~visibility:"private" ~indexable:false ~discoverable:false
+            "nclc-draft"
+        in
+        let* () =
+          accept "published Public" conn ~onboarding:"published"
+            ~visibility:"public" ~indexable:true ~discoverable:true
+            "nclc-public"
+        in
+        accept "published Unlisted" conn ~onboarding:"published"
+          ~visibility:"public" ~indexable:false ~discoverable:false
+          "nclc-unlisted")
+
+  (* === every other network tuple === *)
+
+  let rejected_case =
+    db_case
+      "lifecycle: leaking drafts, private published, and mixed publication \
+       flags are rejected at the database" (fun conn ->
+        Lwt_list.iter_s
+          (fun (label, onboarding, visibility, indexable, discoverable) ->
+            refuse label conn ~onboarding ~visibility ~indexable
+              ~discoverable "nclc-reject")
+          [ ("public draft", "draft", "public", false, false)
+          ; ("indexable draft", "draft", "private", true, false)
+          ; ("discoverable draft", "draft", "private", false, true)
+          ; ("leaking public draft", "draft", "public", true, true)
+          ; ("private published", "published", "private", false, false)
+          ; ("private listed published", "published", "private", true, true)
+          ; ("published indexable only", "published", "public", true, false)
+          ; ("published discoverable only", "published", "public", false,
+             true)
+          ])
+
+  (* === legacy exemption === *)
+
+  let legacy_case =
+    db_case
+      "lifecycle: legacy rows stay accepted in every combination the \
+       network constraint rejects" (fun conn ->
+        Lwt_list.iter_s
+          (fun (label, slug, onboarding, visibility, indexable, discoverable)
+             ->
+            accept label conn ~network:false ~onboarding ~visibility
+              ~indexable ~discoverable slug)
+          [ ("legacy public draft", "nclc-l1", "draft", "public", false,
+             false)
+          ; ("legacy private published", "nclc-l2", "published", "private",
+             false, false)
+          ; ("legacy mixed indexable", "nclc-l3", "published", "public",
+             true, false)
+          ; ("legacy mixed discoverable", "nclc-l4", "published", "public",
+             false, true)
+          ; ("legacy leaking draft", "nclc-l5", "draft", "private", true,
+             true)
+          ])
+
+  (* === presence and validation === *)
+
+  let presence_case =
+    db_case "lifecycle: the constraint is present and validated"
+      (fun conn ->
+        let* rows = constraint_rows conn in
+        Alcotest.(check (list (pair string bool)))
+          "present and validated"
+          [ ("communities_network_lifecycle_check", true) ]
+          rows;
+        Lwt.return_unit)
+
+  (* === down/up round-trip === *)
+
+  let roundtrip_case =
+    db_case "lifecycle: the down/up statement pair round-trips"
+      (fun conn ->
+        let (module C : Caqti_lwt.CONNECTION) = conn in
+        (* The whole round-trip runs inside one transaction that is always
+           rolled back, so the live constraint cannot be lost even if an
+           assertion fails between the drop and the re-add. *)
+        let* r = C.start () in
+        let* () = or_fail "begin" r in
+        let* () =
+          Lwt.finalize
+            (fun () ->
+              let* () = Nclc_relax.drop conn in
+              let* rows = constraint_rows conn in
+              Alcotest.(check int) "down removes the constraint" 0
+                (List.length rows);
+              let* () = Nclc_relax.restore conn in
+              let* rows = constraint_rows conn in
+              Alcotest.(check (list (pair string bool)))
+                "up restores the constraint, validated"
+                [ ("communities_network_lifecycle_check", true) ]
+                rows;
+              Lwt.return_unit)
+            (fun () ->
+              let* _ = C.rollback () in
+              Lwt.return_unit)
+        in
+        let* rows = constraint_rows conn in
+        Alcotest.(check int) "live constraint untouched" 1
+          (List.length rows);
+        Lwt.return_unit)
+
+  let suite =
+    [ accepted_case; rejected_case; legacy_case; presence_case;
+      roundtrip_case ]
 end
 
 (* === Dedicated-home provisioning store
@@ -39777,6 +40167,17 @@ module Ncpr = struct
                  (fun () ->
                    Lwt.finalize cleanup (fun () -> C.disconnect ()))))
 
+  (* db_case with the scoped lifecycle CHECK (migration 20260726130000)
+     dropped for the whole case: these fixtures deliberately write drift
+     shapes the constraint now forbids at the database, and the defensive
+     branches they exercise stay covered. The suite cleanup removes every
+     fixture row before the constraint returns, validated. *)
+  let db_case_lifecycle_relaxed name f =
+    db_case name (fun conn ->
+        Nclc_relax.around conn
+          ~cleanup:(fun () -> Nclc_relax.run_cleanup conn q_cleanup)
+          (fun () -> f conn))
+
   (* === fixtures === *)
 
   let identity ?(name = "Ncpr Home") ?(description = "") ~slug () =
@@ -39947,7 +40348,7 @@ module Ncpr = struct
   (* === availability and lifecycle === *)
 
   let lifecycle_case =
-    db_case "publication read: only an exact private network setup draft is \
+    db_case_lifecycle_relaxed "publication read: only an exact private network setup draft is \
              loadable; every other lifecycle is the same absence" (fun conn ->
         let* owner = insert_user conn "ncpr_lifeowner" in
         let* _inst, _project =
@@ -41418,6 +41819,1551 @@ module Ncpg = struct
     [ detail_draft_case; detail_published_case; detail_legacy_case;
       visibility_case; indexability_case; no_publication_route_case
     ]
+end
+
+(* === Atomic network-community publication store
+   (Network_community_publication_store) ===
+   The single atomic transaction behind the future POST /c/:slug/publish:
+   pure validation before SQL, candidate resolution and the shared
+   project-first lock order, the durable top_mod/admin publication
+   authority and its collapse, the complete-draft and provisioned-relation
+   validation, the pure lifecycle transition, the one guarded
+   identity+lifecycle update and its savepoint-fenced slug-conflict
+   classification, complete post-update validation, staged rollback
+   injection, deterministic concurrency, and the privacy sweep. Reserved
+   external-installation-id range 954000001..954000999 (hence account ids
+   954100001..954100999, which also scope the permanent-project cleanup),
+   ncps_% usernames, and ncps-% community slugs so no suite shares
+   fixtures. Verified projects come only through the real draft/selection/
+   finalization chain; drafts come only through the real provisioning
+   store; publication submissions come only through the real publication
+   form. Every per-case wrapper disconnects deterministically. *)
+module Ncps = struct
+  let ( let* ) = Lwt.bind
+
+  open Caqti_request.Infix
+
+  module St = Earde.Network_community_publication_store
+  module Pv = Earde.Project_home_provisioning_store
+  module Rms = Earde.Project_home_removal_store
+
+  let error_str : St.error -> string = function
+    | St.Invalid_user_id -> "Invalid_user_id"
+    | St.Invalid_community_slug -> "Invalid_community_slug"
+    | St.Draft_unavailable -> "Draft_unavailable"
+    | St.Community_slug_unavailable -> "Community_slug_unavailable"
+    | St.Inconsistent_data -> "Inconsistent_data"
+    | St.Storage_error -> "Storage_error"
+
+  let or_fail = Pod_store.or_fail
+  let insert_user = Pod_store.insert_user
+  let exec = Pod_read.exec
+  let find = Pod_read.find
+  let collect = Pod_read.collect
+  let make_project = Phvr.make_project
+  let insert_community = Phcv.insert_community
+  let contains = Cprj_schema.contains
+  let status_of = Gh_start_handler.status_of
+
+  let q_cleanup =
+    List.map
+      (fun sql -> (Caqti_type.unit ->. Caqti_type.unit) sql)
+      [ "DELETE FROM open_source_projects \
+         WHERE forge_namespace_id BETWEEN 954100001 AND 954100999"
+      ; "DELETE FROM project_onboarding_drafts \
+         WHERE github_installation_record_id IN \
+           (SELECT id FROM github_installations \
+            WHERE github_installation_id BETWEEN 954000001 AND 954000999)"
+      ; "DELETE FROM communities WHERE slug LIKE 'ncps-%'"
+      ; "DELETE FROM users WHERE username LIKE 'ncps_%'"
+      ; "DELETE FROM github_installations \
+         WHERE github_installation_id BETWEEN 954000001 AND 954000999"
+      ]
+
+  (* === queries === *)
+
+  let q_community_id =
+    (Caqti_type.string ->! Caqti_type.int)
+    "SELECT id FROM communities WHERE slug = $1"
+
+  let q_count_by_slug = Phvs.q_count_by_slug
+
+  (* Everything durable on the community row, keyed by id so it survives a
+     slug change, as one byte-comparable signature. *)
+  let q_community_sig =
+    (Caqti_type.int ->! Caqti_type.string)
+    "SELECT slug || '|' || name || '|' || \
+            COALESCE(description, '<null>') || '|' || \
+            COALESCE(rules, '<null>') || '|' || \
+            COALESCE(avatar_url, '<null>') || '|' || \
+            COALESCE(banner_url, '<null>') || '|' || \
+            allow_downvotes::text || '|' || sections_enabled::text || '|' || \
+            visibility || '|' || onboarding_state || '|' || \
+            is_network_community::text || '|' || indexable::text || '|' || \
+            discoverable::text \
+     FROM communities WHERE id = $1"
+
+  (* The lifecycle-and-identity half only, for exact published-state
+     assertions. *)
+  let q_community_state =
+    (Caqti_type.int ->! Caqti_type.string)
+    "SELECT name || '|' || COALESCE(description, '<null>') || '|' || \
+            visibility || '|' || onboarding_state || '|' || \
+            is_network_community::text || '|' || indexable::text || '|' || \
+            discoverable::text \
+     FROM communities WHERE id = $1"
+
+  (* Every durable column of one relation row, exact timestamps included,
+     for byte-unchanged assertions. *)
+  let q_relation_sig =
+    (Caqti_type.int64 ->! Caqti_type.string)
+    "SELECT id::text || '|' || project_id::text || '|' || \
+            community_id::text || '|' || relation_type || '|' || status \
+            || '|' || COALESCE(requested_by_user_id::text, '<null>') \
+            || '|' || COALESCE(reviewed_by_user_id::text, '<null>') \
+            || '|' || COALESCE(request_note, '<null>') \
+            || '|' || created_at::text || '|' || updated_at::text \
+            || '|' || COALESCE(reviewed_at::text, '<null>') \
+            || '|' || COALESCE(removed_at::text, '<null>') \
+     FROM community_projects WHERE id = $1"
+
+  (* Every durable column of the permanent project. *)
+  let q_project_sig =
+    (Caqti_type.int64 ->! Caqti_type.string)
+    "SELECT id::text || '|' || \
+            COALESCE(source_onboarding_draft_id::text, '<null>') || '|' || \
+            name || '|' || slug || '|' || \
+            COALESCE(description, '<null>') || '|' || \
+            COALESCE(website_url, '<null>') || '|' || \
+            kind || '|' || forge || '|' || forge_namespace_id::text || '|' || \
+            forge_namespace_login || '|' || forge_namespace_type || '|' || \
+            verification_status || '|' || \
+            COALESCE(created_by_user_id::text, '<null>') || '|' || \
+            created_at::text || '|' || updated_at::text \
+     FROM open_source_projects WHERE id = $1"
+
+  (* Community-side corruption and restoration fixtures. *)
+  let q_delete_sections =
+    (Caqti_type.int ->. Caqti_type.unit)
+    "DELETE FROM community_sections WHERE community_id = $1"
+
+  let q_insert_general_section =
+    (Caqti_type.int ->. Caqti_type.unit)
+    "INSERT INTO community_sections \
+       (community_id, name, slug, description, position, default_sort, \
+        is_introduction_section) \
+     VALUES ($1, 'General', 'general', 'General discussion', 0, 'new', \
+             FALSE)"
+
+  let q_archive_channels =
+    (Caqti_type.int ->. Caqti_type.unit)
+    "UPDATE channels SET is_archived = TRUE WHERE community_id = $1"
+
+  let q_unarchive_channels =
+    (Caqti_type.int ->. Caqti_type.unit)
+    "UPDATE channels SET is_archived = FALSE WHERE community_id = $1"
+
+  let q_delete_moderators =
+    (Caqti_type.int ->. Caqti_type.unit)
+    "DELETE FROM community_moderators WHERE community_id = $1"
+
+  let q_delete_members =
+    (Caqti_type.int ->. Caqti_type.unit)
+    "DELETE FROM community_members WHERE community_id = $1"
+
+  let q_delete_relations =
+    (Caqti_type.int ->. Caqti_type.unit)
+    "DELETE FROM community_projects WHERE community_id = $1"
+
+  (* Store-shaped accepted provisioned relation, for restoration after the
+     absent-relation probe. *)
+  let q_insert_provisioned_relation =
+    (Caqti_type.(t2 int64 int) ->. Caqti_type.unit)
+    "INSERT INTO community_projects \
+       (project_id, community_id, relation_type, status, reviewed_at) \
+     VALUES ($1, $2, 'home', 'accepted', NOW())"
+
+  let q_insert_pending_relation =
+    (Caqti_type.(t2 int64 int) ->. Caqti_type.unit)
+    "INSERT INTO community_projects \
+       (project_id, community_id, relation_type, status) \
+     VALUES ($1, $2, 'home', 'pending')"
+
+  let q_set_relation_requester =
+    (Caqti_type.(t2 int64 (option int)) ->. Caqti_type.unit)
+    "UPDATE community_projects SET requested_by_user_id = $2 WHERE id = $1"
+
+  let q_delete_relation_by_id =
+    (Caqti_type.int64 ->. Caqti_type.unit)
+    "DELETE FROM community_projects WHERE id = $1"
+
+  (* Lifecycle and identity corruption, only ever run with the matching
+     scoped constraint dropped through Nclc_relax / Ncid_relax. *)
+  let q_set_visibility =
+    (Caqti_type.(t2 int string) ->. Caqti_type.unit)
+    "UPDATE communities SET visibility = $2 WHERE id = $1"
+
+  let q_set_indexable =
+    (Caqti_type.(t2 int bool) ->. Caqti_type.unit)
+    "UPDATE communities SET indexable = $2 WHERE id = $1"
+
+  let q_set_name =
+    (Caqti_type.(t2 int string) ->. Caqti_type.unit)
+    "UPDATE communities SET name = $2 WHERE id = $1"
+
+  let q_set_slug =
+    (Caqti_type.(t2 int string) ->. Caqti_type.unit)
+    "UPDATE communities SET slug = $2 WHERE id = $1"
+
+  let q_delete_user =
+    (Caqti_type.int ->. Caqti_type.unit) "DELETE FROM users WHERE id = $1"
+
+  let q_set_verification = Phrq.q_set_verification
+  let q_mark_removed = Phrq.q_mark_removed
+
+  let q_remove_moderator = Phrv.q_remove_moderator
+  let q_set_moderator_role = Phrv.q_set_moderator_role
+  let q_insert_moderator = Phrv.q_insert_moderator
+  let q_insert_member = Phrv.q_insert_member
+  let q_set_admin = Phrv.q_set_admin
+
+  (* Test-only failure injection, dropped under Lwt.finalize: one RAISE
+     trigger for the update-statement failure, and one side-effect trigger
+     (an extra membership row) that survives the update itself but makes
+     the complete post-update validation fail. *)
+  let ddl sql = (Caqti_type.unit ->. Caqti_type.unit) sql
+
+  let q_create_fail_fn =
+    ddl
+      "CREATE FUNCTION ncps_fail_fn() RETURNS trigger \
+       LANGUAGE plpgsql \
+       AS 'BEGIN RAISE EXCEPTION ''ncps fixture failure''; END'"
+
+  let q_drop_fail_fn = ddl "DROP FUNCTION IF EXISTS ncps_fail_fn()"
+
+  let q_create_fail_trigger =
+    ddl
+      "CREATE TRIGGER ncps_fail_update AFTER UPDATE ON communities \
+       FOR EACH ROW EXECUTE FUNCTION ncps_fail_fn()"
+
+  let q_drop_fail_trigger =
+    ddl "DROP TRIGGER IF EXISTS ncps_fail_update ON communities"
+
+  let q_create_side_fn ~user_id =
+    ddl
+      (Printf.sprintf
+         "CREATE FUNCTION ncps_side_fn() RETURNS trigger \
+          LANGUAGE plpgsql \
+          AS 'BEGIN INSERT INTO community_members (user_id, community_id) \
+              VALUES (%d, NEW.id); RETURN NEW; END'"
+         user_id)
+
+  let q_drop_side_fn = ddl "DROP FUNCTION IF EXISTS ncps_side_fn()"
+
+  let q_create_side_trigger =
+    ddl
+      "CREATE TRIGGER ncps_side_update AFTER UPDATE ON communities \
+       FOR EACH ROW EXECUTE FUNCTION ncps_side_fn()"
+
+  let q_drop_side_trigger =
+    ddl "DROP TRIGGER IF EXISTS ncps_side_update ON communities"
+
+  let db_case name f =
+    Alcotest.test_case name `Quick (fun () ->
+        match Sys.getenv_opt "EARDE_TEST_DATABASE_URL" with
+        | None | Some "" -> Alcotest.skip ()
+        | Some url ->
+            Lwt_main.run
+              (let* conn = Caqti_lwt_unix.connect (Uri.of_string url) in
+               let* conn = or_fail "connect" conn in
+               let (module C : Caqti_lwt.CONNECTION) = conn in
+               let cleanup () =
+                 Lwt_list.iter_s
+                   (fun q ->
+                     let* r = C.exec q () in
+                     let* _ = or_fail "cleanup" r in
+                     Lwt.return_unit)
+                   q_cleanup
+               in
+               let* () = cleanup () in
+               Lwt.finalize
+                 (fun () -> f ~url conn)
+                 (fun () ->
+                   Lwt.finalize cleanup (fun () -> C.disconnect ()))))
+
+  let with_second ~url f =
+    let* conn2 = Caqti_lwt_unix.connect (Uri.of_string url) in
+    let* conn2 = or_fail "second connect" conn2 in
+    let (module C2 : Caqti_lwt.CONNECTION) = conn2 in
+    Lwt.finalize (fun () -> f conn2) (fun () -> C2.disconnect ())
+
+  (* === fixtures and call helpers === *)
+
+  (* One complete private draft, only through the real chain: permanent
+     project via draft/selection/finalization, then the real atomic
+     provisioning transaction. Returns the project, community, and
+     relation ids. *)
+  let make_draft ?(name = "Ncps Community Home") ?(description = "") conn
+      ~user ~ext_id ~project_slug ~slug =
+    let* _inst, project =
+      make_project conn ~user ~ext_id ~slug:project_slug
+    in
+    let identity =
+      phvf_ok "identity fixture" (phvf_fields ~name ~slug ~description ())
+    in
+    let* r = Pv.provision conn ~actor_user_id:user ~project_slug ~identity in
+    let* () =
+      match r with
+      | Ok home ->
+          Alcotest.(check string) "draft fixture slug" slug
+            (Pv.community_slug home);
+          Lwt.return_unit
+      | Error _ -> Alcotest.failf "draft fixture failed for %s" slug
+    in
+    let* cid = find conn "draft community id" q_community_id slug in
+    let* relation_ids = collect conn "relation ids" Phvs.q_relation_ids
+                          project in
+    match relation_ids with
+    | [ rid ] -> Lwt.return (project, cid, rid)
+    | ids ->
+        Alcotest.failf "draft fixture: expected one relation, found %d"
+          (List.length ids)
+
+  (* Publication submissions come only through the real form parser,
+     exactly as the future POST handler will hand them to the store. *)
+  let publication ?(name = "Ncps Community Home") ~slug
+      ?(description = "") ?(visibility = "public") () =
+    ncpf_ok "publication fixture"
+      (ncpf_fields ~name ~slug ~description ~visibility ())
+
+  let publish conn ~actor ~current value =
+    St.publish conn ~actor_user_id:actor ~current_community_slug:current
+      ~publication:value
+
+  (* Every success asserts both public accessors — the only observable
+     surface of the abstract result. *)
+  let publish_ok label conn ~actor ~current ~expect_slug ~expect_visibility
+      value =
+    let* r = publish conn ~actor ~current value in
+    match r with
+    | Ok published ->
+        Alcotest.(check string)
+          (label ^ ": final slug")
+          expect_slug
+          (St.community_slug published);
+        Alcotest.(check string)
+          (label ^ ": publication visibility")
+          (ncpf_vis expect_visibility)
+          (ncpf_vis (St.publication_visibility published));
+        Lwt.return published
+    | Error e -> Alcotest.failf "%s: %s" label (error_str e)
+
+  let publish_expect label expected conn ~actor ~current value =
+    let* r = publish conn ~actor ~current value in
+    match r with
+    | Ok _ ->
+        Alcotest.failf "%s: expected %s, got Ok" label (error_str expected)
+    | Error e ->
+        Alcotest.(check string) label (error_str expected) (error_str e);
+        Lwt.return_unit
+
+  (* The complete durable state around one draft, byte-comparable, for
+     loser/rollback assertions: community row, member/moderator counts,
+     shell signatures, the exact relation row, the exact project row. *)
+  let snapshot label conn ~cid ~project ~rid =
+    let* community = find conn (label ^ ": community sig") q_community_sig
+                       cid in
+    let* members = find conn (label ^ ": members") Phrq.q_count_members cid
+    in
+    let* moderators =
+      find conn (label ^ ": moderators") Phrq.q_count_moderators cid
+    in
+    let* sections = collect conn (label ^ ": sections") Phvs.q_section_sigs
+                      cid in
+    let* channels = collect conn (label ^ ": channels") Phvs.q_channel_sigs
+                      cid in
+    let* relation = find conn (label ^ ": relation sig") q_relation_sig rid
+    in
+    let* project_sig = find conn (label ^ ": project sig") q_project_sig
+                         project in
+    Lwt.return
+      ((community, (members, moderators)), (sections, channels),
+       (relation, project_sig))
+
+  let check_unchanged label conn ~cid ~project ~rid before =
+    let* after = snapshot label conn ~cid ~project ~rid in
+    let (community_b, counts_b), (sections_b, channels_b),
+        (relation_b, project_b) =
+      before
+    in
+    let (community_a, counts_a), (sections_a, channels_a),
+        (relation_a, project_a) =
+      after
+    in
+    Alcotest.(check string) (label ^ ": community unchanged") community_b
+      community_a;
+    Alcotest.(check (pair int int)) (label ^ ": counts unchanged") counts_b
+      counts_a;
+    Alcotest.(check (list string)) (label ^ ": sections unchanged")
+      sections_b sections_a;
+    Alcotest.(check (list string)) (label ^ ": channels unchanged")
+      channels_b channels_a;
+    Alcotest.(check string) (label ^ ": relation unchanged") relation_b
+      relation_a;
+    Alcotest.(check string) (label ^ ": project unchanged") project_b
+      project_a;
+    Lwt.return_unit
+
+  (* Everything a successful publication must leave: the exact selected
+     identity and lifecycle on the same row, no row under the old slug
+     (when it changed), and the relation, project, shell, and roles
+     untouched relative to the pre-publication snapshot. *)
+  let check_published label conn ~cid ~project ~rid ~before ~name
+      ~description ~slug ~old_slug ~indexable ~discoverable =
+    let* state = find conn (label ^ ": state") q_community_state cid in
+    Alcotest.(check string)
+      (label ^ ": identity and lifecycle")
+      (name ^ "|" ^ description ^ "|public|published|true|"
+      ^ string_of_bool indexable ^ "|" ^ string_of_bool discoverable)
+      state;
+    let* n = find conn (label ^ ": final slug count") q_count_by_slug slug in
+    Alcotest.(check int) (label ^ ": exactly one community owns the slug") 1
+      n;
+    let* () =
+      if String.equal old_slug slug then Lwt.return_unit
+      else
+        let* old_n = find conn (label ^ ": old slug") q_count_by_slug
+                       old_slug in
+        Alcotest.(check int) (label ^ ": old slug released") 0 old_n;
+        Lwt.return_unit
+    in
+    let (_, counts_b), (sections_b, channels_b), (relation_b, project_b) =
+      before
+    in
+    let* after = snapshot label conn ~cid ~project ~rid in
+    let (_, counts_a), (sections_a, channels_a), (relation_a, project_a) =
+      after
+    in
+    Alcotest.(check (pair int int))
+      (label ^ ": membership and moderation unchanged")
+      counts_b counts_a;
+    Alcotest.(check (list string)) (label ^ ": sections unchanged")
+      sections_b sections_a;
+    Alcotest.(check (list string)) (label ^ ": channels unchanged")
+      channels_b channels_a;
+    Alcotest.(check string) (label ^ ": relation unchanged byte-for-byte")
+      relation_b relation_a;
+    Alcotest.(check string) (label ^ ": project unchanged") project_b
+      project_a;
+    Lwt.return_unit
+
+  let search_lists label conn ~name ~slug expected =
+    let* r = Earde.Db.search_communities conn name 50 0 in
+    match r with
+    | Error e -> Alcotest.failf "%s: search failed: %s" label e
+    | Ok rows ->
+        Alcotest.(check bool) label expected
+          (List.exists
+             (fun (c : Earde.Db.community) -> String.equal c.slug slug)
+             rows);
+        Lwt.return_unit
+
+  (* === pure input validation === *)
+
+  let pure_inputs_case =
+    db_case "publish: invalid inputs rejected before any SQL"
+      (fun ~url _conn ->
+        (* A deliberately unusable connection: pure validation must return
+           without touching it — were any SQL attempted, the driver would
+           raise on the finished connection and fail the test. *)
+        let* dead = Caqti_lwt_unix.connect (Uri.of_string url) in
+        let* dead = or_fail "dead connect" dead in
+        let (module Dead : Caqti_lwt.CONNECTION) = dead in
+        let* () = Dead.disconnect () in
+        let value = publication ~slug:"ncps-final" () in
+        let expect label e ~actor ~current =
+          publish_expect label e dead ~actor ~current value
+        in
+        let* () = expect "user id 0" St.Invalid_user_id ~actor:0
+                    ~current:"ncps-a" in
+        let* () =
+          expect "negative user id" St.Invalid_user_id ~actor:(-7)
+            ~current:"ncps-a"
+        in
+        let* () =
+          expect "user checked before slug" St.Invalid_user_id ~actor:0
+            ~current:"not a slug"
+        in
+        Lwt_list.iter_s
+          (fun bad ->
+            expect
+              ("invalid current slug " ^ String.escaped bad)
+              St.Invalid_community_slug ~actor:1 ~current:bad)
+          [ ""
+          ; "ncps a"
+          ; " ncps-a"
+          ; "ncps-a "
+          ; "ncps/a"
+          ; "ncps\ta"
+          ; "ncps\na"
+          ; "ncps\x00a"
+          ; "ncps\x1fa"
+          ; "ncps\x7fa"
+          ])
+
+  (* === public publication === *)
+
+  let public_case =
+    db_case
+      "publish: a top moderator atomically publishes Public with a new \
+       identity" (fun ~url conn ->
+        let* owner = insert_user conn "ncps_owner" in
+        let* unrelated = insert_user conn "ncps_other" in
+        let* project, cid, rid =
+          make_draft conn ~user:owner ~ext_id:954000001L
+            ~project_slug:"ncps-alpha" ~slug:"ncps-alpha-home"
+        in
+        let* before = snapshot "before" conn ~cid ~project ~rid in
+        let name = "Ncps Alpha Hub \xc3\xa8" in
+        let description = "Prima riga.\nSeconda con\ttab \xe2\x98\x95" in
+        let* _ =
+          publish_ok "publish" conn ~actor:owner ~current:"ncps-alpha-home"
+            ~expect_slug:"ncps-alpha-hub" ~expect_visibility:Ncpf.Public
+            (publication ~name ~slug:"ncps-alpha-hub" ~description
+               ~visibility:"public" ())
+        in
+        let* () =
+          check_published "published" conn ~cid ~project ~rid ~before ~name
+            ~description ~slug:"ncps-alpha-hub" ~old_slug:"ncps-alpha-home"
+            ~indexable:true ~discoverable:true
+        in
+        (* The real /c/:slug route now follows existing public-community
+           authorization: the creator, an unrelated user, and the
+           anonymous visitor all read the page. *)
+        let* response, body =
+          Ccph.visit ~session_user_id:owner ~url ~slug:"ncps-alpha-hub" ()
+        in
+        Alcotest.(check int) "creator reads the community" 200
+          (status_of response);
+        Alcotest.(check bool) "page carries the published name" true
+          (contains ~needle:"Ncps Alpha Hub" body);
+        let* response, _ =
+          Ccph.visit ~session_user_id:unrelated ~url ~slug:"ncps-alpha-hub"
+            ()
+        in
+        Alcotest.(check int) "unrelated user reads the community" 200
+          (status_of response);
+        let* response, _ = Ccph.visit ~url ~slug:"ncps-alpha-hub" () in
+        Alcotest.(check int) "anonymous visitor reads the community" 200
+          (status_of response);
+        let* response, _ = Ccph.visit ~url ~slug:"ncps-alpha-home" () in
+        Alcotest.(check int) "old slug is gone" 404 (status_of response);
+        (* Existing discovery/indexing rules: a public indexable community
+           appears in community search. *)
+        search_lists "public community is discoverable" conn
+          ~name:"Ncps Alpha Hub" ~slug:"ncps-alpha-hub" true)
+
+  (* === unlisted publication === *)
+
+  let unlisted_case =
+    db_case
+      "publish: Unlisted lands public but neither indexable nor \
+       discoverable" (fun ~url conn ->
+        let* owner = insert_user conn "ncps_owner" in
+        let* project, cid, rid =
+          make_draft conn ~user:owner ~ext_id:954000002L
+            ~project_slug:"ncps-unl" ~slug:"ncps-unl-home"
+        in
+        let* before = snapshot "before" conn ~cid ~project ~rid in
+        let name = "Ncps Unlisted Hub" in
+        let* _ =
+          publish_ok "publish unlisted" conn ~actor:owner
+            ~current:"ncps-unl-home" ~expect_slug:"ncps-unl-hub"
+            ~expect_visibility:Ncpf.Unlisted
+            (publication ~name ~slug:"ncps-unl-hub" ~visibility:"unlisted"
+               ())
+        in
+        let* () =
+          check_published "unlisted" conn ~cid ~project ~rid ~before ~name
+            ~description:"<null>" ~slug:"ncps-unl-hub"
+            ~old_slug:"ncps-unl-home" ~indexable:false ~discoverable:false
+        in
+        (* Reachable directly under existing public authorization... *)
+        let* response, _ = Ccph.visit ~url ~slug:"ncps-unl-hub" () in
+        Alcotest.(check int) "anonymous direct visit succeeds" 200
+          (status_of response);
+        (* ...but absent from discovery and indexing surfaces. *)
+        search_lists "unlisted community is not discoverable" conn
+          ~name:"Ncps Unlisted Hub" ~slug:"ncps-unl-hub" false)
+
+  (* === same-slug publication === *)
+
+  let same_slug_case =
+    db_case
+      "publish: keeping the current slug succeeds without conflict \
+       handling" (fun ~url:_ conn ->
+        let* owner = insert_user conn "ncps_owner" in
+        let* project, cid, rid =
+          make_draft conn ~user:owner ~ext_id:954000003L
+            ~project_slug:"ncps-same" ~slug:"ncps-same-home"
+        in
+        let* before = snapshot "before" conn ~cid ~project ~rid in
+        let* _ =
+          publish_ok "same slug" conn ~actor:owner
+            ~current:"ncps-same-home" ~expect_slug:"ncps-same-home"
+            ~expect_visibility:Ncpf.Public
+            (publication ~name:"Ncps Same Hub" ~slug:"ncps-same-home" ())
+        in
+        let* () =
+          check_published "same slug" conn ~cid ~project ~rid ~before
+            ~name:"Ncps Same Hub" ~description:"<null>"
+            ~slug:"ncps-same-home" ~old_slug:"ncps-same-home"
+            ~indexable:true ~discoverable:true
+        in
+        (* Replay: a published community is no longer a draft. *)
+        publish_expect "replay" St.Draft_unavailable conn ~actor:owner
+          ~current:"ncps-same-home"
+          (publication ~slug:"ncps-same-home" ()))
+
+  (* === authorization variants === *)
+
+  let authority_case =
+    db_case
+      "publish: second top moderator, durable admin, and multiply \
+       authorized actors all publish" (fun ~url:_ conn ->
+        let* owner = insert_user conn "ncps_owner" in
+        let* second = insert_user conn "ncps_second" in
+        let* admin = insert_user conn "ncps_admin" in
+        let* () = exec conn "admin flag" q_set_admin (admin, true) in
+        (* A second current top moderator. *)
+        let* _, cid, _ =
+          make_draft conn ~user:owner ~ext_id:954000004L
+            ~project_slug:"ncps-au1" ~slug:"ncps-au1-home"
+        in
+        let* () = exec conn "second member" q_insert_member (second, cid) in
+        let* () =
+          exec conn "second top mod" q_insert_moderator
+            (second, cid, "top_mod")
+        in
+        let* _ =
+          publish_ok "second top mod" conn ~actor:second
+            ~current:"ncps-au1-home" ~expect_slug:"ncps-au1-hub"
+            ~expect_visibility:Ncpf.Public
+            (publication ~slug:"ncps-au1-hub" ())
+        in
+        (* A durable global admin who is neither member nor moderator. *)
+        let* _, _, _ =
+          make_draft conn ~user:owner ~ext_id:954000005L
+            ~project_slug:"ncps-au2" ~slug:"ncps-au2-home"
+        in
+        let* _ =
+          publish_ok "durable admin" conn ~actor:admin
+            ~current:"ncps-au2-home" ~expect_slug:"ncps-au2-hub"
+            ~expect_visibility:Ncpf.Unlisted
+            (publication ~slug:"ncps-au2-hub" ~visibility:"unlisted" ())
+        in
+        (* A multiply authorized actor: creating top moderator and durable
+           admin at once. *)
+        let* _, _, _ =
+          make_draft conn ~user:owner ~ext_id:954000006L
+            ~project_slug:"ncps-au3" ~slug:"ncps-au3-home"
+        in
+        let* () = exec conn "owner admin too" q_set_admin (owner, true) in
+        let* _ =
+          publish_ok "multiply authorized" conn ~actor:owner
+            ~current:"ncps-au3-home" ~expect_slug:"ncps-au3-hub"
+            ~expect_visibility:Ncpf.Public
+            (publication ~slug:"ncps-au3-hub" ())
+        in
+        exec conn "drop owner admin" q_set_admin (owner, false))
+
+  let unauthorized_case =
+    db_case
+      "publish: every unauthorized or unavailable identity collapses into \
+       one error with no partial state" (fun ~url:_ conn ->
+        let* owner = insert_user conn "ncps_owner" in
+        let* member = insert_user conn "ncps_member" in
+        let* moderator = insert_user conn "ncps_mod" in
+        let* legacy_mod = insert_user conn "ncps_legmod" in
+        let* stranger = insert_user conn "ncps_stranger" in
+        let* foreign_mod = insert_user conn "ncps_foreign" in
+        let* downgraded = insert_user conn "ncps_down" in
+        let* ghost = insert_user conn "ncps_ghost" in
+        let* project, cid, rid =
+          make_draft conn ~user:owner ~ext_id:954000007L
+            ~project_slug:"ncps-un" ~slug:"ncps-un-home"
+        in
+        let* () = exec conn "member" q_insert_member (member, cid) in
+        let* () = exec conn "mod member" q_insert_member (moderator, cid) in
+        let* () =
+          exec conn "mod role" q_insert_moderator (moderator, cid, "mod")
+        in
+        let* () = exec conn "legacy member" q_insert_member (legacy_mod, cid)
+        in
+        let* () =
+          exec conn "legacy mod role" q_insert_moderator
+            (legacy_mod, cid, "legacy_mod")
+        in
+        let* other_cid = insert_community conn "ncps-un-other" in
+        let* () =
+          exec conn "foreign top mod" q_insert_moderator
+            (foreign_mod, other_cid, "top_mod")
+        in
+        let* () = exec conn "downgraded member" q_insert_member
+                    (downgraded, cid) in
+        let* () =
+          exec conn "downgraded once top" q_insert_moderator
+            (downgraded, cid, "top_mod")
+        in
+        let* () =
+          exec conn "downgrade" q_set_moderator_role (downgraded, cid, "mod")
+        in
+        let* () = exec conn "delete ghost" q_delete_user ghost in
+        let* before = snapshot "before" conn ~cid ~project ~rid in
+        let value = publication ~slug:"ncps-un-hub" () in
+        let expect label actor =
+          let* () =
+            publish_expect label St.Draft_unavailable conn ~actor
+              ~current:"ncps-un-home" value
+          in
+          check_unchanged label conn ~cid ~project ~rid before
+        in
+        (* A session-only admin claim never reaches the store, so a plain
+           user with is_admin = FALSE is exactly that case. *)
+        let* () = expect "ordinary member" member in
+        let* () = expect "'mod' role" moderator in
+        let* () = expect "'legacy_mod' role" legacy_mod in
+        let* () = expect "unrelated user / session-only admin" stranger in
+        let* () = expect "moderator of another community" foreign_mod in
+        let* () = expect "downgraded top moderator" downgraded in
+        let* () = expect "deleted user" ghost in
+        (* Missing and legacy communities are the same collapse. *)
+        let* () =
+          publish_expect "missing community" St.Draft_unavailable conn
+            ~actor:owner ~current:"ncps-nowhere" value
+        in
+        let* _legacy =
+          insert_community ~network:false conn "ncps-un-legacy"
+        in
+        let* () =
+          publish_expect "legacy community" St.Draft_unavailable conn
+            ~actor:owner ~current:"ncps-un-legacy" value
+        in
+        let* n = find conn "no hub" q_count_by_slug "ncps-un-hub" in
+        Alcotest.(check int) "no partial publication anywhere" 0 n;
+        Lwt.return_unit)
+
+  (* === project verification states === *)
+
+  let verification_case =
+    db_case
+      "publish: verified, stale, and revoked projects all publish"
+      (fun ~url:_ conn ->
+        let* owner = insert_user conn "ncps_owner" in
+        (* Verified is every other success case; stale and revoked here. *)
+        let* project, _, _ =
+          make_draft conn ~user:owner ~ext_id:954000008L
+            ~project_slug:"ncps-vf1" ~slug:"ncps-vf1-home"
+        in
+        let* () = exec conn "stale" q_set_verification (project, "stale") in
+        let* _ =
+          publish_ok "stale project" conn ~actor:owner
+            ~current:"ncps-vf1-home" ~expect_slug:"ncps-vf1-hub"
+            ~expect_visibility:Ncpf.Public
+            (publication ~slug:"ncps-vf1-hub" ())
+        in
+        let* project2, _, _ =
+          make_draft conn ~user:owner ~ext_id:954000009L
+            ~project_slug:"ncps-vf2" ~slug:"ncps-vf2-home"
+        in
+        let* () = exec conn "revoked" q_set_verification (project2, "revoked")
+        in
+        let* _ =
+          publish_ok "revoked project" conn ~actor:owner
+            ~current:"ncps-vf2-home" ~expect_slug:"ncps-vf2-hub"
+            ~expect_visibility:Ncpf.Public
+            (publication ~slug:"ncps-vf2-hub" ())
+        in
+        Lwt.return_unit)
+
+  (* === draft corruption === *)
+
+  (* Durable corruption defenses that cannot be produced without relaxing
+     production constraints stay defensive and undriven here:
+     communities.visibility and onboarding_state off-enum values,
+     community_projects.status/relation_type off-enum values, a second
+     active home for one project (partial unique index), and non-positive
+     ids (sequences). The lifecycle and identity shapes below are now
+     constraint-protected too, so they run with the matching scoped CHECK
+     dropped through Nclc_relax / Ncid_relax and restored under
+     Lwt.finalize once the row is normalized again. *)
+
+  let shell_corruption_case =
+    db_case
+      "publish: a missing or malformed shell, membership, moderation, or \
+       relation is refused as corruption" (fun ~url:_ conn ->
+        let* owner = insert_user conn "ncps_owner" in
+        let* admin = insert_user conn "ncps_admin" in
+        let* () = exec conn "admin flag" q_set_admin (admin, true) in
+        let* project, cid, rid =
+          make_draft conn ~user:owner ~ext_id:954000010L
+            ~project_slug:"ncps-cor" ~slug:"ncps-cor-home"
+        in
+        let value = publication ~slug:"ncps-cor-hub" () in
+        (* The durable-admin actor keeps authorization satisfied, so each
+           probe reaches the complete-draft validation it targets. *)
+        let expect label =
+          let* () =
+            publish_expect label St.Inconsistent_data conn ~actor:admin
+              ~current:"ncps-cor-home" value
+          in
+          let* n = find conn (label ^ ": no hub") q_count_by_slug
+                     "ncps-cor-hub" in
+          Alcotest.(check int) (label ^ ": no partial publication") 0 n;
+          Lwt.return_unit
+        in
+        (* Missing General section. *)
+        let* () = exec conn "drop sections" q_delete_sections cid in
+        let* () = expect "missing General section" in
+        let* () = exec conn "restore section" q_insert_general_section cid in
+        (* Missing (archived) general channel. *)
+        let* () = exec conn "archive channels" q_archive_channels cid in
+        let* () = expect "missing general channel" in
+        let* () = exec conn "unarchive channels" q_unarchive_channels cid in
+        (* No top moderator at all. *)
+        let* () = exec conn "drop moderators" q_delete_moderators cid in
+        let* () = expect "no top moderator" in
+        let* () =
+          exec conn "restore top mod" q_insert_moderator
+            (owner, cid, "top_mod")
+        in
+        (* No member at all. *)
+        let* () = exec conn "drop members" q_delete_members cid in
+        let* () = expect "no member" in
+        let* () = exec conn "restore member" q_insert_member (owner, cid) in
+        (* Absent accepted relation. *)
+        let* () = exec conn "drop relations" q_delete_relations cid in
+        let* () = expect "absent accepted relation" in
+        let* () =
+          exec conn "restore relation" q_insert_provisioned_relation
+            (project, cid)
+        in
+        (* Non-provisioned accepted relation shape: a fabricated
+           requester. *)
+        let* relation_ids = collect conn "relation ids" Phvs.q_relation_ids
+                              project in
+        let* rid2 =
+          match relation_ids with
+          | [ r ] -> Lwt.return r
+          | _ -> Alcotest.fail "expected one restored relation"
+        in
+        let* () =
+          exec conn "fabricate requester" q_set_relation_requester
+            (rid2, Some owner)
+        in
+        let* () = expect "non-provisioned accepted relation" in
+        let* () =
+          exec conn "clear requester" q_set_relation_requester (rid2, None)
+        in
+        (* Contradictory active relation state: a pending home relation of
+           another project targeting this community. *)
+        let* _, project2, _rid3 =
+          let* _inst, p2 =
+            make_project conn ~user:owner ~ext_id:954000011L
+              ~slug:"ncps-cor2"
+          in
+          Lwt.return (0, p2, 0L)
+        in
+        let* () =
+          exec conn "pending intruder" q_insert_pending_relation
+            (project2, cid)
+        in
+        let* () = expect "pending relation on the community" in
+        let (module C : Caqti_lwt.CONNECTION) = conn in
+        let* pending_ids = collect conn "pending ids" Phvs.q_relation_ids
+                             project2 in
+        let* () =
+          Lwt_list.iter_s
+            (fun id -> exec conn "drop intruder" q_delete_relation_by_id id)
+            pending_ids
+        in
+        (* A second accepted home from another project: the candidate
+           resolution itself must refuse the duplicate. *)
+        let* () =
+          exec conn "second accepted" q_insert_provisioned_relation
+            (project2, cid)
+        in
+        let* () = expect "second accepted home on the community" in
+        let* accepted_ids = collect conn "accepted ids" Phvs.q_relation_ids
+                              project2 in
+        let* () =
+          Lwt_list.iter_s
+            (fun id -> exec conn "drop second" q_delete_relation_by_id id)
+            accepted_ids
+        in
+        ignore rid;
+        (* With every probe repaired the same inputs succeed — the
+           refusals above were the corruption, not the store. *)
+        let* _ =
+          publish_ok "clean run after probes" conn ~actor:admin
+            ~current:"ncps-cor-home" ~expect_slug:"ncps-cor-hub"
+            ~expect_visibility:Ncpf.Public value
+        in
+        Lwt.return_unit)
+
+  let lifecycle_corruption_case =
+    db_case
+      "publish: constraint-protected lifecycle and identity corruption is \
+       refused" (fun ~url:_ conn ->
+        let* owner = insert_user conn "ncps_owner" in
+        let* _project, cid, _rid =
+          make_draft conn ~user:owner ~ext_id:954000012L
+            ~project_slug:"ncps-lcc" ~slug:"ncps-lcc-home"
+        in
+        let value = publication ~slug:"ncps-lcc-hub" () in
+        let expect label current =
+          let* () =
+            publish_expect label St.Inconsistent_data conn ~actor:owner
+              ~current value
+          in
+          let* n = find conn (label ^ ": no hub") q_count_by_slug
+                     "ncps-lcc-hub" in
+          Alcotest.(check int) (label ^ ": no partial publication") 0 n;
+          Lwt.return_unit
+        in
+        (* Lifecycle shapes the new CHECK forbids: producible only with
+           the constraint dropped for the length of the probe. *)
+        let* () = Nclc_relax.drop conn in
+        let* () =
+          Lwt.finalize
+            (fun () ->
+              let* () = exec conn "public draft" q_set_visibility
+                          (cid, "public") in
+              let* () = expect "public draft" "ncps-lcc-home" in
+              let* () = exec conn "back private" q_set_visibility
+                          (cid, "private") in
+              let* () = exec conn "leaking draft" q_set_indexable (cid, true)
+              in
+              let* () = expect "indexable draft" "ncps-lcc-home" in
+              exec conn "back dark" q_set_indexable (cid, false))
+            (fun () ->
+              (* The row is a valid private draft again before the
+                 constraint returns, validated. *)
+              let* () = exec conn "normalize visibility" q_set_visibility
+                          (cid, "private") in
+              let* () = exec conn "normalize indexable" q_set_indexable
+                          (cid, false) in
+              Nclc_relax.restore conn)
+        in
+        (* Identity shapes the scoped identity CHECKs forbid. *)
+        let* () = Ncid_relax.drop conn in
+        let* () =
+          Lwt.finalize
+            (fun () ->
+              let* () =
+                exec conn "control name" q_set_name
+                  (cid, "Ncps\x01Corrupt")
+              in
+              let* () = expect "control byte in name" "ncps-lcc-home" in
+              let* () = exec conn "restore name" q_set_name
+                          (cid, "Ncps Community Home") in
+              let* () =
+                exec conn "noncanonical slug" q_set_slug (cid, "Ncps-Upper")
+              in
+              let* () = expect "noncanonical stored slug" "Ncps-Upper" in
+              exec conn "restore slug" q_set_slug (cid, "ncps-lcc-home"))
+            (fun () ->
+              let* () =
+                exec conn "recanonicalize" Ncid_relax.q_recanonicalize
+                  (cid, "ncps-lcc-home", "Ncps Community Home")
+              in
+              Ncid_relax.restore conn)
+        in
+        (* The uncorrupted draft still publishes. *)
+        let* _ =
+          publish_ok "clean run after corruption" conn ~actor:owner
+            ~current:"ncps-lcc-home" ~expect_slug:"ncps-lcc-hub"
+            ~expect_visibility:Ncpf.Public value
+        in
+        Lwt.return_unit)
+
+  (* === slug conflicts === *)
+
+  let slug_conflict_case =
+    db_case
+      "publish: legacy, draft, and published holders of the requested slug \
+       all win, leaving the loser byte-identical" (fun ~url:_ conn ->
+        let* owner = insert_user conn "ncps_owner" in
+        let* project, cid, rid =
+          make_draft conn ~user:owner ~ext_id:954000013L
+            ~project_slug:"ncps-cf" ~slug:"ncps-cf-home"
+        in
+        let* before = snapshot "before" conn ~cid ~project ~rid in
+        let probe label taken =
+          let* holder_id = find conn (label ^ ": holder id") q_community_id
+                             taken in
+          let* holder_before = find conn (label ^ ": holder sig")
+                                 q_community_sig holder_id in
+          let* () =
+            publish_expect label St.Community_slug_unavailable conn
+              ~actor:owner ~current:"ncps-cf-home"
+              (publication ~slug:taken ())
+          in
+          let* holder_after = find conn (label ^ ": holder sig after")
+                                q_community_sig holder_id in
+          Alcotest.(check string) (label ^ ": holder unchanged")
+            holder_before holder_after;
+          let* n = find conn (label ^ ": one owner") q_count_by_slug taken
+          in
+          Alcotest.(check int) (label ^ ": exactly one row keeps the slug")
+            1 n;
+          check_unchanged label conn ~cid ~project ~rid before
+        in
+        (* A legacy community. *)
+        let* _legacy =
+          insert_community ~network:false conn "ncps-taken-legacy"
+        in
+        let* () = probe "legacy holder" "ncps-taken-legacy" in
+        (* Another network draft under its own current slug. *)
+        let* _, _, _ =
+          make_draft conn ~user:owner ~ext_id:954000014L
+            ~project_slug:"ncps-cf2" ~slug:"ncps-cf2-home"
+        in
+        let* () = probe "draft holder" "ncps-cf2-home" in
+        (* A published network community. *)
+        let* _ =
+          publish_ok "publish the second draft" conn ~actor:owner
+            ~current:"ncps-cf2-home" ~expect_slug:"ncps-cf2-hub"
+            ~expect_visibility:Ncpf.Public
+            (publication ~slug:"ncps-cf2-hub" ())
+        in
+        let* () = probe "published holder" "ncps-cf2-hub" in
+        (* The loser is still a live draft: a fresh slug publishes. *)
+        let* _ =
+          publish_ok "recovery" conn ~actor:owner ~current:"ncps-cf-home"
+            ~expect_slug:"ncps-cf-free" ~expect_visibility:Ncpf.Public
+            (publication ~slug:"ncps-cf-free" ())
+        in
+        Lwt.return_unit)
+
+  (* === rollback injection === *)
+
+  let rollback_case =
+    db_case
+      "publish: a failing update or a failing post-update validation rolls \
+       the whole publication back" (fun ~url:_ conn ->
+        let* owner = insert_user conn "ncps_owner" in
+        let* intruder = insert_user conn "ncps_intruder" in
+        let* project, cid, rid =
+          make_draft conn ~user:owner ~ext_id:954000016L
+            ~project_slug:"ncps-rb" ~slug:"ncps-rb-home"
+        in
+        let* before = snapshot "before" conn ~cid ~project ~rid in
+        let exec_ddl label q =
+          let (module C : Caqti_lwt.CONNECTION) = conn in
+          let* r = C.exec q () in
+          let* _ = or_fail label r in
+          Lwt.return_unit
+        in
+        let value = publication ~slug:"ncps-rb-hub" () in
+        (* 1: the community update itself fails. *)
+        let* () = exec_ddl "create fail fn" q_create_fail_fn in
+        let* () =
+          Lwt.finalize
+            (fun () ->
+              let* () = exec_ddl "poison update" q_create_fail_trigger in
+              Lwt.finalize
+                (fun () ->
+                  let* () =
+                    publish_expect "poisoned update" St.Storage_error conn
+                      ~actor:owner ~current:"ncps-rb-home" value
+                  in
+                  let* () =
+                    check_unchanged "poisoned update" conn ~cid ~project
+                      ~rid before
+                  in
+                  let* n = find conn "no hub" q_count_by_slug "ncps-rb-hub"
+                  in
+                  Alcotest.(check int) "poisoned update: no publication" 0 n;
+                  Lwt.return_unit)
+                (fun () -> exec_ddl "unpoison update" q_drop_fail_trigger))
+            (fun () -> exec_ddl "drop fail fn" q_drop_fail_fn)
+        in
+        (* 2: the update succeeds but the complete post-update validation
+           finds a moved aggregate (a membership row inserted behind the
+           store's back) and refuses to commit. *)
+        let* () = exec_ddl "create side fn" (q_create_side_fn
+                                               ~user_id:intruder) in
+        let* () =
+          Lwt.finalize
+            (fun () ->
+              let* () = exec_ddl "install side trigger"
+                          q_create_side_trigger in
+              Lwt.finalize
+                (fun () ->
+                  let* () =
+                    publish_expect "poisoned validation"
+                      St.Inconsistent_data conn ~actor:owner
+                      ~current:"ncps-rb-home" value
+                  in
+                  let* () =
+                    check_unchanged "poisoned validation" conn ~cid ~project
+                      ~rid before
+                  in
+                  let* n = find conn "no hub" q_count_by_slug "ncps-rb-hub"
+                  in
+                  Alcotest.(check int) "poisoned validation: no publication"
+                    0 n;
+                  let* members = find conn "members" Phrq.q_count_members
+                                   cid in
+                  Alcotest.(check int)
+                    "the injected membership rolled back too" 1 members;
+                  Lwt.return_unit)
+                (fun () ->
+                  exec_ddl "drop side trigger" q_drop_side_trigger))
+            (fun () -> exec_ddl "drop side fn" q_drop_side_fn)
+        in
+        (* With every trigger removed the same inputs succeed. *)
+        let* _ =
+          publish_ok "clean run after poison" conn ~actor:owner
+            ~current:"ncps-rb-home" ~expect_slug:"ncps-rb-hub"
+            ~expect_visibility:Ncpf.Public value
+        in
+        Lwt.return_unit)
+
+  (* === concurrency === *)
+
+  let same_draft_race_case =
+    db_case
+      "publish: two submissions of one draft leave exactly one published \
+       identity" (fun ~url conn ->
+        let* owner = insert_user conn "ncps_owner" in
+        let* second = insert_user conn "ncps_second" in
+        let* _, cid, _ =
+          make_draft conn ~user:owner ~ext_id:954000017L
+            ~project_slug:"ncps-race1" ~slug:"ncps-race1-home"
+        in
+        let* () = exec conn "second member" q_insert_member (second, cid) in
+        let* () =
+          exec conn "second top mod" q_insert_moderator
+            (second, cid, "top_mod")
+        in
+        with_second ~url (fun conn2 ->
+            let sub_a =
+              publication ~name:"Ncps Race A" ~slug:"ncps-race1-a"
+                ~visibility:"public" ()
+            in
+            let sub_b =
+              publication ~name:"Ncps Race B" ~slug:"ncps-race1-b"
+                ~visibility:"unlisted" ()
+            in
+            let* ra, rb =
+              Lwt.both
+                (publish conn ~actor:owner ~current:"ncps-race1-home" sub_a)
+                (publish conn2 ~actor:second ~current:"ncps-race1-home"
+                   sub_b)
+            in
+            let winner_state =
+              match (ra, rb) with
+              | Ok w, Error St.Draft_unavailable ->
+                  Alcotest.(check string) "winner slug" "ncps-race1-a"
+                    (St.community_slug w);
+                  "Ncps Race A|<null>|public|published|true|true|true"
+              | Error St.Draft_unavailable, Ok w ->
+                  Alcotest.(check string) "winner slug" "ncps-race1-b"
+                    (St.community_slug w);
+                  "Ncps Race B|<null>|public|published|true|false|false"
+              | Ok _, Ok _ -> Alcotest.fail "race: both succeeded"
+              | Error a, Error b ->
+                  Alcotest.failf "race: both failed (%s, %s)" (error_str a)
+                    (error_str b)
+              | Ok _, Error e | Error e, Ok _ ->
+                  Alcotest.failf "race: unexpected loser error %s"
+                    (error_str e)
+            in
+            let* state = find conn "state" q_community_state cid in
+            Alcotest.(check string) "exactly the winner identity survives"
+              winner_state state;
+            let loser_slug =
+              match ra with
+              | Ok _ -> "ncps-race1-b"
+              | Error _ -> "ncps-race1-a"
+            in
+            let* n = find conn "loser slug" q_count_by_slug loser_slug in
+            Alcotest.(check int) "no partial second identity" 0 n;
+            let* old_n = find conn "old slug" q_count_by_slug
+                           "ncps-race1-home" in
+            Alcotest.(check int) "the draft slug is gone" 0 old_n;
+            Lwt.return_unit))
+
+  let same_slug_race_case =
+    db_case
+      "publish: two drafts racing for one final slug leave one clean \
+       winner" (fun ~url conn ->
+        let* owner_a = insert_user conn "ncps_owner" in
+        let* owner_b = insert_user conn "ncps_second" in
+        let* project_a, cid_a, rid_a =
+          make_draft conn ~user:owner_a ~ext_id:954000018L
+            ~project_slug:"ncps-race2a" ~slug:"ncps-race2a-home"
+        in
+        let* project_b, cid_b, rid_b =
+          make_draft conn ~user:owner_b ~ext_id:954000019L
+            ~project_slug:"ncps-race2b" ~slug:"ncps-race2b-home"
+        in
+        let* before_a = snapshot "a before" conn ~cid:cid_a
+                          ~project:project_a ~rid:rid_a in
+        let* before_b = snapshot "b before" conn ~cid:cid_b
+                          ~project:project_b ~rid:rid_b in
+        with_second ~url (fun conn2 ->
+            let value = publication ~slug:"ncps-shared-final" () in
+            let* ra, rb =
+              Lwt.both
+                (publish conn ~actor:owner_a ~current:"ncps-race2a-home"
+                   value)
+                (publish conn2 ~actor:owner_b ~current:"ncps-race2b-home"
+                   value)
+            in
+            let* () =
+              match (ra, rb) with
+              | Ok w, Error St.Community_slug_unavailable ->
+                  Alcotest.(check string) "winner slug" "ncps-shared-final"
+                    (St.community_slug w);
+                  (* The loser remains byte-identical under its original
+                     slug as a private draft. *)
+                  check_unchanged "loser b" conn ~cid:cid_b
+                    ~project:project_b ~rid:rid_b before_b
+              | Error St.Community_slug_unavailable, Ok w ->
+                  Alcotest.(check string) "winner slug" "ncps-shared-final"
+                    (St.community_slug w);
+                  check_unchanged "loser a" conn ~cid:cid_a
+                    ~project:project_a ~rid:rid_a before_a
+              | Ok _, Ok _ -> Alcotest.fail "race: both succeeded"
+              | Error a, Error b ->
+                  Alcotest.failf "race: both failed (%s, %s)" (error_str a)
+                    (error_str b)
+              | Ok _, Error e | Error e, Ok _ ->
+                  Alcotest.failf "race: unexpected loser error %s"
+                    (error_str e)
+            in
+            let* n = find conn "one owner" q_count_by_slug
+                       "ncps-shared-final" in
+            Alcotest.(check int) "exactly one community owns the slug" 1 n;
+            Lwt.return_unit))
+
+  (* A publication blocked on the held relation row shows up as a backend
+     some other backend is blocking; polling for it on the idle second
+     connection is deterministic coordination, not a sleep. (A single
+     row-lock waiter parks on the holder's transactionid, so pg_locks
+     shows no not-granted entry on the table itself — pg_blocking_pids is
+     the reliable signal.) *)
+  let q_relation_lock_waiters =
+    (Caqti_type.unit ->! Caqti_type.int)
+    "SELECT COUNT(*) FROM pg_stat_activity \
+     WHERE datname = current_database() \
+       AND cardinality(pg_blocking_pids(pid)) > 0"
+
+  let q_lock_relation_row =
+    (Caqti_type.int64 ->! Caqti_type.int64)
+    "SELECT id FROM community_projects WHERE id = $1 FOR UPDATE"
+
+  let versus_removal_case =
+    db_case
+      "publish: removal serializes on the shared project-first order in \
+       both directions" (fun ~url conn ->
+        let* owner = insert_user conn "ncps_owner" in
+        (* Removal commits first, deterministically: the second connection
+           locks the accepted relation row before the publication is
+           launched, waits until the publication is provably blocked on
+           that row (it has already passed candidate resolution and locked
+           project, community, and authorization), then completes the
+           removal-shaped mutation and commits — so the publication always
+           re-reads the relation after the removal committed. *)
+        let* _, _, rid =
+          make_draft conn ~user:owner ~ext_id:954000020L
+            ~project_slug:"ncps-race3" ~slug:"ncps-race3-home"
+        in
+        let* () =
+          with_second ~url (fun conn2 ->
+              let (module C2 : Caqti_lwt.CONNECTION) = conn2 in
+              let* r = C2.start () in
+              let* () = Phrv.or_fail "second begin" r in
+              let* _ = find conn2 "hold relation" q_lock_relation_row rid in
+              let publish_promise =
+                publish conn ~actor:owner ~current:"ncps-race3-home"
+                  (publication ~slug:"ncps-race3-hub" ())
+              in
+              let rec await_blocked () =
+                let* waiters =
+                  find conn2 "lock waiters" q_relation_lock_waiters ()
+                in
+                if waiters > 0 then Lwt.return_unit
+                else
+                  let* () = Lwt.pause () in
+                  await_blocked ()
+              in
+              let* () = await_blocked () in
+              let* () = exec conn2 "removal first" q_mark_removed rid in
+              let* r = C2.commit () in
+              let* () = Phrv.or_fail "second commit" r in
+              let* r = publish_promise in
+              match r with
+              | Error St.Draft_unavailable -> Lwt.return_unit
+              | Ok _ -> Alcotest.fail "published after removal"
+              | Error e ->
+                  Alcotest.failf "unexpected error %s" (error_str e))
+        in
+        let* n = find conn "no hub" q_count_by_slug "ncps-race3-hub" in
+        Alcotest.(check int) "removal winner leaves no publication" 0 n;
+        (* Publication commits first: the real removal store may then
+           remove the accepted relation while the published community and
+           its content remain. *)
+        let* project2, cid2, _ =
+          make_draft conn ~user:owner ~ext_id:954000021L
+            ~project_slug:"ncps-race4" ~slug:"ncps-race4-home"
+        in
+        let* _ =
+          publish_ok "publication first" conn ~actor:owner
+            ~current:"ncps-race4-home" ~expect_slug:"ncps-race4-home"
+            ~expect_visibility:Ncpf.Public
+            (publication ~slug:"ncps-race4-home" ())
+        in
+        let* r =
+          Rms.remove conn ~actor_user_id:owner ~project_slug:"ncps-race4"
+            ~community_slug:"ncps-race4-home"
+        in
+        let* () =
+          match r with
+          | Ok _ -> Lwt.return_unit
+          | Error _ -> Alcotest.fail "removal after publication failed"
+        in
+        let* state = find conn "state" q_community_state cid2 in
+        Alcotest.(check string) "published community remains"
+          "Ncps Community Home|<null>|public|published|true|true|true"
+          state;
+        let* active = find conn "active" Phrq.q_count_active_for_project
+                        project2 in
+        Alcotest.(check int) "the relation is removed" 0 active;
+        Lwt.return_unit)
+
+  let authority_revocation_race_case =
+    db_case
+      "publish: top-mod removal, downgrade, and admin revocation that \
+       commit first win the lock race" (fun ~url conn ->
+        let* owner = insert_user conn "ncps_owner" in
+        let* admin = insert_user conn "ncps_admin" in
+        let* () = exec conn "admin flag" q_set_admin (admin, true) in
+        let* _, cid, _ =
+          make_draft conn ~user:owner ~ext_id:954000022L
+            ~project_slug:"ncps-race5" ~slug:"ncps-race5-home"
+        in
+        let race label ~mutate ~actor =
+          with_second ~url (fun conn2 ->
+              let* r =
+                Phrv.serialized_mutation_first conn2
+                  ~mutate:(fun () -> mutate conn2)
+                  ~launch:(fun () ->
+                    publish conn ~actor ~current:"ncps-race5-home"
+                      (publication ~slug:"ncps-race5-hub" ()))
+              in
+              match r with
+              | Error St.Draft_unavailable -> Lwt.return_unit
+              | Ok _ -> Alcotest.failf "%s: published anyway" label
+              | Error e ->
+                  Alcotest.failf "%s: unexpected error %s" label
+                    (error_str e))
+        in
+        (* Top-mod removal. *)
+        let* () =
+          race "top-mod removal"
+            ~mutate:(fun conn2 ->
+              exec conn2 "revoke role" q_remove_moderator (owner, cid))
+            ~actor:owner
+        in
+        let* () =
+          exec conn "restore role" q_insert_moderator (owner, cid, "top_mod")
+        in
+        (* Top-mod downgrade. *)
+        let* () =
+          race "top-mod downgrade"
+            ~mutate:(fun conn2 ->
+              exec conn2 "downgrade" q_set_moderator_role (owner, cid, "mod"))
+            ~actor:owner
+        in
+        let* () =
+          exec conn "restore role" q_set_moderator_role
+            (owner, cid, "top_mod")
+        in
+        (* Durable-admin revocation, for an admin-only publisher. *)
+        let* () =
+          race "admin revocation"
+            ~mutate:(fun conn2 ->
+              exec conn2 "revoke admin" q_set_admin (admin, false))
+            ~actor:admin
+        in
+        let* n = find conn "no hub" q_count_by_slug "ncps-race5-hub" in
+        Alcotest.(check int) "no revoked publication survives" 0 n;
+        (* A verification change that commits first does not block: all
+           three known states publish. *)
+        let* () =
+          with_second ~url (fun conn2 ->
+              let* project_id =
+                find conn "project id"
+                  ((Caqti_type.string ->! Caqti_type.int64)
+                     "SELECT id FROM open_source_projects WHERE slug = $1")
+                  "ncps-race5"
+              in
+              let* r =
+                Phrv.serialized_mutation_first conn2
+                  ~mutate:(fun () ->
+                    exec conn2 "stale first" q_set_verification
+                      (project_id, "stale"))
+                  ~launch:(fun () ->
+                    publish conn ~actor:owner ~current:"ncps-race5-home"
+                      (publication ~slug:"ncps-race5-hub" ()))
+              in
+              match r with
+              | Ok published ->
+                  Alcotest.(check string) "published despite staleness"
+                    "ncps-race5-hub" (St.community_slug published);
+                  Lwt.return_unit
+              | Error e ->
+                  Alcotest.failf "verification race: %s" (error_str e))
+        in
+        Lwt.return_unit)
+
+  let versus_provisioning_race_case =
+    db_case
+      "publish: a provisioning insert racing for the same final slug \
+       leaves exactly one owner" (fun ~url conn ->
+        let* owner_a = insert_user conn "ncps_owner" in
+        let* owner_b = insert_user conn "ncps_second" in
+        let* project_a, cid_a, rid_a =
+          make_draft conn ~user:owner_a ~ext_id:954000023L
+            ~project_slug:"ncps-race6" ~slug:"ncps-race6-home"
+        in
+        let* _inst, project_b =
+          make_project conn ~user:owner_b ~ext_id:954000024L
+            ~slug:"ncps-race7"
+        in
+        let* before_a = snapshot "a before" conn ~cid:cid_a
+                          ~project:project_a ~rid:rid_a in
+        with_second ~url (fun conn2 ->
+            let contested = "ncps-contested" in
+            let* pub_r, prov_r =
+              Lwt.both
+                (publish conn ~actor:owner_a ~current:"ncps-race6-home"
+                   (publication ~slug:contested ()))
+                (Pv.provision conn2 ~actor_user_id:owner_b
+                   ~project_slug:"ncps-race7"
+                   ~identity:
+                     (phvf_ok "provision identity"
+                        (phvf_fields ~name:"Ncps Contested"
+                           ~slug:contested ~description:"" ())))
+            in
+            let* () =
+              match (pub_r, prov_r) with
+              | Ok w, Error Pv.Community_slug_unavailable ->
+                  Alcotest.(check string) "publication owns the slug"
+                    contested (St.community_slug w);
+                  (* The provisioning loser left no community and no
+                     relation. *)
+                  let* relations =
+                    find conn "loser relations" Phrq.q_count_for_project
+                      project_b
+                  in
+                  Alcotest.(check int) "no loser relation" 0 relations;
+                  Lwt.return_unit
+              | Error St.Community_slug_unavailable, Ok home ->
+                  Alcotest.(check string) "provisioning owns the slug"
+                    contested (Pv.community_slug home);
+                  (* The publication loser remains byte-identical under
+                     its original slug as a private draft. *)
+                  check_unchanged "loser draft" conn ~cid:cid_a
+                    ~project:project_a ~rid:rid_a before_a
+              | Ok _, Ok _ -> Alcotest.fail "race: both owned the slug"
+              | Error a, Error _ ->
+                  Alcotest.failf "race: both failed (publication %s)"
+                    (error_str a)
+              | Ok _, Error _ ->
+                  Alcotest.fail "race: unexpected provisioning error"
+              | Error e, _ ->
+                  Alcotest.failf "race: unexpected publication error %s"
+                    (error_str e)
+            in
+            let* n = find conn "one owner" q_count_by_slug contested in
+            Alcotest.(check int) "exactly one community owns the slug" 1 n;
+            Lwt.return_unit))
+
+  (* === privacy sweep === *)
+
+  let privacy_case =
+    db_case
+      "publish: no credential-shaped or external-identifier fixture \
+       reaches the published surface" (fun ~url conn ->
+        let* owner = insert_user conn "ncps_priv" in
+        let* project, cid, _rid =
+          make_draft conn ~user:owner ~ext_id:954000015L
+            ~project_slug:"ncps-priv" ~slug:"ncps-priv-home"
+        in
+        let name = "Ncps Private Hub" in
+        let* published =
+          publish_ok "publish" conn ~actor:owner ~current:"ncps-priv-home"
+            ~expect_slug:"ncps-priv-hub" ~expect_visibility:Ncpf.Public
+            (publication ~name ~slug:"ncps-priv-hub" ())
+        in
+        (* The abstract result exposes exactly the final slug and the
+           selected mode — asserted through its only two accessors. *)
+        Alcotest.(check string) "result slug only" "ncps-priv-hub"
+          (St.community_slug published);
+        Alcotest.(check string) "result visibility only" "public"
+          (ncpf_vis (St.publication_visibility published));
+        let* community = find conn "community sig" q_community_sig cid in
+        let* sections = collect conn "sections" Phvs.q_section_sigs cid in
+        let* channels = collect conn "channels" Phvs.q_channel_sigs cid in
+        let* relation_ids = collect conn "relations" Phvs.q_relation_ids
+                              project in
+        let* relation_blob =
+          match relation_ids with
+          | [ rid ] -> find conn "blob" Phrq.q_relation_text_blob rid
+          | _ -> Alcotest.fail "expected one relation"
+        in
+        let* _, page = Ccph.visit ~url ~slug:"ncps-priv-hub" () in
+        let durable_blob =
+          String.concat "|"
+            ((community :: relation_blob :: sections) @ channels)
+        in
+        let page_blob = durable_blob ^ "|" ^ page in
+        (* The intentionally public identity is present; nothing from the
+           owner's GitHub records, account, or the store's internals is.
+           The project namespace login is deliberately public identity on
+           the published page (the connected-projects section renders it by
+           design), so its absence is asserted on the durable community
+           surface only. *)
+        Alcotest.(check bool) "published name present" true
+          (contains ~needle:name page_blob);
+        List.iter
+          (fun (what, marker) ->
+            Alcotest.(check bool)
+              ("published surface carries no " ^ what)
+              false
+              (contains ~needle:marker page_blob))
+          [ ("external installation id", "954000015");
+            ("external account id", "954100015");
+            ("external repository id", "954400015");
+            ("account email", "@test.invalid")
+          ];
+        Alcotest.(check bool)
+          "the community rows carry no installation login" false
+          (contains ~needle:"pfin-owner" durable_blob);
+        Lwt.return_unit)
+
+  let suite =
+    [ pure_inputs_case; public_case; unlisted_case; same_slug_case;
+      authority_case; unauthorized_case; verification_case;
+      shell_corruption_case; lifecycle_corruption_case; slug_conflict_case;
+      rollback_case; same_draft_race_case; same_slug_race_case;
+      versus_removal_case; authority_revocation_race_case;
+      versus_provisioning_race_case; privacy_case ]
 end
 
 let () =
@@ -47345,6 +49291,12 @@ let () =
          description boundaries, legacy exemption, validated presence, and
          the transactional down/up round-trip. Database-gated. *)
     ; ("network_community_identity_schema", Ncid_schema.suite)
+      (* Scoped network-community lifecycle constraint (migration
+         20260726130000): the exact draft and two published tuples accepted,
+         every other network combination rejected, legacy exemption,
+         validated presence, and the transactional down/up round-trip.
+         Database-gated. *)
+    ; ("network_community_lifecycle_schema", Nclc_schema.suite)
       (* Dedicated-home provisioning store: pure validation before SQL,
          the complete atomic private draft (community, membership,
          top_mod, shell, accepted relation), authorization collapse, slug
@@ -47408,4 +49360,12 @@ let () =
          authorization detail, and legacy communities behave exactly as
          before. Database-gated. *)
     ; ("network_community_legacy_mutation_guards", Ncpg.suite)
+      (* Atomic network-community publication store: pure validation before
+         SQL, candidate resolution and the shared project-first lock order,
+         durable top_mod/admin authority and its collapse, complete-draft
+         and provisioned-relation validation, the guarded identity+lifecycle
+         update with savepoint-fenced slug-conflict classification, complete
+         post-update validation, rollback injection, deterministic
+         concurrency, and the privacy sweep. Database-gated. *)
+    ; ("network_community_publication_store", Ncps.suite)
     ]
