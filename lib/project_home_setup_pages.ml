@@ -149,19 +149,23 @@ let valid_project_slug value =
   in
   length >= 1 && length <= 80 && is_alnum value.[length - 1] && check 0
 
-(* The continuation: connecting to an existing community is a real
-   navigable step now, while dedicated-home creation remains future copy —
-   no form, button, or disabled control pretends otherwise. The link is
-   built only over a canonical slug, so corrupt data never becomes
-   actionable. *)
+(* The continuation: two real, visibly distinct navigation steps — connect
+   to an existing community, or start a dedicated one. Both are plain links,
+   never forms: each destination authorizes independently and refuses a
+   project that already has an active home relation. Both are built only
+   over a canonical slug, so corrupt data never becomes actionable. *)
 let next_step_html project =
-  let connect_link =
+  let links =
     if valid_project_slug project.slug then
       Printf.sprintf
         "<p class='phs-next-connect'><a href='%s' class='create-link \
-         phs-next-request-link'>Connect to an existing community</a></p>"
+         phs-next-request-link'>Connect to an existing community</a></p>\
+         <p class='phs-next-create'><a href='%s' class='create-link \
+         phs-next-create-link'>Create a community home</a></p>"
         (Components.safe_internal_path
            ("/projects/" ^ project.slug ^ "/request-home"))
+        (Components.safe_internal_path
+           ("/projects/" ^ project.slug ^ "/community-home/new"))
     else ""
   in
   Printf.sprintf
@@ -169,10 +173,8 @@ let next_step_html project =
      <h2 class='phs-next-title'>Choose a community home</h2>\
      <p class='create-sub phs-next-copy'>Connect this project to an \
      existing Earde community, or create a community home for it.</p>\
-     %s<p class='phs-next-note'>Create a community home: this option is \
-     not available yet.</p>\
-     </section>"
-    connect_link
+     %s</section>"
+    links
 
 let project_home_setup_page ?user ?request ~project () =
   let body =

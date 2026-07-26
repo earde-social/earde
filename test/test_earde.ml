@@ -20419,33 +20419,50 @@ module Pch = struct
             (ps_count frag "phs-repo-primary");
           Alcotest.(check int) "one archived" 1
             (ps_count frag "phs-repo-archived"))
-    ; case "continuation: request-home link plus non-actionable create copy"
-        (fun () ->
+    ; case "continuation: two distinct navigation links, no form" (fun () ->
           let frag = php_frag (php_project ()) in
           ps_must frag "Choose a community home";
-          (* The one real navigation step: an exact structural link to the
-             permanent request-home route — and nothing else actionable. *)
+          (* Both real navigation steps: exact structural links to the two
+             permanent routes — and nothing else actionable. *)
           ps_must frag
             "<a href='/projects/fixture-project/request-home' \
              class='create-link phs-next-request-link'>Connect to an \
              existing community</a>";
-          ps_must frag "Create a community home";
-          ps_must frag "not available yet";
+          ps_must frag
+            "<a href='/projects/fixture-project/community-home/new' \
+             class='create-link phs-next-create-link'>Create a community \
+             home</a>";
+          (* Visibly distinct: two anchors, two destinations, one each. *)
+          Alcotest.(check int) "two next-step links" 2 (ps_count frag "<a href='/projects/");
+          Alcotest.(check int) "one connect link" 1
+            (ps_count frag "phs-next-request-link");
+          Alcotest.(check int) "one create link" 1
+            (ps_count frag "phs-next-create-link");
+          (* The former placeholder copy is gone — the option is real now. *)
+          ps_must_not frag "not available yet";
           ps_must_not frag "<form";
           ps_must_not frag "<button";
           ps_must_not frag "<input";
           ps_must_not frag "disabled";
           ps_must_not frag "<script")
-    ; case "continuation: invalid project slug renders no request-home link"
+    ; case "continuation: invalid project slug renders neither navigation link"
         (fun () ->
           let frag = php_frag (php_project ~slug:"Bad Slug!" ()) in
           ps_must frag "Choose a community home";
           ps_must_not frag "request-home";
           ps_must_not frag "phs-next-request-link";
+          ps_must_not frag "community-home/new";
+          ps_must_not frag "phs-next-create-link";
+          ps_must_not frag "href='/projects/";
           (* The corrupt slug still renders only as escaped text. *)
           ps_must frag "Bad Slug!";
           ps_must_not frag "<form";
           ps_must_not frag "<button")
+    ; case "continuation: no project id ever reaches the navigation section"
+        (fun () ->
+          let frag = php_frag (php_project ()) in
+          List.iter (ps_must_not frag)
+            [ "project_id"; "id='"; "value='" ])
     ]
 
   let php_safety_cases =
@@ -34349,6 +34366,1498 @@ module Phrh = struct
       concurrency_case; drift_case; store_failure_case; privacy_case ]
 end
 
+
+(* === Initial community-identity form (Project_home_provisioning_form) ===
+   The strict parser behind the future POST /projects/:slug/community-home:
+   exact field grammar, the canonicalization the future provisioning store
+   inherits, and the payload-free error contract. Pure — no DB, no request,
+   no session. *)
+module Phvf = Earde.Project_home_provisioning_form
+
+let phvf_err : Phvf.error -> string = function
+  | Phvf.Invalid_form -> "Invalid_form"
+  | Phvf.Invalid_community_name -> "Invalid_community_name"
+  | Phvf.Invalid_community_slug -> "Invalid_community_slug"
+  | Phvf.Invalid_community_description -> "Invalid_community_description"
+
+let phvf_case = go_case
+
+let phvf_fields ?(name = "Phvf Community") ?(slug = "phvf-community")
+    ?(description = "") () =
+  [ ("community_name", name);
+    ("community_slug", slug);
+    ("community_description", description)
+  ]
+
+let phvf_ok label fields =
+  match Phvf.of_fields fields with
+  | Ok parsed -> parsed
+  | Error e -> Alcotest.failf "%s: rejected with %s" label (phvf_err e)
+
+let phvf_expect label expected fields =
+  match Phvf.of_fields fields with
+  | Ok _ -> Alcotest.failf "%s: expected %s, got Ok" label (phvf_err expected)
+  | Error e -> Alcotest.(check string) label (phvf_err expected) (phvf_err e)
+
+(* A two-byte scalar, so length rules are proven to count scalars (as
+   PostgreSQL char_length does) rather than bytes. *)
+let phvf_scalar = "\xc3\xa8"
+
+let phvf_repeat s n = String.concat "" (List.init n (fun _ -> s))
+
+let phvf_grammar_cases =
+  [ phvf_case "form: a valid submission keeps every canonical value exactly"
+      (fun () ->
+        let parsed =
+          phvf_ok "valid"
+            (phvf_fields ~name:"Phvf Community" ~slug:"phvf-community"
+               ~description:"A durable description." ())
+        in
+        Alcotest.(check string) "name" "Phvf Community"
+          (Phvf.community_name parsed);
+        Alcotest.(check string) "slug" "phvf-community"
+          (Phvf.community_slug parsed);
+        Alcotest.(check (option string)) "description"
+          (Some "A durable description.")
+          (Phvf.community_description parsed))
+  ; phvf_case "form: field order is irrelevant" (fun () ->
+        let parsed =
+          phvf_ok "reordered"
+            [ ("community_description", "Body");
+              ("community_slug", "phvf-order");
+              ("community_name", "Phvf Order")
+            ]
+        in
+        Alcotest.(check string) "name" "Phvf Order" (Phvf.community_name parsed);
+        Alcotest.(check string) "slug" "phvf-order" (Phvf.community_slug parsed);
+        Alcotest.(check (option string)) "description" (Some "Body")
+          (Phvf.community_description parsed))
+  ; phvf_case "form: every missing field is the same structural rejection"
+      (fun () ->
+        List.iter
+          (fun drop ->
+            let fields =
+              List.filter (fun (k, _) -> k <> drop) (phvf_fields ())
+            in
+            phvf_expect ("missing " ^ drop) Phvf.Invalid_form fields)
+          [ "community_name"; "community_slug"; "community_description" ];
+        phvf_expect "empty submission" Phvf.Invalid_form [])
+  ; phvf_case "form: every duplicated field is the same structural rejection"
+      (fun () ->
+        List.iter
+          (fun (k, v) ->
+            phvf_expect ("duplicate " ^ k) Phvf.Invalid_form
+              (phvf_fields () @ [ (k, v) ]))
+          [ ("community_name", "Phvf Community");
+            ("community_slug", "phvf-community");
+            ("community_description", "")
+          ])
+  ; phvf_case "form: unknown, case-variant, and padded field names reject"
+      (fun () ->
+        List.iter
+          (fun name ->
+            phvf_expect ("unknown " ^ name) Phvf.Invalid_form
+              (phvf_fields () @ [ (name, "x") ]))
+          [ "Community_name"; "COMMUNITY_SLUG"; " community_name";
+            "community_name "; "community_name\t"; "communityname";
+            "community_visibility"; "project_slug"; "project_id"; "user_id";
+            "return_url"; "publish"; ""
+          ];
+        (* A recognized field spelled differently is not a substitute. *)
+        phvf_expect "case-variant replacement" Phvf.Invalid_form
+          [ ("Community_name", "Phvf"); ("community_slug", "phvf-x");
+            ("community_description", "")
+          ])
+  ; phvf_case "form: a dream.csrf field reaching the parser is a wiring bug, \
+               not an accepted field" (fun () ->
+        phvf_expect "csrf present" Phvf.Invalid_form
+          (("dream.csrf", "token") :: phvf_fields ());
+        phvf_expect "csrf last" Phvf.Invalid_form
+          (phvf_fields () @ [ ("dream.csrf", "token") ]))
+  ; phvf_case "form: a structural failure never becomes a semantic one"
+      (fun () ->
+        (* Malformed name and slug plus an unknown field: the answer names
+           no field at all. *)
+        phvf_expect "structure wins" Phvf.Invalid_form
+          [ ("community_name", "   "); ("community_slug", "NOPE");
+            ("community_description", ""); ("extra", "x")
+          ])
+  ]
+
+let phvf_name_cases =
+  [ phvf_case "form name: outer ASCII whitespace is trimmed, inner bytes are \
+               untouched" (fun () ->
+        let parsed =
+          phvf_ok "trimmed"
+            (phvf_fields ~name:"  Progetto Phvf \t\n" ())
+        in
+        Alcotest.(check string) "canonical name" "Progetto Phvf"
+          (Phvf.community_name parsed);
+        (* No lowercasing, no Unicode rewriting. *)
+        let accented =
+          phvf_ok "accented" (phvf_fields ~name:("Perch" ^ phvf_scalar) ())
+        in
+        Alcotest.(check string) "bytes preserved" ("Perch" ^ phvf_scalar)
+          (Phvf.community_name accented))
+  ; phvf_case "form name: blank names reject" (fun () ->
+        List.iter
+          (fun name ->
+            phvf_expect ("blank " ^ String.escaped name)
+              Phvf.Invalid_community_name (phvf_fields ~name ()))
+          [ ""; " "; "\t"; "\n"; "\r"; "\x0c"; "\x0b"; "   \t\n  " ])
+  ; phvf_case "form name: the maximum is counted in scalars, not bytes, and \
+               nothing is truncated" (fun () ->
+        let at_max = phvf_repeat phvf_scalar 120 in
+        let parsed = phvf_ok "120 scalars" (phvf_fields ~name:at_max ()) in
+        Alcotest.(check string) "kept whole" at_max
+          (Phvf.community_name parsed);
+        Alcotest.(check int) "240 bytes accepted" 240
+          (String.length (Phvf.community_name parsed));
+        phvf_expect "121 scalars" Phvf.Invalid_community_name
+          (phvf_fields ~name:(phvf_repeat phvf_scalar 121) ());
+        phvf_expect "121 ASCII" Phvf.Invalid_community_name
+          (phvf_fields ~name:(String.make 121 'a') ());
+        let ascii_max = phvf_ok "120 ASCII" (phvf_fields ~name:(String.make 120 'a') ()) in
+        Alcotest.(check int) "120 ASCII kept" 120
+          (String.length (Phvf.community_name ascii_max)))
+  ; phvf_case "form name: invalid UTF-8, NUL, controls, and DEL reject"
+      (fun () ->
+        List.iter
+          (fun name ->
+            phvf_expect ("hostile " ^ String.escaped name)
+              Phvf.Invalid_community_name (phvf_fields ~name ()))
+          [ "Phvf\xff"; "\xc3"; "\xed\xa0\x80"; "Phvf\x00Community";
+            "Phvf\x01"; "Phvf\x1f"; "Phvf\x7f"; "Phvf\tCommunity";
+            "Phvf\nCommunity"; "Phvf\rCommunity"
+          ])
+  ]
+
+let phvf_slug_cases =
+  [ phvf_case "form slug: the canonical grammar is accepted exactly as \
+               submitted" (fun () ->
+        List.iter
+          (fun slug ->
+            let parsed = phvf_ok ("valid " ^ slug) (phvf_fields ~slug ()) in
+            Alcotest.(check string) ("byte-identical " ^ slug) slug
+              (Phvf.community_slug parsed))
+          [ "a"; "z9"; "phvf"; "phvf-community"; "a-b-c-d"; "0"; "0-1";
+            String.make 80 'a'; "new"
+          ])
+  ; phvf_case "form slug: nothing is trimmed, lowercased, or repaired"
+      (fun () ->
+        List.iter
+          (fun slug ->
+            phvf_expect ("noncanonical " ^ String.escaped slug)
+              Phvf.Invalid_community_slug (phvf_fields ~slug ()))
+          [ " phvf"; "phvf "; " phvf "; "\tphvf"; "phvf\n"; "PHVF";
+            "Phvf-Community"; "phvF"
+          ])
+  ; phvf_case "form slug: structural violations reject" (fun () ->
+        List.iter
+          (fun slug ->
+            phvf_expect ("malformed " ^ String.escaped slug)
+              Phvf.Invalid_community_slug (phvf_fields ~slug ()))
+          [ ""; "-"; "-phvf"; "phvf-"; "phvf--community"; "phvf_community";
+            "phvf.community"; "phvf/community"; "phvf community"; "phvf%20x";
+            "phvf\x00"; "phvf\x7f"; "phvf" ^ phvf_scalar; "../phvf";
+            "phvf?x=1"; "phvf#a"
+          ])
+  ; phvf_case "form slug: the length boundary is exact" (fun () ->
+        let at_max = String.make 80 'a' in
+        Alcotest.(check string) "80 accepted" at_max
+          (Phvf.community_slug (phvf_ok "80" (phvf_fields ~slug:at_max ())));
+        phvf_expect "81" Phvf.Invalid_community_slug
+          (phvf_fields ~slug:(String.make 81 'a') ()))
+  ]
+
+let phvf_description_cases =
+  [ phvf_case "form description: blank input canonicalizes to no description"
+      (fun () ->
+        List.iter
+          (fun description ->
+            let parsed =
+              phvf_ok ("blank " ^ String.escaped description)
+                (phvf_fields ~description ())
+            in
+            Alcotest.(check (option string))
+              ("None for " ^ String.escaped description)
+              None
+              (Phvf.community_description parsed))
+          [ ""; " "; "\t"; "\n"; "\r\n"; "   \t \n  " ])
+  ; phvf_case "form description: multiline text survives with LF endings"
+      (fun () ->
+        let parsed =
+          phvf_ok "multiline"
+            (phvf_fields ~description:"  First line\r\nSecond\rThird\tcol  " ())
+        in
+        Alcotest.(check (option string)) "normalized and trimmed"
+          (Some "First line\nSecond\nThird\tcol")
+          (Phvf.community_description parsed))
+  ; phvf_case "form description: the maximum is counted in scalars and nothing \
+               is truncated" (fun () ->
+        let at_max = phvf_repeat phvf_scalar 2000 in
+        let parsed = phvf_ok "2000 scalars" (phvf_fields ~description:at_max ()) in
+        Alcotest.(check (option string)) "kept whole" (Some at_max)
+          (Phvf.community_description parsed);
+        phvf_expect "2001 scalars" Phvf.Invalid_community_description
+          (phvf_fields ~description:(phvf_repeat phvf_scalar 2001) ());
+        phvf_expect "2001 ASCII" Phvf.Invalid_community_description
+          (phvf_fields ~description:(String.make 2001 'a') ()))
+  ; phvf_case "form description: invalid UTF-8, NUL, and forbidden controls \
+               reject" (fun () ->
+        List.iter
+          (fun description ->
+            phvf_expect ("hostile " ^ String.escaped description)
+              Phvf.Invalid_community_description (phvf_fields ~description ()))
+          [ "Body\xff"; "\xc3"; "Body\x00"; "Body\x01"; "Body\x1f";
+            "Body\x7f"; "Bo\x0bdy"; "Bo\x0cdy"; "Bo\rdy\x00"
+          ];
+        (* A trailing VT or FF is outer whitespace: it is trimmed away, so
+           the surviving text is ordinary and accepted. *)
+        List.iter
+          (fun description ->
+            Alcotest.(check (option string))
+              ("trimmed " ^ String.escaped description)
+              (Some "Body")
+              (Phvf.community_description
+                 (phvf_ok "trimmed control" (phvf_fields ~description ()))))
+          [ "Body\x0b"; "Body\x0c"; "\x0bBody\x0c" ])
+  ; phvf_case "form description: no Markdown or HTML processing happens here"
+      (fun () ->
+        let raw = "**bold** <script>alert(1)</script> [x](y)" in
+        let parsed = phvf_ok "raw" (phvf_fields ~description:raw ()) in
+        Alcotest.(check (option string)) "byte-identical" (Some raw)
+          (Phvf.community_description parsed))
+  ; phvf_case "form: validation order is name, then slug, then description"
+      (fun () ->
+        phvf_expect "name first" Phvf.Invalid_community_name
+          (phvf_fields ~name:"" ~slug:"NOPE" ~description:"Body\x00" ());
+        phvf_expect "slug second" Phvf.Invalid_community_slug
+          (phvf_fields ~name:"Phvf" ~slug:"NOPE" ~description:"Body\x00" ());
+        phvf_expect "description last" Phvf.Invalid_community_description
+          (phvf_fields ~name:"Phvf" ~slug:"phvf-x" ~description:"Body\x00" ()))
+  ]
+
+let phvf_suite =
+  phvf_grammar_cases @ phvf_name_cases @ phvf_slug_cases
+  @ phvf_description_cases
+
+(* === Dedicated-home creation page (Project_home_provisioning_pages) ===
+   Pure rendering: the exact form contract, the setup-draft and publication
+   copy, defensive degradation, escaping, and the absence of officiality
+   language, hidden identifiers, and script. DB-free. *)
+module Phvp = Earde.Project_home_provisioning_pages
+
+let phvp_case = go_case
+
+let phvp_project ?(name = "Phvp Project") ?(slug = "phvp-project") ?description
+    ?(kind = Pi.Project) ?(login = "phvp-owner") () : Phvp.project =
+  { Phvp.name; slug; description; kind; namespace_login = login }
+
+let phvp_values ?(name = "") ?(slug = "") ?(description = "") () :
+    Phvp.form_values =
+  { Phvp.community_name = name;
+    community_slug = slug;
+    community_description = description
+  }
+
+(* Assertions run over the feature fragment, not the whole page: the shared
+   shell owns its own forms and chrome, and this suite is about what the
+   provisioning surface itself renders. *)
+let phvp_render ?request ?(project = phvp_project ())
+    ?(values = phvp_values ()) ?feedback () =
+  ps_fragment
+    (Phvp.project_home_provisioning_page ?request ~project ~values ~feedback ())
+
+(* A live request under a secret + sessions pipeline, so the framework CSRF
+   field can be emitted; no SQL is touched. *)
+let phvp_live ?project ?values ?feedback () =
+  let captured = ref None in
+  let pipeline =
+    Dream.set_secret gck_secret @@ Dream.memory_sessions
+    @@ fun req ->
+    captured := Some (phvp_render ~request:req ?project ?values ?feedback ());
+    Dream.html ""
+  in
+  ignore (Lwt_main.run (pipeline (Dream.request ~method_:`GET ~target:"/" "")));
+  match !captured with
+  | Some html -> html
+  | None -> Alcotest.fail "provisioning renderer did not run"
+
+let phvp_action = "action='/projects/phvp-project/community-home'"
+
+let phvp_copy_cases =
+  [ phvp_case "provisioning page: heading, setup-draft copy, and factual \
+               verification wording" (fun () ->
+        let html = phvp_render () in
+        ps_must html "Create a community home";
+        ps_must html
+          "Create a private setup draft for this project, then configure and \
+           publish it as Public or Unlisted.";
+        ps_must html "Project connected through GitHub";
+        ps_must html "private setup draft";
+        ps_must html "It is not public yet.";
+        ps_must html "Only authorized setup users can reach it before \
+                      publication.";
+        ps_must html "initial top moderator";
+        ps_must html "Publication is a separate, later step")
+  ; phvp_case "provisioning page: publication offers Public or Unlisted and \
+               never a fully private published community" (fun () ->
+        let html = phvp_render () in
+        ps_must html "you choose Public or Unlisted";
+        ps_must html "keeps a public home, with private rooms available";
+        List.iter (ps_must_not html)
+          [ "fully private"; "Fully private"; "Private community";
+            "publish as Private"; "Public, Unlisted, or Private"
+          ])
+  ; phvp_case "provisioning page: no officiality or endorsement language, and \
+               no claim that a draft already exists" (fun () ->
+        let html = phvp_render ~project:(phvp_project ~description:"A project." ()) () in
+        List.iter (ps_must_not html)
+          [ "Official"; "official"; "GitHub-approved"; "GitHub-endorsed";
+            "endorsed"; "approved by GitHub"
+          ];
+        List.iter (ps_must_not html)
+          [ "Your draft community"; "The draft community is";
+            "已"; "already been created"; "has been created"
+          ])
+  ; phvp_case "provisioning page: the project identity renders as escaped \
+               text only" (fun () ->
+        let html =
+          phvp_render
+            ~project:
+              (phvp_project ~name:"Phvp Alpha" ~kind:Pi.Ecosystem
+                 ~login:"phvp-org" ~description:"**not** <b>markup</b>" ())
+            ()
+        in
+        ps_must html "Phvp Alpha";
+        ps_must html "Ecosystem";
+        ps_must html "phvp-org";
+        ps_must html "**not** &lt;b&gt;markup&lt;/b&gt;";
+        ps_must_not html "<b>markup</b>")
+  ]
+
+let phvp_form_cases =
+  [ phvp_case "provisioning form: exactly one POST form to the exact future \
+               route" (fun () ->
+        let html = phvp_live () in
+        Alcotest.(check int) "one form" 1 (ps_count html "<form");
+        Alcotest.(check int) "POST method" 1 (ps_count html "method='POST'");
+        Alcotest.(check int) "exact action" 1 (ps_count html phvp_action);
+        ps_must html "Create private draft";
+        (* Nameless submit control. *)
+        ps_must_not html "<button type='submit' name")
+  ; phvp_case "provisioning form: exactly the three application fields, and \
+               no hidden field of our own" (fun () ->
+        let html = phvp_live () in
+        List.iter
+          (fun field ->
+            Alcotest.(check int)
+              ("one " ^ field)
+              1
+              (ps_count html (Printf.sprintf "name='%s'" field)))
+          [ "community_name"; "community_slug"; "community_description" ];
+        Alcotest.(check int) "two text inputs plus the framework CSRF field" 3
+          (ps_count html "<input");
+        Alcotest.(check int) "one textarea" 1 (ps_count html "<textarea");
+        Alcotest.(check int) "no select" 0 (ps_count html "<select");
+        (* The only hidden input is Dream's own, in its own quoting style. *)
+        Alcotest.(check int) "no hidden field of ours" 0
+          (ps_count html "type='hidden'");
+        Alcotest.(check int) "exactly one framework hidden field" 1
+          (ps_count html "type=\"hidden\"");
+        List.iter (ps_must_not html)
+          [ "name='project_slug'"; "name='project_id'"; "name='user_id'";
+            "name='installation_id'"; "name='repository_id'";
+            "name='return_url'"; "name='visibility'"; "name='publish'";
+            "name='active_home'"
+          ])
+  ; phvp_case "provisioning form: the framework CSRF field appears only with a \
+               live request" (fun () ->
+        let pure = phvp_render () in
+        Alcotest.(check int) "pure render has no CSRF field" 0
+          (ps_count pure "dream.csrf");
+        Alcotest.(check int) "pure render still has the form" 1
+          (ps_count pure "<form");
+        let live = phvp_live () in
+        Alcotest.(check int) "live render has one CSRF field" 1
+          (ps_count live "name=\"dream.csrf\""))
+  ; phvp_case "provisioning form: suggested values populate the controls and \
+               stay escaped" (fun () ->
+        let html =
+          phvp_render
+            ~values:
+              (phvp_values ~name:"Phvp Suggested" ~slug:"phvp-suggested"
+                 ~description:"Suggested body" ())
+            ()
+        in
+        ps_must html "value='Phvp Suggested'";
+        ps_must html "value='phvp-suggested'";
+        ps_must html ">Suggested body</textarea>";
+        let hostile =
+          phvp_render
+            ~values:
+              (phvp_values ~name:"' onfocus='alert(1)"
+                 ~slug:"'><script>alert(1)</script>"
+                 ~description:"</textarea><script>alert(1)</script>" ())
+            ()
+        in
+        ps_must_not hostile "<script";
+        ps_must_not hostile "onfocus='alert";
+        ps_must hostile "&#39;")
+  ; phvp_case "provisioning form: an empty suggested slug renders an empty \
+               control rather than a repaired value" (fun () ->
+        let html =
+          phvp_render ~values:(phvp_values ~name:"Phvp" ~slug:"" ()) ()
+        in
+        ps_must html "name='community_slug' maxlength='80' value=''")
+  ]
+
+let phvp_defensive_cases =
+  [ phvp_case "provisioning page: an invalid project slug suppresses the form \
+               and every project-derived link" (fun () ->
+        List.iter
+          (fun slug ->
+            let html = phvp_live ~project:(phvp_project ~slug ()) () in
+            Alcotest.(check int) ("no form for " ^ String.escaped slug) 0
+              (ps_count html "<form");
+            Alcotest.(check int) ("no action for " ^ String.escaped slug) 0
+              (ps_count html "action=");
+            Alcotest.(check int) ("no project link for " ^ String.escaped slug) 0
+              (ps_count html "href='/projects/");
+            (* The copy survives; only the actions disappear. *)
+            ps_must html "Create a community home";
+            ps_must html "Project connected through GitHub")
+          [ ""; "Phvp-Project"; "phvp_project"; "-phvp"; "phvp-";
+            "phvp/project"; "phvp project"; "phvp--project";
+            String.make 81 'a'
+          ])
+  ; phvp_case "provisioning page: a canonical slug yields the back link too"
+      (fun () ->
+        let html = phvp_render () in
+        ps_must html "href='/projects/phvp-project/setup'";
+        ps_must html "Back to project setup")
+  ; phvp_case "provisioning page: no identifier of any kind is rendered"
+      (fun () ->
+        let html =
+          phvp_live
+            ~project:(phvp_project ~description:"desc" ())
+            ~values:(phvp_values ~name:"Phvp" ~slug:"phvp-project" ())
+            ()
+        in
+        List.iter (ps_must_not html)
+          [ "project_id"; "draft_id"; "installation_id"; "steward_id";
+            "relation_id"; "community_id"; "forge_namespace_id"
+          ])
+  ; phvp_case "provisioning page: no script, inline style, handler, or refresh"
+      (fun () ->
+        let html = phvp_live ~feedback:Phvp.Provisioning_failed () in
+        List.iter (ps_must_not html)
+          [ "<script"; "javascript:"; "onclick"; "onsubmit"; "onload";
+            "onerror"; "style='"; "style=\""; "http-equiv"; "window.location";
+            "location.href"
+          ])
+  ; phvp_case "provisioning page: no credential-shaped fixture can appear"
+      (fun () ->
+        let html =
+          phvp_live ~project:(phvp_project ~login:"phvp-owner" ()) ()
+        in
+        List.iter (ps_must_not html)
+          [ "gho_"; "ghr_"; "ghs_"; "client_secret"; "code_verifier";
+            "access_token"
+          ])
+  ]
+
+let phvp_feedback_cases =
+  [ phvp_case "provisioning page: no feedback renders no alert" (fun () ->
+        let html = phvp_render () in
+        Alcotest.(check int) "no alert" 0 (ps_count html "phv-alert"))
+  ; phvp_case "provisioning page: every feedback variant renders exactly one \
+               generic alert that echoes no submitted value" (fun () ->
+        let variants =
+          [ ("Invalid_form", Phvp.Invalid_form);
+            ("Invalid_community_name", Phvp.Invalid_community_name);
+            ("Invalid_community_slug", Phvp.Invalid_community_slug);
+            ("Invalid_community_description", Phvp.Invalid_community_description);
+            ("Community_slug_unavailable", Phvp.Community_slug_unavailable);
+            ("Active_home_exists", Phvp.Active_home_exists);
+            ("Provisioning_failed", Phvp.Provisioning_failed)
+          ]
+        in
+        let seen = ref [] in
+        List.iter
+          (fun (label, feedback) ->
+            let html =
+              phvp_render
+                ~values:
+                  (phvp_values ~name:"SECRETNAME" ~slug:"SECRETSLUG"
+                     ~description:"SECRETBODY" ())
+                ~feedback ()
+            in
+            Alcotest.(check int) (label ^ ": one alert") 1
+              (ps_count html "phv-alert");
+            (* The alert text itself never repeats what was submitted. *)
+            let alert_start =
+              match ps_index_of html "phv-alert" 0 with
+              | Some i -> i
+              | None -> Alcotest.failf "%s: alert missing" label
+            in
+            let alert_end =
+              match ps_index_of html "</div>" alert_start with
+              | Some i -> i
+              | None -> Alcotest.failf "%s: unterminated alert" label
+            in
+            let alert =
+              String.sub html alert_start (alert_end - alert_start)
+            in
+            List.iter
+              (fun secret ->
+                Alcotest.(check bool)
+                  (label ^ ": alert free of " ^ secret)
+                  false (contains alert secret))
+              [ "SECRETNAME"; "SECRETSLUG"; "SECRETBODY" ];
+            (* Distinct copy per variant: no two variants share a message. *)
+            Alcotest.(check bool)
+              (label ^ ": distinct copy") false
+              (List.mem alert !seen);
+            seen := alert :: !seen;
+            (* The form is still offered so the steward can correct. *)
+            Alcotest.(check int) (label ^ ": form survives") 1
+              (ps_count html "<form"))
+          variants)
+  ]
+
+let phvp_suite =
+  phvp_copy_cases @ phvp_form_cases @ phvp_defensive_cases
+  @ phvp_feedback_cases
+
+(* === Dedicated-home creation read model
+   (Project_home_provisioning_read_model) ===
+   Owner authorization decided in SQL, the active-home exclusion, durable
+   revalidation, and the suggested initial identity. Reserved
+   external-installation-id range 949000001..949000999 (hence account ids
+   949100001..949100999, which also scope the permanent-project cleanup),
+   phvr_% usernames, and phvr-% community slugs so no suite shares fixtures.
+   Verified projects come only through the real draft/selection/finalization
+   chain; relations come only through the real request/review/removal stores.
+   Every per-case wrapper disconnects deterministically. *)
+module Phvr = struct
+  let ( let* ) = Lwt.bind
+
+  open Caqti_request.Infix
+
+  module Rm = Earde.Project_home_provisioning_read_model
+  module Rq = Earde.Project_home_request_store
+  module Rvs = Earde.Project_home_review_store
+  module Rms = Earde.Project_home_removal_store
+  module Fin = Earde.Project_finalization_store
+
+  let error_str : Rm.error -> string = function
+    | Rm.Invalid_user_id -> "Invalid_user_id"
+    | Rm.Invalid_project_slug -> "Invalid_project_slug"
+    | Rm.Inconsistent_data -> "Inconsistent_data"
+    | Rm.Storage_error -> "Storage_error"
+
+  let or_fail = Pod_store.or_fail
+  let insert_user = Pod_store.insert_user
+  let exec = Pod_read.exec
+  let insert_community = Phcv.insert_community
+
+  let q_cleanup =
+    List.map
+      (fun sql -> (Caqti_type.unit ->. Caqti_type.unit) sql)
+      [ "DELETE FROM open_source_projects \
+         WHERE forge_namespace_id BETWEEN 949100001 AND 949100999"
+      ; "DELETE FROM project_onboarding_drafts \
+         WHERE github_installation_record_id IN \
+           (SELECT id FROM github_installations \
+            WHERE github_installation_id BETWEEN 949000001 AND 949000999)"
+      ; "DELETE FROM communities WHERE slug LIKE 'phvr-%'"
+      ; "DELETE FROM users WHERE username LIKE 'phvr_%'"
+      ; "DELETE FROM github_installations \
+         WHERE github_installation_id BETWEEN 949000001 AND 949000999"
+      ]
+
+  (* Durable corruption the read model must refuse to build a suggestion
+     from. Each value still satisfies every production CHECK — btrim() only
+     trims spaces, and none exceeds a length limit — so nothing here weakens
+     a constraint to manufacture the failure. *)
+  let q_corrupt_name_control =
+    (Caqti_type.int64 ->. Caqti_type.unit)
+    "UPDATE open_source_projects SET name = 'Phvr' || chr(1) || 'Name' \
+     WHERE id = $1"
+
+  let q_corrupt_name_untrimmed =
+    (Caqti_type.int64 ->. Caqti_type.unit)
+    "UPDATE open_source_projects SET name = chr(9) || 'Phvr Name' WHERE id = $1"
+
+  let q_corrupt_description =
+    (Caqti_type.int64 ->. Caqti_type.unit)
+    "UPDATE open_source_projects \
+     SET description = 'Phvr' || chr(1) || 'Body' WHERE id = $1"
+
+  let q_corrupt_login =
+    (Caqti_type.int64 ->. Caqti_type.unit)
+    "UPDATE open_source_projects SET forge_namespace_login = 'phvr owner' \
+     WHERE id = $1"
+
+  let q_restore_project =
+    (Caqti_type.int64 ->. Caqti_type.unit)
+    "UPDATE open_source_projects \
+     SET name = 'Phvr Project', description = NULL, \
+         forge_namespace_login = 'pfin-owner' \
+     WHERE id = $1"
+
+  let q_set_verification = Phrq.q_set_verification
+  let q_delete_steward = Phrq.q_delete_steward
+  let q_insert_steward = Phrq.q_insert_steward
+  let q_insert_moderator = Phrv.q_insert_moderator
+
+  (* Emptying search_path hides the unqualified tables, so the query fails at
+     the SQL layer and Caqti returns an Error the read model maps to
+     Storage_error — a genuine query failure, not a torn-down connection
+     (which the driver signals by raising, not by Error). *)
+  let q_break_search_path =
+    (Caqti_type.unit ->. Caqti_type.unit) "SET search_path TO ''"
+
+  let q_reset_search_path =
+    (Caqti_type.unit ->. Caqti_type.unit) "SET search_path TO public"
+
+  let db_case name f =
+    Alcotest.test_case name `Quick (fun () ->
+        match Sys.getenv_opt "EARDE_TEST_DATABASE_URL" with
+        | None | Some "" -> Alcotest.skip ()
+        | Some url ->
+            Lwt_main.run
+              (let* conn = Caqti_lwt_unix.connect (Uri.of_string url) in
+               let* conn = or_fail "connect" conn in
+               let (module C : Caqti_lwt.CONNECTION) = conn in
+               let cleanup () =
+                 Lwt_list.iter_s
+                   (fun q ->
+                     let* r = C.exec q () in
+                     let* _ = or_fail "cleanup" r in
+                     Lwt.return_unit)
+                   q_cleanup
+               in
+               let* () = cleanup () in
+               Lwt.finalize
+                 (fun () -> f conn)
+                 (fun () ->
+                   Lwt.finalize cleanup (fun () -> C.disconnect ()))))
+
+  (* === fixtures === *)
+
+  (* Verified permanent projects come only through the real chain — draft
+     store, selection store, finalization store — never fixture INSERTs.
+     Returns the installation record id (for extra-steward fixtures) and the
+     permanent project id. *)
+  let make_project ?(name = "Phvr Project") ?description conn ~user ~ext_id
+      ~slug =
+    let repo_id = Int64.add ext_id 400000L in
+    let* inst, draft, _, _ =
+      Pfin.make_draft conn ~user ~ext_id (fun account_id ->
+          [ Pfin.repo ~account_id ~id:repo_id "alpha" ])
+    in
+    let* ids = Pfin.snapshot_ids conn draft in
+    let s1 = List.nth ids 0 in
+    let* () =
+      Pod_select.replace_ok "seed selection" conn ~user ~draft ~primary:s1
+        [ s1 ]
+    in
+    let identity =
+      Pfin.identity_exn ~name ~slug ?description ~selected:[ s1 ] ~primary:s1 ()
+    in
+    let* created =
+      Pfin.finalize_ok "fixture project" conn ~user ~draft identity
+    in
+    Lwt.return (inst, Fin.project_id created)
+
+  let add_steward conn ~project ~user ~installation =
+    exec conn "extra steward" q_insert_steward (project, user, installation)
+
+  let add_top_mod conn ~user ~community =
+    exec conn "top_mod fixture" q_insert_moderator (user, community, "top_mod")
+
+  let request_pending label conn ~user ~slug ~community =
+    let relation = phr_expect_ok (Phr.create_pending ~request_note:None) in
+    let* r =
+      Rq.create conn ~user_id:user ~project_slug:slug
+        ~target_community_id:community ~relation
+    in
+    match r with
+    | Ok _ -> Lwt.return_unit
+    | Error _ -> Alcotest.failf "%s: request fixture failed" label
+
+  let review label conn ~reviewer ~slug ~community_slug decision =
+    let* r =
+      Rvs.review conn ~reviewer_user_id:reviewer ~project_slug:slug
+        ~target_community_slug:community_slug ~decision
+    in
+    match r with
+    | Ok _ -> Lwt.return_unit
+    | Error _ -> Alcotest.failf "%s: review fixture failed" label
+
+  let remove label conn ~actor ~slug ~community_slug =
+    let* r =
+      Rms.remove conn ~actor_user_id:actor ~project_slug:slug
+        ~community_slug
+    in
+    match r with
+    | Ok _ -> Lwt.return_unit
+    | Error _ -> Alcotest.failf "%s: removal fixture failed" label
+
+  (* === call helpers === *)
+
+  let load conn ~user ~slug =
+    Rm.load_for_steward conn ~user_id:user ~project_slug:slug
+
+  let load_view label conn ~user ~slug =
+    let* r = load conn ~user ~slug in
+    match r with
+    | Ok (Some view) -> Lwt.return view
+    | Ok None -> Alcotest.failf "%s: unexpectedly absent" label
+    | Error e -> Alcotest.failf "%s: %s" label (error_str e)
+
+  let load_none label conn ~user ~slug =
+    let* r = load conn ~user ~slug in
+    match r with
+    | Ok None -> Lwt.return_unit
+    | Ok (Some _) -> Alcotest.failf "%s: unexpectedly present" label
+    | Error e -> Alcotest.failf "%s: %s" label (error_str e)
+
+  let load_expect label expected conn ~user ~slug =
+    let* r = load conn ~user ~slug in
+    match r with
+    | Ok None ->
+        Alcotest.failf "%s: expected %s, got Ok None" label (error_str expected)
+    | Ok (Some _) ->
+        Alcotest.failf "%s: expected %s, got Ok Some" label (error_str expected)
+    | Error e ->
+        Alcotest.(check string) label (error_str expected) (error_str e);
+        Lwt.return_unit
+
+  (* === pure input validation === *)
+
+  let pure_inputs_case =
+    db_case "provisioning read: invalid inputs rejected before any SQL"
+      (fun _conn ->
+        (* A deliberately unusable connection: pure validation must return
+           without touching it — were any SQL attempted, the driver would
+           raise on the finished connection and fail the test. *)
+        let url =
+          match Sys.getenv_opt "EARDE_TEST_DATABASE_URL" with
+          | Some url -> url
+          | None -> Alcotest.fail "EARDE_TEST_DATABASE_URL vanished mid-run"
+        in
+        let* dead = Caqti_lwt_unix.connect (Uri.of_string url) in
+        let* dead = or_fail "dead connect" dead in
+        let (module Dead : Caqti_lwt.CONNECTION) = dead in
+        let* () = Dead.disconnect () in
+        let expect label e ~user ~slug = load_expect label e dead ~user ~slug in
+        let* () = expect "user 0" Rm.Invalid_user_id ~user:0 ~slug:"phvr-a" in
+        let* () = expect "user -1" Rm.Invalid_user_id ~user:(-1) ~slug:"phvr-a" in
+        Lwt_list.iter_s
+          (fun slug ->
+            expect ("slug " ^ String.escaped slug) Rm.Invalid_project_slug
+              ~user:1 ~slug)
+          [ ""; " phvr-a"; "phvr-a "; "Phvr-A"; "phvr_a"; "-phvr"; "phvr-";
+            "phvr--a"; "phvr/a"; "phvr a"; "phvr\x00"; String.make 81 'a'
+          ])
+
+  (* === owner authorization === *)
+
+  let authorization_case =
+    db_case "provisioning read: only a current steward of a verified project \
+             sees the view; every other identity is the same absence"
+      (fun conn ->
+        let* owner = insert_user conn "phvr_owner" in
+        let* second = insert_user conn "phvr_second" in
+        let* stranger = insert_user conn "phvr_stranger" in
+        let* admin = insert_user conn "phvr_admin" in
+        let* () = exec conn "admin flag" Phrv.q_set_admin (admin, true) in
+        let* inst, project =
+          make_project conn ~user:owner ~ext_id:949000001L ~slug:"phvr-auth"
+        in
+        let* view = load_view "owner" conn ~user:owner ~slug:"phvr-auth" in
+        Alcotest.(check string) "project slug" "phvr-auth"
+          (Rm.project_slug (Rm.project view));
+        (* A second steward of the same project is equally authorized. *)
+        let* () = add_steward conn ~project ~user:second ~installation:inst in
+        let* _ = load_view "second steward" conn ~user:second ~slug:"phvr-auth" in
+        (* Everyone else — including a durable global admin who is not a
+           steward — collapses to the same absence, matching the sibling
+           permanent-project setup and choice read models. *)
+        let* () = load_none "stranger" conn ~user:stranger ~slug:"phvr-auth" in
+        let* () = load_none "durable admin" conn ~user:admin ~slug:"phvr-auth" in
+        let* () = load_none "missing project" conn ~user:owner ~slug:"phvr-gone" in
+        (* Removed stewardship revokes access with no distinguishable
+           answer. *)
+        let* () = exec conn "remove steward" q_delete_steward (project, second) in
+        load_none "removed steward" conn ~user:second ~slug:"phvr-auth")
+
+  let verification_case =
+    db_case "provisioning read: a stale or revoked project is the same absence"
+      (fun conn ->
+        let* owner = insert_user conn "phvr_vowner" in
+        let* _, project =
+          make_project conn ~user:owner ~ext_id:949000002L ~slug:"phvr-verif"
+        in
+        let* _ = load_view "verified" conn ~user:owner ~slug:"phvr-verif" in
+        let* () = exec conn "stale" q_set_verification (project, "stale") in
+        let* () = load_none "stale" conn ~user:owner ~slug:"phvr-verif" in
+        let* () = exec conn "revoked" q_set_verification (project, "revoked") in
+        let* () = load_none "revoked" conn ~user:owner ~slug:"phvr-verif" in
+        let* () = exec conn "restore" q_set_verification (project, "verified") in
+        let* _ = load_view "restored" conn ~user:owner ~slug:"phvr-verif" in
+        Lwt.return_unit)
+
+  (* === active-home exclusion === *)
+
+  let active_home_case =
+    db_case "provisioning read: a pending request or accepted home closes the \
+             entry, and closed history reopens it" (fun conn ->
+        let* owner = insert_user conn "phvr_aowner" in
+        let* moderator = insert_user conn "phvr_amod" in
+        let* _, _project =
+          make_project conn ~user:owner ~ext_id:949000003L ~slug:"phvr-active"
+        in
+        let* cid = insert_community ~name:"Phvr Home" conn "phvr-home" in
+        let* () = add_top_mod conn ~user:moderator ~community:cid in
+        let* _ = load_view "no relation" conn ~user:owner ~slug:"phvr-active" in
+        (* Pending closes it. *)
+        let* () =
+          request_pending "pending" conn ~user:owner ~slug:"phvr-active"
+            ~community:cid
+        in
+        let* () = load_none "pending" conn ~user:owner ~slug:"phvr-active" in
+        (* A rejected request is history, not an active relation. *)
+        let* () =
+          review "reject" conn ~reviewer:moderator ~slug:"phvr-active"
+            ~community_slug:"phvr-home" Rvs.Reject
+        in
+        let* _ = load_view "after reject" conn ~user:owner ~slug:"phvr-active" in
+        (* Accepted closes it again. *)
+        let* () =
+          request_pending "second" conn ~user:owner ~slug:"phvr-active"
+            ~community:cid
+        in
+        let* () =
+          review "accept" conn ~reviewer:moderator ~slug:"phvr-active"
+            ~community_slug:"phvr-home" Rvs.Accept
+        in
+        let* () = load_none "accepted" conn ~user:owner ~slug:"phvr-active" in
+        (* Removal frees the slot and the entry reopens. *)
+        let* () =
+          remove "remove" conn ~actor:owner ~slug:"phvr-active"
+            ~community_slug:"phvr-home"
+        in
+        let* _ = load_view "after removal" conn ~user:owner ~slug:"phvr-active" in
+        Lwt.return_unit)
+
+  (* === suggested identity === *)
+
+  let suggestion_case =
+    db_case "provisioning read: the suggested identity is exactly the \
+             project's own validated identity" (fun conn ->
+        let* owner = insert_user conn "phvr_sowner" in
+        let* _ =
+          make_project conn ~user:owner ~ext_id:949000004L ~slug:"phvr-suggest"
+            ~name:"Phvr Suggested Name" ~description:"Suggested body."
+        in
+        let* view = load_view "suggestions" conn ~user:owner ~slug:"phvr-suggest" in
+        Alcotest.(check string) "name suggestion" "Phvr Suggested Name"
+          (Rm.suggested_community_name view);
+        Alcotest.(check string) "slug suggestion" "phvr-suggest"
+          (Rm.suggested_community_slug view);
+        Alcotest.(check (option string)) "description suggestion"
+          (Some "Suggested body.")
+          (Rm.suggested_community_description view);
+        (* Accessors mirror the project itself — no second source of
+           truth. *)
+        let project = Rm.project view in
+        Alcotest.(check string) "project name" "Phvr Suggested Name"
+          (Rm.project_name project);
+        Alcotest.(check string) "project slug" "phvr-suggest"
+          (Rm.project_slug project);
+        Alcotest.(check (option string)) "project description"
+          (Some "Suggested body.")
+          (Rm.project_description project);
+        Alcotest.(check string) "namespace login" "pfin-owner"
+          (Rm.project_namespace_login project);
+        Alcotest.(check string) "kind"
+          "project"
+          (Pi.string_of_kind (Rm.project_kind project));
+        (* Every accepted suggestion is accepted by the form unchanged: the
+           GET can never prefill a value the POST would reject. *)
+        (match
+           Phvf.of_fields
+             [ ("community_name", Rm.suggested_community_name view);
+               ("community_slug", Rm.suggested_community_slug view);
+               ("community_description",
+                Option.value ~default:""
+                  (Rm.suggested_community_description view))
+             ]
+         with
+        | Ok parsed ->
+            Alcotest.(check string) "round-trip name" "Phvr Suggested Name"
+              (Phvf.community_name parsed);
+            Alcotest.(check string) "round-trip slug" "phvr-suggest"
+              (Phvf.community_slug parsed)
+        | Error e ->
+            Alcotest.failf "suggestion rejected by the form: %s" (phvf_err e));
+        Lwt.return_unit)
+
+  let suggestion_shapes_case =
+    db_case "provisioning read: every canonical project slug is a usable \
+             community-slug suggestion today" (fun conn ->
+        let* owner = insert_user conn "phvr_shapes" in
+        let long = "phvr-" ^ String.make 75 'a' in
+        let* _ =
+          make_project conn ~user:owner ~ext_id:949000005L ~slug:long
+        in
+        let* view = load_view "long slug" conn ~user:owner ~slug:long in
+        Alcotest.(check string) "80-character slug suggested whole" long
+          (Rm.suggested_community_slug view);
+        Alcotest.(check int) "exactly 80 characters" 80 (String.length long);
+        let* _ =
+          make_project conn ~user:owner ~ext_id:949000006L ~slug:"phvr-a-b-c"
+        in
+        let* view = load_view "hyphens" conn ~user:owner ~slug:"phvr-a-b-c" in
+        Alcotest.(check string) "hyphenated slug suggested whole" "phvr-a-b-c"
+          (Rm.suggested_community_slug view);
+        (* No description means no suggestion, never an empty string. *)
+        Alcotest.(check (option string)) "absent description stays absent" None
+          (Rm.suggested_community_description view);
+        Lwt.return_unit)
+
+  let no_availability_case =
+    db_case "provisioning read: an already-taken slug is still suggested — \
+             availability is the provisioning store's answer, not this GET's"
+      (fun conn ->
+        let* owner = insert_user conn "phvr_taken" in
+        let* _ =
+          make_project conn ~user:owner ~ext_id:949000007L ~slug:"phvr-taken"
+        in
+        (* A community already occupies exactly that slug. *)
+        let* _cid = insert_community ~name:"Phvr Taken" conn "phvr-taken" in
+        let* view = load_view "taken" conn ~user:owner ~slug:"phvr-taken" in
+        Alcotest.(check string) "suggestion unchanged" "phvr-taken"
+          (Rm.suggested_community_slug view);
+        Lwt.return_unit)
+
+  (* === durable revalidation === *)
+
+  let corruption_case =
+    db_case "provisioning read: durable project corruption is Inconsistent_data, \
+             never a suggestion" (fun conn ->
+        let* owner = insert_user conn "phvr_cowner" in
+        let* _, project =
+          make_project conn ~user:owner ~ext_id:949000008L ~slug:"phvr-corrupt"
+        in
+        let* _ = load_view "healthy" conn ~user:owner ~slug:"phvr-corrupt" in
+        let probe label q =
+          let* () = exec conn label q project in
+          let* () =
+            load_expect label Rm.Inconsistent_data conn ~user:owner
+              ~slug:"phvr-corrupt"
+          in
+          exec conn ("restore after " ^ label) q_restore_project project
+        in
+        let* () = probe "control byte in name" q_corrupt_name_control in
+        let* () = probe "untrimmed name" q_corrupt_name_untrimmed in
+        let* () = probe "control byte in description" q_corrupt_description in
+        let* () = probe "unaddressable namespace login" q_corrupt_login in
+        (* Restored data loads again — the failure was the row, not the
+           query. *)
+        let* _ = load_view "restored" conn ~user:owner ~slug:"phvr-corrupt" in
+        Lwt.return_unit)
+
+  let storage_error_case =
+    db_case "provisioning read: a storage failure surfaces as the payload-free \
+             Storage_error" (fun conn ->
+        let* () = exec conn "break search_path" q_break_search_path () in
+        let* () =
+          load_expect "broken schema" Rm.Storage_error conn ~user:1
+            ~slug:"phvr-anything"
+        in
+        exec conn "reset search_path" q_reset_search_path ())
+
+  let privacy_case =
+    db_case "provisioning read: no internal or GitHub identifier crosses the \
+             public surface" (fun conn ->
+        let* owner = insert_user conn "phvr_privacy" in
+        let* _, project =
+          make_project conn ~user:owner ~ext_id:949000009L ~slug:"phvr-privacy"
+            ~description:"Privacy body."
+        in
+        let* view = load_view "privacy" conn ~user:owner ~slug:"phvr-privacy" in
+        let p = Rm.project view in
+        let surface =
+          String.concat "|"
+            [ Rm.project_name p; Rm.project_slug p;
+              Option.value ~default:"" (Rm.project_description p);
+              Rm.project_namespace_login p;
+              Pi.string_of_kind (Rm.project_kind p);
+              Rm.suggested_community_name view;
+              Rm.suggested_community_slug view;
+              Option.value ~default:"" (Rm.suggested_community_description view)
+            ]
+        in
+        List.iter
+          (fun (what, needle) ->
+            Alcotest.(check bool) ("surface free of " ^ what) false
+              (contains surface needle))
+          [ ("permanent project id", Int64.to_string project);
+            ("external installation id", "949000009");
+            ("external account id", "949100009");
+            ("owner user id", string_of_int owner)
+          ];
+        Lwt.return_unit)
+
+  let suite =
+    [ pure_inputs_case; authorization_case; verification_case;
+      active_home_case; suggestion_case; suggestion_shapes_case;
+      no_availability_case; corruption_case; storage_error_case; privacy_case ]
+end
+
+(* === Dedicated-home creation handler (Project_home_provisioning_handlers) ===
+   GET /projects/:slug/community-home/new: the DB-free rollout and
+   authentication gates (every rejection precedes any route read or SQL — no
+   sql_pool is installed in that harness), and the database-gated
+   authorization, suggested prefill, generic collapse, and header contract
+   over verified permanent projects and real relation stores. Reserved
+   external-installation-id range 949200001..949200999 (hence account ids
+   949300001..949300999), phvh_% usernames, and phvh-% community slugs so no
+   suite shares fixtures. *)
+module Phvh = struct
+  let ( let* ) = Lwt.bind
+
+  open Caqti_request.Infix
+
+  module Hd = Earde.Project_home_provisioning_handlers
+  module Rvs = Earde.Project_home_review_store
+
+  let case = go_case
+  let or_fail = Pod_store.or_fail
+  let insert_user = Pod_store.insert_user
+  let exec = Pod_read.exec
+  let insert_community = Phcv.insert_community
+  let status_of = Gh_start_handler.status_of
+
+  let route_pattern = "/projects/:slug/community-home/new"
+  let target slug = Printf.sprintf "/projects/%s/community-home/new" slug
+
+  let make ~mode = Hd.make_project_home_provisioning_page_handler ~mode
+
+  (* === DB-free: rollout and authentication gates === *)
+
+  (* Unrouted: the handler runs with no "slug" parameter, so a request that
+     passes every gate lands on the generic 404 without touching SQL. *)
+  let unrouted_run ?session ~mode () =
+    Pch.gate_run ?session ~method_:`GET ~target:(target "phvh-any")
+      (make ~mode)
+
+  (* Routed but with no sql_pool installed: a request that passes every gate
+     reaches Dream.sql and raises, which the harness reports as the DB
+     boundary. That is the strong proof that the gates themselves ran no
+     SQL. *)
+  let routed_run ?session ~mode () =
+    Pch.gate_run ?session ~method_:`GET ~target:(target "phvh-any")
+      (Dream.router [ Dream.get route_pattern (fun req -> make ~mode req) ])
+
+  let gate_cases =
+    [ case "GET provisioning off: clean /bring redirect before any route read \
+            or SQL" (fun () ->
+          Pch.check_clean_redirect "off" "/bring"
+            (Pch.gate_response "off"
+               (unrouted_run ~session:Pch.admin_session ~mode:Ob.Off ()));
+          Pch.check_clean_redirect "off routed" "/bring"
+            (Pch.gate_response "off routed"
+               (routed_run ~session:Pch.admin_session ~mode:Ob.Off ())))
+    ; case "GET provisioning: anonymous and malformed sessions to /login"
+        (fun () ->
+          Pch.check_clean_redirect "anonymous" "/login"
+            (Pch.gate_response "anonymous" (routed_run ~mode:Ob.Public ()));
+          List.iter
+            (fun raw ->
+              Pch.check_clean_redirect ("user_id " ^ raw) "/login"
+                (Pch.gate_response ("user_id " ^ raw)
+                   (routed_run ~session:[ ("user_id", raw) ] ~mode:Ob.Public ())))
+            [ "not-a-number"; ""; "0"; "-3"; " 42"; "42x" ];
+          Pch.check_clean_redirect "is_admin only" "/login"
+            (Pch.gate_response "is_admin only"
+               (routed_run ~session:[ ("is_admin", "true") ] ~mode:Ob.Admins ())))
+    ; case "GET provisioning admins mode: a non-admin is redirected before any \
+            route read or SQL" (fun () ->
+          Pch.check_clean_redirect "non-admin" "/bring"
+            (Pch.gate_response "non-admin"
+               (routed_run ~session:Pch.logged_in ~mode:Ob.Admins ())))
+    ; case "GET provisioning: authorized modes pass the gates and reach the \
+            database boundary, never before it" (fun () ->
+          Pch.check_db_boundary "admin in admins mode"
+            (routed_run ~session:Pch.admin_session ~mode:Ob.Admins ());
+          Pch.check_db_boundary "user in public mode"
+            (routed_run ~session:Pch.logged_in ~mode:Ob.Public ());
+          Pch.check_db_boundary "admin in public mode"
+            (routed_run ~session:Pch.admin_session ~mode:Ob.Public ()))
+    ; case "GET provisioning: a missing route parameter is the generic 404, \
+            with no SQL" (fun () ->
+          let response =
+            Pch.gate_response "no route"
+              (unrouted_run ~session:Pch.logged_in ~mode:Ob.Public ())
+          in
+          Alcotest.(check int) "404" 404 (status_of response);
+          Alcotest.(check (option string)) "no-store" (Some "no-store")
+            (Dream.header response "Cache-Control"))
+    ]
+
+  (* === Database-gated integration === *)
+
+  (* Distinctive credential-shaped fixtures. None may appear in any page,
+     redirect, header, or cookie this feature produces. *)
+  let credential_markers =
+    [ ("access token", "gho_PHVH_ACCESS_TOKEN_SECRET");
+      ("refresh token", "ghr_PHVH_REFRESH_TOKEN");
+      ("client secret", "PHVH_CLIENT_SECRET_VALUE");
+      ("external installation id", "949200001");
+      ("external account id", "949300001")
+    ]
+
+  let q_cleanup =
+    List.map
+      (fun sql -> (Caqti_type.unit ->. Caqti_type.unit) sql)
+      [ "DELETE FROM open_source_projects \
+         WHERE forge_namespace_id BETWEEN 949300001 AND 949300999"
+      ; "DELETE FROM project_onboarding_drafts \
+         WHERE github_installation_record_id IN \
+           (SELECT id FROM github_installations \
+            WHERE github_installation_id BETWEEN 949200001 AND 949200999)"
+      ; "DELETE FROM communities WHERE slug LIKE 'phvh-%'"
+      ; "DELETE FROM users WHERE username LIKE 'phvh_%'"
+      ; "DELETE FROM github_installations \
+         WHERE github_installation_id BETWEEN 949200001 AND 949200999"
+      ]
+
+  let db_case name f =
+    Alcotest.test_case name `Quick (fun () ->
+        match Sys.getenv_opt "EARDE_TEST_DATABASE_URL" with
+        | None | Some "" -> Alcotest.skip ()
+        | Some url ->
+            Lwt_main.run
+              (let* conn = Caqti_lwt_unix.connect (Uri.of_string url) in
+               let* conn = or_fail "connect" conn in
+               let (module C : Caqti_lwt.CONNECTION) = conn in
+               let cleanup () =
+                 Lwt_list.iter_s
+                   (fun q ->
+                     let* r = C.exec q () in
+                     let* _ = or_fail "cleanup" r in
+                     Lwt.return_unit)
+                   q_cleanup
+               in
+               let* () = cleanup () in
+               Lwt.finalize
+                 (fun () -> f ~url conn)
+                 (fun () ->
+                   Lwt.finalize cleanup (fun () -> C.disconnect ()))))
+
+  (* One shared single-connection sql_pool for the whole suite: nothing ever
+     closes a Dream.sql_pool, and this suite issues many requests across many
+     identities, so a fresh pool per request would exhaust Postgres
+     max_connections. The session identity is swapped per request through a
+     ref instead; cases run sequentially. The real router path is bound to
+     the real handler, alongside the sibling setup GET so the two project
+     routes are proven to coexist. *)
+  let shared_identity : (int * bool) option ref = ref None
+  let shared_pipeline = ref None
+
+  let build_pipeline ~url =
+    Dream.sql_pool ~size:1 url @@ Dream.set_secret gck_secret
+    @@ Dream.memory_sessions
+    @@ (fun handler request ->
+         match !shared_identity with
+         | None -> handler request
+         | Some (uid, is_admin) ->
+             let* () =
+               Dream.set_session_field request "user_id" (string_of_int uid)
+             in
+             let* () =
+               if is_admin then Dream.set_session_field request "is_admin" "true"
+               else Lwt.return_unit
+             in
+             handler request)
+    @@ Dream.router
+         [ Dream.get route_pattern (fun req -> make ~mode:Ob.Public req);
+           Dream.get "/projects/:slug/setup" (fun req ->
+               Earde.Project_creation_handlers.make_project_home_setup_handler
+                 ~mode:Ob.Public req)
+         ]
+
+  let pipeline_for ~url =
+    match !shared_pipeline with
+    | Some pipeline -> pipeline
+    | None ->
+        let pipeline = build_pipeline ~url in
+        shared_pipeline := Some pipeline;
+        pipeline
+
+  let as_user ?(admin_session = false) uid =
+    shared_identity := Some (uid, admin_session)
+
+  let do_get ?pipeline ~url ~target () =
+    let pipeline =
+      match pipeline with Some p -> p | None -> pipeline_for ~url
+    in
+    let* response = pipeline (Dream.request ~method_:`GET ~target "") in
+    let* body = Dream.body response in
+    Lwt.return (response, body)
+
+  let check_page label response =
+    Alcotest.(check int) (label ^ ": 200") 200 (status_of response);
+    Alcotest.(check (option string)) (label ^ ": no-store") (Some "no-store")
+      (Dream.header response "Cache-Control");
+    Alcotest.(check (option string)) (label ^ ": no-referrer")
+      (Some "no-referrer")
+      (Dream.header response "Referrer-Policy")
+
+  let check_generic_404 label response body =
+    Alcotest.(check int) (label ^ ": 404") 404 (status_of response);
+    Alcotest.(check (option string)) (label ^ ": no-store") (Some "no-store")
+      (Dream.header response "Cache-Control");
+    Alcotest.(check bool) (label ^ ": generic copy") true
+      (contains body "This page does not exist.")
+
+  let check_generic_500 label response body =
+    Alcotest.(check int) (label ^ ": 500") 500 (status_of response);
+    Alcotest.(check (option string)) (label ^ ": no-store") (Some "no-store")
+      (Dream.header response "Cache-Control");
+    Alcotest.(check bool) (label ^ ": generic copy") true
+      (contains body "Something went wrong on our side.");
+    List.iter
+      (fun needle ->
+        Alcotest.(check bool) (label ^ ": no detail " ^ needle) false
+          (contains body needle))
+      [ "open_source_projects"; "community_projects"; "Caqti"; "PostgreSQL";
+        "SELECT"; "search_path"; "Inconsistent"; "phvh_void"
+      ]
+
+  let check_no_credentials label response body =
+    let headers =
+      String.concat "\n"
+        (List.map (fun (k, v) -> k ^ ": " ^ v) (Dream.all_headers response))
+    in
+    List.iter
+      (fun (what, needle) ->
+        Alcotest.(check bool) (label ^ ": body free of " ^ what) false
+          (contains body needle);
+        Alcotest.(check bool) (label ^ ": headers free of " ^ what) false
+          (contains headers needle))
+      credential_markers
+
+  (* === fixtures === *)
+
+  let make_project = Phvr.make_project
+  let add_steward = Phvr.add_steward
+  let add_top_mod = Phvr.add_top_mod
+  let request_pending = Phvr.request_pending
+  let review = Phvr.review
+
+  (* === cases === *)
+
+  let steward_page_case =
+    db_case "GET provisioning: a steward gets the page with the project's own \
+             identity suggested" (fun ~url conn ->
+        let* owner = insert_user conn "phvh_owner" in
+        let* inst, _project =
+          make_project conn ~user:owner ~ext_id:949200001L ~slug:"phvh-alpha"
+            ~name:"Phvh Alpha" ~description:"Alpha body."
+        in
+        as_user owner;
+        let* response, body = do_get ~url ~target:(target "phvh-alpha") () in
+        check_page "steward" response;
+        (* The page itself. *)
+        Alcotest.(check bool) "heading" true
+          (contains body "Create a community home");
+        Alcotest.(check bool) "setup-draft copy" true
+          (contains body "private setup draft");
+        Alcotest.(check bool) "verification wording" true
+          (contains body "Project connected through GitHub");
+        Alcotest.(check bool) "noindex" true
+          (contains body "content='noindex'");
+        (* The one form, its exact action, and a live CSRF field. *)
+        Alcotest.(check bool) "exact action" true
+          (contains body "action='/projects/phvh-alpha/community-home'");
+        Alcotest.(check bool) "framework CSRF field" true
+          (contains body "name=\"dream.csrf\"");
+        (* Suggestions prefilled from the project. *)
+        Alcotest.(check bool) "name suggested" true
+          (contains body "value='Phvh Alpha'");
+        Alcotest.(check bool) "slug suggested" true
+          (contains body "value='phvh-alpha'");
+        Alcotest.(check bool) "description suggested" true
+          (contains body ">Alpha body.</textarea>");
+        (* No flash or query state, no officiality language. Script and
+           style are checked over the feature fragment: the shared shell
+           owns its own chrome. *)
+        List.iter
+          (fun needle ->
+            Alcotest.(check bool) ("no " ^ needle) false (contains body needle))
+          [ "Official"; "GitHub-approved"; "GitHub-endorsed"; "?feedback=";
+            "?error="
+          ];
+        let frag = ps_fragment body in
+        List.iter
+          (fun needle ->
+            Alcotest.(check bool) ("fragment free of " ^ needle) false
+              (contains frag needle))
+          [ "<script"; "style='"; "onclick"; "http-equiv" ];
+        Alcotest.(check int) "exactly one form in the fragment" 1
+          (ps_count frag "<form");
+        check_no_credentials "steward page" response body;
+        (* A second steward is served identically. *)
+        let* second = insert_user conn "phvh_second" in
+        let* () = add_steward conn ~project:_project ~user:second ~installation:inst in
+        as_user second;
+        let* response, body = do_get ~url ~target:(target "phvh-alpha") () in
+        check_page "second steward" response;
+        Alcotest.(check bool) "second steward sees the form" true
+          (contains body "action='/projects/phvh-alpha/community-home'");
+        Lwt.return_unit)
+
+  let generic_404_case =
+    db_case "GET provisioning: every unavailable project is the same generic \
+             404" (fun ~url conn ->
+        let* owner = insert_user conn "phvh_gowner" in
+        let* stranger = insert_user conn "phvh_gstranger" in
+        let* moderator = insert_user conn "phvh_gmod" in
+        let* _, project =
+          make_project conn ~user:owner ~ext_id:949200010L ~slug:"phvh-gen"
+        in
+        let* cid = insert_community ~name:"Phvh Home" conn "phvh-home" in
+        let* () = add_top_mod conn ~user:moderator ~community:cid in
+        let bodies = ref [] in
+        let expect_404 label ~user slug =
+          as_user user;
+          let* response, body = do_get ~url ~target:(target slug) () in
+          check_generic_404 label response body;
+          check_no_credentials label response body;
+          bodies := body :: !bodies;
+          Lwt.return_unit
+        in
+        let* () = expect_404 "missing project" ~user:owner "phvh-missing" in
+        let* () = expect_404 "foreign project" ~user:stranger "phvh-gen" in
+        let* () = expect_404 "malformed slug" ~user:owner "Phvh-Gen" in
+        (* Stale and revoked. *)
+        let* () = exec conn "stale" Phrq.q_set_verification (project, "stale") in
+        let* () = expect_404 "stale project" ~user:owner "phvh-gen" in
+        let* () = exec conn "revoked" Phrq.q_set_verification (project, "revoked") in
+        let* () = expect_404 "revoked project" ~user:owner "phvh-gen" in
+        let* () =
+          exec conn "verified" Phrq.q_set_verification (project, "verified")
+        in
+        (* Pending, then accepted. *)
+        let* () =
+          request_pending "pending" conn ~user:owner ~slug:"phvh-gen"
+            ~community:cid
+        in
+        let* () = expect_404 "pending request" ~user:owner "phvh-gen" in
+        let* () =
+          review "accept" conn ~reviewer:moderator ~slug:"phvh-gen"
+            ~community_slug:"phvh-home" Rvs.Accept
+        in
+        let* () = expect_404 "accepted home" ~user:owner "phvh-gen" in
+        (* Unstewarded: the steward row is gone but the project remains. *)
+        let* () =
+          exec conn "unsteward" Phrq.q_delete_steward (project, owner)
+        in
+        let* () = expect_404 "removed stewardship" ~user:owner "phvh-gen" in
+        (* Byte-identical answers: no state is distinguishable. *)
+        (match !bodies with
+        | [] -> Alcotest.fail "no 404 bodies captured"
+        | first :: rest ->
+            List.iteri
+              (fun i body ->
+                Alcotest.(check bool)
+                  (Printf.sprintf "404 body %d identical" i)
+                  true (String.equal first body))
+              rest);
+        Lwt.return_unit)
+
+  let inconsistent_case =
+    db_case "GET provisioning: durable project corruption is one generic \
+             non-cacheable 500" (fun ~url conn ->
+        let* owner = insert_user conn "phvh_icowner" in
+        let* _, project =
+          make_project conn ~user:owner ~ext_id:949200020L ~slug:"phvh-ic"
+        in
+        let* () =
+          exec conn "corrupt name" Phvr.q_corrupt_name_control project
+        in
+        as_user owner;
+        let* response, body = do_get ~url ~target:(target "phvh-ic") () in
+        check_generic_500 "corrupt project" response body;
+        check_no_credentials "corrupt project" response body;
+        Lwt.return_unit)
+
+  let storage_case =
+    db_case "GET provisioning: a real database failure is one generic \
+             non-cacheable 500" (fun ~url _conn ->
+        let poisoned =
+          Uri.to_string
+            (Uri.add_query_param' (Uri.of_string url)
+               ("options", "-csearch_path=phvh_void"))
+        in
+        (* A dedicated single-connection pool for this one case: the shared
+           pipeline must keep talking to the real schema. *)
+        let saved = !shared_pipeline in
+        shared_pipeline := None;
+        let poison_pipe = build_pipeline ~url:poisoned in
+        shared_pipeline := saved;
+        as_user 42;
+        let* response, body =
+          do_get ~pipeline:poison_pipe ~url ~target:(target "phvh-anything") ()
+        in
+        check_generic_500 "poisoned schema" response body;
+        Lwt.return_unit)
+
+  let navigation_case =
+    db_case "setup page: the two distinct navigation links point at the real \
+             routes, and the create link leads to the real page"
+      (fun ~url conn ->
+        let* owner = insert_user conn "phvh_navowner" in
+        let* _ =
+          make_project conn ~user:owner ~ext_id:949200030L ~slug:"phvh-nav"
+            ~name:"Phvh Nav"
+        in
+        as_user owner;
+        let* response, body =
+          do_get ~url ~target:"/projects/phvh-nav/setup" ()
+        in
+        Alcotest.(check int) "setup 200" 200 (status_of response);
+        Alcotest.(check bool) "connect link" true
+          (contains body "href='/projects/phvh-nav/request-home'");
+        Alcotest.(check bool) "create link" true
+          (contains body "href='/projects/phvh-nav/community-home/new'");
+        Alcotest.(check bool) "distinct labels" true
+          (contains body "Connect to an existing community"
+          && contains body ">Create a community home</a>");
+        Alcotest.(check bool) "no form in the setup fragment" false
+          (contains (ps_fragment body) "<form");
+        (* The advertised destination really serves the creation page. *)
+        let* response, body =
+          do_get ~url ~target:(target "phvh-nav") ()
+        in
+        check_page "followed create link" response;
+        Alcotest.(check bool) "creation page" true
+          (contains body "action='/projects/phvh-nav/community-home'");
+        Lwt.return_unit)
+
+  let db_suite =
+    [ steward_page_case; generic_404_case; inconsistent_case; storage_case;
+      navigation_case ]
+end
+
 let () =
   Alcotest.run "earde"
     [ ( "smoke"
@@ -40246,4 +41755,27 @@ let () =
     ; ("project_home_removal_post_gates", Phrh.gate_cases)
     ; ("project_home_removal_post_csrf", Phrh.csrf_cases)
     ; ("project_home_removal_handlers_db", Phrh.db_suite)
+      (* Initial community-identity form for a dedicated project home: the
+         exact field grammar, the name/slug/description canonicalization the
+         future provisioning store inherits, boundary and hostile-byte
+         coverage, and the payload-free error contract. DB-free. *)
+    ; ("project_home_provisioning_form", phvf_suite)
+      (* The creation page itself: setup-draft and Public/Unlisted copy, the
+         exact one-form contract with three application fields and no hidden
+         identifier, CSRF only with a live request, defensive degradation on
+         a malformed slug, escaping, and every feedback variant. DB-free. *)
+    ; ("project_home_provisioning_page", phvp_suite)
+      (* Owner-authorized creation read model: pure input validation before
+         SQL, steward-only authorization with no admin bypass, verification
+         drift, the active-home exclusion and its reopening after closed
+         history, suggested-identity mapping and its round-trip through the
+         form, durable revalidation, storage failure, and the privacy
+         sweep. Database-gated. *)
+    ; ("project_home_provisioning_read_model", Phvr.suite)
+      (* The GET route: DB-free rollout/authentication gates (every
+         rejection precedes any route read or SQL), and the database-gated
+         steward page, identical generic 404s, generic 500s, and the real
+         setup-page navigation into it. *)
+    ; ("project_home_provisioning_get_gates", Phvh.gate_cases)
+    ; ("project_home_provisioning_handlers_db", Phvh.db_suite)
     ]

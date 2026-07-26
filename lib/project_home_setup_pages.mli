@@ -55,14 +55,16 @@ val project_home_setup_page :
     permanent repository list in the supplied order with Primary and
     Archived markers.
 
-    A semantic next-step section headed "Choose a community home" offers
-    one plain navigation link — "Connect to an existing community", built
-    structurally as [/projects/<canonical-slug>/request-home] and rendered
-    only when the page-model slug already has the canonical permanent
-    shape — while dedicated-home creation stays clearly non-actionable
-    future copy. No working form, state-changing button, or
-    disabled-but-actionable-looking control is rendered, no project id is
-    exposed, and nothing claims the project already has a home community.
+    A semantic next-step section headed "Choose a community home" offers two
+    visibly distinct plain navigation links — "Connect to an existing
+    community" at [/projects/<canonical-slug>/request-home] and "Create a
+    community home" at [/projects/<canonical-slug>/community-home/new] —
+    each built structurally and rendered only when the page-model slug
+    already has the canonical permanent shape. No form, state-changing
+    button, or disabled-but-actionable-looking control is rendered, no
+    project id is exposed, and nothing claims the project already has a home
+    community; each destination authorizes independently and refuses a
+    project that already has an active home relation.
 
     Rendering is defensive: every string escapes normally, and a website or
     repository URL that fails the shared HTTP(S) gate is rendered as plain

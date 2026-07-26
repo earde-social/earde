@@ -182,6 +182,17 @@ let () =
              ~mode:(Earde.Project_onboarding.mode_from_env ())
              ~load_config:Earde.Github_app_config.from_env
              request));
+    (* Dedicated-community-home creation entry for a verified project. The
+       steward-only GET is informational and deliberately not rate-limited,
+       matching the other project-setup GETs. Only the entry page exists in
+       this slice: its form posts to /projects/:slug/community-home, which
+       is deliberately not routed until the atomic provisioning store
+       lands. *)
+    Dream.get "/projects/:slug/community-home/new" (fun request ->
+        Earde.Project_home_provisioning_handlers
+        .make_project_home_provisioning_page_handler
+          ~mode:(Earde.Project_onboarding.mode_from_env ())
+          request);
     (* Moderator review of pending project-home requests for a community.
        The queue GET is informational and deliberately not rate-limited,
        matching the other private settings GETs; the accept/reject POSTs
