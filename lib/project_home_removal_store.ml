@@ -132,6 +132,22 @@ let community_structurally_valid ~is_network_community ~onboarding_state
      && visibility = Db.Community_private
      && (not indexable) && not discoverable
 
+(* The exact unpublished dedicated-community setup draft: a network
+   community still in draft, private, and leaking through neither indexing
+   nor discovery. Its provisioned accepted home is part of the draft's
+   structural integrity — like its initial membership, top moderator,
+   section, and channel — so while the draft is unpublished the relation
+   cannot be detached by anyone. Removing it would leave a community that
+   can never be published (the publication store requires the relation) and
+   an orphan shell nothing else can reach. Publication as Public or Unlisted
+   ends the protection: the ordinary unilateral policy resumes. *)
+let unpublished_setup_draft ~is_network_community ~onboarding_state ~visibility
+    ~indexable ~discoverable =
+  is_network_community
+  && onboarding_state = Db.Community_draft
+  && visibility = Db.Community_private
+  && (not indexable) && not discoverable
+
 (* Actor authorization, third, fourth and fifth: all three durable sources
    are queried and locked inside SQL, always in this order and always in
    full, so a concurrent stewardship deletion, role removal or downgrade,
@@ -289,7 +305,7 @@ let remove (module C : Caqti_lwt.CONNECTION) ~actor_user_id ~project_slug
             | Ok () -> Lwt.return (Ok { resulting_status = new_status }))
     in
     (* Step 4: the exact accepted relation, locked last of all. *)
-    let remove_relation ~project_id ~community_id =
+    let remove_relation ~project_id ~community_id ~setup_draft =
       C.find_opt lock_accepted_relation_query (project_id, community_id)
       >>= function
       | Error _ -> rollback_to Storage_error
@@ -313,6 +329,32 @@ let remove (module C : Caqti_lwt.CONNECTION) ~actor_user_id ~project_slug
             && has_reviewed_at && removed_at_null && reviewed_ge && updated_ge
           in
           if not row_shape_ok then rollback_to Inconsistent_data
+          else if setup_draft then
+            (* Community and relation are classified together, only here —
+               after the project, the community, all three authorization
+               rows, and the relation itself have been locked and
+               validated, so an unauthorized caller still cannot learn that
+               a community exists, let alone its lifecycle.
+
+               The provisioning store writes the dedicated draft's home
+               with no requester, no reviewer, and no note (row_shape_ok
+               already proved reviewed_at present and removed_at NULL), and
+               that is the only accepted shape a draft may carry: a
+               dedicated draft has no moderator-reviewed home, because
+               nobody ever requested or reviewed one. So the exact
+               provisioned shape is the protected relation, and anything
+               else on a draft is contradictory provenance rather than an
+               ordinary removable relation. *)
+            let provisioned_shape =
+              requested_by = None && reviewed_by = None && stored_note = None
+            in
+            if provisioned_shape then
+              (* Deliberately the same payload-free variant every zero-row
+                 cause collapses into, so protection is not an oracle for
+                 "unpublished draft". Nothing is written; the transaction
+                 rolls back whole. *)
+              rollback_to Removal_unavailable
+            else rollback_to Inconsistent_data
           else (
             match removed_status_of_note stored_note with
             | None -> rollback_to Inconsistent_data
@@ -387,8 +429,15 @@ let remove (module C : Caqti_lwt.CONNECTION) ~actor_user_id ~project_slug
                        ~onboarding_state ~visibility ~indexable ~discoverable)
               then rollback_to Inconsistent_data
               else
+                (* Classified here because the lifecycle columns are only
+                   available under the community lock, but consulted only
+                   after authorization and the relation lock below. *)
+                let setup_draft =
+                  unpublished_setup_draft ~is_network_community
+                    ~onboarding_state ~visibility ~indexable ~discoverable
+                in
                 authorize ~project_id ~community_id (fun () ->
-                    remove_relation ~project_id ~community_id))
+                    remove_relation ~project_id ~community_id ~setup_draft))
     in
     (* Step 1: the project row, locked before anything else. *)
     C.start () >>= function

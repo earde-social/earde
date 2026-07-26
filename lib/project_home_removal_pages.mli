@@ -50,6 +50,7 @@ type connected_project = {
 
 val project_side_removal_form :
   ?request:Dream.request ->
+  removal_allowed:bool ->
   project_slug:string ->
   community_slug:string ->
   unit ->
@@ -57,7 +58,19 @@ val project_side_removal_form :
 (** The steward-facing removal control for the project's one accepted home,
     for insertion into the accepted state of the home-choice page.
 
-    Renders exactly one [POST
+    [removal_allowed:false] — the caller's durable derivation that the home
+    belongs to an unpublished dedicated-community setup draft, which the
+    removal store refuses to detach — renders the section heading and one
+    restrained sentence naming the structural reason and the ordinary way
+    forward, and nothing else: no form, no action path built anywhere in
+    that branch, no hidden field, no disabled control, no script, and no
+    destructive alternative. The copy promises no publication outcome, and
+    names no lifecycle column, authority, or provenance. No setup link is
+    offered: project stewardship does not establish that the viewer may
+    reach the community's setup surface, and this model carries nothing
+    that would.
+
+    [removal_allowed:true] renders exactly one [POST
     /projects/<project-slug>/community-home/<community-slug>/remove] form
     whose action is built structurally from the two supplied canonical
     slugs. The form carries zero application fields, no hidden id, slug, or
@@ -74,6 +87,7 @@ val project_side_removal_form :
 
 val community_side_management_section :
   ?request:Dream.request ->
+  removal_allowed:bool ->
   community_slug:string ->
   projects:connected_project list ->
   unit ->
@@ -82,7 +96,18 @@ val community_side_management_section :
     settings surface, listing each accepted connected project's public
     identity and its removal control.
 
-    Each actionable project renders one [POST
+    [removal_allowed:false] — the settings surface's own derivation that
+    this community is an unpublished network setup draft, whose provisioned
+    home the removal store refuses to detach — keeps every connected
+    project's identity visible, so a moderator still sees which project the
+    draft belongs to, but makes every row inert: no row builds an action
+    path, and the section copy states the draft-integrity reason in place of
+    the association-only warning, which would otherwise describe a control
+    this surface does not offer. The section is still rendered, so the
+    settings panel and its navigation entry stay in place alongside the
+    existing "Complete setup and publish" link.
+
+    [removal_allowed:true] renders, for each actionable project, one [POST
     /c/<community-slug>/projects/<project-slug>/remove-home] form, built
     structurally from the two canonical slugs, with zero application
     fields, no hidden identifier, and a nameless submit button. Dream's

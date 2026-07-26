@@ -161,7 +161,19 @@ let state_of_view ~request_note view =
       | Project_home_relation.Accepted ->
           Ok
             (Pages_phc.Active_relation
-               { project; relation = Pages_phc.Accepted_home community })
+               {
+                 project;
+                 relation =
+                   Pages_phc.Accepted_home
+                     {
+                       community;
+                       (* The read model's durable derivation, carried
+                          across as the bare boolean it is: the raw target
+                          lifecycle never reaches the page. *)
+                       removal_allowed =
+                         Read.active_relation_removal_allowed relation;
+                     };
+               })
       | Project_home_relation.Rejected | Project_home_relation.Removed ->
           Error ())
   | None -> (

@@ -26,6 +26,11 @@
       chooser, and no-eligible-community states never carry it, and
       rendering it authorizes nothing — the transactional removal store
       reauthorizes the POST;
+    - an accepted home with [removal_allowed = false] carries no removal
+      form and no removal action path at all, only the fragment's
+      restrained draft-integrity copy; suppressing the form likewise
+      authorizes nothing, and the store refuses a forged POST on its own
+      durable authority;
     - an active relation always suppresses the request form, and malformed
       view models degrade instead of raising: an invalid project slug
       drops every actionable form and project-derived link, a non-positive
@@ -65,7 +70,17 @@ type project = {
 
 type active_relation =
   | Pending_request of community
-  | Accepted_home of community
+  | Accepted_home of {
+      community : community;
+      removal_allowed : bool;
+    }
+      (** [removal_allowed] is the handler's derivation from the choice
+          read model of whether the removal store could detach this home at
+          all: [false] for exactly an unpublished dedicated-community setup
+          draft, whose provisioned home is structurally required until the
+          community is published. It selects between the removal form and
+          the restrained draft-integrity copy, and authorizes nothing on
+          its own — the transactional store re-decides every POST. *)
 
 type state =
   | Choose_existing of {

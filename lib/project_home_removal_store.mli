@@ -22,6 +22,34 @@
     revocation, verification change, or lifecycle change serializes
     against the removal instead of racing it.
 
+    One durable exception overrides that authority entirely: while the
+    target community is the exact unpublished dedicated-community setup
+    draft ([is_network_community], [onboarding_state = 'draft'],
+    [visibility = 'private'], neither [indexable] nor [discoverable]) and
+    its accepted home carries the exact provisioned shape the provisioning
+    store wrote (NULL requester, NULL reviewer, NULL note, [reviewed_at]
+    present, [removed_at] NULL), the relation cannot be removed by anyone —
+    project steward, target top moderator, durable global administrator, or
+    an actor holding several of those at once. The provisioned home is part
+    of the draft's structural integrity, exactly like its initial
+    membership, top moderator, section, and channel: detaching it would
+    leave a community that can no longer be published (publication requires
+    the relation) and an orphan shell carrying membership and moderation
+    rows. The answer is the ordinary [Removal_unavailable], so protection is
+    never an oracle for "unpublished draft", and nothing is written. A draft
+    whose accepted home is *not* the provisioned shape — a requester,
+    reviewer, or note present — is contradictory provenance rather than an
+    ordinary removable relation, and is [Inconsistent_data]: a dedicated
+    draft has no moderator-reviewed home, because nobody ever requested or
+    reviewed one. This store is authoritative for the rule; the two
+    surfaces that suppress the removal form grant nothing by doing so.
+
+    Once the draft has been published as Public or Unlisted the protection
+    ends and the ordinary unilateral policy resumes — a published network
+    community's provisioned home is removable by any of the three
+    authorities. Legacy and general communities are unaffected in every
+    lifecycle state.
+
     Unlike the request and review stores, removal deliberately requires
     neither current project verification nor current community host
     eligibility. A project whose verification went stale or was revoked,
@@ -116,7 +144,8 @@ val remove :
     every zero-row relation cause alike: no relation, a pending request, a
     rejected history row, an already removed row, an accepted home
     targeting another community, and a concurrent removal that committed
-    first. Malformed durable data ([Inconsistent_data]) and unexpected
+    first — and, deliberately indistinguishable from all of those, a
+    provisioned home protected by its community's unpublished setup draft. Malformed durable data ([Inconsistent_data]) and unexpected
     database failures ([Storage_error]) roll back completely: on any
     failure the accepted relation and every authorization row remain
     exactly as they were. *)

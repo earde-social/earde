@@ -37,6 +37,7 @@ type community = {
 type active_relation = {
   relation_status : Project_home_relation.status;
   relation_community : community;
+  relation_removal_allowed : bool;
 }
 
 type view = {
@@ -61,6 +62,9 @@ let community_description (c : community) = c.community_description
 let community_visibility (c : community) = c.community_visibility
 let active_relation_status (r : active_relation) = r.relation_status
 let active_relation_community (r : active_relation) = r.relation_community
+
+let active_relation_removal_allowed (r : active_relation) =
+  r.relation_removal_allowed
 let project (v : view) = v.view_project
 let active_relation (v : view) = v.view_active_relation
 let eligible_communities (v : view) = v.view_eligible_communities
@@ -206,12 +210,31 @@ let active_target_visibility ~visibility_raw ~onboarding_raw
   with
   | Some parsed_visibility, Ok parsed_onboarding ->
       if indexable <> discoverable then Error ()
-      else if
-        is_network_community
-        && parsed_onboarding = Db.Community_published
-        && parsed_visibility = Db.Community_public
-      then Ok (if indexable then Public else Unlisted)
-      else Ok Currently_unavailable
+      else
+        (* The one derived permission the accepted state needs: whether
+           the transactional removal store could detach this home at all.
+           False for exactly the unpublished dedicated-community setup
+           draft, whose provisioned home is structurally required until
+           the community is published; true for every published network
+           community and every ordinary accepted home. Under the scoped
+           lifecycle CHECK a network community in draft is necessarily
+           private and leaks through neither indexing nor discovery, so
+           these two columns are the complete structural rule; a
+           hypothetical drifted network draft stays on the protected side,
+           which is where the store's own answer would land it. Only the
+           boolean crosses — no lifecycle detail rides with it. *)
+        let removal_allowed =
+          not (is_network_community && parsed_onboarding = Db.Community_draft)
+        in
+        let visibility =
+          if
+            is_network_community
+            && parsed_onboarding = Db.Community_published
+            && parsed_visibility = Db.Community_public
+          then if indexable then Public else Unlisted
+          else Currently_unavailable
+        in
+        Ok (visibility, removal_allowed)
   | None, _ | _, Error _ -> Error ()
 
 let active_community_of_row ((status_raw, id), (name, slug))
@@ -228,10 +251,11 @@ let active_community_of_row ((status_raw, id), (name, slug))
             ~is_network_community ~indexable ~discoverable
         with
         | Error () -> Error ()
-        | Ok visibility ->
+        | Ok (visibility, removal_allowed) ->
             Ok
               {
                 relation_status = status;
+                relation_removal_allowed = removal_allowed;
                 relation_community =
                   {
                     community_id = id;

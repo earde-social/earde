@@ -999,8 +999,15 @@ let with_connected_projects db ?user request ~community_slug k =
    itself — an ordinary moderator's settings page never issues this query and never receives
    a fragment, so the panel cannot exist for them. Rendering a form still authorizes nothing:
    Project_home_removal_store reauthorizes every removal POST against the three durable
-   sources. *)
-let with_settings_connected_projects db ?user request ~community_slug ~authorized k =
+   sources.
+
+   [removal_allowed] is this surface's own reading of the community it already
+   loaded: an unpublished network setup draft structurally requires its
+   provisioned home, so the section renders identities without controls. It
+   suppresses a form, never a fact, and the store stays authoritative — a forged
+   POST against a protected draft is refused there, not here. *)
+let with_settings_connected_projects db ?user request ~community_slug ~authorized
+    ~removal_allowed k =
   let module R = Community_connected_projects_read_model in
   if not authorized then k ""
   else
@@ -1021,7 +1028,8 @@ let with_settings_connected_projects db ?user request ~community_slug ~authorize
         in
         k
           (Project_home_removal_pages.community_side_management_section ~request
-             ~community_slug ~projects:(List.map page_model projects) ())
+             ~removal_allowed ~community_slug
+             ~projects:(List.map page_model projects) ())
     | Error (R.Invalid_community_slug | R.Community_unavailable) ->
         community_not_found ?user request
     | Error (R.Inconsistent_data | R.Storage_error) ->
@@ -2069,6 +2077,10 @@ let community_settings_handler request =
                       with_settings_connected_projects db ?user request
                         ~community_slug:community.slug
                         ~authorized:(is_top_mod || is_admin)
+                        ~removal_allowed:
+                          (not
+                             (community.is_network_community
+                             && community.onboarding_state = Db.Community_draft))
                         (fun connected_projects ->
                       Dream.html (Pages.community_settings_page ?user ~connected_projects ~is_admin ~is_top_mod ~open_reports_count ~community ~mods ~banned_users ~members ~sections ~channels request))
                   | Error e -> Dream.html ("DB Error: " ^ e))

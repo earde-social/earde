@@ -143,3 +143,21 @@ val active_relation_community : active_relation -> community
     so the relation stays visible after later lifecycle drift; a target
     that became ineligible carries {!Currently_unavailable} rather than a
     false [Public]/[Unlisted] label. *)
+
+val active_relation_removal_allowed : active_relation -> bool
+(** Whether the transactional {!Project_home_removal_store} could detach
+    this home at all, derived from the target's durable lifecycle. It is
+    [false] for exactly the unpublished dedicated-community setup draft,
+    whose provisioned home is part of the draft's structural integrity and
+    is durably unremovable by every authority until the community is
+    published; [true] for a published network community and for every
+    ordinary accepted home, including targets that later drifted to
+    {!Currently_unavailable} — a home must stay separable precisely when
+    its community's lifecycle has drifted.
+
+    Only meaningful for the accepted state; a pending relation carries no
+    removal control on any surface. The raw lifecycle never crosses, so a
+    suppressed control names no reason. This is presentation permission
+    only: it authorizes nothing, and the store independently re-decides
+    every POST — a surface that renders no form grants nothing, and one
+    that renders a form grants nothing either. *)

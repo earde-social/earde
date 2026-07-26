@@ -78,6 +78,17 @@ let association_only_copy =
 let warning_html cls =
   Printf.sprintf "<p class='%s'>%s</p>" cls association_only_copy
 
+(* The copy both surfaces show instead of a removal control while the home
+   belongs to an unpublished dedicated-community setup draft. It states the
+   structural reason and the ordinary way forward, and deliberately stops
+   there: it promises no publication outcome, offers no destructive
+   alternative, and names no lifecycle column, authority, or provenance.
+   There is no hidden field and no script behind it — the control is absent,
+   not merely disabled, and the store refuses the POST regardless. *)
+let draft_integrity_copy =
+  "This project home is part of an unpublished community setup draft. \
+   Complete setup and publish the community before detaching it."
+
 (* Both slugs are validated before an action path is built, so escaping
    here is defense-in-depth over values already known canonical. *)
 let project_side_action ~project_slug ~community_slug =
@@ -105,22 +116,34 @@ let removal_form ~request ~action ~cls =
 
 (* --- Project side: the steward's control for the one accepted home --- *)
 
-let project_side_removal_form ?request ~project_slug ~community_slug () =
-  let form =
-    (* Without both canonical slugs there is no POST target to build, so
-       the section degrades to its copy alone rather than emitting an
-       action that guesses at the missing identity. *)
-    if valid_project_slug project_slug && valid_community_slug community_slug
-    then
-      removal_form ~request
-        ~action:(project_side_action ~project_slug ~community_slug)
-        ~cls:"phrm-project-side"
-    else ""
-  in
-  Printf.sprintf
-    "<div class='phrm-removal'>\
-     <h2 class='phrm-removal-title'>Remove community home</h2>%s%s</div>"
-    (warning_html "phrm-removal-copy") form
+let project_side_removal_form ?request ~removal_allowed ~project_slug
+    ~community_slug () =
+  if not removal_allowed then
+    (* No form at all, and no action path built anywhere in this branch —
+       so nothing a forged submission could be lifted from is emitted. The
+       heading drops "Remove" with it: naming an action the store refuses
+       would be the same lie the form itself would be. *)
+    Printf.sprintf
+      "<div class='phrm-removal phrm-removal--protected'>\
+       <h2 class='phrm-removal-title'>Community home</h2>\
+       <p class='phrm-removal-copy'>%s</p></div>"
+      draft_integrity_copy
+  else
+    let form =
+      (* Without both canonical slugs there is no POST target to build, so
+         the section degrades to its copy alone rather than emitting an
+         action that guesses at the missing identity. *)
+      if valid_project_slug project_slug && valid_community_slug community_slug
+      then
+        removal_form ~request
+          ~action:(project_side_action ~project_slug ~community_slug)
+          ~cls:"phrm-project-side"
+      else ""
+    in
+    Printf.sprintf
+      "<div class='phrm-removal'>\
+       <h2 class='phrm-removal-title'>Remove community home</h2>%s%s</div>"
+      (warning_html "phrm-removal-copy") form
 
 (* --- Community side: the settings management section --- *)
 
@@ -151,7 +174,8 @@ let project_row_html ~request ~community_slug ~actionable (p : connected_project
   Printf.sprintf "<li class='phrm-project'>%s%s</li>"
     (project_identity_html p) form
 
-let community_side_management_section ?request ~community_slug ~projects () =
+let community_side_management_section ?request ~removal_allowed ~community_slug
+    ~projects () =
   let addressable = valid_community_slug community_slug in
   let rendered =
     let rec render seen = function
@@ -159,7 +183,12 @@ let community_side_management_section ?request ~community_slug ~projects () =
       | (p : connected_project) :: rest ->
           let canonical = valid_project_slug p.slug in
           let actionable =
-            addressable && canonical && not (List.mem p.slug seen)
+            (* An unpublished setup draft makes every row inert: the
+               connected project's identity still shows, because a
+               moderator should see which project the draft belongs to,
+               but no row builds an action path. *)
+            removal_allowed && addressable && canonical
+            && not (List.mem p.slug seen)
           in
           let seen = if canonical then p.slug :: seen else seen in
           project_row_html ~request ~community_slug ~actionable p
@@ -175,7 +204,13 @@ let community_side_management_section ?request ~community_slug ~projects () =
     | [] -> "<p class='phrm-none'>No connected projects.</p>"
     | rows ->
         Printf.sprintf "%s<ul class='phrm-projects'>%s</ul>"
-          (warning_html "phrm-section-copy")
+          (if removal_allowed then warning_html "phrm-section-copy"
+           else
+             (* The association-only warning describes a control this
+                surface does not offer; the draft-integrity reason takes
+                its place. *)
+             Printf.sprintf "<p class='phrm-section-copy'>%s</p>"
+               draft_integrity_copy)
           (String.concat "\n" rows)
   in
   Printf.sprintf

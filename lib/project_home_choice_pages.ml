@@ -31,7 +31,10 @@ type project = {
 
 type active_relation =
   | Pending_request of community
-  | Accepted_home of community
+  | Accepted_home of {
+      community : community;
+      removal_allowed : bool;
+    }
 
 type state =
   | Choose_existing of {
@@ -272,8 +275,14 @@ let pending_html (community : community) =
    removal fragment itself, so a malformed one silently drops the form
    rather than building an unusable action. Removal is deliberately
    available while the target is Currently_unavailable: a home must stay
-   separable exactly when the community's lifecycle has drifted. *)
-let accepted_html ?request ~(project : project) (community : community) =
+   separable exactly when the community's lifecycle has drifted.
+
+   [removal_allowed] is the one exception, and it is not a drift state: an
+   unpublished dedicated-community setup draft structurally requires its
+   provisioned home, so the fragment renders its reason instead of a
+   control. Presentation only — the removal store re-decides every POST. *)
+let accepted_html ?request ~(project : project) ~removal_allowed
+    (community : community) =
   Printf.sprintf
     "<div class='create-head'><h1 class='create-title'>Community home \
      connected</h1></div>\
@@ -284,7 +293,8 @@ let accepted_html ?request ~(project : project) (community : community) =
     (community_identity_html community)
     (availability_html community)
     (Project_home_removal_pages.project_side_removal_form ?request
-       ~project_slug:project.slug ~community_slug:community.slug ())
+       ~removal_allowed ~project_slug:project.slug
+       ~community_slug:community.slug ())
 
 let project_home_choice_page ?user ?request ~state ~feedback () =
   let body =
@@ -295,8 +305,9 @@ let project_home_choice_page ?user ?request ~state ~feedback () =
     | Active_relation { project = _; relation = Pending_request community }
       ->
         pending_html community
-    | Active_relation { project; relation = Accepted_home community } ->
-        accepted_html ?request ~project community
+    | Active_relation
+        { project; relation = Accepted_home { community; removal_allowed } } ->
+        accepted_html ?request ~project ~removal_allowed community
   in
   let body =
     Printf.sprintf
