@@ -14666,6 +14666,66 @@ let ps_order frag first second =
         true (i < j)
   | _ -> Alcotest.fail "expected both order markers present"
 
+(* --- Structural form inspection -----------------------------------------
+   Dream's framework field renders as
+   [<input name="dream.csrf" type="hidden" value="TOKEN">] with a fresh
+   random token per request. Any assertion that searches a whole rendered
+   page for a short literal — an internal id, a count — can be spelled by
+   those random bytes and fail at random, so absence assertions inspect
+   structure instead: the form's own inputs, or a page with the framework
+   fields removed. No assertion ever reads the token's bytes. *)
+
+let ps_csrf_input_prefix = "<input name=\"dream.csrf\" type=\"hidden\" value=\""
+
+(* Slices the first [<form ...>...</form>] region out of rendered HTML. *)
+let ps_form_region html =
+  match ps_index_of html "<form" 0 with
+  | None -> Alcotest.fail "no form in the rendered markup"
+  | Some s -> (
+      match ps_index_of html "</form>" s with
+      | None -> Alcotest.fail "unterminated form element"
+      | Some e -> String.sub html s (e - s))
+
+(* Every [<input ...>] tag of a region, as raw tag text, in source order. *)
+let ps_input_tags region =
+  let rec go from acc =
+    match ps_index_of region "<input" from with
+    | None -> List.rev acc
+    | Some s -> (
+        match String.index_from_opt region s '>' with
+        | None -> Alcotest.fail "unterminated input element"
+        | Some e -> go (e + 1) (String.sub region s (e + 1 - s) :: acc))
+  in
+  go 0 []
+
+(* True when [tag] is exactly the framework CSRF field: the framework
+   prefix, then one opaque value that is the tag's last attribute. The
+   value is bounded but never read, so an extra attribute smuggled in
+   after it fails the check. *)
+let ps_is_csrf_input tag =
+  let pl = String.length ps_csrf_input_prefix and tl = String.length tag in
+  tl >= pl + 2
+  && String.sub tag 0 pl = ps_csrf_input_prefix
+  && String.sub tag (tl - 2) 2 = "\">"
+  && not (String.contains (String.sub tag pl (tl - pl - 2)) '"')
+
+(* Rendered HTML with every framework CSRF field dropped, so a whole-page
+   absence assertion cannot trip over random token bytes. *)
+let ps_without_csrf_inputs html =
+  let len = String.length html in
+  let buf = Buffer.create len in
+  let rec go from =
+    match ps_index_of html ps_csrf_input_prefix from with
+    | None -> Buffer.add_string buf (String.sub html from (len - from))
+    | Some s -> (
+        Buffer.add_string buf (String.sub html from (s - from));
+        match String.index_from_opt html s '>' with
+        | None -> Alcotest.fail "unterminated CSRF input element"
+        | Some e -> go (e + 1))
+  in
+  go 0;
+  Buffer.contents buf
+
 let psp_case name f = Alcotest.test_case name `Quick f
 
 let ps_draft ?(id = 11L) ?(login = "octo-org") ?(atype = Psp.Organization)
@@ -28227,9 +28287,10 @@ module Phhr = struct
           Alcotest.(check bool) "admin link present" true
             (contains admin nav_link);
           (* Canonical slug only — never the community id, a count, a form,
-             or script. *)
+             or script. The framework CSRF fields are dropped first: their
+             random token bytes could otherwise spell the id by chance. *)
           Alcotest.(check bool) "no community id in link" false
-            (contains top_mod "4242");
+            (contains (ps_without_csrf_inputs top_mod) "4242");
           Alcotest.(check bool) "one queue link, not two" true
             (ps_count top_mod nav_link = 1))
     ; case "settings nav: an unauthorized (regular-mod) settings surface never \
@@ -32797,15 +32858,40 @@ module Phrh = struct
             (contains none "community-home"))
     ; case "request-home page: the accepted removal form carries no hidden id \
             or slug field" (fun () ->
-          let html = choice_page (accepted_state ()) in
-          let frag = ps_fragment html in
+          let frag = ps_fragment (choice_page (accepted_state ())) in
           Alcotest.(check int) "one form on the accepted page" 1
             (ps_count frag "<form");
-          Alcotest.(check int) "only the framework CSRF input" 1
-            (ps_count frag "<input");
-          Alcotest.(check bool) "the one input is the CSRF field" true
-            (contains frag "name=\"dream.csrf\"");
-          Alcotest.(check bool) "no community id" false (contains frag "77"))
+          let form = ps_form_region frag in
+          (* Both identities ride the route path structurally, which is why
+             the form needs no field of its own. *)
+          Alcotest.(check bool) "both slugs ride the form action" true
+            (contains form (Printf.sprintf "action='%s'" removal_action));
+          (* The form's only input is the framework CSRF field, carrying the
+             framework's own attributes and nothing more. A hidden community
+             id, project slug, or community slug would surface here either as
+             a second input or as an extra attribute on this one. *)
+          (match ps_input_tags form with
+          | [ tag ] ->
+              Alcotest.(check bool) "the one input is the framework CSRF field"
+                true (ps_is_csrf_input tag)
+          | tags ->
+              Alcotest.failf "expected exactly one input, got %d"
+                (List.length tags));
+          (* The pages render their own attributes single-quoted and the
+             framework renders double-quoted, so an application-owned field
+             of any kind would show up in these two counts. *)
+          Alcotest.(check int) "no application-owned named field" 0
+            (ps_count form "name='");
+          Alcotest.(check int) "no application-owned hidden field" 0
+            (ps_count form "type='hidden'");
+          (* Exactly one named field on the whole form, and it is the
+             framework's. *)
+          Alcotest.(check int) "one named field" 1 (ps_count form "name=\"");
+          Alcotest.(check bool) "and it is the CSRF field" true
+            (contains form "name=\"dream.csrf\"");
+          (* Nothing outside that form carries a field either. *)
+          Alcotest.(check int) "no input elsewhere on the page" 1
+            (ps_count frag "<input"))
     ; case "request-home page: a malformed project or community slug \
             suppresses the removal form on the accepted page" (fun () ->
           let bad_project =
