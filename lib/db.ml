@@ -2079,7 +2079,13 @@ module Membership = struct
   let get_user_communities_query =
     let open Caqti_request.Infix in
     (Caqti_type.int ->* community_row_type)
-    "SELECT a.id, a.slug, a.name, a.description, a.rules, a.avatar_url, a.banner_url, a.allow_downvotes, a.sections_enabled, a.visibility, a.indexable
+    (* All fourteen community_row_type columns: the lifecycle trio
+       (is_network_community, onboarding_state, discoverable) was added to the
+       shared row type without being added here, so a user with at least one
+       membership decoded past the end of the result and the driver raised
+       Postgresql.Error out of Dream.sql. Zero rows never decode, which is why
+       it stayed hidden. *)
+    "SELECT a.id, a.slug, a.name, a.description, a.rules, a.avatar_url, a.banner_url, a.allow_downvotes, a.sections_enabled, a.visibility, a.indexable, a.is_network_community, a.onboarding_state, a.discoverable
      FROM communities a
      JOIN community_members am ON a.id = am.community_id
      WHERE am.user_id = $1
@@ -2254,7 +2260,9 @@ module Moderator = struct
   let get_moderated_communities_query =
     let open Caqti_request.Infix in
     (Caqti_type.int ->* community_row_type)
-    "SELECT a.id, a.slug, a.name, a.description, a.rules, a.avatar_url, a.banner_url, a.allow_downvotes, a.sections_enabled, a.visibility, a.indexable
+    (* Same fourteen-column contract as get_user_communities_query above, and
+       the same latent decode overrun before it was completed. *)
+    "SELECT a.id, a.slug, a.name, a.description, a.rules, a.avatar_url, a.banner_url, a.allow_downvotes, a.sections_enabled, a.visibility, a.indexable, a.is_network_community, a.onboarding_state, a.discoverable
      FROM communities a
      JOIN community_moderators am ON a.id = am.community_id
      WHERE am.user_id = $1
