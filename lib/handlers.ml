@@ -929,6 +929,68 @@ let create_community_handler request =
           ))
       | _ -> Dream.respond ~status:`Bad_Request (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Form Error" ~message:"Your form submission was invalid. Please try again." ~alert_type:"error" ~return_url:"/new-community" request)
 
+(* === Connected projects on the community page ===
+   The accepted project-home relations of a community, rendered inside the community page
+   the route already serves. Deliberately read only AFTER the route's own community lookup
+   and can_view_community decision have completed, so this section can never become a side
+   channel that reveals a private, draft, or otherwise unviewable community — it only adds
+   detail to a page the viewer was already entitled to see. It broadens access to nothing:
+   no GitHub authorization is consulted, and anonymous visitors to a public community see
+   exactly what any other viewer of that page sees. *)
+
+(* The read model and the page module are deliberately independent — neither depends on the
+   other — so this route is the one place the two vocabularies meet. *)
+let connected_project_page_model project =
+  let module R = Community_connected_projects_read_model in
+  let repositories =
+    List.map
+      (fun r : Community_connected_projects_pages.repository ->
+        { full_name = R.repository_full_name r;
+          html_url = R.repository_html_url r;
+          is_primary = R.repository_is_primary r;
+          is_archived = R.repository_is_archived r })
+      (R.project_repositories project)
+  in
+  let verification : Community_connected_projects_pages.verification =
+    match R.project_verification project with
+    | R.Verified -> Verified
+    | R.Stale -> Stale
+    | R.Revoked -> Revoked
+  in
+  ({ name = R.project_name project;
+     slug = R.project_slug project;
+     kind = R.project_kind project;
+     namespace_login = R.project_namespace_login project;
+     verification;
+     website_url = R.project_website_url project;
+     repositories }
+    : Community_connected_projects_pages.project)
+
+(* One generic, non-cacheable 500: no Caqti/PostgreSQL detail, error constructor, or durable
+   value reaches the page. Durable corruption is never rendered away as a quietly incomplete
+   community page. *)
+let connected_projects_error_page ?user request =
+  Dream.respond ~status:`Internal_Server_Error
+    ~headers:[ ("Cache-Control", "no-store"); ("Pragma", "no-cache") ]
+    (Pages.msg_page ?user ~title:"Error"
+       ~message:"Something went wrong on our side. Please try again."
+       ~alert_type:"error" ~return_url:"/" request)
+
+(* A slug or community that no longer resolves reuses the route's existing generic
+   unavailable response, byte-for-byte — a community that vanished between the route's own
+   lookup and this read must not become distinguishable from one that never existed. *)
+let with_connected_projects db ?user request ~community_slug k =
+  let module R = Community_connected_projects_read_model in
+  match%lwt R.load_for_community db ~community_slug with
+  | Ok projects ->
+      k
+        (Community_connected_projects_pages.connected_projects_section
+           ~projects:(List.map connected_project_page_model projects))
+  | Error (R.Invalid_community_slug | R.Community_unavailable) ->
+      community_not_found ?user request
+  | Error (R.Inconsistent_data | R.Storage_error) ->
+      connected_projects_error_page ?user request
+
 let community_page_handler request =
   let slug = Dream.param request "slug" in
   let user = Dream.session_field request "username" in
@@ -983,7 +1045,10 @@ let community_page_handler request =
              let mod_usernames = List.map (fun (e: Db.moderator_entry) -> e.username) mods in
              let is_mod = user_id > 0 && List.exists (fun (e: Db.moderator_entry) -> e.user_id = user_id) mods in
              let is_top_mod = user_id > 0 && List.exists (fun (e: Db.moderator_entry) -> e.user_id = user_id && e.role = "top_mod") mods in
-             Dream.html (Pages.community_overview_page ?user ~noindex:(community_noindex community) ~is_member:m ~is_current_user_mod:is_mod ~is_current_user_top_mod:is_top_mod ~mod_usernames ~orphaned ~channels ~recent_posts community section_stats request)
+             (* Order: lookup → authorization → existing page data → connected projects →
+                render. Never before the authorization decision above. *)
+             with_connected_projects db ?user request ~community_slug:slug (fun connected_projects ->
+               Dream.html (Pages.community_overview_page ?user ~noindex:(community_noindex community) ~connected_projects ~is_member:m ~is_current_user_mod:is_mod ~is_current_user_top_mod:is_top_mod ~mod_usernames ~orphaned ~channels ~recent_posts community section_stats request))
          | _ -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:"Failed to load community sections." ~alert_type:"error" ~return_url:"/" request))
     | Ok (Some community) ->
         let%lwt authorized = can_view_community db ~user_id ~is_admin community in
@@ -1005,7 +1070,10 @@ let community_page_handler request =
              let mod_usernames = List.map (fun (e: Db.moderator_entry) -> e.username) mods in
              let is_mod = user_id > 0 && List.exists (fun (e: Db.moderator_entry) -> e.user_id = user_id) mods in
              let is_top_mod = user_id > 0 && List.exists (fun (e: Db.moderator_entry) -> e.user_id = user_id && e.role = "top_mod") mods in
-             Dream.html (Pages.community_page ?user ~noindex:(community_noindex community) ~is_member:m ~is_current_user_mod:is_mod ~is_current_user_top_mod:is_top_mod ~mod_usernames ~admin_usernames ~banned_usernames ~user_communities ~moderated_communities v page sort_str community p request)
+             (* Same order as the structured branch: the connected-projects read follows the
+                authorization decision and the existing feed load. *)
+             with_connected_projects db ?user request ~community_slug:slug (fun connected_projects ->
+               Dream.html (Pages.community_page ?user ~noindex:(community_noindex community) ~connected_projects ~is_member:m ~is_current_user_mod:is_mod ~is_current_user_top_mod:is_top_mod ~mod_usernames ~admin_usernames ~banned_usernames ~user_communities ~moderated_communities v page sort_str community p request))
          | _ -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:"Failed to load community data." ~alert_type:"error" ~return_url:"/" request))
     | Ok None -> Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"Not Found" ~message:"This community does not exist." ~alert_type:"error" ~return_url:"/" request)
     | Error err -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:("Database error: " ^ err) ~alert_type:"error" ~return_url:"/" request)

@@ -331,7 +331,11 @@ let new_community_form ?user request =
   in
   Components.create_page ?user ~request ~title:"New Community" ~body:content ()
 
-let community_page ?user ?(noindex=false) ?section:(section : community_section option) ~is_member ~is_current_user_mod ~is_current_user_top_mod ~mod_usernames ~admin_usernames ~banned_usernames ~user_communities ~moderated_communities user_votes current_page sort_mode (community : community) (posts : post list) request =
+(* [connected_projects] is the pre-rendered Connected-projects fragment supplied by the
+   community route (Community_connected_projects_pages), or "" when the community has no
+   accepted project home — and always "" on the section feeds, which are not /c/:slug.
+   Defaulting to "" keeps every existing caller unchanged. *)
+let community_page ?user ?(noindex=false) ?(connected_projects="") ?section:(section : community_section option) ~is_member ~is_current_user_mod ~is_current_user_top_mod ~mod_usernames ~admin_usernames ~banned_usernames ~user_communities ~moderated_communities user_votes current_page sort_mode (community : community) (posts : post list) request =
   let csrf_token = Dream.csrf_tag request in
   let is_admin = Dream.session_field request "is_admin" = Some "true" in
   let has_next = List.length posts = 20 in
@@ -557,6 +561,7 @@ let community_page ?user ?(noindex=false) ?section:(section : community_section 
                     %s
                     %s
                     %s
+                    %s
                 </div>
             </div>
         </div>
@@ -568,7 +573,7 @@ let community_page ?user ?(noindex=false) ?section:(section : community_section 
     create_post_btn settings_btn membership_btn
     (section_header ^ sort_menu) posts_html
     prev_btn current_page next_btn
-    community_info_card rules_card mods_card toggle_downvotes_card
+    community_info_card rules_card mods_card toggle_downvotes_card connected_projects
   in
   Components.layout ?user ~noindex ~request ~analytics_community:(community.id, community.visibility)
     ~title:community.name content
@@ -1823,7 +1828,9 @@ let thread_shell_page ?user ?(noindex=false) ~is_member ~is_current_user_mod ~mo
    no created_at, because Db.community carries neither. SSR-only: every link/form works with JS
    off. Public presentation only — management (downvotes, mods, sections, bans) lives in
    /c/:slug/settings; the only management affordance here is the gated "Edit community" link. *)
-let community_overview_page ?user ?(noindex=false) ~is_member ~is_current_user_mod ~is_current_user_top_mod
+(* [connected_projects]: see community_page — the same pre-rendered fragment, supplied by the
+   same /c/:slug route after its existing authorization, and "" when there is nothing to show. *)
+let community_overview_page ?user ?(noindex=false) ?(connected_projects="") ~is_member ~is_current_user_mod ~is_current_user_top_mod
     ~mod_usernames ~orphaned ~(channels : channel list) ~(recent_posts : post list)
     (community : community) (section_stats : (community_section * int * string option) list) request =
   let csrf_token = Dream.csrf_tag request in
@@ -2071,7 +2078,7 @@ let community_overview_page ?user ?(noindex=false) ~is_member ~is_current_user_m
     <div class='ch-wrap'>
       <div class='ch-grid'>
         <div>%s%s%s</div>
-        <div>%s%s%s</div>
+        <div>%s%s%s%s</div>
       </div>
     </div>
   </section>
@@ -2084,7 +2091,7 @@ let community_overview_page ?user ?(noindex=false) ~is_member ~is_current_user_m
     channel_count (plural channel_count)
     primary_cta membership_btn settings_btn
     channels_block sections_block recent_block
-    rules_panel mods_panel modlog_card
+    rules_panel mods_panel modlog_card connected_projects
   in
   Components.community_home_page ?user ~noindex ~request
     ~analytics_community:(community.id, community.visibility) ~title:community.name

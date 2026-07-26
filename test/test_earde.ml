@@ -28987,6 +28987,1919 @@ module Phhr = struct
       get_inconsistent_case; post_storage_case ]
 end
 
+(* === Community connected-projects read model
+   (Community_connected_projects_read_model) ===
+   The accepted project-home relations of one community, read for the
+   "Connected projects" section of the existing community page. Accepted
+   relations are produced through the real chain wherever the product has one
+   — draft/selection/finalization for the project, the request store plus the
+   transactional review store for a reviewed acceptance — and only an
+   automatically provisioned home (which no store writes yet) uses a
+   schema-valid production-shaped INSERT. Database-gated
+   (EARDE_TEST_DATABASE_URL, same opt-in as Mod_scope) with its own reserved
+   external-installation-id range 946200001..946200999 (hence account ids
+   946300001..946300999, which also scope the permanent-project cleanup),
+   ccpr_% usernames, and ccpr-% community slugs so no suite shares fixtures.
+   Pure validation is proven pre-SQL against a deliberately disconnected
+   connection. Every per-case wrapper disconnects deterministically. *)
+module Ccpr = struct
+  let ( let* ) = Lwt.bind
+
+  open Caqti_request.Infix
+
+  module Cp = Earde.Community_connected_projects_read_model
+  module Rq = Earde.Project_home_request_store
+  module Rvs = Earde.Project_home_review_store
+  module Fin = Earde.Project_finalization_store
+
+  let error_str : Cp.error -> string = function
+    | Cp.Invalid_community_slug -> "Invalid_community_slug"
+    | Cp.Community_unavailable -> "Community_unavailable"
+    | Cp.Inconsistent_data -> "Inconsistent_data"
+    | Cp.Storage_error -> "Storage_error"
+
+  let verification_str : Cp.verification -> string = function
+    | Cp.Verified -> "verified"
+    | Cp.Stale -> "stale"
+    | Cp.Revoked -> "revoked"
+
+  let or_fail = Pod_store.or_fail
+  let insert_user = Pod_store.insert_user
+  let exec = Pod_read.exec
+  let insert_community = Phcv.insert_community
+
+  (* Distinctive credential-shaped fixtures. None of these may ever reach a
+     value the public API returns; assertions on them are boolean so no
+     fixture byte reaches test output on failure. *)
+  let private_note = "ccpr private note ACCESS_TOKEN_gho_ccpr_secret"
+
+  let q_cleanup =
+    List.map
+      (fun sql -> (Caqti_type.unit ->. Caqti_type.unit) sql)
+      [ "DELETE FROM open_source_projects \
+         WHERE forge_namespace_id BETWEEN 946300001 AND 946300999"
+      ; "DELETE FROM project_onboarding_drafts \
+         WHERE github_installation_record_id IN \
+           (SELECT id FROM github_installations \
+            WHERE github_installation_id BETWEEN 946200001 AND 946200999)"
+      ; "DELETE FROM communities WHERE slug LIKE 'ccpr-%'"
+      ; "DELETE FROM users WHERE username LIKE 'ccpr_%'"
+      ; "DELETE FROM github_installations \
+         WHERE github_installation_id BETWEEN 946200001 AND 946200999"
+      ]
+
+  (* An automatically provisioned accepted home: no requester and no reviewer,
+     exactly the shape the production status CHECK admits for 'accepted'. No
+     store writes this yet, so the row is built directly rather than through a
+     test-only constructor. *)
+  let q_provision_accepted =
+    (Caqti_type.(t2 int64 int) ->. Caqti_type.unit)
+    "INSERT INTO community_projects \
+       (project_id, community_id, relation_type, status, reviewed_at) \
+     VALUES ($1, $2, 'home', 'accepted', NOW())"
+
+  (* A historical removed relation — reviewed and removed, outside the
+     one-active-home partial index, so it coexists with nothing active. *)
+  let q_insert_removed =
+    (Caqti_type.(t2 int64 int) ->. Caqti_type.unit)
+    "INSERT INTO community_projects \
+       (project_id, community_id, relation_type, status, reviewed_at, \
+        removed_at) \
+     VALUES ($1, $2, 'home', 'removed', NOW(), NOW())"
+
+  let q_insert_moderator =
+    (Caqti_type.(t3 int int string) ->. Caqti_type.unit)
+    "INSERT INTO community_moderators (user_id, community_id, role) \
+     VALUES ($1, $2, $3)"
+
+  let q_delete_project =
+    (Caqti_type.int64 ->. Caqti_type.unit)
+    "DELETE FROM open_source_projects WHERE id = $1"
+
+  (* Targeted durable corruption that the production CHECKs already admit:
+     forge_namespace_login only constrains btrim/length, website_url only
+     constrains btrim/non-empty/length, html_url only btrim<>'', and position
+     only > 0 with a per-project uniqueness rule. *)
+  let q_corrupt_login =
+    (Caqti_type.int64 ->. Caqti_type.unit)
+    "UPDATE open_source_projects \
+     SET forge_namespace_login = 'ccpr' || chr(1) || 'bad' WHERE id = $1"
+
+  let q_restore_login =
+    (Caqti_type.int64 ->. Caqti_type.unit)
+    "UPDATE open_source_projects \
+     SET forge_namespace_login = 'pfin-owner' WHERE id = $1"
+
+  let q_corrupt_name =
+    (Caqti_type.int64 ->. Caqti_type.unit)
+    "UPDATE open_source_projects \
+     SET name = 'ccpr' || chr(1) || 'bad' WHERE id = $1"
+
+  let q_set_name =
+    (Caqti_type.(t2 int64 string) ->. Caqti_type.unit)
+    "UPDATE open_source_projects SET name = $2 WHERE id = $1"
+
+  let q_corrupt_website =
+    (Caqti_type.int64 ->. Caqti_type.unit)
+    "UPDATE open_source_projects \
+     SET website_url = 'javascript:alert(1)' WHERE id = $1"
+
+  let q_clear_website =
+    (Caqti_type.int64 ->. Caqti_type.unit)
+    "UPDATE open_source_projects SET website_url = NULL WHERE id = $1"
+
+  let q_corrupt_repo_url =
+    (Caqti_type.int64 ->. Caqti_type.unit)
+    "UPDATE project_repositories \
+     SET html_url = 'https://evil.example/x' WHERE project_id = $1 \
+       AND position = 1"
+
+  let q_restore_repo_url =
+    (Caqti_type.int64 ->. Caqti_type.unit)
+    "UPDATE project_repositories \
+     SET html_url = 'https://github.com/pfin-owner/alpha' \
+     WHERE project_id = $1 AND position = 1"
+
+  let q_break_positions =
+    (Caqti_type.int64 ->. Caqti_type.unit)
+    "UPDATE project_repositories SET position = 7 \
+     WHERE project_id = $1 AND position = 2"
+
+  let q_delete_repos =
+    (Caqti_type.int64 ->. Caqti_type.unit)
+    "DELETE FROM project_repositories WHERE project_id = $1"
+
+  (* Two production constraints make their defensive read-model branches
+     unreachable from data alone. Each is dropped and restored inside the one
+     case that needs it, under Lwt.finalize so a failed assertion still leaves
+     the schema exactly as it was; production migrations are untouched. *)
+  let q_drop_verification_check =
+    (Caqti_type.unit ->. Caqti_type.unit)
+    "ALTER TABLE open_source_projects \
+     DROP CONSTRAINT open_source_projects_verification_status_check"
+
+  let q_add_verification_check =
+    (Caqti_type.unit ->. Caqti_type.unit)
+    "ALTER TABLE open_source_projects \
+     ADD CONSTRAINT open_source_projects_verification_status_check \
+     CHECK (verification_status IN ('verified', 'stale', 'revoked'))"
+
+  let q_set_verification =
+    (Caqti_type.(t2 int64 string) ->. Caqti_type.unit)
+    "UPDATE open_source_projects SET verification_status = $2 WHERE id = $1"
+
+  let q_drop_full_name_key =
+    (Caqti_type.unit ->. Caqti_type.unit)
+    "ALTER TABLE project_repositories \
+     DROP CONSTRAINT project_repositories_project_full_name_key"
+
+  let q_add_full_name_key =
+    (Caqti_type.unit ->. Caqti_type.unit)
+    "ALTER TABLE project_repositories \
+     ADD CONSTRAINT project_repositories_project_full_name_key \
+     UNIQUE (project_id, full_name)"
+
+  let q_duplicate_full_name =
+    (Caqti_type.int64 ->. Caqti_type.unit)
+    "UPDATE project_repositories \
+     SET full_name = 'pfin-owner/alpha', \
+         html_url = 'https://github.com/pfin-owner/alpha' \
+     WHERE project_id = $1 AND position = 2"
+
+  (* Emptying search_path hides the unqualified tables, so the first query
+     fails at the SQL layer and Caqti returns an Error the read model maps to
+     Storage_error — a genuine query failure, not a torn-down connection
+     (which the driver signals by raising, not by Error). *)
+  let q_break_search_path =
+    (Caqti_type.unit ->. Caqti_type.unit) "SET search_path TO ''"
+
+  let q_reset_search_path =
+    (Caqti_type.unit ->. Caqti_type.unit) "SET search_path TO public"
+
+  let db_case name f =
+    Alcotest.test_case name `Quick (fun () ->
+        match Sys.getenv_opt "EARDE_TEST_DATABASE_URL" with
+        | None | Some "" -> Alcotest.skip ()
+        | Some url ->
+            Lwt_main.run
+              (let* conn = Caqti_lwt_unix.connect (Uri.of_string url) in
+               let* conn = or_fail "connect" conn in
+               let (module C : Caqti_lwt.CONNECTION) = conn in
+               let cleanup () =
+                 Lwt_list.iter_s
+                   (fun q ->
+                     let* r = C.exec q () in
+                     let* _ = or_fail "cleanup" r in
+                     Lwt.return_unit)
+                   q_cleanup
+               in
+               let* () = cleanup () in
+               Lwt.finalize
+                 (fun () -> f conn)
+                 (fun () ->
+                   Lwt.finalize cleanup (fun () -> C.disconnect ()))))
+
+  (* === call helpers === *)
+
+  let load conn ~community = Cp.load_for_community conn ~community_slug:community
+
+  let load_ok label conn ~community =
+    let* r = load conn ~community in
+    match r with
+    | Ok projects -> Lwt.return projects
+    | Error e -> Alcotest.failf "%s: %s" label (error_str e)
+
+  let load_expect label expected conn ~community =
+    let* r = load conn ~community in
+    match r with
+    | Ok _ ->
+        Alcotest.failf "%s: expected %s, got Ok" label (error_str expected)
+    | Error e ->
+        Alcotest.(check string) label (error_str expected) (error_str e);
+        Lwt.return_unit
+
+  let slugs projects = List.map Cp.project_slug projects
+
+  let check_slugs label expected projects =
+    Alcotest.(check (list string)) label expected (slugs projects)
+
+  (* === fixtures === *)
+
+  (* Verified permanent projects come only through the real chain — draft
+     store, selection store, finalization store — never fixture INSERTs. *)
+  let make_project ?kind ?name ?website ?(repos = [ "alpha" ]) conn ~user
+      ~ext_id ~slug =
+    let base = Int64.add ext_id 400000L in
+    let* _inst, draft, _, _ =
+      Pfin.make_draft conn ~user ~ext_id (fun account_id ->
+          List.mapi
+            (fun i n ->
+              Pfin.repo ~account_id ~id:(Int64.add base (Int64.of_int i)) n)
+            repos)
+    in
+    let* ids = Pfin.snapshot_ids conn draft in
+    let primary = List.nth ids 0 in
+    let* () =
+      Pod_select.replace_ok "seed selection" conn ~user ~draft ~primary ids
+    in
+    let identity =
+      Pfin.identity_exn ?kind ?name ~slug ?website ~selected:ids ~primary ()
+    in
+    let* created = Pfin.finalize_ok "fixture project" conn ~user ~draft identity in
+    Lwt.return (Fin.project_id created)
+
+  let add_top_mod conn ~user ~community =
+    exec conn "top_mod fixture" q_insert_moderator (user, community, "top_mod")
+
+  let request_pending label conn ~user ~slug ~community ?(note = private_note) () =
+    let relation = phr_expect_ok (Phr.create_pending ~request_note:(Some note)) in
+    let* r =
+      Rq.create conn ~user_id:user ~project_slug:slug
+        ~target_community_id:community ~relation
+    in
+    match r with
+    | Ok _ -> Lwt.return_unit
+    | Error _ -> Alcotest.failf "%s: request fixture failed" label
+
+  let review label conn ~reviewer ~slug ~community_slug ~decision =
+    let* r =
+      Rvs.review conn ~reviewer_user_id:reviewer ~project_slug:slug
+        ~target_community_slug:community_slug ~decision
+    in
+    match r with
+    | Ok _ -> Lwt.return_unit
+    | Error _ -> Alcotest.failf "%s: review fixture failed" label
+
+  (* A reviewed acceptance, end to end through the real stores. *)
+  let accept_reviewed label conn ~owner ~reviewer ~slug ~cid ~community_slug =
+    let* () = request_pending label conn ~user:owner ~slug ~community:cid () in
+    review label conn ~reviewer ~slug ~community_slug ~decision:Rvs.Accept
+
+  (* === pure input validation === *)
+
+  let pure_inputs_case =
+    db_case "connected projects: invalid slugs rejected before any SQL"
+      (fun _conn ->
+        let url =
+          match Sys.getenv_opt "EARDE_TEST_DATABASE_URL" with
+          | Some url -> url
+          | None -> Alcotest.fail "EARDE_TEST_DATABASE_URL vanished mid-run"
+        in
+        let* dead = Caqti_lwt_unix.connect (Uri.of_string url) in
+        let* dead = or_fail "dead connect" dead in
+        let (module Dead : Caqti_lwt.CONNECTION) = dead in
+        let* () = Dead.disconnect () in
+        (* A disconnected connection cannot answer a query, so every one of
+           these returning Invalid_community_slug proves the check precedes
+           SQL. *)
+        Lwt_list.iter_s
+          (fun bad ->
+            load_expect "invalid community slug" Cp.Invalid_community_slug dead
+              ~community:bad)
+          [ ""
+          ; "ccpr c"
+          ; " ccpr-c"
+          ; "ccpr-c "
+          ; "ccpr/c"
+          ; "ccpr\tc"
+          ; "ccpr\nc"
+          ; "ccpr\x01c"
+          ; "ccpr\x7fc"
+          ])
+
+  (* === community existence === *)
+
+  let missing_community_case =
+    db_case "connected projects: a community that does not exist is \
+             Community_unavailable; an existing one with no relations is empty"
+      (fun conn ->
+        let* () =
+          load_expect "missing" Cp.Community_unavailable conn
+            ~community:"ccpr-nope"
+        in
+        let* _cid = insert_community conn "ccpr-empty" in
+        let* projects = load_ok "empty" conn ~community:"ccpr-empty" in
+        Alcotest.(check int) "no connected projects" 0 (List.length projects);
+        (* A community whose projects were all deleted returns to empty rather
+           than to an error. *)
+        Lwt.return_unit)
+
+  (* === accepted relation selection === *)
+
+  let reviewed_accept_case =
+    db_case "connected projects: one moderator-reviewed accepted home is \
+             visible in full, carrying no requester, reviewer, or note"
+      (fun conn ->
+        let* owner = insert_user conn "ccpr_owner" in
+        let* moderator = insert_user conn "ccpr_mod" in
+        let* _project =
+          make_project conn ~user:owner ~ext_id:946200001L ~slug:"ccpr-rev"
+            ~name:"Ccpr Reviewed" ~website:"https://reviewed.example/"
+        in
+        let* cid = insert_community conn "ccpr-rev-home" in
+        let* () = add_top_mod conn ~user:moderator ~community:cid in
+        let* () =
+          accept_reviewed "reviewed accept" conn ~owner ~reviewer:moderator
+            ~slug:"ccpr-rev" ~cid ~community_slug:"ccpr-rev-home"
+        in
+        let* projects = load_ok "reviewed" conn ~community:"ccpr-rev-home" in
+        Alcotest.(check int) "one project" 1 (List.length projects);
+        let p = List.hd projects in
+        Alcotest.(check string) "name" "Ccpr Reviewed" (Cp.project_name p);
+        Alcotest.(check string) "slug" "ccpr-rev" (Cp.project_slug p);
+        Alcotest.(check string) "verification" "verified"
+          (verification_str (Cp.project_verification p));
+        Alcotest.(check string) "namespace" "pfin-owner"
+          (Cp.project_namespace_login p);
+        Alcotest.(check (option string)) "website"
+          (Some "https://reviewed.example/") (Cp.project_website_url p);
+        let repos = Cp.project_repositories p in
+        Alcotest.(check int) "one repository" 1 (List.length repos);
+        Alcotest.(check string) "repository full name" "pfin-owner/alpha"
+          (Cp.repository_full_name (List.hd repos));
+        Alcotest.(check string) "repository url"
+          "https://github.com/pfin-owner/alpha"
+          (Cp.repository_html_url (List.hd repos));
+        Alcotest.(check bool) "repository primary" true
+          (Cp.repository_is_primary (List.hd repos));
+        Alcotest.(check bool) "repository archived" false
+          (Cp.repository_is_archived (List.hd repos));
+        (* Nothing private or provenance-shaped can be reached through the
+           public API: boolean only, so no fixture byte is printed. *)
+        let exposed =
+          String.concat "\n"
+            ([ Cp.project_name p; Cp.project_slug p;
+               Cp.project_namespace_login p;
+               Option.value ~default:"" (Cp.project_website_url p) ]
+            @ List.concat_map
+                (fun r -> [ Cp.repository_full_name r; Cp.repository_html_url r ])
+                repos)
+        in
+        List.iter
+          (fun (label, needle) ->
+            Alcotest.(check bool) label false (contains exposed needle))
+          [ ("no private note", private_note)
+          ; ("no requester name", "ccpr_owner")
+          ; ("no reviewer name", "ccpr_mod")
+          ; ("no external installation id", "946200001")
+          ; ("no external account id", "946300001")
+          ; ("no external repository id", "946600001")
+          ];
+        Lwt.return_unit)
+
+  let provisioned_accept_case =
+    db_case "connected projects: a provisioned accepted home with NULL \
+             requester and reviewer appears exactly like a reviewed one"
+      (fun conn ->
+        let* owner = insert_user conn "ccpr_prov_owner" in
+        let* project =
+          make_project conn ~user:owner ~ext_id:946200002L ~slug:"ccpr-prov"
+            ~name:"Ccpr Provisioned"
+        in
+        let* cid = insert_community conn "ccpr-prov-home" in
+        let* () =
+          exec conn "provisioned accept" q_provision_accepted (project, cid)
+        in
+        let* projects = load_ok "provisioned" conn ~community:"ccpr-prov-home" in
+        check_slugs "provisioned visible" [ "ccpr-prov" ] projects;
+        Alcotest.(check string) "verification" "verified"
+          (verification_str (Cp.project_verification (List.hd projects)));
+        Alcotest.(check (option string)) "no website" None
+          (Cp.project_website_url (List.hd projects));
+        Lwt.return_unit)
+
+  let excluded_statuses_case =
+    db_case "connected projects: pending, rejected and removed relations are \
+             all excluded"
+      (fun conn ->
+        let* owner = insert_user conn "ccpr_ex_owner" in
+        let* moderator = insert_user conn "ccpr_ex_mod" in
+        let* _pending =
+          make_project conn ~user:owner ~ext_id:946200010L ~slug:"ccpr-pend"
+        in
+        let* _rejected =
+          make_project conn ~user:owner ~ext_id:946200011L ~slug:"ccpr-rej"
+        in
+        let* removed =
+          make_project conn ~user:owner ~ext_id:946200012L ~slug:"ccpr-rem"
+        in
+        let* _accepted =
+          make_project conn ~user:owner ~ext_id:946200013L ~slug:"ccpr-acc"
+        in
+        let* cid = insert_community conn "ccpr-ex-home" in
+        let* () = add_top_mod conn ~user:moderator ~community:cid in
+        (* pending: created and deliberately left unreviewed *)
+        let* () =
+          request_pending "pending" conn ~user:owner ~slug:"ccpr-pend"
+            ~community:cid ()
+        in
+        (* rejected: through the real review store *)
+        let* () =
+          request_pending "reject seed" conn ~user:owner ~slug:"ccpr-rej"
+            ~community:cid ()
+        in
+        let* () =
+          review "reject" conn ~reviewer:moderator ~slug:"ccpr-rej"
+            ~community_slug:"ccpr-ex-home" ~decision:Rvs.Reject
+        in
+        (* removed: a historical row, outside the active-home index *)
+        let* () = exec conn "removed row" q_insert_removed (removed, cid) in
+        (* accepted: the only one that must appear *)
+        let* () =
+          accept_reviewed "accept" conn ~owner ~reviewer:moderator
+            ~slug:"ccpr-acc" ~cid ~community_slug:"ccpr-ex-home"
+        in
+        let* projects = load_ok "excluded" conn ~community:"ccpr-ex-home" in
+        check_slugs "only the accepted relation" [ "ccpr-acc" ] projects;
+        Lwt.return_unit)
+
+  (* === ordering === *)
+
+  let ordering_case =
+    db_case "connected projects: deterministic lower(name), slug, id order — \
+             never acceptance time"
+      (fun conn ->
+        let* owner = insert_user conn "ccpr_ord_owner" in
+        let* moderator = insert_user conn "ccpr_ord_mod" in
+        let* cid = insert_community conn "ccpr-ord-home" in
+        let* () = add_top_mod conn ~user:moderator ~community:cid in
+        (* Accepted in an order that contradicts the required output order,
+           and with a case mix that only lower(name) resolves. *)
+        let* _ =
+          make_project conn ~user:owner ~ext_id:946200020L ~slug:"ccpr-ord-z"
+            ~name:"zulu tool"
+        in
+        let* _ =
+          make_project conn ~user:owner ~ext_id:946200021L ~slug:"ccpr-ord-a"
+            ~name:"Alpha tool"
+        in
+        let* _ =
+          make_project conn ~user:owner ~ext_id:946200022L ~slug:"ccpr-ord-m"
+            ~name:"middle tool"
+        in
+        let* () =
+          accept_reviewed "z" conn ~owner ~reviewer:moderator
+            ~slug:"ccpr-ord-z" ~cid ~community_slug:"ccpr-ord-home"
+        in
+        let* () =
+          accept_reviewed "a" conn ~owner ~reviewer:moderator
+            ~slug:"ccpr-ord-a" ~cid ~community_slug:"ccpr-ord-home"
+        in
+        let* () =
+          accept_reviewed "m" conn ~owner ~reviewer:moderator
+            ~slug:"ccpr-ord-m" ~cid ~community_slug:"ccpr-ord-home"
+        in
+        let* projects = load_ok "ordering" conn ~community:"ccpr-ord-home" in
+        check_slugs "lower(name) order, not acceptance order"
+          [ "ccpr-ord-a"; "ccpr-ord-m"; "ccpr-ord-z" ] projects;
+        Lwt.return_unit)
+
+  let name_tiebreak_case =
+    db_case "connected projects: identical names fall through to the slug \
+             tiebreaker"
+      (fun conn ->
+        let* owner = insert_user conn "ccpr_tie_owner" in
+        let* moderator = insert_user conn "ccpr_tie_mod" in
+        let* cid = insert_community conn "ccpr-tie-home" in
+        let* () = add_top_mod conn ~user:moderator ~community:cid in
+        let* _ =
+          make_project conn ~user:owner ~ext_id:946200030L ~slug:"ccpr-tie-b"
+            ~name:"Same Name"
+        in
+        let* _ =
+          make_project conn ~user:owner ~ext_id:946200031L ~slug:"ccpr-tie-a"
+            ~name:"Same Name"
+        in
+        let* () =
+          accept_reviewed "b" conn ~owner ~reviewer:moderator
+            ~slug:"ccpr-tie-b" ~cid ~community_slug:"ccpr-tie-home"
+        in
+        let* () =
+          accept_reviewed "a" conn ~owner ~reviewer:moderator
+            ~slug:"ccpr-tie-a" ~cid ~community_slug:"ccpr-tie-home"
+        in
+        let* projects = load_ok "tiebreak" conn ~community:"ccpr-tie-home" in
+        check_slugs "slug tiebreaker" [ "ccpr-tie-a"; "ccpr-tie-b" ] projects;
+        Lwt.return_unit)
+
+  let repository_order_case =
+    db_case "connected projects: repositories keep stored position order"
+      (fun conn ->
+        let* owner = insert_user conn "ccpr_repo_owner" in
+        let* moderator = insert_user conn "ccpr_repo_mod" in
+        let* _project =
+          make_project conn ~user:owner ~ext_id:946200040L ~slug:"ccpr-repos"
+            ~repos:[ "alpha"; "beta"; "gamma" ]
+        in
+        let* cid = insert_community conn "ccpr-repos-home" in
+        let* () = add_top_mod conn ~user:moderator ~community:cid in
+        let* () =
+          accept_reviewed "repos" conn ~owner ~reviewer:moderator
+            ~slug:"ccpr-repos" ~cid ~community_slug:"ccpr-repos-home"
+        in
+        let* projects = load_ok "repos" conn ~community:"ccpr-repos-home" in
+        let repos = Cp.project_repositories (List.hd projects) in
+        Alcotest.(check (list string)) "position order"
+          [ "pfin-owner/alpha"; "pfin-owner/beta"; "pfin-owner/gamma" ]
+          (List.map Cp.repository_full_name repos);
+        Alcotest.(check int) "exactly one primary" 1
+          (List.length (List.filter Cp.repository_is_primary repos));
+        Lwt.return_unit)
+
+  (* === lifecycle === *)
+
+  let verification_mapping_case =
+    db_case "connected projects: verified, stale and revoked all stay visible \
+             and map exactly"
+      (fun conn ->
+        let* owner = insert_user conn "ccpr_ver_owner" in
+        let* moderator = insert_user conn "ccpr_ver_mod" in
+        let* project =
+          make_project conn ~user:owner ~ext_id:946200050L ~slug:"ccpr-ver"
+        in
+        let* cid = insert_community conn "ccpr-ver-home" in
+        let* () = add_top_mod conn ~user:moderator ~community:cid in
+        let* () =
+          accept_reviewed "ver" conn ~owner ~reviewer:moderator
+            ~slug:"ccpr-ver" ~cid ~community_slug:"ccpr-ver-home"
+        in
+        Lwt_list.iter_s
+          (fun (stored, expected) ->
+            let* () =
+              exec conn "set verification" q_set_verification (project, stored)
+            in
+            let* projects = load_ok stored conn ~community:"ccpr-ver-home" in
+            Alcotest.(check int) (stored ^ ": still visible") 1
+              (List.length projects);
+            Alcotest.(check string) (stored ^ ": mapping") expected
+              (verification_str (Cp.project_verification (List.hd projects)));
+            Lwt.return_unit)
+          [ ("verified", "verified"); ("stale", "stale"); ("revoked", "revoked") ])
+
+  let community_drift_case =
+    db_case "connected projects: public, unlisted and drifted (private, draft, \
+             legacy) target communities all keep the accepted relation"
+      (fun conn ->
+        let* owner = insert_user conn "ccpr_drift_owner" in
+        let* moderator = insert_user conn "ccpr_drift_mod" in
+        let* _project =
+          make_project conn ~user:owner ~ext_id:946200060L ~slug:"ccpr-drift"
+        in
+        let* cid = insert_community conn "ccpr-drift-home" in
+        let* () = add_top_mod conn ~user:moderator ~community:cid in
+        let* () =
+          accept_reviewed "drift" conn ~owner ~reviewer:moderator
+            ~slug:"ccpr-drift" ~cid ~community_slug:"ccpr-drift-home"
+        in
+        let expect_visible label =
+          let* projects = load_ok label conn ~community:"ccpr-drift-home" in
+          check_slugs (label ^ ": still connected") [ "ccpr-drift" ] projects;
+          Lwt.return_unit
+        in
+        let* () = expect_visible "public listed" in
+        let* () = exec conn "unlisted" Phcv.q_make_unlisted cid in
+        let* () = expect_visible "unlisted" in
+        let* () = exec conn "listed again" Phcv.q_make_listed cid in
+        let* () = exec conn "private" Phcv.q_make_private cid in
+        let* () = expect_visible "private drift" in
+        let* () = exec conn "draft" Phcv.q_make_draft_state cid in
+        let* () = expect_visible "draft drift" in
+        let* () = exec conn "legacy" Phcv.q_make_legacy cid in
+        expect_visible "legacy drift")
+
+  let cascade_case =
+    db_case "connected projects: deleting the project cascades the relation \
+             away"
+      (fun conn ->
+        let* owner = insert_user conn "ccpr_casc_owner" in
+        let* moderator = insert_user conn "ccpr_casc_mod" in
+        let* project =
+          make_project conn ~user:owner ~ext_id:946200070L ~slug:"ccpr-casc"
+        in
+        let* cid = insert_community conn "ccpr-casc-home" in
+        let* () = add_top_mod conn ~user:moderator ~community:cid in
+        let* () =
+          accept_reviewed "casc" conn ~owner ~reviewer:moderator
+            ~slug:"ccpr-casc" ~cid ~community_slug:"ccpr-casc-home"
+        in
+        let* before = load_ok "before" conn ~community:"ccpr-casc-home" in
+        Alcotest.(check int) "connected before delete" 1 (List.length before);
+        let* () = exec conn "delete project" q_delete_project project in
+        let* after = load_ok "after" conn ~community:"ccpr-casc-home" in
+        Alcotest.(check int) "gone after delete" 0 (List.length after);
+        Lwt.return_unit)
+
+  (* === website === *)
+
+  let website_case =
+    db_case "connected projects: an absent website is None, a present one is \
+             byte-preserved, and one outside the permanent grammar is \
+             Inconsistent_data"
+      (fun conn ->
+        let* owner = insert_user conn "ccpr_web_owner" in
+        let* moderator = insert_user conn "ccpr_web_mod" in
+        let* project =
+          make_project conn ~user:owner ~ext_id:946200080L ~slug:"ccpr-web"
+            ~website:"https://example.test/path?q=1#frag"
+        in
+        let* cid = insert_community conn "ccpr-web-home" in
+        let* () = add_top_mod conn ~user:moderator ~community:cid in
+        let* () =
+          accept_reviewed "web" conn ~owner ~reviewer:moderator ~slug:"ccpr-web"
+            ~cid ~community_slug:"ccpr-web-home"
+        in
+        let* projects = load_ok "website" conn ~community:"ccpr-web-home" in
+        Alcotest.(check (option string)) "byte-preserved"
+          (Some "https://example.test/path?q=1#frag")
+          (Cp.project_website_url (List.hd projects));
+        let* () = exec conn "clear website" q_clear_website project in
+        let* projects = load_ok "no website" conn ~community:"ccpr-web-home" in
+        Alcotest.(check (option string)) "absent" None
+          (Cp.project_website_url (List.hd projects));
+        let* () = exec conn "corrupt website" q_corrupt_website project in
+        load_expect "non-http website" Cp.Inconsistent_data conn
+          ~community:"ccpr-web-home")
+
+  (* === durable corruption === *)
+
+  let identity_corruption_case =
+    db_case "connected projects: malformed project identity is \
+             Inconsistent_data, never a silently dropped project"
+      (fun conn ->
+        let* owner = insert_user conn "ccpr_corr_owner" in
+        let* moderator = insert_user conn "ccpr_corr_mod" in
+        let* project =
+          make_project conn ~user:owner ~ext_id:946200090L ~slug:"ccpr-corr"
+            ~name:"Ccpr Corrupt"
+        in
+        let* cid = insert_community conn "ccpr-corr-home" in
+        let* () = add_top_mod conn ~user:moderator ~community:cid in
+        let* () =
+          accept_reviewed "corr" conn ~owner ~reviewer:moderator
+            ~slug:"ccpr-corr" ~cid ~community_slug:"ccpr-corr-home"
+        in
+        let* () = exec conn "corrupt login" q_corrupt_login project in
+        let* () =
+          load_expect "control byte in namespace login" Cp.Inconsistent_data
+            conn ~community:"ccpr-corr-home"
+        in
+        let* () = exec conn "restore login" q_restore_login project in
+        let* () = exec conn "corrupt name" q_corrupt_name project in
+        let* () =
+          load_expect "control byte in project name" Cp.Inconsistent_data conn
+            ~community:"ccpr-corr-home"
+        in
+        let* () = exec conn "restore name" q_set_name (project, "Ccpr Corrupt") in
+        let* projects = load_ok "restored" conn ~community:"ccpr-corr-home" in
+        check_slugs "restored" [ "ccpr-corr" ] projects;
+        Lwt.return_unit)
+
+  let repository_corruption_case =
+    db_case "connected projects: a malformed or missing repository set fails \
+             the whole read"
+      (fun conn ->
+        let* owner = insert_user conn "ccpr_rc_owner" in
+        let* moderator = insert_user conn "ccpr_rc_mod" in
+        let* project =
+          make_project conn ~user:owner ~ext_id:946200100L ~slug:"ccpr-rc"
+            ~repos:[ "alpha"; "beta" ]
+        in
+        let* cid = insert_community conn "ccpr-rc-home" in
+        let* () = add_top_mod conn ~user:moderator ~community:cid in
+        let* () =
+          accept_reviewed "rc" conn ~owner ~reviewer:moderator ~slug:"ccpr-rc"
+            ~cid ~community_slug:"ccpr-rc-home"
+        in
+        let* () = exec conn "corrupt repo url" q_corrupt_repo_url project in
+        let* () =
+          load_expect "non-canonical repository URL" Cp.Inconsistent_data conn
+            ~community:"ccpr-rc-home"
+        in
+        let* () = exec conn "restore repo url" q_restore_repo_url project in
+        let* () = exec conn "break positions" q_break_positions project in
+        let* () =
+          load_expect "non-contiguous positions" Cp.Inconsistent_data conn
+            ~community:"ccpr-rc-home"
+        in
+        let* () = exec conn "delete repos" q_delete_repos project in
+        load_expect "zero repositories" Cp.Inconsistent_data conn
+          ~community:"ccpr-rc-home")
+
+  (* The per-project full-name uniqueness constraint makes this branch
+     unreachable from data alone, so the constraint is dropped and restored
+     around the assertion; Lwt.finalize restores it even if the check fails. *)
+  let duplicate_repository_case =
+    db_case "connected projects: duplicate repository full names within one \
+             project are Inconsistent_data"
+      (fun conn ->
+        let* owner = insert_user conn "ccpr_dup_owner" in
+        let* moderator = insert_user conn "ccpr_dup_mod" in
+        let* project =
+          make_project conn ~user:owner ~ext_id:946200110L ~slug:"ccpr-dup"
+            ~repos:[ "alpha"; "beta" ]
+        in
+        let* cid = insert_community conn "ccpr-dup-home" in
+        let* () = add_top_mod conn ~user:moderator ~community:cid in
+        let* () =
+          accept_reviewed "dup" conn ~owner ~reviewer:moderator ~slug:"ccpr-dup"
+            ~cid ~community_slug:"ccpr-dup-home"
+        in
+        let* () = exec conn "drop full-name key" q_drop_full_name_key () in
+        Lwt.finalize
+          (fun () ->
+            let* () =
+              exec conn "duplicate full name" q_duplicate_full_name project
+            in
+            load_expect "duplicate repository full name" Cp.Inconsistent_data
+              conn ~community:"ccpr-dup-home")
+          (fun () ->
+            (* Remove the duplicate before restoring the unique constraint. *)
+            let* () = exec conn "delete repos" q_delete_repos project in
+            exec conn "restore full-name key" q_add_full_name_key ()))
+
+  (* Same shape: the production CHECK closes the verification vocabulary, so
+     the off-enum branch needs the constraint lifted for the length of one
+     assertion. *)
+  let malformed_status_case =
+    db_case "connected projects: an off-enum project verification status is \
+             Inconsistent_data"
+      (fun conn ->
+        let* owner = insert_user conn "ccpr_st_owner" in
+        let* moderator = insert_user conn "ccpr_st_mod" in
+        let* project =
+          make_project conn ~user:owner ~ext_id:946200120L ~slug:"ccpr-st"
+        in
+        let* cid = insert_community conn "ccpr-st-home" in
+        let* () = add_top_mod conn ~user:moderator ~community:cid in
+        let* () =
+          accept_reviewed "st" conn ~owner ~reviewer:moderator ~slug:"ccpr-st"
+            ~cid ~community_slug:"ccpr-st-home"
+        in
+        let* () = exec conn "drop verification check" q_drop_verification_check () in
+        Lwt.finalize
+          (fun () ->
+            let* () =
+              exec conn "off-enum status" q_set_verification (project, "unknown")
+            in
+            load_expect "off-enum verification status" Cp.Inconsistent_data conn
+              ~community:"ccpr-st-home")
+          (fun () ->
+            let* () =
+              exec conn "restore status" q_set_verification (project, "verified")
+            in
+            exec conn "restore verification check" q_add_verification_check ()))
+
+  let storage_error_case =
+    db_case "connected projects: storage failure surfaces as Storage_error"
+      (fun conn ->
+        let* () = exec conn "break search_path" q_break_search_path () in
+        let* () =
+          load_expect "broken schema" Cp.Storage_error conn
+            ~community:"ccpr-anything"
+        in
+        exec conn "reset search_path" q_reset_search_path ())
+
+  let suite =
+    [ pure_inputs_case; missing_community_case; reviewed_accept_case;
+      provisioned_accept_case; excluded_statuses_case; ordering_case;
+      name_tiebreak_case; repository_order_case; verification_mapping_case;
+      community_drift_case; cascade_case; website_case;
+      identity_corruption_case; repository_corruption_case;
+      duplicate_repository_case; malformed_status_case; storage_error_case ]
+end
+
+(* === Community connected-projects section (Community_connected_projects_pages) ===
+   The pure fragment composed into the existing community page: section copy,
+   verification and kind vocabulary, link safety, defensive degradation, and
+   the absence of officiality language, identifiers, and private workflow
+   data. DB-free — the renderer depends on no connection, no read model, and
+   no session. Privacy assertions are boolean, so no fixture byte reaches test
+   output on failure. *)
+module Ccpp = struct
+  module Ccp = Earde.Community_connected_projects_pages
+  module Pi = Earde.Project_identity
+
+  let case = go_case
+
+  let repo ?(primary = false) ?(archived = false) ?url full_name =
+    ({ full_name;
+       html_url =
+         (match url with
+          | Some u -> u
+          | None -> "https://github.com/" ^ full_name);
+       is_primary = primary;
+       is_archived = archived }
+      : Ccp.repository)
+
+  let project ?(kind = Pi.Project) ?(name = "Ccpp Project")
+      ?(slug = "ccpp-project") ?(login = "ccpp-owner")
+      ?(verification = Ccp.Verified) ?website ?repositories () =
+    ({ name;
+       slug;
+       kind;
+       namespace_login = login;
+       verification;
+       website_url = website;
+       repositories =
+         (match repositories with
+          | Some r -> r
+          | None -> [ repo ~primary:true "ccpp-owner/alpha" ]) }
+      : Ccp.project)
+
+  let render projects = Ccp.connected_projects_section ~projects
+
+  let one ?kind ?name ?slug ?login ?verification ?website ?repositories () =
+    render [ project ?kind ?name ?slug ?login ?verification ?website ?repositories () ]
+
+  (* Wording that would misrepresent an accepted home as an endorsement. *)
+  let forbidden_officiality =
+    [ "Official project"; "Official community"; "Official home";
+      "GitHub-approved"; "GitHub-endorsed"; "Official" ]
+
+  let check_no_officiality label html =
+    List.iter
+      (fun needle ->
+        Alcotest.(check bool)
+          (label ^ ": no " ^ needle)
+          false (contains html needle))
+      forbidden_officiality
+
+  (* Inertness is asserted structurally, not by substring: hostile input is
+     deliberately rendered as escaped TEXT, so a fixture that contains the
+     bytes "javascript:" or "onerror=" may legitimately appear in the output.
+     What must never happen is that any of it becomes markup. Every '<' in the
+     output therefore has to open one of the renderer's own tags — which
+     leaves no way to introduce a script, an iframe, an inline style, or an
+     event handler — and no attribute may carry a script-bearing URL. *)
+  let allowed_tags =
+    [ "section"; "/section"; "div"; "/div"; "h2"; "/h2"; "h3"; "/h3"; "p";
+      "/p"; "ul"; "/ul"; "li"; "/li"; "a"; "/a"; "span"; "/span" ]
+
+  let check_only_safe_tags label html =
+    let n = String.length html in
+    let rec go i =
+      if i >= n then ()
+      else if html.[i] <> '<' then go (i + 1)
+      else begin
+        let rest = String.sub html (i + 1) (n - i - 1) in
+        let ok =
+          List.exists
+            (fun tag ->
+              let t = String.length tag in
+              String.length rest >= t
+              && String.sub rest 0 t = tag
+              && (String.length rest = t
+                  || (let c = rest.[t] in
+                      c = ' ' || c = '>')))
+            allowed_tags
+        in
+        Alcotest.(check bool)
+          (label ^ ": every '<' opens a renderer-authored tag")
+          true ok;
+        go (i + 1)
+      end
+    in
+    go 0
+
+  let check_no_script_urls label html =
+    List.iter
+      (fun needle ->
+        Alcotest.(check bool) (label ^ ": no " ^ needle) false
+          (contains html needle))
+      [ "href='javascript:"; "href=\"javascript:"; "href='data:";
+        "href='vbscript:"; "href='#'"; "src='javascript:"; "style=" ]
+
+  let check_inert label html =
+    check_only_safe_tags label html;
+    check_no_script_urls label html
+
+  let empty_cases =
+    [ case "connected projects: an empty list renders the empty fragment"
+        (fun () ->
+          Alcotest.(check string) "empty fragment" "" (render []);
+          (* No placeholder is shown to ordinary visitors. *)
+          Alcotest.(check bool) "no empty-state copy" false
+            (contains (render []) "No connected projects"))
+    ]
+
+  let content_cases =
+    [ case "connected projects: section copy, identity, kind, namespace and \
+            verification all render"
+        (fun () ->
+          let html =
+            one ~name:"Ccpp Alpha" ~slug:"ccpp-alpha" ~login:"ccpp-owner" ()
+          in
+          Alcotest.(check bool) "heading" true
+            (contains html "Connected projects");
+          Alcotest.(check bool) "supporting copy" true
+            (contains html
+               "Open-source projects that use this community as their Earde \
+                home.");
+          Alcotest.(check bool) "project name" true (contains html "Ccpp Alpha");
+          Alcotest.(check bool) "kind copy" true (contains html ">Project<");
+          Alcotest.(check bool) "namespace login" true
+            (contains html "ccpp-owner");
+          Alcotest.(check bool) "verification copy" true
+            (contains html "Verified through GitHub");
+          Alcotest.(check bool) "safe provenance copy" true
+            (contains html "Project connected through GitHub");
+          check_no_officiality "content" html;
+          check_inert "content" html)
+    ; case "connected projects: stale and revoked carry their exact copy and \
+            stay visible"
+        (fun () ->
+          let stale = one ~verification:Ccp.Stale () in
+          Alcotest.(check bool) "stale copy" true
+            (contains stale "Verification stale");
+          Alcotest.(check bool) "stale is not verified copy" false
+            (contains stale "Verified through GitHub");
+          let revoked = one ~verification:Ccp.Revoked () in
+          Alcotest.(check bool) "revoked copy" true
+            (contains revoked "Verification revoked");
+          Alcotest.(check bool) "revoked still rendered" true
+            (contains revoked "Ccpp Project");
+          check_no_officiality "stale" stale;
+          check_no_officiality "revoked" revoked)
+    ; case "connected projects: every project kind uses the current product \
+            vocabulary"
+        (fun () ->
+          List.iter
+            (fun (kind, copy) ->
+              let html = one ~kind () in
+              Alcotest.(check bool)
+                ("kind copy " ^ copy)
+                true
+                (contains html (">" ^ copy ^ "<")))
+            [ (Pi.Project, "Project"); (Pi.Organization, "Organization");
+              (Pi.Ecosystem, "Ecosystem"); (Pi.Foundation, "Foundation");
+              (Pi.Working_group, "Working group"); (Pi.Other, "Other") ])
+    ; case "connected projects: repositories keep supplied order and carry \
+            Primary and Archived markers"
+        (fun () ->
+          let html =
+            one
+              ~repositories:
+                [ repo ~primary:true "ccpp-owner/alpha";
+                  repo ~archived:true "ccpp-owner/beta";
+                  repo "ccpp-owner/gamma" ]
+              ()
+          in
+          let index needle =
+            let rec go i =
+              if i + String.length needle > String.length html then -1
+              else if String.sub html i (String.length needle) = needle then i
+              else go (i + 1)
+            in
+            go 0
+          in
+          Alcotest.(check bool) "alpha before beta" true
+            (index "ccpp-owner/alpha" < index "ccpp-owner/beta");
+          Alcotest.(check bool) "beta before gamma" true
+            (index "ccpp-owner/beta" < index "ccpp-owner/gamma");
+          Alcotest.(check bool) "primary marker" true (contains html ">Primary<");
+          Alcotest.(check bool) "archived marker" true
+            (contains html ">Archived<");
+          Alcotest.(check int) "exactly one primary marker" 1
+            (ps_count html ">Primary<");
+          Alcotest.(check int) "exactly one archived marker" 1
+            (ps_count html ">Archived<"))
+    ; case "connected projects: multiple projects preserve the supplied order"
+        (fun () ->
+          let html =
+            render
+              [ project ~name:"Ccpp One" ~slug:"ccpp-one" ();
+                project ~name:"Ccpp Two" ~slug:"ccpp-two" () ]
+          in
+          Alcotest.(check int) "two project entries" 2
+            (ps_count html "<li class='ccp-project'>");
+          let idx needle =
+            let rec go i =
+              if i + String.length needle > String.length html then -1
+              else if String.sub html i (String.length needle) = needle then i
+              else go (i + 1)
+            in
+            go 0
+          in
+          Alcotest.(check bool) "supplied order kept" true
+            (idx "Ccpp One" < idx "Ccpp Two"))
+    ]
+
+  let link_cases =
+    [ case "connected projects: a safe website is linked; an unsafe one \
+            degrades to inert escaped text"
+        (fun () ->
+          let safe = one ~website:"https://ccpp.example/home" () in
+          Alcotest.(check bool) "website linked" true
+            (contains safe "href='https://ccpp.example/home'");
+          (* Each unsafe scheme renders its text but never an href; the
+             repository list is dropped so the only possible href would be the
+             website's. *)
+          List.iter
+            (fun bad ->
+              let html = one ~website:bad ~repositories:[] () in
+              Alcotest.(check bool)
+                ("no href for " ^ bad)
+                false
+                (contains html "href=");
+              check_inert ("unsafe website " ^ bad) html)
+            [ "javascript:alert(1)"; "data:text/html,x"; "/relative/path";
+              "//evil.example/x"; "ftp://ccpp.example/x"; "" ])
+    ; case "connected projects: a repository links only at its canonical \
+            HTTPS GitHub URL"
+        (fun () ->
+          let good = one ~repositories:[ repo "ccpp-owner/alpha" ] () in
+          Alcotest.(check bool) "canonical repository linked" true
+            (contains good "href='https://github.com/ccpp-owner/alpha'");
+          List.iter
+            (fun bad ->
+              let html =
+                one ~repositories:[ repo ~url:bad "ccpp-owner/alpha" ] ()
+              in
+              Alcotest.(check bool)
+                ("no href for " ^ bad)
+                false (contains html "href=");
+              (* The label still renders, inert and escaped. *)
+              Alcotest.(check bool) "full name still shown" true
+                (contains html "ccpp-owner/alpha");
+              check_inert ("bad repository url " ^ bad) html)
+            [ "https://evil.example/ccpp-owner/alpha";
+              "https://github.com.evil.example/ccpp-owner/alpha";
+              "http://github.com/ccpp-owner/alpha";
+              "https://github.com/ccpp-owner/other";
+              "javascript:alert(1)"; "" ])
+    ; case "connected projects: the project name is never a link and the \
+            owner-only setup route is never advertised"
+        (fun () ->
+          let html = one ~slug:"ccpp-alpha" () in
+          Alcotest.(check bool) "no setup link" false
+            (contains html "/projects/ccpp-alpha/setup");
+          Alcotest.(check bool) "no projects route at all" false
+            (contains html "/projects/");
+          Alcotest.(check bool) "no request-home link" false
+            (contains html "request-home");
+          (* The name renders as a heading, never wrapped in an anchor. *)
+          Alcotest.(check bool) "name is a heading" true
+            (contains html "<h3 class='ccp-name'>Ccpp Project</h3>"))
+    ; case "connected projects: an empty repository list still renders the \
+            project identity"
+        (fun () ->
+          let html = one ~repositories:[] () in
+          Alcotest.(check bool) "identity present" true
+            (contains html "Ccpp Project");
+          Alcotest.(check bool) "no repository list" false
+            (contains html "ccp-repos");
+          Alcotest.(check bool) "no repository link" false (contains html "href="))
+    ]
+
+  let defensive_cases =
+    [ case "connected projects: a blank project name degrades to a generic \
+            safe label"
+        (fun () ->
+          List.iter
+            (fun blank ->
+              let html = one ~name:blank () in
+              Alcotest.(check bool) "generic label" true
+                (contains html "Open-source project");
+              Alcotest.(check bool) "no empty heading" false
+                (contains html "<h3 class='ccp-name'></h3>"))
+            [ ""; "   "; "\t\n" ])
+    ; case "connected projects: a duplicated project slug leaves at most one \
+            link-carrying group"
+        (fun () ->
+          let html =
+            render
+              [ project ~name:"Ccpp One" ~slug:"ccpp-dup"
+                  ~website:"https://one.example/" ();
+                project ~name:"Ccpp Two" ~slug:"ccpp-dup"
+                  ~website:"https://two.example/" () ]
+          in
+          Alcotest.(check int) "both groups render" 2
+            (ps_count html "<li class='ccp-project'>");
+          Alcotest.(check bool) "first keeps its website link" true
+            (contains html "href='https://one.example/'");
+          Alcotest.(check bool) "duplicate carries no website link" false
+            (contains html "href='https://two.example/'");
+          Alcotest.(check bool) "duplicate still shows its website text" true
+            (contains html "https://two.example/");
+          (* Exactly one repository link survives across the duplicate pair. *)
+          Alcotest.(check int) "one repository link" 1
+            (ps_count html "href='https://github.com/ccpp-owner/alpha'"))
+    ; case "connected projects: an invalid project slug carries no links"
+        (fun () ->
+          List.iter
+            (fun bad ->
+              let html = one ~slug:bad ~website:"https://ccpp.example/" () in
+              Alcotest.(check bool) "no links at all" false
+                (contains html "href="))
+            [ ""; "Ccpp-Alpha"; "ccpp alpha"; "-ccpp"; "ccpp-"; "ccpp/alpha";
+              "ccpp\x01" ])
+    ; case "connected projects: a duplicated repository full name leaves at \
+            most one linked item"
+        (fun () ->
+          let html =
+            one
+              ~repositories:
+                [ repo ~primary:true "ccpp-owner/alpha";
+                  repo "ccpp-owner/alpha" ]
+              ()
+          in
+          Alcotest.(check int) "both rows render" 2
+            (ps_count html "<li class='ccp-repo'>");
+          Alcotest.(check int) "only one linked" 1
+            (ps_count html "href='https://github.com/ccpp-owner/alpha'"))
+    ; case "connected projects: a malformed namespace login is escaped, never \
+            executed"
+        (fun () ->
+          let html = one ~login:"<script>alert(1)</script>" () in
+          Alcotest.(check bool) "escaped" true
+            (contains html "&lt;script&gt;");
+          check_inert "malformed login" html)
+    ]
+
+  let escaping_cases =
+    [ case "connected projects: every displayed field is HTML-escaped"
+        (fun () ->
+          let hostile = "<img src=x onerror=alert(1)>\"'&" in
+          let html =
+            one ~name:hostile ~login:hostile
+              ~website:("https://ccpp.example/?q=" ^ hostile)
+              ~repositories:
+                [ repo ~url:"https://github.com/a/b" (hostile ^ "/x") ]
+              ()
+          in
+          Alcotest.(check bool) "no raw img tag" false (contains html "<img ");
+          Alcotest.(check bool) "escaped lt" true (contains html "&lt;img");
+          Alcotest.(check bool) "escaped amp" true (contains html "&amp;");
+          check_inert "hostile fields" html)
+    ; case "connected projects: no identifier, provenance or private workflow \
+            data can appear"
+        (fun () ->
+          (* The page model carries none of these, so the assertion is that
+             nothing resembling them is synthesized by the renderer. *)
+          let html =
+            render
+              [ project ~name:"Ccpp One" ~slug:"ccpp-one" ();
+                project ~name:"Ccpp Two" ~slug:"ccpp-two"
+                  ~verification:Ccp.Revoked () ]
+          in
+          List.iter
+            (fun needle ->
+              Alcotest.(check bool)
+                ("no " ^ needle)
+                false (contains html needle))
+            [ "Requested by"; "Reviewed by"; "request note"; "Private";
+              "relation"; "installation"; "member"; "star"; "karma";
+              "moderator"; "Accept"; "Reject" ];
+          check_no_officiality "identifiers" html;
+          check_inert "identifiers" html)
+    ]
+end
+
+(* === Connected projects on the real community page (GET /c/:slug) ===
+   End-to-end coverage of the integration itself: the section appears inside
+   the page the existing route already serves, for exactly the visitors that
+   route already authorizes, and never for anyone else. The real handler runs
+   behind the real production pipeline shape — sql_pool + secret + memory
+   sessions + the real router path — so :slug, Db.get_community_by_slug and
+   can_view_community behave exactly as in bin/main; no synthetic parallel
+   handler exists. Database-gated with its own reserved
+   external-installation-id range 947000001..947000999 (hence account ids
+   947100001..947100999, which also scope the permanent-project cleanup),
+   ccph_% usernames, and ccph-% community slugs so no suite shares fixtures.
+   Credential and privacy assertions are boolean, so no fixture byte reaches
+   test output on failure. *)
+module Ccph = struct
+  let ( let* ) = Lwt.bind
+
+  open Caqti_request.Infix
+
+  module Rq = Earde.Project_home_request_store
+  module Rvs = Earde.Project_home_review_store
+  module Fin = Earde.Project_finalization_store
+
+  let or_fail = Pod_store.or_fail
+  let insert_user = Pod_store.insert_user
+  let exec = Pod_read.exec
+  let insert_community = Phcv.insert_community
+  let status_of = Gh_start_handler.status_of
+
+  (* Distinctive credential-shaped fixtures. None may appear in the page, its
+     headers, or its cookies. *)
+  let private_note = "ccph private note gho_CCPH_ACCESS_TOKEN_SECRET"
+  let refresh_token_marker = "ghr_CCPH_REFRESH_TOKEN"
+  let pkce_verifier_marker = "CCPH_PKCE_VERIFIER_VALUE"
+  let oauth_state_marker = "CCPH_OAUTH_STATE_VALUE"
+  let client_secret_marker = "CCPH_CLIENT_SECRET_VALUE"
+  let authorization_code_marker = "CCPH_AUTHORIZATION_CODE"
+  let session_binding_marker = "CCPH_SESSION_BINDING"
+
+  let credential_markers =
+    [ ("access token / private note", private_note);
+      ("refresh token", refresh_token_marker);
+      ("PKCE verifier", pkce_verifier_marker);
+      ("OAuth state", oauth_state_marker);
+      ("client secret", client_secret_marker);
+      ("authorization code", authorization_code_marker);
+      ("session binding", session_binding_marker);
+      ("external installation id", "947000001");
+      ("external account id", "947100001");
+      ("external repository id", "947400001")
+    ]
+
+  let q_cleanup =
+    List.map
+      (fun sql -> (Caqti_type.unit ->. Caqti_type.unit) sql)
+      [ "DELETE FROM open_source_projects \
+         WHERE forge_namespace_id BETWEEN 947100001 AND 947100999"
+      ; "DELETE FROM project_onboarding_drafts \
+         WHERE github_installation_record_id IN \
+           (SELECT id FROM github_installations \
+            WHERE github_installation_id BETWEEN 947000001 AND 947000999)"
+      ; "DELETE FROM communities WHERE slug LIKE 'ccph-%'"
+      ; "DELETE FROM users WHERE username LIKE 'ccph_%'"
+      ; "DELETE FROM github_installations \
+         WHERE github_installation_id BETWEEN 947000001 AND 947000999"
+      ]
+
+  let q_insert_moderator =
+    (Caqti_type.(t3 int int string) ->. Caqti_type.unit)
+    "INSERT INTO community_moderators (user_id, community_id, role) \
+     VALUES ($1, $2, $3)"
+
+  let q_insert_member =
+    (Caqti_type.(t2 int int) ->. Caqti_type.unit)
+    "INSERT INTO community_members (user_id, community_id) VALUES ($1, $2)"
+
+  let q_set_admin =
+    (Caqti_type.(t2 int bool) ->. Caqti_type.unit)
+    "UPDATE users SET is_admin = $2 WHERE id = $1"
+
+  let q_provision_accepted =
+    (Caqti_type.(t2 int64 int) ->. Caqti_type.unit)
+    "INSERT INTO community_projects \
+       (project_id, community_id, relation_type, status, reviewed_at) \
+     VALUES ($1, $2, 'home', 'accepted', NOW())"
+
+  let q_insert_removed =
+    (Caqti_type.(t2 int64 int) ->. Caqti_type.unit)
+    "INSERT INTO community_projects \
+       (project_id, community_id, relation_type, status, reviewed_at, \
+        removed_at) \
+     VALUES ($1, $2, 'home', 'removed', NOW(), NOW())"
+
+  let q_set_verification =
+    (Caqti_type.(t2 int64 string) ->. Caqti_type.unit)
+    "UPDATE open_source_projects SET verification_status = $2 WHERE id = $1"
+
+  let q_corrupt_login =
+    (Caqti_type.int64 ->. Caqti_type.unit)
+    "UPDATE open_source_projects \
+     SET forge_namespace_login = 'ccph' || chr(1) || 'bad' WHERE id = $1"
+
+  let q_legacy_community =
+    (Caqti_type.int ->. Caqti_type.unit)
+    "UPDATE communities SET sections_enabled = FALSE WHERE id = $1"
+
+  (* Hiding the relation table makes the community lookup succeed and the
+     connected-projects read fail — the only way to exercise the storage
+     branch of THIS feature rather than the route's pre-existing lookup
+     failure. Renamed and restored inside the one case that needs it, under
+     Lwt.finalize; production migrations are untouched. *)
+  let q_hide_relations =
+    (Caqti_type.unit ->. Caqti_type.unit)
+    "ALTER TABLE community_projects RENAME TO community_projects_ccph_hidden"
+
+  let q_show_relations =
+    (Caqti_type.unit ->. Caqti_type.unit)
+    "ALTER TABLE community_projects_ccph_hidden RENAME TO community_projects"
+
+  let db_case name f =
+    Alcotest.test_case name `Quick (fun () ->
+        match Sys.getenv_opt "EARDE_TEST_DATABASE_URL" with
+        | None | Some "" -> Alcotest.skip ()
+        | Some url ->
+            Lwt_main.run
+              (let* conn = Caqti_lwt_unix.connect (Uri.of_string url) in
+               let* conn = or_fail "connect" conn in
+               let (module C : Caqti_lwt.CONNECTION) = conn in
+               let cleanup () =
+                 Lwt_list.iter_s
+                   (fun q ->
+                     let* r = C.exec q () in
+                     let* _ = or_fail "cleanup" r in
+                     Lwt.return_unit)
+                   q_cleanup
+               in
+               let* () = cleanup () in
+               Lwt.finalize
+                 (fun () -> f ~url conn)
+                 (fun () ->
+                   Lwt.finalize cleanup (fun () -> C.disconnect ()))))
+
+  (* === the real production pipeline shape === *)
+
+  (* One shared single-connection sql_pool pipeline for the whole suite:
+     nothing ever closes a Dream.sql_pool, and this suite issues enough
+     requests (several visitor identities per case) that a fresh pool per
+     request exhausts Postgres max_connections. The session identity is
+     swapped per request instead; cases run sequentially. Everything else is
+     the real production shape — secret, memory sessions, and the real
+     "/c/:slug" router path bound to the real handler, so :slug,
+     Db.get_community_by_slug and can_view_community behave exactly as in
+     bin/main. *)
+  let shared_identity : (int * bool) option ref = ref None
+  let shared_pipeline = ref None
+
+  let pipeline_for ~url =
+    match !shared_pipeline with
+    | Some pipeline -> pipeline
+    | None ->
+        let pipeline =
+          Dream.sql_pool ~size:1 url @@ Dream.set_secret gck_secret
+          @@ Dream.memory_sessions
+          @@ (fun handler request ->
+               match !shared_identity with
+               | None -> handler request
+               | Some (uid, is_admin) ->
+                   let* () =
+                     Dream.set_session_field request "user_id"
+                       (string_of_int uid)
+                   in
+                   let* () =
+                     if is_admin then
+                       Dream.set_session_field request "is_admin" "true"
+                     else Lwt.return_unit
+                   in
+                   handler request)
+          @@ Dream.router
+               [ Dream.get "/c/:slug" Earde.Handlers.community_page_handler ]
+        in
+        shared_pipeline := Some pipeline;
+        pipeline
+
+  let visit ?session_user_id ?(session_admin = false) ~url ~slug () =
+    let pipeline = pipeline_for ~url in
+    shared_identity :=
+      (match session_user_id with
+       | None -> None
+       | Some uid -> Some (uid, session_admin));
+    let* response =
+      pipeline (Dream.request ~method_:`GET ~target:("/c/" ^ slug) "")
+    in
+    let* body = Dream.body response in
+    Lwt.return (response, body)
+
+  let section_marker = "<section class='ccp-section'>"
+
+  let check_has_section label body =
+    Alcotest.(check bool) (label ^ ": section present") true
+      (contains body section_marker);
+    Alcotest.(check bool) (label ^ ": heading") true
+      (contains body "Connected projects");
+    Alcotest.(check bool) (label ^ ": supporting copy") true
+      (contains body
+         "Open-source projects that use this community as their Earde home.")
+
+  let check_no_section label body =
+    Alcotest.(check bool) (label ^ ": no section") false
+      (contains body section_marker);
+    Alcotest.(check bool) (label ^ ": no heading") false
+      (contains body "Connected projects")
+
+  (* Nothing in this feature may imply endorsement or officiality. *)
+  let check_no_officiality label body =
+    List.iter
+      (fun needle ->
+        Alcotest.(check bool) (label ^ ": no " ^ needle) false
+          (contains body needle))
+      [ "Official project"; "Official community"; "Official home";
+        "GitHub-approved"; "GitHub-endorsed" ]
+
+  (* Connected projects must never cause analytics to initialize on a page
+     that would not otherwise carry it. The section itself contributes no
+     script (proven structurally in the DB-free renderer suite); here the
+     assertion is end-to-end — a private or draft page that DOES list
+     connected projects still carries no analytics bootstrap, group
+     attribute, or consent block. *)
+  let check_no_analytics_init label body =
+    List.iter
+      (fun needle ->
+        Alcotest.(check bool) (label ^ ": no " ^ needle) false
+          (contains body needle))
+      [ "analytics.js"; "data-analytics-group"; "analytics-consent";
+        "data-analytics-private-community" ]
+
+  (* Boolean privacy sweep over the page, its headers, and its cookies. *)
+  let check_no_credentials label response body =
+    let headers =
+      String.concat "\n"
+        (List.map (fun (k, v) -> k ^ ": " ^ v) (Dream.all_headers response))
+    in
+    List.iter
+      (fun (what, marker) ->
+        Alcotest.(check bool)
+          (label ^ ": body carries no " ^ what)
+          false (contains body marker);
+        Alcotest.(check bool)
+          (label ^ ": headers carry no " ^ what)
+          false (contains headers marker))
+      credential_markers
+
+  let check_ok label response =
+    Alcotest.(check int) (label ^ ": 200") 200 (status_of response)
+
+  (* The route's single generic unavailable response, used for both a missing
+     community and a denied private read. *)
+  let check_unavailable label response body =
+    Alcotest.(check int) (label ^ ": 404") 404 (status_of response);
+    Alcotest.(check bool) (label ^ ": generic copy") true
+      (contains body "This community does not exist.");
+    check_no_section label body
+
+  let check_generic_500 label response body =
+    Alcotest.(check int) (label ^ ": 500") 500 (status_of response);
+    Alcotest.(check (option string))
+      (label ^ ": non-cacheable")
+      (Some "no-store")
+      (Dream.header response "Cache-Control");
+    Alcotest.(check bool) (label ^ ": generic copy") true
+      (contains body "Something went wrong on our side.");
+    check_no_section label body;
+    (* No SQL diagnostics of any kind. *)
+    List.iter
+      (fun needle ->
+        Alcotest.(check bool) (label ^ ": no " ^ needle) false
+          (contains body needle))
+      [ "community_projects"; "open_source_projects"; "Caqti"; "PostgreSQL";
+        "SELECT"; "relation \"" ]
+
+  (* === fixtures === *)
+
+  let make_project ?kind ?name ?website ?(repos = [ "alpha" ]) conn ~user
+      ~ext_id ~slug =
+    let base = Int64.add ext_id 400000L in
+    let* _inst, draft, _, _ =
+      Pfin.make_draft conn ~user ~ext_id (fun account_id ->
+          List.mapi
+            (fun i n ->
+              Pfin.repo ~account_id ~id:(Int64.add base (Int64.of_int i)) n)
+            repos)
+    in
+    let* ids = Pfin.snapshot_ids conn draft in
+    let primary = List.nth ids 0 in
+    let* () =
+      Pod_select.replace_ok "seed selection" conn ~user ~draft ~primary ids
+    in
+    let identity =
+      Pfin.identity_exn ?kind ?name ~slug ?website ~selected:ids ~primary ()
+    in
+    let* created = Pfin.finalize_ok "fixture project" conn ~user ~draft identity in
+    Lwt.return (Fin.project_id created)
+
+  let add_top_mod conn ~user ~community =
+    exec conn "top_mod fixture" q_insert_moderator (user, community, "top_mod")
+
+  let add_member conn ~user ~community =
+    exec conn "member fixture" q_insert_member (user, community)
+
+  let request_pending label conn ~user ~slug ~community =
+    let relation =
+      phr_expect_ok (Phr.create_pending ~request_note:(Some private_note))
+    in
+    let* r =
+      Rq.create conn ~user_id:user ~project_slug:slug
+        ~target_community_id:community ~relation
+    in
+    match r with
+    | Ok _ -> Lwt.return_unit
+    | Error _ -> Alcotest.failf "%s: request fixture failed" label
+
+  let review label conn ~reviewer ~slug ~community_slug ~decision =
+    let* r =
+      Rvs.review conn ~reviewer_user_id:reviewer ~project_slug:slug
+        ~target_community_slug:community_slug ~decision
+    in
+    match r with
+    | Ok _ -> Lwt.return_unit
+    | Error _ -> Alcotest.failf "%s: review fixture failed" label
+
+  let accept_reviewed label conn ~owner ~reviewer ~slug ~cid ~community_slug =
+    let* () = request_pending label conn ~user:owner ~slug ~community:cid in
+    review label conn ~reviewer ~slug ~community_slug ~decision:Rvs.Accept
+
+  (* === cases === *)
+
+  let empty_case =
+    db_case "community page: a public community with no accepted project home \
+             renders no section at all" (fun ~url conn ->
+        let* _cid = insert_community conn "ccph-empty" in
+        let* response, body = visit ~url ~slug:"ccph-empty" () in
+        check_ok "anonymous" response;
+        check_no_section "anonymous" body;
+        (* The community page itself is unchanged. *)
+        Alcotest.(check bool) "community still renders" true
+          (contains body "ccph-empty");
+        Lwt.return_unit)
+
+  let anonymous_case =
+    db_case "community page: one accepted home is visible to an anonymous \
+             visitor, with factual copy and no GitHub login requirement"
+      (fun ~url conn ->
+        let* owner = insert_user conn "ccph_owner" in
+        let* moderator = insert_user conn "ccph_mod" in
+        let* _project =
+          make_project conn ~user:owner ~ext_id:947000001L ~slug:"ccph-alpha"
+            ~name:"Ccph Alpha" ~website:"https://ccph-alpha.example/"
+        in
+        let* cid = insert_community conn "ccph-pub" in
+        let* () = add_top_mod conn ~user:moderator ~community:cid in
+        let* () =
+          accept_reviewed "accept" conn ~owner ~reviewer:moderator
+            ~slug:"ccph-alpha" ~cid ~community_slug:"ccph-pub"
+        in
+        let* response, body = visit ~url ~slug:"ccph-pub" () in
+        check_ok "anonymous" response;
+        check_has_section "anonymous" body;
+        Alcotest.(check bool) "project name" true (contains body "Ccph Alpha");
+        Alcotest.(check bool) "verification copy" true
+          (contains body "Verified through GitHub");
+        Alcotest.(check bool) "provenance copy" true
+          (contains body "Project connected through GitHub");
+        Alcotest.(check bool) "repository linked" true
+          (contains body "https://github.com/pfin-owner/alpha");
+        (* No GitHub authorization is demanded of an ordinary visitor. *)
+        Alcotest.(check bool) "no GitHub sign-in prompt" false
+          (contains body "github.com/login/oauth");
+        Alcotest.(check bool) "no owner-only setup link" false
+          (contains body "/projects/ccph-alpha/setup");
+        check_no_officiality "anonymous" body;
+        check_no_credentials "anonymous" response body;
+        Lwt.return_unit)
+
+  let ordering_case =
+    db_case "community page: multiple accepted homes keep the read model's \
+             deterministic order" (fun ~url conn ->
+        let* owner = insert_user conn "ccph_ord_owner" in
+        let* moderator = insert_user conn "ccph_ord_mod" in
+        let* cid = insert_community conn "ccph-ord" in
+        let* () = add_top_mod conn ~user:moderator ~community:cid in
+        let* _ =
+          make_project conn ~user:owner ~ext_id:947000010L ~slug:"ccph-ord-z"
+            ~name:"zulu tool"
+        in
+        let* _ =
+          make_project conn ~user:owner ~ext_id:947000011L ~slug:"ccph-ord-a"
+            ~name:"Alpha tool"
+        in
+        let* () =
+          accept_reviewed "z" conn ~owner ~reviewer:moderator ~slug:"ccph-ord-z"
+            ~cid ~community_slug:"ccph-ord"
+        in
+        let* () =
+          accept_reviewed "a" conn ~owner ~reviewer:moderator ~slug:"ccph-ord-a"
+            ~cid ~community_slug:"ccph-ord"
+        in
+        let* _response, body = visit ~url ~slug:"ccph-ord" () in
+        let idx needle =
+          match ps_index_of body needle 0 with
+          | Some i -> i
+          | None -> Alcotest.failf "missing %s" needle
+        in
+        Alcotest.(check bool) "lower(name) order preserved through rendering"
+          true
+          (idx "Alpha tool" < idx "zulu tool");
+        Lwt.return_unit)
+
+  let excluded_case =
+    db_case "community page: pending, rejected and removed relations never \
+             appear" (fun ~url conn ->
+        let* owner = insert_user conn "ccph_ex_owner" in
+        let* moderator = insert_user conn "ccph_ex_mod" in
+        let* _pending =
+          make_project conn ~user:owner ~ext_id:947000020L ~slug:"ccph-pend"
+            ~name:"Ccph Pending"
+        in
+        let* _rejected =
+          make_project conn ~user:owner ~ext_id:947000021L ~slug:"ccph-rej"
+            ~name:"Ccph Rejected"
+        in
+        let* removed =
+          make_project conn ~user:owner ~ext_id:947000022L ~slug:"ccph-rem"
+            ~name:"Ccph Removed"
+        in
+        let* cid = insert_community conn "ccph-ex" in
+        let* () = add_top_mod conn ~user:moderator ~community:cid in
+        let* () =
+          request_pending "pending" conn ~user:owner ~slug:"ccph-pend"
+            ~community:cid
+        in
+        let* () =
+          request_pending "reject seed" conn ~user:owner ~slug:"ccph-rej"
+            ~community:cid
+        in
+        let* () =
+          review "reject" conn ~reviewer:moderator ~slug:"ccph-rej"
+            ~community_slug:"ccph-ex" ~decision:Rvs.Reject
+        in
+        let* () = exec conn "removed row" q_insert_removed (removed, cid) in
+        let* response, body = visit ~url ~slug:"ccph-ex" () in
+        check_ok "closed states" response;
+        check_no_section "only closed states" body;
+        List.iter
+          (fun needle ->
+            Alcotest.(check bool) ("absent: " ^ needle) false
+              (contains body needle))
+          [ "Ccph Pending"; "Ccph Rejected"; "Ccph Removed" ];
+        check_no_credentials "closed states" response body;
+        Lwt.return_unit)
+
+  let drifted_verification_case =
+    db_case "community page: stale and revoked projects stay visible with \
+             their exact copy" (fun ~url conn ->
+        let* owner = insert_user conn "ccph_ver_owner" in
+        let* moderator = insert_user conn "ccph_ver_mod" in
+        let* project =
+          make_project conn ~user:owner ~ext_id:947000030L ~slug:"ccph-ver"
+            ~name:"Ccph Drifting"
+        in
+        let* cid = insert_community conn "ccph-ver" in
+        let* () = add_top_mod conn ~user:moderator ~community:cid in
+        let* () =
+          accept_reviewed "ver" conn ~owner ~reviewer:moderator ~slug:"ccph-ver"
+            ~cid ~community_slug:"ccph-ver"
+        in
+        let* () = exec conn "stale" q_set_verification (project, "stale") in
+        let* _r, body = visit ~url ~slug:"ccph-ver" () in
+        check_has_section "stale" body;
+        Alcotest.(check bool) "stale copy" true
+          (contains body "Verification stale");
+        Alcotest.(check bool) "still listed" true (contains body "Ccph Drifting");
+        let* () = exec conn "revoked" q_set_verification (project, "revoked") in
+        let* _r, body = visit ~url ~slug:"ccph-ver" () in
+        check_has_section "revoked" body;
+        Alcotest.(check bool) "revoked copy" true
+          (contains body "Verification revoked");
+        check_no_officiality "revoked" body;
+        Lwt.return_unit)
+
+  let provisioned_case =
+    db_case "community page: a provisioned accepted home (no requester, no \
+             reviewer) is visible like any other" (fun ~url conn ->
+        let* owner = insert_user conn "ccph_prov_owner" in
+        let* project =
+          make_project conn ~user:owner ~ext_id:947000040L ~slug:"ccph-prov"
+            ~name:"Ccph Provisioned"
+        in
+        let* cid = insert_community conn "ccph-prov" in
+        let* () = exec conn "provision" q_provision_accepted (project, cid) in
+        let* response, body = visit ~url ~slug:"ccph-prov" () in
+        check_ok "provisioned" response;
+        check_has_section "provisioned" body;
+        Alcotest.(check bool) "project listed" true
+          (contains body "Ccph Provisioned");
+        (* Provenance is not exposed, so nothing distinguishes it from a
+           reviewed home. *)
+        List.iter
+          (fun needle ->
+            Alcotest.(check bool) ("no provenance: " ^ needle) false
+              (contains body needle))
+          [ "Requested by"; "Reviewed by"; "provisioned"; "Provisioned home" ];
+        Lwt.return_unit)
+
+  let legacy_branch_case =
+    db_case "community page: the simple-feed branch renders the section too"
+      (fun ~url conn ->
+        let* owner = insert_user conn "ccph_leg_owner" in
+        let* moderator = insert_user conn "ccph_leg_mod" in
+        let* _project =
+          make_project conn ~user:owner ~ext_id:947000050L ~slug:"ccph-leg"
+            ~name:"Ccph Legacy"
+        in
+        let* cid = insert_community conn "ccph-leg" in
+        let* () = add_top_mod conn ~user:moderator ~community:cid in
+        let* () =
+          accept_reviewed "leg" conn ~owner ~reviewer:moderator ~slug:"ccph-leg"
+            ~cid ~community_slug:"ccph-leg"
+        in
+        let* () = exec conn "simple feed" q_legacy_community cid in
+        let* response, body = visit ~url ~slug:"ccph-leg" () in
+        check_ok "simple feed" response;
+        check_has_section "simple feed" body;
+        Alcotest.(check bool) "project listed" true
+          (contains body "Ccph Legacy");
+        Lwt.return_unit)
+
+  let unlisted_case =
+    db_case "community page: an unlisted community is unchanged and still \
+             shows its connected projects" (fun ~url conn ->
+        let* owner = insert_user conn "ccph_unl_owner" in
+        let* moderator = insert_user conn "ccph_unl_mod" in
+        let* _project =
+          make_project conn ~user:owner ~ext_id:947000060L ~slug:"ccph-unl"
+            ~name:"Ccph Unlisted"
+        in
+        let* cid = insert_community conn "ccph-unl" in
+        let* () = add_top_mod conn ~user:moderator ~community:cid in
+        let* () =
+          accept_reviewed "unl" conn ~owner ~reviewer:moderator ~slug:"ccph-unl"
+            ~cid ~community_slug:"ccph-unl"
+        in
+        let* () = exec conn "unlisted" Phcv.q_make_unlisted cid in
+        let* response, body = visit ~url ~slug:"ccph-unl" () in
+        check_ok "unlisted" response;
+        check_has_section "unlisted" body;
+        (* Unchanged indexing policy: an unlisted community stays noindex, and
+           this feature adds no discovery surface. *)
+        Alcotest.(check bool) "still noindex" true (contains body "noindex");
+        Lwt.return_unit)
+
+  let private_case =
+    db_case "community page: only visitors the route already authorizes see a \
+             private community and its connected projects" (fun ~url conn ->
+        let* owner = insert_user conn "ccph_priv_owner" in
+        let* moderator = insert_user conn "ccph_priv_mod" in
+        let* member = insert_user conn "ccph_priv_member" in
+        let* stranger = insert_user conn "ccph_priv_stranger" in
+        let* admin = insert_user conn "ccph_priv_admin" in
+        let* _project =
+          make_project conn ~user:owner ~ext_id:947000070L ~slug:"ccph-priv"
+            ~name:"Ccph Private"
+        in
+        let* cid = insert_community conn "ccph-priv" in
+        let* () = add_top_mod conn ~user:moderator ~community:cid in
+        let* () =
+          accept_reviewed "priv" conn ~owner ~reviewer:moderator
+            ~slug:"ccph-priv" ~cid ~community_slug:"ccph-priv"
+        in
+        let* () = add_member conn ~user:member ~community:cid in
+        let* () = exec conn "make admin" q_set_admin (admin, true) in
+        (* Only after acceptance does the community go private — the drift the
+           feature must tolerate. *)
+        let* () = exec conn "private" Phcv.q_make_private cid in
+        (* Authorized: member, moderator, admin. *)
+        let* () =
+          Lwt_list.iter_s
+            (fun (label, uid, is_admin) ->
+              let* response, body =
+                visit ~url ~session_user_id:uid ~session_admin:is_admin
+                  ~slug:"ccph-priv" ()
+              in
+              check_ok label response;
+              check_has_section label body;
+              Alcotest.(check bool) (label ^ ": project listed") true
+                (contains body "Ccph Private");
+              (* Connected projects exist on this private page, and it still
+                 initializes no analytics of any kind. *)
+              check_no_analytics_init label body;
+              check_no_credentials label response body;
+              Lwt.return_unit)
+            [ ("member", member, false); ("moderator", moderator, false);
+              ("admin", admin, true) ]
+        in
+        (* Unauthorized: anonymous and a signed-in stranger get the route's
+           existing generic response, byte-identical to a missing community. *)
+        let* anon_response, anon_body = visit ~url ~slug:"ccph-priv" () in
+        check_unavailable "anonymous" anon_response anon_body;
+        let* str_response, str_body =
+          visit ~url ~session_user_id:stranger ~slug:"ccph-priv" ()
+        in
+        check_unavailable "stranger" str_response str_body;
+        let* miss_response, miss_body = visit ~url ~slug:"ccph-missing" () in
+        check_unavailable "missing" miss_response miss_body;
+        Alcotest.(check bool)
+          "denied private is indistinguishable from missing" true
+          (String.equal str_body miss_body);
+        Alcotest.(check bool) "no project name leaks to the denied visitor"
+          false
+          (contains str_body "Ccph Private");
+        Lwt.return_unit)
+
+  let draft_case =
+    db_case "community page: a setup-draft community stays authorized exactly \
+             as before" (fun ~url conn ->
+        let* owner = insert_user conn "ccph_dr_owner" in
+        let* moderator = insert_user conn "ccph_dr_mod" in
+        let* stranger = insert_user conn "ccph_dr_stranger" in
+        let* _project =
+          make_project conn ~user:owner ~ext_id:947000080L ~slug:"ccph-dr"
+            ~name:"Ccph Draft"
+        in
+        let* cid = insert_community conn "ccph-dr" in
+        let* () = add_top_mod conn ~user:moderator ~community:cid in
+        let* () =
+          accept_reviewed "dr" conn ~owner ~reviewer:moderator ~slug:"ccph-dr"
+            ~cid ~community_slug:"ccph-dr"
+        in
+        let* () = exec conn "draft" Phcv.q_make_draft_state cid in
+        (* The draft's own moderator keeps access, and sees the section. *)
+        let* mod_response, mod_body =
+          visit ~url ~session_user_id:moderator ~slug:"ccph-dr" ()
+        in
+        check_ok "draft moderator" mod_response;
+        check_has_section "draft moderator" mod_body;
+        check_no_analytics_init "draft moderator" mod_body;
+        (* An unrelated visitor and an anonymous one are still denied. *)
+        let* str_response, str_body =
+          visit ~url ~session_user_id:stranger ~slug:"ccph-dr" ()
+        in
+        check_unavailable "draft stranger" str_response str_body;
+        let* anon_response, anon_body = visit ~url ~slug:"ccph-dr" () in
+        check_unavailable "draft anonymous" anon_response anon_body;
+        Lwt.return_unit)
+
+  let missing_case =
+    db_case "community page: a missing community is unchanged" (fun ~url _conn ->
+        let* response, body = visit ~url ~slug:"ccph-nope" () in
+        check_unavailable "missing" response body;
+        Lwt.return_unit)
+
+  let inconsistency_case =
+    db_case "community page: durable inconsistency in a connected project is \
+             one generic non-cacheable 500, never a partial page"
+      (fun ~url conn ->
+        let* owner = insert_user conn "ccph_inc_owner" in
+        let* moderator = insert_user conn "ccph_inc_mod" in
+        let* project =
+          make_project conn ~user:owner ~ext_id:947000090L ~slug:"ccph-inc"
+            ~name:"Ccph Inconsistent"
+        in
+        let* cid = insert_community conn "ccph-inc" in
+        let* () = add_top_mod conn ~user:moderator ~community:cid in
+        let* () =
+          accept_reviewed "inc" conn ~owner ~reviewer:moderator ~slug:"ccph-inc"
+            ~cid ~community_slug:"ccph-inc"
+        in
+        let* ok_response, ok_body = visit ~url ~slug:"ccph-inc" () in
+        check_ok "before corruption" ok_response;
+        check_has_section "before corruption" ok_body;
+        let* () = exec conn "corrupt login" q_corrupt_login project in
+        let* response, body = visit ~url ~slug:"ccph-inc" () in
+        check_generic_500 "corrupted" response body;
+        (* The community's own content is not rendered around the failure. *)
+        Alcotest.(check bool) "no partial community page" false
+          (contains body "Ccph Inconsistent");
+        check_no_credentials "corrupted" response body;
+        Lwt.return_unit)
+
+  let storage_failure_case =
+    db_case "community page: a connected-projects storage failure is one \
+             generic non-cacheable 500" (fun ~url conn ->
+        let* _cid = insert_community conn "ccph-store" in
+        let* () = exec conn "hide relations" q_hide_relations () in
+        Lwt.finalize
+          (fun () ->
+            let* response, body = visit ~url ~slug:"ccph-store" () in
+            check_generic_500 "storage failure" response body;
+            Lwt.return_unit)
+          (fun () -> exec conn "restore relations" q_show_relations ()))
+
+  let suite =
+    [ empty_case; anonymous_case; ordering_case; excluded_case;
+      drifted_verification_case; provisioned_case; legacy_branch_case;
+      unlisted_case; private_case; draft_case; missing_case;
+      inconsistency_case; storage_failure_case ]
+end
+
 let () =
   Alcotest.run "earde"
     [ ( "smoke"
@@ -34842,4 +36755,24 @@ let () =
     ; ("project_home_review_post_gates", Phhr.post_gate_suite)
     ; ("project_home_review_post_csrf", Phhr.csrf_suite)
     ; ("project_home_review_handlers_db", Phhr.db_suite)
+      (* Community connected-projects read model: slug validation, community
+         existence, accepted-relation selection across provisioned and
+         reviewed homes, deterministic ordering, verification mapping,
+         lifecycle drift, and project/repository/website validation.
+         Database-gated. *)
+    ; ("community_connected_projects_read_model", Ccpr.suite)
+      (* Connected-projects section renderer: section copy, verification and
+         kind vocabulary, link safety, defensive degradation, escaping, and
+         the absence of officiality language and private workflow data.
+         DB-free. *)
+    ; ("community_connected_projects_section_empty", Ccpp.empty_cases)
+    ; ("community_connected_projects_section_content", Ccpp.content_cases)
+    ; ("community_connected_projects_section_links", Ccpp.link_cases)
+    ; ("community_connected_projects_section_defensive", Ccpp.defensive_cases)
+    ; ("community_connected_projects_section_escaping", Ccpp.escaping_cases)
+      (* The section inside the real GET /c/:slug page: visibility follows the
+         route's existing authorization exactly, closed relations never
+         appear, ordering survives rendering, and read-model failures become
+         one generic non-cacheable 500. Database-gated. *)
+    ; ("community_connected_projects_page", Ccph.suite)
     ]
