@@ -2690,6 +2690,19 @@ let community_settings_page ?user ~is_admin ~is_top_mod ~open_reports_count ~(co
     Printf.sprintf "<a class='cm-index-link%s%s' href='/c/%s/settings?panel=%s'>%s</a>"
       danger_cls active_cls slug key label
   in
+  (* Project home requests queue: a normal GET link to the dedicated
+     moderator route (its own handler + read model still authorize). Shown
+     only on the top-mod/admin surface — regular mods, whom this page
+     already knows are unauthorized for the queue, never see it. No badge or
+     pending count, no form, no community id. The URL is built structurally
+     from the canonical (escaped) slug, matching the other nav links. *)
+  let project_home_requests_link =
+    if is_top_mod || is_admin then
+      Printf.sprintf
+        "<a class='cm-index-link' href='/c/%s/project-home-requests'>Project home requests</a>"
+        slug
+    else ""
+  in
   let content = Printf.sprintf "
     <div class='cm-wrap cm-wrap--settings'>
       <div class='cm-head'>
@@ -2700,7 +2713,7 @@ let community_settings_page ?user ~is_admin ~is_top_mod ~open_reports_count ~(co
       <div class='cm-cols'>
         <nav class='cm-index'>
           <div class='cm-index-title'>Settings</div>
-          %s%s%s%s%s%s
+          %s%s%s%s%s%s%s
         </nav>
         <div class='cm-main'>
           %s
@@ -2713,6 +2726,7 @@ let community_settings_page ?user ~is_admin ~is_top_mod ~open_reports_count ~(co
     (nav_item "channels" "Channels &amp; sections")
     (nav_item "members" "Members")
     (nav_item "moderation" "Moderation")
+    project_home_requests_link
     (nav_item ~danger:true "bans" "Bans")
     main_panel
   in

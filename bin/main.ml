@@ -182,6 +182,31 @@ let () =
              ~mode:(Earde.Project_onboarding.mode_from_env ())
              ~load_config:Earde.Github_app_config.from_env
              request));
+    (* Moderator review of pending project-home requests for a community.
+       The queue GET is informational and deliberately not rate-limited,
+       matching the other private settings GETs; the accept/reject POSTs
+       share the sensitive-POST rate limit and per-request configuration
+       load of the project POSTs above (origin policy only — no GitHub
+       credential, no outbound HTTP). Mode is re-read per request (uncached,
+       matching the onboarding routes). Authorization is decided in the read
+       model and review store SQL, not here. *)
+    Dream.get "/c/:slug/project-home-requests" (fun request ->
+        Earde.Project_home_review_handlers
+        .make_project_home_review_queue_handler
+          ~mode:(Earde.Project_onboarding.mode_from_env ())
+          request);
+    Dream.post "/c/:slug/projects/:project_slug/accept"
+      (Earde.Handlers.Rate_limit.middleware (fun request ->
+           Earde.Project_home_review_handlers.make_project_home_accept_handler
+             ~mode:(Earde.Project_onboarding.mode_from_env ())
+             ~load_config:Earde.Github_app_config.from_env
+             request));
+    Dream.post "/c/:slug/projects/:project_slug/reject"
+      (Earde.Handlers.Rate_limit.middleware (fun request ->
+           Earde.Project_home_review_handlers.make_project_home_reject_handler
+             ~mode:(Earde.Project_onboarding.mode_from_env ())
+             ~load_config:Earde.Github_app_config.from_env
+             request));
     Dream.get "/new-community" Earde.Handlers.new_community_page;
     Dream.post "/communities" Earde.Handlers.create_community_handler;
     Dream.post "/join" Earde.Handlers.join_community_handler;
