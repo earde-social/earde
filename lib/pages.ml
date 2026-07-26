@@ -2097,7 +2097,13 @@ let community_overview_page ?user ?(noindex=false) ?(connected_projects="") ~is_
     ~analytics_community:(community.id, community.visibility) ~title:community.name
     ~body:(Components.private_replay_guard ~community content) ()
 
-let community_settings_page ?user ~is_admin ~is_top_mod ~open_reports_count ~(community : community) ~(mods : user list) ~(banned_users : user list) ~(members : user list) ~(sections : community_section list) ~(channels : Db.channel list) request =
+(* [connected_projects] is the pre-rendered "Connected projects" management fragment
+   (Project_home_removal_pages.community_side_management_section) supplied by the settings
+   route, or "" when the viewer is not on the top-mod/admin surface — the route never loads
+   the read model for anyone else, and this page never loads it at all. An empty fragment
+   also removes the panel from the navigation, so no ordinary moderator can reach an empty
+   management surface by typing ?panel=projects. *)
+let community_settings_page ?user ?(connected_projects="") ~is_admin ~is_top_mod ~open_reports_count ~(community : community) ~(mods : user list) ~(banned_users : user list) ~(members : user list) ~(sections : community_section list) ~(channels : Db.channel list) request =
   let csrf_token = Dream.csrf_tag request in
   let esc = Components.html_escape in
   let slug = esc community.slug in
@@ -2110,8 +2116,13 @@ let community_settings_page ?user ~is_admin ~is_top_mod ~open_reports_count ~(co
      at a time. The selected panel comes from ?panel=…; unknown or missing values fall
      back to visibility. Pure server-side rendering — each nav link is a normal GET back
      to this same route with a different query value. *)
+  (* The connected-projects panel exists only when the route supplied its fragment, which it
+     does only for the top-mod/admin surface. Anyone else asking for ?panel=projects falls
+     back to visibility exactly like any unknown value. *)
+  let has_connected_projects = connected_projects <> "" in
   let panel =
     match Dream.query request "panel" with
+    | Some "projects" when has_connected_projects -> "projects"
     | Some ("profile" | "channels" | "members" | "moderation" | "bans" as p) -> p
     | _ -> "visibility"
   in
@@ -2680,12 +2691,25 @@ let community_settings_page ?user ~is_admin ~is_top_mod ~open_reports_count ~(co
       csrf_token community.id banned_section
   in
 
+  (* Already-escaped, form-bearing HTML from the pure removal-pages module; this page adds
+     only the panel chrome and never inspects, rewrites, or re-escapes it. *)
+  let projects_panel =
+    Printf.sprintf
+      "<section class='cm-panel'>
+        <h2 class='cm-panel-title'>Connected projects</h2>
+        <p class='cm-panel-desc'>Open-source projects that use this community as their Earde home.</p>
+        %s
+      </section>"
+      connected_projects
+  in
+
   let main_panel =
     match panel with
     | "profile" -> profile_panel
     | "channels" -> channels_panel
     | "members" -> members_panel
     | "moderation" -> moderation_panel
+    | "projects" -> projects_panel
     | "bans" -> bans_panel
     | _ -> visibility_panel
   in
@@ -2710,6 +2734,12 @@ let community_settings_page ?user ~is_admin ~is_top_mod ~open_reports_count ~(co
         slug
     else ""
   in
+  (* Connected projects: an ordinary panel nav entry, present only when the route supplied
+     the management fragment (top-mod/admin surface). Regular mods, whom this page already
+     knows are unauthorized for project-home moderation, never see it. *)
+  let connected_projects_nav =
+    if has_connected_projects then nav_item "projects" "Connected projects" else ""
+  in
   let content = Printf.sprintf "
     <div class='cm-wrap cm-wrap--settings'>
       <div class='cm-head'>
@@ -2720,7 +2750,7 @@ let community_settings_page ?user ~is_admin ~is_top_mod ~open_reports_count ~(co
       <div class='cm-cols'>
         <nav class='cm-index'>
           <div class='cm-index-title'>Settings</div>
-          %s%s%s%s%s%s%s
+          %s%s%s%s%s%s%s%s
         </nav>
         <div class='cm-main'>
           %s
@@ -2733,6 +2763,7 @@ let community_settings_page ?user ~is_admin ~is_top_mod ~open_reports_count ~(co
     (nav_item "channels" "Channels &amp; sections")
     (nav_item "members" "Members")
     (nav_item "moderation" "Moderation")
+    connected_projects_nav
     project_home_requests_link
     (nav_item ~danger:true "bans" "Bans")
     main_panel

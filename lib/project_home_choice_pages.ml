@@ -266,16 +266,25 @@ let pending_html (community : community) =
     (community_identity_html community)
     (availability_html community)
 
-let accepted_html (community : community) =
+(* The accepted state is the only one that carries a removal control, and
+   the only place on this page a mutation form exists besides the chooser.
+   Both slugs come from the canonical page model and are revalidated by the
+   removal fragment itself, so a malformed one silently drops the form
+   rather than building an unusable action. Removal is deliberately
+   available while the target is Currently_unavailable: a home must stay
+   separable exactly when the community's lifecycle has drifted. *)
+let accepted_html ?request ~(project : project) (community : community) =
   Printf.sprintf
     "<div class='create-head'><h1 class='create-title'>Community home \
      connected</h1></div>\
      <p class='phc-accepted-copy'><strong class='phc-community-name'>%s\
      </strong> %s%s is this project&#39;s community home. Community \
-     moderation stays with its moderators.</p>"
+     moderation stays with its moderators.</p>%s"
     (esc community.name)
     (community_identity_html community)
     (availability_html community)
+    (Project_home_removal_pages.project_side_removal_form ?request
+       ~project_slug:project.slug ~community_slug:community.slug ())
 
 let project_home_choice_page ?user ?request ~state ~feedback () =
   let body =
@@ -286,8 +295,8 @@ let project_home_choice_page ?user ?request ~state ~feedback () =
     | Active_relation { project = _; relation = Pending_request community }
       ->
         pending_html community
-    | Active_relation { project = _; relation = Accepted_home community } ->
-        accepted_html community
+    | Active_relation { project; relation = Accepted_home community } ->
+        accepted_html ?request ~project community
   in
   let body =
     Printf.sprintf

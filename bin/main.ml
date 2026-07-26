@@ -207,6 +207,29 @@ let () =
              ~mode:(Earde.Project_onboarding.mode_from_env ())
              ~load_config:Earde.Github_app_config.from_env
              request));
+    (* Removal of an accepted project home, from either authorized surface.
+       Both POSTs call the same transactional removal store with the same
+       two slugs and share the sensitive-POST rate limit and per-request
+       configuration load of the project POSTs above (origin policy only —
+       no GitHub credential, no outbound HTTP); they differ only in where a
+       completed or already-completed removal returns the browser. There is
+       no GET counterpart and no alias: each surface's own existing route
+       is the confirmation and the destination. Authorization is decided in
+       the removal store's SQL, not here and not by the route shape. *)
+    Dream.post "/projects/:project_slug/community-home/:community_slug/remove"
+      (Earde.Handlers.Rate_limit.middleware (fun request ->
+           Earde.Project_home_removal_handlers
+           .make_project_side_home_removal_handler
+             ~mode:(Earde.Project_onboarding.mode_from_env ())
+             ~load_config:Earde.Github_app_config.from_env
+             request));
+    Dream.post "/c/:community_slug/projects/:project_slug/remove-home"
+      (Earde.Handlers.Rate_limit.middleware (fun request ->
+           Earde.Project_home_removal_handlers
+           .make_community_side_home_removal_handler
+             ~mode:(Earde.Project_onboarding.mode_from_env ())
+             ~load_config:Earde.Github_app_config.from_env
+             request));
     Dream.get "/new-community" Earde.Handlers.new_community_page;
     Dream.post "/communities" Earde.Handlers.create_community_handler;
     Dream.post "/join" Earde.Handlers.join_community_handler;

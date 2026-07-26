@@ -16,6 +16,16 @@
       rendered as Markdown/HTML);
     - Dream's framework CSRF field is emitted only when [request] is
       supplied, keeping pure rendering testable without a server;
+    - the accepted state, and only it, additionally carries the
+      steward-facing removal fragment
+      ({!Project_home_removal_pages.project_side_removal_form}): one
+      [POST /projects/<project-slug>/community-home/<community-slug>/remove]
+      form with zero application fields, built structurally from the two
+      canonical page-model slugs and suppressed whenever either slug is
+      malformed or no live request supplies a CSRF field. The pending,
+      chooser, and no-eligible-community states never carry it, and
+      rendering it authorizes nothing — the transactional removal store
+      reauthorizes the POST;
     - an active relation always suppresses the request form, and malformed
       view models degrade instead of raising: an invalid project slug
       drops every actionable form and project-derived link, a non-positive

@@ -37,7 +37,10 @@ type thread_source_view =
     Preserves the optimistic-vote DOM contract and all comment/vote/mod/delete routes & CSRF. *)
 val thread_shell_page : ?user:string -> ?noindex:bool -> is_member:bool -> is_current_user_mod:bool -> mod_usernames:string list -> admin_usernames:string list -> banned_usernames:string list -> rail_communities:Db.community list -> channels:Db.channel list -> sections:Db.community_section list -> community:Db.community -> ?thread_source:thread_source_view -> user_post_votes:(int * int) list -> user_comment_votes:(int * int) list -> post:Db.post -> comments:Db.comment list -> Dream.request -> string
 val community_overview_page : ?user:string -> ?noindex:bool -> ?connected_projects:string -> is_member:bool -> is_current_user_mod:bool -> is_current_user_top_mod:bool -> mod_usernames:string list -> orphaned:(int * string option) -> channels:Db.channel list -> recent_posts:Db.post list -> Db.community -> (Db.community_section * int * string option) list -> Dream.request -> string
-val community_settings_page : ?user:string -> is_admin:bool -> is_top_mod:bool -> open_reports_count:int -> community:Db.community -> mods:Db.user list -> banned_users:Db.user list -> members:Db.user list -> sections:Db.community_section list -> channels:Db.channel list -> Dream.request -> string
+(** [connected_projects] is the pre-rendered "Connected projects" management fragment for the
+    top-mod/admin settings surface (empty for every other viewer, which also removes the panel
+    and its navigation entry). *)
+val community_settings_page : ?user:string -> ?connected_projects:string -> is_admin:bool -> is_top_mod:bool -> open_reports_count:int -> community:Db.community -> mods:Db.user list -> banned_users:Db.user list -> members:Db.user list -> sections:Db.community_section list -> channels:Db.channel list -> Dream.request -> string
 val manage_mods_page : ?user:string -> is_admin:bool -> current_user_role:string option -> community:Db.community -> mods:Db.moderator_entry list -> Dream.request -> string
 
 (** === POST === *)

@@ -991,6 +991,44 @@ let with_connected_projects db ?user request ~community_slug k =
   | Error (R.Inconsistent_data | R.Storage_error) ->
       connected_projects_error_page ?user request
 
+(* The private settings counterpart of [with_connected_projects]: the same read model, the
+   same generic failure responses, but rendered through the removal-pages management
+   fragment so each accepted project carries a removal form.
+
+   [authorized] is the settings surface's own top-mod/admin decision, and it gates the read
+   itself — an ordinary moderator's settings page never issues this query and never receives
+   a fragment, so the panel cannot exist for them. Rendering a form still authorizes nothing:
+   Project_home_removal_store reauthorizes every removal POST against the three durable
+   sources. *)
+let with_settings_connected_projects db ?user request ~community_slug ~authorized k =
+  let module R = Community_connected_projects_read_model in
+  if not authorized then k ""
+  else
+    match%lwt R.load_for_community db ~community_slug with
+    | Ok projects ->
+        let page_model project =
+          let verification : Project_home_removal_pages.verification =
+            match R.project_verification project with
+            | R.Verified -> Verified
+            | R.Stale -> Stale
+            | R.Revoked -> Revoked
+          in
+          ({ name = R.project_name project;
+             slug = R.project_slug project;
+             namespace_login = R.project_namespace_login project;
+             verification }
+            : Project_home_removal_pages.connected_project)
+        in
+        k
+          (Project_home_removal_pages.community_side_management_section ~request
+             ~community_slug ~projects:(List.map page_model projects) ())
+    | Error (R.Invalid_community_slug | R.Community_unavailable) ->
+        community_not_found ?user request
+    | Error (R.Inconsistent_data | R.Storage_error) ->
+        (* Durable corruption is never rendered away as a quietly incomplete settings
+           page. *)
+        connected_projects_error_page ?user request
+
 let community_page_handler request =
   let slug = Dream.param request "slug" in
   let user = Dream.session_field request "username" in
@@ -2023,7 +2061,16 @@ let community_settings_handler request =
                         match%lwt Db.get_community_members db community.id with
                         | Ok m -> Lwt.return m | Error _ -> Lwt.return []
                       in
-                      Dream.html (Pages.community_settings_page ?user ~is_admin ~is_top_mod ~open_reports_count ~community ~mods ~banned_users ~members ~sections ~channels request)
+                      (* Connected-project management: loaded only after the settings
+                         authorization above succeeded, and only for the same top-mod/admin
+                         surface that already gates the project-home request queue. There is
+                         no second accepted-project query — this is the existing public
+                         read model, rendered with removal controls. *)
+                      with_settings_connected_projects db ?user request
+                        ~community_slug:community.slug
+                        ~authorized:(is_top_mod || is_admin)
+                        (fun connected_projects ->
+                      Dream.html (Pages.community_settings_page ?user ~connected_projects ~is_admin ~is_top_mod ~open_reports_count ~community ~mods ~banned_users ~members ~sections ~channels request))
                   | Error e -> Dream.html ("DB Error: " ^ e))
               | Error e -> Dream.html ("DB Error: " ^ e))
         | Ok None -> Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"Not Found" ~message:"This community does not exist." ~alert_type:"error" ~return_url:"/" request)
