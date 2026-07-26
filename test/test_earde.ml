@@ -38851,6 +38851,2575 @@ module Phvv = struct
     ]
 end
 
+(* === Network-community publication form (Network_community_publication_form) ===
+   The final setup submission of a provisioned network community: the exact
+   four-field grammar, the publication vocabulary, and the delegation of the
+   whole identity half to the frozen provisioning-form policy. Pure — no DB,
+   no request, no session. *)
+
+module Ncpf = Earde.Network_community_publication_form
+
+let ncpf_err : Ncpf.error -> string = function
+  | Ncpf.Invalid_form -> "Invalid_form"
+  | Ncpf.Invalid_community_name -> "Invalid_community_name"
+  | Ncpf.Invalid_community_slug -> "Invalid_community_slug"
+  | Ncpf.Invalid_community_description -> "Invalid_community_description"
+  | Ncpf.Invalid_publication_visibility -> "Invalid_publication_visibility"
+
+let ncpf_case = go_case
+
+let ncpf_vis : Ncpf.publication_visibility -> string = function
+  | Ncpf.Public -> "public"
+  | Ncpf.Unlisted -> "unlisted"
+
+let ncpf_fields ?(name = "Ncpf Community") ?(slug = "ncpf-community")
+    ?(description = "") ?(visibility = "public") () =
+  [ ("community_name", name);
+    ("community_slug", slug);
+    ("community_description", description);
+    ("publication_visibility", visibility)
+  ]
+
+let ncpf_ok label fields =
+  match Ncpf.of_fields fields with
+  | Ok parsed -> parsed
+  | Error e -> Alcotest.failf "%s: rejected with %s" label (ncpf_err e)
+
+let ncpf_expect label expected fields =
+  match Ncpf.of_fields fields with
+  | Ok _ -> Alcotest.failf "%s: expected %s, got Ok" label (ncpf_err expected)
+  | Error e -> Alcotest.(check string) label (ncpf_err expected) (ncpf_err e)
+
+(* Every ordering of a four-element list, so field-order independence is
+   proven exhaustively rather than on a hand-picked pair. *)
+let rec ncpf_permutations = function
+  | [] -> [ [] ]
+  | items ->
+      List.concat_map
+        (fun x ->
+          let rest = List.filter (fun y -> y != x) items in
+          List.map (fun p -> x :: p) (ncpf_permutations rest))
+        items
+
+let ncpf_field_names =
+  [ "community_name"; "community_slug"; "community_description";
+    "publication_visibility"
+  ]
+
+(* The four canonical values one accepted submission must expose, as one
+   comparable signature. *)
+let ncpf_signature parsed =
+  String.concat "|"
+    [ Ncpf.community_name parsed;
+      Ncpf.community_slug parsed;
+      (match Ncpf.community_description parsed with
+      | None -> "<none>"
+      | Some text -> text);
+      ncpf_vis (Ncpf.publication_visibility parsed)
+    ]
+
+let ncpf_grammar_cases =
+  [ ncpf_case "publication form: a valid Public submission keeps every \
+               canonical value exactly" (fun () ->
+        let parsed =
+          ncpf_ok "public"
+            (ncpf_fields ~name:"Ncpf Community" ~slug:"ncpf-community"
+               ~description:"A durable description." ~visibility:"public" ())
+        in
+        Alcotest.(check string) "name" "Ncpf Community"
+          (Ncpf.community_name parsed);
+        Alcotest.(check string) "slug" "ncpf-community"
+          (Ncpf.community_slug parsed);
+        Alcotest.(check (option string)) "description"
+          (Some "A durable description.") (Ncpf.community_description parsed);
+        Alcotest.(check string) "visibility" "public"
+          (ncpf_vis (Ncpf.publication_visibility parsed)))
+  ; ncpf_case "publication form: a valid Unlisted submission differs only in \
+               the publication choice" (fun () ->
+        let parsed =
+          ncpf_ok "unlisted" (ncpf_fields ~visibility:"unlisted" ())
+        in
+        Alcotest.(check string) "visibility" "unlisted"
+          (ncpf_vis (Ncpf.publication_visibility parsed));
+        Alcotest.(check string) "name unchanged" "Ncpf Community"
+          (Ncpf.community_name parsed);
+        Alcotest.(check string) "slug unchanged" "ncpf-community"
+          (Ncpf.community_slug parsed);
+        (* A structurally required but blank description collapses to None,
+           never Some "". *)
+        Alcotest.(check (option string)) "blank description" None
+          (Ncpf.community_description parsed))
+  ; ncpf_case "publication form: every field order yields byte-identical \
+               values" (fun () ->
+        let base =
+          ncpf_fields ~name:"Ncpf Order" ~slug:"ncpf-order"
+            ~description:"Order body." ~visibility:"unlisted" ()
+        in
+        let expected = ncpf_signature (ncpf_ok "canonical order" base) in
+        let orders = ncpf_permutations base in
+        Alcotest.(check int) "24 permutations" 24 (List.length orders);
+        List.iter
+          (fun fields ->
+            let parsed = ncpf_ok "permuted" fields in
+            Alcotest.(check string) "same canonical values" expected
+              (ncpf_signature parsed))
+          orders)
+  ; ncpf_case "publication form: every missing field is the same payload-free \
+               structural rejection" (fun () ->
+        List.iter
+          (fun dropped ->
+            let fields =
+              List.filter
+                (fun (key, _) -> not (String.equal key dropped))
+                (ncpf_fields ())
+            in
+            ncpf_expect ("missing " ^ dropped) Ncpf.Invalid_form fields)
+          ncpf_field_names;
+        ncpf_expect "empty field list" Ncpf.Invalid_form [])
+  ; ncpf_case "publication form: every duplicated field is a structural \
+               rejection, even when both copies are valid" (fun () ->
+        List.iter
+          (fun duplicated ->
+            let extra =
+              match duplicated with
+              | "publication_visibility" -> (duplicated, "unlisted")
+              | "community_slug" -> (duplicated, "ncpf-community")
+              | _ -> (duplicated, "Ncpf Community")
+            in
+            ncpf_expect ("duplicate " ^ duplicated) Ncpf.Invalid_form
+              (ncpf_fields () @ [ extra ]))
+          ncpf_field_names)
+  ; ncpf_case "publication form: unknown, case-variant, and padded field \
+               names are structural rejections" (fun () ->
+        List.iter
+          (fun (key, value) ->
+            ncpf_expect ("unknown " ^ String.escaped key) Ncpf.Invalid_form
+              (ncpf_fields () @ [ (key, value) ]))
+          [ ("community_id", "42"); ("actor_id", "7"); ("current_slug", "x");
+            ("return_url", "/"); ("indexable", "true");
+            ("discoverable", "true"); ("onboarding_state", "published")
+          ];
+        List.iter
+          (fun key ->
+            let fields =
+              List.map
+                (fun (k, v) ->
+                  if String.equal k "community_name" then (key, v) else (k, v))
+                (ncpf_fields ())
+            in
+            ncpf_expect ("variant " ^ String.escaped key) Ncpf.Invalid_form
+              fields)
+          [ "Community_name"; "COMMUNITY_NAME"; " community_name";
+            "community_name "; "community_name\t"; "communityname"
+          ])
+  ; ncpf_case "publication form: a dream.csrf field reaching the pure parser \
+               is a structural rejection, never silently filtered" (fun () ->
+        ncpf_expect "framework field" Ncpf.Invalid_form
+          (("dream.csrf", "opaque-token") :: ncpf_fields ());
+        ncpf_expect "framework field last" Ncpf.Invalid_form
+          (ncpf_fields () @ [ ("dream.csrf", "opaque-token") ]))
+  ; ncpf_case "publication form: structure is decided before semantics, so a \
+               doubly invalid submission never names a field" (fun () ->
+        (* Both the field set and the name are invalid; only the structural
+           answer travels. *)
+        ncpf_expect "unknown field plus blank name" Ncpf.Invalid_form
+          (ncpf_fields ~name:"   " ~visibility:"private" ()
+          @ [ ("surprise", "1") ]);
+        ncpf_expect "missing field plus bad slug" Ncpf.Invalid_form
+          [ ("community_name", ""); ("community_slug", "Not A Slug") ])
+  ]
+
+let ncpf_publication_cases =
+  [ ncpf_case "publication form: exactly public and unlisted are accepted"
+      (fun () ->
+        Alcotest.(check string) "public" "public"
+          (ncpf_vis
+             (Ncpf.publication_visibility
+                (ncpf_ok "public" (ncpf_fields ~visibility:"public" ()))));
+        Alcotest.(check string) "unlisted" "unlisted"
+          (ncpf_vis
+             (Ncpf.publication_visibility
+                (ncpf_ok "unlisted" (ncpf_fields ~visibility:"unlisted" ())))))
+  ; ncpf_case "publication form: private is rejected like any other unknown \
+               value — a network community has no fully private published \
+               shape" (fun () ->
+        List.iter
+          (fun value ->
+            ncpf_expect ("value " ^ String.escaped value)
+              Ncpf.Invalid_publication_visibility
+              (ncpf_fields ~visibility:value ()))
+          [ "private"; "Private"; "PRIVATE"; "secret"; "hidden" ])
+  ; ncpf_case "publication form: nothing is trimmed, case-folded, or repaired \
+               on the publication value" (fun () ->
+        List.iter
+          (fun value ->
+            ncpf_expect ("value " ^ String.escaped value)
+              Ncpf.Invalid_publication_visibility
+              (ncpf_fields ~visibility:value ()))
+          [ ""; " "; " public"; "public "; "\tpublic"; "public\n"; "Public";
+            "PUBLIC"; "pUbLiC"; "Unlisted"; "UNLISTED"; " unlisted";
+            "unlisted "; "public,unlisted"; "published"; "listed"; "0"; "1";
+            "true"
+          ])
+  ; ncpf_case "publication form: identity is validated before the publication \
+               choice, and each field maps to its own error" (fun () ->
+        (* Both halves invalid: the identity error is the one that travels. *)
+        ncpf_expect "bad name wins over bad visibility"
+          Ncpf.Invalid_community_name
+          (ncpf_fields ~name:"" ~visibility:"private" ());
+        ncpf_expect "bad slug wins over bad visibility"
+          Ncpf.Invalid_community_slug
+          (ncpf_fields ~slug:"Not A Slug" ~visibility:"private" ());
+        ncpf_expect "bad description wins over bad visibility"
+          Ncpf.Invalid_community_description
+          (ncpf_fields ~description:"body\x01here" ~visibility:"private" ());
+        (* A valid identity with a bad choice reaches the publication
+           error. *)
+        ncpf_expect "valid identity, bad visibility"
+          Ncpf.Invalid_publication_visibility
+          (ncpf_fields ~visibility:"private" ()))
+  ]
+
+(* Cross-module parity: the identity half of this form is exactly the frozen
+   provisioning policy — same verdicts, same canonical bytes, same error
+   constructor — so a community created by provisioning and edited here can
+   never drift into a second grammar. *)
+let ncpf_identity_probes =
+  [ ("plain", "Ncpf Community", "ncpf-community", "");
+    ("trimmed name", "  Ncpf Community  ", "ncpf-community", "");
+    ("name at the 120-scalar limit", phvf_repeat phvf_scalar 120, "ncpf-a", "");
+    ("name one scalar over", phvf_repeat phvf_scalar 121, "ncpf-a", "");
+    ("blank name", "   ", "ncpf-a", "");
+    ("control in name", "Ncpf\x01Name", "ncpf-a", "");
+    ("invalid utf-8 name", "Ncpf\xff", "ncpf-a", "");
+    ("single-character slug", "Ncpf", "a", "");
+    ("slug at 80 bytes", "Ncpf", String.make 80 'a', "");
+    ("slug at 81 bytes", "Ncpf", String.make 81 'a', "");
+    ("uppercase slug", "Ncpf", "Ncpf-Community", "");
+    ("padded slug", "Ncpf", " ncpf-community", "");
+    ("trailing hyphen slug", "Ncpf", "ncpf-", "");
+    ("double hyphen slug", "Ncpf", "ncpf--community", "");
+    ("underscore slug", "Ncpf", "ncpf_community", "");
+    ("slash slug", "Ncpf", "ncpf/community", "");
+    ("empty slug", "Ncpf", "", "");
+    ("multiline description", "Ncpf", "ncpf-a", "one\r\ntwo\rthree\nfour");
+    ("tabbed description", "Ncpf", "ncpf-a", "col\tumn");
+    ("whitespace-only description", "Ncpf", "ncpf-a", "  \n\t ");
+    ("description at 2000 scalars", "Ncpf", "ncpf-a",
+     phvf_repeat phvf_scalar 2000);
+    ("description one scalar over", "Ncpf", "ncpf-a",
+     phvf_repeat phvf_scalar 2001);
+    ("control in description", "Ncpf", "ncpf-a", "body\x01here");
+    ("invalid utf-8 description", "Ncpf", "ncpf-a", "body\xff")
+  ]
+
+let ncpf_parity_cases =
+  [ ncpf_case "publication form: every identity verdict matches \
+               Project_home_provisioning_form exactly" (fun () ->
+        List.iter
+          (fun (label, name, slug, description) ->
+            let mine =
+              Ncpf.of_fields (ncpf_fields ~name ~slug ~description ())
+            in
+            let frozen = Phvf.of_fields (phvf_fields ~name ~slug ~description ()) in
+            match (mine, frozen) with
+            | Ok a, Ok b ->
+                Alcotest.(check string)
+                  (label ^ ": name")
+                  (Phvf.community_name b) (Ncpf.community_name a);
+                Alcotest.(check string)
+                  (label ^ ": slug")
+                  (Phvf.community_slug b) (Ncpf.community_slug a);
+                Alcotest.(check (option string))
+                  (label ^ ": description")
+                  (Phvf.community_description b) (Ncpf.community_description a)
+            | Error Ncpf.Invalid_community_name,
+              Error Phvf.Invalid_community_name
+            | Error Ncpf.Invalid_community_slug,
+              Error Phvf.Invalid_community_slug
+            | Error Ncpf.Invalid_community_description,
+              Error Phvf.Invalid_community_description ->
+                ()
+            | Error a, Error b ->
+                Alcotest.failf "%s: error mismatch %s vs %s" label
+                  (ncpf_err a) (phvf_err b)
+            | Ok _, Error b ->
+                Alcotest.failf "%s: accepted here, %s there" label (phvf_err b)
+            | Error a, Ok _ ->
+                Alcotest.failf "%s: %s here, accepted there" label (ncpf_err a))
+          ncpf_identity_probes)
+  ; ncpf_case "publication form: an accepted identity is byte-identical under \
+               both publication choices" (fun () ->
+        List.iter
+          (fun (label, name, slug, description) ->
+            match Ncpf.of_fields (ncpf_fields ~name ~slug ~description ()) with
+            | Error _ -> ()
+            | Ok public ->
+                let unlisted =
+                  ncpf_ok (label ^ " unlisted")
+                    (ncpf_fields ~name ~slug ~description
+                       ~visibility:"unlisted" ())
+                in
+                Alcotest.(check string)
+                  (label ^ ": name")
+                  (Ncpf.community_name public) (Ncpf.community_name unlisted);
+                Alcotest.(check string)
+                  (label ^ ": slug")
+                  (Ncpf.community_slug public) (Ncpf.community_slug unlisted);
+                Alcotest.(check (option string))
+                  (label ^ ": description")
+                  (Ncpf.community_description public)
+                  (Ncpf.community_description unlisted))
+          ncpf_identity_probes)
+  ; ncpf_case "publication form: accepted values are preserved byte-exactly, \
+               never lowercased, normalized, or truncated" (fun () ->
+        let parsed =
+          ncpf_ok "preservation"
+            (ncpf_fields ~name:"  Ncpf MiXeD Ünïcode  " ~slug:"ncpf-a1-b2"
+               ~description:"  line one\r\nline two\ttabbed  " ())
+        in
+        Alcotest.(check string) "name outer-trimmed only" "Ncpf MiXeD Ünïcode"
+          (Ncpf.community_name parsed);
+        Alcotest.(check string) "slug byte-identical" "ncpf-a1-b2"
+          (Ncpf.community_slug parsed);
+        Alcotest.(check (option string)) "description normalized to LF"
+          (Some "line one\nline two\ttabbed")
+          (Ncpf.community_description parsed))
+  ]
+
+(* === Network-community publication page (Network_community_publication_pages) ===
+   Pure rendering of the review-and-publish surface: heading and draft copy,
+   the two publication choices and the absence of a private one, the exact
+   one-form contract, defensive degradation, escaping, and every feedback
+   variant. DB-free. *)
+
+module Ncpp = Earde.Network_community_publication_pages
+
+let ncpp_case = go_case
+
+let ncpp_project ?(name = "Ncpp Project") ?(slug = "ncpp-project")
+    ?(login = "ncpp-owner") ?(kind = Pi.Project) () : Ncpp.project =
+  { Ncpp.name; slug; namespace_login = login; kind }
+
+let ncpp_community ?(name = "Ncpp Home") ?(slug = "ncpp-home") ?description () :
+    Ncpp.community =
+  { Ncpp.name; slug; description }
+
+let ncpp_values ?(name = "Ncpp Home") ?(slug = "ncpp-home") ?(description = "")
+    ?(visibility = "public") () : Ncpp.form_values =
+  { Ncpp.community_name = name;
+    community_slug = slug;
+    community_description = description;
+    publication_visibility = visibility
+  }
+
+(* Assertions run over the feature fragment, not the whole page: the shared
+   shell owns its own forms and chrome. *)
+let ncpp_render ?request ?(community = ncpp_community ())
+    ?(project = ncpp_project ()) ?(values = ncpp_values ()) ?feedback () =
+  ps_fragment
+    (Ncpp.network_community_publication_page ?request ~community ~project
+       ~values ~feedback ())
+
+let ncpp_whole ?request ?(community = ncpp_community ())
+    ?(project = ncpp_project ()) ?(values = ncpp_values ()) ?feedback () =
+  Ncpp.network_community_publication_page ?request ~community ~project ~values
+    ~feedback ()
+
+(* A live request under a secret + sessions pipeline, so the framework CSRF
+   field can be emitted; no SQL is touched. *)
+let ncpp_live ?community ?project ?values ?feedback () =
+  let captured = ref None in
+  let pipeline =
+    Dream.set_secret gck_secret @@ Dream.memory_sessions
+    @@ fun req ->
+    captured := Some (ncpp_render ~request:req ?community ?project ?values ?feedback ());
+    Dream.html ""
+  in
+  ignore
+    (Lwt_main.run
+       (pipeline (Dream.request ~method_:`GET ~target:"/c/ncpp-home/setup" "")));
+  match !captured with
+  | Some html -> html
+  | None -> Alcotest.fail "publication renderer did not run"
+
+let ncpp_action = "action='/c/ncpp-home/publish'"
+
+let ncpp_copy_cases =
+  [ ncpp_case "publication page: heading and the supporting review copy"
+      (fun () ->
+        let html = ncpp_render () in
+        ps_must html "Complete setup and publish";
+        ps_must html
+          "Review the community identity and choose how people can discover \
+           it.")
+  ; ncpp_case "publication page: the draft state and the separateness of \
+               publication are stated plainly" (fun () ->
+        let html = ncpp_render () in
+        ps_must html "still a private setup draft";
+        ps_must html "Only people authorized for setup can reach it.";
+        ps_must html "Publishing is a separate, explicit action.";
+        ps_must html "Nothing is published until you submit this form.")
+  ; ncpp_case "publication page: Public and Unlisted are each described \
+               exactly, and a fully private publication is offered nowhere"
+      (fun () ->
+        let html = ncpp_render () in
+        ps_must html
+          "reachable by anyone, listed in Earde&#39;s own discovery surfaces, \
+           and open to search-engine indexing";
+        ps_must html
+          "reachable by anyone with the direct URL, but kept out of \
+           Earde&#39;s discovery surfaces and marked <code>noindex</code>";
+        ps_must html "It cannot be published as a fully private community.";
+        List.iter (ps_must_not html)
+          [ "value='private'"; "value=\"private\""; ">Private<";
+            "publish as Private"; "Public, Unlisted, or Private";
+            "fully private community.</li></ul><li>"
+          ])
+  ; ncpp_case "publication page: private rooms remain possible under either \
+               choice, and publication grants no new permission" (fun () ->
+        let html = ncpp_render () in
+        ps_must html
+          "Private rooms and restricted sections can still exist inside it \
+           under either choice";
+        ps_must html
+          "Publishing does not change who moderates or administers anything.";
+        ps_must html
+          "Project stewards gain no permission beyond the durable roles they \
+           already hold.")
+  ; ncpp_case "publication page: the connected project reads factually, with \
+               no officiality or endorsement language" (fun () ->
+        let html =
+          ncpp_render
+            ~project:
+              (ncpp_project ~name:"Ncpp Alpha" ~kind:Pi.Ecosystem
+                 ~login:"ncpp-org" ())
+            ()
+        in
+        ps_must html "Ncpp Alpha";
+        ps_must html "Ecosystem";
+        ps_must html "ncpp-org";
+        ps_must html "Connected and verified through GitHub.";
+        List.iter (ps_must_not html)
+          [ "Official"; "official"; "GitHub-approved"; "GitHub-endorsed";
+            "endorsed"; "approved by GitHub"; "sponsored"
+          ])
+  ; ncpp_case "publication page: every project kind has its own non-endorsing \
+               label" (fun () ->
+        List.iter
+          (fun (kind, label) ->
+            let html = ncpp_render ~project:(ncpp_project ~kind ()) () in
+            ps_must html label)
+          [ (Pi.Project, "Project"); (Pi.Organization, "GitHub organization");
+            (Pi.Ecosystem, "Ecosystem"); (Pi.Foundation, "Foundation");
+            (Pi.Working_group, "Working group");
+            (Pi.Other, "Other open-source initiative")
+          ])
+  ]
+
+let ncpp_form_cases =
+  [ ncpp_case "publication page: exactly one form, with the exact method and \
+               structurally built action" (fun () ->
+        let html = ncpp_render () in
+        Alcotest.(check int) "one form" 1 (ps_count html "<form");
+        Alcotest.(check int) "one closing form" 1 (ps_count html "</form>");
+        ps_must html "method='POST'";
+        ps_must html ncpp_action;
+        (* The action is derived from the community slug alone: a different
+           draft slug moves it, nothing else does. *)
+        ps_must
+          (ncpp_render ~community:(ncpp_community ~slug:"ncpp-other" ()) ())
+          "action='/c/ncpp-other/publish'")
+  ; ncpp_case "publication page: exactly the four application controls, and \
+               no hidden identifier, current slug, return URL, or lifecycle \
+               flag" (fun () ->
+        let html = ncpp_render () in
+        let region = ps_form_region html in
+        List.iter (ps_must region)
+          [ "name='community_name'"; "name='community_slug'";
+            "name='community_description'"; "name='publication_visibility'"
+          ];
+        Alcotest.(check int) "one name control" 1
+          (ps_count region "name='community_name'");
+        Alcotest.(check int) "one slug control" 1
+          (ps_count region "name='community_slug'");
+        Alcotest.(check int) "one description control" 1
+          (ps_count region "name='community_description'");
+        (* Pure rendering emits no framework field, so the only inputs are
+           the application controls: two radios plus two text inputs. *)
+        Alcotest.(check int) "four inputs" 4
+          (List.length (ps_input_tags region));
+        List.iter (ps_must_not region)
+          [ "type='hidden'"; "type=\"hidden\""; "name='community_id'";
+            "name='project_id'"; "name='relation_id'"; "name='actor_id'";
+            "name='user_id'"; "name='current_slug'"; "name='return_url'";
+            "name='redirect_to'"; "name='onboarding_state'";
+            "name='indexable'"; "name='discoverable'"; "name='visibility'"
+          ])
+  ; ncpp_case "publication page: exactly two publication radio values, and a \
+               nameless submit with no confirmation script" (fun () ->
+        let region = ps_form_region (ncpp_render ()) in
+        Alcotest.(check int) "two radios" 2
+          (ps_count region "type='radio'");
+        Alcotest.(check int) "two publication controls" 2
+          (ps_count region "name='publication_visibility'");
+        Alcotest.(check int) "one public value" 1
+          (ps_count region "value='public'");
+        Alcotest.(check int) "one unlisted value" 1
+          (ps_count region "value='unlisted'");
+        ps_must region "<button type='submit'";
+        ps_must region ">Publish community</button>";
+        List.iter (ps_must_not region)
+          [ "<button name"; "onsubmit"; "confirmModal"; "onclick" ])
+  ; ncpp_case "publication page: public is the default only when no valid \
+               explicit choice is present" (fun () ->
+        (* No explicit choice: public preselected. *)
+        let default = ps_form_region (ncpp_render ~values:(ncpp_values ~visibility:"" ()) ()) in
+        ps_must default "value='public' checked";
+        ps_must_not default "value='unlisted' checked";
+        (* An explicit unlisted choice survives the round trip. *)
+        let unlisted =
+          ps_form_region
+            (ncpp_render ~values:(ncpp_values ~visibility:"unlisted" ()) ())
+        in
+        ps_must unlisted "value='unlisted' checked";
+        ps_must_not unlisted "value='public' checked";
+        (* An explicit public choice stays public. *)
+        let public =
+          ps_form_region
+            (ncpp_render ~values:(ncpp_values ~visibility:"public" ()) ())
+        in
+        ps_must public "value='public' checked")
+  ; ncpp_case "publication page: an invalid submitted publication value \
+               selects neither option rather than defaulting to the more \
+               exposed one" (fun () ->
+        List.iter
+          (fun value ->
+            let region =
+              ps_form_region
+                (ncpp_render ~values:(ncpp_values ~visibility:value ()) ())
+            in
+            Alcotest.(check int)
+              ("no preselection for " ^ String.escaped value)
+              0 (ps_count region "checked"))
+          [ "private"; "Public"; " public"; "unlisted "; "PRIVATE"; "listed" ];
+          (* The empty value is "no choice yet", not a rejected one, and is
+             the single documented case that falls back to public. *)
+          let empty =
+            ps_form_region (ncpp_render ~values:(ncpp_values ~visibility:"" ()) ())
+          in
+          Alcotest.(check int) "empty value defaults to public" 1
+            (ps_count empty "value='public' checked"))
+  ; ncpp_case "publication page: the framework CSRF field appears only with a \
+               live request, and only inside the form" (fun () ->
+        let pure = ncpp_render () in
+        ps_must_not pure "dream.csrf";
+        let live = ncpp_live () in
+        let region = ps_form_region live in
+        let tags = List.filter ps_is_csrf_input (ps_input_tags region) in
+        Alcotest.(check int) "exactly one framework field" 1
+          (List.length tags);
+        (* Removing it leaves exactly the four application controls. *)
+        Alcotest.(check int) "no other framework field in the page" 1
+          (ps_count live ps_csrf_input_prefix))
+  ; ncpp_case "publication page: the controls prefill from the supplied \
+               values, with an absent description as an empty textarea"
+      (fun () ->
+        let html =
+          ncpp_render
+            ~values:
+              (ncpp_values ~name:"Ncpp Current" ~slug:"ncpp-current"
+                 ~description:"Current body." ())
+            ()
+        in
+        ps_must html "value='Ncpp Current'";
+        ps_must html "value='ncpp-current'";
+        ps_must html "Current body.";
+        let blank = ncpp_render ~values:(ncpp_values ~description:"" ()) () in
+        ps_must blank "<textarea name='community_description' maxlength='2000' rows='6'>";
+        ps_must_not blank ">None<")
+  ; ncpp_case "publication page: control limits mirror the server-side policy"
+      (fun () ->
+        let region = ps_form_region (ncpp_render ()) in
+        ps_must region "maxlength='120'";
+        ps_must region "maxlength='80'";
+        ps_must region "maxlength='2000'")
+  ]
+
+let ncpp_defensive_cases =
+  [ ncpp_case "publication page: every caller-controlled value is escaped, \
+               and a description is never treated as markup" (fun () ->
+        let html =
+          ncpp_render
+            ~community:
+              (ncpp_community ~name:"<b>Name</b>"
+                 ~description:"**bold** <i>x</i>" ())
+            ~project:
+              (ncpp_project ~name:"<script>alert(1)</script>"
+                 ~login:"o'wner\"x" ())
+            ~values:
+              (ncpp_values ~name:"a'\"<>&" ~slug:"b'\"<>&"
+                 ~description:"**bold** <i>x</i>" ())
+            ()
+        in
+        List.iter (ps_must_not html)
+          [ "<script>alert(1)</script>"; "<b>Name</b>"; "<i>x</i>" ];
+        ps_must html "&lt;script&gt;alert(1)&lt;/script&gt;";
+        ps_must html "**bold** &lt;i&gt;x&lt;/i&gt;")
+  ; ncpp_case "publication page: a draft slug outside the canonical network \
+               grammar suppresses the whole form rather than emitting an \
+               unusable action" (fun () ->
+        List.iter
+          (fun slug ->
+            let html = ncpp_render ~community:(ncpp_community ~slug ()) () in
+            Alcotest.(check int)
+              ("no form for " ^ String.escaped slug)
+              0 (ps_count html "<form");
+            ps_must_not html "/publish";
+            (* The explanatory copy still renders — the page never raises. *)
+            ps_must html "Complete setup and publish")
+          [ ""; " "; "Ncpp-Home"; "ncpp home"; "ncpp/home"; "ncpp-";
+            "-ncpp"; "ncpp--home"; "ncpp_home"; "ncpp.home"; "ncpp\x01home";
+            String.make 81 'a'
+          ])
+  ; ncpp_case "publication page: no project-derived link exists under any \
+               project slug, malformed or not" (fun () ->
+        List.iter
+          (fun slug ->
+            let html = ncpp_render ~project:(ncpp_project ~slug ()) () in
+            List.iter (ps_must_not html)
+              [ "href='/projects/"; "href=\"/projects/"; "/community-home";
+                "/request-home"
+              ])
+          [ "ncpp-project"; ""; "Ncpp Project"; "ncpp/project"; "ncpp--x" ])
+  ; ncpp_case "publication page: no script, inline style, event handler, or \
+               refresh redirect" (fun () ->
+        let html = ncpp_whole () in
+        let feature = ncpp_render () in
+        List.iter (ps_must_not feature)
+          [ "<script"; "javascript:"; "style='"; "style=\""; "onclick";
+            "onsubmit"; "onload"; "onerror"; "http-equiv"
+          ];
+        (* noindex is a page-level property, so it is asserted on the whole
+           document rather than the fragment. *)
+        ps_must html "content='noindex'")
+  ; ncpp_case "publication page: no identifier of any kind is renderable — \
+               the models carry none" (fun () ->
+        let html = ps_without_csrf_inputs (ncpp_live ()) in
+        List.iter (ps_must_not html)
+          [ "community_id"; "project_id"; "relation_id"; "steward_id";
+            "installation_id"; "membership_id"
+          ])
+  ; ncpp_case "publication page: credential-shaped fixtures never reach the \
+               rendered page" (fun () ->
+        let html =
+          ps_without_csrf_inputs
+            (ncpp_live
+               ~project:
+                 (ncpp_project ~name:"gho_NCPP_ACCESS_TOKEN"
+                    ~login:"NCPP_CLIENT_SECRET" ())
+               ())
+        in
+        (* The project identity is rendered, so the assertion is that the
+           page adds nothing of its own: only the two supplied strings may
+           appear, and no token-shaped value the page could have invented. *)
+        List.iter (ps_must_not html)
+          [ "ghr_"; "ghu_"; "code="; "state="; "code_verifier";
+            "client_secret="; "access_token"
+          ])
+  ]
+
+let ncpp_feedback_cases =
+  [ ncpp_case "publication page: no feedback renders no alert" (fun () ->
+        ps_must_not (ncpp_render ()) "ncp-alert")
+  ; ncpp_case "publication page: every feedback variant renders its own \
+               generic message and never a submitted value" (fun () ->
+        List.iter
+          (fun (feedback, needle) ->
+            let html =
+              ncpp_render
+                ~values:
+                  (ncpp_values ~name:"NcppSecretName" ~slug:"ncpp-secret-slug"
+                     ~visibility:"private" ())
+                ~feedback ()
+            in
+            ps_must html "ncp-alert";
+            ps_must html needle;
+            (* The message itself never quotes the rejected value or the
+               rule that failed. *)
+            List.iter (ps_must_not html)
+              [ "communities_network"; "CHECK"; "constraint"; "regex";
+                "char_length"
+              ])
+          [ (Ncpp.Invalid_form,
+             "We couldn't read that submission. Review the form and try \
+              again.");
+            (Ncpp.Invalid_community_name, "Enter a community name we can use.");
+            (Ncpp.Invalid_community_slug,
+             "Enter a community address using lowercase letters, numbers, and \
+              single hyphens.");
+            (Ncpp.Invalid_community_description,
+             "That description can't be used. Edit it and try again.");
+            (Ncpp.Invalid_publication_visibility,
+             "Choose whether the community should be public or unlisted.");
+            (Ncpp.Community_slug_unavailable,
+             "That community address is already taken. Choose another one.");
+            (Ncpp.Draft_unavailable,
+             "This community is no longer waiting to be published.");
+            (Ncpp.Publication_failed,
+             "We couldn't publish the community. Try again.")
+          ])
+  ; ncpp_case "publication page: feedback never suppresses the form, and the \
+               rejected values still round-trip escaped" (fun () ->
+        let html =
+          ncpp_render
+            ~values:
+              (ncpp_values ~name:"<x>" ~slug:"Bad Slug" ~visibility:"private"
+                 ())
+            ~feedback:Ncpp.Invalid_community_slug ()
+        in
+        Alcotest.(check int) "form still present" 1 (ps_count html "<form");
+        ps_must html "value='&lt;x&gt;'";
+        ps_must html "value='Bad Slug'";
+        ps_must_not html "checked")
+  ]
+
+(* === Network-community publication read model
+       (Network_community_publication_read_model) ===
+   Publisher-authorized load of one provisioned network-community setup
+   draft. Database-gated (EARDE_TEST_DATABASE_URL) with its own reserved
+   external-installation-id range 952000001..952000999 (hence account and
+   forge-namespace ids 952100001..952100999, which also scope the permanent-
+   project cleanup), ncpr_% usernames, and ncpr-% community slugs, so no
+   suite shares fixtures. Every valid draft is created through the real
+   provisioning store, never by fixture INSERTs. Pure validation is proven
+   pre-SQL against a deliberately disconnected connection. Credential
+   assertions are boolean, so no fixture byte reaches test output on
+   failure. *)
+module Ncpr = struct
+  let ( let* ) = Lwt.bind
+
+  open Caqti_request.Infix
+
+  module Rm = Earde.Network_community_publication_read_model
+  module Pv = Earde.Project_home_provisioning_store
+
+  let error_str : Rm.error -> string = function
+    | Rm.Invalid_user_id -> "Invalid_user_id"
+    | Rm.Invalid_community_slug -> "Invalid_community_slug"
+    | Rm.Inconsistent_data -> "Inconsistent_data"
+    | Rm.Storage_error -> "Storage_error"
+
+  let or_fail = Pod_store.or_fail
+  let insert_user = Pod_store.insert_user
+  let exec = Pod_read.exec
+  let find = Pod_read.find
+  let make_project = Phvr.make_project
+  let insert_community = Phcv.insert_community
+
+  (* Distinctive credential-shaped fixtures. None may appear in any public
+     value this read model produces. *)
+  let credential_markers =
+    [ ("access token", "gho_NCPR_ACCESS_TOKEN_SECRET");
+      ("refresh token", "ghr_NCPR_REFRESH_TOKEN");
+      ("client secret", "NCPR_CLIENT_SECRET_VALUE");
+      ("external installation id", "952000001");
+      ("external account id", "952100001")
+    ]
+
+  let q_cleanup =
+    List.map
+      (fun sql -> (Caqti_type.unit ->. Caqti_type.unit) sql)
+      [ "DELETE FROM open_source_projects \
+         WHERE forge_namespace_id BETWEEN 952100001 AND 952100999"
+      ; "DELETE FROM project_onboarding_drafts \
+         WHERE github_installation_record_id IN \
+           (SELECT id FROM github_installations \
+            WHERE github_installation_id BETWEEN 952000001 AND 952000999)"
+      ; "DELETE FROM communities WHERE slug LIKE 'ncpr-%'"
+      ; "DELETE FROM users WHERE username LIKE 'ncpr_%'"
+      ; "DELETE FROM github_installations \
+         WHERE github_installation_id BETWEEN 952000001 AND 952000999"
+      ]
+
+  (* === queries === *)
+
+  let q_community_id =
+    (Caqti_type.string ->! Caqti_type.int)
+    "SELECT id FROM communities WHERE slug = $1"
+
+  let q_publish =
+    (Caqti_type.int ->. Caqti_type.unit)
+    "UPDATE communities SET onboarding_state = 'published', \
+     visibility = 'public', indexable = TRUE, discoverable = TRUE \
+     WHERE id = $1"
+
+  let q_set_visibility =
+    (Caqti_type.(t2 int string) ->. Caqti_type.unit)
+    "UPDATE communities SET visibility = $2 WHERE id = $1"
+
+  let q_set_indexable =
+    (Caqti_type.(t2 int bool) ->. Caqti_type.unit)
+    "UPDATE communities SET indexable = $2 WHERE id = $1"
+
+  let q_set_discoverable =
+    (Caqti_type.(t2 int bool) ->. Caqti_type.unit)
+    "UPDATE communities SET discoverable = $2 WHERE id = $1"
+
+  let q_set_legacy =
+    (Caqti_type.int ->. Caqti_type.unit)
+    "UPDATE communities SET is_network_community = FALSE WHERE id = $1"
+
+  let q_delete_members =
+    (Caqti_type.int ->. Caqti_type.unit)
+    "DELETE FROM community_members WHERE community_id = $1"
+
+  let q_delete_top_mods =
+    (Caqti_type.int ->. Caqti_type.unit)
+    "DELETE FROM community_moderators \
+     WHERE community_id = $1 AND role = 'top_mod'"
+
+  let q_delete_sections =
+    (Caqti_type.int ->. Caqti_type.unit)
+    "DELETE FROM community_sections WHERE community_id = $1"
+
+  let q_duplicate_section =
+    (Caqti_type.int ->. Caqti_type.unit)
+    "INSERT INTO community_sections \
+       (community_id, name, slug, description, position, default_sort, \
+        is_introduction_section) \
+     VALUES ($1, 'General', 'general', 'Duplicate', 1, 'new', FALSE)"
+
+  let q_unarchive_channels =
+    (Caqti_type.int ->. Caqti_type.unit)
+    "UPDATE channels SET is_archived = FALSE WHERE community_id = $1"
+
+  let q_archive_channels =
+    (Caqti_type.int ->. Caqti_type.unit)
+    "UPDATE channels SET is_archived = TRUE WHERE community_id = $1"
+
+  let q_delete_relations =
+    (Caqti_type.int ->. Caqti_type.unit)
+    "DELETE FROM community_projects WHERE community_id = $1"
+
+  let q_set_relation_pending =
+    (Caqti_type.int ->. Caqti_type.unit)
+    "UPDATE community_projects \
+     SET status = 'pending', reviewed_at = NULL, reviewed_by_user_id = NULL \
+     WHERE community_id = $1"
+
+  (* A second accepted home, from a different project: the partial unique
+     index is per project, so the community side is where the contradiction
+     shows up. Shape matches what the provisioning store writes. *)
+  let q_second_accepted =
+    (Caqti_type.(t2 int64 int) ->. Caqti_type.unit)
+    "INSERT INTO community_projects \
+       (project_id, community_id, relation_type, status, reviewed_at) \
+     VALUES ($1, $2, 'home', 'accepted', NOW())"
+
+  let q_set_verification = Phrq.q_set_verification
+  let q_corrupt_login = Phvr.q_corrupt_login
+
+  let q_corrupt_community_name =
+    (Caqti_type.int ->. Caqti_type.unit)
+    "UPDATE communities SET name = 'Ncpr' || chr(1) || 'Name' WHERE id = $1"
+
+  let q_corrupt_community_description =
+    (Caqti_type.int ->. Caqti_type.unit)
+    "UPDATE communities SET description = ' padded ' WHERE id = $1"
+
+  (* Off-enum verification requires the permanent-project CHECK to step
+     aside for the length of one probe; it is restored under
+     Lwt.finalize. *)
+  let ddl sql = (Caqti_type.unit ->. Caqti_type.unit) sql
+
+  let q_drop_verification_check =
+    ddl
+      "ALTER TABLE open_source_projects \
+       DROP CONSTRAINT IF EXISTS open_source_projects_verification_status_check"
+
+  let q_restore_verification_check =
+    ddl
+      "ALTER TABLE open_source_projects \
+       ADD CONSTRAINT open_source_projects_verification_status_check CHECK ( \
+         verification_status IN ('verified', 'stale', 'revoked'))"
+
+  (* Emptying search_path hides the unqualified tables, so the query fails
+     at the SQL layer and Caqti returns an Error the read model maps to
+     Storage_error — a genuine query failure, not a torn-down connection
+     (which the driver signals by raising, not by Error). *)
+  let q_break_search_path =
+    (Caqti_type.unit ->. Caqti_type.unit) "SET search_path TO ''"
+
+  let q_reset_search_path =
+    (Caqti_type.unit ->. Caqti_type.unit) "SET search_path TO public"
+
+  let db_case name f =
+    Alcotest.test_case name `Quick (fun () ->
+        match Sys.getenv_opt "EARDE_TEST_DATABASE_URL" with
+        | None | Some "" -> Alcotest.skip ()
+        | Some url ->
+            Lwt_main.run
+              (let* conn = Caqti_lwt_unix.connect (Uri.of_string url) in
+               let* conn = or_fail "connect" conn in
+               let (module C : Caqti_lwt.CONNECTION) = conn in
+               let cleanup () =
+                 Lwt_list.iter_s
+                   (fun q ->
+                     let* r = C.exec q () in
+                     let* _ = or_fail "cleanup" r in
+                     Lwt.return_unit)
+                   q_cleanup
+               in
+               let* () = cleanup () in
+               Lwt.finalize
+                 (fun () -> f conn)
+                 (fun () ->
+                   Lwt.finalize cleanup (fun () -> C.disconnect ()))))
+
+  (* === fixtures === *)
+
+  let identity ?(name = "Ncpr Home") ?(description = "") ~slug () =
+    phvf_ok "identity fixture" (phvf_fields ~name ~slug ~description ())
+
+  (* The one way a valid draft is built: the real atomic provisioning
+     transaction, exactly as the POST route runs it. *)
+  let provision_draft ?name ?description conn ~actor ~project_slug ~slug =
+    let* r =
+      Pv.provision conn ~actor_user_id:actor ~project_slug
+        ~identity:(identity ?name ?description ~slug ())
+    in
+    match r with
+    | Ok home ->
+        Alcotest.(check string) "provisioned slug" slug (Pv.community_slug home);
+        find conn "community id" q_community_id slug
+    | Error _ -> Alcotest.failf "provisioning fixture failed for %s" slug
+
+  let add_role conn ~user ~community role =
+    exec conn "role fixture" Phrv.q_insert_moderator (user, community, role)
+
+  let add_member conn ~user ~community =
+    exec conn "member fixture" Phrv.q_insert_member (user, community)
+
+  let set_admin conn ~user flag =
+    exec conn "admin fixture" Phrv.q_set_admin (user, flag)
+
+  (* === call helpers === *)
+
+  let load conn ~user ~slug =
+    Rm.load_for_publisher conn ~user_id:user ~community_slug:slug
+
+  let load_view label conn ~user ~slug =
+    let* r = load conn ~user ~slug in
+    match r with
+    | Ok (Some view) -> Lwt.return view
+    | Ok None -> Alcotest.failf "%s: unexpectedly absent" label
+    | Error e -> Alcotest.failf "%s: %s" label (error_str e)
+
+  let load_none label conn ~user ~slug =
+    let* r = load conn ~user ~slug in
+    match r with
+    | Ok None -> Lwt.return_unit
+    | Ok (Some _) -> Alcotest.failf "%s: unexpectedly present" label
+    | Error e -> Alcotest.failf "%s: %s" label (error_str e)
+
+  let load_expect label expected conn ~user ~slug =
+    let* r = load conn ~user ~slug in
+    match r with
+    | Ok None ->
+        Alcotest.failf "%s: expected %s, got Ok None" label (error_str expected)
+    | Ok (Some _) ->
+        Alcotest.failf "%s: expected %s, got Ok Some" label (error_str expected)
+    | Error e ->
+        Alcotest.(check string) label (error_str expected) (error_str e);
+        Lwt.return_unit
+
+  (* === pure input validation === *)
+
+  let pure_inputs_case =
+    db_case "publication read: invalid inputs rejected before any SQL"
+      (fun _conn ->
+        (* A deliberately unusable connection: pure validation must return
+           without touching it — were any SQL attempted, the driver would
+           raise on the finished connection and fail the test. *)
+        let url =
+          match Sys.getenv_opt "EARDE_TEST_DATABASE_URL" with
+          | Some url -> url
+          | None -> Alcotest.fail "EARDE_TEST_DATABASE_URL vanished mid-run"
+        in
+        let* dead = Caqti_lwt_unix.connect (Uri.of_string url) in
+        let* dead = or_fail "dead connect" dead in
+        let (module Dead : Caqti_lwt.CONNECTION) = dead in
+        let* () = Dead.disconnect () in
+        let expect label e ~user ~slug = load_expect label e dead ~user ~slug in
+        let* () = expect "user 0" Rm.Invalid_user_id ~user:0 ~slug:"ncpr-a" in
+        let* () =
+          expect "user -1" Rm.Invalid_user_id ~user:(-1) ~slug:"ncpr-a"
+        in
+        (* The user id is checked first: a doubly invalid call never reaches
+           the slug rule. *)
+        let* () =
+          expect "user before slug" Rm.Invalid_user_id ~user:0 ~slug:"bad slug"
+        in
+        Lwt_list.iter_s
+          (fun slug ->
+            expect ("slug " ^ String.escaped slug) Rm.Invalid_community_slug
+              ~user:1 ~slug)
+          [ ""; " ncpr-a"; "ncpr-a "; "ncpr a"; "ncpr/a"; "ncpr\ta";
+            "ncpr\na"; "ncpr\x00"; "ncpr\x7f"
+          ])
+
+  (* === authorization === *)
+
+  let authorization_case =
+    db_case "publication read: only a current top moderator or a durable \
+             global admin sees the draft; every other identity is the same \
+             absence" (fun conn ->
+        let* owner = insert_user conn "ncpr_owner" in
+        let* second = insert_user conn "ncpr_second" in
+        let* member = insert_user conn "ncpr_member" in
+        let* moddy = insert_user conn "ncpr_mod" in
+        let* legacy = insert_user conn "ncpr_legacymod" in
+        let* elsewhere = insert_user conn "ncpr_elsewhere" in
+        let* stranger = insert_user conn "ncpr_stranger" in
+        let* admin = insert_user conn "ncpr_admin" in
+        let* () = set_admin conn ~user:admin true in
+        let* _inst, _project =
+          make_project conn ~user:owner ~ext_id:952000001L ~slug:"ncpr-auth"
+        in
+        let* community =
+          provision_draft conn ~actor:owner ~project_slug:"ncpr-auth"
+            ~slug:"ncpr-auth-home"
+        in
+        (* The creating steward is the initial top moderator. *)
+        let* view = load_view "creator" conn ~user:owner ~slug:"ncpr-auth-home" in
+        Alcotest.(check bool) "creator is top mod" true
+          (Rm.publisher_is_top_moderator view);
+        Alcotest.(check bool) "creator is not a durable admin" false
+          (Rm.publisher_is_durable_admin view);
+        (* A second current top moderator is equally authorized. *)
+        let* () = add_role conn ~user:second ~community "top_mod" in
+        let* second_view =
+          load_view "second top mod" conn ~user:second ~slug:"ncpr-auth-home"
+        in
+        Alcotest.(check bool) "second is top mod" true
+          (Rm.publisher_is_top_moderator second_view);
+        (* A durable global administrator is authorized without any local
+           role, and says so. *)
+        let* admin_view =
+          load_view "durable admin" conn ~user:admin ~slug:"ncpr-auth-home"
+        in
+        Alcotest.(check bool) "admin is durable admin" true
+          (Rm.publisher_is_durable_admin admin_view);
+        Alcotest.(check bool) "admin holds no local role" false
+          (Rm.publisher_is_top_moderator admin_view);
+        (* Everyone else collapses to the same absence. A session-shaped
+           admin claim is invisible here: only users.is_admin counts, and
+           this user has no durable row. *)
+        let* () = add_member conn ~user:member ~community in
+        let* () = add_role conn ~user:moddy ~community "mod" in
+        let* () = add_role conn ~user:legacy ~community "legacy_mod" in
+        let* other = insert_community conn "ncpr-other" in
+        let* () = add_role conn ~user:elsewhere ~community:other "top_mod" in
+        let* () =
+          Lwt_list.iter_s
+            (fun (label, user) -> load_none label conn ~user ~slug:"ncpr-auth-home")
+            [ ("ordinary member", member); ("mod", moddy);
+              ("legacy_mod", legacy); ("moderator of another community", elsewhere);
+              ("stranger", stranger); ("session-shaped admin", stranger)
+            ]
+        in
+        (* A removed top moderator loses access with no distinguishable
+           answer, and a downgraded one likewise. *)
+        let* () =
+          exec conn "downgrade" Phrv.q_set_moderator_role
+            (second, community, "mod")
+        in
+        let* () = load_none "downgraded top mod" conn ~user:second ~slug:"ncpr-auth-home" in
+        let* () =
+          exec conn "remove" Phrv.q_remove_moderator (second, community)
+        in
+        let* () = load_none "removed top mod" conn ~user:second ~slug:"ncpr-auth-home" in
+        (* A revoked durable admin flag revokes access too. *)
+        let* () = set_admin conn ~user:admin false in
+        load_none "revoked durable admin" conn ~user:admin ~slug:"ncpr-auth-home")
+
+  (* === availability and lifecycle === *)
+
+  let lifecycle_case =
+    db_case "publication read: only an exact private network setup draft is \
+             loadable; every other lifecycle is the same absence" (fun conn ->
+        let* owner = insert_user conn "ncpr_lifeowner" in
+        let* _inst, _project =
+          make_project conn ~user:owner ~ext_id:952000002L ~slug:"ncpr-life"
+        in
+        let* community =
+          provision_draft conn ~actor:owner ~project_slug:"ncpr-life"
+            ~slug:"ncpr-life-home"
+        in
+        let* _ = load_view "draft" conn ~user:owner ~slug:"ncpr-life-home" in
+        (* A nonexistent slug is the same absence. *)
+        let* () = load_none "missing" conn ~user:owner ~slug:"ncpr-nothing" in
+        (* A legacy community is never loadable, even for its own top
+           moderator. *)
+        let* legacy_community = insert_community ~network:false conn "ncpr-legacy" in
+        let* () = add_role conn ~user:owner ~community:legacy_community "top_mod" in
+        let* () = load_none "legacy community" conn ~user:owner ~slug:"ncpr-legacy" in
+        (* Each individual lifecycle drift removes the draft from view; the
+           row is restored between probes so the drifts are independent. *)
+        let restore () =
+          let* () = exec conn "restore visibility" q_set_visibility (community, "private") in
+          let* () = exec conn "restore indexable" q_set_indexable (community, false) in
+          let* () =
+            exec conn "restore discoverable" q_set_discoverable (community, false)
+          in
+          Lwt.return_unit
+        in
+        let* () = exec conn "public" q_set_visibility (community, "public") in
+        let* () = load_none "public draft" conn ~user:owner ~slug:"ncpr-life-home" in
+        let* () = restore () in
+        let* () = exec conn "indexable" q_set_indexable (community, true) in
+        let* () = load_none "indexable draft" conn ~user:owner ~slug:"ncpr-life-home" in
+        let* () = restore () in
+        let* () = exec conn "discoverable" q_set_discoverable (community, true) in
+        let* () =
+          load_none "discoverable draft" conn ~user:owner ~slug:"ncpr-life-home"
+        in
+        let* () = restore () in
+        let* _ = load_view "restored draft" conn ~user:owner ~slug:"ncpr-life-home" in
+        (* Publication ends the surface for good. *)
+        let* () = exec conn "publish" q_publish community in
+        let* () =
+          load_none "published network community" conn ~user:owner
+            ~slug:"ncpr-life-home"
+        in
+        (* Dropping the network marker is equally final. *)
+        let* () = exec conn "publish undo" q_set_visibility (community, "private") in
+        let* () = exec conn "unindex" q_set_indexable (community, false) in
+        let* () = exec conn "undiscover" q_set_discoverable (community, false) in
+        let* () = exec conn "legacy" q_set_legacy community in
+        load_none "network marker dropped" conn ~user:owner ~slug:"ncpr-life-home")
+
+  (* === the connected project === *)
+
+  let project_case =
+    db_case "publication read: exactly one accepted home project is exposed \
+             by identity, and verification drift does not gate the view"
+      (fun conn ->
+        let* owner = insert_user conn "ncpr_projowner" in
+        let* _inst, project =
+          make_project conn ~user:owner ~ext_id:952000003L ~slug:"ncpr-proj"
+            ~name:"Ncpr Proj" ~description:"Project body."
+        in
+        let* _community =
+          provision_draft conn ~actor:owner ~project_slug:"ncpr-proj"
+            ~slug:"ncpr-proj-home"
+        in
+        let* view = load_view "project" conn ~user:owner ~slug:"ncpr-proj-home" in
+        let loaded = Rm.project view in
+        Alcotest.(check string) "project name" "Ncpr Proj"
+          (Rm.project_name loaded);
+        Alcotest.(check string) "project slug" "ncpr-proj"
+          (Rm.project_slug loaded);
+        Alcotest.(check string) "namespace login" "pfin-owner"
+          (Rm.project_namespace_login loaded);
+        Alcotest.(check string) "kind" "project"
+          (Pi.string_of_kind (Rm.project_kind loaded));
+        (* The community identity is the draft's own, byte-exact. *)
+        let community = Rm.community view in
+        Alcotest.(check string) "community name" "Ncpr Home"
+          (Rm.community_name community);
+        Alcotest.(check string) "community slug" "ncpr-proj-home"
+          (Rm.community_slug community);
+        Alcotest.(check (option string)) "community description" None
+          (Rm.community_description community);
+        (* Stale and revoked verification are validated as known values and
+           deliberately do not withdraw the view: the project was verified
+           when the home was established, and a private draft must not be
+           stranded unpublishable by later token drift. *)
+        let* () = exec conn "stale" q_set_verification (project, "stale") in
+        let* _ = load_view "stale project" conn ~user:owner ~slug:"ncpr-proj-home" in
+        let* () = exec conn "revoked" q_set_verification (project, "revoked") in
+        let* _ = load_view "revoked project" conn ~user:owner ~slug:"ncpr-proj-home" in
+        let* () = exec conn "verified" q_set_verification (project, "verified") in
+        let* _ = load_view "verified again" conn ~user:owner ~slug:"ncpr-proj-home" in
+        Lwt.return_unit)
+
+  let relation_corruption_case =
+    db_case "publication read: a missing, pending, duplicated, or malformed \
+             accepted home relation is inconsistent durable state"
+      (fun conn ->
+        let* owner = insert_user conn "ncpr_relowner" in
+        let* _inst, project =
+          make_project conn ~user:owner ~ext_id:952000004L ~slug:"ncpr-rel"
+        in
+        let* _inst2, second_project =
+          make_project conn ~user:owner ~ext_id:952000005L ~slug:"ncpr-rel-b"
+        in
+        let* community =
+          provision_draft conn ~actor:owner ~project_slug:"ncpr-rel"
+            ~slug:"ncpr-rel-home"
+        in
+        let expect label e = load_expect label e conn ~user:owner ~slug:"ncpr-rel-home" in
+        let* _ = load_view "one home" conn ~user:owner ~slug:"ncpr-rel-home" in
+        (* A second accepted home from a different project: the partial
+           unique index is per project, so the contradiction shows up on the
+           community side, and the view must refuse rather than pick one. *)
+        let* () =
+          exec conn "second accepted" q_second_accepted (second_project, community)
+        in
+        let* () = expect "two accepted homes" Rm.Inconsistent_data in
+        (* No accepted home at all is equally inconsistent — a provisioned
+           draft always has exactly one. *)
+        let* () = exec conn "clear relations" q_delete_relations community in
+        let* () = expect "no accepted home" Rm.Inconsistent_data in
+        (* Reinstating exactly one restores the view. *)
+        let* () = exec conn "reinstate" q_second_accepted (project, community) in
+        let* _ = load_view "one home again" conn ~user:owner ~slug:"ncpr-rel-home" in
+        Lwt.return_unit)
+
+  let pending_relation_case =
+    db_case "publication read: a home relation demoted to pending leaves the \
+             draft inconsistent, never silently homeless" (fun conn ->
+        let* owner = insert_user conn "ncpr_pendowner" in
+        let* _inst, _project =
+          make_project conn ~user:owner ~ext_id:952000006L ~slug:"ncpr-pend"
+        in
+        let* community =
+          provision_draft conn ~actor:owner ~project_slug:"ncpr-pend"
+            ~slug:"ncpr-pend-home"
+        in
+        let* _ = load_view "accepted" conn ~user:owner ~slug:"ncpr-pend-home" in
+        let* () = exec conn "demote" q_set_relation_pending community in
+        let* () =
+          load_expect "pending only" Rm.Inconsistent_data conn ~user:owner
+            ~slug:"ncpr-pend-home"
+        in
+        (* Removing the relation entirely is the same inconsistency, never a
+           partial view of a homeless draft. *)
+        let* () = exec conn "clear" q_delete_relations community in
+        load_expect "relation gone" Rm.Inconsistent_data conn ~user:owner
+          ~slug:"ncpr-pend-home")
+
+  (* === complete-draft and identity corruption === *)
+
+  let shell_corruption_case =
+    db_case "publication read: an incomplete community shell is inconsistent \
+             durable state" (fun conn ->
+        let* owner = insert_user conn "ncpr_shellowner" in
+        let* admin = insert_user conn "ncpr_shelladmin" in
+        let* () = set_admin conn ~user:admin true in
+        let* _inst, _project =
+          make_project conn ~user:owner ~ext_id:952000007L ~slug:"ncpr-shell"
+        in
+        let* community =
+          provision_draft conn ~actor:owner ~project_slug:"ncpr-shell"
+            ~slug:"ncpr-shell-home"
+        in
+        let expect label e = load_expect label e conn ~user:admin ~slug:"ncpr-shell-home" in
+        (* Membership is required in its own right. *)
+        let* () = exec conn "drop members" q_delete_members community in
+        let* () = expect "no member" Rm.Inconsistent_data in
+        let* () = add_member conn ~user:owner ~community in
+        let* _ = load_view "member restored" conn ~user:admin ~slug:"ncpr-shell-home" in
+        (* A draft with no top moderator is corrupt even for a durable
+           admin, who can still reach it. *)
+        let* () = exec conn "drop top mods" q_delete_top_mods community in
+        let* () = expect "no top mod" Rm.Inconsistent_data in
+        let* () = add_role conn ~user:owner ~community "top_mod" in
+        let* _ = load_view "top mod restored" conn ~user:admin ~slug:"ncpr-shell-home" in
+        (* The required general channel must exist and be active. *)
+        let* () = exec conn "archive channels" q_archive_channels community in
+        let* () = expect "archived general channel" Rm.Inconsistent_data in
+        let* () = exec conn "unarchive channels" q_unarchive_channels community in
+        let* _ = load_view "channel restored" conn ~user:admin ~slug:"ncpr-shell-home" in
+        (* The required General section. Duplication is not reachable through
+           the durable model — community_sections and channels each carry a
+           unique (community_id, slug) key — so the "exactly one" rule can
+           only be violated downward. The attempt is asserted to be rejected
+           rather than quietly skipped, and absence is then exercised. *)
+        let (module C : Caqti_lwt.CONNECTION) = conn in
+        let* duplicate = C.exec q_duplicate_section community in
+        (match duplicate with
+        | Error _ -> ()
+        | Ok () -> Alcotest.fail "a duplicate General section was accepted");
+        let* () = exec conn "drop sections" q_delete_sections community in
+        expect "no General section" Rm.Inconsistent_data)
+
+  let identity_corruption_case =
+    db_case "publication read: a community identity outside the scoped \
+             network policy is inconsistent durable state" (fun conn ->
+        let* owner = insert_user conn "ncpr_idowner" in
+        let* _inst, _project =
+          make_project conn ~user:owner ~ext_id:952000008L ~slug:"ncpr-id"
+        in
+        let* community =
+          provision_draft conn ~actor:owner ~project_slug:"ncpr-id"
+            ~slug:"ncpr-id-home"
+        in
+        let* _ = load_view "canonical" conn ~user:owner ~slug:"ncpr-id-home" in
+        (* The scoped CHECKs make these states unreachable through normal
+           writes, so they are produced with the constraints briefly stood
+           down and canonicalized again before the constraints return. *)
+        let* () = Ncid_relax.drop conn in
+        Lwt.finalize
+          (fun () ->
+            let* () =
+              exec conn "control byte in name" q_corrupt_community_name community
+            in
+            let* () =
+              load_expect "control-bearing name" Rm.Inconsistent_data conn
+                ~user:owner ~slug:"ncpr-id-home"
+            in
+            let* () =
+              exec conn "recanonicalize" Ncid_relax.q_recanonicalize
+                (community, "ncpr-id-home", "Ncpr Home")
+            in
+            let* _ = load_view "name restored" conn ~user:owner ~slug:"ncpr-id-home" in
+            let* () =
+              exec conn "padded description" q_corrupt_community_description
+                community
+            in
+            let* () =
+              load_expect "untrimmed description" Rm.Inconsistent_data conn
+                ~user:owner ~slug:"ncpr-id-home"
+            in
+            Lwt.return_unit)
+          (fun () ->
+            let* () =
+              exec conn "recanonicalize" Ncid_relax.q_recanonicalize
+                (community, "ncpr-id-home", "Ncpr Home")
+            in
+            Ncid_relax.restore conn))
+
+  let project_corruption_case =
+    db_case "publication read: a malformed or off-enum project identity is \
+             inconsistent durable state" (fun conn ->
+        let* owner = insert_user conn "ncpr_pcowner" in
+        let* _inst, project =
+          make_project conn ~user:owner ~ext_id:952000009L ~slug:"ncpr-pc"
+        in
+        let* _community =
+          provision_draft conn ~actor:owner ~project_slug:"ncpr-pc"
+            ~slug:"ncpr-pc-home"
+        in
+        let* _ = load_view "sound" conn ~user:owner ~slug:"ncpr-pc-home" in
+        (* A namespace login with an embedded space still satisfies the
+           permanent CHECK (btrim-equal, non-empty) but is not addressable. *)
+        let* () = exec conn "corrupt login" q_corrupt_login project in
+        let* () =
+          load_expect "non-addressable login" Rm.Inconsistent_data conn
+            ~user:owner ~slug:"ncpr-pc-home"
+        in
+        let* () =
+          exec conn "restore login" Phvr.q_restore_project project
+        in
+        let* _ = load_view "login restored" conn ~user:owner ~slug:"ncpr-pc-home" in
+        (* An off-enum verification status needs the permanent CHECK to step
+           aside for the length of one probe. *)
+        let (module C : Caqti_lwt.CONNECTION) = conn in
+        let* r = C.exec q_drop_verification_check () in
+        let* () = or_fail "drop verification check" r in
+        Lwt.finalize
+          (fun () ->
+            let* () =
+              exec conn "off-enum verification" q_set_verification
+                (project, "pending_reverification")
+            in
+            load_expect "unknown verification" Rm.Inconsistent_data conn
+              ~user:owner ~slug:"ncpr-pc-home")
+          (fun () ->
+            let* () =
+              exec conn "restore verification" q_set_verification
+                (project, "verified")
+            in
+            let* r = C.exec q_restore_verification_check () in
+            let* () = or_fail "restore verification check" r in
+            Lwt.return_unit))
+
+  (* === storage failure === *)
+
+  let storage_case =
+    db_case "publication read: a query failure is the payload-free storage \
+             error" (fun conn ->
+        let* owner = insert_user conn "ncpr_stowner" in
+        let* _inst, _project =
+          make_project conn ~user:owner ~ext_id:952000010L ~slug:"ncpr-st"
+        in
+        let* _community =
+          provision_draft conn ~actor:owner ~project_slug:"ncpr-st"
+            ~slug:"ncpr-st-home"
+        in
+        let* _ = load_view "before" conn ~user:owner ~slug:"ncpr-st-home" in
+        let* () = exec conn "break search_path" q_break_search_path () in
+        Lwt.finalize
+          (fun () ->
+            load_expect "hidden tables" Rm.Storage_error conn ~user:owner
+              ~slug:"ncpr-st-home")
+          (fun () -> exec conn "reset search_path" q_reset_search_path ()))
+
+  (* === privacy sweep === *)
+
+  let privacy_case =
+    db_case "publication read: no identifier, credential, or private \
+             workflow value crosses the public surface" (fun conn ->
+        let* owner = insert_user conn "ncpr_privowner" in
+        let* _inst, _project =
+          make_project conn ~user:owner ~ext_id:952000001L ~slug:"ncpr-priv"
+            ~name:"Ncpr Priv" ~description:"Priv body."
+        in
+        let* _community =
+          provision_draft conn ~actor:owner ~project_slug:"ncpr-priv"
+            ~slug:"ncpr-priv-home" ~name:"Ncpr Priv Home"
+            ~description:"Home body."
+        in
+        let* view = load_view "priv" conn ~user:owner ~slug:"ncpr-priv-home" in
+        let community = Rm.community view in
+        let project = Rm.project view in
+        (* Every public value of the view, concatenated: nothing else is
+           reachable through the abstract types. *)
+        let surface =
+          String.concat "|"
+            [ Rm.community_name community; Rm.community_slug community;
+              Option.value ~default:"" (Rm.community_description community);
+              Rm.project_name project; Rm.project_slug project;
+              Rm.project_namespace_login project;
+              Pi.string_of_kind (Rm.project_kind project);
+              string_of_bool (Rm.publisher_is_top_moderator view);
+              string_of_bool (Rm.publisher_is_durable_admin view)
+            ]
+        in
+        List.iter
+          (fun (what, needle) ->
+            Alcotest.(check bool) ("view free of " ^ what) false
+              (contains surface needle))
+          credential_markers;
+        (* No internal identifier can appear either: the actor's own id, the
+           community id, and the project id are all absent by construction. *)
+        Alcotest.(check bool) "no actor id" false
+          (contains surface (string_of_int owner));
+        Lwt.return_unit)
+
+  let suite =
+    [ pure_inputs_case; authorization_case; lifecycle_case; project_case;
+      relation_corruption_case; pending_relation_case; shell_corruption_case;
+      identity_corruption_case; project_corruption_case; storage_case;
+      privacy_case
+    ]
+end
+
+(* === GET /c/:slug/setup and the settings navigation into it ===
+   The publisher-only setup route: DB-free rollout/authentication gates
+   (every rejection precedes any route read or SQL), the DB-free settings
+   navigation and the suppression of the legacy identity controls, and the
+   database-gated page, identical generic 404s, generic 500s, and the real
+   navigation from the settings surface. Own reserved external-installation-
+   id range 953000001..953000999 (hence account and forge-namespace ids
+   953100001..953100999), ncph_% usernames, and ncph-% community slugs. *)
+module Ncph = struct
+  let ( let* ) = Lwt.bind
+
+  open Caqti_request.Infix
+
+  module Hd = Earde.Network_community_publication_handlers
+  module Pv = Earde.Project_home_provisioning_store
+
+  let case = go_case
+  let or_fail = Pod_store.or_fail
+  let insert_user = Pod_store.insert_user
+  let exec = Pod_read.exec
+  let find = Pod_read.find
+  let insert_community = Phcv.insert_community
+  let status_of = Gh_start_handler.status_of
+  let make_project = Phvr.make_project
+
+  let route_pattern = "/c/:slug/setup"
+  let target slug = Printf.sprintf "/c/%s/setup" slug
+  let settings_target slug = Printf.sprintf "/c/%s/settings" slug
+
+  let make ~mode = Hd.make_network_community_publication_page_handler ~mode
+
+  (* === DB-free: the route shape === *)
+
+  (* The real router with the setup pattern alongside the existing settings
+     GET, and nothing else: the setup target is dispatched exactly once, no
+     alias or method variant exists, and in particular the POST the page's
+     form names is deliberately unregistered. Mode Off makes each dispatch
+     observable as the clean /bring redirect, with no SQL. *)
+  let route_router () =
+    Dream.router
+      [ Dream.get route_pattern (fun req -> make ~mode:Ob.Off req);
+        Dream.get "/c/:slug/settings" (fun _req -> Dream.html "settings")
+      ]
+
+  let route_run ~method_ ~target =
+    Pch.gate_response "route"
+      (Pch.gate_run ~method_ ~target (route_router ()))
+
+  let route_cases =
+    [ case "setup route: the registered GET pattern is exactly the one the \
+            settings link points at, and coexists with the settings GET"
+        (fun () ->
+          Pch.check_clean_redirect "setup dispatched" "/bring"
+            (route_run ~method_:`GET ~target:(target "ncph-any"));
+          let settings = route_run ~method_:`GET ~target:(settings_target "ncph-any") in
+          Alcotest.(check int) "settings unshadowed" 200 (status_of settings))
+    ; case "setup route: no alias, no method variant, and no publication POST"
+        (fun () ->
+          List.iter
+            (fun (method_, target) ->
+              let response = route_run ~method_ ~target in
+              Alcotest.(check int)
+                (Printf.sprintf "unregistered %s" target)
+                404 (status_of response))
+            [ (`POST, target "ncph-any");
+              (`POST, "/c/ncph-any/publish");
+              (`GET, "/c/ncph-any/publish");
+              (`GET, "/c/ncph-any/setup/extra");
+              (`GET, "/setup");
+              (`GET, "/c/setup")
+            ])
+    ]
+
+  (* === DB-free: rollout and authentication gates === *)
+
+  (* Unrouted: the handler runs with no "slug" parameter, so a request that
+     passes every gate lands on the generic 404 without touching SQL. *)
+  let unrouted_run ?session ~mode () =
+    Pch.gate_run ?session ~method_:`GET ~target:(target "ncph-any") (make ~mode)
+
+  (* Routed but with no sql_pool installed: a request that passes every gate
+     reaches Dream.sql and raises, which the harness reports as the DB
+     boundary. That is the strong proof that the gates themselves ran no
+     SQL. *)
+  let routed_run ?session ~mode () =
+    Pch.gate_run ?session ~method_:`GET ~target:(target "ncph-any")
+      (Dream.router [ Dream.get route_pattern (fun req -> make ~mode req) ])
+
+  let gate_cases =
+    [ case "GET setup off: clean /bring redirect before any route read or SQL"
+        (fun () ->
+          Pch.check_clean_redirect "off" "/bring"
+            (Pch.gate_response "off"
+               (unrouted_run ~session:Pch.admin_session ~mode:Ob.Off ()));
+          Pch.check_clean_redirect "off routed" "/bring"
+            (Pch.gate_response "off routed"
+               (routed_run ~session:Pch.admin_session ~mode:Ob.Off ())))
+    ; case "GET setup: anonymous and malformed sessions to /login" (fun () ->
+          Pch.check_clean_redirect "anonymous" "/login"
+            (Pch.gate_response "anonymous" (routed_run ~mode:Ob.Public ()));
+          List.iter
+            (fun raw ->
+              Pch.check_clean_redirect ("user_id " ^ raw) "/login"
+                (Pch.gate_response ("user_id " ^ raw)
+                   (routed_run ~session:[ ("user_id", raw) ] ~mode:Ob.Public ())))
+            [ "not-a-number"; ""; "0"; "-3"; " 42"; "42x" ];
+          Pch.check_clean_redirect "is_admin only" "/login"
+            (Pch.gate_response "is_admin only"
+               (routed_run ~session:[ ("is_admin", "true") ] ~mode:Ob.Admins ())))
+    ; case "GET setup admins mode: a non-admin is redirected before any route \
+            read or SQL" (fun () ->
+          Pch.check_clean_redirect "non-admin" "/bring"
+            (Pch.gate_response "non-admin"
+               (routed_run ~session:Pch.logged_in ~mode:Ob.Admins ())))
+    ; case "GET setup: authorized modes pass the gates and reach the database \
+            boundary, never before it" (fun () ->
+          Pch.check_db_boundary "admin in admins mode"
+            (routed_run ~session:Pch.admin_session ~mode:Ob.Admins ());
+          Pch.check_db_boundary "user in public mode"
+            (routed_run ~session:Pch.logged_in ~mode:Ob.Public ());
+          Pch.check_db_boundary "admin in public mode"
+            (routed_run ~session:Pch.admin_session ~mode:Ob.Public ()))
+    ; case "GET setup: a missing route parameter is the generic 404, with no \
+            SQL" (fun () ->
+          let response =
+            Pch.gate_response "no route"
+              (unrouted_run ~session:Pch.logged_in ~mode:Ob.Public ())
+          in
+          Alcotest.(check int) "404" 404 (status_of response);
+          Alcotest.(check (option string)) "no-store" (Some "no-store")
+            (Dream.header response "Cache-Control"))
+    ]
+
+  (* === DB-free: settings navigation and legacy-control suppression === *)
+
+  let settings_community ?(slug = "ncph-nav") ?(network = true)
+      ?(onboarding = Earde.Db.Community_draft)
+      ?(visibility = Earde.Db.Community_private) ?(indexable = false)
+      ?(discoverable = false) () : Earde.Db.community =
+    { id = 4242; slug; name = "Ncph Nav"; description = None; rules = None;
+      avatar_url = None; banner_url = None; allow_downvotes = true;
+      sections_enabled = true; visibility; indexable;
+      is_network_community = network; onboarding_state = onboarding;
+      discoverable }
+
+  (* The settings page renders a framework CSRF field, so it needs a live
+     request under a secret + sessions pipeline; no SQL is touched. *)
+  let render_settings ?(panel = "visibility") ~community ~is_admin ~is_top_mod
+      () =
+    let captured = ref None in
+    let pipeline =
+      Dream.set_secret gck_secret @@ Dream.memory_sessions
+      @@ fun req ->
+      captured :=
+        Some
+          (Earde.Pages.community_settings_page ~is_admin ~is_top_mod
+             ~open_reports_count:0 ~community ~mods:[] ~banned_users:[]
+             ~members:[] ~sections:[] ~channels:[] req);
+      Dream.html ""
+    in
+    ignore
+      (Lwt_main.run
+         (pipeline
+            (Dream.request ~method_:`GET
+               ~target:("/c/" ^ community.Earde.Db.slug ^ "/settings?panel=" ^ panel)
+               "")));
+    match !captured with
+    | Some html -> html
+    | None -> Alcotest.fail "settings renderer did not run"
+
+  let nav_link = "href='/c/ncph-nav/setup'"
+
+  let published_network =
+    settings_community ~onboarding:Earde.Db.Community_published
+      ~visibility:Earde.Db.Community_public ~indexable:true ~discoverable:true
+      ()
+
+  let legacy_community =
+    settings_community ~network:false
+      ~onboarding:Earde.Db.Community_published
+      ~visibility:Earde.Db.Community_public ~indexable:true ~discoverable:true
+      ()
+
+  let nav_cases =
+    [ case "settings nav: a network setup draft's top-mod and admin surfaces \
+            expose the setup link, canonically and exactly once" (fun () ->
+          let community = settings_community () in
+          let top_mod = render_settings ~community ~is_admin:false ~is_top_mod:true () in
+          Alcotest.(check bool) "top_mod link present" true
+            (contains top_mod nav_link);
+          Alcotest.(check bool) "exact link text" true
+            (contains top_mod ">Complete setup and publish</a>");
+          (* Exactly one navigation entry; the visibility panel additionally
+             explains the suppression with its own inline pointer, so the
+             href itself legitimately appears twice. *)
+          Alcotest.(check int) "one nav entry, not two" 1
+            (ps_count top_mod ("class='cm-index-link' " ^ nav_link));
+          Alcotest.(check int) "one inline pointer" 1
+            (ps_count top_mod ("<a " ^ nav_link ^ ">complete setup and publish</a>"));
+          let admin = render_settings ~community ~is_admin:true ~is_top_mod:false () in
+          Alcotest.(check bool) "admin link present" true
+            (contains admin nav_link);
+          (* Canonical slug only — never the community id, a lifecycle
+             value, a form, or script. The framework CSRF fields are dropped
+             first: their random token bytes could otherwise spell the id by
+             chance. *)
+          let clean = ps_without_csrf_inputs top_mod in
+          Alcotest.(check bool) "no community id" false (contains clean "4242");
+          List.iter
+            (fun needle ->
+              Alcotest.(check bool) ("no " ^ needle) false (contains clean needle))
+            [ "onboarding_state"; "is_network_community"; "draft'" ])
+    ; case "settings nav: an unauthorized settings surface never gains the \
+            link" (fun () ->
+          let community = settings_community () in
+          let regular = render_settings ~community ~is_admin:false ~is_top_mod:false () in
+          Alcotest.(check bool) "no setup link" false (contains regular nav_link))
+    ; case "settings nav: legacy and already-published communities never gain \
+            the link" (fun () ->
+          List.iter
+            (fun (label, community) ->
+              List.iter
+                (fun (is_admin, is_top_mod) ->
+                  let html = render_settings ~community ~is_admin ~is_top_mod () in
+                  Alcotest.(check bool) (label ^ ": no setup link") false
+                    (contains html nav_link))
+                [ (true, true); (true, false); (false, true); (false, false) ])
+            [ ("published network", published_network);
+              ("legacy", legacy_community)
+            ])
+    ; case "settings nav: a draft slug outside the canonical network grammar \
+            suppresses the link" (fun () ->
+          List.iter
+            (fun slug ->
+              let community = settings_community ~slug () in
+              let html = render_settings ~community ~is_admin:true ~is_top_mod:true () in
+              Alcotest.(check bool)
+                ("no link for " ^ String.escaped slug)
+                false
+                (contains html "/setup'"))
+            [ ""; "Ncph-Nav"; "ncph nav"; "ncph--nav"; "ncph-"; "-ncph";
+              "ncph_nav"; String.make 81 'a'
+            ])
+    ; case "settings suppression: a network setup draft renders none of the \
+            legacy identity, visibility, or discovery controls" (fun () ->
+          let community = settings_community () in
+          List.iter
+            (fun panel ->
+              let html =
+                render_settings ~panel ~community ~is_admin:true ~is_top_mod:true ()
+              in
+              List.iter
+                (fun needle ->
+                  Alcotest.(check bool)
+                    (panel ^ ": no " ^ needle)
+                    false (contains html needle))
+                [ "action='/update-community'";
+                  "action='/c/ncph-nav/settings/visibility'";
+                  "action='/c/ncph-nav/settings/indexability'";
+                  "name='description'"; "name='visibility'"; "name='indexable'"
+                ])
+            [ "visibility"; "profile" ];
+          (* The suppression is explained, not silent, and it points at the
+             canonical surface. *)
+          let html = render_settings ~community ~is_admin:true ~is_top_mod:true () in
+          Alcotest.(check bool) "explains the draft state" true
+            (contains html "still a private setup draft");
+          Alcotest.(check bool) "points at the setup surface" true
+            (contains html "complete setup and publish</a>"))
+    ; case "settings suppression: a published network community keeps its \
+            visibility control but offers no independent discovery toggle"
+        (fun () ->
+          let html =
+            render_settings ~community:published_network ~is_admin:true
+              ~is_top_mod:true ()
+          in
+          Alcotest.(check bool) "visibility control kept" true
+            (contains html "action='/c/ncph-nav/settings/visibility'");
+          Alcotest.(check bool) "no discovery toggle" false
+            (contains html "action='/c/ncph-nav/settings/indexability'");
+          Alcotest.(check bool) "explains why" true
+            (contains html
+               "Discovery for this community follows the Public or Unlisted \
+                choice"))
+    ; case "settings suppression: a legacy community keeps every legacy \
+            control exactly as before" (fun () ->
+          let profile =
+            render_settings ~panel:"profile" ~community:legacy_community
+              ~is_admin:true ~is_top_mod:true ()
+          in
+          Alcotest.(check bool) "profile form kept" true
+            (contains profile "action='/update-community'");
+          let visibility =
+            render_settings ~community:legacy_community ~is_admin:true
+              ~is_top_mod:true ()
+          in
+          Alcotest.(check bool) "visibility control kept" true
+            (contains visibility "action='/c/ncph-nav/settings/visibility'");
+          Alcotest.(check bool) "indexability control kept" true
+            (contains visibility "action='/c/ncph-nav/settings/indexability'"))
+    ]
+
+  (* === Database-gated integration === *)
+
+  (* Distinctive credential-shaped fixtures. None may appear in any page,
+     redirect, header, or cookie this feature produces. *)
+  let credential_markers =
+    [ ("access token", "gho_NCPH_ACCESS_TOKEN_SECRET");
+      ("refresh token", "ghr_NCPH_REFRESH_TOKEN");
+      ("client secret", "NCPH_CLIENT_SECRET_VALUE");
+      ("external installation id", "953000001");
+      ("external account id", "953100001")
+    ]
+
+  let q_cleanup =
+    List.map
+      (fun sql -> (Caqti_type.unit ->. Caqti_type.unit) sql)
+      [ "DELETE FROM open_source_projects \
+         WHERE forge_namespace_id BETWEEN 953100001 AND 953100999"
+      ; "DELETE FROM project_onboarding_drafts \
+         WHERE github_installation_record_id IN \
+           (SELECT id FROM github_installations \
+            WHERE github_installation_id BETWEEN 953000001 AND 953000999)"
+      ; "DELETE FROM communities WHERE slug LIKE 'ncph-%'"
+      ; "DELETE FROM users WHERE username LIKE 'ncph_%'"
+      ; "DELETE FROM github_installations \
+         WHERE github_installation_id BETWEEN 953000001 AND 953000999"
+      ]
+
+  let q_community_id = Ncpr.q_community_id
+  let q_publish = Ncpr.q_publish
+  let q_delete_sections = Ncpr.q_delete_sections
+
+  let db_case name f =
+    Alcotest.test_case name `Quick (fun () ->
+        match Sys.getenv_opt "EARDE_TEST_DATABASE_URL" with
+        | None | Some "" -> Alcotest.skip ()
+        | Some url ->
+            Lwt_main.run
+              (let* conn = Caqti_lwt_unix.connect (Uri.of_string url) in
+               let* conn = or_fail "connect" conn in
+               let (module C : Caqti_lwt.CONNECTION) = conn in
+               let cleanup () =
+                 Lwt_list.iter_s
+                   (fun q ->
+                     let* r = C.exec q () in
+                     let* _ = or_fail "cleanup" r in
+                     Lwt.return_unit)
+                   q_cleanup
+               in
+               let* () = cleanup () in
+               Lwt.finalize
+                 (fun () -> f ~url conn)
+                 (fun () ->
+                   Lwt.finalize cleanup (fun () -> C.disconnect ()))))
+
+  (* One shared single-connection sql_pool for the whole suite: nothing ever
+     closes a Dream.sql_pool, and this suite issues many requests across many
+     identities, so a fresh pool per request would exhaust Postgres
+     max_connections. The session identity is swapped per request through a
+     ref instead; cases run sequentially. The real router binds the setup GET
+     alongside the existing settings GET, so the navigation between them is
+     exercised end to end. *)
+  let shared_identity : (int * bool) option ref = ref None
+  let shared_pipeline = ref None
+
+  let build_pipeline ~url =
+    Dream.sql_pool ~size:1 url @@ Dream.set_secret gck_secret
+    @@ Dream.memory_sessions
+    @@ (fun handler request ->
+         match !shared_identity with
+         | None -> handler request
+         | Some (uid, is_admin) ->
+             let* () =
+               Dream.set_session_field request "user_id" (string_of_int uid)
+             in
+             let* () =
+               Dream.set_session_field request "username"
+                 ("ncph_user_" ^ string_of_int uid)
+             in
+             let* () =
+               if is_admin then Dream.set_session_field request "is_admin" "true"
+               else Lwt.return_unit
+             in
+             handler request)
+    @@ Dream.router
+         [ Dream.get route_pattern (fun req -> make ~mode:Ob.Public req);
+           Dream.get "/c/:slug/settings"
+             Earde.Handlers.community_settings_handler
+         ]
+
+  let pipeline_for ~url =
+    match !shared_pipeline with
+    | Some pipeline -> pipeline
+    | None ->
+        let pipeline = build_pipeline ~url in
+        shared_pipeline := Some pipeline;
+        pipeline
+
+  let as_user ?(admin_session = false) uid =
+    shared_identity := Some (uid, admin_session)
+
+  let do_get ?pipeline ~url ~target () =
+    let pipeline =
+      match pipeline with Some p -> p | None -> pipeline_for ~url
+    in
+    let* response = pipeline (Dream.request ~method_:`GET ~target "") in
+    let* body = Dream.body response in
+    Lwt.return (response, body)
+
+  let check_page label response =
+    Alcotest.(check int) (label ^ ": 200") 200 (status_of response);
+    Alcotest.(check (option string)) (label ^ ": no-store") (Some "no-store")
+      (Dream.header response "Cache-Control");
+    Alcotest.(check (option string)) (label ^ ": no-referrer")
+      (Some "no-referrer")
+      (Dream.header response "Referrer-Policy")
+
+  let check_generic_404 label response body =
+    Alcotest.(check int) (label ^ ": 404") 404 (status_of response);
+    Alcotest.(check (option string)) (label ^ ": no-store") (Some "no-store")
+      (Dream.header response "Cache-Control");
+    Alcotest.(check bool) (label ^ ": generic copy") true
+      (contains body "This page does not exist.")
+
+  let check_generic_500 label response body =
+    Alcotest.(check int) (label ^ ": 500") 500 (status_of response);
+    Alcotest.(check (option string)) (label ^ ": no-store") (Some "no-store")
+      (Dream.header response "Cache-Control");
+    Alcotest.(check bool) (label ^ ": generic copy") true
+      (contains body "Something went wrong on our side.");
+    List.iter
+      (fun needle ->
+        Alcotest.(check bool) (label ^ ": no detail " ^ needle) false
+          (contains body needle))
+      [ "open_source_projects"; "community_projects"; "Caqti"; "PostgreSQL";
+        "SELECT"; "search_path"; "Inconsistent"; "ncph_void"
+      ]
+
+  let check_no_credentials label response body =
+    let headers =
+      String.concat "\n"
+        (List.map (fun (k, v) -> k ^ ": " ^ v) (Dream.all_headers response))
+    in
+    List.iter
+      (fun (what, needle) ->
+        Alcotest.(check bool) (label ^ ": body free of " ^ what) false
+          (contains body needle);
+        Alcotest.(check bool) (label ^ ": headers free of " ^ what) false
+          (contains headers needle))
+      credential_markers
+
+  (* === fixtures === *)
+
+  let provision_draft ?name ?description conn ~actor ~project_slug ~slug =
+    let* r =
+      Pv.provision conn ~actor_user_id:actor ~project_slug
+        ~identity:(Ncpr.identity ?name ?description ~slug ())
+    in
+    match r with
+    | Ok _ -> find conn "community id" q_community_id slug
+    | Error _ -> Alcotest.failf "provisioning fixture failed for %s" slug
+
+  let add_role conn ~user ~community role =
+    exec conn "role fixture" Phrv.q_insert_moderator (user, community, role)
+
+  let set_admin conn ~user flag =
+    exec conn "admin fixture" Phrv.q_set_admin (user, flag)
+
+  (* === cases === *)
+
+  let publisher_page_case =
+    db_case "GET setup: the creating top moderator, a second top moderator, \
+             and a durable admin all get the page prefilled with the draft's \
+             own identity" (fun ~url conn ->
+        let* owner = insert_user conn "ncph_owner" in
+        let* second = insert_user conn "ncph_second" in
+        let* admin = insert_user conn "ncph_admin" in
+        let* () = set_admin conn ~user:admin true in
+        let* _inst, _project =
+          make_project conn ~user:owner ~ext_id:953000001L ~slug:"ncph-alpha"
+            ~name:"Ncph Alpha"
+        in
+        let* community =
+          provision_draft conn ~actor:owner ~project_slug:"ncph-alpha"
+            ~slug:"ncph-alpha-home" ~name:"Ncph Alpha Home"
+            ~description:"Alpha body."
+        in
+        as_user owner;
+        let* response, body = do_get ~url ~target:(target "ncph-alpha-home") () in
+        check_page "creating top mod" response;
+        check_no_credentials "creating top mod" response body;
+        Alcotest.(check bool) "heading" true
+          (contains body "Complete setup and publish");
+        Alcotest.(check bool) "noindex" true (contains body "content='noindex'");
+        Alcotest.(check bool) "exact action" true
+          (contains body "action='/c/ncph-alpha-home/publish'");
+        Alcotest.(check bool) "name prefilled" true
+          (contains body "value='Ncph Alpha Home'");
+        Alcotest.(check bool) "slug prefilled" true
+          (contains body "value='ncph-alpha-home'");
+        Alcotest.(check bool) "description prefilled" true
+          (contains body "Alpha body.");
+        Alcotest.(check bool) "public preselected" true
+          (contains body "value='public' checked");
+        Alcotest.(check bool) "project identity" true
+          (contains body "Ncph Alpha");
+        Alcotest.(check bool) "framework CSRF field" true
+          (contains body ps_csrf_input_prefix);
+        (* No feedback, no flash, no query state. *)
+        Alcotest.(check bool) "no alert" false (contains body "ncp-alert");
+        (* A second current top moderator sees the same page. *)
+        let* () = add_role conn ~user:second ~community "top_mod" in
+        as_user second;
+        let* response, body = do_get ~url ~target:(target "ncph-alpha-home") () in
+        check_page "second top mod" response;
+        Alcotest.(check bool) "second sees the form" true
+          (contains body "action='/c/ncph-alpha-home/publish'");
+        (* A durable global admin does too — with no local role at all. *)
+        as_user admin;
+        let* response, body = do_get ~url ~target:(target "ncph-alpha-home") () in
+        check_page "durable admin" response;
+        Alcotest.(check bool) "admin sees the form" true
+          (contains body "action='/c/ncph-alpha-home/publish'");
+        Lwt.return_unit)
+
+  let generic_404_case =
+    db_case "GET setup: every unavailable or unauthorized community is one \
+             byte-identical generic 404" (fun ~url conn ->
+        let* owner = insert_user conn "ncph_genowner" in
+        let* member = insert_user conn "ncph_genmember" in
+        let* moddy = insert_user conn "ncph_genmod" in
+        let* stranger = insert_user conn "ncph_genstranger" in
+        let* _inst, _project =
+          make_project conn ~user:owner ~ext_id:953000002L ~slug:"ncph-gen"
+        in
+        let* community =
+          provision_draft conn ~actor:owner ~project_slug:"ncph-gen"
+            ~slug:"ncph-gen-home"
+        in
+        let bodies = ref [] in
+        let expect_404 label ?(admin_session = false) ~user slug =
+          as_user ~admin_session user;
+          let* response, body = do_get ~url ~target:(target slug) () in
+          check_generic_404 label response body;
+          check_no_credentials label response body;
+          bodies := body :: !bodies;
+          Lwt.return_unit
+        in
+        let* () = expect_404 "missing community" ~user:owner "ncph-nothing" in
+        let* () = expect_404 "malformed slug" ~user:owner "ncph gen home" in
+        let* () = expect_404 "stranger" ~user:stranger "ncph-gen-home" in
+        let* () =
+          Lwt.bind (Pod_read.exec conn "member" Phrv.q_insert_member (member, community))
+            (fun () -> expect_404 "ordinary member" ~user:member "ncph-gen-home")
+        in
+        let* () = add_role conn ~user:moddy ~community "mod" in
+        let* () = expect_404 "mod" ~user:moddy "ncph-gen-home" in
+        (* A session is_admin claim never authorizes: only users.is_admin
+           does, and this user has no durable row. *)
+        let* () =
+          expect_404 "session-shaped admin" ~admin_session:true ~user:stranger
+            "ncph-gen-home"
+        in
+        (* A legacy community is as absent as a nonexistent one, even to its
+           own top moderator. *)
+        let* legacy = insert_community ~network:false conn "ncph-legacy" in
+        let* () = add_role conn ~user:owner ~community:legacy "top_mod" in
+        let* () = expect_404 "legacy community" ~user:owner "ncph-legacy" in
+        (* Publication ends the surface. *)
+        let* () = exec conn "publish" q_publish community in
+        let* () = expect_404 "published community" ~user:owner "ncph-gen-home" in
+        (match !bodies with
+        | [] -> Alcotest.fail "no 404 bodies captured"
+        | first :: rest ->
+            List.iteri
+              (fun i body ->
+                Alcotest.(check bool)
+                  (Printf.sprintf "404 body %d identical" i)
+                  true (String.equal first body))
+              rest);
+        Lwt.return_unit)
+
+  let inconsistent_case =
+    db_case "GET setup: durable draft corruption is one generic non-cacheable \
+             500" (fun ~url conn ->
+        let* owner = insert_user conn "ncph_icowner" in
+        let* _inst, _project =
+          make_project conn ~user:owner ~ext_id:953000003L ~slug:"ncph-ic"
+        in
+        let* community =
+          provision_draft conn ~actor:owner ~project_slug:"ncph-ic"
+            ~slug:"ncph-ic-home"
+        in
+        let* () = exec conn "drop sections" q_delete_sections community in
+        as_user owner;
+        let* response, body = do_get ~url ~target:(target "ncph-ic-home") () in
+        check_generic_500 "corrupt draft" response body;
+        check_no_credentials "corrupt draft" response body;
+        Lwt.return_unit)
+
+  let storage_case =
+    db_case "GET setup: a real database failure is one generic non-cacheable \
+             500" (fun ~url _conn ->
+        let poisoned =
+          Uri.to_string
+            (Uri.add_query_param' (Uri.of_string url)
+               ("options", "-csearch_path=ncph_void"))
+        in
+        (* A dedicated single-connection pool for this one case: the shared
+           pipeline must keep talking to the real schema. *)
+        let saved = !shared_pipeline in
+        shared_pipeline := None;
+        let poison_pipe = build_pipeline ~url:poisoned in
+        shared_pipeline := saved;
+        as_user 42;
+        let* response, body =
+          do_get ~pipeline:poison_pipe ~url ~target:(target "ncph-anything") ()
+        in
+        check_generic_500 "poisoned schema" response body;
+        Lwt.return_unit)
+
+  let navigation_case =
+    db_case "settings navigation: the draft's settings surface links to the \
+             real setup route, which serves the real page" (fun ~url conn ->
+        let* owner = insert_user conn "ncph_navowner" in
+        let* moddy = insert_user conn "ncph_navmod" in
+        let* _inst, _project =
+          make_project conn ~user:owner ~ext_id:953000004L ~slug:"ncph-nav"
+        in
+        let* community =
+          provision_draft conn ~actor:owner ~project_slug:"ncph-nav"
+            ~slug:"ncph-nav-home" ~name:"Ncph Nav Home"
+        in
+        as_user owner;
+        let* response, body =
+          do_get ~url ~target:(settings_target "ncph-nav-home") ()
+        in
+        Alcotest.(check int) "settings 200" 200 (status_of response);
+        Alcotest.(check bool) "setup link" true
+          (contains body "href='/c/ncph-nav-home/setup'");
+        Alcotest.(check bool) "exact label" true
+          (contains body ">Complete setup and publish</a>");
+        (* The legacy identity and discovery controls are gone from the
+           draft's own settings surface. *)
+        List.iter
+          (fun needle ->
+            Alcotest.(check bool) ("suppressed " ^ needle) false
+              (contains body needle))
+          [ "action='/update-community'";
+            "action='/c/ncph-nav-home/settings/visibility'";
+            "action='/c/ncph-nav-home/settings/indexability'"
+          ];
+        (* The advertised destination really serves the setup page. *)
+        let* response, body = do_get ~url ~target:(target "ncph-nav-home") () in
+        check_page "followed setup link" response;
+        Alcotest.(check bool) "setup page" true
+          (contains body "action='/c/ncph-nav-home/publish'");
+        (* A regular mod reaches the settings page but never the link, and
+           the setup route independently refuses them. *)
+        let* () = add_role conn ~user:moddy ~community "mod" in
+        as_user moddy;
+        let* _response, body =
+          do_get ~url ~target:(settings_target "ncph-nav-home") ()
+        in
+        Alcotest.(check bool) "mod sees no setup link" false
+          (contains body "href='/c/ncph-nav-home/setup'");
+        let* response, body = do_get ~url ~target:(target "ncph-nav-home") () in
+        check_generic_404 "mod at the setup route" response body;
+        Lwt.return_unit)
+
+  let db_suite =
+    [ publisher_page_case; generic_404_case; inconsistent_case; storage_case;
+      navigation_case ]
+end
+
+(* === Legacy mutation bypass closure for network communities ===
+   The three existing routes that can move a community's canonical identity
+   or its publication/discovery lifecycle — POST /update-community, POST
+   /c/:slug/settings/visibility, and POST /c/:slug/settings/indexability —
+   driven as the real handlers over real durable rows. Each must fail closed
+   *before* any write on a network community rather than becoming a scoped
+   CHECK violation rendered back as a database error, and each must leave a
+   legacy community's behaviour byte-for-byte unchanged. Database-gated, with
+   ncpg_% usernames and ncpg-% community slugs; no project fixtures are
+   needed, because only communities.is_network_community and
+   communities.onboarding_state drive the guards. *)
+module Ncpg = struct
+  let ( let* ) = Lwt.bind
+
+  open Caqti_request.Infix
+
+  let or_fail = Pod_store.or_fail
+  let insert_user = Pod_store.insert_user
+  let exec = Pod_read.exec
+  let find = Pod_read.find
+  let insert_community = Phcv.insert_community
+  let status_of = Gh_start_handler.status_of
+
+  let q_cleanup =
+    List.map
+      (fun sql -> (Caqti_type.unit ->. Caqti_type.unit) sql)
+      [ "DELETE FROM communities WHERE slug LIKE 'ncpg-%'"
+      ; "DELETE FROM users WHERE username LIKE 'ncpg_%'"
+      ]
+
+  (* Everything the guarded routes could move, as one comparable signature:
+     if a guard leaks, this string changes. *)
+  let q_state =
+    (Caqti_type.int ->! Caqti_type.string)
+    "SELECT name || '|' || COALESCE(description, '<null>') || '|' || \
+            visibility || '|' || onboarding_state || '|' || \
+            is_network_community::text || '|' || indexable::text || '|' || \
+            discoverable::text \
+     FROM communities WHERE id = $1"
+
+  let db_case name f =
+    Alcotest.test_case name `Quick (fun () ->
+        match Sys.getenv_opt "EARDE_TEST_DATABASE_URL" with
+        | None | Some "" -> Alcotest.skip ()
+        | Some url ->
+            Lwt_main.run
+              (let* conn = Caqti_lwt_unix.connect (Uri.of_string url) in
+               let* conn = or_fail "connect" conn in
+               let (module C : Caqti_lwt.CONNECTION) = conn in
+               let cleanup () =
+                 Lwt_list.iter_s
+                   (fun q ->
+                     let* r = C.exec q () in
+                     let* _ = or_fail "cleanup" r in
+                     Lwt.return_unit)
+                   q_cleanup
+               in
+               let* () = cleanup () in
+               Lwt.finalize
+                 (fun () -> f ~url conn)
+                 (fun () ->
+                   Lwt.finalize cleanup (fun () -> C.disconnect ()))))
+
+  (* One shared single-connection sql_pool for the whole suite (see the
+     sibling handler suites for why a per-request pool is not an option).
+     Session identity, form fields, and encoding are swapped per request
+     through refs; cases run sequentially. The router binds exactly the three
+     real guarded handlers. *)
+  let shared_identity : (int * bool) option ref = ref None
+  let shared_form : (string * string) list ref = ref []
+  let shared_multipart = ref false
+  let shared_pipeline = ref None
+
+  let build_pipeline ~url =
+    Dream.sql_pool ~size:1 url @@ Dream.set_secret gck_secret
+    @@ Dream.memory_sessions
+    @@ (fun handler request ->
+         let* () =
+           match !shared_identity with
+           | None -> Lwt.return_unit
+           | Some (uid, is_admin) ->
+               let* () =
+                 Dream.set_session_field request "user_id" (string_of_int uid)
+               in
+               let* () =
+                 Dream.set_session_field request "username"
+                   ("ncpg_user_" ^ string_of_int uid)
+               in
+               if is_admin then Dream.set_session_field request "is_admin" "true"
+               else Lwt.return_unit
+         in
+         let csrf = Dream.csrf_token request in
+         let fields = ("dream.csrf", csrf) :: !shared_form in
+         Dream.set_body request
+           (if !shared_multipart then Step6_events.multipart_body fields
+            else Step6_events.form_body fields);
+         handler request)
+    @@ Dream.router
+         [ Dream.post "/update-community" Earde.Handlers.update_community_handler;
+           Dream.post "/c/:slug/settings/visibility"
+             Earde.Handlers.update_community_visibility_handler;
+           Dream.post "/c/:slug/settings/indexability"
+             Earde.Handlers.update_community_indexability_handler
+         ]
+
+  let pipeline_for ~url =
+    match !shared_pipeline with
+    | Some pipeline -> pipeline
+    | None ->
+        let pipeline = build_pipeline ~url in
+        shared_pipeline := Some pipeline;
+        pipeline
+
+  let post ~url ~target ?(multipart = false) ~user ?(admin_session = false)
+      fields =
+    shared_identity := Some (user, admin_session);
+    shared_form := fields;
+    shared_multipart := multipart;
+    let headers =
+      [ ( "Content-Type",
+          if multipart then
+            "multipart/form-data; boundary=" ^ Step6_events.multipart_boundary
+          else "application/x-www-form-urlencoded" ) ]
+    in
+    let* response =
+      (pipeline_for ~url) (Dream.request ~method_:`POST ~target ~headers "")
+    in
+    let* body = Dream.body response in
+    Lwt.return (response, body)
+
+  (* The multipart detail form as the real settings page emits it. *)
+  let detail_fields ~community_id ~community_slug ~description =
+    [ ("community_id", string_of_int community_id);
+      ("community_slug", community_slug);
+      ("description", description);
+      ("rules", "");
+      ("avatar_url", "");
+      ("banner_url", "");
+      ("existing_avatar_url", "");
+      ("existing_banner_url", "")
+    ]
+
+  let state conn id = find conn "state" q_state id
+
+  let unchanged label conn id before =
+    let* after = state conn id in
+    Alcotest.(check string) (label ^ ": durable state unchanged") before after;
+    Lwt.return_unit
+
+  (* A guarded response must be generic: no lifecycle, no authorization
+     detail, no constraint name, no SQL. *)
+  let check_opaque label body =
+    List.iter
+      (fun needle ->
+        Alcotest.(check bool) (label ^ ": no " ^ needle) false
+          (contains body needle))
+      [ "communities_network"; "constraint"; "char_length"; "Caqti";
+        "PostgreSQL"; "Database error"; "onboarding_state";
+        "is_network_community"; "top_mod"
+      ]
+
+  (* === fixtures === *)
+
+  let draft conn slug =
+    insert_community ~visibility:"private" ~indexable:false ~network:true
+      ~onboarding:"draft" ~discoverable:false conn slug
+
+  let published_network conn slug =
+    insert_community ~visibility:"public" ~indexable:true ~network:true
+      ~onboarding:"published" ~discoverable:true conn slug
+
+  let legacy conn slug =
+    insert_community ~visibility:"public" ~indexable:true ~network:false
+      ~onboarding:"published" ~discoverable:true conn slug
+
+  let add_top_mod conn ~user ~community =
+    exec conn "top_mod fixture" Phrv.q_insert_moderator
+      (user, community, "top_mod")
+
+  (* === cases === *)
+
+  let detail_draft_case =
+    db_case "legacy guard: a forged /update-community against a network setup \
+             draft writes nothing and answers the generic community 404"
+      (fun ~url conn ->
+        let* actor = insert_user conn "ncpg_detail" in
+        let* community = draft conn "ncpg-detail-draft" in
+        let* () = add_top_mod conn ~user:actor ~community in
+        let* before = state conn community in
+        (* A durable moderator, a session admin, and both at once: the guard
+           precedes every authorization branch, so none of them writes. *)
+        let* () =
+          Lwt_list.iter_s
+            (fun (label, admin_session) ->
+              let* response, body =
+                post ~url ~target:"/update-community" ~multipart:true ~user:actor
+                  ~admin_session
+                  (detail_fields ~community_id:community
+                     ~community_slug:"ncpg-detail-draft"
+                     ~description:"Forged draft description.")
+              in
+              Alcotest.(check int) (label ^ ": 404") 404 (status_of response);
+              check_opaque label body;
+              unchanged label conn community before)
+            [ ("top mod", false); ("session admin", true) ]
+        in
+        (* Browser-supplied fields cannot steer the guard: the write target
+           is the id, and a mismatched slug does not move it. *)
+        let* legacy_community = legacy conn "ncpg-detail-legacy" in
+        let* response, body =
+          post ~url ~target:"/update-community" ~multipart:true ~user:actor
+            ~admin_session:true
+            (detail_fields ~community_id:community
+               ~community_slug:"ncpg-detail-legacy"
+               ~description:"Forged through a legacy slug.")
+        in
+        Alcotest.(check int) "mismatched slug: 404" 404 (status_of response);
+        check_opaque "mismatched slug" body;
+        let* () = unchanged "mismatched slug" conn community before in
+        (* And the legacy community named in the forged field is untouched
+           too — the guard refused before any write at all. *)
+        let* legacy_state = state conn legacy_community in
+        Alcotest.(check bool) "legacy community untouched" true
+          (contains legacy_state "<null>");
+        Lwt.return_unit)
+
+  let detail_published_case =
+    db_case "legacy guard: /update-community on a published network community \
+             enforces the canonical identity policy instead of relying on the \
+             database CHECK" (fun ~url conn ->
+        let* actor = insert_user conn "ncpg_pub" in
+        let* community = published_network conn "ncpg-pub" in
+        let* () = add_top_mod conn ~user:actor ~community in
+        let* before = state conn community in
+        (* A description the scoped CHECK would reject fails closed as a
+           generic form error, with no write and no constraint name. *)
+        let* () =
+          Lwt_list.iter_s
+            (fun (label, description) ->
+              let* response, body =
+                post ~url ~target:"/update-community" ~multipart:true ~user:actor
+                  (detail_fields ~community_id:community ~community_slug:"ncpg-pub"
+                     ~description)
+              in
+              Alcotest.(check int) (label ^ ": 400") 400 (status_of response);
+              Alcotest.(check bool)
+                (label ^ ": generic copy")
+                true
+                (contains body "There was a problem with your submission.");
+              check_opaque label body;
+              unchanged label conn community before)
+            [ ("control byte", "body\x01here");
+              ("invalid utf-8", "body\xffhere");
+              ("over the scalar limit", phvf_repeat phvf_scalar 2001)
+            ]
+        in
+        (* A canonical description is accepted and stored canonically —
+           permitted editing is not broken, only made canonical. *)
+        let* response, _body =
+          post ~url ~target:"/update-community" ~multipart:true ~user:actor
+            (detail_fields ~community_id:community ~community_slug:"ncpg-pub"
+               ~description:"  Published body.\r\nSecond line.  ")
+        in
+        Alcotest.(check bool) "canonical write redirects" true
+          (status_of response >= 300 && status_of response < 400);
+        let* after = state conn community in
+        Alcotest.(check bool) "LF-normalized and trimmed" true
+          (contains after "|Published body.\nSecond line.|");
+        Lwt.return_unit)
+
+  let detail_legacy_case =
+    db_case "legacy guard: /update-community on a legacy community behaves \
+             exactly as before, including values the network policy would \
+             reject" (fun ~url conn ->
+        let* actor = insert_user conn "ncpg_legacy" in
+        let* community = legacy conn "ncpg-legacy-detail" in
+        let* () = add_top_mod conn ~user:actor ~community in
+        (* A control-bearing description is legacy-legal (no CHECK scopes it)
+           and must still be written by the untouched legacy path. *)
+        let* response, _body =
+          post ~url ~target:"/update-community" ~multipart:true ~user:actor
+            (detail_fields ~community_id:community
+               ~community_slug:"ncpg-legacy-detail"
+               ~description:"legacy\x01body")
+        in
+        Alcotest.(check bool) "legacy write redirects" true
+          (status_of response >= 300 && status_of response < 400);
+        let* after = state conn community in
+        Alcotest.(check bool) "legacy value stored verbatim" true
+          (contains after "legacy\x01body");
+        (* A nonexistent community id keeps the old silent no-op redirect. *)
+        let* response, _body =
+          post ~url ~target:"/update-community" ~multipart:true ~user:actor
+            ~admin_session:true
+            (detail_fields ~community_id:2147483000 ~community_slug:"ncpg-gone"
+               ~description:"nothing")
+        in
+        Alcotest.(check bool) "missing id still redirects" true
+          (status_of response >= 300 && status_of response < 400);
+        Lwt.return_unit)
+
+  let visibility_case =
+    db_case "legacy guard: the visibility route refuses a network setup draft \
+             and never transitions it" (fun ~url conn ->
+        let* actor = insert_user conn "ncpg_vis" in
+        let* community = draft conn "ncpg-vis-draft" in
+        let* () = add_top_mod conn ~user:actor ~community in
+        let* before = state conn community in
+        let* () =
+          Lwt_list.iter_s
+            (fun (label, value, admin_session) ->
+              let* response, body =
+                post ~url ~target:"/c/ncpg-vis-draft/settings/visibility"
+                  ~user:actor ~admin_session
+                  [ ("visibility", value) ]
+              in
+              Alcotest.(check int) (label ^ ": 404") 404 (status_of response);
+              check_opaque label body;
+              unchanged label conn community before)
+            [ ("top mod to public", "public", false);
+              ("session admin to public", "public", true);
+              ("top mod to private", "private", false)
+            ]
+        in
+        (* The refusal is byte-identical to a missing community, so the route
+           cannot be used to probe lifecycle. *)
+        let* _response, missing_body =
+          post ~url ~target:"/c/ncpg-nothing/settings/visibility" ~user:actor
+            [ ("visibility", "public") ]
+        in
+        let* _response, draft_body =
+          post ~url ~target:"/c/ncpg-vis-draft/settings/visibility" ~user:actor
+            [ ("visibility", "public") ]
+        in
+        (* Framework CSRF fields carry random bytes, so they are dropped
+           before the byte-identity comparison. *)
+        Alcotest.(check string) "draft answers like a missing community"
+          (ps_without_csrf_inputs missing_body)
+          (ps_without_csrf_inputs draft_body);
+        (* A legacy community still transitions exactly as before. *)
+        let* legacy_community = legacy conn "ncpg-vis-legacy" in
+        let* () = add_top_mod conn ~user:actor ~community:legacy_community in
+        let* response, _body =
+          post ~url ~target:"/c/ncpg-vis-legacy/settings/visibility" ~user:actor
+            [ ("visibility", "private") ]
+        in
+        Alcotest.(check bool) "legacy transition redirects" true
+          (status_of response >= 300 && status_of response < 400);
+        let* after = state conn legacy_community in
+        Alcotest.(check bool) "legacy is now private" true
+          (contains after "|private|");
+        Lwt.return_unit)
+
+  let indexability_case =
+    db_case "legacy guard: the discovery route refuses every network \
+             community, draft or published, and never flips the flag"
+      (fun ~url conn ->
+        let* actor = insert_user conn "ncpg_idx" in
+        let* draft_community = draft conn "ncpg-idx-draft" in
+        let* published = published_network conn "ncpg-idx-pub" in
+        let* () = add_top_mod conn ~user:actor ~community:draft_community in
+        let* () = add_top_mod conn ~user:actor ~community:published in
+        let* draft_before = state conn draft_community in
+        let* published_before = state conn published in
+        let* () =
+          Lwt_list.iter_s
+            (fun (label, slug, id, before, value) ->
+              let* response, body =
+                post ~url
+                  ~target:(Printf.sprintf "/c/%s/settings/indexability" slug)
+                  ~user:actor ~admin_session:true
+                  [ ("indexable", value) ]
+              in
+              Alcotest.(check int) (label ^ ": 404") 404 (status_of response);
+              check_opaque label body;
+              unchanged label conn id before)
+            [ ("draft to indexable", "ncpg-idx-draft", draft_community,
+               draft_before, "true");
+              ("draft to non-indexable", "ncpg-idx-draft", draft_community,
+               draft_before, "false");
+              ("published to non-indexable", "ncpg-idx-pub", published,
+               published_before, "false");
+              ("published to indexable", "ncpg-idx-pub", published,
+               published_before, "true")
+            ]
+        in
+        (* A legacy community still toggles exactly as before. *)
+        let* legacy_community = legacy conn "ncpg-idx-legacy" in
+        let* () = add_top_mod conn ~user:actor ~community:legacy_community in
+        let* response, _body =
+          post ~url ~target:"/c/ncpg-idx-legacy/settings/indexability"
+            ~user:actor [ ("indexable", "false") ]
+        in
+        Alcotest.(check bool) "legacy toggle redirects" true
+          (status_of response >= 300 && status_of response < 400);
+        let* after = state conn legacy_community in
+        Alcotest.(check bool) "legacy is now non-indexable" true
+          (contains after "|public|published|false|false|true");
+        Lwt.return_unit)
+
+  let no_publication_route_case =
+    db_case "legacy guard: no route publishes a network draft — the setup \
+             form's action is deliberately unregistered" (fun ~url conn ->
+        let* actor = insert_user conn "ncpg_pubroute" in
+        let* community = draft conn "ncpg-pubroute" in
+        let* () = add_top_mod conn ~user:actor ~community in
+        let* before = state conn community in
+        (* Every guarded route, plus the unregistered publication target
+           itself: after all of them the draft is byte-identically a draft. *)
+        let* _ =
+          post ~url ~target:"/c/ncpg-pubroute/settings/visibility" ~user:actor
+            ~admin_session:true [ ("visibility", "public") ]
+        in
+        let* _ =
+          post ~url ~target:"/c/ncpg-pubroute/settings/indexability" ~user:actor
+            ~admin_session:true [ ("indexable", "true") ]
+        in
+        let* response, _body =
+          post ~url ~target:"/c/ncpg-pubroute/publish" ~user:actor
+            ~admin_session:true
+            [ ("community_name", "Ncpg Published");
+              ("community_slug", "ncpg-pubroute");
+              ("community_description", "");
+              ("publication_visibility", "public")
+            ]
+        in
+        Alcotest.(check int) "publication route unregistered" 404
+          (status_of response);
+        unchanged "after every attempt" conn community before)
+
+  let suite =
+    [ detail_draft_case; detail_published_case; detail_legacy_case;
+      visibility_case; indexability_case; no_publication_route_case
+    ]
+end
+
 let () =
   Alcotest.run "earde"
     [ ( "smoke"
@@ -44798,4 +47367,45 @@ let () =
     ; ("project_home_provisioning_post_config_origin", Phvv.config_origin_cases)
     ; ("project_home_provisioning_post_csrf", Phvv.csrf_cases)
     ; ("project_home_provisioning_post_db", Phvv.db_suite)
+      (* Final network-community setup submission: the exact four-field
+         grammar, the publication vocabulary (public/unlisted only, nothing
+         trimmed or case-folded, private rejected), and byte-for-byte parity
+         of the whole identity half with the frozen provisioning-form policy.
+         DB-free. *)
+    ; ("network_community_publication_form_grammar", ncpf_grammar_cases)
+    ; ("network_community_publication_form_publication", ncpf_publication_cases)
+    ; ("network_community_publication_form_parity", ncpf_parity_cases)
+      (* The setup/publication page: heading and draft copy, the two
+         publication choices and the absence of a private one, the exact
+         one-form contract with four application fields and no hidden
+         identifier, defensive degradation on a malformed draft slug,
+         escaping, and every feedback variant. DB-free. *)
+    ; ("network_community_publication_page_copy", ncpp_copy_cases)
+    ; ("network_community_publication_page_form", ncpp_form_cases)
+    ; ("network_community_publication_page_defensive", ncpp_defensive_cases)
+    ; ("network_community_publication_page_feedback", ncpp_feedback_cases)
+      (* Publisher-authorized setup read model: pure input validation before
+         SQL, top-mod-or-durable-admin authorization with no session bypass,
+         the exact private-draft lifecycle, the single accepted home project
+         and its verification-drift tolerance, complete-draft and identity
+         revalidation, storage failure, and the privacy sweep.
+         Database-gated. *)
+    ; ("network_community_publication_read_model", Ncpr.suite)
+      (* GET /c/:slug/setup: the exact registered route with no alias and no
+         publication POST, the DB-free rollout/authentication gates (every
+         rejection precedes any route read or SQL), the settings navigation
+         and the suppression of the legacy identity controls, and the
+         database-gated page, byte-identical generic 404s, generic 500s, and
+         the real navigation from the settings surface. *)
+    ; ("network_community_publication_route", Ncph.route_cases)
+    ; ("network_community_publication_get_gates", Ncph.gate_cases)
+    ; ("network_community_publication_settings_nav", Ncph.nav_cases)
+    ; ("network_community_publication_handlers_db", Ncph.db_suite)
+      (* Legacy mutation bypass closure: the three existing identity and
+         lifecycle routes refuse a network community before any write rather
+         than becoming a scoped CHECK violation, forged browser fields cannot
+         steer them, the generic responses disclose no lifecycle or
+         authorization detail, and legacy communities behave exactly as
+         before. Database-gated. *)
+    ; ("network_community_legacy_mutation_guards", Ncpg.suite)
     ]

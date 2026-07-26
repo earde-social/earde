@@ -2130,6 +2130,55 @@ let community_settings_page ?user ?(connected_projects="") ~is_admin ~is_top_mod
   let is_private = community.visibility = Db.Community_private in
   let can_edit_vis = is_top_mod || is_admin in
 
+  (* Network-community lifecycle state. A provisioned setup draft is not
+     configured through the legacy settings controls: its identity,
+     visibility, indexing, and discovery are all decided at once by the
+     canonical publication flow, and the matching legacy POST routes now
+     refuse a network community outright. Rendering controls that the server
+     would reject would be a lie, so they are replaced by a pointer to the
+     canonical surface. *)
+  let is_network_draft =
+    community.is_network_community
+    && community.onboarding_state = Db.Community_draft
+  in
+  (* The scoped network-slug grammar the database enforces on every network
+     row. Defensive: a slug outside it never becomes a setup link. *)
+  let canonical_network_slug value =
+    let n = String.length value in
+    let is_slug_char c = (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') in
+    n >= 1 && n <= 80
+    && value.[0] <> '-'
+    && value.[n - 1] <> '-'
+    &&
+    let rec ok i =
+      i >= n
+      ||
+      if is_slug_char value.[i] then ok (i + 1)
+      else value.[i] = '-' && value.[i + 1] <> '-' && ok (i + 1)
+    in
+    ok 0
+  in
+  (* The setup surface independently reauthorizes (current top_mod of this
+     community, or a durable users.is_admin holder), so this only decides
+     whether the affordance is worth showing on a surface that already knows
+     the answer for the common cases. *)
+  let can_complete_setup =
+    is_network_draft && can_edit_vis && canonical_network_slug community.slug
+  in
+  let setup_pointer_note =
+    if not can_complete_setup then
+      "<p class='cm-muted-note'>This community is still a setup draft. Its \
+       identity and publication are decided together by an authorized \
+       publisher.</p>"
+    else
+      Printf.sprintf
+        "<p class='cm-muted-note'>This community is still a private setup \
+         draft. Its name, address, description, visibility, and discovery are \
+         decided together when you <a href='/c/%s/setup'>complete setup and \
+         publish</a>.</p>"
+        slug
+  in
+
   let stat label cls value =
     Printf.sprintf
       "<div class='cm-stat'><span class='cm-stat-label'>%s</span><span class='cm-stat-val %s'>%s</span></div>"
@@ -2208,7 +2257,8 @@ let community_settings_page ?user ?(connected_projects="") ~is_admin ~is_top_mod
         "<p class='cm-panel-desc'>This community is public by link, but <strong>excluded from the public feed, search, and discovery</strong>, and marked <code>noindex</code>.</p>"
     in
     let visibility_control =
-      if not can_edit_vis then ""
+      if is_network_draft then setup_pointer_note
+      else if not can_edit_vis then ""
       else
         (* Segmented submit control: each segment is its own one-input POST form to the
            existing route, so the control stays fully server-rendered. Clicking the
@@ -2226,7 +2276,17 @@ let community_settings_page ?user ?(connected_projects="") ~is_admin ~is_top_mod
           (seg "private" "Private" is_private)
     in
     let indexable_control =
-      if not can_edit_vis then ""
+      (* Indexing on a network community is not an independent switch: the
+         published shapes are "indexable and discoverable" or neither, and
+         the legacy route can only move one of the two. It refuses a network
+         community for exactly that reason, so no control is offered. *)
+      if community.is_network_community then
+        if is_network_draft then ""
+        else
+          "<p class='cm-muted-note' style='margin-top:12px'>Discovery for this \
+           community follows the Public or Unlisted choice made when it was \
+           published.</p>"
+      else if not can_edit_vis then ""
       else if is_private then
         (* No actionable indexability control while private; surface the stored flag as
            inactive copy so it doesn't look clickable. *)
@@ -2284,6 +2344,19 @@ let community_settings_page ?user ?(connected_projects="") ~is_admin ~is_top_mod
     | _ -> "<div class='cm-asset'><span class='cm-asset-note'>No banner uploaded yet.</span></div>"
   in
   let profile_panel =
+    if is_network_draft then
+      (* The legacy multipart route writes the description straight to the
+         community row; for a setup draft that is a canonical-identity edit
+         outside the publication flow, and the route now refuses it. No form
+         is rendered rather than one the server would reject. *)
+      Printf.sprintf "
+      <section class='cm-panel'>
+        <h2 class='cm-panel-title'>Profile</h2>
+        <p class='cm-panel-desc'>Description, rules, and imagery shown on the public community page.</p>
+        %s
+      </section>"
+        setup_pointer_note
+    else
     Printf.sprintf "
       <section class='cm-panel'>
         <h2 class='cm-panel-title'>Profile</h2>
@@ -2740,6 +2813,22 @@ let community_settings_page ?user ?(connected_projects="") ~is_admin ~is_top_mod
   let connected_projects_nav =
     if has_connected_projects then nav_item "projects" "Connected projects" else ""
   in
+  (* Complete setup and publish: a normal GET link to the dedicated setup
+     route, which independently reauthorizes (current top_mod of this
+     community, or a durable users.is_admin holder) and independently
+     re-checks the draft lifecycle. Shown only on a network setup draft's
+     top-mod/admin surface — legacy communities, already-published network
+     communities, ordinary members, mods, and legacy_mods never see it. No
+     form, no community id, no lifecycle detail; the URL is built
+     structurally from the canonical (escaped) slug, matching the other nav
+     links. *)
+  let setup_publish_link =
+    if can_complete_setup then
+      Printf.sprintf
+        "<a class='cm-index-link' href='/c/%s/setup'>Complete setup and publish</a>"
+        slug
+    else ""
+  in
   let content = Printf.sprintf "
     <div class='cm-wrap cm-wrap--settings'>
       <div class='cm-head'>
@@ -2750,7 +2839,7 @@ let community_settings_page ?user ?(connected_projects="") ~is_admin ~is_top_mod
       <div class='cm-cols'>
         <nav class='cm-index'>
           <div class='cm-index-title'>Settings</div>
-          %s%s%s%s%s%s%s%s
+          %s%s%s%s%s%s%s%s%s
         </nav>
         <div class='cm-main'>
           %s
@@ -2758,6 +2847,7 @@ let community_settings_page ?user ?(connected_projects="") ~is_admin ~is_top_mod
       </div>
     </div>"
     slug slug
+    setup_publish_link
     (nav_item "visibility" "Visibility &amp; discovery")
     (nav_item "profile" "Profile")
     (nav_item "channels" "Channels &amp; sections")

@@ -265,6 +265,22 @@ let () =
     Dream.get "/c/:slug/t/:thread" Earde.Handlers.view_thread_handler;
     Dream.post "/messages" Earde.Handlers.send_message_handler;
     Dream.get "/c/:slug/settings" Earde.Handlers.community_settings_handler;
+    (* Final setup and publication surface of a provisioned network
+       community. A distinct literal segment from settings/modlog/reports, so
+       no router shadowing. Informational and deliberately not rate-limited,
+       matching the other setup GETs; mode is re-read per request (uncached,
+       matching the onboarding routes) and authorization is decided in the
+       read model's SQL, not here and not by the route shape.
+
+       The form this page renders posts to /c/:slug/publish, which is
+       deliberately NOT registered: no publication store exists yet, and the
+       legacy identity/visibility/indexability routes are guarded to refuse
+       network communities rather than stand in for it. *)
+    Dream.get "/c/:slug/setup" (fun request ->
+        Earde.Network_community_publication_handlers
+        .make_network_community_publication_page_handler
+          ~mode:(Earde.Project_onboarding.mode_from_env ())
+          request);
     Dream.get "/c/:slug/modlog" Earde.Handlers.modlog_handler;
     (* Reports: singular GET form + plural POST create (Slice B) + plural GET mod queue
        (read-only). Distinct literal segments from settings/modlog/manage-mods, so no router
