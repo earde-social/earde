@@ -276,7 +276,7 @@ let remove (module C : Caqti_lwt.CONNECTION) ~actor_user_id ~project_slug
     let rollback_to err = C.rollback () >>= fun _ -> Lwt.return (Error err) in
     (* Step 5: the exact locked row, guarded again on accepted, then the
        returned data validated before the commit. *)
-    let write_removal ~relation_id ~new_status =
+    let write_removal ~project_id ~community_id ~relation_id ~new_status =
       let status_string = Project_home_relation.string_of_status new_status in
       C.collect_list update_relation_query (relation_id, status_string)
       >>= function
@@ -300,9 +300,24 @@ let remove (module C : Caqti_lwt.CONNECTION) ~actor_user_id ~project_slug
               && removed_after_created && updated_after_created)
           then rollback_to Inconsistent_data
           else (
-            C.commit () >>= function
-            | Error _ -> Lwt.return (Error Storage_error)
-            | Ok () -> Lwt.return (Ok { resulting_status = new_status }))
+            (* The audit event rides the same transaction: inserted only
+               after the guarded accepted→removed update validated, and
+               any audit failure rolls the whole removal back. Only the
+               caller's identity is recorded — never which of the three
+               authorization sources qualified. *)
+            Project_home_audit.insert
+              (module C)
+              ~action:Project_home_audit.Home_removed
+              ~actor_user_id ~project_id ~community_id ~relation_id
+            >>= function
+            | Error Project_home_audit.Inconsistent_data ->
+                rollback_to Inconsistent_data
+            | Error Project_home_audit.Storage_error ->
+                rollback_to Storage_error
+            | Ok () -> (
+                C.commit () >>= function
+                | Error _ -> Lwt.return (Error Storage_error)
+                | Ok () -> Lwt.return (Ok { resulting_status = new_status })))
     in
     (* Step 4: the exact accepted relation, locked last of all. *)
     let remove_relation ~project_id ~community_id ~setup_draft =
@@ -358,7 +373,9 @@ let remove (module C : Caqti_lwt.CONNECTION) ~actor_user_id ~project_slug
           else (
             match removed_status_of_note stored_note with
             | None -> rollback_to Inconsistent_data
-            | Some new_status -> write_removal ~relation_id ~new_status)
+            | Some new_status ->
+                write_removal ~project_id ~community_id ~relation_id
+                  ~new_status)
     in
     (* Step 3: every authorization row is locked, in this fixed order,
        before any of them decides anything — short-circuiting would make

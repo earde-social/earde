@@ -782,6 +782,41 @@ ALTER SEQUENCE public.posts_id_seq OWNED BY public.posts.id;
 
 
 --
+-- Name: project_home_audit_events; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.project_home_audit_events (
+    id bigint NOT NULL,
+    action text NOT NULL,
+    actor_user_id integer,
+    project_id bigint NOT NULL,
+    community_id integer NOT NULL,
+    relation_id bigint NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT project_home_audit_events_action_check CHECK ((action = ANY (ARRAY['project_home_requested'::text, 'project_home_accepted'::text, 'project_home_rejected'::text, 'project_home_removed'::text, 'dedicated_home_provisioned'::text, 'network_community_published'::text])))
+);
+
+
+--
+-- Name: project_home_audit_events_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.project_home_audit_events_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: project_home_audit_events_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.project_home_audit_events_id_seq OWNED BY public.project_home_audit_events.id;
+
+
+--
 -- Name: project_onboarding_draft_repositories; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -1178,6 +1213,13 @@ ALTER TABLE ONLY public.posts ALTER COLUMN id SET DEFAULT nextval('public.posts_
 
 
 --
+-- Name: project_home_audit_events id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.project_home_audit_events ALTER COLUMN id SET DEFAULT nextval('public.project_home_audit_events_id_seq'::regclass);
+
+
+--
 -- Name: project_onboarding_draft_repositories id; Type: DEFAULT; Schema: public; Owner: -
 --
 
@@ -1493,6 +1535,14 @@ ALTER TABLE ONLY public.posts
 
 
 --
+-- Name: project_home_audit_events project_home_audit_events_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.project_home_audit_events
+    ADD CONSTRAINT project_home_audit_events_pkey PRIMARY KEY (id);
+
+
+--
 -- Name: project_onboarding_draft_repositories project_onboarding_draft_repos_draft_full_name_key; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -1738,6 +1788,34 @@ CREATE INDEX idx_posthog_deletion_jobs_pending ON public.posthog_person_deletion
 --
 
 CREATE INDEX idx_posthog_group_cleanup_pending ON public.posthog_group_cleanup_jobs USING btree (created_at) WHERE (status = 'pending'::text);
+
+
+--
+-- Name: idx_project_home_audit_events_actor; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_project_home_audit_events_actor ON public.project_home_audit_events USING btree (actor_user_id, created_at DESC);
+
+
+--
+-- Name: idx_project_home_audit_events_community; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_project_home_audit_events_community ON public.project_home_audit_events USING btree (community_id, created_at DESC);
+
+
+--
+-- Name: idx_project_home_audit_events_project; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_project_home_audit_events_project ON public.project_home_audit_events USING btree (project_id, created_at DESC);
+
+
+--
+-- Name: idx_project_home_audit_events_relation; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_project_home_audit_events_relation ON public.project_home_audit_events USING btree (relation_id, created_at DESC);
 
 
 --
@@ -2113,6 +2191,38 @@ ALTER TABLE ONLY public.posts
 
 
 --
+-- Name: project_home_audit_events project_home_audit_events_actor_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.project_home_audit_events
+    ADD CONSTRAINT project_home_audit_events_actor_user_id_fkey FOREIGN KEY (actor_user_id) REFERENCES public.users(id) ON DELETE SET NULL;
+
+
+--
+-- Name: project_home_audit_events project_home_audit_events_community_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.project_home_audit_events
+    ADD CONSTRAINT project_home_audit_events_community_id_fkey FOREIGN KEY (community_id) REFERENCES public.communities(id);
+
+
+--
+-- Name: project_home_audit_events project_home_audit_events_project_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.project_home_audit_events
+    ADD CONSTRAINT project_home_audit_events_project_id_fkey FOREIGN KEY (project_id) REFERENCES public.open_source_projects(id);
+
+
+--
+-- Name: project_home_audit_events project_home_audit_events_relation_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.project_home_audit_events
+    ADD CONSTRAINT project_home_audit_events_relation_id_fkey FOREIGN KEY (relation_id) REFERENCES public.community_projects(id);
+
+
+--
 -- Name: project_onboarding_draft_repositories project_onboarding_draft_repositories_draft_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -2251,4 +2361,5 @@ INSERT INTO public.schema_migrations (version) VALUES
     ('20260724130000'),
     ('20260724140000'),
     ('20260726120000'),
-    ('20260726130000');
+    ('20260726130000'),
+    ('20260727120000');

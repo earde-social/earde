@@ -485,14 +485,39 @@ let publish (module C : Caqti_lwt.CONNECTION) ~actor_user_id
                                    relation_sig_after)
                             then rollback_to Inconsistent_data
                             else (
-                              C.commit () >>= function
-                              | Error _ -> Lwt.return (Error Storage_error)
-                              | Ok () ->
-                                  Lwt.return
-                                    (Ok
-                                       { slug = final_slug;
-                                         visibility = selected_visibility
-                                       })))))
+                              (* The audit event rides the same
+                                 transaction: inserted only after the
+                                 complete post-update validation, so a
+                                 slug-conflict loser, a replay, or an
+                                 unavailable draft never reaches it, and
+                                 any audit failure rolls the publication
+                                 back whole. The community foreign key is
+                                 the authoritative identity — neither the
+                                 old nor the final slug is copied in. *)
+                              Project_home_audit.insert
+                                (module C)
+                                ~action:
+                                  Project_home_audit
+                                  .Network_community_published
+                                ~actor_user_id ~project_id ~community_id
+                                ~relation_id
+                              >>= function
+                              | Error Project_home_audit.Inconsistent_data
+                                ->
+                                  rollback_to Inconsistent_data
+                              | Error Project_home_audit.Storage_error ->
+                                  rollback_to Storage_error
+                              | Ok () -> (
+                                  C.commit () >>= function
+                                  | Error _ ->
+                                      Lwt.return (Error Storage_error)
+                                  | Ok () ->
+                                      Lwt.return
+                                        (Ok
+                                           { slug = final_slug;
+                                             visibility =
+                                               selected_visibility
+                                           }))))))
     in
 
     (* Slug-conflict classification: structural cause only — a unique

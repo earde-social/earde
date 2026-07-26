@@ -398,18 +398,57 @@ let review (module C : Caqti_lwt.CONNECTION) ~reviewer_user_id ~project_slug
                                                        status_string)
                                               then
                                                 rollback_to Inconsistent_data
-                                              else (
-                                                C.commit () >>= function
-                                                | Error _ ->
-                                                    Lwt.return
-                                                      (Error Storage_error)
-                                                | Ok () ->
-                                                    Lwt.return
-                                                      (Ok
-                                                         {
-                                                           resulting_status =
-                                                             new_status;
-                                                         }))
+                                              else
+                                                (* The audit event rides
+                                                   the same transaction:
+                                                   inserted only after the
+                                                   guarded transition
+                                                   validated, and any
+                                                   audit failure rolls the
+                                                   whole review back. The
+                                                   private request note
+                                                   never reaches it. *)
+                                                let audit_action =
+                                                  match decision with
+                                                  | Accept ->
+                                                      Project_home_audit
+                                                      .Home_accepted
+                                                  | Reject ->
+                                                      Project_home_audit
+                                                      .Home_rejected
+                                                in
+                                                (Project_home_audit.insert
+                                                   (module C)
+                                                   ~action:audit_action
+                                                   ~actor_user_id:
+                                                     reviewer_user_id
+                                                   ~project_id ~community_id
+                                                   ~relation_id
+                                                 >>= function
+                                                 | Error
+                                                     Project_home_audit
+                                                     .Inconsistent_data ->
+                                                     rollback_to
+                                                       Inconsistent_data
+                                                 | Error
+                                                     Project_home_audit
+                                                     .Storage_error ->
+                                                     rollback_to
+                                                       Storage_error
+                                                 | Ok () -> (
+                                                     C.commit ()
+                                                     >>= function
+                                                     | Error _ ->
+                                                         Lwt.return
+                                                           (Error
+                                                              Storage_error)
+                                                     | Ok () ->
+                                                         Lwt.return
+                                                           (Ok
+                                                              {
+                                                                resulting_status =
+                                                                  new_status;
+                                                              })))
                                           | Ok (_ :: _ :: _) ->
                                               rollback_to Inconsistent_data)
                                 )))))

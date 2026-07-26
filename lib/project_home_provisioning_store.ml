@@ -297,7 +297,7 @@ let provision (module C : Caqti_lwt.CONNECTION) ~actor_user_id ~project_slug
         && provenance_null && lifecycle_ok && times_ok
       in
 
-      let commit_validated project_row_id community_row_id =
+      let commit_validated project_row_id community_row_id relation_row_id =
         C.find validate_state_query
           (community_row_id, actor_user_id, project_row_id)
         >>= function
@@ -306,11 +306,26 @@ let provision (module C : Caqti_lwt.CONNECTION) ~actor_user_id ~project_slug
             if counts <> ((1, 1, 1, 1), ((1, 1, 1, 1), (1, 0))) then
               rollback_to Inconsistent_data
             else (
-              C.commit () >>= function
-              | Error _ -> Lwt.return (Error Storage_error)
-              | Ok () ->
-                  Lwt.return
-                    (Ok { slug = requested_slug; status = resulting }))
+              (* The audit event rides the same transaction as the whole
+                 draft: inserted only after the complete provisioned state
+                 validated, and any audit failure rolls back community,
+                 membership, moderator, shell, and relation together. *)
+              Project_home_audit.insert
+                (module C)
+                ~action:Project_home_audit.Dedicated_home_provisioned
+                ~actor_user_id ~project_id:project_row_id
+                ~community_id:community_row_id ~relation_id:relation_row_id
+              >>= function
+              | Error Project_home_audit.Inconsistent_data ->
+                  rollback_to Inconsistent_data
+              | Error Project_home_audit.Storage_error ->
+                  rollback_to Storage_error
+              | Ok () -> (
+                  C.commit () >>= function
+                  | Error _ -> Lwt.return (Error Storage_error)
+                  | Ok () ->
+                      Lwt.return
+                        (Ok { slug = requested_slug; status = resulting })))
       in
 
       let insert_relation project_row_id community_row_id =
@@ -322,7 +337,10 @@ let provision (module C : Caqti_lwt.CONNECTION) ~actor_user_id ~project_slug
         | Ok (Some returned) ->
             if not (relation_ok project_row_id community_row_id returned)
             then rollback_to Inconsistent_data
-            else commit_validated project_row_id community_row_id
+            else
+              let ((relation_row_id, _), _), _ = returned in
+              commit_validated project_row_id community_row_id
+                relation_row_id
       in
 
       (* Steps 4–6 share one shape: a fresh-row insert whose RETURNING

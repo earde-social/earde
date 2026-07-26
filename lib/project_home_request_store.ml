@@ -202,8 +202,26 @@ let create (module C : Caqti_lwt.CONNECTION) ~user_id ~project_slug
                         if not (positive new_relation_id) then
                           rollback_to Inconsistent_data
                         else (
-                          C.commit () >>= function
-                          | Error _ -> Lwt.return (Error Storage_error)
-                          | Ok () ->
-                              Lwt.return
-                                (Ok { relation_id = new_relation_id })))))
+                          (* The audit event rides the same transaction:
+                             inserted only once the pending relation is
+                             validated, and any audit failure rolls the
+                             whole request back — a committed request
+                             without its event cannot exist. *)
+                          Project_home_audit.insert
+                            (module C)
+                            ~action:Project_home_audit.Home_requested
+                            ~actor_user_id:user_id
+                            ~project_id:project_row_id
+                            ~community_id:community_row_id
+                            ~relation_id:new_relation_id
+                          >>= function
+                          | Error Project_home_audit.Inconsistent_data ->
+                              rollback_to Inconsistent_data
+                          | Error Project_home_audit.Storage_error ->
+                              rollback_to Storage_error
+                          | Ok () -> (
+                              C.commit () >>= function
+                              | Error _ -> Lwt.return (Error Storage_error)
+                              | Ok () ->
+                                  Lwt.return
+                                    (Ok { relation_id = new_relation_id }))))))
