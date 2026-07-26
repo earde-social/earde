@@ -22042,6 +22042,82 @@ let phr_privacy_cases =
           rejections)
   ]
 
+(* === Scoped network-community identity constraints (shared helpers) ===
+   Migration 20260726120000 bars noncanonical identity values on
+   is_network_community rows at the database boundary, which also bars the
+   corruption several gated cases plant on purpose to exercise
+   application-level Inconsistent_data defenses. Those cases drop the
+   three named constraints for one probe and restore them under
+   Lwt.finalize once the corrupt rows are canonical or gone; the schema
+   suite reuses the exact same statements for its down/up round-trip
+   proof. The ADD statements are byte-for-byte the migration's, so a
+   drifted migration fails these tests rather than silently diverging. *)
+module Ncid_relax = struct
+  let ( let* ) = Lwt.bind
+
+  open Caqti_request.Infix
+
+  let ddl sql = (Caqti_type.unit ->. Caqti_type.unit) sql
+
+  let drop_statements =
+    [ ddl
+        "ALTER TABLE communities \
+         DROP CONSTRAINT IF EXISTS communities_network_name_check"
+    ; ddl
+        "ALTER TABLE communities \
+         DROP CONSTRAINT IF EXISTS communities_network_slug_check"
+    ; ddl
+        "ALTER TABLE communities \
+         DROP CONSTRAINT IF EXISTS communities_network_description_check"
+    ]
+
+  let add_statements =
+    [ ddl
+        "ALTER TABLE communities \
+         ADD CONSTRAINT communities_network_name_check CHECK ( \
+           NOT is_network_community OR ( \
+             char_length(name) >= 1 \
+             AND char_length(name) <= 120 \
+             AND name !~ '[\\x01-\\x1f\\x7f]' \
+             AND name !~ '^ ' \
+             AND name !~ ' $'))"
+    ; ddl
+        "ALTER TABLE communities \
+         ADD CONSTRAINT communities_network_slug_check CHECK ( \
+           NOT is_network_community OR ( \
+             slug ~ '^[a-z0-9]+(-[a-z0-9]+)*$' \
+             AND char_length(slug) <= 80))"
+    ; ddl
+        "ALTER TABLE communities \
+         ADD CONSTRAINT communities_network_description_check CHECK ( \
+           NOT is_network_community OR description IS NULL OR ( \
+             char_length(description) >= 1 \
+             AND char_length(description) <= 2000 \
+             AND description !~ '[\\x01-\\x08\\x0b-\\x1f\\x7f]' \
+             AND description !~ '^[ \\t\\n]' \
+             AND description !~ '[ \\t\\n]$'))"
+    ]
+
+  let run conn statements =
+    let (module C : Caqti_lwt.CONNECTION) = conn in
+    Lwt_list.iter_s
+      (fun q ->
+        let* r = C.exec q () in
+        let* _ = Pod_schema.or_fail "identity constraint DDL" r in
+        Lwt.return_unit)
+      statements
+
+  let drop conn = run conn drop_statements
+  let restore conn = run conn add_statements
+
+  (* One canonicalizing restore for finalize blocks: whatever a probe left
+     behind, the row is valid again before the constraints return. *)
+  let q_recanonicalize =
+    (Caqti_type.(t3 int string string) ->. Caqti_type.unit)
+    "UPDATE communities SET slug = $2, name = $3, description = NULL \
+     WHERE id = $1"
+end
+
 (* === Project home request store (Project_home_request_store) ===
    Transactional creation of a pending home-relation request, driven over
    verified permanent projects built through the real draft/selection/
@@ -23013,17 +23089,28 @@ module Phrq = struct
         let* _, project =
           make_project conn ~user:uid ~ext_id:944200014L ~slug:"phrq-corrupt"
         in
-        (* A non-addressable stored slug (communities.slug carries no
-           schema grammar, so this corruption is directly producible). *)
+        (* A non-addressable stored slug. The scoped identity constraints
+           (migration 20260726120000) now bar this corruption at the
+           database boundary, so they are dropped for this probe alone and
+           restored under Lwt.finalize once the corrupt row is deleted —
+           the store-level defense itself must stay observable. *)
         let* bad_slug = insert_community conn "phrq-bad-slug" in
+        let* () = Ncid_relax.drop conn in
         let* () =
-          exec conn "corrupt slug" q_corrupt_community_slug
-            (bad_slug, "phrq-bad slug")
-        in
-        let* () =
-          create_expect "corrupted slug" Rq.Inconsistent_data conn
-            ~user:uid ~slug:"phrq-corrupt" ~community:bad_slug
-            (phr_fresh_pending ())
+          Lwt.finalize
+            (fun () ->
+              let* () =
+                exec conn "corrupt slug" q_corrupt_community_slug
+                  (bad_slug, "phrq-bad slug")
+              in
+              create_expect "corrupted slug" Rq.Inconsistent_data conn
+                ~user:uid ~slug:"phrq-corrupt" ~community:bad_slug
+                (phr_fresh_pending ()))
+            (fun () ->
+              let* () =
+                exec conn "purge corrupt row" q_delete_community bad_slug
+              in
+              Ncid_relax.restore conn)
         in
         (* The mixed published flag shape — neither fully listed nor
            fully unlisted — is invalid per the shared lifecycle rule. *)
@@ -24095,14 +24182,26 @@ module Phcv = struct
           load_expect "mixed flags" Rm.Inconsistent_data conn ~user:a
             ~slug:"phcv-mix"
         in
-        (* The same durable rules bind an eligible row's identity. *)
+        (* The same durable rules bind an eligible row's identity. The
+           scoped identity constraints are dropped for this probe alone
+           and restored under Lwt.finalize once the row is canonical
+           again. *)
         let* () = exec conn "restore flags" q_make_unlisted home in
-        let* () =
-          exec conn "corrupt slug" Phrq.q_corrupt_community_slug
-            (home, "phcv-mix bad slug")
-        in
-        load_expect "corrupt eligible slug" Rm.Inconsistent_data conn ~user:a
-          ~slug:"phcv-mix")
+        let* () = Ncid_relax.drop conn in
+        Lwt.finalize
+          (fun () ->
+            let* () =
+              exec conn "corrupt slug" Phrq.q_corrupt_community_slug
+                (home, "phcv-mix bad slug")
+            in
+            load_expect "corrupt eligible slug" Rm.Inconsistent_data conn
+              ~user:a ~slug:"phcv-mix")
+          (fun () ->
+            let* () =
+              exec conn "recanonicalize" Ncid_relax.q_recanonicalize
+                (home, "phcv-mix-home", "phcv-mix-home")
+            in
+            Ncid_relax.restore conn))
 
   (* === active relation === *)
 
@@ -24318,27 +24417,43 @@ module Phcv = struct
             conn ~user:a ~slug:"phcv-corr"
         in
         let* () = exec conn "restore flags" q_make_listed home in
-        let* () =
-          exec conn "corrupt slug" Phrq.q_corrupt_community_slug
-            (home, "phcv-corr bad slug")
-        in
-        let* () =
-          load_expect "non-addressable target slug" Rm.Inconsistent_data conn
-            ~user:a ~slug:"phcv-corr"
-        in
-        let* () =
-          exec conn "restore slug" Phrq.q_corrupt_community_slug
-            (home, "phcv-corr-home")
-        in
-        let* () = exec conn "blank name" q_set_name (home, "   ") in
-        let* () =
-          load_expect "blank target name" Rm.Inconsistent_data conn ~user:a
-            ~slug:"phcv-corr"
-        in
-        let* () = exec conn "restore name" q_set_name (home, "Phcv Corr Home") in
-        let* () = exec conn "corrupt description" q_corrupt_description home in
-        load_expect "control-unsafe description" Rm.Inconsistent_data conn
-          ~user:a ~slug:"phcv-corr")
+        (* Identity corruption is now barred by the scoped constraints;
+           they are dropped for these probes alone and restored under
+           Lwt.finalize once the row is canonical again. *)
+        let* () = Ncid_relax.drop conn in
+        Lwt.finalize
+          (fun () ->
+            let* () =
+              exec conn "corrupt slug" Phrq.q_corrupt_community_slug
+                (home, "phcv-corr bad slug")
+            in
+            let* () =
+              load_expect "non-addressable target slug" Rm.Inconsistent_data
+                conn ~user:a ~slug:"phcv-corr"
+            in
+            let* () =
+              exec conn "restore slug" Phrq.q_corrupt_community_slug
+                (home, "phcv-corr-home")
+            in
+            let* () = exec conn "blank name" q_set_name (home, "   ") in
+            let* () =
+              load_expect "blank target name" Rm.Inconsistent_data conn
+                ~user:a ~slug:"phcv-corr"
+            in
+            let* () =
+              exec conn "restore name" q_set_name (home, "Phcv Corr Home")
+            in
+            let* () =
+              exec conn "corrupt description" q_corrupt_description home
+            in
+            load_expect "control-unsafe description" Rm.Inconsistent_data
+              conn ~user:a ~slug:"phcv-corr")
+          (fun () ->
+            let* () =
+              exec conn "recanonicalize" Ncid_relax.q_recanonicalize
+                (home, "phcv-corr-home", "Phcv Corr Home")
+            in
+            Ncid_relax.restore conn))
 
   let suite =
     [ pure_inputs_case; storage_case; steward_view_case; collapse_case;
@@ -26330,11 +26445,21 @@ module Phrv = struct
            mixed published flag pair, a draft leaking through public
            listing, and a private community still discoverable. Each is
            restored before the next probe. *)
-        let* () = exec conn "empty name" Phcv.q_set_name (cid, "") in
-        let* () = expect_corrupt "empty community name" in
+        (* The blank name is now barred by the scoped identity
+           constraints; they are dropped for this probe alone and restored
+           under Lwt.finalize once the name is canonical again. *)
+        let* () = Ncid_relax.drop conn in
         let* () =
-          exec conn "restore name" Phcv.q_set_name
-            (cid, "phrv-community-home")
+          Lwt.finalize
+            (fun () ->
+              let* () = exec conn "empty name" Phcv.q_set_name (cid, "") in
+              expect_corrupt "empty community name")
+            (fun () ->
+              let* () =
+                exec conn "restore name" Phcv.q_set_name
+                  (cid, "phrv-community-home")
+              in
+              Ncid_relax.restore conn)
         in
         let* () = exec conn "mix flags" q_mix_flags cid in
         let* () = expect_corrupt "mixed publication flags" in
@@ -31717,15 +31842,27 @@ module Phrm = struct
         (* Community shapes: an empty display name, a mixed published flag
            pair, a draft leaking through public listing, and a private
            community still discoverable. Each is restored before the next. *)
-        let* () = exec conn "empty name" Phcv.q_set_name (cid, "") in
-        let* () = expect "blank community name" in
+        (* Blank and control-byte names are now barred by the scoped
+           identity constraints; they are dropped for these probes alone
+           and restored under Lwt.finalize once the name is canonical
+           again. *)
+        let* () = Ncid_relax.drop conn in
         let* () =
-          exec conn "control-byte name" Phcv.q_set_name
-            (cid, "phrm\x01corrupt")
-        in
-        let* () = expect "control byte in community name" in
-        let* () =
-          exec conn "restore name" Phcv.q_set_name (cid, "phrm-corrupt-home")
+          Lwt.finalize
+            (fun () ->
+              let* () = exec conn "empty name" Phcv.q_set_name (cid, "") in
+              let* () = expect "blank community name" in
+              let* () =
+                exec conn "control-byte name" Phcv.q_set_name
+                  (cid, "phrm\x01corrupt")
+              in
+              expect "control byte in community name")
+            (fun () ->
+              let* () =
+                exec conn "restore name" Phcv.q_set_name
+                  (cid, "phrm-corrupt-home")
+              in
+              Ncid_relax.restore conn)
         in
         let* () = exec conn "mix flags" Phrv.q_mix_flags cid in
         let* () = expect "mixed publication flags" in
@@ -35856,6 +35993,1286 @@ module Phvh = struct
   let db_suite =
     [ steward_page_case; generic_404_case; inconsistent_case; storage_case;
       navigation_case ]
+end
+
+(* === Network-community identity constraints (migration 20260726120000) ===
+   The three scoped CHECK constraints on communities: canonical name, slug,
+   and description whenever is_network_community is TRUE, with legacy rows
+   exempt. Probes run autocommit against the real table with ncid% slugs;
+   the down/up round-trip runs inside one rolled-back transaction using
+   Ncid_relax's byte-identical statements, so the production constraints
+   are never left missing even on assertion failure. *)
+module Ncid_schema = struct
+  let ( let* ) = Lwt.bind
+
+  open Caqti_request.Infix
+
+  let or_fail = Pod_schema.or_fail
+  let reject = Pod_schema.reject
+
+  let q_cleanup =
+    List.map
+      (fun sql -> (Caqti_type.unit ->. Caqti_type.unit) sql)
+      [ "DELETE FROM communities WHERE slug LIKE 'ncid%'" ]
+
+  let q_insert_network =
+    (Caqti_type.(t3 string string (option string)) ->! Caqti_type.int)
+    "INSERT INTO communities (slug, name, description, is_network_community) \
+     VALUES ($1, $2, $3, TRUE) RETURNING id"
+
+  let q_insert_legacy =
+    (Caqti_type.(t3 string string (option string)) ->! Caqti_type.int)
+    "INSERT INTO communities (slug, name, description, is_network_community) \
+     VALUES ($1, $2, $3, FALSE) RETURNING id"
+
+  let q_identity =
+    (Caqti_type.int ->! Caqti_type.(t2 (t2 string string) (option string)))
+    "SELECT slug, name, description FROM communities WHERE id = $1"
+
+  let q_constraints =
+    (Caqti_type.unit ->* Caqti_type.(t2 string bool))
+    "SELECT conname, convalidated FROM pg_constraint \
+     WHERE conrelid = 'communities'::regclass AND contype = 'c' \
+       AND conname LIKE 'communities_network_%' ORDER BY conname"
+
+  let db_case name f =
+    Alcotest.test_case name `Quick (fun () ->
+        match Sys.getenv_opt "EARDE_TEST_DATABASE_URL" with
+        | None | Some "" -> Alcotest.skip ()
+        | Some url ->
+            Lwt_main.run
+              (let* conn = Caqti_lwt_unix.connect (Uri.of_string url) in
+               let* conn = or_fail "connect" conn in
+               let (module C : Caqti_lwt.CONNECTION) = conn in
+               let cleanup () =
+                 Lwt_list.iter_s
+                   (fun q ->
+                     let* r = C.exec q () in
+                     let* _ = or_fail "cleanup" r in
+                     Lwt.return_unit)
+                   q_cleanup
+               in
+               let* () = cleanup () in
+               Lwt.finalize
+                 (fun () -> f conn)
+                 (fun () ->
+                   Lwt.finalize cleanup (fun () -> C.disconnect ()))))
+
+  let accept label conn ?description ~slug ~name () =
+    let (module C : Caqti_lwt.CONNECTION) = conn in
+    let* id = C.find q_insert_network (slug, name, description) in
+    or_fail label id
+
+  let refuse label conn ?description ~slug ~name () =
+    let (module C : Caqti_lwt.CONNECTION) = conn in
+    let* r = C.find q_insert_network (slug, name, description) in
+    reject label r
+
+  let constraint_rows conn =
+    let (module C : Caqti_lwt.CONNECTION) = conn in
+    let* rows = C.collect_list q_constraints () in
+    or_fail "constraint rows" rows
+
+  (* === canonical acceptance === *)
+
+  let valid_case =
+    db_case "identity: canonical network identities are accepted byte-exactly"
+      (fun conn ->
+        let (module C : Caqti_lwt.CONNECTION) = conn in
+        let name = "Ncid Community \xc3\xa8" in
+        let description = "Prima riga.\nSeconda con\ttab \xe2\x98\x95" in
+        let* id =
+          accept "canonical" conn ~slug:"ncid-valid" ~name
+            ~description ()
+        in
+        let* stored = C.find q_identity id in
+        let* (slug_back, name_back), description_back =
+          or_fail "readback" stored
+        in
+        Alcotest.(check string) "slug byte-exact" "ncid-valid" slug_back;
+        Alcotest.(check string) "name byte-exact" name name_back;
+        Alcotest.(check (option string)) "description byte-exact"
+          (Some description) description_back;
+        (* NULL description is a first-class canonical value. *)
+        let* _ = accept "no description" conn ~slug:"ncid-nodesc"
+                   ~name:"Ncid Nodesc" () in
+        Lwt.return_unit)
+
+  (* === slug grammar === *)
+
+  let slug_case =
+    db_case "identity: the network slug grammar binds at the database"
+      (fun conn ->
+        let* () =
+          Lwt_list.iter_s
+            (fun bad ->
+              refuse ("slug " ^ String.escaped bad) conn ~slug:bad
+                ~name:"Ncid Name" ())
+            [ "ncid/slash"
+            ; "Ncid-Upper"
+            ; "ncid slug"
+            ; "ncid_underscore"
+            ; " ncid-pad"
+            ; "-ncid"
+            ; "ncid-"
+            ; "ncid--a"
+            ; "ncid-" ^ String.make 76 'a' (* 81 characters *)
+            ]
+        in
+        (* The exact 80-character boundary is legal. *)
+        let* _ =
+          accept "80-character slug" conn
+            ~slug:("ncid-" ^ String.make 75 'a')
+            ~name:"Ncid Eighty" ()
+        in
+        Lwt.return_unit)
+
+  (* === name policy === *)
+
+  let name_case =
+    db_case "identity: the network name policy binds at the database"
+      (fun conn ->
+        let* () =
+          Lwt_list.iter_s
+            (fun bad ->
+              refuse ("name " ^ String.escaped bad) conn
+                ~slug:"ncid-name-probe" ~name:bad ())
+            [ ""
+            ; " padded"
+            ; "padded "
+            ; "\tpadded"
+            ; "padded\t"
+            ; "\npadded"
+            ; "padded\x0b"
+            ; "padded\x0c"
+            ; "padded\r"
+            ; "in\x01side"
+            ; "in\x1fside"
+            ; "in\x7fside"
+            ; phvf_repeat phvf_scalar 121
+            ]
+        in
+        (* 120 Unicode scalars — counted per character, not per byte. *)
+        let* _ =
+          accept "120-scalar name" conn ~slug:"ncid-name-120"
+            ~name:(phvf_repeat phvf_scalar 120) ()
+        in
+        Lwt.return_unit)
+
+  (* === description policy === *)
+
+  let description_case =
+    db_case "identity: the network description policy binds at the database"
+      (fun conn ->
+        let* () =
+          Lwt_list.iter_s
+            (fun bad ->
+              refuse ("description " ^ String.escaped bad) conn
+                ~slug:"ncid-desc-probe" ~name:"Ncid Desc"
+                ~description:bad ())
+            [ "" (* empty canonical descriptions must be NULL, never '' *)
+            ; " padded"
+            ; "padded "
+            ; "\npadded"
+            ; "padded\n"
+            ; "\tpadded"
+            ; "padded\t"
+            ; "with\rreturn"
+            ; "with\x01control"
+            ; "with\x0bcontrol"
+            ; "with\x7fdel"
+            ; phvf_repeat phvf_scalar 2001
+            ]
+        in
+        (* LF and tab survive as content; 2,000 scalars is the boundary. *)
+        let* _ =
+          accept "multiline description" conn ~slug:"ncid-desc-multi"
+            ~name:"Ncid Multi"
+            ~description:"Line one.\nLine\ttwo." ()
+        in
+        let* _ =
+          accept "2000-scalar description" conn ~slug:"ncid-desc-2000"
+            ~name:"Ncid Bound"
+            ~description:(phvf_repeat phvf_scalar 2000) ()
+        in
+        Lwt.return_unit)
+
+  (* === legacy exemption === *)
+
+  let legacy_case =
+    db_case "identity: legacy rows stay accepted with noncanonical values"
+      (fun conn ->
+        let (module C : Caqti_lwt.CONNECTION) = conn in
+        (* Every value below violates the network policy — noncanonical
+           slug, padded control-bearing name, empty-string description —
+           and all of it stays legal while is_network_community is
+           FALSE. *)
+        let* id =
+          C.find q_insert_legacy
+            ("ncid LEGACY_slug//", "  padded \x01 name  ", Some "")
+        in
+        let* _ = or_fail "legacy row" id in
+        Lwt.return_unit)
+
+  (* === presence and validation === *)
+
+  let presence_case =
+    db_case "identity: all three constraints are present and validated"
+      (fun conn ->
+        let* rows = constraint_rows conn in
+        Alcotest.(check (list (pair string bool)))
+          "present and validated"
+          [ ("communities_network_description_check", true)
+          ; ("communities_network_name_check", true)
+          ; ("communities_network_slug_check", true)
+          ]
+          rows;
+        Lwt.return_unit)
+
+  (* === down/up round-trip === *)
+
+  let roundtrip_case =
+    db_case "identity: the down/up statement pair round-trips"
+      (fun conn ->
+        let (module C : Caqti_lwt.CONNECTION) = conn in
+        (* The whole round-trip runs inside one transaction that is always
+           rolled back, so the live constraints cannot be lost even if an
+           assertion fails between the drop and the re-add. *)
+        let* r = C.start () in
+        let* () = or_fail "begin" r in
+        let* () =
+          Lwt.finalize
+            (fun () ->
+              let* () = Ncid_relax.drop conn in
+              let* rows = constraint_rows conn in
+              Alcotest.(check int) "down removes all three" 0
+                (List.length rows);
+              let* () = Ncid_relax.restore conn in
+              let* rows = constraint_rows conn in
+              Alcotest.(check (list (pair string bool)))
+                "up restores all three, validated"
+                [ ("communities_network_description_check", true)
+                ; ("communities_network_name_check", true)
+                ; ("communities_network_slug_check", true)
+                ]
+                rows;
+              Lwt.return_unit)
+            (fun () ->
+              let* _ = C.rollback () in
+              Lwt.return_unit)
+        in
+        let* rows = constraint_rows conn in
+        Alcotest.(check int) "live constraints untouched" 3
+          (List.length rows);
+        Lwt.return_unit)
+
+  let suite =
+    [ valid_case; slug_case; name_case; description_case; legacy_case;
+      presence_case; roundtrip_case ]
+end
+
+(* === Dedicated-home provisioning store
+   (Project_home_provisioning_store) ===
+   The single atomic transaction behind "Create a community home": pure
+   validation before SQL, project/steward locking and its collapse,
+   active-home arbitration, the complete private draft (community,
+   membership, top_mod, General section, general channel, accepted
+   relation), slug and active-home index arbitration under real
+   concurrency, staged rollback injection, and the privacy sweep.
+   Reserved external-installation-id range 950000001..950000999 (hence
+   account ids 950100001..950100999, which also scope the
+   permanent-project cleanup), phvs_% usernames, and phvs-% community
+   slugs so no suite shares fixtures. Verified projects come only through
+   the real draft/selection/finalization chain; competing relations come
+   only through the real request/review/removal stores; identities come
+   only through the real provisioning form. Every per-case wrapper
+   disconnects deterministically. *)
+module Phvs = struct
+  let ( let* ) = Lwt.bind
+
+  open Caqti_request.Infix
+
+  module Pv = Earde.Project_home_provisioning_store
+  module Rq = Earde.Project_home_request_store
+  module Rvs = Earde.Project_home_review_store
+  module Rms = Earde.Project_home_removal_store
+
+  let error_str : Pv.error -> string = function
+    | Pv.Invalid_user_id -> "Invalid_user_id"
+    | Pv.Invalid_project_slug -> "Invalid_project_slug"
+    | Pv.Project_unavailable -> "Project_unavailable"
+    | Pv.Community_slug_unavailable -> "Community_slug_unavailable"
+    | Pv.Active_home_exists -> "Active_home_exists"
+    | Pv.Inconsistent_data -> "Inconsistent_data"
+    | Pv.Storage_error -> "Storage_error"
+
+  let or_fail = Pod_store.or_fail
+  let insert_user = Pod_store.insert_user
+  let exec = Pod_read.exec
+  let find = Pod_read.find
+  let collect = Pod_read.collect
+  let make_project = Phvr.make_project
+  let insert_community = Phcv.insert_community
+  let contains = Cprj_schema.contains
+  let status_of = Gh_start_handler.status_of
+
+  let q_cleanup =
+    List.map
+      (fun sql -> (Caqti_type.unit ->. Caqti_type.unit) sql)
+      [ "DELETE FROM open_source_projects \
+         WHERE forge_namespace_id BETWEEN 950100001 AND 950100999"
+      ; "DELETE FROM project_onboarding_drafts \
+         WHERE github_installation_record_id IN \
+           (SELECT id FROM github_installations \
+            WHERE github_installation_id BETWEEN 950000001 AND 950000999)"
+      ; "DELETE FROM communities WHERE slug LIKE 'phvs-%'"
+      ; "DELETE FROM users WHERE username LIKE 'phvs_%'"
+      ; "DELETE FROM github_installations \
+         WHERE github_installation_id BETWEEN 950000001 AND 950000999"
+      ]
+
+  (* === queries === *)
+
+  let q_count_by_slug =
+    (Caqti_type.string ->! Caqti_type.int)
+    "SELECT COUNT(*) FROM communities WHERE slug = $1"
+
+  (* Everything durable on the community row except the slug key, as one
+     signature: identity bytes, the private-draft lifecycle, the network
+     marker, both publication flags, and the structured-shell flag. *)
+  let q_community_state =
+    (Caqti_type.string ->? Caqti_type.(t2 int string))
+    "SELECT id, name || '|' || COALESCE(description, '<null>') || '|' || \
+            visibility || '|' || onboarding_state || '|' || \
+            is_network_community::text || '|' || indexable::text || '|' || \
+            discoverable::text || '|' || sections_enabled::text \
+     FROM communities WHERE slug = $1"
+
+  let q_member_present =
+    (Caqti_type.(t2 int int) ->! Caqti_type.int)
+    "SELECT COUNT(*) FROM community_members \
+     WHERE community_id = $1 AND user_id = $2"
+
+  let q_moderator_role =
+    (Caqti_type.(t2 int int) ->? Caqti_type.string)
+    "SELECT role FROM community_moderators \
+     WHERE community_id = $1 AND user_id = $2"
+
+  let q_section_sigs =
+    (Caqti_type.int ->* Caqti_type.string)
+    "SELECT slug || '|' || name || '|' || \
+            COALESCE(description, '<null>') || '|' || position::text \
+            || '|' || default_sort || '|' || \
+            is_introduction_section::text || '|' || indexable::text \
+     FROM community_sections WHERE community_id = $1 \
+     ORDER BY position, slug"
+
+  let q_channel_sigs =
+    (Caqti_type.int ->* Caqti_type.string)
+    "SELECT slug || '|' || name || '|' || COALESCE(topic, '<null>') \
+            || '|' || position::text || '|' || is_archived::text \
+            || '|' || indexable::text \
+     FROM channels WHERE community_id = $1 ORDER BY position, slug"
+
+  let q_relation_ids =
+    (Caqti_type.int64 ->* Caqti_type.int64)
+    "SELECT id FROM community_projects WHERE project_id = $1 ORDER BY id"
+
+  let q_relation_times =
+    (Caqti_type.int64 ->! Caqti_type.(t2 bool bool))
+    "SELECT reviewed_at >= created_at, updated_at >= created_at \
+     FROM community_projects WHERE id = $1"
+
+  (* Test-only failure injection: one shared RAISE function plus one
+     unconditional AFTER INSERT trigger per poisoned table, installed
+     immediately before the single poisoned provision call and dropped
+     under Lwt.finalize — within a case the store's own inserts are the
+     only ones that can fire it. Production migrations are untouched. *)
+  let ddl sql = (Caqti_type.unit ->. Caqti_type.unit) sql
+
+  let q_create_fail_fn =
+    ddl
+      "CREATE FUNCTION phvs_fail_fn() RETURNS trigger \
+       LANGUAGE plpgsql \
+       AS 'BEGIN RAISE EXCEPTION ''phvs fixture failure''; END'"
+
+  let q_drop_fail_fn = ddl "DROP FUNCTION IF EXISTS phvs_fail_fn()"
+
+  let poison_tables =
+    [ "communities"; "community_members"; "community_moderators";
+      "community_sections"; "channels"; "community_projects" ]
+
+  let q_poison table =
+    ddl
+      (Printf.sprintf
+         "CREATE TRIGGER phvs_fail_insert AFTER INSERT ON %s \
+          FOR EACH ROW EXECUTE FUNCTION phvs_fail_fn()"
+         table)
+
+  let q_unpoison table =
+    ddl
+      (Printf.sprintf "DROP TRIGGER IF EXISTS phvs_fail_insert ON %s" table)
+
+  let db_case name f =
+    Alcotest.test_case name `Quick (fun () ->
+        match Sys.getenv_opt "EARDE_TEST_DATABASE_URL" with
+        | None | Some "" -> Alcotest.skip ()
+        | Some url ->
+            Lwt_main.run
+              (let* conn = Caqti_lwt_unix.connect (Uri.of_string url) in
+               let* conn = or_fail "connect" conn in
+               let (module C : Caqti_lwt.CONNECTION) = conn in
+               let cleanup () =
+                 Lwt_list.iter_s
+                   (fun q ->
+                     let* r = C.exec q () in
+                     let* _ = or_fail "cleanup" r in
+                     Lwt.return_unit)
+                   q_cleanup
+               in
+               let* () = cleanup () in
+               Lwt.finalize
+                 (fun () -> f ~url conn)
+                 (fun () ->
+                   Lwt.finalize cleanup (fun () -> C.disconnect ()))))
+
+  let with_second ~url f =
+    let* conn2 = Caqti_lwt_unix.connect (Uri.of_string url) in
+    let* conn2 = or_fail "second connect" conn2 in
+    let (module C2 : Caqti_lwt.CONNECTION) = conn2 in
+    Lwt.finalize (fun () -> f conn2) (fun () -> C2.disconnect ())
+
+  (* === fixtures and call helpers === *)
+
+  (* Identities come only through the real form parser, exactly as the
+     future POST handler will hand them to the store. *)
+  let identity ?(name = "Phvs Community Home") ?(slug = "phvs-home")
+      ?(description = "") () =
+    phvf_ok "identity fixture" (phvf_fields ~name ~slug ~description ())
+
+  let provision conn ~actor ~slug identity =
+    Pv.provision conn ~actor_user_id:actor ~project_slug:slug ~identity
+
+  (* Every success asserts both public accessors — the only observable
+     surface of the abstract result. *)
+  let provision_ok label conn ~actor ~slug ~expect_slug identity =
+    let* r = provision conn ~actor ~slug identity in
+    match r with
+    | Ok home ->
+        Alcotest.(check string)
+          (label ^ ": community slug")
+          expect_slug (Pv.community_slug home);
+        Alcotest.(check string)
+          (label ^ ": resulting status")
+          (Phr.string_of_status Phr.Accepted)
+          (Phr.string_of_status (Pv.resulting_status home));
+        Lwt.return home
+    | Error e -> Alcotest.failf "%s: %s" label (error_str e)
+
+  let provision_expect label expected conn ~actor ~slug identity =
+    let* r = provision conn ~actor ~slug identity in
+    match r with
+    | Ok _ ->
+        Alcotest.failf "%s: expected %s, got Ok" label (error_str expected)
+    | Error e ->
+        Alcotest.(check string) label (error_str expected) (error_str e);
+        Lwt.return_unit
+
+  let community_state label conn slug =
+    let (module C : Caqti_lwt.CONNECTION) = conn in
+    let* r = C.find_opt q_community_state slug in
+    let* row = or_fail label r in
+    match row with
+    | Some state -> Lwt.return state
+    | None -> Alcotest.failf "%s: community %s missing" label slug
+
+  let check_no_state label conn ~project ~slug =
+    let* n = find conn "loser community" q_count_by_slug slug in
+    Alcotest.(check int) (label ^ ": no community") 0 n;
+    let* relations =
+      find conn "relations" Phrq.q_count_for_project project
+    in
+    Alcotest.(check int) (label ^ ": no relation") 0 relations;
+    Lwt.return_unit
+
+  (* The complete durable draft one successful provision must leave. *)
+  let check_provisioned_draft label conn ~actor ~project ~slug ~name
+      ~description =
+    let* cid, state = community_state (label ^ ": community") conn slug in
+    Alcotest.(check string)
+      (label ^ ": community identity and lifecycle")
+      (name ^ "|" ^ description ^ "|private|draft|true|false|false|true")
+      state;
+    let* members = find conn "members" Phrq.q_count_members cid in
+    Alcotest.(check int) (label ^ ": exactly one member") 1 members;
+    let* mine = find conn "actor member" q_member_present (cid, actor) in
+    Alcotest.(check int) (label ^ ": the member is the actor") 1 mine;
+    let* mods = find conn "moderators" Phrq.q_count_moderators cid in
+    Alcotest.(check int) (label ^ ": exactly one moderator") 1 mods;
+    let (module C : Caqti_lwt.CONNECTION) = conn in
+    let* role = C.find_opt q_moderator_role (cid, actor) in
+    let* role = or_fail (label ^ ": role") role in
+    Alcotest.(check (option string))
+      (label ^ ": the actor is top_mod")
+      (Some "top_mod") role;
+    let* sections = collect conn "sections" q_section_sigs cid in
+    Alcotest.(check (list string))
+      (label ^ ": exactly the default General section")
+      [ "general|General|General discussion|0|new|false|true" ]
+      sections;
+    let* channels = collect conn "channels" q_channel_sigs cid in
+    Alcotest.(check (list string))
+      (label ^ ": exactly the default general channel")
+      [ "general|general|General chat|0|false|true" ]
+      channels;
+    let* relation_ids = collect conn "relation ids" q_relation_ids project in
+    match relation_ids with
+    | [ rid ] ->
+        let* ((rp, rc), (rtype, rstatus)), ((req, rev), (note, times)) =
+          Phrq.relation_row conn rid
+        in
+        Alcotest.(check int64) (label ^ ": relation project") project rp;
+        Alcotest.(check int) (label ^ ": relation community") cid rc;
+        Alcotest.(check string) (label ^ ": relation type") "home" rtype;
+        Alcotest.(check string) (label ^ ": accepted") "accepted" rstatus;
+        Alcotest.(check (option int))
+          (label ^ ": no fabricated requester")
+          None req;
+        Alcotest.(check (option int))
+          (label ^ ": no fabricated reviewer")
+          None rev;
+        Alcotest.(check (option string)) (label ^ ": no note") None note;
+        let reviewed_present, removed_present, updated_ok = times in
+        Alcotest.(check bool) (label ^ ": reviewed_at present") true
+          reviewed_present;
+        Alcotest.(check bool) (label ^ ": removed_at absent") false
+          removed_present;
+        Alcotest.(check bool) (label ^ ": updated coherent") true updated_ok;
+        let* reviewed_ok, updated_ok = find conn "times" q_relation_times rid
+        in
+        Alcotest.(check bool) (label ^ ": reviewed_at >= created_at") true
+          reviewed_ok;
+        Alcotest.(check bool) (label ^ ": updated_at >= created_at") true
+          updated_ok;
+        Lwt.return (cid, rid)
+    | ids ->
+        Alcotest.failf "%s: expected one relation, found %d" label
+          (List.length ids)
+
+  (* === pure input validation === *)
+
+  let pure_inputs_case =
+    db_case "provision: invalid inputs rejected before any SQL"
+      (fun ~url:_ _conn ->
+        (* A deliberately unusable connection: pure validation must return
+           without touching it — were any SQL attempted, the result would
+           be Storage_error (or a test-failing exception), never the
+           expected input error. *)
+        let url =
+          match Sys.getenv_opt "EARDE_TEST_DATABASE_URL" with
+          | Some url -> url
+          | None -> Alcotest.fail "EARDE_TEST_DATABASE_URL vanished mid-run"
+        in
+        let* dead = Caqti_lwt_unix.connect (Uri.of_string url) in
+        let* dead = or_fail "dead connect" dead in
+        let (module Dead : Caqti_lwt.CONNECTION) = dead in
+        let* () = Dead.disconnect () in
+        let value = identity () in
+        let expect label e ~actor ~slug =
+          provision_expect label e dead ~actor ~slug value
+        in
+        let* () = expect "user id 0" Pv.Invalid_user_id ~actor:0
+                    ~slug:"phvs-a" in
+        let* () =
+          expect "negative user id" Pv.Invalid_user_id ~actor:(-7)
+            ~slug:"phvs-a"
+        in
+        let* () =
+          expect "user checked before slug" Pv.Invalid_user_id ~actor:0
+            ~slug:"NOT A SLUG"
+        in
+        Lwt_list.iter_s
+          (fun bad ->
+            expect "invalid project slug" Pv.Invalid_project_slug ~actor:1
+              ~slug:bad)
+          [ ""
+          ; "Phvs-Upper"
+          ; "phvs slug"
+          ; " phvs-a"
+          ; "phvs-a "
+          ; "phvs_a"
+          ; "phvs/a"
+          ; "-phvs"
+          ; "phvs-"
+          ; "phvs--a"
+          ; String.make 81 'a'
+          ])
+
+  (* === successful provisioning === *)
+
+  let success_case =
+    db_case
+      "provision: a verified steward atomically creates the complete \
+       private draft" (fun ~url conn ->
+        let* owner = insert_user conn "phvs_owner" in
+        let* unrelated = insert_user conn "phvs_other" in
+        let* _, project =
+          make_project conn ~user:owner ~ext_id:950000001L
+            ~slug:"phvs-alpha"
+        in
+        let* project_before =
+          find conn "project sig" Phrq.q_project_sig project
+        in
+        let* stewards_before =
+          find conn "stewards" Phrq.q_count_stewards_for_project project
+        in
+        let* repos_before =
+          find conn "repos" Phrm.q_count_repositories project
+        in
+        let name = "Phvs Alpha Home \xc3\xa8" in
+        let description = "Prima riga.\nSeconda con\ttab \xe2\x98\x95" in
+        let value =
+          identity ~name ~slug:"phvs-alpha-home" ~description ()
+        in
+        let* _ =
+          provision_ok "provision" conn ~actor:owner ~slug:"phvs-alpha"
+            ~expect_slug:"phvs-alpha-home" value
+        in
+        let* _ =
+          check_provisioned_draft "draft" conn ~actor:owner ~project
+            ~slug:"phvs-alpha-home" ~name ~description
+        in
+        (* The project side is untouched: identity, verification,
+           stewardship, and repositories. *)
+        let* project_after =
+          find conn "project sig after" Phrq.q_project_sig project
+        in
+        Alcotest.(check string) "project unchanged" project_before
+          project_after;
+        let* stewards_after =
+          find conn "stewards after" Phrq.q_count_stewards_for_project
+            project
+        in
+        Alcotest.(check int) "stewardship unchanged" stewards_before
+          stewards_after;
+        let* repos_after =
+          find conn "repos after" Phrm.q_count_repositories project
+        in
+        Alcotest.(check int) "repositories unchanged" repos_before
+          repos_after;
+        (* The real /c/:slug route: the existing private-community
+           authorization admits the creating steward and nobody else —
+           the anonymous visitor and the unrelated user get the same
+           generic 404 a missing community gets. *)
+        let* response, body =
+          Ccph.visit ~session_user_id:owner ~url ~slug:"phvs-alpha-home" ()
+        in
+        Alcotest.(check int) "steward reads the draft" 200
+          (status_of response);
+        Alcotest.(check bool) "draft page carries the community name" true
+          (contains ~needle:"Phvs Alpha Home" body);
+        let* response, _ =
+          Ccph.visit ~session_user_id:unrelated ~url
+            ~slug:"phvs-alpha-home" ()
+        in
+        Alcotest.(check int) "unrelated user gets the generic 404" 404
+          (status_of response);
+        let* response, _ = Ccph.visit ~url ~slug:"phvs-alpha-home" () in
+        Alcotest.(check int) "anonymous visitor gets the generic 404" 404
+          (status_of response);
+        Lwt.return_unit)
+
+  (* === a second steward provisions === *)
+
+  let second_steward_case =
+    db_case
+      "provision: a second steward provisions and becomes the sole \
+       initial member and top moderator" (fun ~url:_ conn ->
+        let* owner = insert_user conn "phvs_owner" in
+        let* second = insert_user conn "phvs_second" in
+        let* inst, project =
+          make_project conn ~user:owner ~ext_id:950000002L
+            ~slug:"phvs-second"
+        in
+        let* () =
+          exec conn "second steward" Phrq.q_insert_steward
+            (project, second, inst)
+        in
+        let* _ =
+          provision_ok "second steward provisions" conn ~actor:second
+            ~slug:"phvs-second" ~expect_slug:"phvs-second-home"
+            (identity ~name:"Phvs Second Home" ~slug:"phvs-second-home" ())
+        in
+        let* cid, _ =
+          check_provisioned_draft "second steward draft" conn ~actor:second
+            ~project ~slug:"phvs-second-home" ~name:"Phvs Second Home"
+            ~description:"<null>"
+        in
+        (* The first steward gains nothing automatically. *)
+        let* owner_member = find conn "owner member" q_member_present
+                              (cid, owner) in
+        Alcotest.(check int) "owner not a member" 0 owner_member;
+        let (module C : Caqti_lwt.CONNECTION) = conn in
+        let* owner_role = C.find_opt q_moderator_role (cid, owner) in
+        let* owner_role = or_fail "owner role" owner_role in
+        Alcotest.(check (option string)) "owner not a moderator" None
+          owner_role;
+        Lwt.return_unit)
+
+  (* === authorization collapse === *)
+
+  let admin_case =
+    db_case
+      "provision: a durable global admin without stewardship is \
+       indistinguishable from a missing project" (fun ~url:_ conn ->
+        let* owner = insert_user conn "phvs_owner" in
+        let* admin = insert_user conn "phvs_admin" in
+        let* () = exec conn "make admin" Ccph.q_set_admin (admin, true) in
+        let* _, project =
+          make_project conn ~user:owner ~ext_id:950000003L
+            ~slug:"phvs-admin"
+        in
+        let* () =
+          provision_expect "durable admin" Pv.Project_unavailable conn
+            ~actor:admin ~slug:"phvs-admin"
+            (identity ~slug:"phvs-admin-home" ())
+        in
+        check_no_state "durable admin" conn ~project
+          ~slug:"phvs-admin-home")
+
+  let unavailable_case =
+    db_case
+      "provision: missing, foreign, stale, revoked, and unstewarded \
+       projects collapse into one error with no partial state"
+      (fun ~url:_ conn ->
+        let* owner = insert_user conn "phvs_owner" in
+        let* other = insert_user conn "phvs_other" in
+        let* _, project =
+          make_project conn ~user:owner ~ext_id:950000004L
+            ~slug:"phvs-unavail"
+        in
+        let value = identity ~slug:"phvs-unavail-home" () in
+        let expect label ~actor ~slug =
+          provision_expect label Pv.Project_unavailable conn ~actor ~slug
+            value
+        in
+        let* () = expect "missing project" ~actor:owner
+                    ~slug:"phvs-nowhere" in
+        let* () = expect "foreign project" ~actor:other
+                    ~slug:"phvs-unavail" in
+        let* () =
+          exec conn "mark stale" Phrq.q_set_verification (project, "stale")
+        in
+        let* () = expect "stale project" ~actor:owner ~slug:"phvs-unavail" in
+        let* () =
+          exec conn "mark revoked" Phrq.q_set_verification
+            (project, "revoked")
+        in
+        let* () = expect "revoked project" ~actor:owner
+                    ~slug:"phvs-unavail" in
+        let* () =
+          exec conn "restore verified" Phrq.q_set_verification
+            (project, "verified")
+        in
+        (* The creator without a steward row does not authorize through
+           created_by_user_id. *)
+        let* () =
+          exec conn "remove stewardship" Phrq.q_delete_steward
+            (project, owner)
+        in
+        let* () = expect "creator without stewardship" ~actor:owner
+                    ~slug:"phvs-unavail" in
+        check_no_state "unavailable variants" conn ~project
+          ~slug:"phvs-unavail-home")
+
+  (* === requested slug conflicts === *)
+
+  let slug_conflict_case =
+    db_case
+      "provision: an existing community slug loses cleanly, whether \
+       legacy or network" (fun ~url:_ conn ->
+        let* owner = insert_user conn "phvs_owner" in
+        let* _, project =
+          make_project conn ~user:owner ~ext_id:950000005L
+            ~slug:"phvs-conflict"
+        in
+        let probe label cid slug =
+          let* sig_before = find conn "community sig" Phrq.q_community_sig
+                              cid in
+          let* () =
+            provision_expect label Pv.Community_slug_unavailable conn
+              ~actor:owner ~slug:"phvs-conflict" (identity ~slug ())
+          in
+          let* sig_after = find conn "community sig after"
+                             Phrq.q_community_sig cid in
+          Alcotest.(check string) (label ^ ": existing row unchanged")
+            sig_before sig_after;
+          let* members = find conn "members" Phrq.q_count_members cid in
+          Alcotest.(check int) (label ^ ": no membership leak") 0 members;
+          let* mods = find conn "moderators" Phrq.q_count_moderators cid in
+          Alcotest.(check int) (label ^ ": no moderator leak") 0 mods;
+          let* n = find conn "count" q_count_by_slug slug in
+          Alcotest.(check int) (label ^ ": exactly one row keeps the slug")
+            1 n;
+          let* relations =
+            find conn "relations" Phrq.q_count_for_project project
+          in
+          Alcotest.(check int) (label ^ ": no relation") 0 relations;
+          Lwt.return_unit
+        in
+        let* legacy =
+          insert_community ~network:false conn "phvs-taken-legacy"
+        in
+        let* () = probe "legacy holder" legacy "phvs-taken-legacy" in
+        let* network = insert_community conn "phvs-taken-net" in
+        probe "network holder" network "phvs-taken-net")
+
+  (* === active relations === *)
+
+  let active_relation_case =
+    db_case
+      "provision: pending and accepted homes block, closed history and \
+       completed removal do not" (fun ~url:_ conn ->
+        let* owner = insert_user conn "phvs_owner" in
+        let* reviewer = insert_user conn "phvs_mod" in
+        let* _, _project =
+          make_project conn ~user:owner ~ext_id:950000006L
+            ~slug:"phvs-active"
+        in
+        let* target = insert_community conn "phvs-active-target" in
+        let* () =
+          exec conn "target top mod" Phrv.q_insert_moderator
+            (reviewer, target, "top_mod")
+        in
+        let value = identity ~slug:"phvs-active-home" () in
+        (* Pending blocks, and the loser leaves no draft community. *)
+        let relation = phr_expect_ok (Phr.create_pending ~request_note:None)
+        in
+        let* r =
+          Rq.create conn ~user_id:owner ~project_slug:"phvs-active"
+            ~target_community_id:target ~relation
+        in
+        let* _ = match r with
+          | Ok created -> Lwt.return created
+          | Error _ -> Alcotest.fail "pending fixture failed"
+        in
+        let* () =
+          provision_expect "pending blocks" Pv.Active_home_exists conn
+            ~actor:owner ~slug:"phvs-active" value
+        in
+        let* n = find conn "no draft" q_count_by_slug "phvs-active-home" in
+        Alcotest.(check int) "pending loser leaves no community" 0 n;
+        (* Accepted blocks. *)
+        let* r =
+          Rvs.review conn ~reviewer_user_id:reviewer
+            ~project_slug:"phvs-active"
+            ~target_community_slug:"phvs-active-target" ~decision:Rvs.Accept
+        in
+        let* () = match r with
+          | Ok _ -> Lwt.return_unit
+          | Error _ -> Alcotest.fail "accept fixture failed"
+        in
+        let* () =
+          provision_expect "accepted blocks" Pv.Active_home_exists conn
+            ~actor:owner ~slug:"phvs-active" value
+        in
+        (* A completed removal frees the slot for a fresh draft. *)
+        let* r =
+          Rms.remove conn ~actor_user_id:owner ~project_slug:"phvs-active"
+            ~community_slug:"phvs-active-target"
+        in
+        let* () = match r with
+          | Ok _ -> Lwt.return_unit
+          | Error _ -> Alcotest.fail "removal fixture failed"
+        in
+        let* _ =
+          provision_ok "provision after removal" conn ~actor:owner
+            ~slug:"phvs-active" ~expect_slug:"phvs-active-home" value
+        in
+        (* Rejected history never blocks either. *)
+        let* _, project2 =
+          make_project conn ~user:owner ~ext_id:950000007L
+            ~slug:"phvs-hist"
+        in
+        let relation = phr_expect_ok (Phr.create_pending ~request_note:None)
+        in
+        let* r =
+          Rq.create conn ~user_id:owner ~project_slug:"phvs-hist"
+            ~target_community_id:target ~relation
+        in
+        let* _ = match r with
+          | Ok created -> Lwt.return created
+          | Error _ -> Alcotest.fail "second pending fixture failed"
+        in
+        let* r =
+          Rvs.review conn ~reviewer_user_id:reviewer
+            ~project_slug:"phvs-hist"
+            ~target_community_slug:"phvs-active-target" ~decision:Rvs.Reject
+        in
+        let* () = match r with
+          | Ok _ -> Lwt.return_unit
+          | Error _ -> Alcotest.fail "reject fixture failed"
+        in
+        let* _ =
+          provision_ok "provision over rejected history" conn ~actor:owner
+            ~slug:"phvs-hist" ~expect_slug:"phvs-hist-home"
+            (identity ~slug:"phvs-hist-home" ())
+        in
+        let* active =
+          find conn "active" Phrq.q_count_active_for_project project2
+        in
+        Alcotest.(check int) "exactly one active relation" 1 active;
+        Lwt.return_unit)
+
+  (* === staged rollback injection === *)
+
+  let rollback_case =
+    db_case
+      "provision: a failure at any stage rolls the whole draft back"
+      (fun ~url:_ conn ->
+        let* owner = insert_user conn "phvs_owner" in
+        let* _, project =
+          make_project conn ~user:owner ~ext_id:950000008L
+            ~slug:"phvs-poison"
+        in
+        let* project_before =
+          find conn "project sig" Phrq.q_project_sig project
+        in
+        let exec_ddl label q =
+          let (module C : Caqti_lwt.CONNECTION) = conn in
+          let* r = C.exec q () in
+          let* _ = or_fail label r in
+          Lwt.return_unit
+        in
+        let* () = exec_ddl "create fail fn" q_create_fail_fn in
+        Lwt.finalize
+          (fun () ->
+            let* () =
+              Lwt_list.iter_s
+                (fun table ->
+                  let* () = exec_ddl ("poison " ^ table) (q_poison table) in
+                  Lwt.finalize
+                    (fun () ->
+                      let* () =
+                        provision_expect ("poisoned " ^ table)
+                          Pv.Storage_error conn ~actor:owner
+                          ~slug:"phvs-poison"
+                          (identity ~slug:"phvs-poison-home" ())
+                      in
+                      let* () =
+                        check_no_state ("poisoned " ^ table) conn ~project
+                          ~slug:"phvs-poison-home"
+                      in
+                      let* stewards =
+                        find conn "stewards"
+                          Phrq.q_count_stewards_for_project project
+                      in
+                      Alcotest.(check int)
+                        ("poisoned " ^ table ^ ": stewardship intact")
+                        1 stewards;
+                      let* project_after =
+                        find conn "project sig" Phrq.q_project_sig project
+                      in
+                      Alcotest.(check string)
+                        ("poisoned " ^ table ^ ": project unchanged")
+                        project_before project_after;
+                      Lwt.return_unit)
+                    (fun () ->
+                      exec_ddl ("unpoison " ^ table) (q_unpoison table)))
+                poison_tables
+            in
+            (* With every poison removed the same inputs succeed — the
+               failures above were the triggers, not the store. *)
+            let* _ =
+              provision_ok "clean run after poison" conn ~actor:owner
+                ~slug:"phvs-poison" ~expect_slug:"phvs-poison-home"
+                (identity ~slug:"phvs-poison-home" ())
+            in
+            Lwt.return_unit)
+          (fun () ->
+            let* () =
+              Lwt_list.iter_s
+                (fun table -> exec_ddl ("drop trigger " ^ table)
+                                (q_unpoison table))
+                poison_tables
+            in
+            exec_ddl "drop fail fn" q_drop_fail_fn))
+
+  (* === concurrency === *)
+
+  let one_winner label expected_loser (ra, rb) =
+    match (ra, rb) with
+    | Ok w, Error e | Error e, Ok w ->
+        Alcotest.(check string)
+          (label ^ ": loser error")
+          (error_str expected_loser) (error_str e);
+        w
+    | Ok _, Ok _ -> Alcotest.failf "%s: both succeeded" label
+    | Error a, Error b ->
+        Alcotest.failf "%s: both failed (%s, %s)" label (error_str a)
+          (error_str b)
+
+  let same_project_race_case =
+    db_case
+      "provision: two provisions of one project leave exactly one draft"
+      (fun ~url conn ->
+        let* owner = insert_user conn "phvs_owner" in
+        let* _, project =
+          make_project conn ~user:owner ~ext_id:950000009L
+            ~slug:"phvs-race1"
+        in
+        with_second ~url (fun conn2 ->
+            let* results =
+              Lwt.both
+                (provision conn ~actor:owner ~slug:"phvs-race1"
+                   (identity ~slug:"phvs-race1-a" ()))
+                (provision conn2 ~actor:owner ~slug:"phvs-race1"
+                   (identity ~slug:"phvs-race1-b" ()))
+            in
+            let winner =
+              one_winner "same project" Pv.Active_home_exists results
+            in
+            let winner_slug = Pv.community_slug winner in
+            let loser_slug =
+              if String.equal winner_slug "phvs-race1-a" then "phvs-race1-b"
+              else "phvs-race1-a"
+            in
+            let* n = find conn "loser slug" q_count_by_slug loser_slug in
+            Alcotest.(check int) "no orphan loser community" 0 n;
+            let* _ =
+              check_provisioned_draft "winner draft" conn ~actor:owner
+                ~project ~slug:winner_slug ~name:"Phvs Community Home"
+                ~description:"<null>"
+            in
+            let* active =
+              find conn "active" Phrq.q_count_active_for_project project
+            in
+            Alcotest.(check int) "one active relation" 1 active;
+            Lwt.return_unit))
+
+  let same_slug_race_case =
+    db_case
+      "provision: two projects racing for one slug leave one clean winner"
+      (fun ~url conn ->
+        let* owner_a = insert_user conn "phvs_owner" in
+        let* owner_b = insert_user conn "phvs_second" in
+        let* _, project_a =
+          make_project conn ~user:owner_a ~ext_id:950000010L
+            ~slug:"phvs-race2a"
+        in
+        let* _, project_b =
+          make_project conn ~user:owner_b ~ext_id:950000011L
+            ~slug:"phvs-race2b"
+        in
+        with_second ~url (fun conn2 ->
+            let value = identity ~slug:"phvs-shared-home" () in
+            let* ra, rb =
+              Lwt.both
+                (provision conn ~actor:owner_a ~slug:"phvs-race2a" value)
+                (provision conn2 ~actor:owner_b ~slug:"phvs-race2b" value)
+            in
+            let _ =
+              one_winner "same slug" Pv.Community_slug_unavailable (ra, rb)
+            in
+            let winner_actor, winner_project, loser_project =
+              match ra with
+              | Ok _ -> (owner_a, project_a, project_b)
+              | Error _ -> (owner_b, project_b, project_a)
+            in
+            let* n = find conn "one community" q_count_by_slug
+                       "phvs-shared-home" in
+            Alcotest.(check int) "exactly one community with the slug" 1 n;
+            let* _ =
+              check_provisioned_draft "winner draft" conn
+                ~actor:winner_actor ~project:winner_project
+                ~slug:"phvs-shared-home" ~name:"Phvs Community Home"
+                ~description:"<null>"
+            in
+            let* loser_relations =
+              find conn "loser relations" Phrq.q_count_for_project
+                loser_project
+            in
+            Alcotest.(check int) "loser project has no relation" 0
+              loser_relations;
+            Lwt.return_unit))
+
+  let versus_request_case =
+    db_case
+      "provision: racing an existing-community request leaves one active \
+       relation" (fun ~url conn ->
+        let* owner = insert_user conn "phvs_owner" in
+        let* _, project =
+          make_project conn ~user:owner ~ext_id:950000012L
+            ~slug:"phvs-race3"
+        in
+        let* target = insert_community conn "phvs-race3-target" in
+        with_second ~url (fun conn2 ->
+            let relation =
+              phr_expect_ok (Phr.create_pending ~request_note:None)
+            in
+            let* prov, req =
+              Lwt.both
+                (provision conn ~actor:owner ~slug:"phvs-race3"
+                   (identity ~slug:"phvs-race3-home" ()))
+                (Rq.create conn2 ~user_id:owner ~project_slug:"phvs-race3"
+                   ~target_community_id:target ~relation)
+            in
+            let* () =
+              match (prov, req) with
+              | Ok home, Error Rq.Active_home_exists ->
+                  Alcotest.(check string) "provisioned home"
+                    "phvs-race3-home" (Pv.community_slug home);
+                  let* _ =
+                    check_provisioned_draft "provisioning won" conn
+                      ~actor:owner ~project ~slug:"phvs-race3-home"
+                      ~name:"Phvs Community Home" ~description:"<null>"
+                  in
+                  Lwt.return_unit
+              | Error Pv.Active_home_exists, Ok _ ->
+                  (* The request won: a pending relation on the target and
+                     no draft community anywhere. *)
+                  let* n = find conn "no draft" q_count_by_slug
+                             "phvs-race3-home" in
+                  Alcotest.(check int) "no draft community survives" 0 n;
+                  Lwt.return_unit
+              | Ok _, Ok _ -> Alcotest.fail "race: both succeeded"
+              | Error a, Error _ ->
+                  Alcotest.failf "race: both failed (provision %s)"
+                    (error_str a)
+              | Ok _, Error _ ->
+                  Alcotest.fail "race: unexpected request loser error"
+              | Error e, _ ->
+                  Alcotest.failf "race: unexpected provision error %s"
+                    (error_str e)
+            in
+            let* active =
+              find conn "active" Phrq.q_count_active_for_project project
+            in
+            Alcotest.(check int) "exactly one active relation" 1 active;
+            Lwt.return_unit))
+
+  let verification_loss_race_case =
+    db_case
+      "provision: a verification loss that commits first wins the project \
+       lock race" (fun ~url conn ->
+        let* owner = insert_user conn "phvs_owner" in
+        let* _, project =
+          make_project conn ~user:owner ~ext_id:950000013L
+            ~slug:"phvs-race4"
+        in
+        with_second ~url (fun conn2 ->
+            let* r =
+              Phrv.serialized_mutation_first conn2
+                ~mutate:(fun () ->
+                  exec conn2 "stale first" Phrq.q_set_verification
+                    (project, "stale"))
+                ~launch:(fun () ->
+                  provision conn ~actor:owner ~slug:"phvs-race4"
+                    (identity ~slug:"phvs-race4-home" ()))
+            in
+            let* () =
+              match r with
+              | Error Pv.Project_unavailable -> Lwt.return_unit
+              | Ok _ -> Alcotest.fail "provisioned after verification loss"
+              | Error e ->
+                  Alcotest.failf "unexpected error %s" (error_str e)
+            in
+            check_no_state "verification loss" conn ~project
+              ~slug:"phvs-race4-home"))
+
+  let steward_loss_race_case =
+    db_case
+      "provision: a stewardship revocation that commits first wins the \
+       lock race" (fun ~url conn ->
+        let* owner = insert_user conn "phvs_owner" in
+        let* _, project =
+          make_project conn ~user:owner ~ext_id:950000014L
+            ~slug:"phvs-race5"
+        in
+        with_second ~url (fun conn2 ->
+            let* r =
+              Phrv.serialized_mutation_first conn2
+                ~mutate:(fun () ->
+                  exec conn2 "revoke stewardship" Phrq.q_delete_steward
+                    (project, owner))
+                ~launch:(fun () ->
+                  provision conn ~actor:owner ~slug:"phvs-race5"
+                    (identity ~slug:"phvs-race5-home" ()))
+            in
+            let* () =
+              match r with
+              | Error Pv.Project_unavailable -> Lwt.return_unit
+              | Ok _ -> Alcotest.fail "provisioned with revoked authority"
+              | Error e ->
+                  Alcotest.failf "unexpected error %s" (error_str e)
+            in
+            check_no_state "stewardship loss" conn ~project
+              ~slug:"phvs-race5-home"))
+
+  (* === privacy sweep === *)
+
+  (* Durable corruption defenses that cannot be produced without relaxing
+     production constraints stay defensive and undriven here:
+     project_stewards.role is CHECK-bound to 'steward',
+     open_source_projects.slug and verification_status are CHECK-bound,
+     community_projects.status and relation_type are CHECK-bound, and a
+     second active home is barred by the partial unique index. The
+     reachable corruption shapes on the sibling read paths are already
+     exercised by their own suites. *)
+
+  let privacy_case =
+    db_case
+      "provision: no credential-shaped or external-identifier fixture \
+       reaches the draft" (fun ~url:_ conn ->
+        let* owner = insert_user conn "phvs_priv" in
+        let* _, project =
+          make_project conn ~user:owner ~ext_id:950000015L
+            ~slug:"phvs-priv"
+        in
+        let name = "Phvs Private Home" in
+        let* _ =
+          provision_ok "provision" conn ~actor:owner ~slug:"phvs-priv"
+            ~expect_slug:"phvs-priv-home" (identity ~name
+                                             ~slug:"phvs-priv-home" ())
+        in
+        let* cid, state =
+          community_state "community" conn "phvs-priv-home"
+        in
+        let* sections = collect conn "sections" q_section_sigs cid in
+        let* channels = collect conn "channels" q_channel_sigs cid in
+        let* relation_ids = collect conn "relations" q_relation_ids project
+        in
+        let* relation_blob =
+          match relation_ids with
+          | [ rid ] -> find conn "blob" Phrq.q_relation_text_blob rid
+          | _ -> Alcotest.fail "expected one relation"
+        in
+        let blob =
+          String.concat "|"
+            ((state :: relation_blob :: sections) @ channels)
+        in
+        (* The intentionally supplied safe identity is present; nothing
+           else from the steward's GitHub records or account is. *)
+        Alcotest.(check bool) "supplied name present" true
+          (contains ~needle:name blob);
+        List.iter
+          (fun (what, marker) ->
+            Alcotest.(check bool) ("draft carries no " ^ what) false
+              (contains ~needle:marker blob))
+          [ ("external installation id", "950000015");
+            ("external account id", "950100015");
+            ("external repository id", "950400015");
+            ("account email", "@test.invalid");
+            ("installation login", "pfin-owner")
+          ];
+        Lwt.return_unit)
+
+  let suite =
+    [ pure_inputs_case; success_case; second_steward_case; admin_case;
+      unavailable_case; slug_conflict_case; active_relation_case;
+      rollback_case; same_project_race_case; same_slug_race_case;
+      versus_request_case; verification_loss_race_case;
+      steward_loss_race_case; privacy_case ]
 end
 
 let () =
@@ -41778,4 +43195,16 @@ let () =
          setup-page navigation into it. *)
     ; ("project_home_provisioning_get_gates", Phvh.gate_cases)
     ; ("project_home_provisioning_handlers_db", Phvh.db_suite)
+      (* Scoped network-community identity constraints (migration
+         20260726120000): canonical acceptance, the exact slug/name/
+         description boundaries, legacy exemption, validated presence, and
+         the transactional down/up round-trip. Database-gated. *)
+    ; ("network_community_identity_schema", Ncid_schema.suite)
+      (* Dedicated-home provisioning store: pure validation before SQL,
+         the complete atomic private draft (community, membership,
+         top_mod, shell, accepted relation), authorization collapse, slug
+         and active-home arbitration, staged rollback injection,
+         deterministic concurrency races, and the privacy sweep.
+         Database-gated. *)
+    ; ("project_home_provisioning_store", Phvs.suite)
     ]

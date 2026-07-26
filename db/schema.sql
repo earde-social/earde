@@ -154,6 +154,9 @@ CREATE TABLE public.communities (
     is_network_community boolean DEFAULT false NOT NULL,
     onboarding_state text DEFAULT 'published'::text NOT NULL,
     discoverable boolean DEFAULT true NOT NULL,
+    CONSTRAINT communities_network_description_check CHECK (((NOT is_network_community) OR (description IS NULL) OR ((char_length(description) >= 1) AND (char_length(description) <= 2000) AND (description !~ '[\x01-\x08\x0b-\x1f\x7f]'::text) AND (description !~ '^[ \t\n]'::text) AND (description !~ '[ \t\n]$'::text)))),
+    CONSTRAINT communities_network_name_check CHECK (((NOT is_network_community) OR ((char_length(name) >= 1) AND (char_length(name) <= 120) AND (name !~ '[\x01-\x1f\x7f]'::text) AND (name !~ '^ '::text) AND (name !~ ' $'::text)))),
+    CONSTRAINT communities_network_slug_check CHECK (((NOT is_network_community) OR ((slug ~ '^[a-z0-9]+(-[a-z0-9]+)*$'::text) AND (char_length(slug) <= 80)))),
     CONSTRAINT communities_onboarding_state_check CHECK ((onboarding_state = ANY (ARRAY['draft'::text, 'published'::text]))),
     CONSTRAINT communities_visibility_check CHECK ((visibility = ANY (ARRAY['public'::text, 'private'::text])))
 );
@@ -2245,4 +2248,5 @@ INSERT INTO public.schema_migrations (version) VALUES
     ('20260723150000'),
     ('20260724120000'),
     ('20260724130000'),
-    ('20260724140000');
+    ('20260724140000'),
+    ('20260726120000');
