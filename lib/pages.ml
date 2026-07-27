@@ -64,11 +64,21 @@ let index ?user user_votes current_page sort_mode ~feed_type ~admin_usernames ~m
 
 (* === AUTHENTICATION === *)
 
-let signup_form ?user ?error ?turnstile_site_key request =
+(* Cartographic Civic (pass 2): /signup renders through the isolated launch
+   wrapper. The form contract is unchanged — POST /signup, Dream CSRF tag,
+   username/email/password names and required flags, the required privacy
+   checkbox with its exact legal wording, the off-screen 'website' honeypot,
+   and the optional Turnstile widget+script — only the chrome and skin moved
+   to the approved component classes. The viewer-dependent ?user chrome is
+   gone by design (deterministic anonymous top bar), so ?user is accepted
+   for signature compatibility and ignored. *)
+let signup_form ?user:_ ?error ?turnstile_site_key request =
   let csrf_token = Dream.csrf_tag request in
+  (* Server-authored messages only (never user input); rendered as the flat
+     rejected notice above the card — no toast, no animation. *)
   let error_html = match error with
     | None -> ""
-    | Some msg -> Printf.sprintf "<div class='auth-alert auth-alert--error'>%s</div>" msg
+    | Some msg -> Printf.sprintf "<p class='notice notice--rejected launch-auth__alert'>%s</p>" msg
   in
   (* Turnstile widget is rendered only when a site key is configured. The site key
      is public; still escape it as defense-in-depth. The challenge needs JS to
@@ -79,30 +89,35 @@ let signup_form ?user ?error ?turnstile_site_key request =
         Printf.sprintf "<div class='cf-turnstile' data-sitekey='%s'></div>" (Components.html_escape key),
         "<script src='https://challenges.cloudflare.com/turnstile/v0/api.js' async defer></script>"
   in
-  let card = Printf.sprintf "
-        <h1 class='auth-title'>Join Earde</h1>
-        <p class='auth-sub'>Create an account to start and join communities.</p>
-
-        <form action='/signup' method='POST' class='auth-form'>
+  let content = Printf.sprintf "
+        <div class='auth'>
+          <div class='auth__head'>
+            <img class='auth__mark' src='/static/images/logo-mark.svg' alt=''>
+            <h1 class='auth__title'>Create an account</h1>
+            <p class='auth__sub'>One account for every community on Earde. No GitHub required.</p>
+          </div>
+          %s
+          <form action='/signup' method='POST' class='auth__card'>
             %s
-            %s
 
-            <div class='auth-field'>
-                <label class='auth-label' for='su-username'>Username</label>
-                <input class='auth-input' type='text' id='su-username' name='username' required
-                       placeholder='Choose a unique username'>
+            <div class='field'>
+                <label class='label' for='su-username'>Username</label>
+                <div class='input-group'>
+                    <span class='input-group__prefix'>u/</span>
+                    <input class='input input--mono input--inset' type='text' id='su-username' name='username' required>
+                </div>
+                <p class='hint'>3&#8211;30 characters</p>
             </div>
 
-            <div class='auth-field'>
-                <label class='auth-label' for='su-email'>Email address</label>
-                <input class='auth-input' type='email' id='su-email' name='email' required
-                       placeholder='you@example.com'>
+            <div class='field'>
+                <label class='label' for='su-email'>Email</label>
+                <input class='input input--inset' type='email' id='su-email' name='email' required>
             </div>
 
-            <div class='auth-field'>
-                <label class='auth-label' for='su-password'>Password</label>
-                <input class='auth-input' type='password' id='su-password' name='password' required
-                       placeholder='Minimum 8 characters'>
+            <div class='field'>
+                <label class='label' for='su-password'>Password</label>
+                <input class='input input--inset' type='password' id='su-password' name='password' required>
+                <p class='hint'>At least 8 characters.</p>
             </div>
 
             <!-- Honeypot: positioned off-screen so humans never see or fill it; a non-empty
@@ -112,43 +127,60 @@ let signup_form ?user ?error ?turnstile_site_key request =
                 <input type='text' id='website' name='website' tabindex='-1' autocomplete='off'>
             </div>
 
-            <label class='auth-check' for='privacy'>
+            <label class='check launch-auth__legal' for='privacy'>
                 <input id='privacy' name='privacy' type='checkbox' required>
-                <span>I agree to the <a href='/privacy' target='_blank' class='auth-link'>Privacy Policy</a> and consent to data processing.</span>
+                <span>I agree to the <a href='/privacy' target='_blank'>Privacy Policy</a> and consent to data processing.</span>
             </label>
 
             %s
 
-            <button type='submit' class='auth-btn'>Sign up</button>
-        </form>
-        %s
-
-        <div class='auth-foot'>Already have an account? <a href='/login' class='auth-link'>Log in</a></div>"
-    csrf_token error_html turnstile_widget turnstile_script
+            <button type='submit' class='btn btn--primary btn--block launch-auth__submit'>Create account</button>
+          </form>
+          %s
+          <p class='notice launch-auth__notice'>Maintainers: create your account first, then <a href='/bring'>connect a project through GitHub</a>.</p>
+          <p class='auth__foot'>Already have an account? <a href='/login'>Log in &#8594;</a></p>
+        </div>"
+    error_html csrf_token turnstile_widget turnstile_script
   in
-  Components.auth_page ?user ~request ~title:"Sign Up" ~card ()
+  Components.launch_auth_page ~request ~page_class:"launch-signup"
+    ~title:"Create an account" ~content ()
 
-let login_form ?user request =
+(* Cartographic Civic (pass 2): /login through the same launch wrapper. The
+   form contract is unchanged — POST /login, Dream CSRF tag, 'identifier' and
+   'password' names with their required flags, /forgot-password link — and no
+   remember-me is added (unsupported). Failures still render through the
+   legacy msg_page, untouched by this pass. ?user ignored as in signup_form. *)
+let login_form ?user:_ request =
   let csrf_token = Dream.csrf_tag request in
-  let card = Printf.sprintf "
-        <h1 class='auth-title'>Welcome back</h1>
-        <p class='auth-sub'>Log in to your Earde account.</p>
-        <form action='/login' method='POST' class='auth-form'>
+  let content = Printf.sprintf "
+        <div class='auth'>
+          <div class='auth__head'>
+            <img class='auth__mark' src='/static/images/logo-mark.svg' alt=''>
+            <h1 class='auth__title'>Log in</h1>
+            <p class='auth__sub'>Reading is open to everyone. Log in to post, vote and join communities.</p>
+          </div>
+          <form action='/login' method='POST' class='auth__card'>
             %s
-            <div class='auth-field'>
-                <label class='auth-label' for='li-identifier'>Username or email</label>
-                <input class='auth-input' type='text' id='li-identifier' name='identifier' required placeholder='tolwiz or tolwiz@example.com'>
+            <div class='field'>
+                <label class='label' for='li-identifier'>Username or email</label>
+                <input class='input input--inset' type='text' id='li-identifier' name='identifier' required>
             </div>
-            <div class='auth-field'>
-                <label class='auth-label' for='li-password'>Password <a href='/forgot-password' class='auth-link auth-inline-link' tabindex='-1'>Forgot?</a></label>
-                <input class='auth-input' type='password' id='li-password' name='password' required>
+            <div class='field launch-auth__field-last'>
+                <label class='label' for='li-password'>Password</label>
+                <input class='input input--inset' type='password' id='li-password' name='password' required>
             </div>
-            <button type='submit' class='auth-btn'>Log in</button>
-        </form>
-        <div class='auth-foot'>Don't have an account? <a href='/signup' class='auth-link'>Sign up</a></div>"
+            <div class='launch-auth__meta'>
+                <a href='/forgot-password' tabindex='-1'>Forgot password?</a>
+            </div>
+            <button type='submit' class='btn btn--primary btn--block launch-auth__submit'>Log in</button>
+          </form>
+          <p class='notice launch-auth__notice'>GitHub is only needed to <b>connect an open-source project</b>. Members read, join and chat with an Earde account alone.</p>
+          <p class='auth__foot'>No account? <a href='/signup'>Create one &#8594;</a></p>
+        </div>"
     csrf_token
   in
-  Components.auth_page ~title:"Log In" ?user ~request ~card ()
+  Components.launch_auth_page ~request ~page_class:"launch-login"
+    ~title:"Log in" ~content ()
 
 let forgot_password_page request =
   let csrf_token = Dream.csrf_tag request in

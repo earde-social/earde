@@ -79,6 +79,18 @@ val auth_page : ?user:string -> ?noindex:bool -> ?request:Dream.request -> title
     changes. *)
 val launch_entry_page : ?noindex:bool -> ?request:Dream.request -> page_class:string -> title:string -> content:string -> unit -> string
 
+(** Cartographic Civic launch auth document (pass 2: /login and /signup only).
+    A complete, self-contained document loading only /static/css/earde.css — no
+    Tailwind, no external fonts, no auth.css, no mobile gate, no notification
+    polling — under the approved deterministic *anonymous* top bar (Bring a
+    project / Log in / Sign up, command field as a link to /search) and no
+    rail/sidebar/aside. [request] feeds only the shared analytics assets
+    (identical to [layout]'s). [page_class] ("launch-login" / "launch-signup")
+    is stamped on <body> next to the shared "launch-auth" scope root the
+    integration CSS at the end of earde.css keys on. Used only by
+    [Pages.login_form] and [Pages.signup_form]; no existing wrapper changes. *)
+val launch_auth_page : ?noindex:bool -> ?request:Dream.request -> page_class:string -> title:string -> content:string -> unit -> string
+
 (** Focused in-product creation layout: the mono app command bar over a single centered
     cool-grey panel (create.css), with no rail/sidebar. Used by the creation flows
     (new-community, new-post, choose-community, join-to-post). [body] is the inner page

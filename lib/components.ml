@@ -644,6 +644,68 @@ let launch_entry_page ?(noindex = false) ?request ~page_class ~title ~content ()
     (html_escape title) robots_meta analytics_head page_class house_icon
     content analytics_banner
 
+(* Cartographic Civic launch auth document (pass 2: /login and /signup only).
+   Like [launch_entry_page], a complete self-contained document that loads only
+   earde.css — no Tailwind, no external fonts, no auth.css, no mobile gate, no
+   notification polling — but with the approved *anonymous* top bar (Bring a
+   project / Log in / Sign up) instead of the entry chrome, and no icon rail:
+   the /login and /signup routes render no panes at all (04-ROUTES).
+
+   The chrome is deterministic and viewer-independent: the same three real
+   routes for every request, no bell, no user chip, no logout form. The
+   command field stays a styled link to /search (same trick as pass 1) so this
+   wrapper adds no form contract beyond the page's own auth form. Analytics
+   behavior is the shared [analytics_assets], identical to [layout] and
+   [launch_entry_page]. [page_class] ("launch-login" / "launch-signup") lands
+   on <body> next to the shared "launch-auth" scope root that the integration
+   CSS at the end of earde.css keys on. Existing wrappers and their callers
+   are untouched. *)
+let launch_auth_page ?(noindex = false) ?request ~page_class ~title ~content () =
+  let analytics_head, analytics_banner = analytics_assets ?request () in
+  let robots_meta =
+    if noindex then "<meta name='robots' content='noindex'>" else ""
+  in
+  Printf.sprintf
+    "<!DOCTYPE html>\n\
+     <html lang='en'>\n\
+     <head>\n\
+     <meta charset='UTF-8'>\n\
+     <meta name='viewport' content='width=device-width, initial-scale=1.0'>\n\
+     <title>%s - Earde</title>\n\
+     %s\n\
+     <link rel='stylesheet' href='/static/css/earde.css'>\n\
+     %s\n\
+     </head>\n\
+     <body class='launch-auth %s'>\n\
+     <div class='app'>\n\
+     <header class='topbar'>\
+     <a class='topbar__brand' href='/feed' aria-label='Earde feed'>\
+     <img class='topbar__mark' src='/static/images/logo-mark.svg' alt=''>\
+     <img class='topbar__wordmark' src='/static/images/logo-wordmark.svg' alt='Earde'>\
+     </a>\
+     <a class='search launch-search' href='/search' aria-label='Search Earde'>\
+     <span class='search__sigil' aria-hidden='true'>/</span>\
+     <span class='launch-search__hint'>grep threads &middot; projects &middot; communities&hellip;</span>\
+     <span class='launch-search__enter' aria-hidden='true'>&#8629;</span>\
+     </a>\
+     <div class='topbar__actions topbar__actions--anon'>\
+     <a class='btn btn--quiet' href='/bring'>Bring a project</a>\
+     <a class='btn btn--secondary btn--auth' href='/login'>Log in</a>\
+     <a class='btn btn--primary btn--auth' href='/signup'>Sign up</a>\
+     </div>\
+     </header>\n\
+     <div class='shell'>\
+     <main class='main main--paper'><div class='scroll'>\n\
+     %s\n\
+     </div></main>\
+     </div>\n\
+     </div>\n\
+     %s\n\
+     </body>\n\
+     </html>"
+    (html_escape title) robots_meta analytics_head page_class content
+    analytics_banner
+
 (* === HELPERS === *)
 
 (* "[deleted_" is set by anonymize_user in Db — both sides must agree on the tombstone format. *)

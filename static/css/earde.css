@@ -1108,3 +1108,86 @@ ol, ul { margin: 0; padding: 0; list-style: none; }
 .launch-bring #analytics-consent [data-analytics-error] {
   color: var(--danger); font-size: var(--fs-11);
 }
+
+/* ==========================================================================
+   EARDE INTEGRATION — /login and /signup only
+   Scoped beneath body.launch-auth (route roots .launch-login /
+   .launch-signup). Exists only because the real auth pages cannot emit the
+   reference markup exactly:
+   - the top-bar command field is a link, not a search form (same zero-extra-
+     form trick as /bring), so its inner cells are skinned here;
+   - the reference styled per-page margins with inline style attributes,
+     converted to launch-auth__* classes here;
+   - the privacy checkbox and its legal sentence are an application contract
+     (not in the mockup), skinned as the card's legal line;
+   - the analytics consent banner markup is shared with the legacy layout,
+     whose utility classes are inert without Tailwind (same rules as the
+     /bring section, re-scoped — a real floating overlay, --shadow-overlay
+     allowed).
+   ========================================================================== */
+
+/* Command field rendered as a link to /search (no extra form contract). */
+.launch-auth .launch-search { color: var(--ink); }
+.launch-auth .launch-search__hint {
+  flex: 1; min-width: 0; align-self: center;
+  font-size: var(--fs-13-5); color: var(--muted); opacity: .8;
+  padding: var(--sp-4) var(--sp-5);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.launch-auth .launch-search__enter {
+  display: grid; place-items: center;
+  border-left: var(--bw) solid var(--line); background: var(--surface3);
+  color: var(--muted); font-family: var(--mono); font-size: var(--fs-12);
+  padding: 0 13px;
+}
+
+/* Card rhythm — inline margins in reference/login.html, as classes. */
+.launch-auth .launch-auth__field-last { margin-bottom: 0; }
+.launch-auth .launch-auth__meta {
+  display: flex; justify-content: flex-end; margin-top: 13px;
+  font-family: var(--mono); font-size: var(--fs-11-5);
+}
+.launch-auth .launch-auth__submit { margin-top: var(--sp-8); }
+.launch-auth .launch-auth__notice { margin-top: var(--sp-7); }
+.launch-auth .launch-auth__alert { margin-top: var(--sp-7); }
+
+/* u/ prefix group sits inset like its input (reference used an inline
+   background on the wrapper). */
+.launch-auth .auth__card .input-group { background: var(--surface2); }
+
+/* The privacy checkbox doubles as the card's legal line: sans 11.5, muted,
+   wrapping — the mockup's separate legal paragraph is this contract here. */
+.launch-auth .launch-auth__legal {
+  align-items: flex-start; margin-top: var(--sp-7);
+  font-family: var(--sans); font-size: var(--fs-11-5);
+  line-height: var(--lh-prose);
+}
+.launch-auth .launch-auth__legal input { margin-top: 3px; }
+
+/* Turnstile challenge keeps its slot inside the card when configured. */
+.launch-auth .auth__card .cf-turnstile { margin-top: var(--sp-7); }
+
+/* Analytics consent banner (markup shared with the legacy layout). */
+.launch-auth #analytics-consent {
+  position: fixed; bottom: var(--sp-8); left: 50%; transform: translateX(-50%);
+  z-index: 50; width: calc(100% - 2rem); max-width: 28rem;
+  background: var(--surface); border: var(--bw) solid var(--line2);
+  border-radius: var(--r-3); padding: var(--sp-7) var(--sp-8);
+  box-shadow: var(--shadow-overlay);
+}
+.launch-auth #analytics-consent p {
+  font-size: var(--fs-13); color: var(--muted); margin-bottom: var(--sp-5);
+}
+.launch-auth #analytics-consent [data-analytics-accept],
+.launch-auth #analytics-consent [data-analytics-refuse] {
+  font-family: var(--sans); font-weight: 600; font-size: var(--fs-12);
+  border: var(--bw) solid var(--line2); border-radius: var(--r-2);
+  padding: var(--sp-3) var(--sp-7); cursor: pointer;
+  background: var(--surface); color: var(--muted); margin-right: var(--sp-4);
+}
+.launch-auth #analytics-consent [data-analytics-accept] {
+  color: #fff; background: var(--moss); border-color: var(--moss);
+}
+.launch-auth #analytics-consent [data-analytics-error] {
+  color: var(--danger); font-size: var(--fs-11);
+}
