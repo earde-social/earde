@@ -449,6 +449,23 @@ let make_repository_selection_handler ~mode ~load_config request =
                           in
                           match replaced with
                           | Ok () ->
+                              (* The one durable-acceptance boundary of this
+                                 step, shared by both continuations below: the
+                                 store committed the replacement. Only the
+                                 accepted set's SIZE crosses — never a
+                                 snapshot id, repository name, or URL. A
+                                 deliberately cleared selection is a committed
+                                 transition too, and reports count 0. *)
+                              Analytics.capture_if_consented request
+                                ~distinct_id:
+                                  (Analytics.distinct_id_of_user_id user_id)
+                                (Analytics.Github_repositories_selected
+                                   {
+                                     user_id;
+                                     repository_count =
+                                       List.length
+                                         (Form.selected_snapshot_ids form);
+                                   });
                               if Form.selected_snapshot_ids form = [] then
                                 (* The empty selection is deliberately
                                    saved, but the identity step needs at

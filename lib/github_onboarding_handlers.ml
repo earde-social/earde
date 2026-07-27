@@ -287,7 +287,18 @@ let make_start_installation_handler ~mode ~load_config request =
                           Some response
                         with _ -> None
                       with
-                      | Some response -> Lwt.return response
+                      | Some response ->
+                          (* Every gate passed, the state row committed, and
+                             the valid GitHub redirect is the response being
+                             returned: the one funnel-start boundary. Consent-
+                             gated and best-effort — a PostHog failure cannot
+                             change this redirect. Nothing about the state,
+                             the cookie, or the GitHub URL crosses. *)
+                          Analytics.capture_if_consented request
+                            ~distinct_id:
+                              (Analytics.distinct_id_of_user_id user_id)
+                            (Analytics.Github_app_install_started { user_id });
+                          Lwt.return response
                       | None -> unavailable_page request))))
 
 (* --- OAuth authorization callback
@@ -489,6 +500,18 @@ let finish_authorization ~config ~credentials ~exchange_transport
                       Lwt.return
                         (callback_failure_dropping config ~request ~state)
                   | Ok () ->
+                      (* Both persistence steps committed: the verified
+                         installation record and the refreshed draft exist.
+                         The owning user comes from the consumed state row,
+                         never a session — this request arrives cross-site
+                         from GitHub, so only the consent cookie (which is
+                         SameSite=Lax and does accompany a top-level
+                         navigation) gates the capture. The verified
+                         installation id, account id, login, token set and
+                         repository snapshot all stay behind. *)
+                      Analytics.capture_if_consented request
+                        ~distinct_id:(Analytics.distinct_id_of_user_id user_id)
+                        (Analytics.Github_app_installed { user_id });
                       Lwt.return
                         (redirect_dropping_cookie config ~request ~state
                            (callback_success ()))))))

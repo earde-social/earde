@@ -256,9 +256,28 @@ let handle_review_result request ~decision ~user_id ~community_slug = function
       in
       if Store.resulting_status reviewed <> expected then
         (* A decision/result mismatch is a broken invariant, not a public
-           state: the generic 500, never a redirect that names it. *)
+           state: the generic 500, never a redirect that names it. And no
+           event: nothing coherent committed to report. *)
         server_error_page request
-      else Lwt.return (queue_redirect ~community_slug)
+      else (
+        (* The review committed with the status its route decided, together
+           with its audit event and notifications: the one review boundary,
+           for accept and reject alike. The actor is the REVIEWER — a
+           different person from the requesting steward, which is why this
+           step cannot join a person funnel. The project slug, community
+           slug, requester, private note and reviewer authority source
+           deliberately do not cross. *)
+        Analytics.capture_if_consented request
+          ~distinct_id:(Analytics.distinct_id_of_user_id user_id)
+          (Analytics.Project_home_request_reviewed
+             {
+               user_id;
+               decision =
+                 (match decision with
+                 | Store.Accept -> Analytics.Review_accepted
+                 | Store.Reject -> Analytics.Review_rejected);
+             });
+        Lwt.return (queue_redirect ~community_slug))
   | Error Store.Invalid_user_id ->
       (* Defensive: the session gate already validated the id. *)
       server_error_page request

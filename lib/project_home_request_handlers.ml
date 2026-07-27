@@ -261,6 +261,14 @@ let preservable_note note =
 
 let handle_store_result request ~user_id ~slug ~submitted_note = function
   | Ok _created ->
+      (* The store committed the pending relation together with its audit
+         event and its notifications: the one submission boundary. The
+         relation id, the target community id, the project slug and the
+         private note deliberately do not cross — only the acting steward,
+         who is already the distinct id. Consent-gated and best-effort. *)
+      Analytics.capture_if_consented request
+        ~distinct_id:(Analytics.distinct_id_of_user_id user_id)
+        (Analytics.Project_home_request_submitted { user_id });
       (* PRG to the same permanent route: the relation id, target id, and
          submitted note deliberately never enter the URL. *)
       Lwt.return (request_home_redirect ~slug)

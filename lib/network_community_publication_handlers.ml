@@ -272,7 +272,26 @@ let handle_store_result request ~user_id ~slug ~values = function
       (* The closed result vocabulary: a committed publication is always
          reachable, and there is no Private or draft shape to represent. The
          choice itself never changes the destination. *)
-      | Form.Public | Form.Unlisted ->
+      | (Form.Public | Form.Unlisted) as visibility ->
+          (* The publication transaction committed as Public or Unlisted:
+             the one publication boundary. The store's own closed value is
+             mapped exhaustively onto the analytics vocabulary, so a new
+             domain constructor breaks the build here rather than degrading
+             silently, and Private stays unrepresentable on both sides. The
+             final canonical slug — the community's real identity, never the
+             obsolete route slug — is used for the redirect only; no
+             community identity crosses into analytics, because the store's
+             narrow result carries no community id. *)
+          Analytics.capture_if_consented request
+            ~distinct_id:(Analytics.distinct_id_of_user_id user_id)
+            (Analytics.Network_community_published
+               {
+                 user_id;
+                 publication_visibility =
+                   (match visibility with
+                   | Form.Public -> Analytics.Published_public
+                   | Form.Unlisted -> Analytics.Published_unlisted);
+               });
           (* PRG into the now-published community. The canonical slug comes
              only from the store, so a publication that moved the slug lands
              on the new one; no submitted value, id, or result token enters

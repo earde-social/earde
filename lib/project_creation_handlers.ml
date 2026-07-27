@@ -314,8 +314,27 @@ let rerender_after_conflict request ~user_id ~draft_id ~form feedback =
           ~values:(identity_values_of_form form) view
       else Lwt.return (draft_redirect ~draft_id "required")
 
-let handle_finalization_result request ~user_id ~draft_id ~form = function
+(* [identity] and [repository_count] are carried in for the success branch
+   alone: the finalized project's kind and the size of the authoritative
+   selection the store finalized. Neither reaches a page, a URL, or a log. *)
+let handle_finalization_result request ~user_id ~draft_id ~form ~identity
+    ~repository_count = function
   | Ok created ->
+      (* Finalization committed and the permanent project is in hand: the
+         anchor boundary of both community-home funnels. The permanent row id
+         comes from the store's own public accessor; the canonical slug,
+         name, description, website, and every GitHub identifier deliberately
+         do not cross. Consent-gated and best-effort — a PostHog failure
+         cannot change this redirect. *)
+      Analytics.capture_if_consented request
+        ~distinct_id:(Analytics.distinct_id_of_user_id user_id)
+        (Analytics.Github_project_created
+           {
+             user_id;
+             project_id = Fin.project_id created;
+             project_kind = Project_identity.kind identity;
+             repository_count;
+           });
       (* The permanent PRG destination: only the canonical persisted slug
          crosses. *)
       Lwt.return (setup_redirect ~slug:(Fin.project_slug created))
@@ -374,6 +393,8 @@ let handle_parsed_form request ~user_id form =
                     Fin.finalize db ~user_id ~draft_id ~identity)
               in
               handle_finalization_result request ~user_id ~draft_id ~form
+                ~identity
+                ~repository_count:(List.length selected_snapshot_ids)
                 finalized))
 
 (* --- POST /projects --- *)

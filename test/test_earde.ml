@@ -784,6 +784,75 @@ let consent_request = function
   | None -> Dream.request ""
   | Some cookie -> Dream.request ~headers:[ ("Cookie", cookie) ] ""
 
+(* The plaintext consent cookie pair, for the database-gated handler suites
+   that drive real requests through a real pipeline. *)
+let an_consent_granted = (An.consent_cookie_name, "granted")
+let an_consent_denied = (An.consent_cookie_name, "denied")
+
+(* Lwt variant of [with_sink] for the database-gated suites: installs the
+   enabled (or disabled) test configuration and a collecting sink around one
+   awaited computation, always restores the module's global state, and
+   returns the computation's value with the payloads captured in order. The
+   sink replaces the HTTP transport entirely, so no request can reach a real
+   PostHog project, and capture becomes synchronous — no Lwt.async race
+   between a captured event and the assertion that reads it. *)
+let with_sink_lwt ?(enabled = true) f =
+  let captured = ref [] in
+  (if enabled then AnT.use_enabled_test_configuration ()
+   else AnT.use_disabled_test_configuration ());
+  AnT.set_capture_sink (fun p -> captured := p :: !captured);
+  Lwt.map
+    (fun value -> (value, List.rev !captured))
+    (Lwt.finalize
+       (fun () -> f ())
+       (fun () ->
+         AnT.clear_capture_sink ();
+         AnT.clear_configuration_override ();
+         Lwt.return_unit))
+
+let an_event_names payloads =
+  List.filter_map
+    (fun p ->
+      match payload_member "event" p with
+      | Some (`String n) -> Some n
+      | _ -> None)
+    payloads
+
+(* Exactly one captured payload, with the exact stable event name, the exact
+   distinct id, and exactly [props] on top of the centrally injected
+   environment property. Failures report event NAMES only — never a captured
+   body, which would print whatever fixture material the payload was built
+   next to. *)
+let check_single_capture label ~name ~distinct_id ~props payloads =
+  match payloads with
+  | [ payload ] ->
+      Alcotest.(check (option yojson))
+        (label ^ ": stable event name")
+        (Some (`String name))
+        (payload_member "event" payload);
+      Alcotest.(check (option yojson))
+        (label ^ ": distinct id")
+        (Some (`String distinct_id))
+        (payload_member "distinct_id" payload);
+      Alcotest.(check (option yojson))
+        (label ^ ": exact closed properties")
+        (Some
+           (`Assoc
+             (props @ [ ("deployment_environment", `String "development") ])))
+        (payload_member "properties" payload)
+  | payloads ->
+      Alcotest.failf "%s: expected exactly one capture, got %d [%s]" label
+        (List.length payloads)
+        (String.concat "," (an_event_names payloads))
+
+let check_no_capture label payloads =
+  match payloads with
+  | [] -> ()
+  | payloads ->
+      Alcotest.failf "%s: expected no capture, got %d [%s]" label
+        (List.length payloads)
+        (String.concat "," (an_event_names payloads))
+
 let an_person =
   { An.username = "alice";
     signup_date = "2026-01-01T00:00:00Z"; is_admin = false }
@@ -839,6 +908,46 @@ let an_all_events =
           post_id = 11; message_id = 91L; promoted_message_count = 4;
           promoted_participant_count = Some 2 } );
     ("account_deleted", An.Account_deleted);
+    (* GitHub-anchored project and community-home funnels. Every one of
+       these is deliberately identifier-poor; the shared allowlist and
+       $set/$groups checks below therefore apply to them unchanged. *)
+    ("github_app_install_started", An.Github_app_install_started { user_id = 1 });
+    ("github_app_installed", An.Github_app_installed { user_id = 1 });
+    ( "github_repositories_selected",
+      An.Github_repositories_selected { user_id = 1; repository_count = 3 } );
+    ( "github_project_created",
+      An.Github_project_created
+        { user_id = 1; project_id = 4242L;
+          project_kind = Earde.Project_identity.Project; repository_count = 3 } );
+    ("dedicated_home_provisioned", An.Dedicated_home_provisioned { user_id = 1 });
+    ( "network_community_published",
+      An.Network_community_published
+        { user_id = 1; publication_visibility = An.Published_public } );
+    ( "project_home_request_submitted",
+      An.Project_home_request_submitted { user_id = 1 } );
+    ( "project_home_request_reviewed",
+      An.Project_home_request_reviewed
+        { user_id = 1; decision = An.Review_accepted } );
+    ( "project_home_removed",
+      An.Project_home_removed
+        { user_id = 1; removal_surface = An.Removal_project_route } );
+  ]
+
+(* The exact stable PostHog event name of every funnel event, paired with its
+   exact closed property allowlist. One table drives the name assertions, the
+   key assertions, and the "nothing else was added" sweep, so a constructor
+   cannot gain a property without this list changing. *)
+let an_funnel_contract =
+  [ ("github_app_install_started", [ "user_id" ]);
+    ("github_app_installed", [ "user_id" ]);
+    ("github_repositories_selected", [ "user_id"; "repository_count" ]);
+    ( "github_project_created",
+      [ "user_id"; "project_id"; "project_kind"; "repository_count" ] );
+    ("dedicated_home_provisioned", [ "user_id" ]);
+    ("network_community_published", [ "user_id"; "publication_visibility" ]);
+    ("project_home_request_submitted", [ "user_id" ]);
+    ("project_home_request_reviewed", [ "user_id"; "decision" ]);
+    ("project_home_removed", [ "user_id"; "removal_surface" ]);
   ]
 
 (* Test payloads are built for the Development environment; the envelope
@@ -869,6 +978,33 @@ let check_group name expected event =
       Alcotest.(check (option string))
         name expected
         (an_group_key (an_payload event)))
+
+(* Property readers for the funnel assertions: [None] means the property is
+   absent OR carries another JSON shape, which is exactly what an omission
+   assertion needs. *)
+let an_string_prop payload name =
+  match List.assoc_opt name (payload_props payload) with
+  | Some (`String s) -> Some s
+  | _ -> None
+
+let an_int_prop payload name =
+  match List.assoc_opt name (payload_props payload) with
+  | Some (`Int n) -> Some n
+  | _ -> None
+
+(* project_id is an int64, encoded as `Intlit so a bigint never loses
+   precision on the wire. *)
+let an_intlit_prop payload name =
+  match List.assoc_opt name (payload_props payload) with
+  | Some (`Intlit s) -> Some s
+  | _ -> None
+
+let check_string_prop label event name expected =
+  an_case label (fun () ->
+      Alcotest.(check (option string))
+        label expected
+        (an_string_prop (an_payload event) name))
+
 
 (* --- Step-4: consent endpoint, cookie contract, browser config ----------- *)
 
@@ -12009,7 +12145,139 @@ module Gh_start_handler = struct
           (String.equal binding_a binding_b);
         Lwt.return_unit)
 
-  let db_suite = [ success_case; storage_failure_case; multiple_starts_case ]
+  (* --- Analytics: github_app_install_started ---
+
+     The success boundary is exactly "the state row committed AND the valid
+     GitHub redirect is the response being returned". Everything below drives
+     the real pipeline; the fake sink replaces the HTTP transport, so no
+     PostHog request can leave the process. *)
+
+  (* run_start with a browser cookie jar, so the plaintext consent cookie
+     reaches the handler exactly as a real browser would send it. Session
+     identity still comes from the memory-session middleware, never a
+     cookie. *)
+  let run_start_with_cookies ~url ~session_user_id ~cookies ?(mode = Ob.Public)
+      ?(origin = Some "https://earde.com") () =
+    let handler = make ~mode ~load_config:(fun () -> ok_loader ()) in
+    let pipeline =
+      Dream.sql_pool url @@ Dream.set_secret gck_secret
+      @@ Dream.memory_sessions
+      @@ fun req ->
+      let* () =
+        Dream.set_session_field req "user_id" (string_of_int session_user_id)
+      in
+      handler req
+    in
+    let headers =
+      (match origin with Some o -> [ ("Origin", o) ] | None -> [])
+      @ match cookies with [] -> [] | c -> [ ("Cookie", gck_cookie_header c) ]
+    in
+    pipeline (Dream.request ~method_:`POST ~target ~headers "")
+
+  let analytics_success_case =
+    db_case
+      "analytics: a successful start captures exactly one \
+       github_app_install_started, after the state row and with no GitHub \
+       material"
+      (fun ~url (module C : Caqti_lwt.CONNECTION) ->
+        let* uid = C.find q_insert_user "ghstart_an_ok" in
+        let* uid = or_fail "user" uid in
+        let* response, captured =
+          with_sink_lwt (fun () ->
+              run_start_with_cookies ~url ~session_user_id:uid
+                ~cookies:[ an_consent_granted ] ())
+        in
+        let _ = successful_start "analytics start" response in
+        check_single_capture "granted" ~name:"github_app_install_started"
+          ~distinct_id:(Printf.sprintf "user:%d" uid)
+          ~props:[ ("user_id", `Int uid) ]
+          captured;
+        (* The state row exists, and nothing about it — hash, binding,
+           cookie name, or GitHub URL — reached the payload. *)
+        let* count = C.find q_count_for_user uid in
+        let* count = or_fail "count" count in
+        Alcotest.(check int) "one state row" 1 count;
+        Lwt.return_unit)
+
+  let analytics_consent_case =
+    db_case
+      "analytics: denied, missing, and disabled configurations capture \
+       nothing while the redirect and the state row are unchanged"
+      (fun ~url (module C : Caqti_lwt.CONNECTION) ->
+        let* uid = C.find q_insert_user "ghstart_an_consent" in
+        let* uid = or_fail "user" uid in
+        let run label ?(enabled = true) cookies =
+          let* response, captured =
+            with_sink_lwt ~enabled (fun () ->
+                run_start_with_cookies ~url ~session_user_id:uid ~cookies ())
+          in
+          (* The business outcome is identical in every configuration. *)
+          let _ = successful_start label response in
+          check_no_capture label captured;
+          Lwt.return_unit
+        in
+        let* () = run "denied" [ an_consent_denied ] in
+        let* () = run "missing" [] in
+        let* () = run "unrelated cookies" [ ("theme", "dark") ] in
+        let* () = run "malformed value" [ (An.consent_cookie_name, "yes") ] in
+        let* () = run "analytics disabled" ~enabled:false [ an_consent_granted ] in
+        let* count = C.find q_count_for_user uid in
+        let* count = or_fail "count" count in
+        Alcotest.(check int) "five successful starts, five rows" 5 count;
+        Lwt.return_unit)
+
+  let analytics_no_event_case =
+    db_case
+      "analytics: every refused or failed start captures nothing, even with \
+       granted consent"
+      (fun ~url (module C : Caqti_lwt.CONNECTION) ->
+        let* ghost = C.find q_absent_user_id () in
+        let* ghost = or_fail "absent user id" ghost in
+        let* uid = C.find q_insert_user "ghstart_an_none" in
+        let* uid = or_fail "user" uid in
+        (* Storage failure: the state row never commits, so no redirect and
+           no event. *)
+        let* response, captured =
+          with_sink_lwt (fun () ->
+              run_start_with_cookies ~url ~session_user_id:ghost
+                ~cookies:[ an_consent_granted ] ())
+        in
+        Alcotest.(check int) "storage failure 503" 503 (status_of response);
+        check_no_capture "storage failure" captured;
+        (* Rollout gate: a non-admin in Admins mode never reaches issuance. *)
+        let* response, captured =
+          with_sink_lwt (fun () ->
+              run_start_with_cookies ~url ~session_user_id:uid
+                ~cookies:[ an_consent_granted ] ~mode:Ob.Admins ())
+        in
+        Alcotest.(check int) "rollout 403" 403 (status_of response);
+        check_no_capture "rollout gate" captured;
+        (* Kill switch. *)
+        let* response, captured =
+          with_sink_lwt (fun () ->
+              run_start_with_cookies ~url ~session_user_id:uid
+                ~cookies:[ an_consent_granted ] ~mode:Ob.Off ())
+        in
+        Alcotest.(check int) "off 404" 404 (status_of response);
+        check_no_capture "kill switch" captured;
+        (* Origin gate. *)
+        let* response, captured =
+          with_sink_lwt (fun () ->
+              run_start_with_cookies ~url ~session_user_id:uid
+                ~cookies:[ an_consent_granted ] ~origin:(Some "https://evil.example")
+                ())
+        in
+        Alcotest.(check int) "cross-origin 403" 403 (status_of response);
+        check_no_capture "origin gate" captured;
+        let* count = C.find q_count_for_user uid in
+        let* count = or_fail "count" count in
+        Alcotest.(check int) "no state row from a refused start" 0 count;
+        Lwt.return_unit)
+
+  let db_suite =
+    [ success_case; storage_failure_case; multiple_starts_case;
+      analytics_success_case; analytics_consent_case; analytics_no_event_case
+    ]
 end
 
 (* === GitHub onboarding setup-return handler (Github_onboarding_handlers) ===
@@ -14340,6 +14608,205 @@ module Gh_oauth_callback = struct
           sigs;
         Lwt.return_unit)
 
+  (* --- Analytics: github_app_installed ---
+
+     The success boundary is exactly "state consumed, installation verified,
+     and BOTH persistence steps committed". The distinct id comes from the
+     consumed state row's owning user — this leg is sessionless, so a session
+     could not supply it. The fake sink replaces the HTTP transport, so no
+     PostHog request can leave the process. *)
+
+  let analytics_success_case =
+    db_case
+      "analytics: a completed callback captures exactly one \
+       github_app_installed for the state's owner, carrying no GitHub or \
+       OAuth material"
+      (fun ~url (module C : Caqti_lwt.CONNECTION) ->
+        let* uid = fixture_user (module C) "ghoauth_an_ok" in
+        let installation = 936000101L in
+        let* state, cookie = onboard ~url ~uid ~installation "analytics" in
+        let ex_calls = ref 0 and inst_calls = ref 0 in
+        let repo_captured = ref [] in
+        let* response, captured =
+          with_sink_lwt (fun () ->
+              run_callback ~url ~jar:[ cookie; an_consent_granted ]
+                ~exchange:(exchange_stub (Ok (200, token_body)) ex_calls)
+                ~installations:
+                  (installations_stub [ listing_for installation ] inst_calls)
+                ~repositories:
+                  (gur_transport
+                     [ repo_listing (default_repo_entries installation) ]
+                     repo_captured)
+                ~target:(callback_target state fixture_code)
+                ())
+        in
+        let* () = check_success_lwt "analytics success" response in
+        check_single_capture "granted" ~name:"github_app_installed"
+          ~distinct_id:(Printf.sprintf "user:%d" uid)
+          ~props:[ ("user_id", `Int uid) ]
+          captured;
+        (* Privacy sweep over the serialized payload: none of the
+           credential-shaped fixtures this leg handles may appear anywhere
+           in it. Assertions are boolean so a failure never prints the
+           payload — or the values it is being checked against. *)
+        let serialized =
+          String.concat "|" (List.map Yojson.Safe.to_string captured)
+        in
+        List.iter
+          (fun needle ->
+            Alcotest.(check bool)
+              "credential-shaped fixture absent from the analytics payload"
+              false
+              (goc_contains ~needle serialized))
+          [ access_fixture; refresh_fixture; fixture_code; gte_client_secret;
+            GOC.state_to_string state;
+            Int64.to_string installation;
+            Int64.to_string (Int64.add installation 1L);
+            Printf.sprintf "owner-%Ld" installation;
+            gur_private_name; gur_private_description; snd cookie
+          ];
+        Lwt.return_unit)
+
+  let analytics_consent_case =
+    db_case
+      "analytics: denied, missing, and disabled configurations capture \
+       nothing while the callback still succeeds"
+      (fun ~url (module C : Caqti_lwt.CONNECTION) ->
+        let run label ?(enabled = true) ~username ~installation extra_cookies =
+          let* uid = fixture_user (module C) username in
+          let* state, cookie = onboard ~url ~uid ~installation label in
+          let ex_calls = ref 0 and inst_calls = ref 0 in
+          let repo_captured = ref [] in
+          let* response, captured =
+            with_sink_lwt ~enabled (fun () ->
+                run_callback ~url ~jar:(cookie :: extra_cookies)
+                  ~exchange:(exchange_stub (Ok (200, token_body)) ex_calls)
+                  ~installations:
+                    (installations_stub [ listing_for installation ] inst_calls)
+                  ~repositories:
+                    (gur_transport
+                       [ repo_listing (default_repo_entries installation) ]
+                       repo_captured)
+                  ~target:(callback_target state fixture_code)
+                  ())
+          in
+          (* The business outcome is identical in every configuration. *)
+          let* () = check_success_lwt label response in
+          check_no_capture label captured;
+          Lwt.return_unit
+        in
+        let* () =
+          run "denied" ~username:"ghoauth_an_denied" ~installation:936000102L
+            [ an_consent_denied ]
+        in
+        let* () =
+          run "missing" ~username:"ghoauth_an_missing"
+            ~installation:936000103L []
+        in
+        run "analytics disabled" ~enabled:false
+          ~username:"ghoauth_an_disabled" ~installation:936000104L
+          [ an_consent_granted ])
+
+  let analytics_no_event_case =
+    db_case
+      "analytics: a rejected authorization, a failed exchange, a failed \
+       verification, a failed listing, a failed persistence, and a replay \
+       all capture nothing"
+      (fun ~url (module C : Caqti_lwt.CONNECTION) ->
+        (* One helper per terminal-failure shape, each over the real
+           pipeline with granted consent. *)
+        let failing label ~username ~installation ~target ~exchange
+            ~installations ~repositories =
+          let* uid = fixture_user (module C) username in
+          let* state, cookie = onboard ~url ~uid ~installation label in
+          let* response, captured =
+            with_sink_lwt (fun () ->
+                run_callback ~url ~jar:[ cookie; an_consent_granted ]
+                  ~exchange ~installations ~repositories
+                  ~target:(target state) ())
+          in
+          let* () = check_failure_lwt label response in
+          check_no_capture label captured;
+          Lwt.return (uid, state, cookie)
+        in
+        let ex_calls = ref 0 and inst_calls = ref 0 in
+        let repo_captured = ref [] in
+        (* The user said no at GitHub: no exchange, no SQL past consume. *)
+        let* _ =
+          failing "authorization rejected" ~username:"ghoauth_an_rej"
+            ~installation:936000111L
+            ~target:(fun state ->
+              target_of
+                [ "state=" ^ GOC.state_to_string state; "error=access_denied" ])
+            ~exchange:(exchange_stub (Ok (200, token_body)) ex_calls)
+            ~installations:(installations_stub [] inst_calls)
+            ~repositories:(gur_transport [] repo_captured)
+        in
+        Alcotest.(check int) "rejected: no exchange" 0 !ex_calls;
+        (* Exchange failure. *)
+        let* _ =
+          failing "exchange failure" ~username:"ghoauth_an_ex"
+            ~installation:936000112L
+            ~target:(fun state -> callback_target state fixture_code)
+            ~exchange:(exchange_stub (Error ()) (ref 0))
+            ~installations:(installations_stub [] (ref 0))
+            ~repositories:(gur_transport [] (ref []))
+        in
+        (* Verification failure: an empty installation listing. *)
+        let* _ =
+          failing "verification failure" ~username:"ghoauth_an_ver"
+            ~installation:936000113L
+            ~target:(fun state -> callback_target state fixture_code)
+            ~exchange:(exchange_stub (Ok (200, token_body)) (ref 0))
+            ~installations:(installations_stub [ listing_for 936000999L ] (ref 0))
+            ~repositories:(gur_transport [] (ref []))
+        in
+        (* Repository listing failure: the installation is verified, but
+           nothing is persisted, so there is no installation to report. *)
+        let* _ =
+          failing "listing failure" ~username:"ghoauth_an_list"
+            ~installation:936000114L
+            ~target:(fun state -> callback_target state fixture_code)
+            ~exchange:(exchange_stub (Ok (200, token_body)) (ref 0))
+            ~installations:
+              (installations_stub [ listing_for 936000114L ] (ref 0))
+            ~repositories:(gur_transport [ Error () ] (ref []))
+        in
+        (* A successful callback, then its replay. *)
+        let* uid = fixture_user (module C) "ghoauth_an_replay" in
+        let installation = 936000115L in
+        let* state, cookie = onboard ~url ~uid ~installation "replay" in
+        let succeed label jar =
+          with_sink_lwt (fun () ->
+              run_callback ~url ~jar
+                ~exchange:(exchange_stub (Ok (200, token_body)) (ref 0))
+                ~installations:
+                  (installations_stub [ listing_for installation ] (ref 0))
+                ~repositories:
+                  (gur_transport
+                     [ repo_listing (default_repo_entries installation) ]
+                     (ref []))
+                ~target:(callback_target state fixture_code)
+                ())
+          |> Lwt.map (fun (response, captured) -> (label, response, captured))
+        in
+        let* label, response, captured =
+          succeed "first" [ cookie; an_consent_granted ]
+        in
+        let* () = check_success_lwt label response in
+        check_single_capture label ~name:"github_app_installed"
+          ~distinct_id:(Printf.sprintf "user:%d" uid)
+          ~props:[ ("user_id", `Int uid) ]
+          captured;
+        (* The replay finds the state already consumed: same generic
+           failure, and deliberately no second event. *)
+        let* label, response, captured =
+          succeed "replay" [ cookie; an_consent_granted ]
+        in
+        let* () = check_failure_lwt label response in
+        check_no_capture label captured;
+        Lwt.return_unit)
+
   let db_suite =
     [ success_case; replay_case; expired_case; already_consumed_case;
       binding_mismatch_case; exchange_transport_case; oauth_rejected_case;
@@ -14347,7 +14814,8 @@ module Gh_oauth_callback = struct
       listing_transport_error_case; listing_status_case;
       listing_invalid_case; listing_no_public_case; listing_pagination_case;
       multiple_repositories_case; persistence_failure_case;
-      draft_failure_case; consume_storage_error_case; parallel_case ]
+      draft_failure_case; consume_storage_error_case; parallel_case;
+      analytics_success_case; analytics_consent_case; analytics_no_event_case ]
 end
 
 (* === REQUEST-TARGET REDACTION ===
@@ -50320,6 +50788,1442 @@ module Phnt = struct
 end
 
 
+(* === GITHUB PROJECT AND COMMUNITY-HOME ANALYTICS FUNNEL (handlers) ===
+   The eight post-installation funnel events, driven through the real
+   handlers and the real production stores over a real Dream pipeline
+   (sql_pool + secret + memory sessions + the real router shape and route
+   patterns main.ml registers), with the fake capture sink replacing the
+   PostHog HTTP transport: no request can leave the process, and capture
+   becomes synchronous, so "exactly one event" is an exact assertion rather
+   than a race. The two GitHub-installation events are covered where their
+   harnesses already live (Gh_start_handler, Gh_oauth_callback).
+
+   The authenticated-mutation rate limiter main.ml wraps these POSTs in is
+   deliberately NOT installed here: it is orthogonal to the capture
+   boundary, has its own coverage, and would otherwise arbitrate the
+   concurrency cases instead of the stores under test.
+
+   Reserved so no suite shares fixtures: external installation ids
+   962000001..962000999 (hence namespace ids 962100001..962100999, which
+   also scope the permanent-project cleanup), anfn_% usernames, and anfn-%
+   community and project slugs.
+
+   Every assertion about a submitted or durable value is boolean, and
+   failures report event NAMES only — no fixture byte and no captured body
+   reaches test output. Database-gated (EARDE_TEST_DATABASE_URL, the same
+   opt-in as Mod_scope). *)
+module Anfn = struct
+  let ( let* ) = Lwt.bind
+
+  open Caqti_request.Infix
+
+  module Fin = Earde.Project_finalization_store
+  module Phr = Earde.Project_home_relation
+  module Rq = Earde.Project_home_request_store
+  module Rvs = Earde.Project_home_review_store
+  module Psh = Earde.Project_setup_handlers
+  module Pc = Earde.Project_creation_handlers
+  module Prh = Earde.Project_home_request_handlers
+  module Hrv = Earde.Project_home_review_handlers
+  module Pvh = Earde.Project_home_provisioning_handlers
+  module Rmh = Earde.Project_home_removal_handlers
+  module Ncph = Earde.Network_community_publication_handlers
+
+  let or_fail = Pod_store.or_fail
+  let insert_user = Pod_store.insert_user
+  let exec = Pod_read.exec
+  let find = Pod_read.find
+  let insert_community = Phcv.insert_community
+  let ok_loader = Gh_start_handler.ok_loader
+  let status_of = Gh_start_handler.status_of
+  let q_insert_moderator = Phrv.q_insert_moderator
+
+  (* Notifications and audit events must go before projects and communities
+     (audit RESTRICT-protects both), then the shared dependency order of the
+     sibling suites. *)
+  let q_cleanup =
+    List.map
+      (fun sql -> (Caqti_type.unit ->. Caqti_type.unit) sql)
+      [ "DELETE FROM notifications \
+         WHERE project_id IN \
+           (SELECT id FROM open_source_projects \
+            WHERE forge_namespace_id BETWEEN 962100001 AND 962100999)"
+      ; "DELETE FROM notifications \
+         WHERE community_id IN \
+           (SELECT id FROM communities WHERE slug LIKE 'anfn-%')"
+      ; "DELETE FROM notifications \
+         WHERE user_id IN (SELECT id FROM users WHERE username LIKE 'anfn_%')"
+      ; "DELETE FROM project_home_audit_events \
+         WHERE project_id IN \
+           (SELECT id FROM open_source_projects \
+            WHERE forge_namespace_id BETWEEN 962100001 AND 962100999)"
+      ; "DELETE FROM project_home_audit_events \
+         WHERE community_id IN \
+           (SELECT id FROM communities WHERE slug LIKE 'anfn-%')"
+      ; "DELETE FROM open_source_projects \
+         WHERE forge_namespace_id BETWEEN 962100001 AND 962100999"
+      ; "DELETE FROM project_onboarding_drafts \
+         WHERE github_installation_record_id IN \
+           (SELECT id FROM github_installations \
+            WHERE github_installation_id BETWEEN 962000001 AND 962000999)"
+      ; "DELETE FROM communities WHERE slug LIKE 'anfn-%'"
+      ; "DELETE FROM users WHERE username LIKE 'anfn_%'"
+      ; "DELETE FROM github_installations \
+         WHERE github_installation_id BETWEEN 962000001 AND 962000999"
+      ]
+
+  let db_case name f =
+    Alcotest.test_case name `Quick (fun () ->
+        match Sys.getenv_opt "EARDE_TEST_DATABASE_URL" with
+        | None | Some "" -> Alcotest.skip ()
+        | Some url ->
+            Lwt_main.run
+              (let* conn = Caqti_lwt_unix.connect (Uri.of_string url) in
+               let* conn = or_fail "connect" conn in
+               let (module C : Caqti_lwt.CONNECTION) = conn in
+               let cleanup () =
+                 Lwt_list.iter_s
+                   (fun q ->
+                     let* r = C.exec q () in
+                     let* _ = or_fail "cleanup" r in
+                     Lwt.return_unit)
+                   q_cleanup
+               in
+               let* () = cleanup () in
+               Lwt.finalize
+                 (fun () -> f ~url conn)
+                 (fun () ->
+                   Lwt.finalize cleanup (fun () -> C.disconnect ()))))
+
+  (* === Fixtures: only through the real chain === *)
+
+  let make_project = Phvr.make_project
+  let make_home_draft = Ncps.make_draft
+
+  let q_relation_status =
+    (Caqti_type.int64 ->! Caqti_type.string)
+    "SELECT status FROM community_projects WHERE project_id = $1 \
+     ORDER BY id DESC LIMIT 1"
+
+  let q_relation_count =
+    (Caqti_type.int64 ->! Caqti_type.int)
+    "SELECT COUNT(*) FROM community_projects WHERE project_id = $1"
+
+  let q_project_count =
+    (Caqti_type.int64 ->! Caqti_type.int)
+    "SELECT COUNT(*) FROM open_source_projects WHERE forge_namespace_id = $1"
+
+  let q_project_id_of_slug =
+    (Caqti_type.string ->! Caqti_type.int64)
+    "SELECT id FROM open_source_projects WHERE slug = $1"
+
+  let q_community_state =
+    (Caqti_type.string ->! Caqti_type.(t2 string string))
+    "SELECT onboarding_state, visibility FROM communities WHERE slug = $1"
+
+  let q_community_count =
+    (Caqti_type.string ->! Caqti_type.int)
+    "SELECT COUNT(*) FROM communities WHERE slug = $1"
+
+  let pending_request conn ~user ~slug ~community ?(note = None) () =
+    let relation =
+      match Phr.create_pending ~request_note:note with
+      | Ok relation -> relation
+      | Error _ -> Alcotest.fail "pending relation fixture rejected"
+    in
+    let* r =
+      Rq.create conn ~user_id:user ~project_slug:slug
+        ~target_community_id:community ~relation
+    in
+    match r with
+    | Ok _ -> Lwt.return_unit
+    | Error _ -> Alcotest.failf "pending request fixture failed for %s" slug
+
+  let accept_request conn ~reviewer ~project_slug ~community_slug =
+    let* r =
+      Rvs.review conn ~reviewer_user_id:reviewer ~project_slug
+        ~target_community_slug:community_slug ~decision:Rvs.Accept
+    in
+    match r with
+    | Ok _ -> Lwt.return_unit
+    | Error _ ->
+        Alcotest.failf "accept fixture failed for %s" project_slug
+
+  (* === The real pipeline ===
+
+     One shared two-connection sql_pool for the whole suite: nothing ever
+     closes a Dream.sql_pool, so a fresh pool per request would exhaust
+     Postgres max_connections; two connections are the minimum that lets the
+     concurrency cases run two requests genuinely at once. Session identity
+     is sticky: a request that already carries a session keeps its own user,
+     so independent cookies stay independent under concurrency. *)
+  let shared_identity : int option ref = ref None
+  let shared_pipeline = ref None
+
+  let identity_middleware handler request =
+    match Dream.session_field request "user_id" with
+    | Some _ -> handler request
+    | None -> (
+        match !shared_identity with
+        | None -> handler request
+        | Some uid ->
+            let* () =
+              Dream.set_session_field request "user_id" (string_of_int uid)
+            in
+            let* () =
+              Dream.set_session_field request "username"
+                ("anfn_user_" ^ string_of_int uid)
+            in
+            handler request)
+
+  let mode = Ob.Public
+  let config () = ok_loader ()
+
+  let build_pipeline ~url =
+    Dream.sql_pool ~size:2 url @@ Dream.set_secret gck_secret
+    @@ Dream.memory_sessions @@ identity_middleware
+    @@ Dream.router
+         [ Dream.get "/mint" (fun req -> Dream.respond (Dream.csrf_token req));
+           Dream.post "/projects/new/repositories" (fun req ->
+               Psh.make_repository_selection_handler ~mode ~load_config:config
+                 req);
+           Dream.post "/projects" (fun req ->
+               Pc.make_project_creation_handler ~mode ~load_config:config req);
+           Dream.post "/projects/:slug/request-home" (fun req ->
+               Prh.make_project_home_request_handler ~mode ~load_config:config
+                 req);
+           Dream.post "/projects/:slug/community-home" (fun req ->
+               Pvh.make_project_home_provisioning_handler ~mode
+                 ~load_config:config req);
+           Dream.post "/c/:slug/projects/:project_slug/accept" (fun req ->
+               Hrv.make_project_home_accept_handler ~mode ~load_config:config
+                 req);
+           Dream.post "/c/:slug/projects/:project_slug/reject" (fun req ->
+               Hrv.make_project_home_reject_handler ~mode ~load_config:config
+                 req);
+           Dream.post
+             "/projects/:project_slug/community-home/:community_slug/remove"
+             (fun req ->
+               Rmh.make_project_side_home_removal_handler ~mode
+                 ~load_config:config req);
+           Dream.post "/c/:community_slug/projects/:project_slug/remove-home"
+             (fun req ->
+               Rmh.make_community_side_home_removal_handler ~mode
+                 ~load_config:config req);
+           Dream.post "/c/:slug/publish" (fun req ->
+               Ncph.make_network_community_publication_handler ~mode
+                 ~load_config:config req)
+         ]
+
+  let pipeline_for ~url =
+    match !shared_pipeline with
+    | Some pipeline -> pipeline
+    | None ->
+        let pipeline = build_pipeline ~url in
+        shared_pipeline := Some pipeline;
+        pipeline
+
+  let do_get ?cookie ~url ~target () =
+    let headers = match cookie with Some c -> [ ("Cookie", c) ] | None -> [] in
+    let* response = (pipeline_for ~url) (Dream.request ~method_:`GET ~target ~headers "") in
+    let* body = Dream.body response in
+    Lwt.return (response, body)
+
+  (* Every POST carries the plaintext consent cookie beside the session
+     cookie unless the caller overrides it, exactly as a consenting browser
+     would. *)
+  let do_post ?(consent = [ an_consent_granted ]) ~url ~cookie ~target ~token
+      ~body_fields () =
+    let headers =
+      [ ("Origin", "https://earde.com");
+        ("Content-Type", "application/x-www-form-urlencoded");
+        ( "Cookie",
+          String.concat "; "
+            (cookie :: List.map (fun (n, v) -> n ^ "=" ^ v) consent) )
+      ]
+    in
+    let* response =
+      (pipeline_for ~url)
+        (Dream.request ~method_:`POST ~target ~headers
+           (Pch.form_body (("dream.csrf", token) :: body_fields)))
+    in
+    let* body = Dream.body response in
+    Lwt.return (response, body)
+
+  (* One cookie-less GET that opens a fresh session for this user and
+     returns its cookie plus a live CSRF token. *)
+  let open_session label ~url uid =
+    shared_identity := Some uid;
+    let* response, token = do_get ~url ~target:"/mint" () in
+    Alcotest.(check int) (label ^ ": mint 200") 200 (status_of response);
+    Lwt.return (Pch.session_cookie label response, token)
+
+  let check_redirect label ~location response =
+    Alcotest.(check int) (label ^ ": 303") 303 (status_of response);
+    Alcotest.(check (option string)) (label ^ ": Location") (Some location)
+      (Dream.header response "Location")
+
+  (* === Targets === *)
+
+  let request_home_target slug = Printf.sprintf "/projects/%s/request-home" slug
+  let provision_target slug = Printf.sprintf "/projects/%s/community-home" slug
+  let publish_target slug = Printf.sprintf "/c/%s/publish" slug
+
+  let accept_target ~community ~project =
+    Printf.sprintf "/c/%s/projects/%s/accept" community project
+
+  let reject_target ~community ~project =
+    Printf.sprintf "/c/%s/projects/%s/reject" community project
+
+  let project_side_remove ~project ~community =
+    Printf.sprintf "/projects/%s/community-home/%s/remove" project community
+
+  let community_side_remove ~community ~project =
+    Printf.sprintf "/c/%s/projects/%s/remove-home" community project
+
+  (* === Form field sets === *)
+
+  let request_fields ~community ?(note = "") () =
+    [ ("target_community_id", string_of_int community);
+      ("request_note", note)
+    ]
+
+  let community_fields ?(name = "Anfn Community Home") ~slug
+      ?(description = "") () =
+    [ ("community_name", name); ("community_slug", slug);
+      ("community_description", description)
+    ]
+
+  let publish_fields ?(name = "Anfn Community Home") ~slug ?(description = "")
+      ?(visibility = "public") () =
+    community_fields ~name ~slug ~description ()
+    @ [ ("publication_visibility", visibility) ]
+  (* === github_repositories_selected === *)
+
+  let selection_case =
+    db_case
+      "repository selection: each durably accepted set captures exactly one \
+       github_repositories_selected carrying only its size"
+      (fun ~url conn ->
+        let* uid = insert_user conn "anfn_sel" in
+        let* _inst, draft, _v, _acct =
+          Pfin.make_draft conn ~user:uid ~ext_id:962000001L
+            (fun account_id ->
+              [ Pfin.repo ~account_id ~id:962900001L "alpha";
+                Pfin.repo ~account_id ~id:962900002L "beta"
+              ])
+        in
+        let* ids = Pfin.snapshot_ids conn draft in
+        let s1 = List.nth ids 0 and s2 = List.nth ids 1 in
+        let* cookie, token = open_session "sel" ~url uid in
+        let post label ?consent fields =
+          with_sink_lwt (fun () ->
+              do_post ?consent ~url ~cookie ~target:"/projects/new/repositories"
+                ~token ~body_fields:fields ())
+          |> Lwt.map (fun ((response, _body), captured) ->
+                 (label, response, captured))
+        in
+        let draft_field = ("draft_id", Int64.to_string draft) in
+        (* One repository. *)
+        let* label, response, captured =
+          post "one"
+            [ draft_field; ("repository", Int64.to_string s1) ]
+        in
+        Alcotest.(check int) (label ^ ": 303") 303 (status_of response);
+        check_single_capture label ~name:"github_repositories_selected"
+          ~distinct_id:(Printf.sprintf "user:%d" uid)
+          ~props:[ ("user_id", `Int uid); ("repository_count", `Int 1) ]
+          captured;
+        (* Two repositories. *)
+        let* label, response, captured =
+          post "two"
+            [ draft_field; ("repository", Int64.to_string s1);
+              ("repository", Int64.to_string s2)
+            ]
+        in
+        Alcotest.(check int) (label ^ ": 303") 303 (status_of response);
+        check_single_capture label ~name:"github_repositories_selected"
+          ~distinct_id:(Printf.sprintf "user:%d" uid)
+          ~props:[ ("user_id", `Int uid); ("repository_count", `Int 2) ]
+          captured;
+        (* A deliberately cleared selection is still a committed
+           transition, and reports count 0. *)
+        let* label, response, captured = post "cleared" [ draft_field ] in
+        Alcotest.(check int) (label ^ ": 303") 303 (status_of response);
+        check_single_capture label ~name:"github_repositories_selected"
+          ~distinct_id:(Printf.sprintf "user:%d" uid)
+          ~props:[ ("user_id", `Int uid); ("repository_count", `Int 0) ]
+          captured;
+        (* Denied consent: identical business outcome, no event. *)
+        let* label, response, captured =
+          post "denied consent" ~consent:[ an_consent_denied ]
+            [ draft_field; ("repository", Int64.to_string s1) ]
+        in
+        Alcotest.(check int) (label ^ ": 303") 303 (status_of response);
+        check_no_capture label captured;
+        Lwt.return_unit)
+
+  let selection_failure_case =
+    db_case
+      "repository selection: an invalid form, a foreign draft, and a stale \
+       selection capture nothing"
+      (fun ~url conn ->
+        let* uid = insert_user conn "anfn_selfail" in
+        let* other = insert_user conn "anfn_selother" in
+        let* _inst, draft, _v, _acct =
+          Pfin.make_draft conn ~user:uid ~ext_id:962000002L
+            (fun account_id -> [ Pfin.repo ~account_id ~id:962900011L "alpha" ])
+        in
+        let* _inst, foreign_draft, _v, _acct =
+          Pfin.make_draft conn ~user:other ~ext_id:962000003L
+            (fun account_id -> [ Pfin.repo ~account_id ~id:962900012L "alpha" ])
+        in
+        let* cookie, token = open_session "selfail" ~url uid in
+        let post label fields =
+          with_sink_lwt (fun () ->
+              do_post ~url ~cookie ~target:"/projects/new/repositories" ~token
+                ~body_fields:fields ())
+          |> Lwt.map (fun ((response, _body), captured) ->
+                 (label, response, captured))
+        in
+        let refused label fields =
+          let* label, _response, captured = post label fields in
+          check_no_capture label captured;
+          Lwt.return_unit
+        in
+        let* () =
+          refused "unknown field"
+            [ ("draft_id", Int64.to_string draft); ("anfn_unknown", "x") ]
+        in
+        let* () = refused "missing draft id" [ ("repository", "1") ] in
+        let* () =
+          refused "non-numeric draft id" [ ("draft_id", "not-a-number") ]
+        in
+        let* () =
+          refused "foreign draft"
+            [ ("draft_id", Int64.to_string foreign_draft) ]
+        in
+        let* () =
+          refused "snapshot id from another draft"
+            [ ("draft_id", Int64.to_string draft);
+              ("repository", "962999999")
+            ]
+        in
+        (* An origin failure is refused before the form is even parsed. *)
+        let* (response, _body), captured =
+          with_sink_lwt (fun () ->
+              let headers =
+                [ ("Origin", "https://evil.example");
+                  ("Content-Type", "application/x-www-form-urlencoded");
+                  ("Cookie", cookie ^ "; " ^ fst an_consent_granted ^ "=granted")
+                ]
+              in
+              let* response =
+                (pipeline_for ~url)
+                  (Dream.request ~method_:`POST
+                     ~target:"/projects/new/repositories" ~headers
+                     (Pch.form_body
+                        [ ("dream.csrf", token);
+                          ("draft_id", Int64.to_string draft)
+                        ]))
+              in
+              let* body = Dream.body response in
+              Lwt.return (response, body))
+        in
+        Alcotest.(check int) "cross-origin 403" 403 (status_of response);
+        check_no_capture "cross-origin" captured;
+        (* A missing CSRF token is refused the same way. *)
+        let* (response, _body), captured =
+          with_sink_lwt (fun () ->
+              do_post ~url ~cookie ~target:"/projects/new/repositories"
+                ~token:"not-a-token"
+                ~body_fields:[ ("draft_id", Int64.to_string draft) ]
+                ())
+        in
+        Alcotest.(check int) "bad CSRF 403" 403 (status_of response);
+        check_no_capture "bad CSRF" captured;
+        Lwt.return_unit)
+
+  (* === github_project_created === *)
+
+  let creation_case =
+    db_case
+      "project creation: a committed finalization captures exactly one \
+       github_project_created carrying the permanent id, kind and count"
+      (fun ~url conn ->
+        let* uid = insert_user conn "anfn_create" in
+        let* _inst, draft, _v, _acct =
+          Pfin.make_draft conn ~user:uid ~ext_id:962000011L
+            (fun account_id ->
+              [ Pfin.repo ~account_id ~id:962900021L "alpha";
+                Pfin.repo ~account_id ~id:962900022L "beta"
+              ])
+        in
+        let* ids = Pfin.snapshot_ids conn draft in
+        let s1 = List.nth ids 0 and s2 = List.nth ids 1 in
+        let* () =
+          Pod_select.replace_ok "seed selection" conn ~user:uid ~draft
+            ~primary:s1 [ s1; s2 ]
+        in
+        let* cookie, token = open_session "create" ~url uid in
+        let fields =
+          Pch.identity_fields ~draft:(Int64.to_string draft)
+            ~name:"Anfn Created Project" ~slug:"anfn-created"
+            ~primary:(Int64.to_string s1) ()
+        in
+        let* (response, _body), captured =
+          with_sink_lwt (fun () ->
+              do_post ~url ~cookie ~target:"/projects" ~token
+                ~body_fields:fields ())
+        in
+        check_redirect "created" ~location:"/projects/anfn-created/setup"
+          response;
+        let* project = find conn "project id" q_project_id_of_slug "anfn-created" in
+        check_single_capture "created" ~name:"github_project_created"
+          ~distinct_id:(Printf.sprintf "user:%d" uid)
+          ~props:
+            [ ("user_id", `Int uid);
+              ("project_id", `Intlit (Int64.to_string project));
+              ("project_kind", `String "project");
+              ("repository_count", `Int 2)
+            ]
+          captured;
+        (* A replay finds the draft completed: no second project, no second
+           event. *)
+        let* (response, _body), captured =
+          with_sink_lwt (fun () ->
+              do_post ~url ~cookie ~target:"/projects" ~token
+                ~body_fields:fields ())
+        in
+        Alcotest.(check int) "replay 303" 303 (status_of response);
+        check_no_capture "replay" captured;
+        let* count = find conn "project count" q_project_count 962100011L in
+        Alcotest.(check int) "exactly one permanent project" 1 count;
+        Lwt.return_unit)
+
+  let creation_failure_case =
+    db_case
+      "project creation: an invalid form, a taken slug, and an already \
+       claimed repository capture nothing"
+      (fun ~url conn ->
+        let* uid = insert_user conn "anfn_createfail" in
+        (* An existing project owns both the slug and a repository id. *)
+        let* _inst, _existing =
+          make_project conn ~user:uid ~ext_id:962000021L ~slug:"anfn-taken"
+        in
+        let* _inst, draft, _v, _acct =
+          Pfin.make_draft conn ~user:uid ~ext_id:962000022L
+            (fun account_id -> [ Pfin.repo ~account_id ~id:962900031L "alpha" ])
+        in
+        let* ids = Pfin.snapshot_ids conn draft in
+        let s1 = List.nth ids 0 in
+        let* () =
+          Pod_select.replace_ok "seed selection" conn ~user:uid ~draft
+            ~primary:s1 [ s1 ]
+        in
+        let* cookie, token = open_session "createfail" ~url uid in
+        let post label fields =
+          with_sink_lwt (fun () ->
+              do_post ~url ~cookie ~target:"/projects" ~token
+                ~body_fields:fields ())
+          |> Lwt.map (fun ((response, _body), captured) ->
+                 (label, response, captured))
+        in
+        (* Structurally invalid: an unknown field never reaches the store. *)
+        let* label, response, captured =
+          post "unknown field"
+            [ ("draft_id", Int64.to_string draft); ("anfn_unknown", "x") ]
+        in
+        Alcotest.(check int) (label ^ ": 400") 400 (status_of response);
+        check_no_capture label captured;
+        (* Domain-invalid identity: a reserved slug is a 422 re-render. *)
+        let* label, response, captured =
+          post "reserved slug"
+            (Pch.identity_fields ~draft:(Int64.to_string draft)
+               ~name:"Anfn Reserved" ~slug:"new"
+               ~primary:(Int64.to_string s1) ())
+        in
+        Alcotest.(check int) (label ^ ": 422") 422 (status_of response);
+        check_no_capture label captured;
+        (* Slug already taken by the existing project: a 409 re-render. *)
+        let* label, response, captured =
+          post "slug conflict"
+            (Pch.identity_fields ~draft:(Int64.to_string draft)
+               ~name:"Anfn Conflict" ~slug:"anfn-taken"
+               ~primary:(Int64.to_string s1) ())
+        in
+        Alcotest.(check int) (label ^ ": 409") 409 (status_of response);
+        check_no_capture label captured;
+        let* count = find conn "project count" q_project_count 962100022L in
+        Alcotest.(check int) "no project from a refused creation" 0 count;
+        Lwt.return_unit)
+
+  (* === project_home_request_submitted === *)
+
+  let request_case =
+    db_case
+      "home request: a committed pending request captures exactly one \
+       project_home_request_submitted for the steward"
+      (fun ~url conn ->
+        let* uid = insert_user conn "anfn_req" in
+        let* _inst, _project =
+          make_project conn ~user:uid ~ext_id:962000031L ~slug:"anfn-req"
+        in
+        let* community = insert_community conn "anfn-req-home" in
+        let* cookie, token = open_session "req" ~url uid in
+        let* (response, _body), captured =
+          with_sink_lwt (fun () ->
+              do_post ~url ~cookie ~target:(request_home_target "anfn-req")
+                ~token
+                ~body_fields:
+                  (request_fields ~community
+                     ~note:"anfn-note-SHOULD-NOT-BE-CAPTURED" ())
+                ())
+        in
+        check_redirect "submitted" ~location:"/projects/anfn-req/request-home"
+          response;
+        check_single_capture "submitted"
+          ~name:"project_home_request_submitted"
+          ~distinct_id:(Printf.sprintf "user:%d" uid)
+          ~props:[ ("user_id", `Int uid) ]
+          captured;
+        (* The private note never reached the payload. *)
+        let serialized =
+          String.concat "|" (List.map Yojson.Safe.to_string captured)
+        in
+        Alcotest.(check bool) "request note absent from the payload" false
+          (contains serialized "anfn-note");
+        Alcotest.(check bool) "community slug absent from the payload" false
+          (contains serialized "anfn-req-home");
+        (* A replay hits the one-active-home rule: 409, and no event. *)
+        let* (response, _body), captured =
+          with_sink_lwt (fun () ->
+              do_post ~url ~cookie ~target:(request_home_target "anfn-req")
+                ~token ~body_fields:(request_fields ~community ()) ())
+        in
+        Alcotest.(check int) "replay 409" 409 (status_of response);
+        check_no_capture "replay" captured;
+        Lwt.return_unit)
+
+  let request_failure_case =
+    db_case
+      "home request: an invalid form, an ineligible target, and an \
+       unstewarded project capture nothing"
+      (fun ~url conn ->
+        let* uid = insert_user conn "anfn_reqfail" in
+        let* outsider = insert_user conn "anfn_reqout" in
+        let* _inst, _project =
+          make_project conn ~user:uid ~ext_id:962000032L ~slug:"anfn-reqfail"
+        in
+        (* Eligibility is exactly "network community AND published AND
+           public-or-unlisted", so a legacy community is ineligible without
+           forcing a shape the scoped lifecycle CHECKs forbid. *)
+        let* legacy_community =
+          insert_community ~network:false conn "anfn-reqfail-legacy"
+        in
+        let* cookie, token = open_session "reqfail" ~url uid in
+        let post ?(target = request_home_target "anfn-reqfail") label fields =
+          with_sink_lwt (fun () ->
+              do_post ~url ~cookie ~target ~token ~body_fields:fields ())
+          |> Lwt.map (fun ((response, _body), captured) ->
+                 (label, response, captured))
+        in
+        let* label, response, captured =
+          post "unknown field" [ ("anfn_unknown", "x") ]
+        in
+        Alcotest.(check int) (label ^ ": 400") 400 (status_of response);
+        check_no_capture label captured;
+        let* label, response, captured =
+          post "ineligible target"
+            (request_fields ~community:legacy_community ())
+        in
+        Alcotest.(check int) (label ^ ": 409") 409 (status_of response);
+        check_no_capture label captured;
+        (* An unstewarded project is the generic 404. *)
+        let* community = insert_community conn "anfn-reqfail-home" in
+        let* out_cookie, out_token = open_session "outsider" ~url outsider in
+        let* (response, _body), captured =
+          with_sink_lwt (fun () ->
+              do_post ~url ~cookie:out_cookie
+                ~target:(request_home_target "anfn-reqfail") ~token:out_token
+                ~body_fields:(request_fields ~community ()) ())
+        in
+        Alcotest.(check int) "unstewarded 404" 404 (status_of response);
+        check_no_capture "unstewarded" captured;
+        Lwt.return_unit)
+
+  let request_concurrency_case =
+    db_case
+      "home request concurrency: two competing submissions leave one \
+       relation and exactly one submitted event"
+      (fun ~url conn ->
+        let* uid = insert_user conn "anfn_reqrace" in
+        let* _inst, project =
+          make_project conn ~user:uid ~ext_id:962000033L ~slug:"anfn-reqrace"
+        in
+        let* a = insert_community conn "anfn-reqrace-a" in
+        let* b = insert_community conn "anfn-reqrace-b" in
+        let* cookie, token = open_session "reqrace" ~url uid in
+        let* (first, second), captured =
+          with_sink_lwt (fun () ->
+              Lwt.both
+                (do_post ~url ~cookie
+                   ~target:(request_home_target "anfn-reqrace") ~token
+                   ~body_fields:(request_fields ~community:a ())
+                   ())
+                (do_post ~url ~cookie
+                   ~target:(request_home_target "anfn-reqrace") ~token
+                   ~body_fields:(request_fields ~community:b ())
+                   ()))
+        in
+        let statuses =
+          List.sort compare
+            [ status_of (fst first); status_of (fst second) ]
+        in
+        Alcotest.(check (list int)) "one winner, one conflict" [ 303; 409 ]
+          statuses;
+        check_single_capture "race" ~name:"project_home_request_submitted"
+          ~distinct_id:(Printf.sprintf "user:%d" uid)
+          ~props:[ ("user_id", `Int uid) ]
+          captured;
+        let* count = find conn "relations" q_relation_count project in
+        Alcotest.(check int) "exactly one relation" 1 count;
+        Lwt.return_unit)
+
+  (* === project_home_request_reviewed === *)
+
+  let review_case =
+    db_case
+      "review: accept and reject each capture exactly one \
+       project_home_request_reviewed for the reviewing moderator"
+      (fun ~url conn ->
+        let* steward = insert_user conn "anfn_revsteward" in
+        let* moderator = insert_user conn "anfn_revmod" in
+        let* _inst, _p1 =
+          make_project conn ~user:steward ~ext_id:962000041L
+            ~slug:"anfn-accepted"
+        in
+        let* _inst, _p2 =
+          make_project conn ~user:steward ~ext_id:962000042L
+            ~slug:"anfn-rejected"
+        in
+        let* community = insert_community conn "anfn-review-home" in
+        let* () =
+          exec conn "top mod" q_insert_moderator
+            (moderator, community, "top_mod")
+        in
+        let* () =
+          pending_request conn ~user:steward ~slug:"anfn-accepted" ~community ()
+        in
+        let* () =
+          pending_request conn ~user:steward ~slug:"anfn-rejected" ~community ()
+        in
+        let* cookie, token = open_session "review" ~url moderator in
+        let review label ~target =
+          with_sink_lwt (fun () ->
+              do_post ~url ~cookie ~target ~token ~body_fields:[] ())
+          |> Lwt.map (fun ((response, _body), captured) ->
+                 (label, response, captured))
+        in
+        let* label, response, captured =
+          review "accept"
+            ~target:
+              (accept_target ~community:"anfn-review-home"
+                 ~project:"anfn-accepted")
+        in
+        check_redirect label
+          ~location:"/c/anfn-review-home/project-home-requests" response;
+        check_single_capture label ~name:"project_home_request_reviewed"
+          (* The actor is the REVIEWER, not the requesting steward. *)
+          ~distinct_id:(Printf.sprintf "user:%d" moderator)
+          ~props:
+            [ ("user_id", `Int moderator); ("decision", `String "accepted") ]
+          captured;
+        let* label, response, captured =
+          review "reject"
+            ~target:
+              (reject_target ~community:"anfn-review-home"
+                 ~project:"anfn-rejected")
+        in
+        check_redirect label
+          ~location:"/c/anfn-review-home/project-home-requests" response;
+        check_single_capture label ~name:"project_home_request_reviewed"
+          ~distinct_id:(Printf.sprintf "user:%d" moderator)
+          ~props:
+            [ ("user_id", `Int moderator); ("decision", `String "rejected") ]
+          captured;
+        (* Replays of both decisions find nothing pending. *)
+        let* label, response, captured =
+          review "accept replay"
+            ~target:
+              (accept_target ~community:"anfn-review-home"
+                 ~project:"anfn-accepted")
+        in
+        Alcotest.(check int) (label ^ ": 409") 409 (status_of response);
+        check_no_capture label captured;
+        Lwt.return_unit)
+
+  let review_failure_case =
+    db_case
+      "review: an unauthorized reviewer and a body-carrying form capture \
+       nothing"
+      (fun ~url conn ->
+        let* steward = insert_user conn "anfn_revfsteward" in
+        let* moderator = insert_user conn "anfn_revfmod" in
+        let* ordinary = insert_user conn "anfn_revfuser" in
+        let* _inst, _p =
+          make_project conn ~user:steward ~ext_id:962000043L
+            ~slug:"anfn-revfail"
+        in
+        let* community = insert_community conn "anfn-revfail-home" in
+        let* () =
+          exec conn "top mod" q_insert_moderator
+            (moderator, community, "top_mod")
+        in
+        let* () =
+          pending_request conn ~user:steward ~slug:"anfn-revfail" ~community ()
+        in
+        let target =
+          accept_target ~community:"anfn-revfail-home" ~project:"anfn-revfail"
+        in
+        let* cookie, token = open_session "ordinary" ~url ordinary in
+        let* (response, _body), captured =
+          with_sink_lwt (fun () ->
+              do_post ~url ~cookie ~target ~token ~body_fields:[] ())
+        in
+        Alcotest.(check int) "unauthorized 404" 404 (status_of response);
+        check_no_capture "unauthorized" captured;
+        (* A moderator submitting any application field is a generic 400
+           that never reaches the store. *)
+        let* mod_cookie, mod_token = open_session "moderator" ~url moderator in
+        let* (response, _body), captured =
+          with_sink_lwt (fun () ->
+              do_post ~url ~cookie:mod_cookie ~target ~token:mod_token
+                ~body_fields:[ ("decision", "accepted") ] ())
+        in
+        Alcotest.(check int) "field-carrying 400" 400 (status_of response);
+        check_no_capture "field-carrying" captured;
+        Lwt.return_unit)
+
+  let review_concurrency_case =
+    db_case
+      "review concurrency: two reviewers of one pending request produce \
+       exactly one reviewed event"
+      (fun ~url conn ->
+        let* steward = insert_user conn "anfn_revrsteward" in
+        let* mod_a = insert_user conn "anfn_revrmoda" in
+        let* mod_b = insert_user conn "anfn_revrmodb" in
+        let* _inst, project =
+          make_project conn ~user:steward ~ext_id:962000044L
+            ~slug:"anfn-revrace"
+        in
+        let* community = insert_community conn "anfn-revrace-home" in
+        let* () =
+          exec conn "mod a" q_insert_moderator (mod_a, community, "top_mod")
+        in
+        let* () =
+          exec conn "mod b" q_insert_moderator (mod_b, community, "top_mod")
+        in
+        let* () =
+          pending_request conn ~user:steward ~slug:"anfn-revrace" ~community ()
+        in
+        let target =
+          accept_target ~community:"anfn-revrace-home" ~project:"anfn-revrace"
+        in
+        let* cookie_a, token_a = open_session "mod a" ~url mod_a in
+        let* cookie_b, token_b = open_session "mod b" ~url mod_b in
+        let* (first, second), captured =
+          with_sink_lwt (fun () ->
+              Lwt.both
+                (do_post ~url ~cookie:cookie_a ~target ~token:token_a
+                   ~body_fields:[] ())
+                (do_post ~url ~cookie:cookie_b ~target ~token:token_b
+                   ~body_fields:[] ()))
+        in
+        let statuses =
+          List.sort compare
+            [ status_of (fst first); status_of (fst second) ]
+        in
+        Alcotest.(check (list int)) "one winner, one conflict" [ 303; 409 ]
+          statuses;
+        Alcotest.(check int) "exactly one reviewed event" 1
+          (List.length captured);
+        Alcotest.(check (list string)) "and it is the reviewed event"
+          [ "project_home_request_reviewed" ] (an_event_names captured);
+        let* status = find conn "status" q_relation_status project in
+        Alcotest.(check string) "one accepted relation" "accepted" status;
+        Lwt.return_unit)
+
+  (* === dedicated_home_provisioned === *)
+
+  let provisioning_case =
+    db_case
+      "provisioning: a committed dedicated home captures exactly one \
+       dedicated_home_provisioned and never a publication event"
+      (fun ~url conn ->
+        let* uid = insert_user conn "anfn_prov" in
+        let* _inst, _project =
+          make_project conn ~user:uid ~ext_id:962000051L ~slug:"anfn-prov"
+        in
+        let* cookie, token = open_session "prov" ~url uid in
+        let* (response, _body), captured =
+          with_sink_lwt (fun () ->
+              do_post ~url ~cookie ~target:(provision_target "anfn-prov")
+                ~token
+                ~body_fields:(community_fields ~slug:"anfn-prov-home" ())
+                ())
+        in
+        check_redirect "provisioned"
+          ~location:"/c/anfn-prov-home/settings" response;
+        check_single_capture "provisioned" ~name:"dedicated_home_provisioned"
+          ~distinct_id:(Printf.sprintf "user:%d" uid)
+          ~props:[ ("user_id", `Int uid) ]
+          captured;
+        (* The created community is still a private draft: nothing published
+           happened, and no publication event may exist. *)
+        let* state, visibility =
+          find conn "community state" q_community_state "anfn-prov-home"
+        in
+        Alcotest.(check string) "still a draft" "draft" state;
+        Alcotest.(check string) "still private" "private" visibility;
+        (* A replay finds an active home: the current-home GET, no event. *)
+        let* (response, _body), captured =
+          with_sink_lwt (fun () ->
+              do_post ~url ~cookie ~target:(provision_target "anfn-prov")
+                ~token
+                ~body_fields:(community_fields ~slug:"anfn-prov-home2" ())
+                ())
+        in
+        check_redirect "replay" ~location:"/projects/anfn-prov/request-home"
+          response;
+        check_no_capture "replay" captured;
+        let* count = find conn "second community" q_community_count
+                       "anfn-prov-home2" in
+        Alcotest.(check int) "no second community" 0 count;
+        Lwt.return_unit)
+
+  let provisioning_failure_case =
+    db_case
+      "provisioning: an invalid form, a taken slug, and an unstewarded \
+       project capture nothing"
+      (fun ~url conn ->
+        let* uid = insert_user conn "anfn_provfail" in
+        let* outsider = insert_user conn "anfn_provout" in
+        let* _inst, _project =
+          make_project conn ~user:uid ~ext_id:962000052L ~slug:"anfn-provfail"
+        in
+        let* _taken = insert_community conn "anfn-provfail-taken" in
+        let* cookie, token = open_session "provfail" ~url uid in
+        let post label fields =
+          with_sink_lwt (fun () ->
+              do_post ~url ~cookie
+                ~target:(provision_target "anfn-provfail") ~token
+                ~body_fields:fields ())
+          |> Lwt.map (fun ((response, _body), captured) ->
+                 (label, response, captured))
+        in
+        let* label, response, captured =
+          post "invalid slug"
+            (community_fields ~slug:"Anfn Invalid Slug" ())
+        in
+        Alcotest.(check int) (label ^ ": 422") 422 (status_of response);
+        check_no_capture label captured;
+        let* label, response, captured =
+          post "taken slug" (community_fields ~slug:"anfn-provfail-taken" ())
+        in
+        Alcotest.(check int) (label ^ ": 409") 409 (status_of response);
+        check_no_capture label captured;
+        let* out_cookie, out_token = open_session "outsider" ~url outsider in
+        let* (response, _body), captured =
+          with_sink_lwt (fun () ->
+              do_post ~url ~cookie:out_cookie
+                ~target:(provision_target "anfn-provfail") ~token:out_token
+                ~body_fields:(community_fields ~slug:"anfn-provfail-out" ())
+                ())
+        in
+        Alcotest.(check int) "unstewarded 404" 404 (status_of response);
+        check_no_capture "unstewarded" captured;
+        Lwt.return_unit)
+
+  let provisioning_concurrency_case =
+    db_case
+      "provisioning concurrency: two attempts leave one home and exactly one \
+       provisioned event"
+      (fun ~url conn ->
+        let* uid = insert_user conn "anfn_provrace" in
+        let* _inst, project =
+          make_project conn ~user:uid ~ext_id:962000053L ~slug:"anfn-provrace"
+        in
+        let* cookie, token = open_session "provrace" ~url uid in
+        let* (first, second), captured =
+          with_sink_lwt (fun () ->
+              Lwt.both
+                (do_post ~url ~cookie
+                   ~target:(provision_target "anfn-provrace") ~token
+                   ~body_fields:(community_fields ~slug:"anfn-provrace-a" ())
+                   ())
+                (do_post ~url ~cookie
+                   ~target:(provision_target "anfn-provrace") ~token
+                   ~body_fields:(community_fields ~slug:"anfn-provrace-b" ())
+                   ()))
+        in
+        ignore first;
+        ignore second;
+        Alcotest.(check int) "exactly one provisioned event" 1
+          (List.length captured);
+        Alcotest.(check (list string)) "and it is the provisioned event"
+          [ "dedicated_home_provisioned" ] (an_event_names captured);
+        let* count = find conn "relations" q_relation_count project in
+        Alcotest.(check int) "exactly one relation" 1 count;
+        Lwt.return_unit)
+
+  (* === network_community_published === *)
+
+  let publication_case =
+    db_case
+      "publication: Public and Unlisted each capture exactly one \
+       network_community_published carrying only the committed exposure"
+      (fun ~url conn ->
+        let* uid = insert_user conn "anfn_pub" in
+        let* _p, _cid, _rid =
+          make_home_draft conn ~user:uid ~ext_id:962000061L
+            ~project_slug:"anfn-pub-a" ~slug:"anfn-pub-a-home"
+        in
+        let* _p, _cid, _rid =
+          make_home_draft conn ~user:uid ~ext_id:962000062L
+            ~project_slug:"anfn-pub-b" ~slug:"anfn-pub-b-home"
+        in
+        let* cookie, token = open_session "pub" ~url uid in
+        let publish label ~slug ~visibility =
+          with_sink_lwt (fun () ->
+              do_post ~url ~cookie ~target:(publish_target slug) ~token
+                ~body_fields:(publish_fields ~slug ~visibility ())
+                ())
+          |> Lwt.map (fun ((response, _body), captured) ->
+                 (label, response, captured))
+        in
+        let* label, response, captured =
+          publish "public" ~slug:"anfn-pub-a-home" ~visibility:"public"
+        in
+        check_redirect label ~location:"/c/anfn-pub-a-home" response;
+        check_single_capture label ~name:"network_community_published"
+          ~distinct_id:(Printf.sprintf "user:%d" uid)
+          ~props:
+            [ ("user_id", `Int uid);
+              ("publication_visibility", `String "public")
+            ]
+          captured;
+        let* label, response, captured =
+          publish "unlisted" ~slug:"anfn-pub-b-home" ~visibility:"unlisted"
+        in
+        check_redirect label ~location:"/c/anfn-pub-b-home" response;
+        check_single_capture label ~name:"network_community_published"
+          ~distinct_id:(Printf.sprintf "user:%d" uid)
+          ~props:
+            [ ("user_id", `Int uid);
+              ("publication_visibility", `String "unlisted")
+            ]
+          captured;
+        (* A replayed publication is the generic 404, with no event. *)
+        let* label, response, captured =
+          publish "replay" ~slug:"anfn-pub-a-home" ~visibility:"public"
+        in
+        Alcotest.(check int) (label ^ ": 404") 404 (status_of response);
+        check_no_capture label captured;
+        Lwt.return_unit)
+
+  let publication_failure_case =
+    db_case
+      "publication: an invalid form, a taken slug, and an unauthorized \
+       publisher capture nothing"
+      (fun ~url conn ->
+        let* uid = insert_user conn "anfn_pubfail" in
+        let* outsider = insert_user conn "anfn_pubout" in
+        let* _p, _cid, _rid =
+          make_home_draft conn ~user:uid ~ext_id:962000063L
+            ~project_slug:"anfn-pubfail" ~slug:"anfn-pubfail-home"
+        in
+        let* _taken = insert_community conn "anfn-pubfail-taken" in
+        let* cookie, token = open_session "pubfail" ~url uid in
+        let post label ?(cookie = cookie) ?(token = token) fields =
+          with_sink_lwt (fun () ->
+              do_post ~url ~cookie
+                ~target:(publish_target "anfn-pubfail-home") ~token
+                ~body_fields:fields ())
+          |> Lwt.map (fun ((response, _body), captured) ->
+                 (label, response, captured))
+        in
+        let* label, response, captured =
+          post "invalid visibility"
+            (publish_fields ~slug:"anfn-pubfail-home" ~visibility:"private" ())
+        in
+        Alcotest.(check int) (label ^ ": 422") 422 (status_of response);
+        check_no_capture label captured;
+        let* label, response, captured =
+          post "taken slug"
+            (publish_fields ~slug:"anfn-pubfail-taken" ())
+        in
+        Alcotest.(check int) (label ^ ": 409") 409 (status_of response);
+        check_no_capture label captured;
+        let* out_cookie, out_token = open_session "outsider" ~url outsider in
+        let* label, response, captured =
+          post "unauthorized" ~cookie:out_cookie ~token:out_token
+            (publish_fields ~slug:"anfn-pubfail-home" ())
+        in
+        Alcotest.(check int) (label ^ ": 404") 404 (status_of response);
+        check_no_capture label captured;
+        let* state, _visibility =
+          find conn "community state" q_community_state "anfn-pubfail-home"
+        in
+        Alcotest.(check string) "still a draft" "draft" state;
+        Lwt.return_unit)
+
+  let publication_concurrency_case =
+    db_case
+      "publication concurrency: two attempts publish once and capture \
+       exactly one published event"
+      (fun ~url conn ->
+        let* uid = insert_user conn "anfn_pubrace" in
+        let* _p, _cid, _rid =
+          make_home_draft conn ~user:uid ~ext_id:962000064L
+            ~project_slug:"anfn-pubrace" ~slug:"anfn-pubrace-home"
+        in
+        let* cookie, token = open_session "pubrace" ~url uid in
+        let fields = publish_fields ~slug:"anfn-pubrace-home" () in
+        let* (first, second), captured =
+          with_sink_lwt (fun () ->
+              Lwt.both
+                (do_post ~url ~cookie
+                   ~target:(publish_target "anfn-pubrace-home") ~token
+                   ~body_fields:fields ())
+                (do_post ~url ~cookie
+                   ~target:(publish_target "anfn-pubrace-home") ~token
+                   ~body_fields:fields ()))
+        in
+        let statuses =
+          List.sort compare
+            [ status_of (fst first); status_of (fst second) ]
+        in
+        Alcotest.(check (list int)) "one winner, one generic 404" [ 303; 404 ]
+          statuses;
+        Alcotest.(check int) "exactly one published event" 1
+          (List.length captured);
+        Alcotest.(check (list string)) "and it is the published event"
+          [ "network_community_published" ] (an_event_names captured);
+        Lwt.return_unit)
+
+  (* === project_home_removed === *)
+
+  let removal_case =
+    db_case
+      "removal: each surface captures exactly one project_home_removed \
+       carrying its route surface and no authorization source"
+      (fun ~url conn ->
+        let* steward = insert_user conn "anfn_rmsteward" in
+        let* moderator = insert_user conn "anfn_rmmod" in
+        let seed ~ext_id ~project_slug ~community_slug =
+          let* _inst, _project =
+            make_project conn ~user:steward ~ext_id ~slug:project_slug
+          in
+          let* community = insert_community conn community_slug in
+          let* () =
+            exec conn "top mod" q_insert_moderator
+              (moderator, community, "top_mod")
+          in
+          let* () =
+            pending_request conn ~user:steward ~slug:project_slug ~community ()
+          in
+          accept_request conn ~reviewer:moderator ~project_slug
+            ~community_slug
+        in
+        let* () =
+          seed ~ext_id:962000071L ~project_slug:"anfn-rm-a"
+            ~community_slug:"anfn-rm-a-home"
+        in
+        let* () =
+          seed ~ext_id:962000072L ~project_slug:"anfn-rm-b"
+            ~community_slug:"anfn-rm-b-home"
+        in
+        let* cookie, token = open_session "removal" ~url steward in
+        let remove label ~target =
+          with_sink_lwt (fun () ->
+              do_post ~url ~cookie ~target ~token ~body_fields:[] ())
+          |> Lwt.map (fun ((response, _body), captured) ->
+                 (label, response, captured))
+        in
+        let* label, response, captured =
+          remove "project surface"
+            ~target:
+              (project_side_remove ~project:"anfn-rm-a"
+                 ~community:"anfn-rm-a-home")
+        in
+        check_redirect label ~location:"/projects/anfn-rm-a/request-home"
+          response;
+        check_single_capture label ~name:"project_home_removed"
+          ~distinct_id:(Printf.sprintf "user:%d" steward)
+          ~props:
+            [ ("user_id", `Int steward);
+              ("removal_surface", `String "project")
+            ]
+          captured;
+        let* label, response, captured =
+          remove "community surface"
+            ~target:
+              (community_side_remove ~community:"anfn-rm-b-home"
+                 ~project:"anfn-rm-b")
+        in
+        check_redirect label
+          ~location:"/c/anfn-rm-b-home/settings?panel=projects" response;
+        check_single_capture label ~name:"project_home_removed"
+          ~distinct_id:(Printf.sprintf "user:%d" steward)
+          ~props:
+            [ ("user_id", `Int steward);
+              ("removal_surface", `String "community")
+            ]
+          captured;
+        (* A replay reaches the same destination — deliberately — with no
+           second event. *)
+        let* label, response, captured =
+          remove "replay"
+            ~target:
+              (project_side_remove ~project:"anfn-rm-a"
+                 ~community:"anfn-rm-a-home")
+        in
+        check_redirect label ~location:"/projects/anfn-rm-a/request-home"
+          response;
+        check_no_capture label captured;
+        Lwt.return_unit)
+
+  let removal_failure_case =
+    db_case
+      "removal: a protected unpublished draft home and an unauthorized \
+       actor capture nothing"
+      (fun ~url conn ->
+        let* uid = insert_user conn "anfn_rmfail" in
+        let* outsider = insert_user conn "anfn_rmout" in
+        let* project, _cid, _rid =
+          make_home_draft conn ~user:uid ~ext_id:962000073L
+            ~project_slug:"anfn-rmfail" ~slug:"anfn-rmfail-home"
+        in
+        let* cookie, token = open_session "rmfail" ~url uid in
+        let target =
+          project_side_remove ~project:"anfn-rmfail"
+            ~community:"anfn-rmfail-home"
+        in
+        (* The provisioned home of an unpublished setup draft is protected:
+           the redirect is the same as a success, and there is deliberately
+           no event. *)
+        let* (response, _body), captured =
+          with_sink_lwt (fun () ->
+              do_post ~url ~cookie ~target ~token ~body_fields:[] ())
+        in
+        check_redirect "protected draft"
+          ~location:"/projects/anfn-rmfail/request-home" response;
+        check_no_capture "protected draft" captured;
+        let* status = find conn "status" q_relation_status project in
+        Alcotest.(check string) "home still accepted" "accepted" status;
+        let* out_cookie, out_token = open_session "outsider" ~url outsider in
+        let* (response, _body), captured =
+          with_sink_lwt (fun () ->
+              do_post ~url ~cookie:out_cookie ~target ~token:out_token
+                ~body_fields:[] ())
+        in
+        Alcotest.(check int) "unauthorized 404" 404 (status_of response);
+        check_no_capture "unauthorized" captured;
+        Lwt.return_unit)
+
+  let removal_concurrency_case =
+    db_case
+      "removal concurrency: two removers on both surfaces produce exactly \
+       one removal event"
+      (fun ~url conn ->
+        let* steward = insert_user conn "anfn_rmrsteward" in
+        let* moderator = insert_user conn "anfn_rmrmod" in
+        let* _inst, project =
+          make_project conn ~user:steward ~ext_id:962000074L
+            ~slug:"anfn-rmrace"
+        in
+        let* community = insert_community conn "anfn-rmrace-home" in
+        let* () =
+          exec conn "top mod" q_insert_moderator
+            (moderator, community, "top_mod")
+        in
+        let* () =
+          pending_request conn ~user:steward ~slug:"anfn-rmrace" ~community ()
+        in
+        let* () =
+          accept_request conn ~reviewer:moderator ~project_slug:"anfn-rmrace"
+            ~community_slug:"anfn-rmrace-home"
+        in
+        let* steward_cookie, steward_token =
+          open_session "steward" ~url steward
+        in
+        let* mod_cookie, mod_token = open_session "moderator" ~url moderator in
+        let* (first, second), captured =
+          with_sink_lwt (fun () ->
+              Lwt.both
+                (do_post ~url ~cookie:steward_cookie
+                   ~target:
+                     (project_side_remove ~project:"anfn-rmrace"
+                        ~community:"anfn-rmrace-home")
+                   ~token:steward_token ~body_fields:[] ())
+                (do_post ~url ~cookie:mod_cookie
+                   ~target:
+                     (community_side_remove ~community:"anfn-rmrace-home"
+                        ~project:"anfn-rmrace")
+                   ~token:mod_token ~body_fields:[] ()))
+        in
+        (* Both surfaces answer 303 whether they removed or found nothing to
+           remove — that collapse is the point of the design. *)
+        Alcotest.(check (list int)) "both redirect" [ 303; 303 ]
+          [ status_of (fst first); status_of (fst second) ];
+        Alcotest.(check int) "exactly one removal event" 1
+          (List.length captured);
+        Alcotest.(check (list string)) "and it is the removal event"
+          [ "project_home_removed" ] (an_event_names captured);
+        let* status = find conn "status" q_relation_status project in
+        Alcotest.(check string) "relation removed once" "removed" status;
+        Lwt.return_unit)
+
+  (* === Privacy sweep === *)
+
+  let privacy_case =
+    db_case
+      "privacy: no email, GitHub identifier, repository name, slug, note, or \
+       description reaches an event name, a property, a distinct id, or a \
+       captured body"
+      (fun ~url conn ->
+        let* steward = insert_user conn "anfn_privsteward" in
+        let* moderator = insert_user conn "anfn_privmod" in
+        let repo_name = "anfnPrivateRepoFixture" in
+        let note = "anfn-NOTE-fixture-9f2b" in
+        let description = "anfn-DESCRIPTION-fixture-4c7d" in
+        let* _inst, draft, _v, _acct =
+          Pfin.make_draft ~login:"anfn-owner-fixture" conn ~user:steward
+            ~ext_id:962000081L
+            (fun account_id ->
+              [ (* the listing fixture substitutes raw JSON per field, so a
+                   description travels as a JSON string literal *)
+                Pfin.repo ~owner_login:"anfn-owner-fixture" ~account_id
+                  ~description:(Printf.sprintf "%S" description)
+                  ~id:962900081L repo_name
+              ])
+        in
+        let* ids = Pfin.snapshot_ids conn draft in
+        let s1 = List.nth ids 0 in
+        let* () =
+          Pod_select.replace_ok "seed" conn ~user:steward ~draft ~primary:s1
+            [ s1 ]
+        in
+        let* cookie, token = open_session "privacy" ~url steward in
+        let collected = ref [] in
+        let run label target fields =
+          let* (response, _body), captured =
+            with_sink_lwt (fun () ->
+                do_post ~url ~cookie ~target ~token ~body_fields:fields ())
+          in
+          collected := !collected @ captured;
+          Lwt.return (label, response)
+        in
+        let* _ =
+          run "select" "/projects/new/repositories"
+            [ ("draft_id", Int64.to_string draft);
+              ("repository", Int64.to_string s1)
+            ]
+        in
+        let* _ =
+          run "create" "/projects"
+            (Pch.identity_fields ~draft:(Int64.to_string draft)
+               ~name:"Anfn Privacy Project" ~slug:"anfn-privacy"
+               ~description ~website:"https://anfn.example/privacy"
+               ~primary:(Int64.to_string s1) ())
+        in
+        let* community = insert_community conn "anfn-privacy-home" in
+        let* () =
+          exec conn "top mod" q_insert_moderator
+            (moderator, community, "top_mod")
+        in
+        let* _ =
+          run "request"
+            (request_home_target "anfn-privacy")
+            (request_fields ~community ~note ())
+        in
+        let* mod_cookie, mod_token = open_session "moderator" ~url moderator in
+        let* (_response, _body), captured =
+          with_sink_lwt (fun () ->
+              do_post ~url ~cookie:mod_cookie
+                ~target:
+                  (accept_target ~community:"anfn-privacy-home"
+                     ~project:"anfn-privacy")
+                ~token:mod_token ~body_fields:[] ())
+        in
+        collected := !collected @ captured;
+        let payloads = !collected in
+        Alcotest.(check int) "four funnel events" 4 (List.length payloads);
+        Alcotest.(check (list string)) "the expected four"
+          [ "github_repositories_selected"; "github_project_created";
+            "project_home_request_submitted"; "project_home_request_reviewed"
+          ]
+          (an_event_names payloads);
+        (* Distinct ids are only the two intended user identities. *)
+        let distinct_ids =
+          List.filter_map
+            (fun p ->
+              match payload_member "distinct_id" p with
+              | Some (`String s) -> Some s
+              | _ -> None)
+            payloads
+        in
+        List.iter
+          (fun id ->
+            Alcotest.(check bool) "distinct id is user:<id>" true
+              (id = Printf.sprintf "user:%d" steward
+              || id = Printf.sprintf "user:%d" moderator))
+          distinct_ids;
+        let serialized =
+          String.concat "|" (List.map Yojson.Safe.to_string payloads)
+        in
+        List.iter
+          (fun (what, needle) ->
+            Alcotest.(check bool)
+              ("no " ^ what ^ " anywhere in the captured payloads")
+              false
+              (contains serialized needle))
+          [ ("email", "anfn_privsteward@test.invalid");
+            ("username", "anfn_privsteward");
+            ("moderator username", "anfn_privmod");
+            ("github login", "anfn-owner-fixture");
+            ("repository name", repo_name);
+            ("repository full name", "anfn-owner-fixture/" ^ repo_name);
+            ("repository url", "https://github.com/anfn-owner-fixture");
+            ("installation id", "962000081");
+            ("account id", "962100081");
+            ("github repository id", "962900081");
+            ("project slug", "anfn-privacy");
+            ("community slug", "anfn-privacy-home");
+            ("request note", note);
+            ("description", description);
+            ("website", "anfn.example")
+          ];
+        (* Small serial ids (draft id, snapshot id) are deliberately NOT
+           probed by substring: they can legitimately appear inside an
+           exported project_id or user_id, which would make the assertion
+           meaningless. Their absence is pinned instead by the exact closed
+           property allowlist every other case asserts. *)
+        Lwt.return_unit)
+
+  let suite =
+    [ selection_case; selection_failure_case; creation_case;
+      creation_failure_case; request_case; request_failure_case;
+      request_concurrency_case; review_case; review_failure_case;
+      review_concurrency_case; provisioning_case; provisioning_failure_case;
+      provisioning_concurrency_case; publication_case;
+      publication_failure_case; publication_concurrency_case; removal_case;
+      removal_failure_case; removal_concurrency_case; privacy_case
+    ]
+end
+
+
 let () =
   Alcotest.run "earde"
     [ ( "smoke"
@@ -50860,7 +52764,19 @@ let () =
                 [ "account_signed_up"; "account_logged_in"; "community_joined";
                   "community_left"; "chat_message_sent";
                   "forum_thread_created"; "forum_comment_created";
-                  "conversation_promoted"; "account_deleted" ]
+                  "conversation_promoted"; "account_deleted";
+                  (* GitHub project and community-home funnels. The four
+                     deliberately-not-in-this-slice names —
+                     github_onboarding_failed,
+                     github_repository_already_connected,
+                     project_home_choice_viewed, bring_community_started —
+                     and github_repositories_loaded (no single non-repeating
+                     production boundary exists) must stay absent. *)
+                  "github_app_install_started"; "github_app_installed";
+                  "github_repositories_selected"; "github_project_created";
+                  "dedicated_home_provisioned"; "network_community_published";
+                  "project_home_request_submitted";
+                  "project_home_request_reviewed"; "project_home_removed" ]
                 (List.map
                    (fun (_, event) ->
                      match payload_member "event" (an_payload event) with
@@ -50870,7 +52786,16 @@ let () =
         ; an_case "no obsolete pre-pivot event name is ever emitted" (fun () ->
               let obsolete =
                 [ "signup_confirmed"; "login_succeeded"; "post_created";
-                  "comment_created"; "thread_promoted" ]
+                  "comment_created"; "thread_promoted";
+                  (* Explicitly out of scope for this slice; naming one of
+                     them would create a production event nothing measures. *)
+                  "github_onboarding_failed";
+                  "github_repository_already_connected";
+                  "project_home_choice_viewed"; "bring_community_started";
+                  "github_repositories_loaded";
+                  (* The provisioning event must never be misnamed as a
+                     publication: a provisioned home is still private. *)
+                  "community_published" ]
               in
               List.iter
                 (fun (label, event) ->
@@ -50916,6 +52841,364 @@ let () =
         ; check_group "login has no group" None
             (List.assoc "account_logged_in" an_all_events)
         ; check_group "deletion has no group" None An.Account_deleted
+        ] )
+      (* ---- GitHub project / community-home funnel event contract ----
+
+         Exact stable event names, exact closed property allowlists, exact
+         closed value spellings, the centrally injected environment envelope,
+         and the omission rules for out-of-range counts and non-positive ids.
+         Everything here is pure: no request, no consent, no transport. *)
+    ; ( "analytics_funnel_contract"
+      , List.map
+          (fun (name, _) ->
+            check_event_name ("stable name " ^ name) name
+              (List.assoc name an_all_events))
+          an_funnel_contract
+        @ List.map
+            (fun (name, keys) ->
+              check_keys
+                ("closed property allowlist " ^ name)
+                (List.assoc name an_all_events)
+                (* deployment_environment is added by the shared envelope,
+                   never by a constructor, so it belongs to every event. *)
+                (keys @ [ "deployment_environment" ]))
+            an_funnel_contract
+        @ [ an_case "no funnel event carries a group: the community group \
+                     key needs a numeric id no success boundary has, and no \
+                     second group type exists" (fun () ->
+                List.iter
+                  (fun (name, _) ->
+                    let payload = an_payload (List.assoc name an_all_events) in
+                    Alcotest.(check (option string))
+                      (name ^ ": no community group")
+                      None (an_group_key payload);
+                    Alcotest.(check bool)
+                      (name ^ ": no $groups key at all")
+                      false
+                      (List.mem_assoc "$groups" (payload_props payload)))
+                  an_funnel_contract)
+          ; an_case "every funnel event is attributed to user:<id> and \
+                     carries the matching user_id property" (fun () ->
+                List.iter
+                  (fun (name, _) ->
+                    let event = List.assoc name an_all_events in
+                    let payload =
+                      AnT.event_payload ~api_key:"phc_test"
+                        ~environment:An.Development
+                        ~distinct_id:(An.distinct_id_of_user_id 77)
+                        event
+                    in
+                    Alcotest.(check (option yojson))
+                      (name ^ ": distinct id")
+                      (Some (`String "user:77"))
+                      (payload_member "distinct_id" payload);
+                    Alcotest.(check (option int))
+                      (name ^ ": user_id property")
+                      (Some 1) (an_int_prop payload "user_id"))
+                  an_funnel_contract)
+            (* The envelope is injected centrally, once, by the shared
+               payload builder. No constructor can supply, duplicate, or
+               override it — the closed variants have no field for it. *)
+          ; an_case "deployment_environment is centrally injected on every \
+                     funnel event, exactly once, with the caller's \
+                     environment" (fun () ->
+                List.iter
+                  (fun (name, _) ->
+                    let event = List.assoc name an_all_events in
+                    List.iter
+                      (fun (env, spelling) ->
+                        let payload =
+                          AnT.event_payload ~api_key:"phc_test"
+                            ~environment:env ~distinct_id:"user:1" event
+                        in
+                        Alcotest.(check (option string))
+                          (name ^ ": " ^ spelling)
+                          (Some spelling)
+                          (an_string_prop payload "deployment_environment");
+                        Alcotest.(check int)
+                          (name ^ ": exactly one envelope key")
+                          1
+                          (List.length
+                             (List.filter
+                                (fun (k, _) -> k = "deployment_environment")
+                                (payload_props payload))))
+                      [ (An.Production, "production");
+                        (An.Staging, "staging");
+                        (An.Development, "development")
+                      ])
+                  an_funnel_contract)
+          ; an_case "the funnel property allowlist is closed: the union of \
+                     every funnel event's keys is exactly the documented set"
+              (fun () ->
+                let union =
+                  List.sort_uniq compare
+                    (List.concat_map
+                       (fun (name, _) ->
+                         prop_keys (an_payload (List.assoc name an_all_events)))
+                       an_funnel_contract)
+                in
+                Alcotest.(check (slist string compare))
+                  "closed union"
+                  [ "user_id"; "repository_count"; "project_id"; "project_kind";
+                    "publication_visibility"; "decision"; "removal_surface";
+                    "deployment_environment"
+                  ]
+                  union)
+            (* Closed value spellings. A third spelling is unrepresentable —
+               these types have exactly two constructors each. *)
+          ; check_string_prop "review decision accepted"
+              (An.Project_home_request_reviewed
+                 { user_id = 1; decision = An.Review_accepted })
+              "decision" (Some "accepted")
+          ; check_string_prop "review decision rejected"
+              (An.Project_home_request_reviewed
+                 { user_id = 1; decision = An.Review_rejected })
+              "decision" (Some "rejected")
+          ; check_string_prop "publication visibility public"
+              (An.Network_community_published
+                 { user_id = 1; publication_visibility = An.Published_public })
+              "publication_visibility" (Some "public")
+          ; check_string_prop "publication visibility unlisted"
+              (An.Network_community_published
+                 { user_id = 1; publication_visibility = An.Published_unlisted })
+              "publication_visibility" (Some "unlisted")
+          ; check_string_prop "removal surface project route"
+              (An.Project_home_removed
+                 { user_id = 1; removal_surface = An.Removal_project_route })
+              "removal_surface" (Some "project")
+          ; check_string_prop "removal surface community route"
+              (An.Project_home_removed
+                 { user_id = 1; removal_surface = An.Removal_community_route })
+              "removal_surface" (Some "community")
+          ; an_case "project_kind uses the exact closed Project_identity \
+                     database spellings, with no stringified unknown"
+              (fun () ->
+                List.iter
+                  (fun (kind, spelling) ->
+                    Alcotest.(check (option string))
+                      spelling (Some spelling)
+                      (an_string_prop
+                         (an_payload
+                            (An.Github_project_created
+                               { user_id = 1; project_id = 1L;
+                                 project_kind = kind; repository_count = 1 }))
+                         "project_kind"))
+                  [ (Earde.Project_identity.Project, "project");
+                    (Earde.Project_identity.Organization, "organization");
+                    (Earde.Project_identity.Ecosystem, "ecosystem");
+                    (Earde.Project_identity.Foundation, "foundation");
+                    (Earde.Project_identity.Working_group, "working_group");
+                    (Earde.Project_identity.Other, "other")
+                  ])
+          ; an_case "project_id is an exact bigint literal, and a \
+                     non-positive id is omitted rather than exported"
+              (fun () ->
+                let payload_for id =
+                  an_payload
+                    (An.Github_project_created
+                       { user_id = 1; project_id = id;
+                         project_kind = Earde.Project_identity.Project;
+                         repository_count = 1 })
+                in
+                Alcotest.(check (option string))
+                  "large id survives as a literal"
+                  (Some "9223372036854775807")
+                  (an_intlit_prop (payload_for Int64.max_int) "project_id");
+                List.iter
+                  (fun (label, id) ->
+                    Alcotest.(check bool)
+                      (label ^ ": omitted")
+                      false
+                      (List.mem_assoc "project_id"
+                         (payload_props (payload_for id))))
+                  [ ("zero", 0L); ("negative", -1L); ("min_int", Int64.min_int) ])
+          ; an_case "repository_count keeps the whole legitimate domain range \
+                     and omits anything outside it" (fun () ->
+                let count_of n =
+                  an_int_prop
+                    (an_payload
+                       (An.Github_repositories_selected
+                          { user_id = 1; repository_count = n }))
+                    "repository_count"
+                in
+                (* Zero is a real committed transition: a deliberately
+                   cleared selection. *)
+                Alcotest.(check (option int)) "zero kept" (Some 0) (count_of 0);
+                Alcotest.(check (option int)) "one kept" (Some 1) (count_of 1);
+                Alcotest.(check (option int))
+                  "snapshot maximum kept" (Some 2000) (count_of 2000);
+                List.iter
+                  (fun (label, n) ->
+                    Alcotest.(check (option int))
+                      (label ^ ": omitted")
+                      None (count_of n))
+                  [ ("negative", -1); ("above the snapshot bound", 2001);
+                    ("absurd", max_int)
+                  ];
+                (* The same rule on the creation event. *)
+                Alcotest.(check bool)
+                  "creation event omits an out-of-range count" false
+                  (List.mem_assoc "repository_count"
+                     (payload_props
+                        (an_payload
+                           (An.Github_project_created
+                              { user_id = 1; project_id = 5L;
+                                project_kind = Earde.Project_identity.Project;
+                                repository_count = -3 })))))
+          ; an_case "github_project_created full payload" (fun () ->
+                let expected : Yojson.Safe.t =
+                  `Assoc
+                    [ ("api_key", `String "phc_test")
+                    ; ("event", `String "github_project_created")
+                    ; ("distinct_id", `String "user:1")
+                    ; ( "properties"
+                      , `Assoc
+                          [ ("user_id", `Int 1)
+                          ; ("project_id", `Intlit "4242")
+                          ; ("project_kind", `String "project")
+                          ; ("repository_count", `Int 3)
+                          ; ("deployment_environment", `String "development")
+                          ] )
+                    ]
+                in
+                Alcotest.check yojson "full payload" expected
+                  (an_payload (List.assoc "github_project_created" an_all_events)))
+          ; an_case "project_home_request_reviewed full payload" (fun () ->
+                let expected : Yojson.Safe.t =
+                  `Assoc
+                    [ ("api_key", `String "phc_test")
+                    ; ("event", `String "project_home_request_reviewed")
+                    ; ("distinct_id", `String "user:1")
+                    ; ( "properties"
+                      , `Assoc
+                          [ ("user_id", `Int 1)
+                          ; ("decision", `String "accepted")
+                          ; ("deployment_environment", `String "development")
+                          ] )
+                    ]
+                in
+                Alcotest.check yojson "full payload" expected
+                  (an_payload
+                     (List.assoc "project_home_request_reviewed" an_all_events)))
+            (* Nothing credential- or identity-shaped may appear anywhere in
+               a funnel payload, whatever the fixture values are. *)
+          ; an_case "no funnel payload can carry an identity, credential, or \
+                     free-text property name" (fun () ->
+                let forbidden =
+                  [ "email"; "username"; "login"; "github_login"; "namespace";
+                    "installation_id"; "github_installation_id"; "account_id";
+                    "repository"; "repository_name"; "repository_full_name";
+                    "repositories"; "repository_id"; "html_url"; "url";
+                    "project_name"; "project_slug"; "slug"; "community_id";
+                    "community_name"; "community_slug"; "note"; "request_note";
+                    "review_note"; "description"; "state"; "code"; "verifier";
+                    "code_verifier"; "token"; "error"; "authorization_source";
+                    "session"
+                  ]
+                in
+                List.iter
+                  (fun (name, _) ->
+                    let keys =
+                      prop_keys (an_payload (List.assoc name an_all_events))
+                    in
+                    List.iter
+                      (fun bad ->
+                        if List.mem bad keys then
+                          Alcotest.failf "%s carries forbidden property %s"
+                            name bad)
+                      forbidden)
+                  an_funnel_contract)
+          ] )
+      (* Consent and configuration for the funnel events: the identical gate
+         the existing events use, driven through the fake sink. No network. *)
+    ; ( "analytics_funnel_consent"
+      , [ an_case "granted consent on an enabled configuration captures \
+                   exactly one payload per funnel event" (fun () ->
+              List.iter
+                (fun (name, _) ->
+                  let event = List.assoc name an_all_events in
+                  let captured =
+                    with_sink ~enabled:true (fun () ->
+                        An.capture_if_consented
+                          (consent_request
+                             (Some "earde_analytics_consent=granted"))
+                          ~distinct_id:"user:1" event)
+                  in
+                  Alcotest.(check int) (name ^ ": one capture") 1
+                    (List.length captured);
+                  match captured with
+                  | [ payload ] ->
+                      Alcotest.(check (option yojson))
+                        (name ^ ": stable event name")
+                        (Some (`String name))
+                        (payload_member "event" payload)
+                  | _ -> Alcotest.fail "expected exactly one payload")
+                an_funnel_contract)
+        ; an_case "denied, missing, and malformed consent capture nothing"
+            (fun () ->
+              List.iter
+                (fun (name, _) ->
+                  let event = List.assoc name an_all_events in
+                  List.iter
+                    (fun (label, cookie) ->
+                      let captured =
+                        with_sink ~enabled:true (fun () ->
+                            An.capture_if_consented (consent_request cookie)
+                              ~distinct_id:"user:1" event)
+                      in
+                      Alcotest.(check int)
+                        (name ^ ": " ^ label ^ " captures nothing")
+                        0 (List.length captured))
+                    [ ("denied", Some "earde_analytics_consent=denied");
+                      ("missing", None);
+                      ("no consent cookie", Some "session=abc; theme=dark");
+                      ("malformed value",
+                       Some "earde_analytics_consent=granted-ish");
+                      ("wrong case", Some "earde_analytics_consent=Granted")
+                    ])
+                an_funnel_contract)
+        ; an_case "disabled analytics captures nothing even with granted \
+                   consent" (fun () ->
+              List.iter
+                (fun (name, _) ->
+                  let captured =
+                    with_sink ~enabled:false (fun () ->
+                        An.capture_if_consented
+                          (consent_request
+                             (Some "earde_analytics_consent=granted"))
+                          ~distinct_id:"user:1"
+                          (List.assoc name an_all_events))
+                  in
+                  Alcotest.(check int) (name ^ ": no capture") 0
+                    (List.length captured))
+                an_funnel_contract)
+        ; an_case "a transport failure is swallowed: the caller sees unit and \
+                   no exception escapes" (fun () ->
+              (* The sink stands in for the HTTP transport, and dispatch
+                 swallows sink failures exactly like network failures. A
+                 handler calling capture can therefore never have its
+                 response changed by PostHog. *)
+              AnT.use_enabled_test_configuration ();
+              AnT.set_capture_sink (fun _ -> failwith "posthog is down");
+              Fun.protect
+                ~finally:(fun () ->
+                  AnT.clear_capture_sink ();
+                  AnT.clear_configuration_override ())
+                (fun () ->
+                  List.iter
+                    (fun (name, _) ->
+                      match
+                        An.capture_if_consented
+                          (consent_request
+                             (Some "earde_analytics_consent=granted"))
+                          ~distinct_id:"user:1"
+                          (List.assoc name an_all_events)
+                      with
+                      | () -> ()
+                      | exception e ->
+                          Alcotest.failf "%s: capture raised %s" name
+                            (Printexc.to_string e))
+                    an_funnel_contract))
         ] )
       (* Consent-transition sync: the dedicated $identify payload with the
          same closed $set object as the identity events. *)
@@ -56372,4 +58655,14 @@ let () =
     ; ("project_home_notifications_concurrency", Phnt.concurrency_suite)
     ; ("project_home_notifications_ui", Phnt.ui_suite)
     ; ("project_home_notifications_privacy", Phnt.privacy_suite)
+      (* GitHub project and community-home analytics funnel: the eight
+         post-installation events driven through the real handlers and the
+         real production stores over a real Dream pipeline, with the fake
+         capture sink replacing the PostHog transport. Exactly one event per
+         committed transition, none on any refused, replayed, conflicted, or
+         losing-concurrent path, and a privacy sweep over the captured
+         payloads. The two installation events live with their own harnesses
+         in github_start_handler_db and github_oauth_callback_db.
+         Database-gated. *)
+    ; ("analytics_funnel_handlers_db", Anfn.suite)
     ]

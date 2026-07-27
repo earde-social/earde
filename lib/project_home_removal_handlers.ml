@@ -172,17 +172,30 @@ let with_gates ~mode request k =
    deliberately removes the error oracle a stale or replayed form would
    otherwise be, performs no second mutation, and lets the destination
    itself show what is durably true. *)
-let handle_removal_result request ~redirect = function
+let handle_removal_result request ~user_id ~surface ~redirect = function
   | Ok removed ->
       if Store.resulting_status removed <> Project_home_relation.Removed then
         (* A result that is not Removed is a broken store invariant, not a
-           public state: the generic 500, never a redirect that names it. *)
+           public state: the generic 500, never a redirect that names it.
+           And no event: nothing coherent committed to report. *)
         server_error_page request
-      else Lwt.return (redirect ())
+      else (
+        (* The accepted → removed transition committed, together with its
+           audit event and notifications: the one removal boundary. Both
+           routes reach it through this single private helper, so a removal
+           can never be counted twice. Only the route surface crosses —
+           never which of steward / top moderator / durable admin authorized
+           it, and never a project or community identity. *)
+        Analytics.capture_if_consented request
+          ~distinct_id:(Analytics.distinct_id_of_user_id user_id)
+          (Analytics.Project_home_removed { user_id; removal_surface = surface });
+        Lwt.return (redirect ()))
   | Error Store.Removal_unavailable ->
       (* No relation, a pending request, a closed history row, an accepted
          home targeting another community, and a concurrent removal that
-         committed first all collapse here — same destination as success. *)
+         committed first all collapse here — same destination as success,
+         but deliberately NO event: nothing was removed. That asymmetry is
+         invisible to the client, which sees one redirect either way. *)
       Lwt.return (redirect ())
   | Error Store.Invalid_user_id ->
       (* Defensive: the session gate already validated the id. *)
@@ -211,7 +224,7 @@ let handle_removal_result request ~redirect = function
    verified form, require zero application fields, then call the
    transactional removal store in one short SQL scope with no outer
    transaction and no pre-authorization of any kind. *)
-let make_removal_handler ~redirect_of ~mode ~load_config request =
+let make_removal_handler ~surface ~redirect_of ~mode ~load_config request =
   with_gates ~mode request (fun ~user_id ->
       match
         (route_param request "project_slug", route_param request "community_slug")
@@ -248,14 +261,14 @@ let make_removal_handler ~redirect_of ~mode ~load_config request =
                               Store.remove db ~actor_user_id:user_id
                                 ~project_slug ~community_slug)
                         in
-                        handle_removal_result request
+                        handle_removal_result request ~user_id ~surface
                           ~redirect:(redirect_of ~project_slug ~community_slug)
                           result))))
 
 (* --- POST /projects/:project_slug/community-home/:community_slug/remove --- *)
 
 let make_project_side_home_removal_handler ~mode ~load_config request =
-  make_removal_handler
+  make_removal_handler ~surface:Analytics.Removal_project_route
     ~redirect_of:(fun ~project_slug ~community_slug:_ () ->
       request_home_redirect ~project_slug)
     ~mode ~load_config request
@@ -263,7 +276,7 @@ let make_project_side_home_removal_handler ~mode ~load_config request =
 (* --- POST /c/:community_slug/projects/:project_slug/remove-home --- *)
 
 let make_community_side_home_removal_handler ~mode ~load_config request =
-  make_removal_handler
+  make_removal_handler ~surface:Analytics.Removal_community_route
     ~redirect_of:(fun ~project_slug:_ ~community_slug () ->
       community_settings_redirect ~community_slug)
     ~mode ~load_config request

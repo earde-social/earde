@@ -273,12 +273,21 @@ let handle_store_result request ~user_id ~slug ~values = function
            that names it. *)
         server_error_page request
       else
-        (* PRG into the new private setup draft. The canonical slug comes
-           only from the store; no submitted value, id, or result token
-           enters the URL. *)
-        Lwt.return
-          (community_settings_redirect
-             ~community_slug:(Store.community_slug home))
+        (* The provisioning transaction committed: the private setup draft,
+           its initial role/shell, the accepted home relation and the audit
+           event all exist. The created community's slug, name and
+           description deliberately do not cross — and neither does a
+           community id, which the store's narrow result does not carry.
+           Consent-gated and best-effort. *)
+        (Analytics.capture_if_consented request
+           ~distinct_id:(Analytics.distinct_id_of_user_id user_id)
+           (Analytics.Dedicated_home_provisioned { user_id });
+         (* PRG into the new private setup draft. The canonical slug comes
+            only from the store; no submitted value, id, or result token
+            enters the URL. *)
+         Lwt.return
+           (community_settings_redirect
+              ~community_slug:(Store.community_slug home)))
   | Error Store.Project_unavailable ->
       (* Missing, foreign, unstewarded, stale, revoked, and a durable admin
          who is not a steward collapse to the one generic 404 — never a

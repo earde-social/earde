@@ -28,6 +28,27 @@ type community_group = {
 
 type response_mode = Response_json | Response_redirect
 
+(* The moderator's closed verdict on a hosted-home request. Mirrors the
+   review store's Accept/Reject decision, but stays an analytics-local type
+   so this module never depends on a transactional store. *)
+type review_decision = Review_accepted | Review_rejected
+
+(* Which of the two removal routes emitted the request. Product surface only
+   — deliberately NOT the authorization source: the removal store admits a
+   steward, a top moderator, or a durable admin from either route, and
+   exporting which of those applied would leak durable role state. *)
+type removal_surface = Removal_project_route | Removal_community_route
+
+(* The committed exposure of a published network community. Kept
+   analytics-local rather than reusing
+   Network_community_publication_form.publication_visibility: that module
+   sits below the legacy Db macro-module in the dependency graph, and
+   analytics must not pull it in. The publication handler maps the store's
+   closed value onto this one exhaustively, so the two vocabularies cannot
+   drift apart silently — and, like the domain type, there is deliberately
+   no Private constructor to represent. *)
+type publication_visibility = Published_public | Published_unlisted
+
 type event =
   | Account_signed_up of { user_id : int; person : person_properties }
   | Account_logged_in of { user_id : int; person : person_properties }
@@ -85,6 +106,44 @@ type event =
          person, no group. Person processing is disabled on the payload, so it
          can never be associated with (or recreate) the person the deletion
          job is about to remove. *)
+  (* --- GitHub-anchored project and community-home funnels ---
+     Every constructor below is deliberately identifier-poor: no GitHub
+     installation, account or repository id, no login or namespace, no
+     repository name, no project or community name or slug, no request or
+     review note. The only durable identifier any of them carries is the
+     acting user (already the distinct id) and, where an existing public
+     accessor supplies it, the permanent Earde project id. *)
+  | Github_app_install_started of { user_id : int }
+      (* The authenticated, rollout- and origin-authorized start of a GitHub
+         App installation, after the durable onboarding state row committed
+         and the browser is about to be redirected to GitHub. *)
+  | Github_app_installed of { user_id : int }
+      (* The OAuth callback completed: state validated and consumed, the
+         installation verified against the GitHub user, and the installation
+         record plus refreshed draft committed. The verified installation id,
+         account id and login stay behind in the handler. *)
+  | Github_repositories_selected of { user_id : int; repository_count : int }
+  | Github_project_created of {
+      user_id : int;
+      project_id : int64;  (* the permanent open_source_projects row id *)
+      project_kind : Project_identity.kind;
+      repository_count : int;
+    }
+  | Dedicated_home_provisioned of { user_id : int }
+      (* The private setup draft, its initial role/shell, the accepted home
+         relation and the audit event all committed. Deliberately NOT
+         "community_published": nothing is public yet. *)
+  | Network_community_published of {
+      user_id : int;
+      publication_visibility : publication_visibility;
+          (* the committed exposure; the closed type has no Private *)
+    }
+  | Project_home_request_submitted of { user_id : int }
+  | Project_home_request_reviewed of {
+      user_id : int;  (* the reviewing moderator, not the requesting steward *)
+      decision : review_decision;
+    }
+  | Project_home_removed of { user_id : int; removal_surface : removal_surface }
 
 let distinct_id_of_user_id user_id = Printf.sprintf "user:%d" user_id
 
@@ -514,6 +573,34 @@ let response_mode_to_string = function
 let opt_int name = function None -> [] | Some v -> [ (name, `Int v) ]
 let opt_string name = function None -> [] | Some v -> [ (name, `String v) ]
 
+let review_decision_to_string = function
+  | Review_accepted -> "accepted"
+  | Review_rejected -> "rejected"
+
+let removal_surface_to_string = function
+  | Removal_project_route -> "project"
+  | Removal_community_route -> "community"
+
+let publication_visibility_to_string = function
+  | Published_public -> "public"
+  | Published_unlisted -> "unlisted"
+
+(* A draft repository snapshot is structurally bounded to 1..2,000 rows and a
+   saved selection is a subset of it, so 0..2,000 is the entire legitimate
+   range of a repository count. A value outside it is durable corruption, not
+   a measurement: the property is omitted rather than exported as a nonsense
+   number that would silently distort a funnel. *)
+let max_repository_count = 2000
+
+let bounded_count name value =
+  if value >= 0 && value <= max_repository_count then [ (name, `Int value) ]
+  else []
+
+(* Internal row ids are positive by construction. A non-positive value can
+   only mean the caller lost the real id, so nothing is exported for it. *)
+let positive_id64 name value =
+  if Int64.compare value 0L > 0 then [ (name, json_int64 value) ] else []
+
 let event_name = function
   | Account_signed_up _ -> "account_signed_up"
   | Account_logged_in _ -> "account_logged_in"
@@ -524,11 +611,33 @@ let event_name = function
   | Forum_comment_created _ -> "forum_comment_created"
   | Conversation_promoted _ -> "conversation_promoted"
   | Account_deleted -> "account_deleted"
+  | Github_app_install_started _ -> "github_app_install_started"
+  | Github_app_installed _ -> "github_app_installed"
+  | Github_repositories_selected _ -> "github_repositories_selected"
+  | Github_project_created _ -> "github_project_created"
+  | Dedicated_home_provisioned _ -> "dedicated_home_provisioned"
+  | Network_community_published _ -> "network_community_published"
+  | Project_home_request_submitted _ -> "project_home_request_submitted"
+  | Project_home_request_reviewed _ -> "project_home_request_reviewed"
+  | Project_home_removed _ -> "project_home_removed"
 
 (* Community-scoped events carry $groups.community (§5.3); identity/lifecycle
    events do not. *)
 let event_community_id = function
   | Account_signed_up _ | Account_logged_in _ | Account_deleted -> None
+  (* The GitHub-project and community-home lifecycle events carry no
+     $groups.community: the numeric community id is simply not reachable at
+     their success boundaries. The publication and provisioning stores return
+     the committed community's canonical SLUG only, and the review, removal
+     and request handlers work from route slugs — and a slug is deliberately
+     never a group key (§5.3: keys are the immutable numeric id). Recovering
+     the id would mean handler-side SQL run purely for analytics. *)
+  | Github_app_install_started _ | Github_app_installed _
+  | Github_repositories_selected _ | Github_project_created _
+  | Dedicated_home_provisioned _ | Network_community_published _
+  | Project_home_request_submitted _ | Project_home_request_reviewed _
+  | Project_home_removed _ ->
+      None
   | Community_joined { community_id; _ }
   | Community_left { community_id; _ }
   | Chat_message_sent { community_id; _ }
@@ -636,6 +745,36 @@ let event_properties = function
          docs, api/capture "Anonymous event capture"): person processing off,
          no other properties — an aggregate counter only. *)
       [ ("$process_person_profile", `Bool false) ]
+  | Github_app_install_started { user_id } | Github_app_installed { user_id } ->
+      [ ("user_id", `Int user_id) ]
+  | Github_repositories_selected { user_id; repository_count } ->
+      [ ("user_id", `Int user_id) ]
+      @ bounded_count "repository_count" repository_count
+  | Github_project_created
+      { user_id; project_id; project_kind; repository_count } ->
+      [ ("user_id", `Int user_id) ]
+      @ positive_id64 "project_id" project_id
+      @ [ ("project_kind", `String (Project_identity.string_of_kind project_kind)) ]
+      @ bounded_count "repository_count" repository_count
+  | Dedicated_home_provisioned { user_id }
+  | Project_home_request_submitted { user_id } ->
+      [ ("user_id", `Int user_id) ]
+  | Network_community_published { user_id; publication_visibility } ->
+      [
+        ("user_id", `Int user_id);
+        ( "publication_visibility",
+          `String (publication_visibility_to_string publication_visibility) );
+      ]
+  | Project_home_request_reviewed { user_id; decision } ->
+      [
+        ("user_id", `Int user_id);
+        ("decision", `String (review_decision_to_string decision));
+      ]
+  | Project_home_removed { user_id; removal_surface } ->
+      [
+        ("user_id", `Int user_id);
+        ("removal_surface", `String (removal_surface_to_string removal_surface));
+      ]
 
 (* The one shared payload envelope. deployment_environment is appended HERE,
    exactly once, for every eligible PostHog payload (domain events,
