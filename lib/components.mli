@@ -108,6 +108,27 @@ val launch_auth_page : ?noindex:bool -> ?request:Dream.request -> page_class:str
     Used only by [Pages.feed_page]; no existing wrapper changes. *)
 val launch_app_page : ?noindex:bool -> ?request:Dream.request -> ?user:string -> ?rail_communities:Db.community list -> ?aside:string -> page_class:string -> title:string -> content:string -> unit -> string
 
+(** Cartographic Civic launch onboarding document (pass 4: /projects/new only).
+    A complete, self-contained document loading only /static/css/earde.css plus
+    the shared desktop-only mobile gate — no Tailwind, no external fonts, no
+    shell.css, no create.css — under the launch app chrome: the 54px top bar
+    (brand → /feed, command field as a styled link to /search, viewer-state
+    actions: anonymous Bring/Log in/Sign up, or the member ＋ Connect, the
+    id='notif-badge' bell and the user chip as a plain /u/:name link), the dark
+    64px icon rail (Feed, ＋ → /bring; no community tiles — the onboarding
+    renderers receive no membership data), and a centred onboarding column.
+    [stepper] is caller-supplied markup rendered inside the column BEFORE the
+    [.create-shell] wrapper; [content] is wrapped in the identical
+    <div class='create-shell'>…</div> that [create_page] emits, so the feature
+    fragment the test suites slice (create-shell → </main>) stays byte-exact.
+    Member documents carry the shared launch behavior script (bell badge);
+    anonymous documents carry no script. [request] feeds only the shared
+    analytics assets. [page_class] (e.g. "launch-project-new") is the scoping
+    root stamped on <body> for the integration CSS at the end of earde.css.
+    Used only by [Project_setup_pages.project_setup_page]; no existing wrapper
+    changes. *)
+val launch_onboarding_page : ?noindex:bool -> ?request:Dream.request -> ?user:string -> ?stepper:string -> page_class:string -> title:string -> content:string -> unit -> string
+
 (** Deterministic launch-palette colour (hex string) for a community slug.
     The database stores no per-community colour, so launch chrome derives a
     stable presentational one from the slug alone (same slug → same colour). *)

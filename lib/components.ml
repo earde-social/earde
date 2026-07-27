@@ -1040,6 +1040,124 @@ let launch_app_page ?(noindex = false) ?request ?user ?(rail_communities = [])
     page_class search_form actions rail content aside_html
     mobile_desktop_gate analytics_banner behavior_script
 
+(* Cartographic Civic launch onboarding document (pass 4: /projects/new only).
+   Like the pass 1-3 documents, a complete self-contained page loading only
+   earde.css plus the shared desktop-only mobile gate — no Tailwind, no
+   external fonts, no shell.css, no create.css — under the launch app chrome:
+   the 54px top bar (brand → /feed, the command field as a styled LINK to
+   /search — this wrapper adds no form of its own beyond the page content —
+   and viewer-state actions: anonymous Bring/Log in/Sign up, or the member
+   ＋ Connect, the id='notif-badge' bell, and the user chip as a plain link to
+   /u/:name), the dark 64px icon rail (Feed, ＋ → /bring; no community tiles —
+   the onboarding renderers receive no membership data and none is invented),
+   and a centred onboarding column ([container--form]).
+
+   [stepper] is caller-supplied markup rendered INSIDE the column but BEFORE
+   the [.create-shell] wrapper: the create-shell opening tag is a byte-exact
+   slicing marker for the feature test suites (fragment = create-shell →
+   </main>), so all launch chrome — stepper included — must precede it and
+   nothing may follow its close inside <main>. [content] is the existing
+   feature body, wrapped in the identical <div class='create-shell'>…</div>
+   that [create_page] emits, byte-for-byte.
+
+   Member documents carry the exact shared [launch_behavior_script] (the bell
+   badge is its only live consumer here — vote selectors match nothing), the
+   same behavior the legacy create_page/[layout] document had on this route;
+   anonymous documents carry no script. Analytics assets are the shared
+   [analytics_assets], identical to every other launch document. [page_class]
+   (e.g. "launch-project-new") is the scoping root stamped on <body> for the
+   route's integration CSS at the end of earde.css. Used only by
+   [Project_setup_pages.project_setup_page]; existing wrappers ([create_page],
+   [layout], the other launch documents) and their callers are untouched. *)
+let launch_onboarding_page ?(noindex = false) ?request ?user ?(stepper = "")
+    ~page_class ~title ~content () =
+  let analytics_head, analytics_banner = analytics_assets ?request () in
+  let robots_meta =
+    if noindex then "<meta name='robots' content='noindex'>" else ""
+  in
+  let house_icon =
+    "<svg width='18' height='18' viewBox='0 0 24 24' fill='none' \
+     stroke='currentColor' stroke-width='1.7' stroke-linecap='round' \
+     stroke-linejoin='round' aria-hidden='true'><path d='M3 10.5 12 3l9 \
+     7.5'></path><path d='M5 9.5V21h14V9.5'></path></svg>"
+  in
+  let bell_icon =
+    "<svg width='16' height='16' viewBox='0 0 24 24' fill='none' \
+     stroke='currentColor' stroke-width='1.7' stroke-linecap='round' \
+     stroke-linejoin='round' aria-hidden='true'><path d='M18 8a6 6 0 0 \
+     0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9'></path><path d='M10 21h4'></path></svg>"
+  in
+  let actions =
+    match user with
+    | Some username ->
+        let u = html_escape username in
+        let initial =
+          if String.length username > 0
+          then html_escape (String.sub (String.uppercase_ascii username) 0 1)
+          else "?"
+        in
+        (* The bell keeps id='notif-badge' + the `hidden` class exactly where
+           the shared behavior script expects them; the user chip is the
+           reference markup's plain link — no menu, no extra form. *)
+        Printf.sprintf
+          "<a class='btn btn--outline-ochre' href='/bring' title='Connect an open-source project'>&#65291; Connect</a>\
+           <a class='bell' href='/notifications' title='Notifications' aria-label='Notifications'>%s<span id='notif-badge' class='bell__count hidden'>0</span></a>\
+           <a class='userchip' href='/u/%s'><span class='avatar avatar--24'>%s</span><span class='userchip__name'>u/%s</span></a>"
+          bell_icon u initial u
+    | None ->
+        "<a class='btn btn--quiet' href='/bring'>Bring a project</a>\
+         <a class='btn btn--secondary btn--auth' href='/login'>Log in</a>\
+         <a class='btn btn--primary btn--auth' href='/signup'>Sign up</a>"
+  in
+  let behavior_script = match user with
+    | Some _ -> launch_behavior_script
+    | None -> ""
+  in
+  Printf.sprintf
+    "<!DOCTYPE html>\n\
+     <html lang='en'>\n\
+     <head>\n\
+     <meta charset='UTF-8'>\n\
+     <meta name='viewport' content='width=device-width, initial-scale=1.0'>\n\
+     <title>%s - Earde</title>\n\
+     %s\n\
+     <link rel='stylesheet' href='/static/css/earde.css'>\n\
+     %s\n\
+     %s\n\
+     </head>\n\
+     <body class='%s'>\n\
+     <div class='app'>\n\
+     <header class='topbar'>\
+     <a class='topbar__brand' href='/feed' aria-label='Earde feed'>\
+     <img class='topbar__mark' src='/static/images/logo-mark.svg' alt=''>\
+     <img class='topbar__wordmark' src='/static/images/logo-wordmark.svg' alt='Earde'>\
+     </a>\
+     <a class='search launch-search' href='/search' aria-label='Search Earde'>\
+     <span class='search__sigil' aria-hidden='true'>/</span>\
+     <span class='launch-search__hint'>grep threads &middot; projects &middot; communities&hellip;</span>\
+     <span class='launch-search__enter' aria-hidden='true'>&#8629;</span>\
+     </a>\
+     <div class='topbar__actions'>%s</div>\
+     </header>\n\
+     <div class='shell'>\
+     <nav class='rail' aria-label='Primary'>\
+     <a class='rail__item' href='/feed' title='Feed' aria-label='Feed'>%s</a>\
+     <span class='rail__spacer'></span>\
+     <a class='rail__item rail__item--add' href='/bring' title='Connect a project' aria-label='Connect a project'>&#65291;</a>\
+     </nav>\
+     <main class='main'><div class='scroll'><div class='container--form'>\n\
+     %s<div class='create-shell'>%s</div></div></div></main>\
+     </div>\n\
+     </div>\n\
+     %s\n\
+     %s\n\
+     %s\n\
+     </body>\n\
+     </html>"
+    (html_escape title) robots_meta mobile_gate_css_link analytics_head
+    page_class actions house_icon stepper content
+    mobile_desktop_gate analytics_banner behavior_script
+
 (* === HELPERS === *)
 
 (* "[deleted_" is set by anonymize_user in Db — both sides must agree on the tombstone format. *)

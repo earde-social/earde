@@ -477,6 +477,41 @@ let state_html ?request = function
   | Configure_identity configuration ->
       configure_identity_html ?request configuration
 
+(* Launch onboarding stepper (Cartographic Civic, 04-ROUTES): the full
+   approved five-step sequence, truthfully positioned. This pass renders only
+   the two states this route really owns — the repository-selection step
+   (GitHub active) and the project-details step (GitHub done, Project active);
+   later steps are plain upcoming dots, never links, and nothing is marked
+   done before its operation actually committed. Rendered by the launch
+   wrapper BEFORE the immutable create-shell fragment, so the byte-exact
+   fragment the test suites slice is untouched. Markup only — no form, no
+   field, no script, no inline style. *)
+let stepper_html state =
+  let labels = [ "GitHub"; "Project"; "Home"; "Configure"; "Complete" ] in
+  let active =
+    match state with
+    | Configure_identity _ -> 1
+    | No_available_drafts | Choose_draft _ | Configure_repositories _ -> 0
+  in
+  let step index label =
+    let dot_class, dot_text =
+      if index < active then ("step__dot step__dot--done", "&#10003;")
+      else if index = active then
+        ("step__dot step__dot--active", string_of_int (index + 1))
+      else ("step__dot", string_of_int (index + 1))
+    in
+    let label_class =
+      if index = active then "step__label step__label--active"
+      else "step__label"
+    in
+    Printf.sprintf
+      "<li class='step'><span class='%s'>%s</span><span class='%s'>%s</span></li>"
+      dot_class dot_text label_class label
+  in
+  Printf.sprintf "<ol class='steps' aria-label='Project onboarding steps'>%s</ol>"
+    (String.concat "<li class='step__rule' aria-hidden='true'></li>"
+       (List.mapi step labels))
+
 let project_setup_page ?user ?request ~state ~feedback () =
   let body =
     Printf.sprintf
@@ -485,5 +520,6 @@ let project_setup_page ?user ?request ~state ~feedback () =
       heading (feedback_html feedback) (state_html ?request state)
   in
   (* noindex: a session-dependent setup surface — not for search indexes. *)
-  Components.create_page ?user ?request ~noindex:true ~title:"Create a project"
-    ~body ()
+  Components.launch_onboarding_page ?user ?request ~noindex:true
+    ~stepper:(stepper_html state) ~page_class:"launch-project-new"
+    ~title:"Create a project" ~content:body ()
