@@ -221,6 +221,37 @@ let actions_html ?request ~(community : community) ~values () =
     form_html ?request ~community_slug:community.slug ~values ()
   else ""
 
+(* Launch onboarding stepper (Cartographic Civic, 04-ROUTES): the same
+   five-step sequence the earlier launch wrappers render, truthfully
+   positioned for this route — GitHub, Project, and Home are committed by
+   the time a provisioned draft can render this page at all, Configure is
+   the live step (this page is where the draft is configured and
+   published), and Complete stays a plain upcoming dot, never a link.
+   Rendered by the launch wrapper BEFORE the immutable create-shell
+   fragment, so the byte-exact fragment the test suites slice is untouched.
+   Markup only — no form, no field, no script, no inline style. *)
+let stepper_html =
+  let labels = [ "GitHub"; "Project"; "Home"; "Configure"; "Complete" ] in
+  let active = 3 in
+  let step index label =
+    let dot_class, dot_text =
+      if index < active then ("step__dot step__dot--done", "&#10003;")
+      else if index = active then
+        ("step__dot step__dot--active", string_of_int (index + 1))
+      else ("step__dot", string_of_int (index + 1))
+    in
+    let label_class =
+      if index = active then "step__label step__label--active"
+      else "step__label"
+    in
+    Printf.sprintf
+      "<li class='step'><span class='%s'>%s</span><span class='%s'>%s</span></li>"
+      dot_class dot_text label_class label
+  in
+  Printf.sprintf "<ol class='steps' aria-label='Project onboarding steps'>%s</ol>"
+    (String.concat "<li class='step__rule' aria-hidden='true'></li>"
+       (List.mapi step labels))
+
 let network_community_publication_page ?user ?request ~community ~project
     ~values ~feedback () =
   let body =
@@ -232,5 +263,6 @@ let network_community_publication_page ?user ?request ~community ~project
       (actions_html ?request ~community ~values ())
   in
   (* noindex: an authorized-only setup surface — not for search indexes. *)
-  Components.create_page ?user ?request ~noindex:true
-    ~title:"Complete setup and publish" ~body ()
+  Components.launch_onboarding_page ?user ?request ~noindex:true
+    ~stepper:stepper_html ~page_class:"launch-community-publication"
+    ~title:"Complete setup and publish" ~content:body ()

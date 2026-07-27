@@ -2348,3 +2348,269 @@ ol, ul { margin: 0; padding: 0; list-style: none; }
 .launch-project-community-home #analytics-consent [data-analytics-error] {
   color: var(--danger); font-size: var(--fs-11);
 }
+
+/* ==========================================================================
+   EARDE INTEGRATION — /c/:slug/setup only
+   Scoped beneath body.launch-community-publication (GET /c/:slug/setup and
+   every re-render POST /c/:slug/publish produces: 422 validation, 409
+   conflict, and the stale-CSRF 403). Exists only because the real
+   publication page cannot emit the reference markup exactly:
+   - the feature fragment beginning at <div class='create-shell'> is a
+     byte-exact slicing marker for the test suites, so the existing ncp-* /
+     create-* markup is styled in place — the mockup's option-card and rows
+     anatomy is recreated over the pinned form, never rewritten onto new
+     markup;
+   - the handoff's community-setup reference is the mockup flow's
+     post-publication "Complete" celebration (checklist, settings links,
+     Open /c/… buttons); the real route is the Configure step — the
+     review-and-publish form — so this section applies the approved
+     Configure grammar (08-project-community-home-new) to the real
+     contract: name, address, description, and exactly the Public/Unlisted
+     radio pair (no Private card, no structure chips, no preview);
+   - the top-bar command field is a link, not a search form (same
+     zero-extra-form trick as the other launch documents);
+   - the onboarding stepper (.steps, approved sheet above) is rendered by
+     the wrapper before the untouched fragment and needs no extra rules;
+   - the notification badge is revealed by the shared script removing the
+     legacy `hidden` class; honoured on the badge element only — no global
+     .hidden utility is defined;
+   - the desktop-only gate panel ships in mobile-gate.css; only the
+     launch-scope "hide the app" rule for this route's document hierarchy
+     lives here;
+   - the analytics consent banner markup is shared with the legacy layout
+     (same rules as the other launch sections, re-scoped).
+   ========================================================================== */
+
+/* ---- Launch chrome -------------------------------------------------------- */
+
+/* Command field rendered as a link to /search. */
+.launch-community-publication .launch-search { color: var(--ink); }
+.launch-community-publication .launch-search__hint {
+  flex: 1; min-width: 0; align-self: center;
+  font-size: var(--fs-13-5); color: var(--muted); opacity: .8;
+  padding: var(--sp-4) var(--sp-5);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.launch-community-publication .launch-search__enter {
+  display: grid; place-items: center;
+  border-left: var(--bw) solid var(--line); background: var(--surface3);
+  color: var(--muted); font-family: var(--mono); font-size: var(--fs-12);
+  padding: 0 13px;
+}
+
+/* Member top-bar cluster: chip avatar tone + badge reveal hook. */
+.launch-community-publication .userchip .avatar { background: var(--moss); }
+.launch-community-publication #notif-badge.hidden { display: none; }
+
+/* Legacy create.css wrappers, flat on the launch column (no cool-grey card). */
+.launch-community-publication .create-shell { display: block; }
+.launch-community-publication .create-wrap { max-width: 640px; margin: 0 auto; }
+.launch-community-publication .create-panel { display: block; }
+
+/* Page head: serif title over a muted lead. */
+.launch-community-publication .create-head { margin-bottom: var(--sp-8); }
+.launch-community-publication .create-title {
+  font-family: var(--serif); font-weight: 600; font-size: var(--fs-24);
+  color: var(--ink);
+}
+.launch-community-publication .create-sub {
+  color: var(--muted); font-size: var(--fs-13-5); line-height: var(--lh-prose);
+  margin-top: var(--sp-2);
+}
+
+/* ---- Refused-submission feedback ------------------------------------------ */
+
+/* One-time feedback: a flat 1px danger-tinted notice — every ncp variant on
+   this route (validation, conflict, stale form, publication failure) reports
+   a refused submission. Never a shadowed alert. */
+.launch-community-publication .ncp-alert {
+  border: var(--bw) solid var(--danger); border-radius: var(--r-2);
+  background: color-mix(in srgb, var(--danger) 8%, var(--surface));
+  color: var(--ink); font-size: var(--fs-13); line-height: var(--lh-prose);
+  padding: 13px var(--sp-8); margin-bottom: var(--sp-8);
+}
+
+/* ---- Connected-project identity ------------------------------------------- */
+
+/* The project this community is the home of: the read-only surface2 card
+   idiom — serif name over mono facts, the factual GitHub-verification line
+   in moss mono with a decorative check drawn as pseudo-content (the copy
+   itself is pinned). */
+.launch-community-publication .ncp-project {
+  border: var(--bw) solid var(--line); border-radius: var(--r-4);
+  background: var(--surface2); padding: var(--sp-8) var(--sp-9);
+  margin-bottom: var(--sp-8);
+}
+.launch-community-publication .ncp-project-name {
+  font-family: var(--serif); font-weight: 600; font-size: var(--fs-19);
+  color: var(--ink); margin-bottom: var(--sp-2);
+}
+.launch-community-publication .ncp-project-meta {
+  font-family: var(--mono); font-size: var(--fs-12); color: var(--muted);
+}
+.launch-community-publication .ncp-project-note {
+  font-family: var(--mono); font-size: var(--fs-12); color: var(--moss);
+  margin-top: var(--sp-2);
+}
+.launch-community-publication .ncp-project-note::before { content: '\2713\00a0'; }
+
+/* ---- Draft state and publication consequences ----------------------------- */
+
+/* Where this community stands: consequences of publishing — dashed frame,
+   per the approved system (solid = status, dashed = consequence). */
+.launch-community-publication .ncp-explain {
+  border: var(--bw) dashed var(--line2); border-radius: var(--r-3);
+  background: var(--surface); padding: var(--sp-7) var(--sp-8);
+  margin-bottom: var(--sp-8);
+}
+.launch-community-publication .ncp-explain-title {
+  font-family: var(--mono); font-size: var(--fs-10-5); font-weight: 600;
+  letter-spacing: var(--ls-kicker); text-transform: uppercase;
+  color: var(--muted); margin-bottom: var(--sp-4);
+}
+.launch-community-publication .ncp-explain-list li {
+  font-size: var(--fs-12-5); color: var(--muted); line-height: var(--lh-prose);
+  padding-left: var(--sp-6); position: relative; margin-bottom: var(--sp-2);
+}
+.launch-community-publication .ncp-explain-list li::before {
+  content: '\00B7'; position: absolute; left: 0; color: var(--moss);
+  font-weight: 700;
+}
+.launch-community-publication .ncp-explain-list li:last-child { margin-bottom: 0; }
+
+/* The two discovery choices, factually explained before the radio pair: the
+   bordered .rows rhythm — one hairline-separated row per choice, the choice
+   name in ink, the indexing consequence in muted prose, noindex as a mono
+   fact. */
+.launch-community-publication .ncp-choices { margin-bottom: var(--sp-9); }
+.launch-community-publication .ncp-choices-title {
+  font-family: var(--mono); font-size: var(--fs-10-5); font-weight: 600;
+  letter-spacing: var(--ls-kicker); text-transform: uppercase;
+  color: var(--muted); margin-bottom: var(--sp-4);
+}
+.launch-community-publication .ncp-choices-list {
+  border: var(--bw) solid var(--line); border-radius: var(--r-4);
+  background: var(--surface); overflow: hidden;
+}
+.launch-community-publication .ncp-choices-list li {
+  border-bottom: var(--bw) solid var(--line);
+  padding: var(--sp-6) var(--sp-8);
+  font-size: var(--fs-12-5); color: var(--muted); line-height: var(--lh-prose);
+}
+.launch-community-publication .ncp-choices-list li:last-child { border-bottom: 0; }
+.launch-community-publication .ncp-choices-list strong { color: var(--ink); }
+.launch-community-publication .ncp-choices-list code {
+  font-family: var(--mono); font-size: var(--fs-11); color: var(--ink);
+  background: var(--surface2); border-radius: var(--r-1); padding: 0 4px;
+}
+
+/* ---- Identity form -------------------------------------------------------- */
+
+/* Identity fields: mono fact labels over inset sans controls; the community
+   address stays mono — the value is a URL fact. */
+.launch-community-publication .ncp-field {
+  display: block; font-family: var(--mono); font-size: var(--fs-11);
+  color: var(--muted); margin-bottom: var(--sp-8);
+}
+.launch-community-publication .ncp-field input,
+.launch-community-publication .ncp-field textarea {
+  display: block; width: 100%; margin-top: 5px;
+  font-family: var(--sans); font-size: var(--fs-14); color: var(--ink);
+  background: var(--surface); border: var(--bw) solid var(--line2);
+  border-radius: var(--r-2); padding: 9px var(--sp-6); outline: none;
+}
+.launch-community-publication .ncp-field input:focus,
+.launch-community-publication .ncp-field textarea:focus {
+  border-color: var(--moss);
+}
+.launch-community-publication .ncp-field input[name='community_slug'] {
+  font-family: var(--mono); font-size: var(--fs-13);
+}
+.launch-community-publication .ncp-field textarea {
+  min-height: 110px; resize: vertical;
+  font-size: var(--fs-13-5); line-height: var(--lh-prose);
+}
+/* The /c/<address> semantics, as a mono field hint tucked under the address
+   control (the hint follows that field in the pinned markup). */
+.launch-community-publication .ncp-hint {
+  font-family: var(--mono); font-size: var(--fs-10-5); color: var(--muted);
+  line-height: var(--lh-prose); margin: calc(-1 * var(--sp-5)) 0 var(--sp-8);
+}
+
+/* Publish as: mono kicker legend over the Public / Unlisted pair as flat
+   bordered radio cards — the whole label is the hit target, the real radio
+   stays visible (moss accent), and selection is echoed by a moss row tint.
+   No third card exists: the page offers no Private shape. */
+.launch-community-publication .ncp-visibility {
+  border: 0; padding: 0; margin: 0 0 var(--sp-4);
+}
+.launch-community-publication .ncp-legend {
+  font-family: var(--mono); font-size: var(--fs-10-5); font-weight: 600;
+  letter-spacing: var(--ls-kicker); text-transform: uppercase;
+  color: var(--muted); padding: 0; margin-bottom: var(--sp-4);
+}
+.launch-community-publication .ncp-radio {
+  display: block; cursor: pointer;
+  border: var(--bw) solid var(--line2); border-radius: var(--r-3);
+  background: var(--surface); padding: var(--sp-6) var(--sp-8);
+  margin-bottom: var(--sp-4);
+  font-weight: 600; font-size: var(--fs-13-5); color: var(--ink);
+}
+.launch-community-publication .ncp-radio:hover { background: var(--surface2); }
+.launch-community-publication .ncp-radio input[type='radio'] {
+  accent-color: var(--moss); margin: 0 var(--sp-4) 0 0; vertical-align: -1px;
+}
+.launch-community-publication .ncp-radio:has(input:checked) {
+  border-color: var(--moss);
+  background: color-mix(in srgb, var(--moss) 10%, var(--surface));
+}
+.launch-community-publication .ncp-radio:has(input:checked):hover {
+  background: color-mix(in srgb, var(--moss) 13%, var(--surface));
+}
+
+/* The one strong publication action. Inline (the reference footer button),
+   never a full-bleed bar: create-btn--block is pinned markup, restyled here.
+   Moss — publication is the primary action of the whole onboarding flow. */
+.launch-community-publication .create-actions { margin-top: var(--sp-10); }
+.launch-community-publication .create-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  gap: var(--sp-3); font-family: var(--sans); font-weight: 600;
+  font-size: var(--fs-13); color: #fff;
+  background: var(--moss); border: var(--bw) solid var(--moss);
+  border-radius: var(--r-3); padding: 9px var(--sp-10); cursor: pointer;
+}
+.launch-community-publication .create-btn--block { width: auto; }
+.launch-community-publication .create-btn:hover { filter: brightness(1.06); }
+
+/* ---- Gate + consent -------------------------------------------------------- */
+
+/* Desktop-only gate: hide this route's launch app under the shared
+   breakpoint; the gate panel itself is styled by mobile-gate.css. */
+@media (max-width: 800px) {
+  body.launch-community-publication > .app { display: none !important; }
+}
+
+/* Analytics consent banner (markup shared with the legacy layout). */
+.launch-community-publication #analytics-consent {
+  position: fixed; bottom: var(--sp-8); left: 50%; transform: translateX(-50%);
+  z-index: 50; width: calc(100% - 2rem); max-width: 28rem;
+  background: var(--surface); border: var(--bw) solid var(--line2);
+  border-radius: var(--r-3); padding: var(--sp-7) var(--sp-8);
+  box-shadow: var(--shadow-overlay);
+}
+.launch-community-publication #analytics-consent p {
+  font-size: var(--fs-13); color: var(--muted); margin-bottom: var(--sp-5);
+}
+.launch-community-publication #analytics-consent [data-analytics-accept],
+.launch-community-publication #analytics-consent [data-analytics-refuse] {
+  font-family: var(--sans); font-weight: 600; font-size: var(--fs-12);
+  border: var(--bw) solid var(--line2); border-radius: var(--r-2);
+  padding: var(--sp-3) var(--sp-7); cursor: pointer;
+  background: var(--surface); color: var(--muted); margin-right: var(--sp-4);
+}
+.launch-community-publication #analytics-consent [data-analytics-accept] {
+  color: #fff; background: var(--moss); border-color: var(--moss);
+}
+.launch-community-publication #analytics-consent [data-analytics-error] {
+  color: var(--danger); font-size: var(--fs-11);
+}
