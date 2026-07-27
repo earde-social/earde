@@ -288,10 +288,19 @@ ol, ul { margin: 0; padding: 0; list-style: none; }
   cursor: pointer; text-decoration: none;
 }
 .sidebar__name {
-  display: block; font-family: var(--mono); font-weight: 700; font-size: 15px; color: var(--ink);
+  /* Long names get up to two lines instead of a one-line ellipsis; the clamp
+     (not free wrapping) caps the header height, and overflow-wrap keeps a
+     single over-long token from bursting the fixed sidebar width. */
+  display: -webkit-box; -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2; line-clamp: 2;
+  font-family: var(--mono); font-weight: 700; font-size: 15px; color: var(--ink);
+  overflow: hidden; overflow-wrap: anywhere;
+}
+.sidebar__slug {
+  /* The /c/slug line stays one line: an ellipsis beats wrapping mid-token. */
+  display: block; font-family: var(--mono); font-size: var(--fs-11); color: var(--muted);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.sidebar__slug { display: block; font-family: var(--mono); font-size: var(--fs-11); color: var(--muted); }
 .sidebar__body { flex: 1; overflow-y: auto; padding: var(--sp-5) var(--sp-4); scrollbar-width: thin; }
 .sidebar__group { padding: var(--sp-6) 9px var(--sp-2); }
 .navitem {
@@ -2876,5 +2885,350 @@ ol, ul { margin: 0; padding: 0; list-style: none; }
   color: #fff; background: var(--moss); border-color: var(--moss);
 }
 .launch-community-overview #analytics-consent [data-analytics-error] {
+  color: var(--danger); font-size: var(--fs-11);
+}
+
+/* ==========================================================================
+   EARDE INTEGRATION — live community channel only
+   Scoped beneath body.launch-community-channel: GET /c/:slug/ch/:channel_slug
+   (Pages.community_channel_shell_page). Section, thread, settings and every
+   other community surface stay on shell.css. The live chat DOM is a strict
+   JS contract (chat_live.js): #chat-live-root IS the scroller
+   (.cs-main-body), .cs-main is a flex column whose head / .cs-chat-stage /
+   typing row / composer are DIRECT children, the cursor overlay is an
+   absolutely-positioned sibling of the scroller inside the stage, and the
+   [hidden] typing row must keep its reserved height. shell.css no longer
+   loads on this route, so its load-bearing cs-* layout rules are
+   re-provided here 1:1 (same boxes, same scroll owner, same flex chain) and
+   only re-skinned onto the approved Cartographic chat grammar
+   (.chat__head/.msg/.typing/.composer from the design handoff). Other notes:
+   - the notification badge rule is scoped to the badge element only — no
+     global .hidden utility is defined;
+   - the desktop-only gate panel ships in mobile-gate.css; only this route's
+     launch-scope "hide the app" rule lives here;
+   - the analytics consent banner markup is shared with the legacy layout
+     (same rules as the other launch sections, re-scoped);
+   - the base .aside rules (width/background/border/scroll + the ≤1279px
+     collapse) come from the shared shell system above; only the presence
+     pane's inner anatomy is styled here.
+   ========================================================================== */
+
+/* ---- Launch chrome -------------------------------------------------------- */
+
+/* Top-bar user menu: pure-CSS <details>, real logout POST form inside. */
+.launch-community-channel .launch-user { position: relative; }
+.launch-community-channel .launch-user > summary { list-style: none; }
+.launch-community-channel .launch-user > summary::-webkit-details-marker { display: none; }
+.launch-community-channel .launch-user .avatar { background: var(--moss); }
+.launch-community-channel .launch-user__menu {
+  position: absolute; right: 0; top: calc(100% + 6px); z-index: 40;
+  min-width: 168px; display: flex; flex-direction: column;
+  background: var(--surface); border: var(--bw) solid var(--line2);
+  border-radius: var(--r-3); padding: var(--sp-3);
+  box-shadow: var(--shadow-overlay);
+}
+.launch-community-channel .launch-user__menu a,
+.launch-community-channel .launch-user__menu button {
+  display: block; width: 100%; text-align: left; background: none; border: 0;
+  font-family: var(--mono); font-size: var(--fs-12); color: var(--ink);
+  padding: var(--sp-3) var(--sp-5); border-radius: var(--r-2); cursor: pointer;
+}
+.launch-community-channel .launch-user__menu a:hover,
+.launch-community-channel .launch-user__menu button:hover { background: var(--surface2); }
+.launch-community-channel .launch-user__menu form {
+  margin: var(--sp-2) 0 0; padding-top: var(--sp-2);
+  border-top: var(--bw) solid var(--line);
+}
+
+/* Notification badge: hidden until the shared one-shot fetch reveals it.
+   Badge element only — deliberately NOT a global .hidden utility. */
+.launch-community-channel #notif-badge.hidden { display: none; }
+
+/* Real community avatars fill their fixed tile (rail, sidebar head). */
+.launch-community-channel .launch-rail__img,
+.launch-community-channel .launch-avatar-img {
+  width: 100%; height: 100%; object-fit: cover; border-radius: inherit;
+  display: block;
+}
+
+/* ---- Community sidebar ----------------------------------------------------- */
+
+.launch-community-channel .launch-side-id { min-width: 0; display: block; }
+
+/* Factual visibility marker (private communities only; public is unmarked). */
+.launch-community-channel .launch-side-vis {
+  font-family: var(--mono); font-size: var(--fs-10-5); color: var(--ochre);
+  padding: var(--sp-2) 9px var(--sp-1);
+}
+
+/* ---- Chat main pane: load-bearing flex chain (from shell.css, re-skinned) -- */
+
+/* .cs-main fills the shell's flexible center column; its panes must remain
+   DIRECT children so the height chain head → stage → typing → composer
+   resolves. Never interpose a wrapper here. */
+.launch-community-channel .cs-main {
+  flex: 1; min-width: 0; display: flex; flex-direction: column;
+  overflow: hidden; background: var(--surface);
+}
+
+/* Compact channel header (approved .chat__head grammar): mono #name, quiet
+   topic, share-cursor control pushed to the right edge. */
+.launch-community-channel .cs-main-head {
+  flex-shrink: 0; display: flex; align-items: center; gap: var(--sp-6);
+  padding: 11px var(--sp-9); border-bottom: var(--bw) solid var(--line2);
+  background: var(--surface);
+  font-family: var(--mono); font-weight: 700; font-size: var(--fs-16); color: var(--ink);
+}
+.launch-community-channel .cs-hash { color: var(--moss); }
+.launch-community-channel .cs-ch-topic {
+  font-family: var(--sans); font-weight: 400; font-size: var(--fs-12-5); color: var(--muted);
+  border-left: var(--bw) solid var(--line2); padding-left: var(--sp-6);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0;
+}
+
+/* Stage wraps the scroller with the inert cursor overlay on its visible box. */
+.launch-community-channel .cs-chat-stage {
+  position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column;
+}
+.launch-community-channel .cs-chat-stage > .cs-chat-body { flex: 1; }
+
+/* #chat-live-root: the ONLY scroll owner for message history. */
+.launch-community-channel .cs-main-body { flex: 1; overflow-y: auto; scrollbar-width: thin; }
+.launch-community-channel .cs-chat-body { padding: var(--sp-5) 0; display: flex; flex-direction: column; }
+/* Pin a short stream to the bottom while keeping a long one scrollable from
+   the top (flex-end would clip it in some engines). */
+.launch-community-channel .cs-chat-body > :first-child { margin-top: auto; }
+
+/* ---- Message rows (approved .msg anatomy, flat, no shadows) ---------------- */
+
+.launch-community-channel .cs-msg {
+  display: flex; gap: 11px; padding: 5px var(--sp-9);
+  transition: background-color 1.2s ease;
+}
+.launch-community-channel .cs-msg:hover { background: var(--surface2); }
+.launch-community-channel .cs-msg-avatar {
+  width: 30px; height: 30px; flex-shrink: 0;
+  display: grid; place-items: center; border-radius: var(--r-3);
+  font-family: var(--mono); font-weight: 700; font-size: var(--fs-12);
+  background: var(--surface3); color: var(--muted); border: var(--bw) solid var(--line);
+}
+.launch-community-channel .cs-msg-body { flex: 1; min-width: 0; }
+.launch-community-channel .cs-msg-meta { display: flex; align-items: baseline; gap: var(--sp-4); }
+.launch-community-channel .cs-msg-author { font-weight: 600; font-size: var(--fs-13-5); color: var(--ink); }
+.launch-community-channel .cs-msg-time { font-family: var(--mono); font-size: var(--fs-10-5); color: var(--muted); }
+.launch-community-channel .cs-msg-time-slot { display: inline-grid; align-items: baseline; position: relative; }
+.launch-community-channel .cs-msg-time-slot .cs-msg-time,
+.launch-community-channel .cs-msg-time-slot .cs-msg-start { grid-area: 1 / 1; }
+.launch-community-channel .cs-msg-time-slot .cs-msg-time { pointer-events: none; }
+.launch-community-channel .cs-msg-time-slot .cs-msg-start { position: relative; z-index: 1; }
+.launch-community-channel .cs-msg-text {
+  font-size: var(--fs-14); line-height: var(--lh-prose); color: var(--ink);
+  white-space: pre-wrap; overflow-wrap: anywhere;
+}
+.launch-community-channel .cs-msg-deleted { font-style: italic; color: var(--muted); }
+
+/* Per-message thread provenance markers below the text (clay = promotion). */
+.launch-community-channel .cs-msg-actions {
+  display: flex; align-items: baseline; flex-wrap: wrap; gap: var(--sp-2) var(--sp-5);
+  margin-top: 3px;
+}
+.launch-community-channel .cs-msg-start,
+.launch-community-channel .cs-msg-thread,
+.launch-community-channel .cs-msg-ref {
+  font-family: var(--mono); font-size: var(--fs-10-5); text-decoration: none;
+  white-space: nowrap; max-width: 260px; overflow: hidden; text-overflow: ellipsis;
+}
+.launch-community-channel .cs-msg-thread { color: var(--clay); }
+.launch-community-channel .cs-msg-thread:hover { text-decoration: underline; }
+.launch-community-channel .cs-msg-ref { color: var(--muted); }
+.launch-community-channel .cs-msg-ref:hover { color: var(--ink); text-decoration: underline; }
+.launch-community-channel .cs-msg-refmore {
+  font-family: var(--mono); font-size: var(--fs-10-5); color: var(--muted); margin-left: -6px;
+}
+
+/* "Start thread" replaces the timestamp inside the same reserved slot. */
+.launch-community-channel .cs-msg-start { color: var(--clay); opacity: 0; pointer-events: none; cursor: pointer; transition: opacity .12s ease; }
+.launch-community-channel .cs-msg-time-slot .cs-msg-time { transition: opacity .12s ease; }
+.launch-community-channel .cs-msg:hover .cs-msg-time-slot .cs-msg-time,
+.launch-community-channel .cs-msg:focus-within .cs-msg-time-slot .cs-msg-time { opacity: 0; }
+.launch-community-channel .cs-msg:hover .cs-msg-start,
+.launch-community-channel .cs-msg:focus-within .cs-msg-start { opacity: 1; pointer-events: auto; }
+.launch-community-channel .cs-msg-start:hover { text-decoration: underline; }
+@media (hover: none) {
+  .launch-community-channel .cs-msg-time-slot .cs-msg-time { opacity: 0; }
+  .launch-community-channel .cs-msg-start { opacity: 1; pointer-events: auto; }
+}
+
+.launch-community-channel .cs-msg-empty { padding: var(--sp-11) var(--sp-9); color: var(--muted); font-size: var(--fs-14); }
+
+/* Reverse navigation from a promoted thread: SSR notice band + grouped
+   source-row tint (clay = provenance; fades when JS drops the class). */
+.launch-community-channel .cs-source-notice {
+  display: flex; align-items: baseline; justify-content: space-between; gap: var(--sp-6); flex-wrap: wrap;
+  padding: var(--sp-4) var(--sp-9); border-bottom: var(--bw) solid var(--line2);
+  background: var(--surface2);
+  font-family: var(--mono); font-size: var(--fs-11-5); color: var(--muted);
+}
+.launch-community-channel .cs-source-notice b { color: var(--ink); }
+.launch-community-channel .cs-source-notice-actions { display: flex; gap: var(--sp-7); white-space: nowrap; }
+.launch-community-channel .cs-source-notice a { color: var(--slate); text-decoration: none; }
+.launch-community-channel .cs-source-notice a:hover { text-decoration: underline; }
+.launch-community-channel .cs-msg--source-flash {
+  background-color: color-mix(in srgb, var(--clay) 10%, transparent); transition: none;
+}
+
+/* ---- Typing row: reserved height even when [hidden] (JS contract) ---------- */
+
+.launch-community-channel .cs-typing {
+  flex-shrink: 0; box-sizing: content-box; min-height: 15px; padding: 3px var(--sp-9) 0;
+  font-size: var(--fs-12); font-style: italic; color: var(--muted); background: var(--surface);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.launch-community-channel .cs-typing[hidden] { display: block; visibility: hidden; }
+
+/* ---- Composer (approved .composer grammar: inset field, moss send) --------- */
+
+.launch-community-channel .cs-composer {
+  flex-shrink: 0; border-top: var(--bw) solid var(--line2); background: var(--surface);
+  padding: var(--sp-6) var(--sp-8);
+}
+.launch-community-channel .cs-composer form { display: flex; gap: var(--sp-5); align-items: flex-end; }
+.launch-community-channel .cs-composer textarea {
+  flex: 1; border: var(--bw) solid var(--line2); border-radius: var(--r-2); background: var(--surface2);
+  font-family: var(--sans); font-size: var(--fs-14); color: var(--ink);
+  padding: 9px 12px; min-height: 22px; resize: vertical; outline: none;
+}
+.launch-community-channel .cs-composer textarea:focus { border-color: var(--moss); }
+.launch-community-channel .cs-send {
+  flex-shrink: 0; cursor: pointer; border: var(--bw) solid var(--moss); border-radius: var(--r-2);
+  background: var(--moss); color: #fff; font-family: var(--sans); font-weight: 600;
+  font-size: var(--fs-14); padding: 9px var(--sp-9);
+}
+.launch-community-channel .cs-send:hover { filter: brightness(1.05); }
+.launch-community-channel .cs-send:disabled { opacity: .6; cursor: default; }
+
+/* Anon / non-member / private-viewer prompt reuses the composer frame inline. */
+.launch-community-channel .cs-composer-prompt {
+  display: flex; align-items: center; gap: var(--sp-5); flex-wrap: wrap;
+  font-size: var(--fs-14); color: var(--muted);
+}
+.launch-community-channel .cs-composer-prompt form { display: inline-flex; }
+
+/* Inline send error under the composer (fetch submissions never navigate). */
+.launch-community-channel .cs-composer-error {
+  margin-top: var(--sp-3); font-size: var(--fs-12-5); color: var(--danger);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+/* "New messages" pill floated over the scroller (inside .cs-chat-stage),
+   above the inert cursor overlay (z-index 5) so it stays clickable. */
+.launch-community-channel .cs-new-msgs {
+  position: absolute; bottom: var(--sp-5); left: 50%; transform: translateX(-50%);
+  z-index: 6; cursor: pointer;
+  border: var(--bw) solid var(--moss); border-radius: var(--r-6);
+  background: var(--moss); color: #fff;
+  font-family: var(--sans); font-weight: 600; font-size: var(--fs-12);
+  padding: var(--sp-2) var(--sp-6);
+}
+.launch-community-channel .cs-new-msgs:hover { filter: brightness(1.05); }
+
+/* ---- Shared cursors -------------------------------------------------------- */
+
+/* Opt-in control at the right edge of the channel header. */
+.launch-community-channel .cs-cursor-share {
+  margin-left: auto; display: inline-flex; align-items: center; gap: var(--sp-3);
+  font-family: var(--mono); font-weight: 400; font-size: var(--fs-11-5); color: var(--muted);
+  cursor: pointer; user-select: none; white-space: nowrap;
+}
+.launch-community-channel .cs-cursor-share:hover { color: var(--ink); }
+.launch-community-channel .cs-cursor-share input { accent-color: var(--moss); margin: 0; }
+/* The inline-flex above would defeat the [hidden] attribute (coarse-pointer
+   devices hide the inert control via JS). */
+.launch-community-channel .cs-cursor-share[hidden] { display: none; }
+
+/* Inert overlay on the scroller's visible box; cursors never affect layout. */
+.launch-community-channel .cs-cursor-overlay {
+  position: absolute; inset: 0; overflow: hidden; pointer-events: none; z-index: 5;
+}
+.launch-community-channel .cs-cursor {
+  position: absolute; left: 0; top: 0; pointer-events: none;
+  display: flex; align-items: flex-start; gap: 3px;
+  will-change: transform; transition: transform 90ms linear;
+}
+.launch-community-channel .cs-cursor svg { display: block; color: var(--cursor-color); }
+.launch-community-channel .cs-cursor-label {
+  margin-top: 9px; padding: 1px 6px; border-radius: var(--r-2);
+  font-family: var(--mono); font-size: var(--fs-10-5); line-height: var(--lh-ui); color: var(--ink);
+  background: var(--surface); border: var(--bw) solid var(--cursor-color);
+  max-width: 120px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+/* Deterministic per-user hue (user_id % 8, computed locally — never sent
+   over the network). Same values as the legacy shell so cursor identity
+   colours stay stable across the conversion. */
+.launch-community-channel .cs-cursor[data-hue='0'] { --cursor-color: oklch(0.555 0.155 27); }
+.launch-community-channel .cs-cursor[data-hue='1'] { --cursor-color: oklch(0.555 0.13 70); }
+.launch-community-channel .cs-cursor[data-hue='2'] { --cursor-color: oklch(0.555 0.13 130); }
+.launch-community-channel .cs-cursor[data-hue='3'] { --cursor-color: oklch(0.555 0.13 165); }
+.launch-community-channel .cs-cursor[data-hue='4'] { --cursor-color: oklch(0.555 0.13 210); }
+.launch-community-channel .cs-cursor[data-hue='5'] { --cursor-color: oklch(0.555 0.13 260); }
+.launch-community-channel .cs-cursor[data-hue='6'] { --cursor-color: oklch(0.555 0.13 300); }
+.launch-community-channel .cs-cursor[data-hue='7'] { --cursor-color: oklch(0.555 0.13 340); }
+@media (prefers-reduced-motion: reduce) {
+  .launch-community-channel .cs-cursor { transition: none; }
+}
+
+/* ---- Presence pane (approved chat-aside anatomy) --------------------------- */
+
+.launch-community-channel .cs-presence { padding: 14px 16px; }
+.launch-community-channel .ca-label {
+  font-family: var(--mono); font-size: var(--fs-10-5); font-weight: 600;
+  letter-spacing: var(--ls-kicker); text-transform: uppercase; color: var(--muted);
+  margin-bottom: var(--sp-5);
+}
+.launch-community-channel .cs-presence-status { font-size: var(--fs-12-5); color: var(--muted); }
+.launch-community-channel .cs-presence-list { list-style: none; margin: 0; padding: 0; }
+.launch-community-channel .cs-presence-user {
+  display: flex; align-items: center; gap: 9px; padding: var(--sp-2) 0;
+  font-size: var(--fs-13);
+}
+.launch-community-channel .cs-presence-avatar {
+  width: 22px; height: 22px; flex: none;
+  display: grid; place-items: center; border-radius: var(--r-pill);
+  font-family: var(--mono); font-weight: 700; font-size: var(--fs-10);
+  color: var(--muted); background: var(--surface3); border: var(--bw) solid var(--line);
+}
+.launch-community-channel .cs-presence-name { color: var(--ink); }
+.launch-community-channel .cs-presence-name:hover { color: var(--slate); }
+
+/* ---- Gate + consent -------------------------------------------------------- */
+
+/* Desktop-only gate: hide this route's launch app under the shared
+   breakpoint; the gate panel itself is styled by mobile-gate.css. */
+@media (max-width: 800px) {
+  body.launch-community-channel > .app { display: none !important; }
+}
+
+/* Analytics consent banner (markup shared with the legacy layout). */
+.launch-community-channel #analytics-consent {
+  position: fixed; bottom: var(--sp-8); left: 50%; transform: translateX(-50%);
+  z-index: 50; width: calc(100% - 2rem); max-width: 28rem;
+  background: var(--surface); border: var(--bw) solid var(--line2);
+  border-radius: var(--r-3); padding: var(--sp-7) var(--sp-8);
+  box-shadow: var(--shadow-overlay);
+}
+.launch-community-channel #analytics-consent p {
+  font-size: var(--fs-13); color: var(--muted); margin-bottom: var(--sp-5);
+}
+.launch-community-channel #analytics-consent [data-analytics-accept],
+.launch-community-channel #analytics-consent [data-analytics-refuse] {
+  font-family: var(--sans); font-weight: 600; font-size: var(--fs-12);
+  border: var(--bw) solid var(--line2); border-radius: var(--r-2);
+  padding: var(--sp-3) var(--sp-7); cursor: pointer;
+  background: var(--surface); color: var(--muted); margin-right: var(--sp-4);
+}
+.launch-community-channel #analytics-consent [data-analytics-accept] {
+  color: #fff; background: var(--moss); border-color: var(--moss);
+}
+.launch-community-channel #analytics-consent [data-analytics-error] {
   color: var(--danger); font-size: var(--fs-11);
 }

@@ -1053,17 +1053,77 @@ let community_channel_shell_page ?user ?realtime_token ?(noindex=false) ~is_memb
   let csrf_token = Dream.csrf_tag request in
   let channel_url = Printf.sprintf "/c/%s/ch/%s" (esc community.slug) (esc channel.slug) in
 
-  (* Sidebar: Channels group (current channel active) + Forum Sections group (none active). *)
-  let section_items = List.map (fun (s : community_section) ->
-    { Components.ni_label = s.name;
-      ni_href  = Printf.sprintf "/c/%s/s/%s" community.slug s.slug;
-      ni_sigil = "§"; ni_active = false; ni_badge = None })
-    sections
+  (* Launch community sidebar (pass-8 grammar, channel variant): identity
+     head, Overview link, factual visibility marker, Live channels with the
+     CURRENT channel active, Knowledge sections (this renderer has no
+     per-section counts, so none are shown), and the intentionally public
+     moderation log. Settings and Home requests need the mod/top-mod
+     authority the channel handler never loads, so they are not rendered
+     here — nothing is invented. *)
+  let tile_glyph =
+    String.capitalize_ascii
+      (if String.length community.slug >= 2 then String.sub community.slug 0 2
+       else if community.slug = "" then "?" else community.slug)
   in
-  let nav_groups =
-    channels_nav_group ~community ~channels ~active:channel.slug ()
-    @ (if section_items = [] then []
-       else [ { Components.ng_label = "Forum Sections"; ng_items = section_items } ])
+  let side_face =
+    match community.avatar_url with
+    | Some url when String.trim url <> "" ->
+        (match Components.safe_img_src url with
+         | "#" ->
+             Printf.sprintf "<span class='avatar avatar--32' style='background:%s'>%s</span>"
+               (Components.launch_tile_color community.slug) (esc tile_glyph)
+         | src ->
+             Printf.sprintf "<span class='avatar avatar--32'><img class='launch-avatar-img' src='%s' alt=''></span>" src)
+    | _ ->
+        Printf.sprintf "<span class='avatar avatar--32' style='background:%s'>%s</span>"
+          (Components.launch_tile_color community.slug) (esc tile_glyph)
+  in
+  let side_head =
+    Printf.sprintf
+      "<a class='sidebar__head' href='/c/%s'>%s<span class='launch-side-id'><span class='sidebar__name'>%s</span><span class='sidebar__slug'>/c/%s</span></span></a>"
+      (esc community.slug) side_face (esc community.name) (esc community.slug)
+  in
+  let nav_overview =
+    Printf.sprintf
+      "<a class='navitem navitem--pad' href='/c/%s'><span class='navitem__sigil navitem__sigil--box'>&#8962;</span>Overview</a>"
+      (esc community.slug)
+  in
+  let vis_note =
+    if community.visibility = Db.Community_private then
+      "<div class='launch-side-vis'>private community</div>"
+    else ""
+  in
+  let nav_live =
+    if channels = [] then ""
+    else
+      "<p class='kicker sidebar__group'>Live</p>"
+      ^ String.concat "" (List.map (fun (c : channel) ->
+          let cls = if c.slug = channel.slug then "navitem navitem--active" else "navitem" in
+          Printf.sprintf
+            "<a class='%s' href='/c/%s/ch/%s'><span class='navitem__sigil navitem__sigil--live'>#</span>%s</a>"
+            cls (esc community.slug) (esc c.slug) (esc c.slug))
+          channels)
+  in
+  let nav_knowledge =
+    if sections = [] then ""
+    else
+      "<p class='kicker sidebar__group'>Knowledge</p>"
+      ^ String.concat "" (List.map (fun (s : community_section) ->
+          Printf.sprintf
+            "<a class='navitem' href='/c/%s/s/%s'><span class='navitem__sigil navitem__sigil--live'>&sect;</span>%s</a>"
+            (esc community.slug) (esc s.slug) (esc s.name))
+          sections)
+  in
+  let nav_network =
+    "<p class='kicker sidebar__group'>Network</p>"
+    ^ Printf.sprintf
+        "<a class='navitem navitem--pad' href='/c/%s/modlog'><span class='navitem__sigil navitem__sigil--box'>&#9776;</span>Moderation log</a>"
+        (esc community.slug)
+  in
+  let sidebar =
+    Printf.sprintf
+      "<aside class='sidebar' aria-label='%s community'>%s<div class='sidebar__body'>%s%s%s%s%s</div></aside>"
+      (esc community.name) side_head nav_overview vis_note nav_live nav_knowledge nav_network
   in
 
   let topic_html = match channel.topic with
@@ -1224,6 +1284,9 @@ let community_channel_shell_page ?user ?realtime_token ?(noindex=false) ~is_memb
       messages_html
       composer
   in
+  (* Presence pane: markup (classes + every #chat-presence-* id chat_live.js
+     fills) unchanged; only the outer wrapper is the launch `.aside--chat`
+     column instead of the legacy `.cs-aside` grid cell. *)
   let presence_pane =
     "<div class='cs-presence' id='chat-presence'>\
        <div class='ca-label' id='chat-presence-heading'>In this channel</div>\
@@ -1231,6 +1294,7 @@ let community_channel_shell_page ?user ?realtime_token ?(noindex=false) ~is_memb
        <ul class='cs-presence-list' id='chat-presence-list'></ul>\
      </div>"
   in
+  let aside = Printf.sprintf "<aside class='aside aside--chat'>%s</aside>" presence_pane in
   let title = Printf.sprintf "#%s · %s" channel.name community.name in
   (* The parameterized reverse-navigation view canonicalizes to the clean channel URL so
      crawlers never index per-thread duplicates of the same channel page. *)
@@ -1243,8 +1307,19 @@ let community_channel_shell_page ?user ?realtime_token ?(noindex=false) ~is_memb
     "<script src='/static/js/phoenix.js' defer></script>\
      <script src='/static/js/chat_live.js' defer></script>"
   in
-  Components.community_shell ?user ~noindex ~request ~rail_communities ~active_slug:community.slug
-    ~title ~community ~nav_groups ~main ~right_pane:presence_pane ~head_extra ()
+  (* The complete <main> element, built here so the launch wrapper can never
+     interpose a box: .cs-main is a flex column whose head / chat stage /
+     typing row / composer MUST stay direct children, and for a private
+     community the ph-no-capture replay guard rides on this element itself
+     (never a wrapper div — see the chat-layout regression). *)
+  let main_el =
+    Printf.sprintf "<main class='%s'>%s</main>"
+      (if community.visibility = Db.Community_private then "cs-main ph-no-capture" else "cs-main")
+      main
+  in
+  Components.launch_community_surface_page ?user ~noindex ~request ~rail_communities
+    ~head_extra ~aside ~community ~sidebar
+    ~page_class:"launch-community-channel" ~title ~main_el ()
 
 (* What the thread page may say about a promoted thread's chat origin, decided by the
    HANDLER from the viewer's read authorization on the source channel's community:
@@ -1890,7 +1965,8 @@ let thread_shell_page ?user ?(noindex=false) ~is_member ~is_current_user_mod ~mo
    fragment is spliced in verbatim (its markup is pinned by the fragment
    suites) and restyled purely by the route-scoped CSS. *)
 let community_overview_page ?user ?(noindex=false) ?(connected_projects="") ~is_member ~is_current_user_mod ~is_current_user_top_mod
-    ~mod_usernames ~orphaned ~(channels : channel list) ~(recent_posts : post list)
+    ~mod_usernames ~orphaned ~(rail_communities : community list)
+    ~(channels : channel list) ~(recent_posts : post list)
     (community : community) (section_stats : (community_section * int * string option) list) request =
   let csrf_token = Dream.csrf_tag request in
   let is_admin = Dream.session_field request "is_admin" = Some "true" in
@@ -2219,8 +2295,8 @@ let community_overview_page ?user ?(noindex=false) ?(connected_projects="") ~is_
       connected_projects sections_panel recent_panel
       channels_panel mods_panel rules_panel modlog_panel
   in
-  Components.launch_community_page ?user ~noindex ~request ~community
-    ~sidebar ~page_class:"launch-community-overview" ~title:community.name ~content ()
+  Components.launch_community_page ?user ~noindex ~request ~rail_communities
+    ~community ~sidebar ~page_class:"launch-community-overview" ~title:community.name ~content ()
 
 (* [connected_projects] is the pre-rendered "Connected projects" management fragment
    (Project_home_removal_pages.community_side_management_section) supplied by the settings

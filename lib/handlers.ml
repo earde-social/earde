@@ -1081,7 +1081,7 @@ let community_page_handler request =
         in
         let%lwt recent_posts_res = Db.get_posts_by_community db community.id Db.Newest 5 0 in
         let recent_posts = match recent_posts_res with Ok ps -> ps | Error _ -> [] in
-        let%lwt (mods_res, _admin_usernames, _banned_usernames, _user_communities, _moderated_communities, is_mem) =
+        let%lwt (mods_res, _admin_usernames, _banned_usernames, user_communities, _moderated_communities, is_mem) =
           shared_sidebar_data db community
         in
         (match sections_res, is_mem with
@@ -1094,7 +1094,7 @@ let community_page_handler request =
              (* Order: lookup → authorization → existing page data → connected projects →
                 render. Never before the authorization decision above. *)
              with_connected_projects db ?user request ~community_slug:slug (fun connected_projects ->
-               Dream.html (Pages.community_overview_page ?user ~noindex:(community_noindex community) ~connected_projects ~is_member:m ~is_current_user_mod:is_mod ~is_current_user_top_mod:is_top_mod ~mod_usernames ~orphaned ~channels ~recent_posts community section_stats request))
+               Dream.html (Pages.community_overview_page ?user ~noindex:(community_noindex community) ~connected_projects ~is_member:m ~is_current_user_mod:is_mod ~is_current_user_top_mod:is_top_mod ~mod_usernames ~orphaned ~rail_communities:user_communities ~channels ~recent_posts community section_stats request))
          | _ -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:"Failed to load community sections." ~alert_type:"error" ~return_url:"/" request))
     | Ok (Some community) ->
         let%lwt authorized = can_view_community db ~user_id ~is_admin community in

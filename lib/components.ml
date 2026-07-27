@@ -1182,12 +1182,15 @@ let launch_onboarding_page ?(noindex = false) ?request ?user ?(stepper = "")
    selectors match nothing here); anonymous documents carry no script and
    fire no /api/unread-notifs request. [page_class]
    ("launch-community-overview") is the scoping root stamped on <body> for
-   the route's integration CSS at the end of earde.css. Used only by
-   [Pages.community_overview_page]; existing wrappers ([layout],
-   [community_home_page], [community_shell], the other launch documents) and
-   their callers are untouched. *)
-let launch_community_page ?(noindex = false) ?request ?user
-    ~(community : community) ~sidebar ~page_class ~title ~content () =
+   the route's integration CSS at the end of earde.css. Shared doc builder
+   behind [launch_community_page] (pass 8 overview) and
+   [launch_community_surface_page] (pass 9 channel), so the two routes'
+   global rails can never diverge;
+   existing wrappers ([layout], [community_home_page], [community_shell],
+   the other launch documents) and their callers are untouched. *)
+let launch_community_doc ?(noindex = false) ?request ?user
+    ?(rail_communities = []) ?(head_extra = "") ?(aside = "")
+    ~(community : community) ~sidebar ~page_class ~title ~main_el () =
   let analytics_head, analytics_banner =
     analytics_assets ?request
       ~analytics_community:(community.id, community.visibility) ()
@@ -1253,10 +1256,13 @@ let launch_community_page ?(noindex = false) ?request ?user
          <a class='btn btn--secondary btn--auth' href='/login'>Log in</a>\
          <a class='btn btn--primary btn--auth' href='/signup'>Sign up</a>"
   in
-  (* The rail shows only what this renderer really has: Feed, the current
-     community (active, white marker, linking to its own canonical overview),
-     and ＋. Joined communities are not supplied to the overview handler path
-     and are not fabricated. *)
+  (* The rail shows only what this renderer really has: Feed, the joined
+     communities the handler supplies (kept in their established order), the
+     current community, and ＋. Nothing is fabricated: anonymous documents get
+     no joined tiles, and the current community is appended only when it is
+     not already in the joined run (dedup by slug) — so navigating between
+     feed, overview and channel never removes, adds or reorders joined tiles;
+     only the active marker moves. *)
   let tile_glyph slug =
     let raw =
       if String.length slug >= 2 then String.sub slug 0 2
@@ -1265,26 +1271,46 @@ let launch_community_page ?(noindex = false) ?request ?user
     in
     String.capitalize_ascii raw
   in
-  let tile_face =
-    match community.avatar_url with
+  let tile_face_of (c : community) =
+    match c.avatar_url with
     | Some url when String.trim url <> "" ->
         let src = safe_img_src url in
-        if src = "#" then html_escape (tile_glyph community.slug)
+        if src = "#" then html_escape (tile_glyph c.slug)
         else Printf.sprintf "<img class='launch-rail__img' src='%s' alt=''>" src
-    | _ -> html_escape (tile_glyph community.slug)
+    | _ -> html_escape (tile_glyph c.slug)
+  in
+  (* One tile per community in the run; the current community carries the
+     white active marker wherever it sits (in its joined slot when the viewer
+     belongs to it, appended at the end when directly visiting a community
+     they haven't joined — an anonymous viewer's rail reduces to exactly the
+     current tile). *)
+  let rail_tile (c : community) =
+    let marker =
+      if c.slug = community.slug
+      then "<span class='rail__marker rail__marker--community'></span>"
+      else ""
+    in
+    Printf.sprintf
+      "<a class='rail__item rail__item--community' href='/c/%s' title='/c/%s' style='background:%s'>%s%s</a>"
+      (html_escape c.slug) (html_escape c.slug)
+      (launch_tile_color c.slug) marker (tile_face_of c)
+  in
+  let rail_run =
+    if List.exists (fun (c : community) -> c.slug = community.slug) rail_communities
+    then rail_communities
+    else rail_communities @ [community]
   in
   let rail =
     Printf.sprintf
       "<nav class='rail' aria-label='Primary'>\
        <a class='rail__item' href='/feed' title='Feed' aria-label='Feed'>%s</a>\
        <span class='rail__divider'></span>\
-       <a class='rail__item rail__item--community' href='/c/%s' title='/c/%s' style='background:%s'><span class='rail__marker rail__marker--community'></span>%s</a>\
+       %s\
        <span class='rail__spacer'></span>\
        <a class='rail__item rail__item--add' href='/bring' title='Connect a project' aria-label='Connect a project'>&#65291;</a>\
        </nav>"
       house_icon
-      (html_escape community.slug) (html_escape community.slug)
-      (launch_tile_color community.slug) tile_face
+      (String.concat "" (List.map rail_tile rail_run))
   in
   (* Replay privacy on the existing shell element — class only, no wrapper. *)
   let shell_cls =
@@ -1320,9 +1346,8 @@ let launch_community_page ?(noindex = false) ?request ?user
      <div class='%s'>\
      %s\
      %s\
-     <main class='main'>\n\
-     %s\n\
-     </main>\
+     %s\
+     %s\
      </div>\n\
      </div>\n\
      %s\n\
@@ -1330,9 +1355,37 @@ let launch_community_page ?(noindex = false) ?request ?user
      %s\n\
      </body>\n\
      </html>"
-    (html_escape title) robots_meta mobile_gate_css_link analytics_head
-    page_class search_form actions shell_cls rail sidebar content
+    (html_escape title) robots_meta mobile_gate_css_link
+    (analytics_head ^ head_extra)
+    page_class search_form actions shell_cls rail sidebar main_el aside
     mobile_desktop_gate analytics_banner behavior_script
+
+(* Public pass-8 entry point: the overview content is wrapped in the exact
+   `<main class='main'>` element (same newlines) the pre-extraction template
+   emitted, with no head extras and no aside. [rail_communities] carries the
+   viewer's joined communities so the overview's global rail matches the feed
+   and channel routes instead of collapsing to the current tile alone. *)
+let launch_community_page ?noindex ?request ?user ?rail_communities
+    ~(community : community) ~sidebar ~page_class ~title ~content () =
+  launch_community_doc ?noindex ?request ?user ?rail_communities ~community
+    ~sidebar ~page_class
+    ~title ~main_el:("<main class='main'>\n" ^ content ^ "\n</main>") ()
+
+(* Pass-9 channel-safe variant: identical launch chrome (topbar, rail,
+   analytics assets, behavior script, mobile gate, tile colours) but the
+   caller supplies the COMPLETE prebuilt <main> element — the live channel's
+   `<main class='cs-main …'>` flex column must keep its head / stage /
+   typing / composer as direct children, which the overview's
+   `<main class='main'>` + `.scroll` anatomy would break. [head_extra]
+   carries the channel's existing realtime scripts (phoenix.js +
+   chat_live.js) and canonical link; [aside] the presence pane;
+   [rail_communities] the real joined communities its handler already
+   loads. Used only by [Pages.community_channel_shell_page]. *)
+let launch_community_surface_page ?noindex ?request ?user ?rail_communities
+    ?head_extra ?aside ~(community : community) ~sidebar ~page_class ~title
+    ~main_el () =
+  launch_community_doc ?noindex ?request ?user ?rail_communities ?head_extra
+    ?aside ~community ~sidebar ~page_class ~title ~main_el ()
 
 (* === HELPERS === *)
 

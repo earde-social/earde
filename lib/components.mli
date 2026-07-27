@@ -136,10 +136,12 @@ val launch_onboarding_page : ?noindex:bool -> ?request:Dream.request -> ?user:st
     the approved four-pane community shell: the 54px top bar (brand → /feed,
     the real /search form, the same viewer-state clusters as
     [launch_app_page] including the member logout POST form and the
-    id='notif-badge' bell), the dark icon rail (Feed, the CURRENT community
-    tile active with the white marker, ＋ → /bring; joined communities are
-    not supplied to this renderer and are not invented), the caller-rendered
-    community [sidebar], and the central overview [content]. Analytics
+    id='notif-badge' bell), the dark icon rail (Feed, then [rail_communities]
+    — the viewer's joined communities in their established order, with the
+    current community's tile carrying the white active marker and appended
+    only when not already joined; nothing is invented — then ＋ → /bring),
+    the caller-rendered community [sidebar], and the central overview
+    [content]. Analytics
     assets carry the community group attribute (and private marker) derived
     from [community] itself; for a private community the ph-no-capture
     replay guard rides on the existing `.shell` element (no wrapper div).
@@ -148,7 +150,27 @@ val launch_onboarding_page : ?noindex:bool -> ?request:Dream.request -> ?user:st
     the scoping root stamped on <body> for the integration CSS at the end of
     earde.css. Used only by [Pages.community_overview_page]; no existing
     wrapper changes. *)
-val launch_community_page : ?noindex:bool -> ?request:Dream.request -> ?user:string -> community:Db.community -> sidebar:string -> page_class:string -> title:string -> content:string -> unit -> string
+val launch_community_page : ?noindex:bool -> ?request:Dream.request -> ?user:string -> ?rail_communities:Db.community list -> community:Db.community -> sidebar:string -> page_class:string -> title:string -> content:string -> unit -> string
+
+(** Cartographic Civic launch community document, channel-safe variant
+    (pass 9: GET /c/:slug/ch/:channel_slug only). Identical launch chrome to
+    [launch_community_page] — same top bar, dark rail (current community
+    active), analytics assets with the community group/private markers,
+    shared behavior script for members, desktop-only mobile gate, and the
+    ph-no-capture replay guard on `.shell` for private communities — but the
+    caller supplies [main_el], the COMPLETE prebuilt `<main>` element. The
+    live channel's `<main class='cs-main …'>` is a load-bearing flex column
+    whose head / chat stage / typing row / composer must stay DIRECT
+    children, so no wrapper of any kind is added around or inside it.
+    [head_extra] appends per-page <head> tags after the analytics assets
+    (the channel's existing phoenix.js + chat_live.js defer scripts and the
+    reverse-navigation canonical link). [aside] renders after [main_el]
+    inside `.shell` (the presence pane). [rail_communities] adds real
+    joined-community tiles to the rail (the channel handler already loads
+    them; the current community's tile carries the active marker in its
+    joined slot, or is appended when not joined). Used only by
+    [Pages.community_channel_shell_page]; no existing wrapper changes. *)
+val launch_community_surface_page : ?noindex:bool -> ?request:Dream.request -> ?user:string -> ?rail_communities:Db.community list -> ?head_extra:string -> ?aside:string -> community:Db.community -> sidebar:string -> page_class:string -> title:string -> main_el:string -> unit -> string
 
 (** Deterministic launch-palette colour (hex string) for a community slug.
     The database stores no per-community colour, so launch chrome derives a
