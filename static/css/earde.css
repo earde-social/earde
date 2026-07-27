@@ -1942,3 +1942,409 @@ ol, ul { margin: 0; padding: 0; list-style: none; }
 .launch-project-home-setup #analytics-consent [data-analytics-error] {
   color: var(--danger); font-size: var(--fs-11);
 }
+
+/* ==========================================================================
+   EARDE INTEGRATION — project home choice branches only
+   Scoped beneath body.launch-project-request-home
+   (GET/POST /projects/:slug/request-home and its re-renders) and
+   body.launch-project-community-home (/projects/:slug/community-home/new
+   and its re-renders). Exists only because the two real branch pages cannot
+   emit the reference markup exactly:
+   - each feature fragment beginning at <div class='create-shell'> is a
+     byte-exact slicing marker for the test suites, so the existing phc-* /
+     phv-* / phrm-* / create-* markup is styled in place — the mockup's
+     .repo-row chooser and identity-card anatomy are recreated over the
+     pinned rows, never rewritten onto new markup;
+   - the mockup's community search field, member counts, match badges,
+     default-structure chips, and publication options are unsupported by the
+     backend contracts of these routes (visibility is chosen later at
+     publication) and are deliberately not drawn;
+   - the top-bar command field is a link, not a search form (same
+     zero-extra-form trick as the other launch documents);
+   - the onboarding stepper (.steps, approved sheet above) is rendered by
+     the wrapper before the untouched fragment and needs no extra rules;
+   - the notification badge is revealed by the shared script removing the
+     legacy `hidden` class; honoured on the badge element only — no global
+     .hidden utility is defined;
+   - the desktop-only gate panel ships in mobile-gate.css; only the
+     launch-scope "hide the app" rules for these routes' document
+     hierarchies live here (mirrors mobile-gate.css's body.launch-feed
+     > .app rule);
+   - the analytics consent banner markup is shared with the legacy layout
+     (same rules as the other launch sections, re-scoped).
+   phc-* rules are scoped beneath launch-project-request-home only; phv-*
+   rules beneath launch-project-community-home only.
+   ========================================================================== */
+
+/* ---- Shared launch chrome (both branch roots) ------------------------- */
+
+/* Command field rendered as a link to /search. */
+.launch-project-request-home .launch-search,
+.launch-project-community-home .launch-search { color: var(--ink); }
+.launch-project-request-home .launch-search__hint,
+.launch-project-community-home .launch-search__hint {
+  flex: 1; min-width: 0; align-self: center;
+  font-size: var(--fs-13-5); color: var(--muted); opacity: .8;
+  padding: var(--sp-4) var(--sp-5);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.launch-project-request-home .launch-search__enter,
+.launch-project-community-home .launch-search__enter {
+  display: grid; place-items: center;
+  border-left: var(--bw) solid var(--line); background: var(--surface3);
+  color: var(--muted); font-family: var(--mono); font-size: var(--fs-12);
+  padding: 0 13px;
+}
+
+/* Member top-bar cluster: chip avatar tone + badge reveal hook. */
+.launch-project-request-home .userchip .avatar,
+.launch-project-community-home .userchip .avatar { background: var(--moss); }
+.launch-project-request-home #notif-badge.hidden,
+.launch-project-community-home #notif-badge.hidden { display: none; }
+
+/* Legacy create.css wrappers, flat on the launch column (no cool-grey card). */
+.launch-project-request-home .create-shell,
+.launch-project-community-home .create-shell { display: block; }
+.launch-project-request-home .create-wrap,
+.launch-project-community-home .create-wrap { max-width: 640px; margin: 0 auto; }
+.launch-project-request-home .create-panel,
+.launch-project-community-home .create-panel { display: block; }
+
+/* Page head: serif title over a muted lead. */
+.launch-project-request-home .create-head,
+.launch-project-community-home .create-head { margin-bottom: var(--sp-8); }
+.launch-project-request-home .create-title,
+.launch-project-community-home .create-title {
+  font-family: var(--serif); font-weight: 600; font-size: var(--fs-24);
+  color: var(--ink);
+}
+.launch-project-request-home .create-sub,
+.launch-project-community-home .create-sub {
+  color: var(--muted); font-size: var(--fs-13-5); line-height: var(--lh-prose);
+  margin-top: var(--sp-2);
+}
+
+/* The factual verification line: moss mono, check drawn as decorative
+   pseudo-content (the copy itself is pinned). */
+.launch-project-request-home .phc-verified,
+.launch-project-community-home .phv-verified {
+  font-family: var(--mono); font-size: var(--fs-12); color: var(--moss);
+  margin-top: var(--sp-2);
+}
+.launch-project-request-home .phc-verified::before,
+.launch-project-community-home .phv-verified::before { content: '\2713\00a0'; }
+
+/* Quiet links. */
+.launch-project-request-home .create-link,
+.launch-project-community-home .create-link { color: var(--slate); }
+.launch-project-request-home .create-link:hover,
+.launch-project-community-home .create-link:hover {
+  color: #3b525a; text-decoration: underline;
+}
+
+/* One-time feedback: a flat 1px danger-tinted notice — every variant on
+   these two routes reports a refused submission. Never a shadowed alert. */
+.launch-project-request-home .phc-alert,
+.launch-project-community-home .phv-alert {
+  border: var(--bw) solid var(--danger); border-radius: var(--r-2);
+  background: color-mix(in srgb, var(--danger) 8%, var(--surface));
+  color: var(--ink); font-size: var(--fs-13); line-height: var(--lh-prose);
+  padding: 13px var(--sp-8); margin-bottom: var(--sp-8);
+}
+
+/* The one strong submit action. Inline (the reference footer button), never
+   a full-bleed bar: create-btn--block is pinned markup, restyled here.
+   Accent per branch — moss for the dedicated home (.btn--primary), ochre
+   for the request (.btn--project); one accent per element. */
+.launch-project-request-home .create-actions,
+.launch-project-community-home .create-actions { margin-top: var(--sp-10); }
+.launch-project-request-home .create-btn,
+.launch-project-community-home .create-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  gap: var(--sp-3); font-family: var(--sans); font-weight: 600;
+  font-size: var(--fs-13); color: #fff;
+  border: var(--bw) solid; border-radius: var(--r-3);
+  padding: 9px var(--sp-10); cursor: pointer;
+}
+.launch-project-request-home .create-btn--block,
+.launch-project-community-home .create-btn--block { width: auto; }
+.launch-project-request-home .create-btn {
+  background: var(--ochre); border-color: var(--ochre);
+}
+.launch-project-request-home .create-btn:hover { filter: brightness(1.05); }
+.launch-project-community-home .create-btn {
+  background: var(--moss); border-color: var(--moss);
+}
+.launch-project-community-home .create-btn:hover { filter: brightness(1.06); }
+
+/* ---- Request-home branch (phc-*, phrm-*) ------------------------------ */
+
+/* The project whose home is being chosen: one factual line. */
+.launch-project-request-home .phc-project {
+  font-size: var(--fs-13-5); color: var(--muted); margin-bottom: var(--sp-6);
+}
+.launch-project-request-home .phc-project strong { color: var(--ink); }
+
+/* Who decides, and what verification does not grant: a consequence notice —
+   dashed frame, per the approved system (solid = status, dashed =
+   consequence). */
+.launch-project-request-home .phc-review-copy {
+  border: var(--bw) dashed var(--line2); border-radius: var(--r-3);
+  background: var(--surface); color: var(--muted);
+  font-size: var(--fs-12-5); line-height: var(--lh-prose);
+  padding: var(--sp-6) var(--sp-8); margin-bottom: var(--sp-8);
+}
+
+/* Community chooser: the bordered .rows rhythm, one radio row per eligible
+   community. The whole label is the hit target; the real radio stays
+   visible (moss accent) — selection is also echoed by the row tint. */
+.launch-project-request-home .phc-community-list {
+  border: var(--bw) solid var(--line); border-radius: var(--r-4);
+  background: var(--surface); overflow: hidden; margin-bottom: var(--sp-8);
+}
+.launch-project-request-home .phc-community {
+  border-bottom: var(--bw) solid var(--line);
+  padding: var(--sp-6) var(--sp-8);
+}
+.launch-project-request-home .phc-community:last-child { border-bottom: 0; }
+.launch-project-request-home .phc-community label {
+  display: block; cursor: pointer;
+}
+.launch-project-request-home .phc-community input[type='radio'] {
+  accent-color: var(--moss); margin: 0 var(--sp-4) 0 0; vertical-align: -1px;
+}
+.launch-project-request-home .phc-community:has(input:checked) {
+  background: color-mix(in srgb, var(--moss) 10%, var(--surface));
+}
+.launch-project-request-home .phc-community:hover { background: var(--surface2); }
+.launch-project-request-home .phc-community:has(input:checked):hover {
+  background: color-mix(in srgb, var(--moss) 13%, var(--surface));
+}
+.launch-project-request-home .phc-community--unavailable,
+.launch-project-request-home .phc-community--unavailable:hover {
+  background: var(--surface2); color: var(--muted);
+}
+.launch-project-request-home .phc-community-name {
+  font-weight: 600; font-size: var(--fs-14); color: var(--ink);
+}
+.launch-project-request-home .phc-community--unavailable .phc-community-name {
+  color: var(--muted);
+}
+.launch-project-request-home .phc-community-slug {
+  font-family: var(--mono); font-size: var(--fs-10-5); color: var(--muted);
+}
+.launch-project-request-home a.phc-community-slug { color: var(--slate); }
+/* The Public / Unlisted publication fact: a mono outline tag. */
+.launch-project-request-home .phc-community-visibility {
+  display: inline-flex; align-items: center; vertical-align: 1px;
+  font-family: var(--mono); font-size: var(--fs-10); line-height: 1.7;
+  color: var(--muted); border: var(--bw) solid currentColor;
+  border-radius: var(--r-1); padding: 1px 5px; margin-left: var(--sp-3);
+}
+.launch-project-request-home .phc-community-desc {
+  font-size: var(--fs-12); color: var(--muted); line-height: var(--lh-prose);
+  margin: var(--sp-2) 0 0 22px;
+}
+
+/* Request note: mono fact label over a restrained sans textarea. */
+.launch-project-request-home .phc-note-field {
+  display: block; font-family: var(--mono); font-size: var(--fs-11);
+  color: var(--muted); margin-bottom: var(--sp-4);
+}
+.launch-project-request-home .phc-note-field textarea {
+  display: block; width: 100%; margin-top: 5px;
+  font-family: var(--sans); font-size: var(--fs-13-5); color: var(--ink);
+  line-height: var(--lh-prose); min-height: 70px; resize: vertical;
+  background: var(--surface); border: var(--bw) solid var(--line2);
+  border-radius: var(--r-2); padding: 9px var(--sp-6); outline: none;
+}
+.launch-project-request-home .phc-note-field textarea:focus {
+  border-color: var(--moss);
+}
+.launch-project-request-home .phc-note-copy {
+  font-family: var(--mono); font-size: var(--fs-10-5); color: var(--muted);
+  line-height: var(--lh-prose); margin-top: var(--sp-2);
+}
+
+/* Pending state: the ochre pending notice — 1px frame, 3px left rule,
+   ochre-tinted paper. Pending is a fact, not an error. */
+.launch-project-request-home .phc-pending-copy {
+  border: var(--bw) solid var(--ochre);
+  border-left: var(--bw-accent-3) solid var(--ochre);
+  border-radius: var(--r-3);
+  background: color-mix(in srgb, var(--ochre) 8%, var(--surface));
+  color: var(--muted); font-size: var(--fs-13); line-height: var(--lh-prose);
+  padding: var(--sp-7) var(--sp-8);
+}
+.launch-project-request-home .phc-pending-copy strong { color: var(--ink); }
+
+/* Accepted state: the moss success notice. */
+.launch-project-request-home .phc-accepted-copy {
+  border: var(--bw) solid var(--moss); border-radius: var(--r-3);
+  background: color-mix(in srgb, var(--moss) 9%, var(--surface));
+  color: var(--ink); font-size: var(--fs-13); line-height: var(--lh-prose);
+  padding: var(--sp-7) var(--sp-8);
+}
+
+/* An active target that later became ineligible: ochre outline fact tag. */
+.launch-project-request-home .phc-community-availability {
+  display: inline-flex; align-items: center; vertical-align: 1px;
+  font-family: var(--mono); font-size: var(--fs-10); line-height: 1.7;
+  color: var(--ochre); border: var(--bw) solid currentColor;
+  border-radius: var(--r-1); padding: 1px 5px;
+}
+
+/* No eligible community: a sentence, not a poster. */
+.launch-project-request-home .phc-none {
+  font-family: var(--mono); font-size: var(--fs-12-5); color: var(--muted);
+  line-height: var(--lh-prose); margin-top: var(--sp-6); max-width: 56ch;
+}
+
+/* The way back to the project setup page. */
+.launch-project-request-home .phc-back {
+  margin-top: var(--sp-9); font-family: var(--mono); font-size: var(--fs-12);
+}
+
+/* Steward removal fragment (accepted state only): a quiet section under a
+   hairline; destructive action stays text-and-border danger, never a fill. */
+.launch-project-request-home .phrm-removal {
+  margin-top: var(--sp-11); padding-top: var(--sp-9);
+  border-top: var(--bw) solid var(--line);
+}
+.launch-project-request-home .phrm-removal-title {
+  font-family: var(--serif); font-weight: 600; font-size: var(--fs-19);
+  color: var(--ink); margin-bottom: var(--sp-4);
+}
+.launch-project-request-home .phrm-removal-copy {
+  font-size: var(--fs-12-5); color: var(--muted); line-height: var(--lh-prose);
+  margin-bottom: var(--sp-6);
+}
+.launch-project-request-home .phrm-btn {
+  display: inline-flex; align-items: center;
+  font-family: var(--sans); font-weight: 600; font-size: var(--fs-12);
+  color: var(--danger); background: var(--surface);
+  border: var(--bw) solid var(--danger); border-radius: var(--r-2);
+  padding: var(--sp-3) var(--sp-7); cursor: pointer;
+}
+.launch-project-request-home .phrm-btn:hover {
+  background: color-mix(in srgb, var(--danger) 8%, var(--surface));
+}
+
+/* ---- Dedicated-home branch (phv-*) ------------------------------------ */
+
+/* Project identity summary: the read-only surface2 card idiom, serif name
+   over mono facts. */
+.launch-project-community-home .phv-project {
+  border: var(--bw) solid var(--line); border-radius: var(--r-4);
+  background: var(--surface2); padding: var(--sp-8) var(--sp-9);
+  margin-bottom: var(--sp-8);
+}
+.launch-project-community-home .phv-project-name {
+  font-family: var(--serif); font-weight: 600; font-size: var(--fs-19);
+  color: var(--ink); margin-bottom: var(--sp-2);
+}
+.launch-project-community-home .phv-project-meta {
+  font-family: var(--mono); font-size: var(--fs-12); color: var(--muted);
+}
+.launch-project-community-home .phv-project-desc {
+  font-size: var(--fs-12-5); color: var(--muted); line-height: var(--lh-prose);
+  margin-top: var(--sp-4);
+}
+
+/* What happens next: consequences of creating the draft — dashed frame,
+   per the approved system (solid = status, dashed = consequence). */
+.launch-project-community-home .phv-explain {
+  border: var(--bw) dashed var(--line2); border-radius: var(--r-3);
+  background: var(--surface); padding: var(--sp-7) var(--sp-8);
+  margin-bottom: var(--sp-9);
+}
+.launch-project-community-home .phv-explain-title {
+  font-family: var(--mono); font-size: var(--fs-10-5); font-weight: 600;
+  letter-spacing: var(--ls-kicker); text-transform: uppercase;
+  color: var(--muted); margin-bottom: var(--sp-4);
+}
+.launch-project-community-home .phv-explain-list li {
+  font-size: var(--fs-12-5); color: var(--muted); line-height: var(--lh-prose);
+  padding-left: var(--sp-6); position: relative; margin-bottom: var(--sp-2);
+}
+.launch-project-community-home .phv-explain-list li::before {
+  content: '\00B7'; position: absolute; left: 0; color: var(--moss);
+  font-weight: 700;
+}
+.launch-project-community-home .phv-explain-list li:last-child { margin-bottom: 0; }
+
+/* Identity form fields: mono fact labels over inset sans controls; the
+   community address stays mono — the value is a URL fact. */
+.launch-project-community-home .phv-field {
+  display: block; font-family: var(--mono); font-size: var(--fs-11);
+  color: var(--muted); margin-bottom: var(--sp-8);
+}
+.launch-project-community-home .phv-field input,
+.launch-project-community-home .phv-field textarea {
+  display: block; width: 100%; margin-top: 5px;
+  font-family: var(--sans); font-size: var(--fs-14); color: var(--ink);
+  background: var(--surface); border: var(--bw) solid var(--line2);
+  border-radius: var(--r-2); padding: 9px var(--sp-6); outline: none;
+}
+.launch-project-community-home .phv-field input:focus,
+.launch-project-community-home .phv-field textarea:focus {
+  border-color: var(--moss);
+}
+.launch-project-community-home .phv-field input[name='community_slug'] {
+  font-family: var(--mono); font-size: var(--fs-13);
+}
+.launch-project-community-home .phv-field textarea {
+  min-height: 70px; resize: vertical;
+  font-size: var(--fs-13-5); line-height: var(--lh-prose);
+}
+/* The /c/<address> semantics, as a mono field hint tucked under the
+   address control. */
+.launch-project-community-home .phv-hint {
+  font-family: var(--mono); font-size: var(--fs-10-5); color: var(--muted);
+  line-height: var(--lh-prose); margin: -3px 0 var(--sp-8);
+}
+
+/* The way back to the project setup page. */
+.launch-project-community-home .phv-back {
+  margin-top: var(--sp-9); font-family: var(--mono); font-size: var(--fs-12);
+}
+
+/* ---- Shared gate + consent (both branch roots) ------------------------ */
+
+/* Desktop-only gate: hide these routes' launch app under the shared
+   breakpoint; the gate panel itself is styled by mobile-gate.css. */
+@media (max-width: 800px) {
+  body.launch-project-request-home > .app,
+  body.launch-project-community-home > .app { display: none !important; }
+}
+
+/* Analytics consent banner (markup shared with the legacy layout). */
+.launch-project-request-home #analytics-consent,
+.launch-project-community-home #analytics-consent {
+  position: fixed; bottom: var(--sp-8); left: 50%; transform: translateX(-50%);
+  z-index: 50; width: calc(100% - 2rem); max-width: 28rem;
+  background: var(--surface); border: var(--bw) solid var(--line2);
+  border-radius: var(--r-3); padding: var(--sp-7) var(--sp-8);
+  box-shadow: var(--shadow-overlay);
+}
+.launch-project-request-home #analytics-consent p,
+.launch-project-community-home #analytics-consent p {
+  font-size: var(--fs-13); color: var(--muted); margin-bottom: var(--sp-5);
+}
+.launch-project-request-home #analytics-consent [data-analytics-accept],
+.launch-project-request-home #analytics-consent [data-analytics-refuse],
+.launch-project-community-home #analytics-consent [data-analytics-accept],
+.launch-project-community-home #analytics-consent [data-analytics-refuse] {
+  font-family: var(--sans); font-weight: 600; font-size: var(--fs-12);
+  border: var(--bw) solid var(--line2); border-radius: var(--r-2);
+  padding: var(--sp-3) var(--sp-7); cursor: pointer;
+  background: var(--surface); color: var(--muted); margin-right: var(--sp-4);
+}
+.launch-project-request-home #analytics-consent [data-analytics-accept],
+.launch-project-community-home #analytics-consent [data-analytics-accept] {
+  color: #fff; background: var(--moss); border-color: var(--moss);
+}
+.launch-project-request-home #analytics-consent [data-analytics-error],
+.launch-project-community-home #analytics-consent [data-analytics-error] {
+  color: var(--danger); font-size: var(--fs-11);
+}
