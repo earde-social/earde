@@ -50694,9 +50694,69 @@ module Phnt = struct
         Alcotest.(check int) "moderator: 200" 200 (status_of response);
         Lwt.return_unit)
 
+  (* Removal is the one kind notified to BOTH sides (every steward and
+     every top moderator, minus the actor), so its destination must be
+     one every recipient can actually open. A steward-only project route
+     would 404 for the moderators — the regression this case pins. *)
+  let ui_removal_destination_case =
+    db_case "ui: a steward-side removal gives the moderator recipient a \
+             destination its own authorization admits"
+      (fun ~url conn ->
+        let* owner = insert_user conn "phnt_uir_owner" in
+        let* m1 = insert_user conn "phnt_uir_m1" in
+        let* _inst, project =
+          make_project conn ~user:owner ~ext_id:960000056L ~slug:"phnt-uir"
+        in
+        let* () =
+          exec conn "project name" q_set_project_name
+            ("Phnt UIR Project", project)
+        in
+        let* cid =
+          insert_community ~name:"Phnt UIR Home" conn "phnt-uir-home"
+        in
+        let* () =
+          exec conn "top mod" Phrv.q_insert_moderator (m1, cid, "top_mod")
+        in
+        let* _rid =
+          request_ok "request" conn ~user:owner ~slug:"phnt-uir"
+            ~community:cid
+        in
+        let* () =
+          review_ok "accept" conn ~reviewer:m1 ~slug:"phnt-uir"
+            ~community:"phnt-uir-home" Rvs.Accept Phr.Accepted
+        in
+        (* The STEWARD removes, so the top moderator is the recipient. *)
+        let* () =
+          remove_ok "steward-side removal" conn ~actor:owner
+            ~slug:"phnt-uir" ~community:"phnt-uir-home"
+        in
+        let* _, body = notifications_page_for ~url ~label:"moderator" m1 in
+        check_contains "removed label" body
+          "Phnt UIR Project is no longer connected to Phnt UIR Home as its \
+           home";
+        check_contains "community destination" body "href='/c/phnt-uir-home'";
+        (* The steward-only project route must not be handed to a
+           moderator who is not one of the project's stewards. *)
+        check_absent "no steward-only destination" body
+          "href='/projects/phnt-uir/request-home'";
+        (* And the destination really is open to that recipient. *)
+        let community_router =
+          Dream.router
+            [ Dream.get "/c/:slug" Earde.Handlers.community_page_handler ]
+        in
+        let* response =
+          run_get ~url
+            ~session:[ ("user_id", string_of_int m1) ]
+            ~target:"/c/phnt-uir-home" community_router
+        in
+        Alcotest.(check int) "moderator: destination 200" 200
+          (status_of response);
+        Lwt.return_unit)
+
   let ui_suite =
     [ ui_labels_case; ui_unread_case; ui_escaping_case;
-      ui_deleted_actor_case; ui_destination_protection_case
+      ui_deleted_actor_case; ui_destination_protection_case;
+      ui_removal_destination_case
     ]
 
   (* ==================== privacy sweep ==================== *)

@@ -4545,8 +4545,18 @@ let notifications_page ?user (notifs : Db.notification list) request =
                     ( Printf.sprintf "%s rejected the community-home request for %s" c p,
                       Printf.sprintf "/projects/%s/request-home" (Components.html_escape project_slug) )
                 | _ ->
+                    (* Removal is the one kind whose recipients span BOTH
+                       sides: the removal store notifies every project
+                       steward and every community top moderator (minus the
+                       actor). A steward-only destination would 404 for the
+                       moderators, so this points at the community's own
+                       page — reachable by a top moderator always, and by a
+                       steward for exactly the published (public/unlisted)
+                       communities a home can be removed from. Its
+                       Connected-projects section is also where the removal
+                       is actually visible to either side. *)
                     ( Printf.sprintf "%s is no longer connected to %s as its home" p c,
-                      Printf.sprintf "/projects/%s/request-home" (Components.html_escape project_slug) )
+                      Printf.sprintf "/c/%s" (Components.html_escape community_slug) )
               in
               Some (label, Some href)
           | _ -> Some ("A project community-home update", None))
