@@ -348,14 +348,27 @@ let make_network_community_publication_handler ~mode ~load_config request =
                 (* Dream's form API enforces the URL-encoded content type and
                    verifies its own CSRF field, which it strips from the
                    returned fields — so the strict parser below sees
-                   application fields only. Every CSRF failure collapses to
-                   one generic 403; no framework diagnostic or submitted
-                   value reaches the response. *)
+                   application fields only.
+
+                   Every CSRF failure still refuses the submission with 403
+                   and never opens the store, but it is answered with the
+                   owner-authorized page rather than a terminal message
+                   page: the framework token lives one hour while the
+                   session that renders it lives two weeks, so a setup page
+                   left open (or served before a restart, which rotates the
+                   encryption secret) would otherwise become permanently
+                   unsubmittable. The re-render is already past the session,
+                   rollout and same-origin gates, re-authorizes the
+                   publisher in SQL, and reflects nothing from the
+                   unverified submission. *)
                 match%lwt Dream.form request with
                 | `Wrong_content_type -> bad_request_page request
                 | `Expired _ | `Wrong_session _ | `Invalid_token _
                 | `Missing_token _ | `Many_tokens _ ->
-                    forbidden_page request
+                    respond_owner_authorized request ~user_id
+                      ~community_slug:slug
+                      ~values_of:(fun _ -> blank_values)
+                      ~feedback:(Some Pages_ncp.Stale_form) ~status:`Forbidden
                 | `Ok fields -> (
                     (* No store SQL opens before the submission is
                        structurally and semantically valid; the parser owns

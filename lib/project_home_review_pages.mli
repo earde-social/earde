@@ -76,8 +76,12 @@ type state = {
 }
 
 (** Generic, ID-free outcome copy. Cosmetic only — feedback never alters
-    authorization or which controls render. *)
+    authorization or which controls render.
+    {!Stale_form} is the framework CSRF refusal — a page held open past the
+    token's lifetime, or served before a restart — and states only that
+    nothing was changed. *)
 type feedback =
+  | Stale_form
   | Review_unavailable
   | Project_unavailable
   | Target_ineligible

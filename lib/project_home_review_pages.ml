@@ -51,6 +51,7 @@ type state = {
 }
 
 type feedback =
+  | Stale_form
   | Review_unavailable
   | Project_unavailable
   | Target_ineligible
@@ -105,6 +106,9 @@ let verification_copy = function
   | Revoked -> "Verification revoked"
 
 let feedback_copy = function
+  | Stale_form ->
+      "This page had been open too long, so the action could no longer be \
+       submitted. Nothing was changed. Try again."
   | Review_unavailable -> "That request is no longer pending."
   | Project_unavailable ->
       "That project is no longer available for acceptance."

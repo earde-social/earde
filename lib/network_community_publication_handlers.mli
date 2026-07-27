@@ -50,7 +50,12 @@ val make_network_community_publication_handler :
     is one generic 403, decided {i before} the body is parsed), then
     [Dream.form] — a wrong content type or malformed framework form is one
     generic 400, and every CSRF failure (missing, invalid, expired,
-    wrong-session, duplicated) is one generic 403. The route slug is never
+    wrong-session, duplicated) is refused with 403 and never reaches the
+    store — answered by re-rendering the owner-authorized page with
+    [Network_community_publication_pages.Stale_form] and a fresh token,
+    reflecting nothing submitted, so a page whose one-hour token outlived
+    its fourteen-day session does not become permanently unsubmittable. The
+    route slug is never
     trimmed, lowercased, decoded, repaired, or reflected: the read model and
     the store own its validation.
 

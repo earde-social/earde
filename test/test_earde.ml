@@ -24472,7 +24472,8 @@ let phcp_feedback_cases =
             let frag = phcp_frag ~feedback:(Some feedback) (phcp_choose ()) in
             ps_must frag "phc-alert";
             ps_must frag marker)
-          [ (Phcp.Request_form_invalid, "Review the form and try again")
+          [ (Phcp.Stale_form, "This page had been open too long")
+          ; (Phcp.Request_form_invalid, "Review the form and try again")
           ; (Phcp.Community_unavailable,
              "no longer available for project requests")
           ; (Phcp.Active_home_exists,
@@ -25660,17 +25661,25 @@ module Phch = struct
         let pipeline = csrf_pipeline () in
         let cookie, fresh, expired = Pch.mint_tokens "mint" pipeline in
         let fields = request_fields () in
-        csrf_rejected "missing token" 403 (csrf_post ~cookie pipeline fields);
-        csrf_rejected "invalid token" 403
+        (* Every CSRF failure refuses the submission, but it is answered by
+           reloading the authorized current state (a fresh token, nothing
+           reflected) rather than a terminal page — so each one reaches the
+           read model's DB boundary and none reaches the store. A page whose
+           one-hour token outlived its fourteen-day session must not become
+           permanently unsubmittable. *)
+        Pch.check_db_boundary "missing token re-renders"
+          (csrf_post ~cookie pipeline fields);
+        Pch.check_db_boundary "invalid token re-renders"
           (csrf_post ~cookie pipeline
              (fields @ [ ("dream.csrf", "not-a-token") ]));
-        csrf_rejected "expired token" 403
+        Pch.check_db_boundary "expired token re-renders"
           (csrf_post ~cookie pipeline (fields @ [ ("dream.csrf", expired) ]));
-        csrf_rejected "duplicate tokens" 403
+        Pch.check_db_boundary "duplicate tokens re-render"
           (csrf_post ~cookie pipeline
              (fields @ [ ("dream.csrf", fresh); ("dream.csrf", fresh) ]));
-        csrf_rejected "wrong session" 403
+        Pch.check_db_boundary "wrong session re-renders"
           (csrf_post pipeline (fields @ [ ("dream.csrf", fresh) ]));
+        (* A wrong content type is still answered without any SQL. *)
         csrf_rejected "wrong content type" 400
           (csrf_post ~cookie ~content_type:false pipeline
              (fields @ [ ("dream.csrf", fresh) ]));
@@ -28213,7 +28222,8 @@ let phrp_feedback_cases =
             let frag = phrp_frag ~feedback:(Some fb) (phrp_state ()) in
             ps_must frag "phrv-alert";
             ps_must frag needle)
-          [ (Phrp.Review_unavailable, "no longer pending")
+          [ (Phrp.Stale_form, "This page had been open too long")
+          ; (Phrp.Review_unavailable, "no longer pending")
           ; (Phrp.Project_unavailable, "no longer available for acceptance")
           ; (Phrp.Target_ineligible, "cannot currently accept that project")
           ; (Phrp.Review_failed, "couldn't review the request") ])
@@ -29335,16 +29345,24 @@ module Phhr = struct
             let pipeline = csrf_pipeline ~make ~pattern () in
             let cookie, fresh, expired = Pch.mint_tokens "mint" pipeline in
             let post = csrf_post ~target in
-            csrf_rejected "missing token" 403 (post ~cookie pipeline []);
-            csrf_rejected "invalid token" 403
+            (* Every CSRF failure refuses the submission, but it is answered
+               by reloading the reviewer-authorized queue with a fresh token
+               rather than a terminal page — so each one reaches the read
+               model's DB boundary and none reaches the store. A queue whose
+               one-hour token outlived its fourteen-day session must not
+               become permanently unactionable. *)
+            Pch.check_db_boundary "missing token re-renders"
+              (post ~cookie pipeline []);
+            Pch.check_db_boundary "invalid token re-renders"
               (post ~cookie pipeline [ ("dream.csrf", "not-a-token") ]);
-            csrf_rejected "expired token" 403
+            Pch.check_db_boundary "expired token re-renders"
               (post ~cookie pipeline [ ("dream.csrf", expired) ]);
-            csrf_rejected "duplicate tokens" 403
+            Pch.check_db_boundary "duplicate tokens re-render"
               (post ~cookie pipeline
                  [ ("dream.csrf", fresh); ("dream.csrf", fresh) ]);
-            csrf_rejected "wrong session" 403
+            Pch.check_db_boundary "wrong session re-renders"
               (post pipeline [ ("dream.csrf", fresh) ]);
+            (* A wrong content type is still answered without any SQL. *)
             csrf_rejected "wrong content type" 400
               (post ~cookie ~content_type:false pipeline
                  [ ("dream.csrf", fresh) ]);
@@ -36170,7 +36188,8 @@ let phvp_feedback_cases =
   ; phvp_case "provisioning page: every feedback variant renders exactly one \
                generic alert that echoes no submitted value" (fun () ->
         let variants =
-          [ ("Invalid_form", Phvp.Invalid_form);
+          [ ("Stale_form", Phvp.Stale_form);
+            ("Invalid_form", Phvp.Invalid_form);
             ("Invalid_community_name", Phvp.Invalid_community_name);
             ("Invalid_community_slug", Phvp.Invalid_community_slug);
             ("Invalid_community_description", Phvp.Invalid_community_description);
@@ -38994,23 +39013,31 @@ module Phvv = struct
           let pipeline = csrf_pipeline () in
           let cookie, fresh, expired = Pch.mint_tokens "mint" pipeline in
           let valid = fields () in
-          csrf_rejected "missing token" 403 (csrf_post ~cookie pipeline valid);
-          csrf_rejected "invalid token" 403
+          (* Every CSRF failure refuses the submission, but it is answered by
+             re-rendering the owner-authorized page (a fresh token, nothing
+             reflected) rather than a terminal page — so each one reaches the
+             read model's DB boundary and none reaches the store. A page
+             whose one-hour token outlived its fourteen-day session must not
+             become permanently unsubmittable. *)
+          Pch.check_db_boundary "missing token re-renders"
+            (csrf_post ~cookie pipeline valid);
+          Pch.check_db_boundary "invalid token re-renders"
             (csrf_post ~cookie pipeline
                (("dream.csrf", "not-a-token") :: valid));
-          csrf_rejected "expired token" 403
+          Pch.check_db_boundary "expired token re-renders"
             (csrf_post ~cookie pipeline (("dream.csrf", expired) :: valid));
-          csrf_rejected "duplicate tokens" 403
+          Pch.check_db_boundary "duplicate tokens re-render"
             (csrf_post ~cookie pipeline
                (("dream.csrf", fresh) :: ("dream.csrf", fresh) :: valid));
-          csrf_rejected "wrong session" 403
+          Pch.check_db_boundary "wrong session re-renders"
             (csrf_post pipeline (("dream.csrf", fresh) :: valid));
+          (* A wrong content type is still answered without any SQL. *)
           csrf_rejected "wrong content type" 400
             (csrf_post ~cookie ~content_type:false pipeline
                (("dream.csrf", fresh) :: valid));
-          (* A rejected token answers before the application fields are even
-             looked at. *)
-          csrf_rejected "bad token beats bad form" 403
+          (* A rejected token still answers before the application fields are
+             even looked at: the re-render is the same whatever was sent. *)
+          Pch.check_db_boundary "bad token beats bad form"
             (csrf_post ~cookie pipeline
                [ ("dream.csrf", "not-a-token"); ("phvv_unknown", "x") ]);
           (* A verified token reaches Dream.sql, which raises without a pool:
@@ -39174,6 +39201,11 @@ module Phvv = struct
     @@ Dream.memory_sessions @@ identity_middleware
     @@ Dream.router
          [ Dream.get "/mint" (fun req -> Dream.respond (Dream.csrf_token req));
+           (* The exact production failure this suite regresses: an
+              authentic, correctly signed, same-session token whose one-hour
+              lifetime ran out while the page sat open. *)
+           Dream.get "/mint-expired" (fun req ->
+               Dream.respond (Dream.csrf_token ~valid_for:(-60.) req));
            Dream.get get_pattern (fun req -> make_get ~mode:Ob.Public req);
            Dream.post post_pattern
              (Earde.Handlers.Rate_limit.middleware (fun req ->
@@ -39210,8 +39242,12 @@ module Phvv = struct
     let* body = Dream.body response in
     Lwt.return (response, body)
 
-  let do_post ?pipeline ?(origin = Some "https://earde.com") ~url ~cookie
-      ~target ~token ~body_fields () =
+  (* [omit_token] posts a body with no framework CSRF field at all — exactly
+     what a page rendered without one would send; [extra_headers] carries the
+     rest of the real navigation metadata a browser attaches. *)
+  let do_post ?pipeline ?(origin = Some "https://earde.com")
+      ?(extra_headers = []) ?(omit_token = false) ~url ~cookie ~target ~token
+      ~body_fields () =
     let pipeline =
       match pipeline with Some p -> p | None -> pipeline_for ~url
     in
@@ -39220,11 +39256,14 @@ module Phvv = struct
       @ [ ("Content-Type", "application/x-www-form-urlencoded");
           ("Cookie", cookie)
         ]
+      @ extra_headers
+    in
+    let fields =
+      if omit_token then body_fields else ("dream.csrf", token) :: body_fields
     in
     let* response =
       pipeline
-        (Dream.request ~method_:`POST ~target ~headers
-           (Pch.form_body (("dream.csrf", token) :: body_fields)))
+        (Dream.request ~method_:`POST ~target ~headers (Pch.form_body fields))
     in
     let* body = Dream.body response in
     Lwt.return (response, body)
@@ -39239,6 +39278,11 @@ module Phvv = struct
 
   let mint_token label ~url ~cookie =
     let* response, body = do_get ~url ~cookie ~target:"/mint" () in
+    Alcotest.(check int) (label ^ ": mint 200") 200 (status_of response);
+    Lwt.return body
+
+  let mint_expired_token label ~url ~cookie =
+    let* response, body = do_get ~url ~cookie ~target:"/mint-expired" () in
     Alcotest.(check int) (label ^ ": mint 200") 200 (status_of response);
     Lwt.return body
 
@@ -39683,12 +39727,15 @@ module Phvv = struct
         in
         check_clean_redirect "fresh-token replay"
           (request_home_target "phvv-replay") response body;
-        (* A genuinely unusable token is still the framework 403. *)
-        let* response, _ =
+        (* A genuinely unusable token no longer dead-ends: it is refused
+           without opening the store and answered by reloading the
+           owner-authorized page. This project now has an active home, so
+           that reload is exactly the generic 404 its own GET gives. *)
+        let* response, body =
           do_post ~url ~cookie ~target:(post_target "phvv-replay")
             ~token:"phvv-not-a-token" ~body_fields ()
         in
-        Alcotest.(check int) "bad token 403" 403 (status_of response);
+        check_generic_404 "bad token" response body;
         (* Exactly one of everything. *)
         let* communities =
           find conn "communities" q_count_by_slug "phvv-replay-home"
@@ -40145,11 +40192,257 @@ module Phvv = struct
         in
         Lwt.return_unit)
 
+  (* === the real browser contract ===
+
+     A regression for the launch smoke-test blocker: the steward opened
+     /projects/<slug>/community-home/new, filled it in, and submitted hours
+     later. Dream's framework CSRF token is valid for one hour while
+     sql_sessions keeps the login for two weeks, so the still-authenticated
+     page posted an authentic but expired token and the handler answered a
+     terminal generic 403 — no form, no explanation, no way back into the
+     flow, and the typed values gone.
+
+     Everything here goes through the markup the browser actually receives:
+     the control names are read out of the rendered form rather than
+     hard-coded, and the token is the one the page itself carries. *)
+
+  (* Every control name the rendered creation form submits, in document
+     order — the framework CSRF field Dream emits plus the page's own
+     application fields. *)
+  let form_control_names label ~slug html =
+    let opening = Printf.sprintf "action='%s'" (post_target slug) in
+    let form_start =
+      match ps_index_of html opening 0 with
+      | Some i -> i
+      | None -> Alcotest.fail (label ^ ": the creation form is not rendered")
+    in
+    let form_end =
+      match ps_index_of html "</form>" form_start with
+      | Some i -> i
+      | None -> Alcotest.fail (label ^ ": unterminated creation form")
+    in
+    let form = String.sub html form_start (form_end - form_start) in
+    let rec scan from acc =
+      match ps_index_of form "name=" from with
+      | None -> List.rev acc
+      | Some i ->
+          let quote_at = i + String.length "name=" in
+          if quote_at >= String.length form then List.rev acc
+          else
+            let quote = form.[quote_at] in
+            let start = quote_at + 1 in
+            (match String.index_from_opt form start quote with
+            | None -> List.rev acc
+            | Some e -> scan (e + 1) (String.sub form start (e - start) :: acc))
+    in
+    scan 0 []
+
+  (* The navigation metadata a same-origin form POST really carries. *)
+  let browser_headers =
+    [ ("Sec-Fetch-Site", "same-origin");
+      ("Sec-Fetch-Mode", "navigate");
+      ("Referer", "https://earde.com" ^ get_target "phvv-browser")
+    ]
+
+  (* The authenticated-mutation rate limiter allows five attempts per IP and
+     endpoint per minute, and the browser-contract case deliberately makes
+     more than that: the limiter itself is covered by [rate_limit_case], so
+     this one resets its window between phases rather than re-proving it. *)
+  let q_clear_rate_limits =
+    (Caqti_type.unit ->. Caqti_type.unit)
+    "DELETE FROM rate_limits WHERE endpoint LIKE '/projects/phvv-%'"
+
+  let clear_rate_limit conn =
+    let (module C : Caqti_lwt.CONNECTION) = conn in
+    let* cleared = C.exec q_clear_rate_limits () in
+    let* () = or_fail "clear rate limits" cleared in
+    Lwt.return_unit
+
+  let q_count_audit =
+    (Caqti_type.int64 ->! Caqti_type.int)
+    "SELECT COUNT(*) FROM project_home_audit_events WHERE project_id = $1"
+
+  let q_count_notifs =
+    (Caqti_type.int64 ->! Caqti_type.int)
+    "SELECT COUNT(*) FROM notifications WHERE project_id = $1"
+
+  let q_count_members_like =
+    (Caqti_type.string ->! Caqti_type.int)
+    "SELECT COUNT(*) FROM community_members m \
+     JOIN communities c ON c.id = m.community_id WHERE c.slug LIKE $1"
+
+  let q_count_mods_like =
+    (Caqti_type.string ->! Caqti_type.int)
+    "SELECT COUNT(*) FROM community_moderators m \
+     JOIN communities c ON c.id = m.community_id WHERE c.slug LIKE $1"
+
+  let q_count_sections_like =
+    (Caqti_type.string ->! Caqti_type.int)
+    "SELECT COUNT(*) FROM community_sections s \
+     JOIN communities c ON c.id = s.community_id WHERE c.slug LIKE $1"
+
+  let q_count_channels_like =
+    (Caqti_type.string ->! Caqti_type.int)
+    "SELECT COUNT(*) FROM channels ch \
+     JOIN communities c ON c.id = ch.community_id WHERE c.slug LIKE $1"
+
+  (* Nothing of a community home exists anywhere: not the community, not the
+     relation, not the membership, role, section, channel, audit event, or
+     notification a real provision would have committed together. *)
+  let check_nothing_created label conn ~project =
+    let* communities = find conn "communities" q_count_like "phvv-%" in
+    Alcotest.(check int) (label ^ ": no community") 0 communities;
+    let* relations = find conn "relations" q_active_relations project in
+    Alcotest.(check int) (label ^ ": no relation") 0 relations;
+    let* members = find conn "members" q_count_members_like "phvv-%" in
+    Alcotest.(check int) (label ^ ": no membership") 0 members;
+    let* mods = find conn "moderators" q_count_mods_like "phvv-%" in
+    Alcotest.(check int) (label ^ ": no moderator") 0 mods;
+    let* sections = find conn "sections" q_count_sections_like "phvv-%" in
+    Alcotest.(check int) (label ^ ": no section") 0 sections;
+    let* channels = find conn "channels" q_count_channels_like "phvv-%" in
+    Alcotest.(check int) (label ^ ": no channel") 0 channels;
+    let* audit = find conn "audit" q_count_audit project in
+    Alcotest.(check int) (label ^ ": no audit event") 0 audit;
+    let* notifs = find conn "notifications" q_count_notifs project in
+    Alcotest.(check int) (label ^ ": no notification") 0 notifs;
+    Lwt.return_unit
+
+  let browser_contract_case =
+    db_case "POST provisioning: the rendered form's own fields and token \
+             redirect, a stale or forged token re-renders a usable form \
+             without creating anything, and exactly one complete draft \
+             results" (fun ~url conn ->
+        let* owner = insert_user conn "phvv_browser" in
+        let* _inst, project =
+          make_project conn ~user:owner ~ext_id:951000002L
+            ~slug:"phvv-browser" ~name:"Phvv Browser"
+        in
+        let* cookie, page_token, page =
+          open_form "browser" ~url ~slug:"phvv-browser" owner
+        in
+
+        (* --- 1. the page really is the contract the browser follows ---
+
+           Its referrer policy must keep the real Origin on the POST it
+           hosts: a "no-referrer" document would make the browser send
+           Origin: null, which the same-origin gate rejects. *)
+        let* page_response, _ =
+          do_get ~url ~cookie ~target:(get_target "phvv-browser") ()
+        in
+        Alcotest.(check (option string))
+          "the page keeps its own POST's Origin"
+          (Some Earde.Request_origin.referrer_policy)
+          (Dream.header page_response "Referrer-Policy");
+        let names = form_control_names "browser" ~slug:"phvv-browser" page in
+        Alcotest.(check (list string))
+          "exactly the framework field and the three application fields"
+          [ "dream.csrf"; "community_name"; "community_slug";
+            "community_description"
+          ]
+          names;
+        (* The submitted body is built from those names alone. *)
+        let typed =
+          [ ("community_name", "Phvv Browser Home");
+            ("community_slug", "phvv-browser-home");
+            ("community_description", "Private draft for local smoke testing.")
+          ]
+        in
+        let body_fields =
+          List.filter_map
+            (fun name ->
+              if String.equal name "dream.csrf" then None
+              else
+                match List.assoc_opt name typed with
+                | Some value -> Some (name, value)
+                | None -> Alcotest.failf "browser: unexpected control %s" name)
+            names
+        in
+        let post ?origin ?omit_token ~token () =
+          do_post ?origin ?omit_token ~extra_headers:browser_headers ~url
+            ~cookie ~target:(post_target "phvv-browser") ~token ~body_fields ()
+        in
+
+        (* --- 2. the exact production failure: an authentic same-session
+           token that outlived its one-hour validity --- *)
+        let* expired = mint_expired_token "expired" ~url ~cookie in
+        let* response, body = post ~token:expired () in
+        check_rerender "expired token" ~status:403
+          ~feedback:"This page had been open too long"
+          ~slug:"phvv-browser" response body;
+        check_no_credentials "expired token" response body;
+        let* () = check_nothing_created "expired token" conn ~project in
+
+        (* --- 3. a forged, absent, duplicated, or foreign-session token is
+           refused exactly as hard, and still creates nothing --- *)
+        let* response, body = post ~token:"not-a-token" () in
+        check_rerender "forged token" ~status:403
+          ~feedback:"This page had been open too long"
+          ~slug:"phvv-browser" response body;
+        let* response, body = post ~omit_token:true ~token:"" () in
+        check_rerender "absent token" ~status:403
+          ~feedback:"This page had been open too long"
+          ~slug:"phvv-browser" response body;
+        (* Another session's live token is not this session's. *)
+        let* other_cookie, _ = open_session "other" ~url owner in
+        let* foreign = mint_token "foreign" ~url ~cookie:other_cookie in
+        as_user owner;
+        let* response, body = post ~token:foreign () in
+        check_rerender "foreign-session token" ~status:403
+          ~feedback:"This page had been open too long"
+          ~slug:"phvv-browser" response body;
+        let* () = check_nothing_created "rejected tokens" conn ~project in
+
+        (* --- 4. the origin gate is untouched: a cross-origin POST carrying
+           the page's own live token is still the terminal 403, with no form
+           and no fresh token handed out --- *)
+        let* () = clear_rate_limit conn in
+        let* response, body =
+          post ~origin:(Some "https://evil.example") ~token:page_token ()
+        in
+        Alcotest.(check int) "cross-origin: 403" 403 (status_of response);
+        Alcotest.(check bool) "cross-origin: no form" false
+          (contains body "phv-form");
+        Alcotest.(check bool) "cross-origin: no fresh token" false
+          (contains body "name=\"dream.csrf\"");
+        Alcotest.(check bool) "cross-origin: generic refusal" true
+          (contains body "This request is not allowed.");
+        Alcotest.(check bool) "cross-origin: origin never reflected" false
+          (contains body "evil.example");
+        let* () = check_nothing_created "cross-origin" conn ~project in
+
+        (* --- 5. the steward recovers from the re-rendered page itself:
+           its fresh token, the same typed values, one redirect --- *)
+        let* () = clear_rate_limit conn in
+        let* response, body = post ~token:expired () in
+        let recovered = Pch.csrf_of_page "recovered" body in
+        Alcotest.(check bool) "the re-render carries a different token" true
+          (not (String.equal recovered expired));
+        Alcotest.(check int) "the re-render is still a refusal" 403
+          (status_of response);
+        let* response, body = post ~token:recovered () in
+        check_clean_redirect "recovered submission"
+          (settings_target "phvv-browser-home") response body;
+
+        (* --- 6. exactly one complete draft, and no second one --- *)
+        let* _cid, _rid =
+          Phvs.check_provisioned_draft "browser" conn ~actor:owner ~project
+            ~slug:"phvv-browser-home" ~name:"Phvv Browser Home"
+            ~description:"Private draft for local smoke testing."
+        in
+        let* communities = find conn "communities" q_count_like "phvv-%" in
+        Alcotest.(check int) "exactly one community" 1 communities;
+        let* relations = find conn "relations" q_active_relations project in
+        Alcotest.(check int) "exactly one active relation" 1 relations;
+        let* named = find conn "named" q_count_by_slug "phvv-browser-home" in
+        Alcotest.(check int) "and it is the one just created" 1 named;
+        Lwt.return_unit)
+
   let db_suite =
-    [ success_case; parser_rejection_case; escaping_case; slug_conflict_case;
-      active_home_case; replay_case; drift_case; inconsistent_case;
-      storage_case; same_project_race_case; same_slug_race_case;
-      destination_case; rate_limit_case; privacy_case
+    [ success_case; browser_contract_case; parser_rejection_case;
+      escaping_case; slug_conflict_case; active_home_case; replay_case;
+      drift_case; inconsistent_case; storage_case; same_project_race_case;
+      same_slug_race_case; destination_case; rate_limit_case; privacy_case
     ]
 end
 
@@ -40855,6 +41148,10 @@ let ncpp_feedback_cases =
               ])
           [ (Ncpp.Invalid_form,
              "We couldn't read that submission. Review the form and try \
+              again.");
+            (Ncpp.Stale_form,
+             "This page had been open too long, so the form could no longer \
+              be submitted. Nothing was changed. Review it and submit \
               again.");
             (Ncpp.Invalid_community_name, "Enter a community name we can use.");
             (Ncpp.Invalid_community_slug,
@@ -44664,23 +44961,31 @@ module Ncpb = struct
           let pipeline = csrf_pipeline () in
           let cookie, fresh, expired = Pch.mint_tokens "mint" pipeline in
           let valid = fields () in
-          csrf_rejected "missing token" 403 (csrf_post ~cookie pipeline valid);
-          csrf_rejected "invalid token" 403
+          (* Every CSRF failure refuses the submission, but it is answered by
+             re-rendering the owner-authorized page (a fresh token, nothing
+             reflected) rather than a terminal page — so each one reaches the
+             read model's DB boundary and none reaches the store. A page
+             whose one-hour token outlived its fourteen-day session must not
+             become permanently unsubmittable. *)
+          Pch.check_db_boundary "missing token re-renders"
+            (csrf_post ~cookie pipeline valid);
+          Pch.check_db_boundary "invalid token re-renders"
             (csrf_post ~cookie pipeline
                (("dream.csrf", "not-a-token") :: valid));
-          csrf_rejected "expired token" 403
+          Pch.check_db_boundary "expired token re-renders"
             (csrf_post ~cookie pipeline (("dream.csrf", expired) :: valid));
-          csrf_rejected "duplicate tokens" 403
+          Pch.check_db_boundary "duplicate tokens re-render"
             (csrf_post ~cookie pipeline
                (("dream.csrf", fresh) :: ("dream.csrf", fresh) :: valid));
-          csrf_rejected "wrong session" 403
+          Pch.check_db_boundary "wrong session re-renders"
             (csrf_post pipeline (("dream.csrf", fresh) :: valid));
+          (* A wrong content type is still answered without any SQL. *)
           csrf_rejected "wrong content type" 400
             (csrf_post ~cookie ~content_type:false pipeline
                (("dream.csrf", fresh) :: valid));
-          (* A rejected token answers before the application fields are even
-             looked at. *)
-          csrf_rejected "bad token beats bad form" 403
+          (* A rejected token still answers before the application fields are
+             even looked at: the re-render is the same whatever was sent. *)
+          Pch.check_db_boundary "bad token beats bad form"
             (csrf_post ~cookie pipeline
                [ ("dream.csrf", "not-a-token"); ("ncpb_unknown", "x") ]);
           (* A verified token reaches Dream.sql, which raises without a pool:
@@ -45793,12 +46098,15 @@ module Ncpb = struct
             ~token:fresh ~body_fields ()
         in
         check_generic_404 "replay under the final slug" response body;
-        (* A genuinely unusable token is still the framework 403. *)
-        let* response, _ =
+        (* A genuinely unusable token no longer dead-ends: it is refused
+           without opening the store and answered by re-rendering the
+           owner-authorized page. This community is no longer a draft, so
+           that re-render is exactly the generic 404 its own GET gives. *)
+        let* response, body =
           do_post ~conn ~url ~cookie ~target ~token:"ncpb-not-a-token"
             ~body_fields ()
         in
-        Alcotest.(check int) "bad token 403" 403 (status_of response);
+        check_generic_404 "bad token" response body;
         (* Exactly one publication, and no duplicate or partial state. *)
         let* n = find conn "final" q_count_by_slug "ncpb-replay-live" in
         Alcotest.(check int) "exactly one community owns the final slug" 1 n;

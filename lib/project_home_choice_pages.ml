@@ -49,6 +49,7 @@ type state =
     }
 
 type feedback =
+  | Stale_form
   | Request_form_invalid
   | Community_unavailable
   | Active_home_exists
@@ -100,6 +101,9 @@ let community_identity_html (community : community) =
   else Printf.sprintf "<span class='phc-community-slug'>%s</span>" text
 
 let feedback_copy = function
+  | Stale_form ->
+      "This page had been open too long, so the form could no longer be \
+       submitted. Nothing was changed. Review it and submit again."
   | Request_form_invalid ->
       "We couldn't read that request. Review the form and try again."
   | Community_unavailable ->

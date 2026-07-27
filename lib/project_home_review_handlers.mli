@@ -55,8 +55,13 @@ val make_project_home_accept_handler :
     SQL) — the configuration exists only to reuse the exact public-origin
     policy shared through [Request_origin.same_origin_request], whose
     rejection is a generic 403 before the form is read. The form then goes
-    through Dream's own CSRF-verifying form API: every CSRF failure is a
-    generic 403, a wrong content type a generic 400, and the application
+    through Dream's own CSRF-verifying form API: a wrong content type is a
+    generic 400; every CSRF failure (missing, invalid, expired,
+    wrong-session, duplicated) is refused with 403 and never reaches the
+    store — answered by reloading the reviewer-authorized queue with
+    [Project_home_review_pages.Stale_form] and a fresh token, so a queue
+    whose one-hour token outlived its fourteen-day session does not become
+    permanently unactionable. Past that the application
     field list must be exactly empty — any remaining field (a
     browser-supplied decision, an id, a return URL, a duplicate, or an
     unknown key) is a generic 400 that never reaches the store.

@@ -358,14 +358,25 @@ let make_review_post_handler ~decision ~mode ~load_config request =
               else (
                 (* Dream's form API enforces the URL-encoded content type
                    and verifies its own CSRF field, which it strips from
-                   the returned fields. Every CSRF failure collapses to one
-                   generic 403; no framework diagnostic reaches the
-                   response. *)
+                   the returned fields.
+
+                   Every CSRF failure still refuses the submission with 403
+                   and never opens the store, but it is answered with the
+                   authorized queue rather than a terminal message page:
+                   the framework token lives one hour while the session that
+                   renders it lives two weeks, so a queue left open (or
+                   served before a restart, which rotates the encryption
+                   secret) would otherwise become permanently unactionable.
+                   The reload is already past the session, rollout and
+                   same-origin gates, re-authorizes the reviewer in the
+                   read-model SQL, and carries a fresh token; no framework
+                   diagnostic reaches the response. *)
                 match%lwt Dream.form request with
                 | `Wrong_content_type -> bad_request_page request
                 | `Expired _ | `Wrong_session _ | `Invalid_token _
                 | `Missing_token _ | `Many_tokens _ ->
-                    forbidden_page request
+                    respond_current_queue request ~user_id ~community_slug
+                      ~feedback:(Some Pages_phrv.Stale_form) ~status:`Forbidden
                 | `Ok fields -> (
                     (* The review form carries no application field: any
                        remaining value (a browser-supplied decision, an id,

@@ -32,6 +32,7 @@ type form_values = {
 }
 
 type feedback =
+  | Stale_form
   | Invalid_form
   | Invalid_community_name
   | Invalid_community_slug
@@ -73,6 +74,9 @@ let canonical_network_slug value =
 (* One generic message per rejected outcome. None names a submitted value, a
    length, or which durable row lost a race. *)
 let feedback_copy = function
+  | Stale_form ->
+      "This page had been open too long, so the form could no longer be \
+       submitted. Nothing was changed. Review it and submit again."
   | Invalid_form ->
       "We couldn't read that submission. Review the form and try again."
   | Invalid_community_name -> "Enter a community name we can use."

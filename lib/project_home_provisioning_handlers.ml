@@ -340,14 +340,33 @@ let make_project_home_provisioning_handler ~mode ~load_config request =
                 (* Dream's form API enforces the URL-encoded content type and
                    verifies its own CSRF field, which it strips from the
                    returned fields — so the strict parser below sees
-                   application fields only. Every CSRF failure collapses to
-                   one generic 403; no framework diagnostic or submitted
-                   value reaches the response. *)
+                   application fields only.
+
+                   Every CSRF failure still refuses the submission with 403
+                   and never opens the store: no provisioning transaction, no
+                   analytics capture, no redirect. It is answered with the
+                   owner-authorized page rather than the terminal generic
+                   403, because a framework CSRF token lives one hour while
+                   the session that renders it lives two weeks — so a setup
+                   page left open (or served before a restart, which changes
+                   the encryption secret) turns into a form whose every
+                   submission is rejected forever, with no way back into the
+                   flow. Re-rendering costs an authorization the attacker
+                   cannot pass anyway: this point is already past the session
+                   gate, the rollout gate and the same-origin gate, and the
+                   read model re-checks stewardship in SQL before anything
+                   renders. The page comes back carrying a fresh token, and
+                   nothing from the unverified submission is reflected into
+                   it — a request whose CSRF field did not verify is never
+                   evidence of what the steward typed. *)
                 match%lwt Dream.form request with
                 | `Wrong_content_type -> bad_request_page request
                 | `Expired _ | `Wrong_session _ | `Invalid_token _
                 | `Missing_token _ | `Many_tokens _ ->
-                    forbidden_page request
+                    respond_owner_authorized request ~user_id
+                      ~project_slug:slug
+                      ~values_of:(fun _ -> blank_values)
+                      ~feedback:(Some Pages_phv.Stale_form) ~status:`Forbidden
                 | `Ok fields -> (
                     (* No SQL opens before the identity is structurally and
                        semantically valid; the parser owns the whole

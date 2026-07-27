@@ -48,9 +48,15 @@ val make_project_home_request_handler :
     SQL) — the configuration exists only to reuse the exact public-origin
     policy shared through [Request_origin.same_origin_request], whose
     rejection is a generic 403 before the form is read. The form then goes
-    through Dream's own CSRF-verifying form API: every CSRF failure is a
-    generic 403, a wrong content type a generic 400, and verified
-    application fields reach the strict [Project_home_request_form] parser.
+    through Dream's own CSRF-verifying form API: a wrong content type is a
+    generic 400, and every CSRF failure (missing, invalid, expired,
+    wrong-session, duplicated) is refused with 403 and never reaches the
+    store — answered by reloading the authorized current state with
+    [Project_home_choice_pages.Stale_form] and a fresh token, reflecting
+    nothing submitted, so a page whose one-hour token outlived its
+    fourteen-day session does not become permanently unsubmittable.
+    Verified application fields reach the strict
+    [Project_home_request_form] parser.
 
     A structurally invalid submission never reaches the store: the current
     owner-authorized view is reloaded and re-rendered as a 400 with generic

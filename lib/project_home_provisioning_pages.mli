@@ -29,9 +29,12 @@ type form_values = {
     {!Project_home_provisioning_form}'s semantic errors;
     {!Community_slug_unavailable}, {!Active_home_exists}, and
     {!Provisioning_failed} exist for the future POST integration and are
-    dormant in the current GET-only wiring. No variant carries a payload, and
-    no message repeats a submitted value. *)
+    dormant in the current GET-only wiring. {!Stale_form} is the framework
+    CSRF refusal — a page held open past the token's lifetime, or served
+    before a restart — and states only that nothing was created. No variant
+    carries a payload, and no message repeats a submitted value. *)
 type feedback =
+  | Stale_form
   | Invalid_form
   | Invalid_community_name
   | Invalid_community_slug

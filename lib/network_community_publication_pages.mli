@@ -35,8 +35,12 @@ type form_values = {
 
 (** One generic message per rejected outcome. The last three are dormant in
     this slice: the POST route they belong to is deliberately not registered
-    yet, and no handler can produce them today. *)
+    yet, and no handler can produce them today.
+    {!Stale_form} is the framework CSRF refusal — a page held open past the
+    token's lifetime, or served before a restart — and states only that
+    nothing was changed. *)
 type feedback =
+  | Stale_form
   | Invalid_form
   | Invalid_community_name
   | Invalid_community_slug

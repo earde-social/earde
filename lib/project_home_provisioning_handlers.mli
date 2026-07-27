@@ -54,9 +54,18 @@ val make_project_home_provisioning_handler :
     form. A configuration failure is a generic non-cacheable 503 carrying no
     diagnostic; an origin rejection is a generic 403 that never reflects the
     supplied origin; a wrong content type or malformed framework form is a
-    generic 400 and every CSRF failure — missing, invalid, expired,
-    wrong-session, or duplicated token — is a generic 403. No SQL opens before
-    the submitted identity is structurally and semantically valid.
+    generic 400. Every CSRF failure — missing, invalid, expired, wrong-session,
+    or duplicated token — is refused with HTTP 403 and never opens the store,
+    but it is answered with the owner-authorized page carrying
+    {!Project_home_provisioning_pages.Stale_form} and a fresh CSRF field rather
+    than a terminal message page: the framework token lives one hour while the
+    session that renders it lives two weeks, so a page left open (or served
+    before a restart, which rotates the encryption secret) would otherwise
+    become permanently unsubmittable. That re-render is already past the
+    session, rollout and same-origin gates and re-authorizes stewardship in
+    SQL, and it reflects nothing from the unverified submission. No store SQL
+    opens before the submitted identity is structurally and semantically
+    valid.
 
     {!Project_home_provisioning_form} owns the entire field grammar and
     canonicalization; nothing is trimmed, normalized, or repaired here. Each
@@ -90,4 +99,4 @@ val make_project_home_provisioning_handler :
     of a succeeded form creates nothing, because the project lock and the
     partial unique active-home index make the store answer
     [Active_home_exists], which redirects to the current home page. A stale
-    replay of the already-consumed CSRF token remains a framework 403. *)
+    replay of an unverifiable CSRF token stays a 403 that creates nothing. *)

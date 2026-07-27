@@ -352,15 +352,29 @@ let make_project_home_request_handler ~mode ~load_config request =
                       (* Dream's form API enforces the URL-encoded content
                          type and verifies its own CSRF field, which it
                          strips from the returned fields — so the strict
-                         parser below sees application fields only. Every
-                         CSRF failure collapses to one generic 403; no
-                         framework diagnostic or submitted value reaches
-                         the response. *)
+                         parser below sees application fields only.
+
+                         Every CSRF failure still refuses the submission
+                         with 403 and never opens the store, but it is
+                         answered with the authorized current state rather
+                         than a terminal message page: the framework token
+                         lives one hour while the session that renders it
+                         lives two weeks, so a page left open (or served
+                         before a restart, which rotates the encryption
+                         secret) would otherwise become permanently
+                         unsubmittable. The re-render is already past the
+                         session, rollout and same-origin gates and
+                         re-authorizes stewardship in SQL, and it reflects
+                         nothing from the unverified submission — no
+                         framework diagnostic and no submitted note. *)
                       match%lwt Dream.form request with
                       | `Wrong_content_type -> bad_request_page request
                       | `Expired _ | `Wrong_session _ | `Invalid_token _
                       | `Missing_token _ | `Many_tokens _ ->
-                          forbidden_page request
+                          respond_current_state request ~user_id ~slug
+                            ~request_note:""
+                            ~feedback:(Some Pages_phc.Stale_form)
+                            ~status:`Forbidden
                       | `Ok fields -> (
                           match Form.of_fields fields with
                           | Error Form.Invalid_form ->
