@@ -13341,8 +13341,9 @@ end
    GET /integrations/github/authorize/callback: the terminal, sessionless
    leg of onboarding. Every outcome must be a clean 303 with the
    no-store/no-cache/no-referrer headers and an empty body, to exactly
-   /bring?github=connected or /bring?github=failed — never a rendered page,
-   never a distinguishable internal stage. DB-free cases use injected
+   /projects/new (success, parameter-free — the setup page re-derives the
+   viewer's drafts from its own session) or /bring?github=failed — never a
+   rendered page, never a distinguishable internal stage. DB-free cases use injected
    mode/config/credentials and fake transports under the fixed test secret;
    no session middleware is ever installed, because the handler must not
    need one. Reaching the missing sql_pool boundary IS the assertion that
@@ -14101,8 +14102,11 @@ module Gh_oauth_callback = struct
   let check_failure_lwt label response =
     check_redirect_lwt label ~location:"/bring?github=failed" response
 
+  (* The success continuation is the literal, parameter-free setup page:
+     equality with the fixed string is also the proof that no draft id,
+     installation id, repository id, state, or credential rides along. *)
   let check_success_lwt label response =
-    check_redirect_lwt label ~location:"/bring?github=connected" response
+    check_redirect_lwt label ~location:"/projects/new" response
 
   let state_row (module C : Caqti_lwt.CONNECTION) label state =
     let* row = C.find q_state_row (state_hash_of state) in
@@ -15225,10 +15229,11 @@ module Gh_oauth_callback = struct
              ~target:(Printf.sprintf {|"%s"|} target)
              ()) )
 
-  (* GET /projects/new for one owned draft, over the same shared pipeline,
-     with a memory session for the owner — the real page a user lands on
-     after a successful callback. *)
-  let projects_new_body ~url ~uid ~draft_id label =
+  (* GET /projects/new exactly as the success redirect issues it —
+     parameter-free, with a memory session for the owner. With one owned
+     draft the handler must open that draft's repository selector directly,
+     so this is the real page a user lands on after a successful callback. *)
+  let projects_new_body ~url ~uid label =
     let handler =
       Dream.memory_sessions (fun req ->
           let* () =
@@ -15239,9 +15244,7 @@ module Gh_oauth_callback = struct
     in
     let* response =
       run_shared ~url handler
-        (Dream.request ~method_:`GET
-           ~target:(Printf.sprintf "/projects/new?draft=%Ld" draft_id)
-           "")
+        (Dream.request ~method_:`GET ~target:"/projects/new" "")
     in
     Alcotest.(check int) (label ^ ": /projects/new renders") 200
       (status_of response);
@@ -15308,9 +15311,10 @@ module Gh_oauth_callback = struct
           [ Pod_store.sig_of ~position:1 ~id:901L ~account_id ~login
               public_name ]
           sigs;
-        (* And it is actually offered on /projects/new, with the private
+        (* And following the success redirect itself — parameter-free —
+           opens this single draft's repository selector, with the private
            repository absent from the page as well as from the snapshot. *)
-        let* html = projects_new_body ~url ~uid ~draft_id:draft name in
+        let* html = projects_new_body ~url ~uid name in
         Alcotest.(check bool) (name ^ ": public repository offered") true
           (goc_contains ~needle:(login ^ "/" ^ public_name) html);
         Alcotest.(check bool) (name ^ ": account login shown") true

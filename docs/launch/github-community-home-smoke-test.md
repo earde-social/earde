@@ -217,8 +217,10 @@ Expected event: **`github_app_install_started`**.
       onward to the OAuth authorization step.
 - [ ] Authorize; GitHub returns to
       `/integrations/github/authorize/callback`.
-- [ ] The browser lands on `/bring?github=connected` with a success banner.
-      A failure lands on `/bring?github=failed`.
+- [ ] The browser lands on `/projects/new` — with exactly one draft it opens
+      that draft's repository selector directly. The Location is
+      parameter-free: no draft id, installation id, repository id, state, or
+      code. A failure lands on `/bring?github=failed`.
 - [ ] Check the onboarding cookie attributes listed in §1.5 now (it is
       dropped after the flow completes).
 - [ ] Address bar and browser history contain no `code=` or `state=` value
@@ -296,7 +298,8 @@ Installing on an organization is a **separate installation** of the same App.
       the installation request. Record who approved: `____________`
 - [ ] Repeat Phase 2.1–2.2 and choose the **organization** as the install
       target, granting at least one org-owned repository.
-- [ ] Return lands on `/bring?github=connected`.
+- [ ] Return lands on `/projects/new`, which now shows the draft chooser
+      (two drafts exist).
 
 ### 3.2 Select an organization repository
 

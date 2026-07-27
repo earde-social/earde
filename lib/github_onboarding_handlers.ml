@@ -308,9 +308,12 @@ let make_start_installation_handler ~mode ~load_config request =
    failure target for every internal stage — malformed callback, GitHub
    rejection, cookie, configuration, credentials, consumption, exchange,
    verification, persistence — so the browser can never learn which stage
-   failed, and no sensitive value rides in either Location. *)
+   failed, and no sensitive value rides in either Location. Success
+   continues straight into project setup: /projects/new re-derives the
+   viewer's own drafts from the normal session, so the redirect stays
+   parameter-free. *)
 let callback_failure () = clean_redirect "/bring?github=failed"
-let callback_success () = clean_redirect "/bring?github=connected"
+let callback_success () = clean_redirect "/projects/new"
 
 (* The browser learns nothing, but the operator must: without this, every
    cause — a GitHub outage, a misconfigured deployment, an installation that
@@ -569,8 +572,9 @@ let finish_authorization ~config ~credentials ~exchange_transport
                                           error = reason;
                                         }))
                             | Ok _draft ->
-                                (* The draft id stays private until an
-                                   owner-authorized setup route exists. *)
+                                (* The draft id stays private: /projects/new
+                                   loads the owner's drafts itself, so the
+                                   redirect carries nothing. *)
                                 Lwt.return (Ok ())))
                   in
                   match persisted with

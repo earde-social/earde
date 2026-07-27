@@ -119,7 +119,9 @@ val make_oauth_callback_handler :
 
     Every outcome is a 303 with an empty body, [Cache-Control: no-store],
     [Pragma: no-cache], and [Referrer-Policy: no-referrer], to exactly one
-    of two clean local targets: [/bring?github=connected] on full success,
+    of two clean local targets: [/projects/new] on full success — the
+    owner-authorized setup page, which re-derives the viewer's drafts from
+    the normal session, so the Location stays parameter-free —
     [/bring?github=failed] for every failure. Which internal stage failed —
     parsing, GitHub rejection, cookie, configuration, credentials, state
     consumption, token exchange, installation verification, or persistence
