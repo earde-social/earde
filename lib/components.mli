@@ -129,6 +129,27 @@ val launch_app_page : ?noindex:bool -> ?request:Dream.request -> ?user:string ->
     changes. *)
 val launch_onboarding_page : ?noindex:bool -> ?request:Dream.request -> ?user:string -> ?stepper:string -> page_class:string -> title:string -> content:string -> unit -> string
 
+(** Cartographic Civic launch community document (pass 8: the structured
+    /c/:slug overview only). A complete, self-contained document loading only
+    /static/css/earde.css plus the shared desktop-only mobile gate — no
+    Tailwind, no external fonts, no shell.css, no community-home.css — with
+    the approved four-pane community shell: the 54px top bar (brand → /feed,
+    the real /search form, the same viewer-state clusters as
+    [launch_app_page] including the member logout POST form and the
+    id='notif-badge' bell), the dark icon rail (Feed, the CURRENT community
+    tile active with the white marker, ＋ → /bring; joined communities are
+    not supplied to this renderer and are not invented), the caller-rendered
+    community [sidebar], and the central overview [content]. Analytics
+    assets carry the community group attribute (and private marker) derived
+    from [community] itself; for a private community the ph-no-capture
+    replay guard rides on the existing `.shell` element (no wrapper div).
+    Member documents carry the shared launch behavior script; anonymous
+    documents carry no script. [page_class] ("launch-community-overview") is
+    the scoping root stamped on <body> for the integration CSS at the end of
+    earde.css. Used only by [Pages.community_overview_page]; no existing
+    wrapper changes. *)
+val launch_community_page : ?noindex:bool -> ?request:Dream.request -> ?user:string -> community:Db.community -> sidebar:string -> page_class:string -> title:string -> content:string -> unit -> string
+
 (** Deterministic launch-palette colour (hex string) for a community slug.
     The database stores no per-community colour, so launch chrome derives a
     stable presentational one from the slug alone (same slug → same colour). *)

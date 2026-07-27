@@ -1158,6 +1158,182 @@ let launch_onboarding_page ?(noindex = false) ?request ?user ?(stepper = "")
     page_class actions house_icon stepper content
     mobile_desktop_gate analytics_banner behavior_script
 
+(* Cartographic Civic launch community document (pass 8: the structured
+   /c/:slug overview only). Like the pass 1-7 documents, a complete
+   self-contained page loading only earde.css plus the shared desktop-only
+   mobile gate — no Tailwind, no external fonts, no shell.css, no
+   community-home.css — but with the approved four-pane community shell: the
+   54px top bar (brand → /feed, the REAL /search form, viewer-state actions —
+   identical clusters to [launch_app_page], including the member ⋯ menu with
+   the existing logout POST form and the id='notif-badge' bell), the dark
+   icon rail (Feed, the CURRENT community tile active with the white bleeding
+   marker, ＋ → /bring — this renderer receives no joined-community data and
+   none is invented), the caller-rendered 244px community [sidebar], and the
+   central overview [content]. The overview's right column is page content,
+   not the `.aside` pane, so no aside parameter exists.
+
+   Analytics assets carry the §5.3 community group attribute (and the §13
+   private marker) exactly as the legacy [community_home_page] wrapper did:
+   the (id, visibility) pair comes from the [community] record itself.
+   Replay privacy: for a private community the ph-no-capture class rides on
+   the existing `.shell` element (sidebar + main together) — never a new
+   wrapper div, so the flex chain is untouched. Member documents carry the
+   exact shared [launch_behavior_script] (bell badge one-shot fetch; vote
+   selectors match nothing here); anonymous documents carry no script and
+   fire no /api/unread-notifs request. [page_class]
+   ("launch-community-overview") is the scoping root stamped on <body> for
+   the route's integration CSS at the end of earde.css. Used only by
+   [Pages.community_overview_page]; existing wrappers ([layout],
+   [community_home_page], [community_shell], the other launch documents) and
+   their callers are untouched. *)
+let launch_community_page ?(noindex = false) ?request ?user
+    ~(community : community) ~sidebar ~page_class ~title ~content () =
+  let analytics_head, analytics_banner =
+    analytics_assets ?request
+      ~analytics_community:(community.id, community.visibility) ()
+  in
+  let robots_meta =
+    if noindex then "<meta name='robots' content='noindex'>" else ""
+  in
+  let is_admin = match request with
+    | Some req -> (try Dream.session_field req "is_admin" = Some "true" with _ -> false)
+    | None -> false
+  in
+  let house_icon =
+    "<svg width='18' height='18' viewBox='0 0 24 24' fill='none' \
+     stroke='currentColor' stroke-width='1.7' stroke-linecap='round' \
+     stroke-linejoin='round' aria-hidden='true'><path d='M3 10.5 12 3l9 \
+     7.5'></path><path d='M5 9.5V21h14V9.5'></path></svg>"
+  in
+  let bell_icon =
+    "<svg width='16' height='16' viewBox='0 0 24 24' fill='none' \
+     stroke='currentColor' stroke-width='1.7' stroke-linecap='round' \
+     stroke-linejoin='round' aria-hidden='true'><path d='M18 8a6 6 0 0 \
+     0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9'></path><path d='M10 21h4'></path></svg>"
+  in
+  (* Same /search route + ?q= contract (and `required`) as the legacy search
+     forms; no /c/:slug test counts page-wide forms, so the real command
+     field is safe here (unlike the onboarding wrappers' link variant). *)
+  let search_form =
+    "<form class='topbar__search-cell' action='/search' method='GET' role='search'>\
+     <div class='search'>\
+     <span class='search__sigil' aria-hidden='true'>/</span>\
+     <label class='sr-only' for='q'>Search Earde</label>\
+     <input class='search__input' id='q' type='text' name='q' required placeholder='grep threads &middot; projects &middot; communities&hellip;'>\
+     <button class='search__enter' type='submit' aria-label='Search'>&#8629;</button>\
+     </div>\
+     </form>"
+  in
+  let actions =
+    match user with
+    | Some username ->
+        let u = html_escape username in
+        let admin_item = if is_admin then "<a href='/admin'>Admin</a>" else "" in
+        let initial =
+          if String.length username > 0
+          then html_escape (String.sub (String.uppercase_ascii username) 0 1)
+          else "?"
+        in
+        Printf.sprintf
+          "<a class='btn btn--outline-ochre' href='/bring' title='Connect an open-source project'>&#65291; Connect</a>\
+           <a class='bell' href='/notifications' title='Notifications' aria-label='Notifications'>%s<span id='notif-badge' class='bell__count hidden'>0</span></a>\
+           <details class='launch-user'>\
+           <summary class='userchip'><span class='avatar avatar--24'>%s</span><span class='userchip__name'>u/%s</span></summary>\
+           <div class='launch-user__menu'>\
+           <a href='/u/%s'>Profile</a>\
+           <a href='/settings'>Settings</a>\
+           <a href='/notifications'>Notifications</a>\
+           %s\
+           <form action='/logout' method='POST'><button type='submit'>Log out</button></form>\
+           </div>\
+           </details>"
+          bell_icon initial u u admin_item
+    | None ->
+        "<a class='btn btn--quiet' href='/bring'>Bring a project</a>\
+         <a class='btn btn--secondary btn--auth' href='/login'>Log in</a>\
+         <a class='btn btn--primary btn--auth' href='/signup'>Sign up</a>"
+  in
+  (* The rail shows only what this renderer really has: Feed, the current
+     community (active, white marker, linking to its own canonical overview),
+     and ＋. Joined communities are not supplied to the overview handler path
+     and are not fabricated. *)
+  let tile_glyph slug =
+    let raw =
+      if String.length slug >= 2 then String.sub slug 0 2
+      else if String.length slug = 1 then slug
+      else "?"
+    in
+    String.capitalize_ascii raw
+  in
+  let tile_face =
+    match community.avatar_url with
+    | Some url when String.trim url <> "" ->
+        let src = safe_img_src url in
+        if src = "#" then html_escape (tile_glyph community.slug)
+        else Printf.sprintf "<img class='launch-rail__img' src='%s' alt=''>" src
+    | _ -> html_escape (tile_glyph community.slug)
+  in
+  let rail =
+    Printf.sprintf
+      "<nav class='rail' aria-label='Primary'>\
+       <a class='rail__item' href='/feed' title='Feed' aria-label='Feed'>%s</a>\
+       <span class='rail__divider'></span>\
+       <a class='rail__item rail__item--community' href='/c/%s' title='/c/%s' style='background:%s'><span class='rail__marker rail__marker--community'></span>%s</a>\
+       <span class='rail__spacer'></span>\
+       <a class='rail__item rail__item--add' href='/bring' title='Connect a project' aria-label='Connect a project'>&#65291;</a>\
+       </nav>"
+      house_icon
+      (html_escape community.slug) (html_escape community.slug)
+      (launch_tile_color community.slug) tile_face
+  in
+  (* Replay privacy on the existing shell element — class only, no wrapper. *)
+  let shell_cls =
+    if Db.community_is_private community.visibility then "shell ph-no-capture"
+    else "shell"
+  in
+  let behavior_script = match user with
+    | Some _ -> launch_behavior_script
+    | None -> ""
+  in
+  Printf.sprintf
+    "<!DOCTYPE html>\n\
+     <html lang='en'>\n\
+     <head>\n\
+     <meta charset='UTF-8'>\n\
+     <meta name='viewport' content='width=device-width, initial-scale=1.0'>\n\
+     <title>%s - Earde</title>\n\
+     %s\n\
+     <link rel='stylesheet' href='/static/css/earde.css'>\n\
+     %s\n\
+     %s\n\
+     </head>\n\
+     <body class='%s'>\n\
+     <div class='app'>\n\
+     <header class='topbar'>\
+     <a class='topbar__brand' href='/feed' aria-label='Earde feed'>\
+     <img class='topbar__mark' src='/static/images/logo-mark.svg' alt=''>\
+     <img class='topbar__wordmark' src='/static/images/logo-wordmark.svg' alt='Earde'>\
+     </a>\
+     %s\
+     <div class='topbar__actions'>%s</div>\
+     </header>\n\
+     <div class='%s'>\
+     %s\
+     %s\
+     <main class='main'>\n\
+     %s\n\
+     </main>\
+     </div>\n\
+     </div>\n\
+     %s\n\
+     %s\n\
+     %s\n\
+     </body>\n\
+     </html>"
+    (html_escape title) robots_meta mobile_gate_css_link analytics_head
+    page_class search_form actions shell_cls rail sidebar content
+    mobile_desktop_gate analytics_banner behavior_script
+
 (* === HELPERS === *)
 
 (* "[deleted_" is set by anonymize_user in Db — both sides must agree on the tombstone format. *)

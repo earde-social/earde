@@ -2614,3 +2614,267 @@ ol, ul { margin: 0; padding: 0; list-style: none; }
 .launch-community-publication #analytics-consent [data-analytics-error] {
   color: var(--danger); font-size: var(--fs-11);
 }
+
+/* ==========================================================================
+   EARDE INTEGRATION — structured /c/:slug overview only
+   Scoped beneath body.launch-community-overview: the structured-community
+   branch of GET /c/:slug (Pages.community_overview_page). Flat communities
+   (sections_enabled = false) keep the legacy Site renderer and never load
+   this stylesheet; channel/section/thread pages stay on shell.css. Exists
+   only because the real overview cannot emit the reference markup exactly:
+   - the connected-projects fragment (ccp-*) is byte-pinned by its fragment
+     suites (tag allow-list, counts, DOM order, escaping), so it is spliced
+     verbatim and skinned here onto the approved panel + 1px-gap
+     project-grid anatomy — no markup inside the fragment changes;
+   - the join/leave controls are the legacy POST forms (exact fields)
+     restyled; the reference's static Joined button is the real Leave form;
+   - the notification badge is revealed by the shared script removing the
+     legacy `hidden` class; honoured on the badge element only — no global
+     .hidden utility is defined;
+   - the desktop-only gate panel ships in mobile-gate.css; only the
+     launch-scope "hide the app" rule for this route lives here;
+   - the analytics consent banner markup is shared with the legacy layout
+     (same rules as the other launch sections, re-scoped).
+   ========================================================================== */
+
+/* ---- Launch chrome -------------------------------------------------------- */
+
+/* Top-bar user menu: pure-CSS <details>, real logout POST form inside. */
+.launch-community-overview .launch-user { position: relative; }
+.launch-community-overview .launch-user > summary { list-style: none; }
+.launch-community-overview .launch-user > summary::-webkit-details-marker { display: none; }
+.launch-community-overview .launch-user .avatar { background: var(--moss); }
+.launch-community-overview .launch-user__menu {
+  position: absolute; right: 0; top: calc(100% + 6px); z-index: 40;
+  min-width: 168px; display: flex; flex-direction: column;
+  background: var(--surface); border: var(--bw) solid var(--line2);
+  border-radius: var(--r-3); padding: var(--sp-3);
+  box-shadow: var(--shadow-overlay);
+}
+.launch-community-overview .launch-user__menu a,
+.launch-community-overview .launch-user__menu button {
+  display: block; width: 100%; text-align: left; background: none; border: 0;
+  font-family: var(--mono); font-size: var(--fs-12); color: var(--ink);
+  padding: var(--sp-3) var(--sp-5); border-radius: var(--r-2); cursor: pointer;
+}
+.launch-community-overview .launch-user__menu a:hover,
+.launch-community-overview .launch-user__menu button:hover { background: var(--surface2); }
+.launch-community-overview .launch-user__menu form {
+  margin: var(--sp-2) 0 0; padding-top: var(--sp-2);
+  border-top: var(--bw) solid var(--line);
+}
+
+/* Notification badge: hidden until the shared one-shot fetch reveals it.
+   Badge element only — deliberately NOT a global .hidden utility. */
+.launch-community-overview #notif-badge.hidden { display: none; }
+
+/* Real community avatars fill their fixed tile (rail, sidebar head, crest). */
+.launch-community-overview .launch-rail__img,
+.launch-community-overview .launch-avatar-img {
+  width: 100%; height: 100%; object-fit: cover; border-radius: inherit;
+  display: block;
+}
+
+/* ---- Community sidebar ----------------------------------------------------- */
+
+.launch-community-overview .launch-side-id { min-width: 0; display: block; }
+
+/* Factual visibility marker (private communities only; public is unmarked). */
+.launch-community-overview .launch-side-vis {
+  font-family: var(--mono); font-size: var(--fs-10-5); color: var(--ochre);
+  padding: var(--sp-2) 9px var(--sp-1);
+}
+
+/* ---- Header band ----------------------------------------------------------- */
+
+/* Optional banner (real stored image only; no gradient placeholder). */
+.launch-community-overview .launch-banner {
+  border-bottom: var(--bw) solid var(--line2); background: var(--surface2);
+}
+.launch-community-overview .launch-banner-img {
+  display: block; width: 100%; max-height: 180px; object-fit: cover;
+}
+
+/* Identity column mirrors the reference's inline flex:1;min-width:0. */
+.launch-community-overview .launch-chead-id { flex: 1; min-width: 0; }
+
+/* The action column holds real forms (join/leave); each form is one row and
+   its submit control fills it like the reference's static buttons. */
+.launch-community-overview .chead__actions form { display: flex; margin: 0; }
+.launch-community-overview .chead__actions form .btn { flex: 1; }
+
+/* Leave = the reference's Joined affordance: quiet until hover warns. */
+.launch-community-overview .launch-leave:hover {
+  border-color: var(--danger); color: var(--danger); background: var(--surface);
+}
+
+/* ---- Overview body --------------------------------------------------------- */
+
+.launch-community-overview .launch-overview-body { padding-top: 20px; }
+
+/* Hairline between consecutive rows inside a panel (the section-head already
+   carries its own bottom rule). */
+.launch-community-overview .panel > .project-row + .project-row {
+  border-top: var(--bw) solid var(--line);
+}
+
+/* Knowledge-section rows. */
+.launch-community-overview .launch-secrow { padding: 11px var(--sp-7); }
+.launch-community-overview .launch-sec-sigil {
+  font-family: var(--mono); color: var(--moss); width: 15px; text-align: center;
+  flex: none;
+}
+.launch-community-overview .launch-sec-main { min-width: 0; flex: 1; display: block; }
+.launch-community-overview .launch-sec-name {
+  display: block; font-weight: 600; font-size: var(--fs-13-5); color: var(--ink);
+}
+.launch-community-overview .launch-sec-desc {
+  display: block; font-size: var(--fs-11); color: var(--muted);
+  margin-top: var(--sp-1);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.launch-community-overview .launch-sec-count {
+  margin-left: auto; flex: none;
+  font-family: var(--mono); font-size: var(--fs-11); color: var(--muted);
+}
+
+/* Recent durable knowledge rows. */
+.launch-community-overview .launch-postrow { display: block; padding: 12px var(--sp-7); }
+.launch-community-overview .launch-post-meta {
+  display: block; font-family: var(--mono); font-size: var(--fs-10-5);
+  color: var(--muted); margin-bottom: 3px;
+}
+.launch-community-overview .launch-post-sec { color: var(--moss); }
+.launch-community-overview .launch-post-title {
+  display: block; font-weight: 600; font-size: var(--fs-14); color: var(--ink);
+}
+.launch-community-overview .launch-post-foot {
+  display: block; font-family: var(--mono); font-size: var(--fs-10-5);
+  color: var(--muted); margin-top: 4px;
+}
+
+/* Live-channel rows. */
+.launch-community-overview .launch-chanrow { display: block; padding: 9px 14px; }
+.launch-community-overview .launch-chan-line {
+  display: block; font-family: var(--mono); font-size: var(--fs-13); color: var(--ink);
+}
+.launch-community-overview .launch-chan-hash { color: var(--moss); }
+.launch-community-overview .launch-chan-topic {
+  display: block; font-size: var(--fs-11); color: var(--muted);
+  margin-top: var(--sp-1);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+/* Moderators (usernames only — the page holds no per-mod roles). */
+.launch-community-overview .launch-mods { padding: var(--sp-4) 14px; }
+.launch-community-overview .launch-modrow {
+  display: flex; align-items: center; gap: 9px; padding: var(--sp-2) 0;
+  font-size: var(--fs-13); color: var(--ink); text-decoration: none;
+}
+.launch-community-overview .launch-modrow:hover .launch-mod-name { text-decoration: underline; }
+
+/* Rules / moderation-log panel bodies. */
+.launch-community-overview .launch-rules {
+  font-size: var(--fs-13); color: var(--muted); line-height: var(--lh-prose);
+  white-space: pre-wrap; overflow-wrap: anywhere;
+}
+.launch-community-overview .launch-modlog-desc {
+  font-size: var(--fs-12-5); color: var(--muted); line-height: var(--lh-prose);
+  margin: 0 0 var(--sp-4);
+}
+.launch-community-overview .launch-modlog-link { font-size: var(--fs-11); font-family: var(--mono); }
+
+/* ---- Connected projects (pinned ccp-* fragment, skinned in place) ---------- */
+
+/* The fragment's own <section> becomes the panel frame. */
+.launch-community-overview .ccp-section {
+  border: var(--bw) solid var(--line); border-radius: var(--r-3);
+  background: var(--surface); overflow: hidden;
+}
+/* Heading pair reads as the panel's section-head (kicker + mono note). */
+.launch-community-overview .ccp-title {
+  font-family: var(--mono); font-size: var(--fs-10-5); font-weight: 600;
+  letter-spacing: var(--ls-kicker); text-transform: uppercase; color: var(--muted);
+  margin: 0; padding: var(--sp-6) var(--sp-8) 2px;
+}
+.launch-community-overview .ccp-sub {
+  font-family: var(--mono); font-size: var(--fs-10-5); color: var(--muted);
+  margin: 0; padding: 0 var(--sp-8) var(--sp-6);
+  border-bottom: var(--bw) solid var(--line);
+}
+/* The approved 1px-gap project grid: the gutter IS the rule. */
+.launch-community-overview .ccp-projects {
+  list-style: none; margin: 0; padding: 0;
+  display: grid; grid-template-columns: 1fr 1fr; gap: var(--bw);
+  background: var(--line);
+}
+.launch-community-overview .ccp-project {
+  background: var(--surface); padding: 11px var(--sp-7); min-width: 0;
+}
+/* An odd last cell spans the row so no bare gutter shows through. */
+.launch-community-overview .ccp-project:last-child:nth-child(odd) { grid-column: 1 / -1; }
+.launch-community-overview .ccp-identity p { margin: 0; }
+.launch-community-overview .ccp-name {
+  margin: 0; font-family: var(--sans); font-weight: 600;
+  font-size: var(--fs-13-5); color: var(--ink);
+}
+.launch-community-overview .ccp-kind {
+  font-size: var(--fs-11); color: var(--muted); margin-top: var(--sp-1);
+}
+/* Facts are mono. Verification copy states verified/stale/revoked itself, so
+   the shared class keeps a neutral tint — revoked is never dressed moss. */
+.launch-community-overview .ccp-namespace,
+.launch-community-overview .ccp-verification,
+.launch-community-overview .ccp-connected {
+  font-family: var(--mono); font-size: var(--fs-10-5); color: var(--muted);
+  margin-top: var(--sp-1);
+}
+.launch-community-overview .ccp-website {
+  font-size: var(--fs-11); margin-top: var(--sp-1);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.launch-community-overview .ccp-website-link { color: var(--slate); }
+.launch-community-overview .ccp-repos { list-style: none; margin: var(--sp-2) 0 0; padding: 0; }
+.launch-community-overview .ccp-repo {
+  font-family: var(--mono); font-size: var(--fs-10-5); color: var(--muted);
+}
+.launch-community-overview .ccp-repo-link { color: var(--slate); }
+.launch-community-overview .ccp-repo-name { color: var(--muted); }
+.launch-community-overview .ccp-marker {
+  font-family: var(--mono); font-size: var(--fs-9); color: var(--muted);
+  border: var(--bw) solid var(--line2); border-radius: var(--r-6); padding: 0 5px;
+}
+.launch-community-overview .ccp-primary { color: var(--moss); border-color: var(--moss); }
+
+/* ---- Gate + consent -------------------------------------------------------- */
+
+/* Desktop-only gate: hide this route's launch app under the shared
+   breakpoint; the gate panel itself is styled by mobile-gate.css. */
+@media (max-width: 800px) {
+  body.launch-community-overview > .app { display: none !important; }
+}
+
+/* Analytics consent banner (markup shared with the legacy layout). */
+.launch-community-overview #analytics-consent {
+  position: fixed; bottom: var(--sp-8); left: 50%; transform: translateX(-50%);
+  z-index: 50; width: calc(100% - 2rem); max-width: 28rem;
+  background: var(--surface); border: var(--bw) solid var(--line2);
+  border-radius: var(--r-3); padding: var(--sp-7) var(--sp-8);
+  box-shadow: var(--shadow-overlay);
+}
+.launch-community-overview #analytics-consent p {
+  font-size: var(--fs-13); color: var(--muted); margin-bottom: var(--sp-5);
+}
+.launch-community-overview #analytics-consent [data-analytics-accept],
+.launch-community-overview #analytics-consent [data-analytics-refuse] {
+  font-family: var(--sans); font-weight: 600; font-size: var(--fs-12);
+  border: var(--bw) solid var(--line2); border-radius: var(--r-2);
+  padding: var(--sp-3) var(--sp-7); cursor: pointer;
+  background: var(--surface); color: var(--muted); margin-right: var(--sp-4);
+}
+.launch-community-overview #analytics-consent [data-analytics-accept] {
+  color: #fff; background: var(--moss); border-color: var(--moss);
+}
+.launch-community-overview #analytics-consent [data-analytics-error] {
+  color: var(--danger); font-size: var(--fs-11);
+}
