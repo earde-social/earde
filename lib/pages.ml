@@ -4515,30 +4515,85 @@ let settings_page ?user bio avatar_url request =
 let notifications_page ?user (notifs : Db.notification list) request =
   let render_notif (n : Db.notification) =
     let unread_class = if n.is_read then "" else " account-notif--unread" in
+    (* Project-home notifications are structured: no stored prose, so the
+       label and destination derive from the durable kind and the joined
+       current project/community identity. Names and slugs are escaped at
+       this template boundary; destinations are built structurally from
+       the joined slugs (never from anything browser-supplied), and each
+       destination page enforces its own authorization. The actor is
+       deliberately absent from the copy, so a deleted actor renders
+       identically. Should a joined identity be missing mid-race (the
+       subject FKs cascade), the row degrades to a generic unlinked line
+       rather than inventing names. *)
+    let project_home_label_link =
+      match n.notif_type with
+      | "project_home_requested" | "project_home_accepted"
+      | "project_home_rejected" | "project_home_removed" -> (
+          match (n.project_name, n.project_slug, n.community_name, n.community_slug) with
+          | Some project_name, Some project_slug, Some community_name, Some community_slug ->
+              let p = Components.html_escape project_name in
+              let c = Components.html_escape community_name in
+              let label, href =
+                match n.notif_type with
+                | "project_home_requested" ->
+                    ( Printf.sprintf "%s requested %s as its community home" p c,
+                      Printf.sprintf "/c/%s/project-home-requests" (Components.html_escape community_slug) )
+                | "project_home_accepted" ->
+                    ( Printf.sprintf "%s accepted the community-home request for %s" c p,
+                      Printf.sprintf "/projects/%s/request-home" (Components.html_escape project_slug) )
+                | "project_home_rejected" ->
+                    ( Printf.sprintf "%s rejected the community-home request for %s" c p,
+                      Printf.sprintf "/projects/%s/request-home" (Components.html_escape project_slug) )
+                | _ ->
+                    ( Printf.sprintf "%s is no longer connected to %s as its home" p c,
+                      Printf.sprintf "/projects/%s/request-home" (Components.html_escape project_slug) )
+              in
+              Some (label, Some href)
+          | _ -> Some ("A project community-home update", None))
+      | _ -> None
+    in
+    let message = Option.value n.message ~default:"" in
     let icon = match n.notif_type with
       | "mention"    -> "&#64;"   (* @ symbol — avoids mojibake in Printf *)
       | "mod_action" -> "&#9888;" (* ⚠ warning sign *)
+      | "project_home_requested" | "project_home_accepted"
+      | "project_home_rejected" | "project_home_removed" -> "&#127968;" (* 🏠 *)
       | _ ->
           (* Legacy comment_reply: distinguish post vs comment reply by message suffix. *)
-          let len = String.length n.message in
-          if len >= 5 && String.sub n.message (len - 5) 5 = "post." then "&#128221;" (* 📝 *)
+          let len = String.length message in
+          if len >= 5 && String.sub message (len - 5) 5 = "post." then "&#128221;" (* 📝 *)
           else "&#128172;" (* 💬 *)
+    in
+    (* Project-home labels are built above from already-escaped parts;
+       legacy prose is escaped here. *)
+    let msg_html =
+      match project_home_label_link with
+      | Some (label, _) -> label
+      | None -> Components.html_escape message
     in
     let inner = Printf.sprintf "
         <div class='account-notif-icon'>%s</div>
         <div class='account-notif-body'>
             <div class='account-notif-msg'>%s</div>
             <div class='account-notif-time'>%s</div>
-        </div>" icon (Components.html_escape n.message) (Components.time_ago n.created_at)
+        </div>" icon msg_html (Components.time_ago n.created_at)
     in
-    (* Mod-action notifications without a post link render as non-clickable divs.
+    let link =
+      match project_home_label_link with
+      | Some (_, link) -> link
+      | None -> (
+          match n.post_id with
+          | Some pid -> Some (Printf.sprintf "/p/%d" pid)
+          | None -> None)
+    in
+    (* Notifications without a destination render as non-clickable divs.
        Read state is already persisted server-side on page load (Db.mark_notifs_read);
        the onclick is a purely cosmetic clear of the unread accent on this visit. *)
-    match n.post_id with
-    | Some pid ->
+    match link with
+    | Some href ->
         Printf.sprintf "
-    <a href='/p/%d' onclick=\"this.classList.remove('account-notif--unread');\" class='account-notif%s'>%s
-    </a>" pid unread_class inner
+    <a href='%s' onclick=\"this.classList.remove('account-notif--unread');\" class='account-notif%s'>%s
+    </a>" href unread_class inner
     | None ->
         Printf.sprintf "
     <div class='account-notif%s'>%s

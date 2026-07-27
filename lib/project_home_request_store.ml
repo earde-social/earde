@@ -220,8 +220,57 @@ let create (module C : Caqti_lwt.CONNECTION) ~user_id ~project_slug
                           | Error Project_home_audit.Storage_error ->
                               rollback_to Storage_error
                           | Ok () -> (
-                              C.commit () >>= function
-                              | Error _ -> Lwt.return (Error Storage_error)
-                              | Ok () ->
-                                  Lwt.return
-                                    (Ok { relation_id = new_relation_id }))))))
+                              (* Durable notifications ride the same
+                                 transaction: the target community's
+                                 current top moderators, resolved under
+                                 the held locks, minus the requesting
+                                 actor. A notification failure rolls
+                                 the pending relation and its audit
+                                 event back whole — a committed request
+                                 without its notification set cannot
+                                 exist, and zero other top moderators
+                                 is a legitimate empty set. *)
+                              Project_home_notifications
+                              .community_top_moderator_ids
+                                (module C)
+                                ~community_id:community_row_id
+                              >>= function
+                              | Error
+                                  Project_home_notifications
+                                  .Inconsistent_data ->
+                                  rollback_to Inconsistent_data
+                              | Error
+                                  Project_home_notifications.Storage_error
+                                ->
+                                  rollback_to Storage_error
+                              | Ok top_moderator_ids -> (
+                                  Project_home_notifications.insert_many
+                                    (module C)
+                                    ~kind:
+                                      Project_home_notifications
+                                      .Home_requested
+                                    ~actor_user_id:user_id
+                                    ~project_id:project_row_id
+                                    ~community_id:community_row_id
+                                    ~relation_id:new_relation_id
+                                    ~recipient_user_ids:top_moderator_ids
+                                  >>= function
+                                  | Error
+                                      Project_home_notifications
+                                      .Inconsistent_data ->
+                                      rollback_to Inconsistent_data
+                                  | Error
+                                      Project_home_notifications
+                                      .Storage_error ->
+                                      rollback_to Storage_error
+                                  | Ok () -> (
+                                      C.commit () >>= function
+                                      | Error _ ->
+                                          Lwt.return (Error Storage_error)
+                                      | Ok () ->
+                                          Lwt.return
+                                            (Ok
+                                               {
+                                                 relation_id =
+                                                   new_relation_id;
+                                               }))))))))

@@ -417,6 +417,34 @@ let review (module C : Caqti_lwt.CONNECTION) ~reviewer_user_id ~project_slug
                                                       Project_home_audit
                                                       .Home_rejected
                                                 in
+                                                let notification_kind =
+                                                  match decision with
+                                                  | Accept ->
+                                                      Project_home_notifications
+                                                      .Home_accepted
+                                                  | Reject ->
+                                                      Project_home_notifications
+                                                      .Home_rejected
+                                                in
+                                                (* The recipient is the
+                                                   locked row's durable
+                                                   requester — never a
+                                                   browser value. A
+                                                   NULL (deleted)
+                                                   requester or a
+                                                   self-review leaves
+                                                   the set empty, and
+                                                   the decision still
+                                                   commits. *)
+                                                let decision_recipients =
+                                                  match requested_by with
+                                                  | Some id
+                                                    when id
+                                                         <> reviewer_user_id
+                                                    ->
+                                                      [ id ]
+                                                  | Some _ | None -> []
+                                                in
                                                 (Project_home_audit.insert
                                                    (module C)
                                                    ~action:audit_action
@@ -436,19 +464,56 @@ let review (module C : Caqti_lwt.CONNECTION) ~reviewer_user_id ~project_slug
                                                      rollback_to
                                                        Storage_error
                                                  | Ok () -> (
-                                                     C.commit ()
+                                                     (* The durable
+                                                        notification
+                                                        rides the same
+                                                        transaction: a
+                                                        failure rolls
+                                                        the decision
+                                                        and its audit
+                                                        event back
+                                                        whole. The
+                                                        private request
+                                                        note never
+                                                        reaches it. *)
+                                                     Project_home_notifications
+                                                     .insert_many
+                                                       (module C)
+                                                       ~kind:
+                                                         notification_kind
+                                                       ~actor_user_id:
+                                                         reviewer_user_id
+                                                       ~project_id
+                                                       ~community_id
+                                                       ~relation_id
+                                                       ~recipient_user_ids:
+                                                         decision_recipients
                                                      >>= function
-                                                     | Error _ ->
-                                                         Lwt.return
-                                                           (Error
-                                                              Storage_error)
-                                                     | Ok () ->
-                                                         Lwt.return
-                                                           (Ok
-                                                              {
-                                                                resulting_status =
-                                                                  new_status;
-                                                              })))
+                                                     | Error
+                                                         Project_home_notifications
+                                                         .Inconsistent_data
+                                                       ->
+                                                         rollback_to
+                                                           Inconsistent_data
+                                                     | Error
+                                                         Project_home_notifications
+                                                         .Storage_error ->
+                                                         rollback_to
+                                                           Storage_error
+                                                     | Ok () -> (
+                                                         C.commit ()
+                                                         >>= function
+                                                         | Error _ ->
+                                                             Lwt.return
+                                                               (Error
+                                                                  Storage_error)
+                                                         | Ok () ->
+                                                             Lwt.return
+                                                               (Ok
+                                                                  {
+                                                                    resulting_status =
+                                                                      new_status;
+                                                                  }))))
                                           | Ok (_ :: _ :: _) ->
                                               rollback_to Inconsistent_data)
                                 )))))

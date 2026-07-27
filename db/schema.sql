@@ -475,10 +475,16 @@ CREATE TABLE public.notifications (
     id integer NOT NULL,
     user_id integer NOT NULL,
     post_id integer,
-    message text NOT NULL,
+    message text,
     is_read boolean DEFAULT false NOT NULL,
     created_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP NOT NULL,
-    notif_type character varying(50) DEFAULT 'comment_reply'::character varying NOT NULL
+    notif_type character varying(50) DEFAULT 'comment_reply'::character varying NOT NULL,
+    actor_user_id integer,
+    project_id bigint,
+    community_id integer,
+    relation_id bigint,
+    CONSTRAINT notifications_notif_type_check CHECK (((notif_type)::text = ANY ((ARRAY['comment_reply'::character varying, 'mention'::character varying, 'mod_action'::character varying, 'project_home_requested'::character varying, 'project_home_accepted'::character varying, 'project_home_rejected'::character varying, 'project_home_removed'::character varying])::text[]))),
+    CONSTRAINT notifications_project_home_shape_check CHECK (((((notif_type)::text = ANY ((ARRAY['project_home_requested'::character varying, 'project_home_accepted'::character varying, 'project_home_rejected'::character varying, 'project_home_removed'::character varying])::text[])) AND (project_id IS NOT NULL) AND (community_id IS NOT NULL) AND (relation_id IS NOT NULL) AND (message IS NULL) AND (post_id IS NULL)) OR (((notif_type)::text <> ALL ((ARRAY['project_home_requested'::character varying, 'project_home_accepted'::character varying, 'project_home_rejected'::character varying, 'project_home_removed'::character varying])::text[])) AND (project_id IS NULL) AND (community_id IS NULL) AND (relation_id IS NULL) AND (actor_user_id IS NULL) AND (message IS NOT NULL))))
 );
 
 
@@ -1742,6 +1748,34 @@ CREATE INDEX idx_github_onboarding_states_user_id ON public.github_onboarding_st
 
 
 --
+-- Name: idx_notifications_actor; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_notifications_actor ON public.notifications USING btree (actor_user_id) WHERE (actor_user_id IS NOT NULL);
+
+
+--
+-- Name: idx_notifications_community; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_notifications_community ON public.notifications USING btree (community_id) WHERE (community_id IS NOT NULL);
+
+
+--
+-- Name: idx_notifications_project; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_notifications_project ON public.notifications USING btree (project_id) WHERE (project_id IS NOT NULL);
+
+
+--
+-- Name: idx_notifications_relation; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_notifications_relation ON public.notifications USING btree (relation_id) WHERE (relation_id IS NOT NULL);
+
+
+--
 -- Name: idx_open_source_projects_namespace; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -1900,6 +1934,13 @@ CREATE UNIQUE INDEX uniq_reports_open_per_reporter_target ON public.reports USIN
 --
 
 CREATE UNIQUE INDEX uniq_thread_source_seed_message ON public.thread_source_messages USING btree (message_id) WHERE is_seed;
+
+
+--
+-- Name: uq_notifications_recipient_kind_relation; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX uq_notifications_recipient_kind_relation ON public.notifications USING btree (user_id, notif_type, relation_id) WHERE (relation_id IS NOT NULL);
 
 
 --
@@ -2103,11 +2144,43 @@ ALTER TABLE ONLY public.mod_actions
 
 
 --
+-- Name: notifications notifications_actor_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.notifications
+    ADD CONSTRAINT notifications_actor_user_id_fkey FOREIGN KEY (actor_user_id) REFERENCES public.users(id) ON DELETE SET NULL;
+
+
+--
+-- Name: notifications notifications_community_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.notifications
+    ADD CONSTRAINT notifications_community_id_fkey FOREIGN KEY (community_id) REFERENCES public.communities(id) ON DELETE CASCADE;
+
+
+--
 -- Name: notifications notifications_post_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.notifications
     ADD CONSTRAINT notifications_post_id_fkey FOREIGN KEY (post_id) REFERENCES public.posts(id) ON DELETE CASCADE;
+
+
+--
+-- Name: notifications notifications_project_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.notifications
+    ADD CONSTRAINT notifications_project_id_fkey FOREIGN KEY (project_id) REFERENCES public.open_source_projects(id) ON DELETE CASCADE;
+
+
+--
+-- Name: notifications notifications_relation_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.notifications
+    ADD CONSTRAINT notifications_relation_id_fkey FOREIGN KEY (relation_id) REFERENCES public.community_projects(id) ON DELETE CASCADE;
 
 
 --
@@ -2362,4 +2435,5 @@ INSERT INTO public.schema_migrations (version) VALUES
     ('20260724140000'),
     ('20260726120000'),
     ('20260726130000'),
-    ('20260727120000');
+    ('20260727120000'),
+    ('20260727130000');

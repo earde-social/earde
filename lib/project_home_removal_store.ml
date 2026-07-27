@@ -315,9 +315,53 @@ let remove (module C : Caqti_lwt.CONNECTION) ~actor_user_id ~project_slug
             | Error Project_home_audit.Storage_error ->
                 rollback_to Storage_error
             | Ok () -> (
-                C.commit () >>= function
-                | Error _ -> Lwt.return (Error Storage_error)
-                | Ok () -> Lwt.return (Ok { resulting_status = new_status })))
+                (* Durable notifications ride the same transaction: both
+                   current counterparties — every project steward and
+                   every community top moderator — resolved under the
+                   held locks, deduplicated, minus the actor. The same
+                   symmetric set serves steward-side, moderator-side,
+                   admin, and multiply-authorized removals, so which
+                   authority qualified never shapes (or leaks through)
+                   the recipients. A notification failure rolls the
+                   removal and its audit event back whole; a set left
+                   empty by exclusion is legitimate. *)
+                Project_home_notifications.project_steward_ids
+                  (module C)
+                  ~project_id
+                >>= function
+                | Error Project_home_notifications.Inconsistent_data ->
+                    rollback_to Inconsistent_data
+                | Error Project_home_notifications.Storage_error ->
+                    rollback_to Storage_error
+                | Ok steward_ids -> (
+                    Project_home_notifications.community_top_moderator_ids
+                      (module C)
+                      ~community_id
+                    >>= function
+                    | Error Project_home_notifications.Inconsistent_data ->
+                        rollback_to Inconsistent_data
+                    | Error Project_home_notifications.Storage_error ->
+                        rollback_to Storage_error
+                    | Ok top_moderator_ids -> (
+                        Project_home_notifications.insert_many
+                          (module C)
+                          ~kind:Project_home_notifications.Home_removed
+                          ~actor_user_id ~project_id ~community_id
+                          ~relation_id
+                          ~recipient_user_ids:
+                            (steward_ids @ top_moderator_ids)
+                        >>= function
+                        | Error Project_home_notifications.Inconsistent_data
+                          ->
+                            rollback_to Inconsistent_data
+                        | Error Project_home_notifications.Storage_error ->
+                            rollback_to Storage_error
+                        | Ok () -> (
+                            C.commit () >>= function
+                            | Error _ -> Lwt.return (Error Storage_error)
+                            | Ok () ->
+                                Lwt.return
+                                  (Ok { resulting_status = new_status }))))))
     in
     (* Step 4: the exact accepted relation, locked last of all. *)
     let remove_relation ~project_id ~community_id ~setup_draft =

@@ -116,7 +116,11 @@ type comment_report_target = {
 
 type notification = {
   id : int; user_id : int; post_id : int option; notif_type : string;
-  message : string; is_read : bool; created_at : string;
+  (* NULL for the structured project-home kinds, which render from the
+     joined project/community display fields instead of stored prose. *)
+  message : string option; is_read : bool; created_at : string;
+  project_name : string option; project_slug : string option;
+  community_name : string option; community_slug : string option;
 }
 
 type mod_action = {
