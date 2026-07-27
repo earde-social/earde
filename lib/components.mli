@@ -67,6 +67,18 @@ val layout : ?noindex:bool -> ?user:string -> ?request:Dream.request -> ?head_ex
     card HTML (a form or a message panel); the brand mark and outer shell are supplied. *)
 val auth_page : ?user:string -> ?noindex:bool -> ?request:Dream.request -> title:string -> card:string -> unit -> string
 
+(** Cartographic Civic launch entry document (pass 1: /bring only). A complete,
+    self-contained document loading only /static/css/earde.css — no Tailwind, no
+    external fonts, no legacy per-page CSS — with a viewer-independent, form-free
+    top bar (command field is a link to /search) and icon rail over a centred
+    onboarding column. Emits no forms and only real routes, so pages whose tests
+    assert zero forms document-wide can adopt it. [request] feeds only the shared
+    analytics assets (identical to [layout]'s). [page_class] is the route-specific
+    scoping root stamped on <body> (e.g. "launch-bring") that the integration CSS
+    at the end of earde.css keys on. Not wired into [layout]; no existing wrapper
+    changes. *)
+val launch_entry_page : ?noindex:bool -> ?request:Dream.request -> page_class:string -> title:string -> content:string -> unit -> string
+
 (** Focused in-product creation layout: the mono app command bar over a single centered
     cool-grey panel (create.css), with no rail/sidebar. Used by the creation flows
     (new-community, new-post, choose-community, join-to-post). [body] is the inner page

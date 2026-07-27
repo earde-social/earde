@@ -219,28 +219,20 @@ let mobile_desktop_gate =
      </div>\
    </div>"
 
-(* chrome selects the page furniture: `Site = the warm Tailwind navbar + Privacy footer
-   (every legacy/marketing/private page); `App = the mono command bar and NO footer, for the
-   in-app shell. The shell surfaces (feed, section/channel/thread, account, admin, community
-   management, and the public /c/:slug community-home) opt into `App via their wrappers; the
-   remaining legacy/marketing pages keep `Site, byte-for-byte unchanged. *)
-let layout ?(noindex=false) ?user ?request ?(head_extra="") ?(full_bleed=false) ?(chrome=`Site) ?analytics_community ~title content =
-  let is_admin = match request with
-    | Some req -> Dream.session_field req "is_admin" = Some "true"
-    | None -> false
-  in
-  (* PostHog browser integration (spec §2): emitted only when analytics is
-     enabled with valid public config — otherwise no script, no banner, no
-     attributes, and therefore no PostHog network request. Only the public
-     token and ingest host are rendered; analytics.js itself is local and
-     connects to PostHog exclusively after granted consent. The banner ships
-     hidden; analytics.js reveals it only when no consent cookie exists.
-     The same root carries the §4.2 identity attribute (authenticated pages
-     only: exactly user:<id>, nothing else — no username/email/raw id) and
-     the §5.3 group attribute (community-scoped pages only: exactly
-     community:<id>, keyed by the immutable numeric id). *)
-  let analytics_head, analytics_banner =
-    match Posthog.browser_config () with
+(* PostHog browser integration (spec §2): emitted only when analytics is
+   enabled with valid public config — otherwise no script, no banner, no
+   attributes, and therefore no PostHog network request. Only the public
+   token and ingest host are rendered; analytics.js itself is local and
+   connects to PostHog exclusively after granted consent. The banner ships
+   hidden; analytics.js reveals it only when no consent cookie exists.
+   The same root carries the §4.2 identity attribute (authenticated pages
+   only: exactly user:<id>, nothing else — no username/email/raw id) and
+   the §5.3 group attribute (community-scoped pages only: exactly
+   community:<id>, keyed by the immutable numeric id). Shared by [layout]
+   and [launch_entry_page] so every document family carries the exact same
+   analytics assets. *)
+let analytics_assets ?request ?analytics_community () =
+  match Posthog.browser_config () with
     | None -> ("", "")
     | Some cfg ->
         let identity_attr =
@@ -288,6 +280,19 @@ let layout ?(noindex=false) ?user ?request ?(head_extra="") ?(full_bleed=false) 
             (html_escape cfg.Posthog.browser_api_host)
             (html_escape cfg.Posthog.browser_deployment_environment)
             identity_attr group_attr private_attr )
+
+(* chrome selects the page furniture: `Site = the warm Tailwind navbar + Privacy footer
+   (every legacy/marketing/private page); `App = the mono command bar and NO footer, for the
+   in-app shell. The shell surfaces (feed, section/channel/thread, account, admin, community
+   management, and the public /c/:slug community-home) opt into `App via their wrappers; the
+   remaining legacy/marketing pages keep `Site, byte-for-byte unchanged. *)
+let layout ?(noindex=false) ?user ?request ?(head_extra="") ?(full_bleed=false) ?(chrome=`Site) ?analytics_community ~title content =
+  let is_admin = match request with
+    | Some req -> Dream.session_field req "is_admin" = Some "true"
+    | None -> false
+  in
+  let analytics_head, analytics_banner =
+    analytics_assets ?request ?analytics_community ()
   in
   let auth_menu =
     match user with
@@ -565,6 +570,79 @@ let auth_page ?user ?(noindex=false) ?request ~title ~card () =
       card
   in
   layout ?user ?request ~noindex ~full_bleed:true ~chrome:`Auth ~head_extra:auth_css_link ~title body
+
+(* Cartographic Civic launch entry document (pass 1: /bring only). A complete,
+   self-contained HTML document that loads only the launch stylesheet
+   (earde.css) — no Tailwind, no external fonts, no legacy per-page CSS — so
+   the two design systems never collide on one page. Not wired into [layout]:
+   existing wrappers and their callers are untouched.
+
+   The chrome is deliberately viewer-independent and form-free: /bring's
+   non-ready states assert zero <form> elements across the whole document,
+   and its Off state additionally forbids a /login link, so the top bar
+   renders the command field as a link to /search and offers no search form,
+   no logout, and no login/signup. Every link is a real route (/feed,
+   /search, /bring).
+
+   Analytics behavior is unchanged: the same shared [analytics_assets] as
+   [layout] (script + consent banner); the scoped integration CSS at the end
+   of earde.css positions the banner, whose utility classes are inert
+   without Tailwind. [page_class] is the route-specific scoping root for
+   that integration CSS (e.g. "launch-bring"), stamped on <body>. *)
+let launch_entry_page ?(noindex = false) ?request ~page_class ~title ~content () =
+  let analytics_head, analytics_banner = analytics_assets ?request () in
+  let robots_meta =
+    if noindex then "<meta name='robots' content='noindex'>" else ""
+  in
+  let house_icon =
+    "<svg width='18' height='18' viewBox='0 0 24 24' fill='none' \
+     stroke='currentColor' stroke-width='1.7' stroke-linecap='round' \
+     stroke-linejoin='round' aria-hidden='true'><path d='M3 10.5 12 3l9 \
+     7.5'></path><path d='M5 9.5V21h14V9.5'></path></svg>"
+  in
+  Printf.sprintf
+    "<!DOCTYPE html>\n\
+     <html lang='en'>\n\
+     <head>\n\
+     <meta charset='UTF-8'>\n\
+     <meta name='viewport' content='width=device-width, initial-scale=1.0'>\n\
+     <title>%s - Earde</title>\n\
+     %s\n\
+     <link rel='stylesheet' href='/static/css/earde.css'>\n\
+     %s\n\
+     </head>\n\
+     <body class='%s'>\n\
+     <div class='app'>\n\
+     <header class='topbar'>\
+     <a class='topbar__brand' href='/feed' aria-label='Earde feed'>\
+     <img class='topbar__mark' src='/static/images/logo-mark.svg' alt=''>\
+     <img class='topbar__wordmark' src='/static/images/logo-wordmark.svg' alt='Earde'>\
+     </a>\
+     <a class='search launch-search' href='/search' aria-label='Search Earde'>\
+     <span class='search__sigil' aria-hidden='true'>/</span>\
+     <span class='launch-search__hint'>grep threads &middot; projects &middot; communities&hellip;</span>\
+     <span class='launch-search__enter' aria-hidden='true'>&#8629;</span>\
+     </a>\
+     <div class='topbar__actions'>\
+     <a class='btn btn--outline-ochre' href='/bring' title='Connect an open-source project'>&#65291; Connect</a>\
+     </div>\
+     </header>\n\
+     <div class='shell'>\
+     <nav class='rail' aria-label='Primary'>\
+     <a class='rail__item' href='/feed' title='Feed' aria-label='Feed'>%s</a>\
+     <span class='rail__spacer'></span>\
+     <a class='rail__item rail__item--add' href='/bring' title='Connect a project' aria-label='Connect a project'>&#65291;</a>\
+     </nav>\
+     <main class='main'><div class='scroll'><div class='container--form'>\n\
+     %s\n\
+     </div></div></main>\
+     </div>\n\
+     </div>\n\
+     %s\n\
+     </body>\n\
+     </html>"
+    (html_escape title) robots_meta analytics_head page_class house_icon
+    content analytics_banner
 
 (* === HELPERS === *)
 
