@@ -13107,6 +13107,236 @@ module Gh_setup_return = struct
       db_missing_cookie_case; parallel_case ]
 end
 
+(* === Callback failure diagnostics (Github_onboarding_diagnostics) ===
+   The callback answers one opaque redirect for every cause, so the server
+   log is the only place a production failure can be identified. Every
+   classification must produce its exact stable label — operators grep
+   these — and the type must remain structurally incapable of carrying
+   anything secret: the cases below pin both. *)
+module Ghd = struct
+  module D = Earde.Github_onboarding_diagnostics
+  module GOS = Earde.Github_onboarding_state_store
+  module GIS = Earde.Github_installation_store
+  module PODS = Earde.Project_onboarding_draft_store
+
+  let case = go_case
+
+  let user_context =
+    { D.installation_id = 149256567L; account_type = GUI.User }
+
+  let organization_context =
+    { D.installation_id = 149347874L; account_type = GUI.Organization }
+
+  let check label expected reason =
+    Alcotest.(check string) label expected (D.describe reason)
+
+  let stage_cases =
+    case "every stage produces its exact label" (fun () ->
+        List.iter
+          (fun (expected, reason) -> check expected expected reason)
+          [ ("stage=callback_parse reason=malformed_callback",
+             D.Malformed_callback)
+          ; ("stage=configuration reason=unavailable",
+             D.Configuration_unavailable)
+          ; ("stage=flow_cookie reason=missing", D.Cookie_missing)
+          ; ("stage=flow_cookie reason=invalid", D.Cookie_invalid)
+          ; ("stage=authorization reason=rejected_at_github",
+             D.Authorization_rejected)
+          ; ("stage=credentials reason=unavailable",
+             D.Credentials_unavailable)
+          ])
+
+  let state_cases =
+    case "state consumption causes stay distinguishable in the log"
+      (fun () ->
+        List.iter
+          (fun (expected, error) ->
+            check expected ("stage=state reason=" ^ expected)
+              (D.State_rejected error))
+          [ ("state_not_found", GOS.State_not_found)
+          ; ("state_expired", GOS.State_expired)
+          ; ("state_already_consumed", GOS.State_already_consumed)
+          ; ("session_binding_mismatch", GOS.Session_binding_mismatch)
+          ; ("flow_mismatch", GOS.Flow_mismatch)
+          ; ("missing_pending_installation", GOS.Missing_pending_installation)
+          ; ("storage_error", GOS.Storage_error)
+          ])
+
+  let exchange_case =
+    case "token exchange carries the pending id and any HTTP status"
+      (fun () ->
+        let reason error =
+          D.Token_exchange_failed
+            { pending_installation_id = 149347874L; error }
+        in
+        check "transport"
+          "stage=token_exchange reason=transport_error installation=149347874"
+          (reason GTE.Transport_error);
+        check "status"
+          "stage=token_exchange reason=unexpected_http_status status=502 \
+           installation=149347874"
+          (reason (GTE.Unexpected_http_status 502));
+        check "rejected"
+          "stage=token_exchange reason=oauth_rejected installation=149347874"
+          (reason GTE.OAuth_rejected);
+        check "invalid"
+          "stage=token_exchange reason=invalid_response installation=149347874"
+          (reason GTE.Invalid_response))
+
+  let verification_case =
+    case "verification carries the still-unverified pending id" (fun () ->
+        let reason error =
+          D.Installation_verification_failed
+            { pending_installation_id = 149347874L; error }
+        in
+        check "not accessible"
+          "stage=installation_verification \
+           reason=installation_not_accessible installation=149347874"
+          (reason GUI.Installation_not_accessible);
+        check "status"
+          "stage=installation_verification reason=unexpected_http_status \
+           status=403 installation=149347874"
+          (reason (GUI.Unexpected_http_status 403));
+        check "invalid id"
+          "stage=installation_verification reason=invalid_installation_id \
+           installation=149347874"
+          (reason GUI.Invalid_installation_id);
+        check "transport"
+          "stage=installation_verification reason=transport_error \
+           installation=149347874"
+          (reason GUI.Transport_error);
+        check "invalid response"
+          "stage=installation_verification reason=invalid_response \
+           installation=149347874"
+          (reason GUI.Invalid_response);
+        check "pagination"
+          "stage=installation_verification reason=pagination_limit \
+           installation=149347874"
+          (reason GUI.Pagination_limit))
+
+  (* The exact line the private-repository-only organization installation
+     produces: the class of failure plus the two identifiers needed to tell
+     which installation and which account kind it was. *)
+  let listing_case =
+    case "repository listing names the account kind, not the repository"
+      (fun () ->
+        let reason ?(installation = organization_context) error =
+          D.Repository_listing_failed { installation; error }
+        in
+        check "no public repositories"
+          "stage=repository_listing reason=no_public_repositories \
+           installation=149347874 account_type=organization"
+          (reason GUR.No_public_repositories);
+        check "personal account prints the other kind"
+          "stage=repository_listing reason=no_public_repositories \
+           installation=149256567 account_type=user"
+          (reason ~installation:user_context GUR.No_public_repositories);
+        check "status"
+          "stage=repository_listing reason=unexpected_http_status \
+           status=404 installation=149347874 account_type=organization"
+          (reason (GUR.Unexpected_http_status 404));
+        check "transport"
+          "stage=repository_listing reason=transport_error \
+           installation=149347874 account_type=organization"
+          (reason GUR.Transport_error);
+        check "invalid"
+          "stage=repository_listing reason=invalid_response \
+           installation=149347874 account_type=organization"
+          (reason GUR.Invalid_response);
+        check "pagination"
+          "stage=repository_listing reason=pagination_limit \
+           installation=149347874 account_type=organization"
+          (reason GUR.Pagination_limit))
+
+  let persistence_case =
+    case "both persistence steps are distinguishable" (fun () ->
+        check "installation store"
+          "stage=installation_persistence reason=installation_unavailable \
+           installation=149347874 account_type=organization"
+          (D.Installation_persistence_failed
+             { installation = organization_context;
+               error = GIS.Installation_unavailable
+             });
+        check "installation storage"
+          "stage=installation_persistence reason=storage_error \
+           installation=149347874 account_type=organization"
+          (D.Installation_persistence_failed
+             { installation = organization_context;
+               error = GIS.Storage_error });
+        check "installation user id"
+          "stage=installation_persistence \
+           reason=invalid_connected_by_user_id installation=149347874 \
+           account_type=organization"
+          (D.Installation_persistence_failed
+             { installation = organization_context;
+               error =
+                 GIS.Invalid_connected_by_user_id
+             });
+        check "draft store"
+          "stage=draft_persistence reason=storage_error \
+           installation=149347874 account_type=organization"
+          (D.Draft_persistence_failed
+             { installation = organization_context;
+               error = PODS.Storage_error });
+        check "draft installation"
+          "stage=draft_persistence reason=installation_unavailable \
+           installation=149347874 account_type=organization"
+          (D.Draft_persistence_failed
+             { installation = organization_context;
+               error =
+                 PODS.Installation_unavailable
+             });
+        check "draft user id"
+          "stage=draft_persistence reason=invalid_user_id \
+           installation=149347874 account_type=organization"
+          (D.Draft_persistence_failed
+             { installation = organization_context;
+               error = PODS.Invalid_user_id }))
+
+  (* Whatever the cause, a label is one line of [key=value] pairs drawn
+     from a closed vocabulary plus integers — never free text that could
+     have come from a request, a cookie, or a GitHub response. *)
+  let shape_case =
+    case "every label is one safe key=value line" (fun () ->
+        List.iter
+          (fun reason ->
+            let label = D.describe reason in
+            Alcotest.(check bool) "single line" false
+              (String.exists (fun c -> c = '\n' || c = '\r') label);
+            Alcotest.(check bool) "safe alphabet" true
+              (String.for_all
+                 (function
+                   | 'a' .. 'z' | '0' .. '9' | '_' | '=' | ' ' -> true
+                   | _ -> false)
+                 label);
+            Alcotest.(check bool) "starts with the stage key" true
+              (String.length label > 6 && String.sub label 0 6 = "stage="))
+          [ D.Malformed_callback; D.Configuration_unavailable
+          ; D.Cookie_missing; D.Cookie_invalid; D.Authorization_rejected
+          ; D.Credentials_unavailable
+          ; D.State_rejected GOS.Session_binding_mismatch
+          ; D.Token_exchange_failed
+              { pending_installation_id = 1L;
+                error = GTE.Unexpected_http_status 500 }
+          ; D.Installation_verification_failed
+              { pending_installation_id = 1L;
+                error = GUI.Installation_not_accessible }
+          ; D.Repository_listing_failed
+              { installation = organization_context;
+                error = GUR.No_public_repositories }
+          ; D.Installation_persistence_failed
+              { installation = user_context;
+                error = GIS.Storage_error }
+          ; D.Draft_persistence_failed
+              { installation = user_context;
+                error = PODS.Storage_error }
+          ])
+
+  let suite =
+    [ stage_cases; state_cases; exchange_case; verification_case;
+      listing_case; persistence_case; shape_case ]
+end
+
 (* === GitHub OAuth authorization callback (Github_onboarding_handlers) ===
    GET /integrations/github/authorize/callback: the terminal, sessionless
    leg of onboarding. Every outcome must be a clean 303 with the
@@ -13726,6 +13956,16 @@ module Gh_oauth_callback = struct
        (github_installation_id, github_account_id, github_account_login,
         github_account_type, status, revoked_at)
      VALUES ($1, $2, 'revoked-owner', 'organization', 'revoked', NOW())"
+
+  (* Pre-existing ACTIVE personal-account row, so a later organization
+     verification of the same installation id must be refused as an
+     identity change rather than silently rewriting the kind. *)
+  let q_insert_active_user =
+    (Caqti_type.(t2 int64 int64 ->. unit))
+    "INSERT INTO github_installations
+       (github_installation_id, github_account_id, github_account_login,
+        github_account_type, status)
+     VALUES ($1, $2, 'personal-owner-fixture', 'user', 'active')"
 
   let fixture_user (module C : Caqti_lwt.CONNECTION) name =
     let* uid = C.find Gh_start_handler.q_insert_user name in
@@ -14963,8 +15203,235 @@ module Gh_oauth_callback = struct
         check_no_capture label captured;
         Lwt.return_unit)
 
+  (* --- Both GitHub account kinds, end to end ---
+     The fixtures above derive one synthetic identity per installation and
+     always describe it as an organization. The two cases below instead
+     spell out the identity GitHub really returns for each account kind —
+     a personal account and an organization with its own login and account
+     id — and follow it all the way to what /projects/new renders, because
+     that is where a wrongly parsed or wrongly persisted account kind would
+     actually surface. *)
+
+  (* One listing page carrying an explicit account identity and target
+     type, instead of the id-derived default. *)
+  let listing_as ~account_id ~login ~target installation =
+    Ok
+      ( 200,
+        gui_entry_page
+          (gui_raw_entry
+             ~id:(Int64.to_string installation)
+             ~account:
+               (Printf.sprintf {|{"id":%Ld,"login":"%s"}|} account_id login)
+             ~target:(Printf.sprintf {|"%s"|} target)
+             ()) )
+
+  (* GET /projects/new for one owned draft, over the same shared pipeline,
+     with a memory session for the owner — the real page a user lands on
+     after a successful callback. *)
+  let projects_new_body ~url ~uid ~draft_id label =
+    let handler =
+      Dream.memory_sessions (fun req ->
+          let* () =
+            Dream.set_session_field req "user_id" (string_of_int uid)
+          in
+          Earde.Project_setup_handlers.make_new_project_handler
+            ~mode:Ob.Public req)
+    in
+    let* response =
+      run_shared ~url handler
+        (Dream.request ~method_:`GET
+           ~target:(Printf.sprintf "/projects/new?draft=%Ld" draft_id)
+           "")
+    in
+    Alcotest.(check int) (label ^ ": /projects/new renders") 200
+      (status_of response);
+    Dream.body response
+
+  (* One account kind, from the GitHub identity through persistence to the
+     rendered chooser. [private_name] must never appear anywhere. *)
+  let account_kind_case name ~username ~installation ~account_id ~login
+      ~target ~expected_type ~public_name ~private_name =
+    db_case name (fun ~url (module C : Caqti_lwt.CONNECTION) ->
+        let* uid = fixture_user (module C) username in
+        let* state, cookie = onboard ~url ~uid ~installation name in
+        let repo ?(private_flag = false) ?(visibility = "public") ~id
+            repo_name =
+          gur_repo ~owner_id:account_id ~owner_login:login ~private_flag
+            ~visibility ~id ~name:repo_name ()
+        in
+        let inst_calls = ref 0 in
+        let repo_captured = ref [] in
+        let* response =
+          run_callback ~url ~jar:[ cookie ]
+            ~exchange:(exchange_stub (Ok (200, token_body)) (ref 0))
+            ~installations:
+              (installations_stub
+                 [ listing_as ~account_id ~login ~target installation ]
+                 inst_calls)
+            ~repositories:
+              (gur_transport
+                 [ repo_listing
+                     [ repo ~id:901L public_name
+                     ; repo ~private_flag:true ~visibility:"private"
+                         ~id:902L private_name
+                     ] ]
+                 repo_captured)
+            ~target:(callback_target state fixture_code)
+            ()
+        in
+        (* The whole point: this account kind reaches the connected
+           redirect, not the generic failure. *)
+        let* () = check_success_lwt name response in
+        Alcotest.(check int) (name ^ ": one verification") 1 !inst_calls;
+        Alcotest.(check int) (name ^ ": one repository listing") 1
+          (List.length !repo_captured);
+        (* The account kind and login are persisted exactly as GitHub
+           described them — no defaulting to the other kind. *)
+        let* row = C.find q_installation_row installation in
+        let* (stored_account_id, stored_login, stored_type), connected_by =
+          or_fail (name ^ ": installation row") row
+        in
+        Alcotest.(check bool) (name ^ ": account id") true
+          (stored_account_id = account_id);
+        Alcotest.(check string) (name ^ ": account login") login stored_login;
+        Alcotest.(check string) (name ^ ": account type") expected_type
+          stored_type;
+        Alcotest.(check (option int)) (name ^ ": connected by the owner")
+          (Some uid) connected_by;
+        (* Exactly the public repository is snapshotted, owned by this
+           account. *)
+        let* record_id = installation_record_id (module C) name installation in
+        let* draft = active_draft (module C) name ~uid ~record_id in
+        let draft = require_draft name draft in
+        let* sigs = snapshot_sigs (module C) name draft in
+        Alcotest.(check (list string)) (name ^ ": public snapshot only")
+          [ Pod_store.sig_of ~position:1 ~id:901L ~account_id ~login
+              public_name ]
+          sigs;
+        (* And it is actually offered on /projects/new, with the private
+           repository absent from the page as well as from the snapshot. *)
+        let* html = projects_new_body ~url ~uid ~draft_id:draft name in
+        Alcotest.(check bool) (name ^ ": public repository offered") true
+          (goc_contains ~needle:(login ^ "/" ^ public_name) html);
+        Alcotest.(check bool) (name ^ ": account login shown") true
+          (goc_contains ~needle:login html);
+        Alcotest.(check bool) (name ^ ": private repository absent") false
+          (goc_contains ~needle:private_name html);
+        Lwt.return_unit)
+
+  let personal_account_case =
+    account_kind_case
+      "personal account: User installation connects and lands on \
+       /projects/new"
+      ~username:"ghoauth_personal" ~installation:936000021L
+      ~account_id:220767424L ~login:"personal-owner-fixture" ~target:"User"
+      ~expected_type:"user" ~public_name:"smoke-personal"
+      ~private_name:"personal-private-fixture"
+
+  let organization_account_case =
+    account_kind_case
+      "organization: Organization installation with an org-owned public \
+       repository connects and lands on /projects/new"
+      ~username:"ghoauth_org" ~installation:936000022L
+      ~account_id:267672683L ~login:"org-owner-fixture"
+      ~target:"Organization" ~expected_type:"organization"
+      ~public_name:"smoke-org" ~private_name:"org-private-fixture"
+
+  (* An organization listing whose repository is owned by a different
+     account than the installation: the ownership check must reject the
+     page rather than snapshot a foreign repository. *)
+  let organization_owner_mismatch_case =
+    db_case
+      "organization owner mismatch: foreign repository fails closed with \
+       no rows"
+      (fun ~url (module C : Caqti_lwt.CONNECTION) ->
+        let* uid = fixture_user (module C) "ghoauth_orgowner" in
+        let installation = 936000023L in
+        let account_id = 267672683L in
+        let* state, cookie = onboard ~url ~uid ~installation "org owner" in
+        let* response =
+          run_callback ~url ~jar:[ cookie ]
+            ~exchange:(exchange_stub (Ok (200, token_body)) (ref 0))
+            ~installations:
+              (installations_stub
+                 [ listing_as ~account_id ~login:"org-owner-fixture"
+                     ~target:"Organization" installation ]
+                 (ref 0))
+            ~repositories:
+              (gur_transport
+                 [ repo_listing
+                     [ gur_repo
+                         ~owner_id:(Int64.add account_id 7L)
+                         ~owner_login:"someone-else-fixture" ~id:903L
+                         ~name:"borrowed" () ] ]
+                 (ref []))
+            ~target:(callback_target state fixture_code)
+            ()
+        in
+        let* () =
+          check_terminal_failure (module C) "org owner" ~cookie ~installation
+            response
+        in
+        let* drafts = draft_count (module C) "org owner" uid in
+        Alcotest.(check int) "no draft" 0 drafts;
+        Lwt.return_unit)
+
+  (* The same installation id already recorded as a personal account: an
+     organization verification for it is an identity change the store must
+     refuse, leaving the existing row exactly as it was. *)
+  let account_kind_conflict_case =
+    db_case
+      "account-kind conflict: an organization verification never rewrites \
+       a recorded personal installation"
+      (fun ~url (module C : Caqti_lwt.CONNECTION) ->
+        let* uid = fixture_user (module C) "ghoauth_kindconflict" in
+        let installation = 936000024L in
+        let account_id = 220767424L in
+        let* r = C.exec q_insert_active_user (installation, account_id) in
+        let* () = or_fail "personal fixture" r in
+        let* state, cookie = onboard ~url ~uid ~installation "conflict" in
+        let* response =
+          run_callback ~url ~jar:[ cookie ]
+            ~exchange:(exchange_stub (Ok (200, token_body)) (ref 0))
+            ~installations:
+              (installations_stub
+                 [ listing_as ~account_id ~login:"org-owner-fixture"
+                     ~target:"Organization" installation ]
+                 (ref 0))
+            ~repositories:
+              (gur_transport
+                 [ repo_listing
+                     [ gur_repo ~owner_id:account_id
+                         ~owner_login:"org-owner-fixture" ~id:904L
+                         ~name:"conflicting" () ] ]
+                 (ref []))
+            ~target:(callback_target state fixture_code)
+            ()
+        in
+        let* () = check_failure_lwt "conflict" response in
+        check_deletion "conflict" ~cookie_name:(fst cookie)
+          ~stored_value:(snd cookie) response;
+        (* The recorded personal identity survives byte for byte, and no
+           draft was created against it. *)
+        let* row = C.find q_installation_row installation in
+        let* (stored_account_id, stored_login, stored_type), _ =
+          or_fail "conflict row" row
+        in
+        Alcotest.(check bool) "account id unchanged" true
+          (stored_account_id = account_id);
+        Alcotest.(check string) "login unchanged" "personal-owner-fixture"
+          stored_login;
+        Alcotest.(check string) "kind unchanged" "user" stored_type;
+        let* count = installation_count (module C) "conflict" installation in
+        Alcotest.(check int) "still exactly one row" 1 count;
+        let* drafts = draft_count (module C) "conflict" uid in
+        Alcotest.(check int) "no draft" 0 drafts;
+        Lwt.return_unit)
+
   let db_suite =
     [ success_case; replay_case; expired_case; already_consumed_case;
+      personal_account_case; organization_account_case;
+      organization_owner_mismatch_case; account_kind_conflict_case;
       binding_mismatch_case; exchange_transport_case; oauth_rejected_case;
       not_accessible_case; pagination_limit_case;
       listing_transport_error_case; listing_status_case;
@@ -55980,6 +56447,11 @@ let () =
          transports — every outcome must be a clean 303 to one of the two
          generic targets, with no stage distinguishable. *)
     ; ( "github_oauth_callback_gates", Gh_oauth_callback.gate_suite )
+      (* The callback's single opaque redirect is only diagnosable through
+         the server log: every failure class must produce its exact stable
+         label, and no label may carry anything but closed vocabulary and
+         integers (see Ghd). *)
+    ; ( "github_callback_failure_diagnostics", Ghd.suite )
       (* OAuth callback over the real pipeline (start + setup return first,
          then sql_pool + secret with fake transports, no session
          middleware); EARDE_TEST_DATABASE_URL gate. *)

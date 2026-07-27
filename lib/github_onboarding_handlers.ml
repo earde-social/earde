@@ -312,6 +312,20 @@ let make_start_installation_handler ~mode ~load_config request =
 let callback_failure () = clean_redirect "/bring?github=failed"
 let callback_success () = clean_redirect "/bring?github=connected"
 
+(* The browser learns nothing, but the operator must: without this, every
+   cause — a GitHub outage, a misconfigured deployment, an installation that
+   grants access to private repositories only — is one indistinguishable
+   redirect and no log line at all. The label comes from the pure closed
+   classification in Github_onboarding_diagnostics, which structurally cannot
+   carry state, codes, tokens, cookies, logins, or repository data; the
+   request association only adds Dream's own request id. *)
+module Diagnostics = Github_onboarding_diagnostics
+
+let log_callback_failure request reason =
+  Dream.warning (fun log ->
+      log ~request "github onboarding callback failed: %s"
+        (Diagnostics.describe reason))
+
 (* Applies this flow's cookie deletion to an already-built clean redirect.
    Dropping can only raise if the runtime secret middleware is
    misconfigured; the clean redirect still wins over surfacing that
@@ -323,6 +337,17 @@ let redirect_dropping_cookie config ~request ~state response =
 
 let callback_failure_dropping config ~request ~state =
   redirect_dropping_cookie config ~request ~state (callback_failure ())
+
+(* The two failure exits, each logging its classified cause first. Every
+   branch that answers /bring?github=failed goes through one of them, so a
+   new failure cause cannot be added silently. *)
+let failed_callback request reason =
+  log_callback_failure request reason;
+  callback_failure ()
+
+let failed_callback_dropping config ~request ~state reason =
+  log_callback_failure request reason;
+  callback_failure_dropping config ~request ~state
 
 (* The two accepted callback shapes: GitHub sent an authorization code, or
    GitHub reported the authorization as rejected. The remote error value is
@@ -378,22 +403,28 @@ let finish_authorization ~config ~credentials ~exchange_transport
           ~flow:Github_onboarding.Project_onboarding)
   in
   match consumed with
-  | Error Github_onboarding_state_store.Storage_error ->
+  | Error (Github_onboarding_state_store.Storage_error as reason) ->
       (* No committed outcome is known, so the cookie survives: if the
          database recovers while the state is still live, a browser
          refresh can retry. No GitHub call is made. *)
-      Lwt.return (callback_failure ())
+      Lwt.return (failed_callback request (Diagnostics.State_rejected reason))
   | Error
-      ( Github_onboarding_state_store.State_not_found
-      | Github_onboarding_state_store.State_expired
-      | Github_onboarding_state_store.State_already_consumed
-      | Github_onboarding_state_store.Session_binding_mismatch
-      | Github_onboarding_state_store.Flow_mismatch
-      | Github_onboarding_state_store.Missing_pending_installation ) ->
+      (( Github_onboarding_state_store.State_not_found
+       | Github_onboarding_state_store.State_expired
+       | Github_onboarding_state_store.State_already_consumed
+       | Github_onboarding_state_store.Session_binding_mismatch
+       | Github_onboarding_state_store.Flow_mismatch
+       | Github_onboarding_state_store.Missing_pending_installation ) as
+       reason) ->
       (* One collapsed answer whether the state was already dead or was
          just atomically burned by a mismatch — which one stays private,
-         and the cookie can never succeed against this row again. *)
-      Lwt.return (callback_failure_dropping config ~request ~state)
+         and the cookie can never succeed against this row again. The
+         server-side log still names it: a binding mismatch is a security
+         signal an operator must be able to see, and a log line reaches no
+         browser. *)
+      Lwt.return
+        (failed_callback_dropping config ~request ~state
+           (Diagnostics.State_rejected reason))
   | Ok
       {
         Github_onboarding_state_store.user_id;
@@ -407,12 +438,18 @@ let finish_authorization ~config ~credentials ~exchange_transport
       in
       match exchanged with
       | Error
-          ( Github_oauth_token_exchange.Transport_error
-          | Github_oauth_token_exchange.Unexpected_http_status _
-          | Github_oauth_token_exchange.OAuth_rejected
-          | Github_oauth_token_exchange.Invalid_response ) ->
+          (( Github_oauth_token_exchange.Transport_error
+           | Github_oauth_token_exchange.Unexpected_http_status _
+           | Github_oauth_token_exchange.OAuth_rejected
+           | Github_oauth_token_exchange.Invalid_response ) as reason) ->
           (* The state is already consumed: onboarding must restart. *)
-          Lwt.return (callback_failure_dropping config ~request ~state)
+          Lwt.return
+            (failed_callback_dropping config ~request ~state
+               (Diagnostics.Token_exchange_failed
+                  {
+                    pending_installation_id = pending_github_installation_id;
+                    error = reason;
+                  }))
       | Ok token_set -> (
           let%lwt verification =
             Github_user_installations.verify
@@ -421,14 +458,34 @@ let finish_authorization ~config ~credentials ~exchange_transport
           in
           match verification with
           | Error
-              ( Github_user_installations.Invalid_installation_id
-              | Github_user_installations.Transport_error
-              | Github_user_installations.Unexpected_http_status _
-              | Github_user_installations.Invalid_response
-              | Github_user_installations.Installation_not_accessible
-              | Github_user_installations.Pagination_limit ) ->
-              Lwt.return (callback_failure_dropping config ~request ~state)
+              (( Github_user_installations.Invalid_installation_id
+               | Github_user_installations.Transport_error
+               | Github_user_installations.Unexpected_http_status _
+               | Github_user_installations.Invalid_response
+               | Github_user_installations.Installation_not_accessible
+               | Github_user_installations.Pagination_limit ) as reason) ->
+              Lwt.return
+                (failed_callback_dropping config ~request ~state
+                   (Diagnostics.Installation_verification_failed
+                      {
+                        pending_installation_id =
+                          pending_github_installation_id;
+                        error = reason;
+                      }))
           | Ok verified_installation -> (
+              (* Verified identity, safe to name in a log: the id GitHub
+                 confirmed against the user token plus its account kind.
+                 The account login stays out. *)
+              let verified_context =
+                {
+                  Diagnostics.installation_id =
+                    Github_user_installations.installation_id
+                      verified_installation;
+                  account_type =
+                    Github_user_installations.account_type
+                      verified_installation;
+                }
+              in
               let%lwt listed =
                 Github_user_installation_repositories.list_public
                   ~transport:repositories_transport ~token_set
@@ -436,19 +493,27 @@ let finish_authorization ~config ~credentials ~exchange_transport
               in
               match listed with
               | Error
-                  ( Github_user_installation_repositories.Transport_error
-                  | Github_user_installation_repositories
-                    .Unexpected_http_status _
-                  | Github_user_installation_repositories.Invalid_response
-                  | Github_user_installation_repositories
-                    .No_public_repositories
-                  | Github_user_installation_repositories.Pagination_limit
-                    ) ->
+                  (( Github_user_installation_repositories.Transport_error
+                   | Github_user_installation_repositories
+                     .Unexpected_http_status _
+                   | Github_user_installation_repositories.Invalid_response
+                   | Github_user_installation_repositories
+                     .No_public_repositories
+                   | Github_user_installation_repositories.Pagination_limit
+                     ) as reason) ->
                   (* Nothing is persisted when the listing fails: the
                      installation record and draft only exist together
-                     with a complete snapshot source. *)
+                     with a complete snapshot source. This is also where a
+                     perfectly healthy installation that grants access to
+                     private repositories only ends up, so the log must
+                     name it. *)
                   Lwt.return
-                    (callback_failure_dropping config ~request ~state)
+                    (failed_callback_dropping config ~request ~state
+                       (Diagnostics.Repository_listing_failed
+                          {
+                            installation = verified_context;
+                            error = reason;
+                          }))
               | Ok repository_set -> (
                   (* The token set stays behind in memory on purpose: only
                      the verified identity and the validated public
@@ -468,12 +533,19 @@ let finish_authorization ~config ~credentials ~exchange_transport
                         in
                         match recorded with
                         | Error
-                            ( Github_installation_store
-                              .Invalid_connected_by_user_id
-                            | Github_installation_store
-                              .Installation_unavailable
-                            | Github_installation_store.Storage_error ) ->
-                            Lwt.return (Error ())
+                            (( Github_installation_store
+                               .Invalid_connected_by_user_id
+                             | Github_installation_store
+                               .Installation_unavailable
+                             | Github_installation_store.Storage_error ) as
+                             reason) ->
+                            Lwt.return
+                              (Error
+                                 (Diagnostics.Installation_persistence_failed
+                                    {
+                                      installation = verified_context;
+                                      error = reason;
+                                    }))
                         | Ok () -> (
                             let%lwt refreshed =
                               Project_onboarding_draft_store.refresh_verified
@@ -483,22 +555,29 @@ let finish_authorization ~config ~credentials ~exchange_transport
                             in
                             match refreshed with
                             | Error
-                                ( Project_onboarding_draft_store
-                                  .Invalid_user_id
-                                | Project_onboarding_draft_store
-                                  .Installation_unavailable
-                                | Project_onboarding_draft_store
-                                  .Storage_error ) ->
-                                Lwt.return (Error ())
+                                (( Project_onboarding_draft_store
+                                   .Invalid_user_id
+                                 | Project_onboarding_draft_store
+                                   .Installation_unavailable
+                                 | Project_onboarding_draft_store
+                                   .Storage_error ) as reason) ->
+                                Lwt.return
+                                  (Error
+                                     (Diagnostics.Draft_persistence_failed
+                                        {
+                                          installation = verified_context;
+                                          error = reason;
+                                        }))
                             | Ok _draft ->
                                 (* The draft id stays private until an
                                    owner-authorized setup route exists. *)
                                 Lwt.return (Ok ())))
                   in
                   match persisted with
-                  | Error () ->
+                  | Error reason ->
                       Lwt.return
-                        (callback_failure_dropping config ~request ~state)
+                        (failed_callback_dropping config ~request ~state
+                           reason)
                   | Ok () ->
                       (* Both persistence steps committed: the verified
                          installation record and the refreshed draft exist.
@@ -572,7 +651,9 @@ let make_oauth_callback_handler ~mode ~load_config ~load_credentials
   | Project_onboarding.Off ->
       (* Kill switch: no parsing, no configuration or credential read, no
          cookie access, no SQL, no GitHub. Still a clean redirect — the
-         browser sits at a URL carrying a live code and state. *)
+         browser sits at a URL carrying a live code and state. Deliberately
+         unlogged: a disabled integration is a deployment decision, not a
+         failure, and the callback URL is publicly reachable. *)
       Lwt.return (callback_failure ())
   | Project_onboarding.Admins | Project_onboarding.Public -> (
       (* Sessionless like the setup return: this arrives on a cross-site
@@ -581,41 +662,51 @@ let make_oauth_callback_handler ~mode ~load_config ~load_credentials
          owning user comes back from the consumed state row, never from a
          Dream session. *)
       match parse_oauth_callback_target (Dream.target request) with
-      | Error () -> Lwt.return (callback_failure ())
+      | Error () ->
+          Lwt.return (failed_callback request Diagnostics.Malformed_callback)
       | Ok (state, shape) -> (
           match load_config () with
           | Error _ ->
               (* Without configuration there is no cookie policy either,
                  so no deletion is attempted; credentials, SQL, and GitHub
-                 stay untouched. *)
-              Lwt.return (callback_failure ())
+                 stay untouched. The loader's own error value is not
+                 carried: it can name environment variables. *)
+              Lwt.return
+                (failed_callback request Diagnostics.Configuration_unavailable)
           | Ok config -> (
               match Github_onboarding_cookie.load config ~request ~state with
               | Error Github_onboarding_cookie.Missing ->
                   (* Another browser, or cleared data: nothing to delete,
                      and any other browser's cookie can still finish. No
                      credentials, SQL, or GitHub. *)
-                  Lwt.return (callback_failure ())
+                  Lwt.return (failed_callback request Diagnostics.Cookie_missing)
               | Error Github_onboarding_cookie.Invalid ->
                   (* Undecryptable material is useless; delete it. Still no
                      credentials, SQL, or GitHub. *)
                   Lwt.return
-                    (callback_failure_dropping config ~request ~state)
+                    (failed_callback_dropping config ~request ~state
+                       Diagnostics.Cookie_invalid)
               | Ok data -> (
                   match shape with
                   | Authorization_rejected ->
                       (* The user said no at GitHub: end the flow without
                          credentials, SQL, or GitHub calls. The untouched
-                         state row expires on its own. *)
+                         state row expires on its own. The remote error
+                         value is still never carried. *)
                       Lwt.return
-                        (callback_failure_dropping config ~request ~state)
+                        (failed_callback_dropping config ~request ~state
+                           Diagnostics.Authorization_rejected)
                   | Authorization_granted code -> (
                       match load_credentials () with
                       | Error _ ->
                           (* Deployment problem with the state untouched:
                              keep the cookie so a manual refresh can retry
-                             once the configuration is repaired. *)
-                          Lwt.return (callback_failure ())
+                             once the configuration is repaired. The
+                             loader's error value, which names credential
+                             environment variables, is not carried. *)
+                          Lwt.return
+                            (failed_callback request
+                               Diagnostics.Credentials_unavailable)
                       | Ok credentials ->
                           finish_authorization ~config ~credentials
                             ~exchange_transport ~installations_transport
