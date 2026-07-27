@@ -551,11 +551,16 @@ let make_bring_handler ~mode request =
      session username without a valid positive user_id stays anonymous. *)
   let user = match user_id with None -> None | Some _ -> session_user request in
   (* no-store: the page reflects session identity, rollout mode, and
-     one-time callback feedback; no-referrer keeps the feedback query out
-     of outbound Referers. *)
+     one-time callback feedback. The referrer policy is the shared one from
+     Request_origin, not "no-referrer": this page hosts the start form, and
+     a no-referrer document makes the browser post it with Origin: null,
+     which the start handler's own origin gate then rejects. The feedback
+     query still never reaches an outbound Referer. *)
   Dream.html
     ~headers:
-      [ ("Cache-Control", "no-store"); ("Referrer-Policy", "no-referrer") ]
+      [ ("Cache-Control", "no-store");
+        ("Referrer-Policy", Request_origin.referrer_policy);
+      ]
     (Github_onboarding_pages.bring_page ?user ~request ~access
        ~feedback:(bring_feedback_of_target (Dream.target request))
        ())

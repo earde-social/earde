@@ -3,6 +3,18 @@
    Github_onboarding_handlers so the two never drift; the start handler's
    behavior is pinned by its existing origin-gate regression tests. *)
 
+(* Referrer-Policy for any HTML page that hosts a form posting to a route
+   gated by [same_origin_request]. It lives here, next to the gate, because
+   the two are one contract: per Fetch ("append a request Origin header"), a
+   document served with "no-referrer" makes the browser send `Origin: null`
+   on every non-GET navigation it starts — including a plain same-origin
+   form POST — and a null origin is (correctly) rejected below. "same-origin"
+   is the strictest policy that keeps the real origin on that POST: it still
+   sends no Referer whatsoever to any cross-origin destination, so nothing
+   in a page URL can leak off-site. State-bearing URLs are unaffected — they
+   never render a document, only "no-referrer" redirects away. *)
+let referrer_policy = "same-origin"
+
 (* The effective (scheme, host, port) identity of a serialized origin, or
    [None] for anything malformed. An Origin header is scheme://host[:port]
    only, so a path, query, fragment, or userinfo component (and non-http(s)

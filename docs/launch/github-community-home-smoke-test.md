@@ -834,9 +834,22 @@ Search the full HTML of `/projects/<slug>/setup`,
 
 Also confirm on the new routes:
 
-- [ ] Response headers include `Cache-Control: no-store` and
-      `Referrer-Policy: no-referrer` on the private project/community-home
-      pages and on their error responses.
+- [ ] Response headers include `Cache-Control: no-store` on the private
+      project/community-home pages and on their error responses.
+- [ ] Those **pages** carry `Referrer-Policy: same-origin` — *not*
+      `no-referrer`. This is deliberate and must not be "tightened": a
+      document served `no-referrer` makes the browser attach `Origin: null`
+      to any form it posts, and the same-origin gate on every one of these
+      POST routes rejects a null origin, so every button on the page would
+      answer `403 Not Allowed`. `same-origin` still sends no `Referer` at
+      all to any cross-origin destination, so nothing leaks off-site.
+- [ ] The **redirects** away from the two state-bearing callback URLs
+      (`/integrations/github/install/return`,
+      `/integrations/github/authorize/callback`) still carry
+      `Referrer-Policy: no-referrer` alongside `Cache-Control: no-store` and
+      `Pragma: no-cache`. Those render no form, so nothing depends on their
+      `Origin`, and the `state=`/`code=` value must never travel onward as a
+      `Referer`.
 
 ---
 

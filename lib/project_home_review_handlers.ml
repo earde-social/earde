@@ -46,10 +46,16 @@ let authenticated_user_id request =
 (* --- Responses --- *)
 
 (* Every rendered page reflects session identity and private workflow
-   state: never cacheable, and never leaking onward as a Referer. The page
-   remains noindex from the page module itself. *)
+   state: never cacheable, and never leaking onward as a cross-origin
+   Referer. The page remains noindex from the page module itself. The
+   referrer policy is Request_origin's shared value rather than
+   "no-referrer": these pages host the forms posting to this feature's
+   origin-gated routes, and a no-referrer document makes the browser send
+   Origin: null on that POST. Cross-origin Referers stay fully suppressed. *)
 let page_headers =
-  [ ("Cache-Control", "no-store"); ("Referrer-Policy", "no-referrer") ]
+  [ ("Cache-Control", "no-store");
+    ("Referrer-Policy", Request_origin.referrer_policy);
+  ]
 
 (* Explicit 303 with an empty body and a server-controlled Location — no
    request value is ever reflected into a redirect. *)

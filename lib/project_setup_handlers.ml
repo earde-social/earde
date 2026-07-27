@@ -36,9 +36,15 @@ let authenticated_user_id request =
 
 (* Every rendered page in this feature reflects session identity, draft
    state, and one-time feedback: never cacheable, and the query never leaks
-   onward as a Referer. *)
+   onward as a cross-origin Referer. The
+   referrer policy is Request_origin's shared value rather than
+   "no-referrer": these pages host the forms posting to this feature's
+   origin-gated routes, and a no-referrer document makes the browser send
+   Origin: null on that POST. Cross-origin Referers stay fully suppressed. *)
 let page_headers =
-  [ ("Cache-Control", "no-store"); ("Referrer-Policy", "no-referrer") ]
+  [ ("Cache-Control", "no-store");
+    ("Referrer-Policy", Request_origin.referrer_policy);
+  ]
 
 (* Explicit 303 with an empty body and a server-controlled Location — no
    request value is ever reflected into a redirect. *)
