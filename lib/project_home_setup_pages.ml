@@ -176,6 +176,36 @@ let next_step_html project =
      %s</section>"
     links
 
+(* Launch onboarding stepper (Cartographic Civic, 04-ROUTES): the same
+   five-step sequence the /projects/new wrapper renders, truthfully
+   positioned for this destination — GitHub and Project are committed by the
+   time this page can render at all, Home is the live decision, and the later
+   steps stay plain upcoming dots, never links. Rendered by the launch
+   wrapper BEFORE the immutable create-shell fragment, so the byte-exact
+   fragment the test suites slice is untouched. Markup only — no form, no
+   field, no script, no inline style. *)
+let stepper_html =
+  let labels = [ "GitHub"; "Project"; "Home"; "Configure"; "Complete" ] in
+  let active = 2 in
+  let step index label =
+    let dot_class, dot_text =
+      if index < active then ("step__dot step__dot--done", "&#10003;")
+      else if index = active then
+        ("step__dot step__dot--active", string_of_int (index + 1))
+      else ("step__dot", string_of_int (index + 1))
+    in
+    let label_class =
+      if index = active then "step__label step__label--active"
+      else "step__label"
+    in
+    Printf.sprintf
+      "<li class='step'><span class='%s'>%s</span><span class='%s'>%s</span></li>"
+      dot_class dot_text label_class label
+  in
+  Printf.sprintf "<ol class='steps' aria-label='Project onboarding steps'>%s</ol>"
+    (String.concat "<li class='step__rule' aria-hidden='true'></li>"
+       (List.mapi step labels))
+
 let project_home_setup_page ?user ?request ~project () =
   let body =
     Printf.sprintf
@@ -186,5 +216,6 @@ let project_home_setup_page ?user ?request ~project () =
       (next_step_html project)
   in
   (* noindex: a steward-only setup surface — not for search indexes. *)
-  Components.create_page ?user ?request ~noindex:true ~title:"Project created"
-    ~body ()
+  Components.launch_onboarding_page ?user ?request ~noindex:true
+    ~stepper:stepper_html ~page_class:"launch-project-home-setup"
+    ~title:"Project created" ~content:body ()

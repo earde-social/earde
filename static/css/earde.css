@@ -1707,3 +1707,238 @@ ol, ul { margin: 0; padding: 0; list-style: none; }
 .launch-project-new #analytics-consent [data-analytics-error] {
   color: var(--danger); font-size: var(--fs-11);
 }
+
+/* ==========================================================================
+   EARDE INTEGRATION — /projects/:slug/setup only
+   Scoped beneath body.launch-project-home-setup. Exists only because the
+   real "Project created" page cannot emit the reference markup exactly:
+   - the feature fragment beginning at <div class='create-shell'> is a
+     byte-exact slicing marker for the test suites, so the existing phs-* /
+     create-* markup is styled in place — the mockup's .choice anatomy is
+     recreated over the two pinned phs-next-* paragraphs and anchors, and
+     the card glyphs are decorative pseudo-content, never new markup;
+   - the mockup's editable "Project details" form belongs to the identity
+     step on /projects/new; this destination is read-only by contract, so
+     only the identity summary and the home-choice section are drawn;
+   - the top-bar command field is a link, not a search form (same
+     zero-extra-form trick as the other launch documents);
+   - the onboarding stepper (.steps, approved sheet above) is rendered by
+     the wrapper before the untouched fragment and needs no extra rules;
+   - the notification badge is revealed by the shared script removing the
+     legacy `hidden` class; honoured on the badge element only — no global
+     .hidden utility is defined;
+   - the desktop-only gate panel ships in mobile-gate.css; only the
+     launch-scope "hide the app" rule for this route's document hierarchy
+     lives here (mirrors mobile-gate.css's body.launch-feed > .app rule);
+   - the analytics consent banner markup is shared with the legacy layout
+     (same rules as the other launch sections, re-scoped).
+   ========================================================================== */
+
+/* Command field rendered as a link to /search. */
+.launch-project-home-setup .launch-search { color: var(--ink); }
+.launch-project-home-setup .launch-search__hint {
+  flex: 1; min-width: 0; align-self: center;
+  font-size: var(--fs-13-5); color: var(--muted); opacity: .8;
+  padding: var(--sp-4) var(--sp-5);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.launch-project-home-setup .launch-search__enter {
+  display: grid; place-items: center;
+  border-left: var(--bw) solid var(--line); background: var(--surface3);
+  color: var(--muted); font-family: var(--mono); font-size: var(--fs-12);
+  padding: 0 13px;
+}
+
+/* Member top-bar cluster: chip avatar tone + badge reveal hook. */
+.launch-project-home-setup .userchip .avatar { background: var(--moss); }
+.launch-project-home-setup #notif-badge.hidden { display: none; }
+
+/* Legacy create.css wrappers, flat on the launch column (no cool-grey card). */
+.launch-project-home-setup .create-shell { display: block; }
+.launch-project-home-setup .create-wrap { max-width: 640px; margin: 0 auto; }
+.launch-project-home-setup .create-panel { display: block; }
+
+/* Page head: serif title over the factual verification line — moss mono,
+   a check drawn as decorative pseudo-content (the copy itself is pinned). */
+.launch-project-home-setup .create-head { margin-bottom: var(--sp-9); }
+.launch-project-home-setup .create-title {
+  font-family: var(--serif); font-weight: 600; font-size: var(--fs-24);
+  color: var(--ink);
+}
+.launch-project-home-setup .create-sub {
+  color: var(--muted); font-size: var(--fs-13-5); line-height: var(--lh-prose);
+  margin-top: var(--sp-2);
+}
+.launch-project-home-setup .phs-verified {
+  font-family: var(--mono); font-size: var(--fs-12); color: var(--moss);
+}
+.launch-project-home-setup .phs-verified::before { content: '\2713\00a0'; }
+
+/* Quiet links. */
+.launch-project-home-setup .create-link { color: var(--slate); }
+.launch-project-home-setup .create-link:hover { color: #3b525a; text-decoration: underline; }
+
+/* Project identity summary: the read-only surface2 card idiom (reference
+   "verified repository identity"), serif name over mono facts. */
+.launch-project-home-setup .phs-summary {
+  border: var(--bw) solid var(--line); border-radius: var(--r-4);
+  background: var(--surface2); padding: var(--sp-8) var(--sp-9);
+}
+.launch-project-home-setup .phs-name {
+  font-family: var(--serif); font-weight: 600; font-size: var(--fs-19);
+  color: var(--ink); margin-bottom: var(--sp-5);
+}
+.launch-project-home-setup .phs-facts {
+  display: grid; grid-template-columns: max-content 1fr;
+  gap: var(--sp-2) var(--sp-8); margin: 0;
+}
+.launch-project-home-setup .phs-facts dt {
+  font-family: var(--mono); font-size: var(--fs-10-5); font-weight: 600;
+  letter-spacing: var(--ls-kicker); text-transform: uppercase;
+  color: var(--muted); padding-top: 2px;
+}
+.launch-project-home-setup .phs-facts dd {
+  margin: 0; min-width: 0; overflow-wrap: anywhere;
+  font-size: var(--fs-13); color: var(--ink);
+}
+.launch-project-home-setup .phs-slug {
+  font-family: var(--mono); font-size: var(--fs-12-5); color: var(--moss);
+}
+.launch-project-home-setup .phs-namespace,
+.launch-project-home-setup .phs-kind { font-family: var(--mono); font-size: var(--fs-12-5); }
+.launch-project-home-setup .phs-description {
+  font-family: var(--sans); font-size: var(--fs-12-5); color: var(--muted);
+  line-height: var(--lh-prose);
+}
+.launch-project-home-setup .phs-website { font-family: var(--mono); font-size: var(--fs-12-5); }
+
+/* Repositories: bordered row list on the .rows rhythm. */
+.launch-project-home-setup .phs-repos { margin-top: var(--sp-10); }
+.launch-project-home-setup .phs-repos-title {
+  font-family: var(--serif); font-weight: 600; font-size: var(--fs-19);
+  color: var(--ink);
+}
+.launch-project-home-setup .phs-repo-list {
+  border: var(--bw) solid var(--line); border-radius: var(--r-3);
+  background: var(--surface); overflow: hidden; margin-top: var(--sp-6);
+}
+.launch-project-home-setup .phs-repo {
+  padding: var(--sp-6) var(--sp-8);
+  border-bottom: var(--bw) solid var(--line);
+}
+.launch-project-home-setup .phs-repo:last-child { border-bottom: 0; }
+.launch-project-home-setup .phs-repo-name {
+  font-family: var(--mono); font-size: var(--fs-13); color: var(--ink);
+}
+/* Primary: moss outline fact tag (verified accent); Archived: ochre
+   (projects/pending accent) — text-and-border, never a fill. */
+.launch-project-home-setup .phs-repo-primary,
+.launch-project-home-setup .phs-repo-archived {
+  display: inline-flex; align-items: center; vertical-align: 1px;
+  font-family: var(--mono); font-size: var(--fs-10); line-height: 1.7;
+  border: var(--bw) solid currentColor;
+  border-radius: var(--r-1); padding: 1px 5px; margin-left: var(--sp-4);
+}
+.launch-project-home-setup .phs-repo-primary { color: var(--moss); }
+.launch-project-home-setup .phs-repo-archived { color: var(--ochre); }
+.launch-project-home-setup .phs-repo-desc {
+  font-size: var(--fs-12); color: var(--muted); margin-top: var(--sp-2);
+}
+.launch-project-home-setup .phs-repo-meta {
+  font-family: var(--mono); font-size: var(--fs-10-5); color: var(--muted);
+  margin-top: var(--sp-2);
+}
+.launch-project-home-setup .phs-repo-branch {
+  font-family: var(--mono); font-size: var(--fs-10-5); color: var(--ink);
+  background: var(--surface2); border: var(--bw) solid var(--line);
+  border-radius: var(--r-1); padding: 0 4px;
+}
+
+/* Home choice: below a hairline, the two flat bordered cards (reference
+   .choice anatomy over the pinned phs-next-* markup). The create card leads
+   visually (grid order only — DOM order is test-pinned), glyphs are
+   decorative pseudo-content, and each pinned anchor is drawn as the card's
+   one strong action: moss fill for the dedicated home, ochre for the
+   connect path — the reference's own .btn--primary / .btn--project pair. */
+.launch-project-home-setup .phs-next {
+  margin-top: var(--sp-11); padding-top: var(--sp-10);
+  border-top: var(--bw) solid var(--line);
+  display: grid; grid-template-columns: 1fr 1fr;
+  gap: var(--sp-4) var(--sp-8);
+}
+.launch-project-home-setup .phs-next-title {
+  grid-column: 1 / -1; order: 1;
+  font-family: var(--serif); font-weight: 600; font-size: var(--fs-19);
+  color: var(--ink);
+}
+.launch-project-home-setup .phs-next-copy {
+  grid-column: 1 / -1; order: 2;
+  margin: 0 0 var(--sp-5);
+}
+.launch-project-home-setup .phs-next-connect,
+.launch-project-home-setup .phs-next-create {
+  border: var(--bw) solid var(--line2); border-radius: var(--r-5);
+  background: var(--surface); padding: var(--sp-10);
+  display: flex; flex-direction: column; margin: 0;
+}
+.launch-project-home-setup .phs-next-create { order: 3; }
+.launch-project-home-setup .phs-next-connect { order: 4; }
+.launch-project-home-setup .phs-next-create::before {
+  content: '\2302'; color: var(--moss);
+  font-size: var(--fs-24); line-height: 1; margin-bottom: var(--sp-6);
+}
+.launch-project-home-setup .phs-next-connect::before {
+  content: '\25C8'; color: var(--ochre);
+  font-size: var(--fs-24); line-height: 1; margin-bottom: var(--sp-6);
+}
+.launch-project-home-setup .phs-next-connect .create-link,
+.launch-project-home-setup .phs-next-create .create-link {
+  display: flex; align-items: center; justify-content: center;
+  text-align: center; margin-top: auto;
+  font-family: var(--sans); font-weight: 600; font-size: var(--fs-13);
+  border: var(--bw) solid; border-radius: var(--r-3);
+  padding: 9px var(--sp-8);
+}
+.launch-project-home-setup .phs-next-create .create-link {
+  color: #fff; background: var(--moss); border-color: var(--moss);
+}
+.launch-project-home-setup .phs-next-create .create-link:hover {
+  color: #fff; text-decoration: none; filter: brightness(1.06);
+}
+.launch-project-home-setup .phs-next-connect .create-link {
+  color: #fff; background: var(--ochre); border-color: var(--ochre);
+}
+.launch-project-home-setup .phs-next-connect .create-link:hover {
+  color: #fff; text-decoration: none; filter: brightness(1.05);
+}
+
+/* Desktop-only gate: hide this route's launch app under the shared
+   breakpoint; the gate panel itself is styled by mobile-gate.css. */
+@media (max-width: 800px) {
+  body.launch-project-home-setup > .app { display: none !important; }
+}
+
+/* Analytics consent banner (markup shared with the legacy layout). */
+.launch-project-home-setup #analytics-consent {
+  position: fixed; bottom: var(--sp-8); left: 50%; transform: translateX(-50%);
+  z-index: 50; width: calc(100% - 2rem); max-width: 28rem;
+  background: var(--surface); border: var(--bw) solid var(--line2);
+  border-radius: var(--r-3); padding: var(--sp-7) var(--sp-8);
+  box-shadow: var(--shadow-overlay);
+}
+.launch-project-home-setup #analytics-consent p {
+  font-size: var(--fs-13); color: var(--muted); margin-bottom: var(--sp-5);
+}
+.launch-project-home-setup #analytics-consent [data-analytics-accept],
+.launch-project-home-setup #analytics-consent [data-analytics-refuse] {
+  font-family: var(--sans); font-weight: 600; font-size: var(--fs-12);
+  border: var(--bw) solid var(--line2); border-radius: var(--r-2);
+  padding: var(--sp-3) var(--sp-7); cursor: pointer;
+  background: var(--surface); color: var(--muted); margin-right: var(--sp-4);
+}
+.launch-project-home-setup #analytics-consent [data-analytics-accept] {
+  color: #fff; background: var(--moss); border-color: var(--moss);
+}
+.launch-project-home-setup #analytics-consent [data-analytics-error] {
+  color: var(--danger); font-size: var(--fs-11);
+}
