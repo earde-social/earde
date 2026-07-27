@@ -91,6 +91,28 @@ val launch_entry_page : ?noindex:bool -> ?request:Dream.request -> page_class:st
     [Pages.login_form] and [Pages.signup_form]; no existing wrapper changes. *)
 val launch_auth_page : ?noindex:bool -> ?request:Dream.request -> page_class:string -> title:string -> content:string -> unit -> string
 
+(** Cartographic Civic launch app document (pass 3: /feed only). A complete,
+    self-contained document loading only /static/css/earde.css plus the shared
+    desktop-only mobile gate — no Tailwind, no external fonts, no shell.css —
+    under the approved app chrome: 54px top bar (brand → /feed, a real /search
+    form, viewer-state actions: anonymous Bring/Log in/Sign up, or the member
+    ＋ Connect, the id='notif-badge' bell, and a pure-CSS user menu whose
+    logout stays a POST form), the dark 64px icon rail (Feed active, one tile
+    per real joined community targeting the legacy /c/:slug/ch/general
+    destination, ＋ → /bring), the central main column and an optional right
+    [aside]. Member documents carry the exact [layout] inline behavior script
+    (optimistic voting, confirm modal, ONE-SHOT notification fetch); anonymous
+    documents carry no script. [request] feeds the shared analytics assets and
+    the admin session flag. [page_class] (e.g. "launch-feed") is the scoping
+    root stamped on <body> for the integration CSS at the end of earde.css.
+    Used only by [Pages.feed_page]; no existing wrapper changes. *)
+val launch_app_page : ?noindex:bool -> ?request:Dream.request -> ?user:string -> ?rail_communities:Db.community list -> ?aside:string -> page_class:string -> title:string -> content:string -> unit -> string
+
+(** Deterministic launch-palette colour (hex string) for a community slug.
+    The database stores no per-community colour, so launch chrome derives a
+    stable presentational one from the slug alone (same slug → same colour). *)
+val launch_tile_color : string -> string
+
 (** Focused in-product creation layout: the mono app command bar over a single centered
     cool-grey panel (create.css), with no rail/sidebar. Used by the creation flows
     (new-community, new-post, choose-community, join-to-post). [body] is the inner page

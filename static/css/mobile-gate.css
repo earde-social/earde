@@ -21,6 +21,10 @@
   body > header.app-topbar,
   body > main { display: none !important; }
 
+  /* Launch documents (/feed) wrap their chrome in body > .app instead of
+     body > header + main; same gate, same breakpoint, launch scope only. */
+  body.launch-feed > .app { display: none !important; }
+
   .mobile-gate {
     /* cool-grey neutrals (subset ported from shell.css; tokens there are scoped to
        .community-shell/.app-topbar, so they're redeclared on the local container). */

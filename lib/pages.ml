@@ -762,14 +762,20 @@ let community_section_shell_page ?user ?(noindex=false) ?thread_count ?last_acti
   Components.community_shell ?user ~noindex ~request ~rail_communities ~active_slug:community.slug
     ~title ~community ~nav_groups ~main ~right_pane ()
 
-(* /feed — the global Feed surface. Lives outside any one community (Components.feed_shell, no
-   community sidebar), but speaks the same shell language as the section view. Rows reuse
-   render_forum_row with ~show_context so each names its origin community/section. Mirrors the
-   global home/all contract: per-community mod buttons are NOT shown here (only admin/own-post
-   actions via render_forum_row's own logic) — exactly like the warm-card global feed.
+(* /feed — the global Feed surface, now the first App route on the launch
+   chrome (Components.launch_app_page: earde.css only, no shell.css/Tailwind).
+   Rows still come from render_forum_row with ~show_context — its markup is a
+   load-bearing contract (optimistic-vote DOM, replay-masking classes, the ⋯
+   moderation menu) — and are skinned onto the approved .thread-row anatomy by
+   the "/feed only" integration section at the end of earde.css. Mirrors the
+   global home/all contract: per-community mod buttons are NOT shown here
+   (only admin/own-post actions via render_forum_row's own logic).
 
-   scope is "following" | "all"; logged-out users are always "all" with no toggle. Empty
-   Following renders an intentional empty state that points at public content + the founder. *)
+   scope is "following" | "all"; logged-out users are always "all" with no
+   toggle. Sort chips cover exactly the four sorts feed_handler parses; the
+   handoff's type chips are omitted (no ?type= parameter exists). Empty
+   Following renders an intentional empty state that points at public content
+   + the founder, never a fake Browse-communities link (no such route). *)
 let feed_page ?user ~scope ~sort_mode ~is_logged_in ~admin_usernames
     ~(rail_communities : community list) ~user_votes ~current_page
     (posts : post list) request =
@@ -784,101 +790,114 @@ let feed_page ?user ~scope ~sort_mode ~is_logged_in ~admin_usernames
     if not is_logged_in then ""
     else
       let tab s label =
-        let cls = if s = scope then " class='active'" else "" in
-        Printf.sprintf "<a%s href='/feed?scope=%s&sort=%s'>%s</a>" cls s sort_mode label
+        let cls = if s = scope then "tab tab--active" else "tab" in
+        Printf.sprintf "<a class='%s' href='/feed?scope=%s&sort=%s'>%s</a>" cls s sort_mode label
       in
-      Printf.sprintf "<div class='ftabs fh-scope'>%s%s</div>" (tab "following" "Following") (tab "all" "All")
+      Printf.sprintf "<nav class='tabs launch-scope-tabs' aria-label='Feed scope'>%s%s</nav>"
+        (tab "following" "Following") (tab "all" "All communities")
   in
 
-  (* Sort tabs — keep the current scope. *)
-  let tab mode label =
-    let cls = if mode = sort_mode then " class='active'" else "" in
-    Printf.sprintf "<a%s href='/feed?scope=%s&sort=%s'>%s</a>" cls scope mode label
+  (* Sort chips — keep the current scope. *)
+  let chip mode label =
+    let cls = if mode = sort_mode then "chip chip--active" else "chip" in
+    Printf.sprintf "<a class='%s' href='/feed?scope=%s&sort=%s'>%s</a>" cls scope mode label
   in
-  let ftabs = Printf.sprintf "<div class='ftabs'>%s%s%s%s</div>"
-    (tab "hot" "Hot") (tab "new" "New") (tab "top" "Top") (tab "active" "Active")
-  in
-
-  (* The .feed-lane wrapper (max-width, centered) is what keeps the feed from gluing to the icon
-     rail and stretching across the whole middle. Header, tabs, rows, empty state and pager all
-     sit inside a lane so they share one centered column; the full-width header band + row
-     dividers belong to that lane's width. *)
-  let forum_head = Printf.sprintf "
-    <div class='forum-head'>
-      <div class='feed-lane'>
-        <div class='fh-top'>
-            <div>
-                <div class='fh-title'><span class='sec'>⌂</span> Feed</div>
-                <div class='fh-desc'>Latest public discussions from Earde communities.</div>
-            </div>
-        </div>
-        %s
-        %s
-      </div>
-    </div>"
-    scope_tabs ftabs
+  let sort_bar =
+    Printf.sprintf
+      "<div class='tabbar launch-sort-bar'><div class='chips' aria-label='Sort'>%s%s%s%s</div></div>"
+      (chip "hot" "Hot") (chip "new" "New") (chip "top" "Top") (chip "active" "Active")
   in
 
-  (* Empty state. Following-empty is intentional: point at public content + the founder, never a
-     fake Browse-communities link (no such route exists yet). *)
+  let page_head =
+    Printf.sprintf
+      "<div class='page__head'><div class='page__head-inner'>\
+       <h1 class='page__title'>Feed</h1>\
+       <p class='page__sub'>Live activity and durable knowledge across the communities you follow.</p>\
+       %s%s</div></div>"
+      scope_tabs sort_bar
+  in
+
+  (* Empty state. Following-empty keeps its two real destinations (public
+     threads + the pilot mailto) under the launch .empty idiom. *)
   let posts_html =
     if posts <> [] then
       String.concat "\n" (List.map (Components.render_forum_row ~admin_usernames ~show_context:true request user_votes) posts)
     else if scope = "following" && is_logged_in then
-      Printf.sprintf "
-        <div class='cs-empty feed-empty'>
-            <div class='fe-title'>Your feed is empty</div>
-            <p>You're not following any communities yet. Browse public threads while Earde is early, or start a pilot community.</p>
-            <div class='fe-actions'>
-                <a class='btn sm primary' href='/feed?scope=all&sort=%s'>All public threads</a>
-                <a class='btn sm' href='%s'>Start a pilot community</a>
-            </div>
-        </div>"
+      Printf.sprintf
+        "<div class='empty'>\
+         <div class='empty__title'>Your feed is empty</div>\
+         <p class='empty__body'>You're not following any communities yet. Browse public threads while Earde is early, or start a pilot community.</p>\
+         <div class='launch-empty-actions'>\
+         <a class='btn btn--secondary btn--sm' href='/feed?scope=all&sort=%s'>All public threads</a>\
+         <a class='btn btn--quiet btn--sm' href='%s'>Start a pilot community</a>\
+         </div></div>"
         sort_mode mail_pilot
     else
-      "<div class='cs-empty'>No public threads yet — once communities post, durable discussions surface here.</div>"
+      "<div class='empty'>\
+       <div class='empty__title'>No public threads yet.</div>\
+       <p class='empty__body'>Once communities post, durable discussions surface here.</p>\
+       </div>"
   in
 
   let has_next = List.length posts = 20 in
-  let scope_q = Printf.sprintf "scope=%s" scope in
-  let prev_btn = if current_page <= 1 then "" else Printf.sprintf "<a class='btn sm' href='/feed?%s&sort=%s&page=%d'>&larr; Previous</a>" scope_q sort_mode (current_page - 1) in
-  let next_btn = if not has_next then "" else Printf.sprintf "<a class='btn sm' href='/feed?%s&sort=%s&page=%d'>Next &rarr;</a>" scope_q sort_mode (current_page + 1) in
-  let pager = Printf.sprintf "<div class='cs-pager'><div>%s</div><span class='cs-pager-n'>Page %d</span><div>%s</div></div>" prev_btn current_page next_btn in
+  let prev_btn = if current_page <= 1 then "" else Printf.sprintf "<a class='btn btn--secondary btn--sm' href='/feed?scope=%s&sort=%s&page=%d'>&larr; Previous</a>" scope sort_mode (current_page - 1) in
+  let next_btn = if not has_next then "" else Printf.sprintf "<a class='btn btn--secondary btn--sm' href='/feed?scope=%s&sort=%s&page=%d'>Next &rarr;</a>" scope sort_mode (current_page + 1) in
+  let pager = Printf.sprintf "<div class='pager launch-pager'>%s<span>Page %d</span>%s</div>" prev_btn current_page next_btn in
 
-  let main = Printf.sprintf "%s<div class='cs-main-body cs-flush'><div class='feed-lane'>%s%s</div></div>" forum_head posts_html pager in
+  let content =
+    Printf.sprintf "%s<div class='scroll'><div class='container'>%s\n%s</div></div>"
+      page_head posts_html pager
+  in
 
-  (* Right rail — shell vocabulary (.ca-block / .btn), no fake metrics, no Browse-communities. *)
-  let founder_block = Printf.sprintf "
-    <div class='ca-block'>
-        <div class='ca-label'>Earde is early</div>
-        <p class='ca-note'>If you are trying to build a community here, I want to hear what works, what breaks, and what features you need next.</p>
-        <div class='ca-cta'>
-            <a class='btn sm primary block' href='%s' target='_blank' rel='noopener noreferrer'>Talk to me!</a>
-            <div class='ca-secondary-link'><a href='mailto:metacirculardispatches@gmail.com'>or email me</a></div>
-        </div>
-    </div>"
+  (* Right aside — factual static product copy + real page data only: the
+     handoff's Bring block, the existing founder/pilot contacts, and the real
+     Following list. No Atlas, no fake trends, no fabricated counts. *)
+  let bring_block =
+    "<div class='aside__block'>\
+     <div class='kicker aside__kicker'>Bring your community</div>\
+     <p class='aside__text'>Maintain an open-source project? Verify it through GitHub and give it a home on Earde.</p>\
+     <a class='btn btn--accent btn--block btn--sm' href='/bring'>Connect a project</a>\
+     </div>"
+  in
+  let founder_block = Printf.sprintf
+    "<div class='aside__block'>\
+     <div class='kicker aside__kicker'>Earde is early</div>\
+     <p class='aside__text'>If you are trying to build a community here, I want to hear what works, what breaks, and what features you need next.</p>\
+     <a class='btn btn--secondary btn--block btn--sm' href='%s' target='_blank' rel='noopener noreferrer'>Talk to me!</a>\
+     <div class='launch-aside-alt'><a href='mailto:metacirculardispatches@gmail.com'>or email me</a></div>\
+     </div>"
     founder_tg
   in
-  let pilot_block = Printf.sprintf "
-    <div class='ca-block'>
-        <div class='ca-label'>Start here</div>
-        <p class='ca-note'>Want to try Earde with your community? I can help you set it up.</p>
-        <div class='ca-cta'><a class='btn sm primary block' href='%s'>Start a pilot community</a></div>
-    </div>"
+  let pilot_block = Printf.sprintf
+    "<div class='aside__block'>\
+     <div class='kicker aside__kicker'>Start here</div>\
+     <p class='aside__text'>Want to try Earde with your community? I can help you set it up.</p>\
+     <a class='btn btn--outline-ochre btn--block btn--sm' href='%s'>Start a pilot community</a>\
+     </div>"
     mail_pilot
   in
-  (* Following mini-list — honest, no counts; shown only when the user actually follows things. *)
+  (* Following mini-list — honest, no counts; shown only when the user actually
+     follows things. Letter tiles use the shared deterministic launch palette
+     (nothing is stored per community). *)
+  let tile_glyph slug =
+    String.capitalize_ascii
+      (if String.length slug >= 2 then String.sub slug 0 2
+       else if slug = "" then "?" else slug)
+  in
   let following_block =
     if rail_communities = [] then ""
     else
       let rows = String.concat "" (List.map (fun (c : community) ->
-        Printf.sprintf "<div class='member'><a href='/c/%s'>/c/%s</a></div>" (esc c.slug) (esc c.slug)
+        Printf.sprintf
+          "<a class='navitem' href='/c/%s'><span class='avatar avatar--20' style='background:%s'>%s</span><span class='mono'>/c/%s</span></a>"
+          (esc c.slug) (Components.launch_tile_color c.slug) (esc (tile_glyph c.slug)) (esc c.slug)
       ) rail_communities) in
-      Printf.sprintf "<div class='ca-block'><div class='ca-label'>Following</div>%s</div>" rows
+      Printf.sprintf "<div class='aside__block'><div class='kicker aside__kicker'>Following</div>%s</div>" rows
   in
-  let right_pane = founder_block ^ pilot_block ^ following_block in
+  let aside = bring_block ^ founder_block ^ pilot_block ^ following_block in
 
-  Components.feed_shell ?user ~request ~rail_communities ~title:"Feed" ~main ~right_pane ()
+  Components.launch_app_page ?user ~request ~rail_communities ~aside
+    ~page_class:"launch-feed" ~title:"Feed" ~content ()
 
 (* Pure helpers for "Start thread from chat". Extracted from the handler so the
    title/body prefill, checkbox-id parsing, and channel-row marker classification are

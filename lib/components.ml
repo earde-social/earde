@@ -706,6 +706,340 @@ let launch_auth_page ?(noindex = false) ?request ~page_class ~title ~content () 
     (html_escape title) robots_meta analytics_head page_class content
     analytics_banner
 
+(* Deterministic launch-palette colour for a community tile/avatar. The
+   database stores no per-community colour, so the launch chrome derives a
+   stable presentational value from the slug alone (same slug → same colour
+   on every render, no randomness, nothing persisted). The palette is the
+   five approved Cartographic Civic community tones from the handoff
+   reference (moss / clay / ochre / slate / forest families). *)
+let launch_tile_color slug =
+  let palette = [| "#556B57"; "#A15E3B"; "#B39352"; "#4D6A73"; "#3E5143" |] in
+  let sum = ref 0 in
+  String.iter (fun c -> sum := !sum + Char.code c) slug;
+  palette.(!sum mod Array.length palette)
+
+(* The behavior script members' launch app documents carry: byte-for-byte the
+   inline script [layout] ships (confirm modal for the own-post delete form,
+   share-link copy, optimistic voting over form[action='/vote'] /
+   form[action='/vote-comment'], and the ONE-SHOT notification-badge fetch —
+   one request per page load, no polling loop). Kept as a verbatim copy so the
+   launch document preserves every DOM contract (parentElement traversal,
+   first/lastElementChild vote forms, the legacy Tailwind colour class names
+   the vote handler toggles, id='notif-badge' + the `hidden` class) without
+   touching [layout] itself. Anonymous launch documents omit it entirely: they
+   render no vote forms, no ⋯ menu and no badge, so there is nothing for it to
+   do and no /api/unread-notifs request should fire. *)
+let launch_behavior_script = {js|<script>
+        /* Custom confirmation modal: replaces native window.confirm() — the browser's
+           built-in dialog is synchronous, unstyled, and blocks the JS thread. */
+        function confirmModal(event, message) {
+          event.preventDefault();
+          const form = event.target;
+          const overlay = document.createElement('div');
+          overlay.className = 'fixed inset-0 bg-gray-900/40 backdrop-blur-sm z-50 flex items-center justify-center opacity-0 transition-opacity duration-200';
+          const modal = document.createElement('div');
+          modal.className = 'bg-white rounded-2xl shadow-xl p-6 max-w-sm w-full mx-4 transform scale-95 transition-transform duration-200';
+          modal.innerHTML = `
+            <h3 class='text-lg font-semibold text-gray-900 mb-2'>Are you sure?</h3>
+            <p class='text-sm text-gray-500 mb-6' id='modal-confirm-msg'></p>
+            <div class='flex justify-end gap-3'>
+              <button type='button' class='px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-xl hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-[#C94C4C]' id='cancel-btn'>Cancel</button>
+              <button type='button' class='px-4 py-2 text-sm font-medium text-white bg-red-600 border border-transparent rounded-xl hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-600' id='confirm-btn'>Confirm</button>
+            </div>`;
+          /* textContent prevents innerHTML XSS — message may contain user-supplied
+             usernames (e.g., ban dialog). Using textContent treats the value as
+             plain text regardless of what it contains. */
+          modal.querySelector('#modal-confirm-msg').textContent = message;
+          overlay.appendChild(modal);
+          document.body.appendChild(overlay);
+          requestAnimationFrame(() => {
+            overlay.classList.remove('opacity-0');
+            modal.classList.remove('scale-95');
+          });
+          const close = () => {
+            overlay.classList.add('opacity-0');
+            modal.classList.add('scale-95');
+            setTimeout(() => overlay.remove(), 200);
+          };
+          document.getElementById('cancel-btn').onclick = close;
+          /* form.submit() bypasses the submit event so onsubmit won't re-fire. */
+          document.getElementById('confirm-btn').onclick = () => { close(); form.submit(); };
+        }
+        /* Clipboard write is async; we optimistically swap innerHTML and class list
+           rather than disabling the button — avoids layout shift on fast connections. */
+        function copyPostLink(path, btn) {
+          var fullUrl = window.location.origin + path;
+          navigator.clipboard.writeText(fullUrl).then(function() {
+            var originalHTML = btn.innerHTML;
+            btn.innerHTML = '<svg class="w-4 h-4 mr-1 inline" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg> Copied';
+            btn.classList.add('text-emerald-600');
+            btn.classList.remove('text-gray-500', 'hover:text-gray-900');
+            setTimeout(function() {
+              btn.innerHTML = originalHTML;
+              btn.classList.remove('text-emerald-600');
+              btn.classList.add('text-gray-500', 'hover:text-gray-900');
+            }, 2000);
+          }).catch(function(err) { console.error('Failed to copy: ', err); });
+        }
+        /* Optimistic vote update: mutate DOM immediately, then fire-and-forget XHR.
+           If the request fails the server state is authoritative on next page load —
+           acceptable UX trade-off for a forum where stale scores are low-stakes. */
+        document.querySelectorAll("form[action='/vote'], form[action='/vote-comment']").forEach(form => {
+            form.addEventListener("submit", async (e) => {
+                e.preventDefault();
+                const formData = new FormData(form);
+                const urlEncodedData = new URLSearchParams(formData).toString();
+
+                fetch(form.action, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+                    body: urlEncodedData
+                });
+
+                const container = form.parentElement;
+                const scoreSpan = container.querySelector("span");
+                let score = parseInt(scoreSpan.innerText);
+
+                const upForm = container.firstElementChild;
+                /* downForm may be absent when allow_downvotes=false — guard against
+                   lastElementChild being the score <span> rather than a vote form. */
+                const lastEl = container.lastElementChild;
+                const downForm = (lastEl && lastEl.tagName === 'FORM') ? lastEl : null;
+
+                const upBtn = upForm?.querySelector("button");
+                const downBtn = downForm?.querySelector("button");
+
+                const upInput = upForm?.querySelector("input[name='direction']");
+                const downInput = downForm?.querySelector("input[name='direction']");
+
+                const action = parseInt(formData.get("direction"));
+                const isUpvoteBtn = form === upForm;
+
+                const resetColors = () => {
+                    upBtn?.classList.remove("text-orange-500");
+                    upBtn?.classList.add("text-gray-400", "hover:text-orange-500");
+                    downBtn?.classList.remove("text-[#69C3D2]");
+                    downBtn?.classList.add("text-gray-400", "hover:text-[#69C3D2]");
+                };
+
+                if (action === 1) {
+                    /* downInput===null means downvotes disabled → no prior downvote possible */
+                    if (downInput && parseInt(downInput.value) === 0) score += 2;
+                    else score += 1;
+                    resetColors();
+                    upBtn?.classList.remove("text-gray-400", "hover:text-orange-500");
+                    upBtn?.classList.add("text-orange-500");
+                    if (upInput) upInput.value = "0";
+                    if (downInput) downInput.value = "-1";
+                }
+                else if (action === -1) {
+                    if (upInput && parseInt(upInput.value) === 0) score -= 2;
+                    else score -= 1;
+                    resetColors();
+                    downBtn?.classList.remove("text-gray-400", "hover:text-[#69C3D2]");
+                    downBtn?.classList.add("text-[#69C3D2]");
+                    if (upInput) upInput.value = "1";
+                    if (downInput) downInput.value = "0";
+                }
+                else if (action === 0) {
+                    if (isUpvoteBtn) score -= 1;
+                    else score += 1;
+                    resetColors();
+                    if (upInput) upInput.value = "1";
+                    if (downInput) downInput.value = "-1";
+                }
+
+                scoreSpan.innerText = score;
+            });
+        });
+      // Notif badge polling — fires once per page load to avoid repeated DB hits
+        fetch('/api/unread-notifs')
+            .then(response => response.text())
+            .then(count => {
+                let c = parseInt(count);
+                if (c > 0) {
+                    let badge = document.getElementById('notif-badge');
+                    if (badge) {
+                        badge.innerText = c;
+                        badge.classList.remove('hidden');
+                    }
+                }
+            }).catch(e => console.log(e));
+      </script>|js}
+
+(* Cartographic Civic launch app document (pass 3: /feed only). Like the pass
+   1/2 documents, a complete self-contained page loading only earde.css — no
+   Tailwind, no external fonts, no shell.css — but with the approved full app
+   chrome: the 54px top bar (brand → /feed, a REAL /search form, viewer-state
+   actions), the dark 64px icon rail (Feed active with its bleeding marker,
+   one tile per real joined community, ＋ → /bring), the central main column,
+   and an optional right aside. Unlike the entry/auth documents it also
+   carries the desktop-only mobile gate (same stylesheet + panel as `App
+   [layout] surfaces) and, for members only, the exact [layout] behavior
+   script (optimistic voting, confirm modal, one-shot notification fetch) —
+   see [launch_behavior_script]. Community tiles keep the existing rail
+   destination (/c/:slug/ch/general) and face fallback (avatar image when it
+   passes the gate, else the 2-letter slug glyph) so the launch rail offers
+   exactly the capabilities the legacy rail does. Every link is a real route.
+   Existing wrappers ([layout], [global_shell], [feed_shell], …) and their
+   callers are untouched. *)
+let launch_app_page ?(noindex = false) ?request ?user ?(rail_communities = [])
+    ?(aside = "") ~page_class ~title ~content () =
+  let analytics_head, analytics_banner = analytics_assets ?request () in
+  let robots_meta =
+    if noindex then "<meta name='robots' content='noindex'>" else ""
+  in
+  let is_admin = match request with
+    | Some req -> (try Dream.session_field req "is_admin" = Some "true" with _ -> false)
+    | None -> false
+  in
+  let house_icon =
+    "<svg width='18' height='18' viewBox='0 0 24 24' fill='none' \
+     stroke='currentColor' stroke-width='1.7' stroke-linecap='round' \
+     stroke-linejoin='round' aria-hidden='true'><path d='M3 10.5 12 3l9 \
+     7.5'></path><path d='M5 9.5V21h14V9.5'></path></svg>"
+  in
+  let bell_icon =
+    "<svg width='16' height='16' viewBox='0 0 24 24' fill='none' \
+     stroke='currentColor' stroke-width='1.7' stroke-linecap='round' \
+     stroke-linejoin='round' aria-hidden='true'><path d='M18 8a6 6 0 0 \
+     0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9'></path><path d='M10 21h4'></path></svg>"
+  in
+  (* Same /search route + ?q= contract (and `required`) as both legacy search
+     forms; only the skin is the handoff command field. *)
+  let search_form =
+    "<form class='topbar__search-cell' action='/search' method='GET' role='search'>\
+     <div class='search'>\
+     <span class='search__sigil' aria-hidden='true'>/</span>\
+     <label class='sr-only' for='q'>Search Earde</label>\
+     <input class='search__input' id='q' type='text' name='q' required placeholder='grep threads &middot; projects &middot; communities&hellip;'>\
+     <button class='search__enter' type='submit' aria-label='Search'>&#8629;</button>\
+     </div>\
+     </form>"
+  in
+  let actions =
+    match user with
+    | Some username ->
+        let u = html_escape username in
+        (* /admin is admin-only; the handler re-checks is_admin, so the link
+           leaks nothing (same rule as render_app_topbar). *)
+        let admin_item = if is_admin then "<a href='/admin'>Admin</a>" else "" in
+        let initial =
+          if String.length username > 0
+          then html_escape (String.sub (String.uppercase_ascii username) 0 1)
+          else "?"
+        in
+        (* User menu is a pure-CSS <details>; Log out stays a POST form with
+           its existing action/semantics. The bell keeps id='notif-badge' and
+           the `hidden` class exactly where the behavior script expects them. *)
+        Printf.sprintf
+          "<a class='btn btn--outline-ochre' href='/bring' title='Connect an open-source project'>&#65291; Connect</a>\
+           <a class='bell' href='/notifications' title='Notifications' aria-label='Notifications'>%s<span id='notif-badge' class='bell__count hidden'>0</span></a>\
+           <details class='launch-user'>\
+           <summary class='userchip'><span class='avatar avatar--24'>%s</span><span class='userchip__name'>u/%s</span></summary>\
+           <div class='launch-user__menu'>\
+           <a href='/u/%s'>Profile</a>\
+           <a href='/settings'>Settings</a>\
+           <a href='/notifications'>Notifications</a>\
+           %s\
+           <form action='/logout' method='POST'><button type='submit'>Log out</button></form>\
+           </div>\
+           </details>"
+          bell_icon initial u u admin_item
+    | None ->
+        (* Anonymous cluster (04-ROUTES): no bell, no user chip, no logout,
+           and therefore no notification fetch anywhere in the document. *)
+        "<a class='btn btn--quiet' href='/bring'>Bring a project</a>\
+         <a class='btn btn--secondary btn--auth' href='/login'>Log in</a>\
+         <a class='btn btn--primary btn--auth' href='/signup'>Sign up</a>"
+  in
+  (* Same face fallback as the legacy rail's rail_glyph (defined later in
+     this file): first two slug letters, one if short, "?" if empty — only
+     capitalized here to match the approved tile face. *)
+  let tile_glyph slug =
+    let raw =
+      if String.length slug >= 2 then String.sub slug 0 2
+      else if String.length slug = 1 then slug
+      else "?"
+    in
+    String.capitalize_ascii raw
+  in
+  let tiles =
+    List.map
+      (fun (c : community) ->
+        let face =
+          match c.avatar_url with
+          | Some url when String.trim url <> "" ->
+              let src = safe_img_src url in
+              if src = "#" then html_escape (tile_glyph c.slug)
+              else Printf.sprintf "<img class='launch-rail__img' src='%s' alt=''>" src
+          | _ -> html_escape (tile_glyph c.slug)
+        in
+        Printf.sprintf
+          "<a class='rail__item rail__item--community' href='/c/%s/ch/general' title='/c/%s' style='background:%s'>%s</a>"
+          (html_escape c.slug) (html_escape c.slug) (launch_tile_color c.slug) face)
+      rail_communities
+  in
+  let divider =
+    if rail_communities = [] then "" else "<span class='rail__divider'></span>"
+  in
+  let rail =
+    Printf.sprintf
+      "<nav class='rail' aria-label='Primary'>\
+       <a class='rail__item' href='/feed' title='Feed' aria-label='Feed'><span class='rail__marker'></span>%s</a>\
+       %s%s\
+       <span class='rail__spacer'></span>\
+       <a class='rail__item rail__item--add' href='/bring' title='Connect a project' aria-label='Connect a project'>&#65291;</a>\
+       </nav>"
+      house_icon divider (String.concat "" tiles)
+  in
+  let aside_html =
+    if aside = "" then ""
+    else Printf.sprintf "<aside class='aside' aria-label='Secondary'>%s</aside>" aside
+  in
+  let behavior_script = match user with
+    | Some _ -> launch_behavior_script
+    | None -> ""
+  in
+  Printf.sprintf
+    "<!DOCTYPE html>\n\
+     <html lang='en'>\n\
+     <head>\n\
+     <meta charset='UTF-8'>\n\
+     <meta name='viewport' content='width=device-width, initial-scale=1.0'>\n\
+     <title>%s - Earde</title>\n\
+     %s\n\
+     <link rel='stylesheet' href='/static/css/earde.css'>\n\
+     %s\n\
+     %s\n\
+     </head>\n\
+     <body class='%s'>\n\
+     <div class='app'>\n\
+     <header class='topbar'>\
+     <a class='topbar__brand' href='/feed' aria-label='Earde feed'>\
+     <img class='topbar__mark' src='/static/images/logo-mark.svg' alt=''>\
+     <img class='topbar__wordmark' src='/static/images/logo-wordmark.svg' alt='Earde'>\
+     </a>\
+     %s\
+     <div class='topbar__actions'>%s</div>\
+     </header>\n\
+     <div class='shell'>\
+     %s\
+     <main class='main'>\n\
+     %s\n\
+     </main>\
+     %s\
+     </div>\n\
+     </div>\n\
+     %s\n\
+     %s\n\
+     %s\n\
+     </body>\n\
+     </html>"
+    (html_escape title) robots_meta mobile_gate_css_link analytics_head
+    page_class search_form actions rail content aside_html
+    mobile_desktop_gate analytics_banner behavior_script
+
 (* === HELPERS === *)
 
 (* "[deleted_" is set by anonymize_user in Db — both sides must agree on the tombstone format. *)

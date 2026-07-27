@@ -1191,3 +1191,241 @@ ol, ul { margin: 0; padding: 0; list-style: none; }
 .launch-auth #analytics-consent [data-analytics-error] {
   color: var(--danger); font-size: var(--fs-11);
 }
+
+/* ==========================================================================
+   EARDE INTEGRATION — /feed only
+   Scoped beneath body.launch-feed. Exists only because the real /feed page
+   cannot emit the reference markup exactly:
+   - rows come from the shared render_forum_row renderer, whose markup is a
+     load-bearing contract (optimistic-vote DOM traversal, replay-masking
+     classes .ft-title/.ft-preview, the ⋯ moderation menu, ban/remove
+     dialogs); the row is skinned here onto the approved .thread-row anatomy
+     instead of being rewritten;
+   - the optimistic-vote script toggles legacy Tailwind colour class names on
+     the vote buttons; those exact names are mapped to launch accents here;
+   - the shared confirm-modal script builds its overlay from legacy utility
+     class names (inert without Tailwind), so the overlay, card and buttons
+     are styled via their stable ids and class pairs;
+   - the notification badge is revealed by the shared script removing the
+     legacy `hidden` class; that class is honoured here on the badge element
+     only — no global .hidden utility is defined;
+   - the analytics consent banner markup is shared with the legacy layout
+     (same rules as the /bring and /login sections, re-scoped).
+   ========================================================================== */
+
+/* Top-bar user menu: pure-CSS <details>, real logout POST form inside. */
+.launch-feed .launch-user { position: relative; }
+.launch-feed .launch-user > summary { list-style: none; }
+.launch-feed .launch-user > summary::-webkit-details-marker { display: none; }
+.launch-feed .launch-user .avatar { background: var(--moss); }
+.launch-feed .launch-user__menu {
+  position: absolute; right: 0; top: calc(100% + 6px); z-index: 40;
+  min-width: 168px; display: flex; flex-direction: column;
+  background: var(--surface); border: var(--bw) solid var(--line2);
+  border-radius: var(--r-3); padding: var(--sp-3);
+  box-shadow: var(--shadow-overlay);
+}
+.launch-feed .launch-user__menu a,
+.launch-feed .launch-user__menu button {
+  display: block; width: 100%; text-align: left; background: none; border: 0;
+  font-family: var(--mono); font-size: var(--fs-12); color: var(--ink);
+  padding: var(--sp-3) var(--sp-5); border-radius: var(--r-2); cursor: pointer;
+}
+.launch-feed .launch-user__menu a:hover,
+.launch-feed .launch-user__menu button:hover { background: var(--surface2); }
+.launch-feed .launch-user__menu form {
+  margin: var(--sp-2) 0 0; padding-top: var(--sp-2);
+  border-top: var(--bw) solid var(--line);
+}
+
+/* Notification badge: hidden until the shared one-shot fetch reveals it.
+   Badge element only — deliberately NOT a global .hidden utility. */
+.launch-feed #notif-badge.hidden { display: none; }
+
+/* Rail tiles: real community avatars fill the fixed 42px tile. */
+.launch-feed .launch-rail__img {
+  width: 100%; height: 100%; object-fit: cover; border-radius: inherit;
+}
+
+/* Page-head rhythm (inline margins in reference/feed.html, as classes). */
+.launch-feed .launch-scope-tabs { margin-top: 14px; }
+.launch-feed .launch-sort-bar { margin-top: 10px; padding-bottom: 12px; }
+
+/* Feed rows: render_forum_row markup skinned onto the .thread-row anatomy. */
+.launch-feed .cs-thread {
+  display: flex; gap: var(--sp-7); padding: var(--sp-7) var(--sp-2);
+  border-bottom: var(--bw) solid var(--line);
+}
+.launch-feed .cs-thread:hover { background: var(--surface2); }
+.launch-feed .ft-main { flex: 1; min-width: 0; }
+
+/* Vote column: up form · score · optional down form (DOM order is the
+   optimistic-vote script's contract — style only, never reorder). */
+.launch-feed .cs-vote {
+  display: flex; flex-direction: column; align-items: center;
+  width: 30px; flex: none; padding-top: var(--sp-1);
+}
+.launch-feed .cs-vote form { margin: 0; padding: 0; display: flex; }
+.launch-feed .cs-vote button,
+.launch-feed .cs-vote a {
+  background: none; border: 0; cursor: pointer; padding: 0;
+  font-size: var(--fs-13); line-height: 1; color: var(--muted);
+}
+/* Asymmetric arrows: the last control is the downvote (▼ available, not
+   encouraged). */
+.launch-feed .cs-vote form:last-child button,
+.launch-feed .cs-vote a:last-child { color: var(--line2); }
+.launch-feed .cs-vote-score {
+  font-family: var(--mono); font-weight: 600; font-size: var(--fs-13);
+  color: var(--ink); margin: 3px 0;
+}
+/* Active-vote colours: the exact legacy class names the vote script toggles
+   (kept after the base arrow rules so equal specificity resolves to these). */
+.launch-feed .cs-vote form button.text-orange-500 { color: var(--clay); }
+.launch-feed .cs-vote form button.text-\[\#69C3D2\] { color: var(--slate); }
+
+/* Row context line: § section (moss 700) · /c/slug (mono muted). */
+.launch-feed .ft-ctx {
+  font-family: var(--mono); font-size: var(--fs-11); color: var(--muted);
+  display: flex; align-items: center; gap: var(--sp-4); flex-wrap: wrap;
+  margin-bottom: var(--sp-2);
+}
+.launch-feed .ft-ctx .sec { color: var(--moss); font-weight: 700; }
+.launch-feed .ft-ctx a { color: var(--moss); font-weight: 700; }
+.launch-feed .ft-ctx a.ft-ctx-c { color: var(--muted); font-weight: 400; }
+.launch-feed .ft-ctx a:hover { color: var(--ink); }
+
+.launch-feed .ft-title {
+  font-weight: 600; font-size: var(--fs-15-5); line-height: var(--lh-title);
+  text-wrap: pretty;
+}
+.launch-feed .ft-title a { color: var(--ink); }
+.launch-feed .ft-title a:hover { text-decoration: underline; }
+.launch-feed .ft-preview {
+  font-size: var(--fs-12-5); color: var(--muted); margin-top: 3px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.launch-feed .ft-meta {
+  font-family: var(--mono); font-size: var(--fs-11); color: var(--muted);
+  display: flex; align-items: center; gap: var(--sp-7); flex-wrap: wrap;
+  margin-top: 8px;
+}
+.launch-feed .ft-meta a { color: var(--muted); }
+.launch-feed .ft-meta a:hover { color: var(--ink); }
+.launch-feed .ft-domain { color: var(--slate); }
+.launch-feed .mod-badge {
+  font-family: var(--mono); font-size: var(--fs-9); color: var(--clay);
+  margin-left: 4px;
+}
+
+/* ⋯ moderation/self-action menu (admins and post authors only). */
+.launch-feed .cs-row-mod { position: relative; align-self: flex-start; }
+.launch-feed .cs-row-mod > summary {
+  list-style: none; cursor: pointer; color: var(--muted);
+  font-family: var(--mono); padding: 0 var(--sp-3); border-radius: var(--r-2);
+}
+.launch-feed .cs-row-mod > summary::-webkit-details-marker { display: none; }
+.launch-feed .cs-row-mod > summary:hover { background: var(--surface2); color: var(--ink); }
+.launch-feed .cs-row-mod-menu {
+  position: absolute; right: 0; top: calc(100% + 4px); z-index: 30;
+  display: flex; flex-direction: column; align-items: flex-start;
+  gap: var(--sp-3); min-width: 150px;
+  background: var(--surface); border: var(--bw) solid var(--line2);
+  border-radius: var(--r-3); padding: var(--sp-4);
+  box-shadow: var(--shadow-overlay);
+}
+
+/* Legacy moderation <dialog>s (Tailwind classes inert here): keep them
+   readable and usable; admin-only surface. */
+.launch-feed dialog {
+  border: var(--bw) solid var(--line2); border-radius: var(--r-4);
+  padding: var(--sp-9); max-width: 28rem; width: calc(100% - 2rem);
+  background: var(--surface); color: var(--ink);
+}
+.launch-feed dialog::backdrop { background: rgba(31, 36, 33, .45); }
+.launch-feed dialog form {
+  display: flex; flex-direction: column; gap: var(--sp-6);
+  margin-top: var(--sp-4);
+}
+.launch-feed dialog textarea {
+  width: 100%; border: var(--bw) solid var(--line2); border-radius: var(--r-2);
+  background: var(--surface2); padding: var(--sp-4);
+  font-family: var(--sans); font-size: var(--fs-13); min-height: 70px;
+}
+.launch-feed dialog button {
+  cursor: pointer; border: var(--bw) solid var(--line2);
+  border-radius: var(--r-2); background: var(--surface); color: var(--ink);
+  padding: var(--sp-3) var(--sp-7); font-size: var(--fs-12); font-weight: 600;
+}
+.launch-feed dialog button[type='submit'] {
+  color: #fff; background: var(--danger); border-color: var(--danger);
+}
+
+/* Shared confirm modal (own-post delete): the script composes it from legacy
+   utility class names; the stable .fixed.inset-0 pair and the #cancel-btn /
+   #confirm-btn ids are the hooks. */
+.launch-feed .fixed.inset-0 {
+  position: fixed; inset: 0; z-index: 50;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(31, 36, 33, .45); transition: opacity .2s;
+}
+.launch-feed .fixed.inset-0.opacity-0 { opacity: 0; }
+.launch-feed .fixed.inset-0 > div {
+  background: var(--surface); border: var(--bw) solid var(--line2);
+  border-radius: var(--r-4); padding: var(--sp-9);
+  max-width: 24rem; width: calc(100% - 2rem);
+  box-shadow: var(--shadow-overlay);
+}
+.launch-feed .fixed.inset-0 h3 { font-size: var(--fs-15); font-weight: 700; margin-bottom: var(--sp-3); }
+.launch-feed .fixed.inset-0 p { font-size: var(--fs-13); color: var(--muted); margin-bottom: var(--sp-7); }
+.launch-feed .fixed.inset-0 .flex { display: flex; justify-content: flex-end; gap: var(--sp-4); }
+.launch-feed #cancel-btn,
+.launch-feed #confirm-btn {
+  cursor: pointer; border: var(--bw) solid var(--line2);
+  border-radius: var(--r-2); background: var(--surface); color: var(--ink);
+  padding: var(--sp-3) var(--sp-7); font-size: var(--fs-12); font-weight: 600;
+}
+.launch-feed #confirm-btn { color: #fff; background: var(--danger); border-color: var(--danger); }
+
+/* Empty-state actions (real destinations kept under the launch .empty). */
+.launch-feed .launch-empty-actions {
+  display: flex; justify-content: center; gap: var(--sp-5);
+  margin-top: var(--sp-7);
+}
+
+/* Pager: mono "Page n" centred, real prev/next links beside it. */
+.launch-feed .launch-pager {
+  display: flex; align-items: center; justify-content: center; gap: var(--sp-7);
+}
+
+/* Aside: reference sets padding-left:0 on Following rows inline. */
+.launch-feed .aside .navitem { padding-left: 0; }
+.launch-feed .launch-aside-alt {
+  margin-top: var(--sp-4); font-family: var(--mono); font-size: var(--fs-11);
+  text-align: center;
+}
+
+/* Analytics consent banner (markup shared with the legacy layout). */
+.launch-feed #analytics-consent {
+  position: fixed; bottom: var(--sp-8); left: 50%; transform: translateX(-50%);
+  z-index: 50; width: calc(100% - 2rem); max-width: 28rem;
+  background: var(--surface); border: var(--bw) solid var(--line2);
+  border-radius: var(--r-3); padding: var(--sp-7) var(--sp-8);
+  box-shadow: var(--shadow-overlay);
+}
+.launch-feed #analytics-consent p {
+  font-size: var(--fs-13); color: var(--muted); margin-bottom: var(--sp-5);
+}
+.launch-feed #analytics-consent [data-analytics-accept],
+.launch-feed #analytics-consent [data-analytics-refuse] {
+  font-family: var(--sans); font-weight: 600; font-size: var(--fs-12);
+  border: var(--bw) solid var(--line2); border-radius: var(--r-2);
+  padding: var(--sp-3) var(--sp-7); cursor: pointer;
+  background: var(--surface); color: var(--muted); margin-right: var(--sp-4);
+}
+.launch-feed #analytics-consent [data-analytics-accept] {
+  color: #fff; background: var(--moss); border-color: var(--moss);
+}
+.launch-feed #analytics-consent [data-analytics-error] {
+  color: var(--danger); font-size: var(--fs-11);
+}
