@@ -81,13 +81,19 @@ let process_image_upload ~max_bytes ~resize image_bytes =
 module Rate_limit = struct
   let middleware inner_handler request =
     let ip = Dream.client request in
-    let endpoint = Dream.target request in
+    (* Path only: the rate-limit table must never persist query values (reset
+       tokens, OAuth state/code, search terms), and /login?x=y must share
+       /login's bucket rather than minting a fresh one per query string. *)
+    let endpoint = Request_target_redaction.path_only (Dream.target request) in
     match%lwt Dream.sql request (fun db -> Db.Rate_limit.check db ip endpoint) with
     | Ok `Blocked ->
         let user = Dream.session_field request "username" in
+        (* The blocked page's return link reuses the path-only endpoint: echoing
+           the full target would leak query secrets (OAuth code/state, reset
+           tokens) into the rendered HTML. *)
         Dream.html (Pages.msg_page ~auth:true ?user ~title:"Too Many Attempts"
           ~message:"Too many attempts. Please try again later."
-          ~alert_type:"error" ~return_url:(Dream.target request) request)
+          ~alert_type:"error" ~return_url:endpoint request)
     | Ok `Allowed -> inner_handler request
     | Error _ -> inner_handler request
 end
@@ -789,6 +795,15 @@ let search_handler request =
 (* === COMMUNITY === *)
 
 let new_community_page request =
+  (* Legacy generic creation is global-admin only; everyone else lands on the
+     onboarding explainer. Admins keep the pre-existing flow untouched. *)
+  match
+    Project_onboarding.legacy_creation_get_decision
+      ~is_admin:(Dream.session_field request "is_admin" = Some "true")
+  with
+  | Project_onboarding.Redirect_to_bring | Project_onboarding.Forbid ->
+      Dream.redirect request "/bring"
+  | Project_onboarding.Show_form ->
   match Dream.session_field request "user_id" with
   | None ->
       Dream.redirect request "/login"
@@ -797,6 +812,16 @@ let new_community_page request =
       Dream.html (Pages.new_community_form ?user request)
 
 let create_community_handler request =
+  (* Server-side admin gate before any form parsing, so a forged form from a
+     non-admin session (or no session) is rejected outright. *)
+  match
+    Project_onboarding.legacy_creation_post_decision
+      ~is_admin:(Dream.session_field request "is_admin" = Some "true")
+  with
+  | Project_onboarding.Forbid | Project_onboarding.Redirect_to_bring ->
+      Dream.respond ~status:`Forbidden
+        "Forbidden: community creation is restricted to Earde administrators."
+  | Project_onboarding.Show_form ->
   match Dream.session_field request "user_id" with
   | None ->
       Dream.redirect request "/login"
@@ -904,6 +929,114 @@ let create_community_handler request =
           ))
       | _ -> Dream.respond ~status:`Bad_Request (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Form Error" ~message:"Your form submission was invalid. Please try again." ~alert_type:"error" ~return_url:"/new-community" request)
 
+(* === Connected projects on the community page ===
+   The accepted project-home relations of a community, rendered inside the community page
+   the route already serves. Deliberately read only AFTER the route's own community lookup
+   and can_view_community decision have completed, so this section can never become a side
+   channel that reveals a private, draft, or otherwise unviewable community — it only adds
+   detail to a page the viewer was already entitled to see. It broadens access to nothing:
+   no GitHub authorization is consulted, and anonymous visitors to a public community see
+   exactly what any other viewer of that page sees. *)
+
+(* The read model and the page module are deliberately independent — neither depends on the
+   other — so this route is the one place the two vocabularies meet. *)
+let connected_project_page_model project =
+  let module R = Community_connected_projects_read_model in
+  let repositories =
+    List.map
+      (fun r : Community_connected_projects_pages.repository ->
+        { full_name = R.repository_full_name r;
+          html_url = R.repository_html_url r;
+          is_primary = R.repository_is_primary r;
+          is_archived = R.repository_is_archived r })
+      (R.project_repositories project)
+  in
+  let verification : Community_connected_projects_pages.verification =
+    match R.project_verification project with
+    | R.Verified -> Verified
+    | R.Stale -> Stale
+    | R.Revoked -> Revoked
+  in
+  ({ name = R.project_name project;
+     slug = R.project_slug project;
+     kind = R.project_kind project;
+     namespace_login = R.project_namespace_login project;
+     verification;
+     website_url = R.project_website_url project;
+     repositories }
+    : Community_connected_projects_pages.project)
+
+(* One generic, non-cacheable 500: no Caqti/PostgreSQL detail, error constructor, or durable
+   value reaches the page. Durable corruption is never rendered away as a quietly incomplete
+   community page. *)
+let connected_projects_error_page ?user request =
+  Dream.respond ~status:`Internal_Server_Error
+    ~headers:[ ("Cache-Control", "no-store"); ("Pragma", "no-cache") ]
+    (Pages.msg_page ?user ~title:"Error"
+       ~message:"Something went wrong on our side. Please try again."
+       ~alert_type:"error" ~return_url:"/" request)
+
+(* A slug or community that no longer resolves reuses the route's existing generic
+   unavailable response, byte-for-byte — a community that vanished between the route's own
+   lookup and this read must not become distinguishable from one that never existed. *)
+let with_connected_projects db ?user request ~community_slug k =
+  let module R = Community_connected_projects_read_model in
+  match%lwt R.load_for_community db ~community_slug with
+  | Ok projects ->
+      k
+        (Community_connected_projects_pages.connected_projects_section
+           ~projects:(List.map connected_project_page_model projects))
+  | Error (R.Invalid_community_slug | R.Community_unavailable) ->
+      community_not_found ?user request
+  | Error (R.Inconsistent_data | R.Storage_error) ->
+      connected_projects_error_page ?user request
+
+(* The private settings counterpart of [with_connected_projects]: the same read model, the
+   same generic failure responses, but rendered through the removal-pages management
+   fragment so each accepted project carries a removal form.
+
+   [authorized] is the settings surface's own top-mod/admin decision, and it gates the read
+   itself — an ordinary moderator's settings page never issues this query and never receives
+   a fragment, so the panel cannot exist for them. Rendering a form still authorizes nothing:
+   Project_home_removal_store reauthorizes every removal POST against the three durable
+   sources.
+
+   [removal_allowed] is this surface's own reading of the community it already
+   loaded: an unpublished network setup draft structurally requires its
+   provisioned home, so the section renders identities without controls. It
+   suppresses a form, never a fact, and the store stays authoritative — a forged
+   POST against a protected draft is refused there, not here. *)
+let with_settings_connected_projects db ?user request ~community_slug ~authorized
+    ~removal_allowed k =
+  let module R = Community_connected_projects_read_model in
+  if not authorized then k ""
+  else
+    match%lwt R.load_for_community db ~community_slug with
+    | Ok projects ->
+        let page_model project =
+          let verification : Project_home_removal_pages.verification =
+            match R.project_verification project with
+            | R.Verified -> Verified
+            | R.Stale -> Stale
+            | R.Revoked -> Revoked
+          in
+          ({ name = R.project_name project;
+             slug = R.project_slug project;
+             namespace_login = R.project_namespace_login project;
+             verification }
+            : Project_home_removal_pages.connected_project)
+        in
+        k
+          (Project_home_removal_pages.community_side_management_section ~request
+             ~removal_allowed ~community_slug
+             ~projects:(List.map page_model projects) ())
+    | Error (R.Invalid_community_slug | R.Community_unavailable) ->
+        community_not_found ?user request
+    | Error (R.Inconsistent_data | R.Storage_error) ->
+        (* Durable corruption is never rendered away as a quietly incomplete settings
+           page. *)
+        connected_projects_error_page ?user request
+
 let community_page_handler request =
   let slug = Dream.param request "slug" in
   let user = Dream.session_field request "username" in
@@ -958,7 +1091,10 @@ let community_page_handler request =
              let mod_usernames = List.map (fun (e: Db.moderator_entry) -> e.username) mods in
              let is_mod = user_id > 0 && List.exists (fun (e: Db.moderator_entry) -> e.user_id = user_id) mods in
              let is_top_mod = user_id > 0 && List.exists (fun (e: Db.moderator_entry) -> e.user_id = user_id && e.role = "top_mod") mods in
-             Dream.html (Pages.community_overview_page ?user ~noindex:(community_noindex community) ~is_member:m ~is_current_user_mod:is_mod ~is_current_user_top_mod:is_top_mod ~mod_usernames ~orphaned ~channels ~recent_posts community section_stats request)
+             (* Order: lookup → authorization → existing page data → connected projects →
+                render. Never before the authorization decision above. *)
+             with_connected_projects db ?user request ~community_slug:slug (fun connected_projects ->
+               Dream.html (Pages.community_overview_page ?user ~noindex:(community_noindex community) ~connected_projects ~is_member:m ~is_current_user_mod:is_mod ~is_current_user_top_mod:is_top_mod ~mod_usernames ~orphaned ~channels ~recent_posts community section_stats request))
          | _ -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:"Failed to load community sections." ~alert_type:"error" ~return_url:"/" request))
     | Ok (Some community) ->
         let%lwt authorized = can_view_community db ~user_id ~is_admin community in
@@ -980,7 +1116,10 @@ let community_page_handler request =
              let mod_usernames = List.map (fun (e: Db.moderator_entry) -> e.username) mods in
              let is_mod = user_id > 0 && List.exists (fun (e: Db.moderator_entry) -> e.user_id = user_id) mods in
              let is_top_mod = user_id > 0 && List.exists (fun (e: Db.moderator_entry) -> e.user_id = user_id && e.role = "top_mod") mods in
-             Dream.html (Pages.community_page ?user ~noindex:(community_noindex community) ~is_member:m ~is_current_user_mod:is_mod ~is_current_user_top_mod:is_top_mod ~mod_usernames ~admin_usernames ~banned_usernames ~user_communities ~moderated_communities v page sort_str community p request)
+             (* Same order as the structured branch: the connected-projects read follows the
+                authorization decision and the existing feed load. *)
+             with_connected_projects db ?user request ~community_slug:slug (fun connected_projects ->
+               Dream.html (Pages.community_page ?user ~noindex:(community_noindex community) ~connected_projects ~is_member:m ~is_current_user_mod:is_mod ~is_current_user_top_mod:is_top_mod ~mod_usernames ~admin_usernames ~banned_usernames ~user_communities ~moderated_communities v page sort_str community p request))
          | _ -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:"Failed to load community data." ~alert_type:"error" ~return_url:"/" request))
     | Ok None -> Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"Not Found" ~message:"This community does not exist." ~alert_type:"error" ~return_url:"/" request)
     | Error err -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:("Database error: " ^ err) ~alert_type:"error" ~return_url:"/" request)
@@ -1930,7 +2069,20 @@ let community_settings_handler request =
                         match%lwt Db.get_community_members db community.id with
                         | Ok m -> Lwt.return m | Error _ -> Lwt.return []
                       in
-                      Dream.html (Pages.community_settings_page ?user ~is_admin ~is_top_mod ~open_reports_count ~community ~mods ~banned_users ~members ~sections ~channels request)
+                      (* Connected-project management: loaded only after the settings
+                         authorization above succeeded, and only for the same top-mod/admin
+                         surface that already gates the project-home request queue. There is
+                         no second accepted-project query — this is the existing public
+                         read model, rendered with removal controls. *)
+                      with_settings_connected_projects db ?user request
+                        ~community_slug:community.slug
+                        ~authorized:(is_top_mod || is_admin)
+                        ~removal_allowed:
+                          (not
+                             (community.is_network_community
+                             && community.onboarding_state = Db.Community_draft))
+                        (fun connected_projects ->
+                      Dream.html (Pages.community_settings_page ?user ~connected_projects ~is_admin ~is_top_mod ~open_reports_count ~community ~mods ~banned_users ~members ~sections ~channels request))
                   | Error e -> Dream.html ("DB Error: " ^ e))
               | Error e -> Dream.html ("DB Error: " ^ e))
         | Ok None -> Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"Not Found" ~message:"This community does not exist." ~alert_type:"error" ~return_url:"/" request)
@@ -2232,6 +2384,45 @@ let modlog_handler request =
     | Error err -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:("Database error: " ^ err) ~alert_type:"error" ~return_url:"/" request)
   )
 
+(* === NETWORK-COMMUNITY LEGACY MUTATION GUARDS ===
+
+   A provisioned network community is configured only through the canonical
+   setup flow: GET /c/:slug/setup reviews the draft and the future
+   POST /c/:slug/publish commits identity and exposure together, atomically.
+   None of the legacy settings mutations below may stand in for it, and a
+   forged direct POST must fail closed *before* any write rather than
+   becoming a database CHECK violation rendered back as "Database error: …"
+   (the scoped communities_network_* constraints would otherwise echo a
+   constraint name to the client).
+
+   These guards are deliberately narrow: they test durable columns on the
+   authoritative record the handler has already loaded and authorized, they
+   never write, and a legacy (non-network) community reaches exactly the code
+   it always did. *)
+
+let is_network_setup_draft (community : Db.community) =
+  community.is_network_community
+  && community.onboarding_state = Db.Community_draft
+
+(* The canonical community-identity policy, applied to a *published* network
+   community's proposed description before the legacy detail write. The
+   policy is not restated here: the community's own stored name and slug ride
+   along so the frozen parser decides all three together, exactly as the
+   provisioning store persisted them. [Error] means fail closed — the write
+   never happens — and a canonical [Ok] value is what gets stored, so the
+   scoped database CHECK is a backstop rather than the enforcement point. *)
+let canonical_network_description (community : Db.community) ~raw_description =
+  match
+    Project_home_provisioning_form.of_fields
+      [ ("community_name", community.name);
+        ("community_slug", community.slug);
+        ("community_description", raw_description)
+      ]
+  with
+  | Ok identity ->
+      Ok (Project_home_provisioning_form.community_description identity)
+  | Error _ -> Error ()
+
 let update_community_handler request =
   match Dream.session_field request "user_id" with
   | None -> Dream.redirect request "/login"
@@ -2279,6 +2470,35 @@ let update_community_handler request =
             if not authorized then
               Dream.respond ~status:`Forbidden (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Access Denied" ~message:"You must be a moderator to perform this action." ~alert_type:"error" ~return_url:"/" request)
             else
+              (* Network-community guard, before any write. The description is
+                 canonical community identity, so a setup draft is refused
+                 outright (its identity belongs to /c/:slug/setup) and a
+                 published network community's description must satisfy the
+                 frozen canonical policy rather than reach the scoped database
+                 CHECK. A legacy community keeps exactly its previous
+                 behaviour, including the untouched no-op path when the id
+                 matches nothing. *)
+              (match%lwt Db.get_community_by_id db community_id with
+               | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Error" ~message:("Database error: " ^ e) ~alert_type:"error" ~return_url:("/c/" ^ community_slug ^ "/settings") request)
+               | Ok (Some target) when is_network_setup_draft target ->
+                   (* The generic community 404: nothing about the draft's
+                      lifecycle, identity, or authorization is disclosed, and
+                      nothing is written. *)
+                   community_not_found ?user:(Dream.session_field request "username") request
+               | Ok loaded ->
+                 let network_description =
+                   match loaded with
+                   | Some target when target.is_network_community ->
+                       canonical_network_description target
+                         ~raw_description:(get_field "description")
+                   | _ -> Ok description
+                 in
+                 match network_description with
+                 | Error () ->
+                     (* Fail closed: no write, and no constraint name, SQL, or
+                        submitted value in the response. *)
+                     Dream.respond ~status:`Bad_Request (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Form Error" ~message:"There was a problem with your submission. Please try again." ~alert_type:"error" ~return_url:("/c/" ^ community_slug ^ "/settings") request)
+                 | Ok description ->
               (match%lwt Db.update_community_details db community_id description rules avatar_url banner_url with
               | Ok (Some community) ->
                   (* UPDATE ... RETURNING supplied the authoritative updated
@@ -2294,7 +2514,7 @@ let update_community_handler request =
                      UPDATE with the same redirect; keep the response, emit
                      nothing. *)
                   Dream.redirect request ("/c/" ^ community_slug ^ "/settings")
-              | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Error" ~message:("Database error: " ^ e) ~alert_type:"error" ~return_url:("/c/" ^ community_slug ^ "/settings") request))
+              | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Error" ~message:("Database error: " ^ e) ~alert_type:"error" ~return_url:("/c/" ^ community_slug ^ "/settings") request)))
           )))
       | _ -> Dream.respond ~status:`Bad_Request (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Form Error" ~message:"Invalid form submission." ~alert_type:"error" ~return_url:"/" request)
 
@@ -2712,7 +2932,8 @@ let view_post_handler request =
         let community_for_page : Db.community = match community_res with
           | Ok (Some a) -> a
           | _ -> { id = post.community_id; slug = post.community_slug; name = post.community_slug;
-                   description = None; rules = None; avatar_url = None; banner_url = None; allow_downvotes = true; sections_enabled = false; visibility = Db.Community_public; indexable = true }
+                   description = None; rules = None; avatar_url = None; banner_url = None; allow_downvotes = true; sections_enabled = false; visibility = Db.Community_public; indexable = true;
+                   is_network_community = false; onboarding_state = Db.Community_published; discoverable = true }
         in
         let%lwt noindex = thread_noindex db community_for_page post in
         (match comments_result, is_member_result with
@@ -2817,7 +3038,8 @@ let view_thread_handler request =
           let community_for_page : Db.community = match community_res with
             | Ok (Some a) -> a
             | _ -> { id = post.community_id; slug = post.community_slug; name = post.community_slug;
-                     description = None; rules = None; avatar_url = None; banner_url = None; allow_downvotes = true; sections_enabled = false; visibility = Db.Community_public; indexable = true } in
+                     description = None; rules = None; avatar_url = None; banner_url = None; allow_downvotes = true; sections_enabled = false; visibility = Db.Community_public; indexable = true;
+                     is_network_community = false; onboarding_state = Db.Community_published; discoverable = true } in
           let%lwt noindex = thread_noindex db community_for_page post in
           match comments_result, is_member_result with
           | Ok comments, Ok is_member ->
@@ -3611,6 +3833,24 @@ let toggle_downvotes_handler request =
    regular mod hitting these POSTs directly is rejected `Forbidden, mirroring toggle_downvotes
    (top_mod || is_admin). These never change read gates or noindex behavior; they only flip the
    Slice B columns the gate/resolver already consult. *)
+
+(* Extracted so the settings flow's lifecycle decision is unit-testable without
+   Dream/DB plumbing: the handler consults exactly this, on the authoritative
+   record it just loaded, before any write. The rule itself lives in
+   Network_communities — this only maps the record's fields onto it and picks
+   the user-facing rejection copy. *)
+let visibility_update_rejection (community : Db.community) ~requested_visibility =
+  if
+    Network_communities.visibility_change_allowed
+      ~is_network_community:community.is_network_community
+      ~onboarding_state:community.onboarding_state
+      ~requested_visibility
+  then None
+  else
+    Some
+      "Published network communities must remain public. Private channels and \
+       sections may still be used."
+
 let update_community_visibility_handler request =
   let slug = Dream.param request "slug" in
   let user = Dream.session_field request "username" in
@@ -3632,12 +3872,28 @@ let update_community_visibility_handler request =
                   match%lwt Db.get_community_by_slug db slug with
                   | Ok None -> Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"Not Found" ~message:"Community not found." ~alert_type:"error" ~return_url:"/" request)
                   | Error err -> Dream.respond ~status:`Internal_Server_Error ("DB Error: " ^ err)
+                  | Ok (Some community) when is_network_setup_draft community ->
+                      (* A setup draft's visibility is not an independent
+                         switch: publication sets visibility, indexability,
+                         discoverability, and onboarding state together. This
+                         route must never publish one, and it never reveals
+                         that the community exists in that state — the same
+                         generic 404 a missing community gets, before any
+                         authorization branch or write. *)
+                      Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"Not Found" ~message:"Community not found." ~alert_type:"error" ~return_url:"/" request)
                   | Ok (Some community) ->
                       let%lwt role_res = Db.get_moderator_role db user_id community.id in
                       let is_top_mod = match role_res with Ok (Some "top_mod") -> true | _ -> false in
                       if not (is_top_mod || is_admin) then
                         Dream.respond ~status:`Forbidden (Pages.msg_page ?user ~title:"Access Denied" ~message:"Only Top Mods and admins can change visibility." ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/settings") request)
                       else
+                        match visibility_update_rejection community ~requested_visibility:visibility with
+                        | Some message ->
+                            (* Server-side lifecycle gate: a forged POST must not
+                               reach the update. `Conflict, not a redirect — the
+                               transition is refused, never silently dropped. *)
+                            Dream.respond ~status:`Conflict (Pages.msg_page ?user ~title:"Visibility unavailable" ~message ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/settings") request)
+                        | None ->
                         match%lwt Db.update_community_visibility_and_enqueue_group_cleanup db community.id visibility with
                         | Ok (Some updated, cleanup_job) ->
                             (* Visibility is a closed group property: refresh
@@ -3689,6 +3945,18 @@ let update_community_indexability_handler request =
              match%lwt Db.get_community_by_slug db slug with
              | Ok None -> Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"Not Found" ~message:"Community not found." ~alert_type:"error" ~return_url:"/" request)
              | Error err -> Dream.respond ~status:`Internal_Server_Error ("DB Error: " ^ err)
+             | Ok (Some community) when community.is_network_community ->
+                 (* Indexing on a network community is never independent: a
+                    setup draft must stay non-indexable, and a published one
+                    is either indexable *and* discoverable or neither. This
+                    route can only move [indexable], so on a network community
+                    it can only produce a state
+                    Network_communities.lifecycle_state_valid rejects. It
+                    therefore refuses both lifecycle states outright, before
+                    any authorization branch or write, with the same generic
+                    404 a missing community gets — publication owns this
+                    pair. *)
+                 Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"Not Found" ~message:"Community not found." ~alert_type:"error" ~return_url:"/" request)
              | Ok (Some community) ->
                  let%lwt role_res = Db.get_moderator_role db user_id community.id in
                  let is_top_mod = match role_res with Ok (Some "top_mod") -> true | _ -> false in

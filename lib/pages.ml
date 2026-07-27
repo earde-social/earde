@@ -13,7 +13,7 @@ let index ?user user_votes current_page sort_mode ~feed_type ~admin_usernames ~m
 
   let posts_html =
     if posts = [] then
-      "<div class='text-center py-10 text-gray-500 border border-dashed border-[#E0D9CC] rounded-xl'>It's quiet here. Too quiet. <br><a href='/new-community' class='text-[#C94C4C] underline'>Create a community</a> and start posting!</div>"
+      "<div class='text-center py-10 text-gray-500 border border-dashed border-[#E0D9CC] rounded-xl'>It's quiet here. Too quiet. <br><a href='/bring' class='text-[#C94C4C] underline'>Bring your community</a> and start posting!</div>"
     else String.concat "\n" (List.map (Components.render_post ~admin_usernames request user_votes) posts)
   in
 
@@ -56,7 +56,7 @@ let index ?user user_votes current_page sort_mode ~feed_type ~admin_usernames ~m
                 <div>%s</div><div class='text-sm text-gray-500 font-bold'>Page %d</div><div>%s</div>
             </div>
         </div>
-        <div class='w-full lg:w-1/4'><div class='bg-white p-5 rounded-xl border border-[#E0D9CC] sticky top-20'><h2 class='text-sm font-semibold text-gray-800 mb-1'>Earde</h2><p class='text-xs text-gray-500 mb-4'>Your personal frontpage.</p><div class='flex flex-col space-y-2'><a href='/new-post' class='w-full bg-[#C94C4C] text-white text-center py-2 rounded-xl font-semibold text-sm hover:bg-[#A83A3A] transition'>Create Post</a><a href='/new-community' class='w-full bg-white text-[#C94C4C] border border-[#C94C4C] text-center py-2 rounded-xl font-semibold text-sm hover:bg-[#F0EDE4] transition'>Create Community</a></div></div><div class='mt-6 bg-blue-50 border border-blue-100 rounded-xl p-4 shadow-sm'><h3 class='text-sm font-bold text-blue-900 mb-1'>Talk to me!</h3><p class='text-xs text-blue-800 mb-3 leading-relaxed'>For feature requests, ideas, critiques, if you are a Reddit mod and want to become a mod on the specular community here, or just to say hi!</p><a href='https://t.me/tolwiz' target='_blank' rel='noopener noreferrer' class='w-full flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold py-2 rounded-xl transition-colors'>&#128172; Text me (the dev)!</a></div></div>
+        <div class='w-full lg:w-1/4'><div class='bg-white p-5 rounded-xl border border-[#E0D9CC] sticky top-20'><h2 class='text-sm font-semibold text-gray-800 mb-1'>Earde</h2><p class='text-xs text-gray-500 mb-4'>Your personal frontpage.</p><div class='flex flex-col space-y-2'><a href='/new-post' class='w-full bg-[#C94C4C] text-white text-center py-2 rounded-xl font-semibold text-sm hover:bg-[#A83A3A] transition'>Create Post</a><a href='/bring' class='w-full bg-white text-[#C94C4C] border border-[#C94C4C] text-center py-2 rounded-xl font-semibold text-sm hover:bg-[#F0EDE4] transition'>Connect a project</a></div></div><div class='mt-6 bg-blue-50 border border-blue-100 rounded-xl p-4 shadow-sm'><h3 class='text-sm font-bold text-blue-900 mb-1'>Talk to me!</h3><p class='text-xs text-blue-800 mb-3 leading-relaxed'>For feature requests, ideas, critiques, if you are a Reddit mod and want to become a mod on the specular community here, or just to say hi!</p><a href='https://t.me/tolwiz' target='_blank' rel='noopener noreferrer' class='w-full flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold py-2 rounded-xl transition-colors'>&#128172; Text me (the dev)!</a></div></div>
     </div>"
     sidebar_html feed_title feed_tabs sort_menu posts_html prev_btn current_page next_btn
   in
@@ -331,7 +331,11 @@ let new_community_form ?user request =
   in
   Components.create_page ?user ~request ~title:"New Community" ~body:content ()
 
-let community_page ?user ?(noindex=false) ?section:(section : community_section option) ~is_member ~is_current_user_mod ~is_current_user_top_mod ~mod_usernames ~admin_usernames ~banned_usernames ~user_communities ~moderated_communities user_votes current_page sort_mode (community : community) (posts : post list) request =
+(* [connected_projects] is the pre-rendered Connected-projects fragment supplied by the
+   community route (Community_connected_projects_pages), or "" when the community has no
+   accepted project home — and always "" on the section feeds, which are not /c/:slug.
+   Defaulting to "" keeps every existing caller unchanged. *)
+let community_page ?user ?(noindex=false) ?(connected_projects="") ?section:(section : community_section option) ~is_member ~is_current_user_mod ~is_current_user_top_mod ~mod_usernames ~admin_usernames ~banned_usernames ~user_communities ~moderated_communities user_votes current_page sort_mode (community : community) (posts : post list) request =
   let csrf_token = Dream.csrf_tag request in
   let is_admin = Dream.session_field request "is_admin" = Some "true" in
   let has_next = List.length posts = 20 in
@@ -557,6 +561,7 @@ let community_page ?user ?(noindex=false) ?section:(section : community_section 
                     %s
                     %s
                     %s
+                    %s
                 </div>
             </div>
         </div>
@@ -568,7 +573,7 @@ let community_page ?user ?(noindex=false) ?section:(section : community_section 
     create_post_btn settings_btn membership_btn
     (section_header ^ sort_menu) posts_html
     prev_btn current_page next_btn
-    community_info_card rules_card mods_card toggle_downvotes_card
+    community_info_card rules_card mods_card toggle_downvotes_card connected_projects
   in
   Components.layout ?user ~noindex ~request ~analytics_community:(community.id, community.visibility)
     ~title:community.name content
@@ -1823,7 +1828,9 @@ let thread_shell_page ?user ?(noindex=false) ~is_member ~is_current_user_mod ~mo
    no created_at, because Db.community carries neither. SSR-only: every link/form works with JS
    off. Public presentation only — management (downvotes, mods, sections, bans) lives in
    /c/:slug/settings; the only management affordance here is the gated "Edit community" link. *)
-let community_overview_page ?user ?(noindex=false) ~is_member ~is_current_user_mod ~is_current_user_top_mod
+(* [connected_projects]: see community_page — the same pre-rendered fragment, supplied by the
+   same /c/:slug route after its existing authorization, and "" when there is nothing to show. *)
+let community_overview_page ?user ?(noindex=false) ?(connected_projects="") ~is_member ~is_current_user_mod ~is_current_user_top_mod
     ~mod_usernames ~orphaned ~(channels : channel list) ~(recent_posts : post list)
     (community : community) (section_stats : (community_section * int * string option) list) request =
   let csrf_token = Dream.csrf_tag request in
@@ -2071,7 +2078,7 @@ let community_overview_page ?user ?(noindex=false) ~is_member ~is_current_user_m
     <div class='ch-wrap'>
       <div class='ch-grid'>
         <div>%s%s%s</div>
-        <div>%s%s%s</div>
+        <div>%s%s%s%s</div>
       </div>
     </div>
   </section>
@@ -2084,13 +2091,19 @@ let community_overview_page ?user ?(noindex=false) ~is_member ~is_current_user_m
     channel_count (plural channel_count)
     primary_cta membership_btn settings_btn
     channels_block sections_block recent_block
-    rules_panel mods_panel modlog_card
+    rules_panel mods_panel modlog_card connected_projects
   in
   Components.community_home_page ?user ~noindex ~request
     ~analytics_community:(community.id, community.visibility) ~title:community.name
     ~body:(Components.private_replay_guard ~community content) ()
 
-let community_settings_page ?user ~is_admin ~is_top_mod ~open_reports_count ~(community : community) ~(mods : user list) ~(banned_users : user list) ~(members : user list) ~(sections : community_section list) ~(channels : Db.channel list) request =
+(* [connected_projects] is the pre-rendered "Connected projects" management fragment
+   (Project_home_removal_pages.community_side_management_section) supplied by the settings
+   route, or "" when the viewer is not on the top-mod/admin surface — the route never loads
+   the read model for anyone else, and this page never loads it at all. An empty fragment
+   also removes the panel from the navigation, so no ordinary moderator can reach an empty
+   management surface by typing ?panel=projects. *)
+let community_settings_page ?user ?(connected_projects="") ~is_admin ~is_top_mod ~open_reports_count ~(community : community) ~(mods : user list) ~(banned_users : user list) ~(members : user list) ~(sections : community_section list) ~(channels : Db.channel list) request =
   let csrf_token = Dream.csrf_tag request in
   let esc = Components.html_escape in
   let slug = esc community.slug in
@@ -2103,14 +2116,68 @@ let community_settings_page ?user ~is_admin ~is_top_mod ~open_reports_count ~(co
      at a time. The selected panel comes from ?panel=…; unknown or missing values fall
      back to visibility. Pure server-side rendering — each nav link is a normal GET back
      to this same route with a different query value. *)
+  (* The connected-projects panel exists only when the route supplied its fragment, which it
+     does only for the top-mod/admin surface. Anyone else asking for ?panel=projects falls
+     back to visibility exactly like any unknown value. *)
+  let has_connected_projects = connected_projects <> "" in
   let panel =
     match Dream.query request "panel" with
+    | Some "projects" when has_connected_projects -> "projects"
     | Some ("profile" | "channels" | "members" | "moderation" | "bans" as p) -> p
     | _ -> "visibility"
   in
 
   let is_private = community.visibility = Db.Community_private in
   let can_edit_vis = is_top_mod || is_admin in
+
+  (* Network-community lifecycle state. A provisioned setup draft is not
+     configured through the legacy settings controls: its identity,
+     visibility, indexing, and discovery are all decided at once by the
+     canonical publication flow, and the matching legacy POST routes now
+     refuse a network community outright. Rendering controls that the server
+     would reject would be a lie, so they are replaced by a pointer to the
+     canonical surface. *)
+  let is_network_draft =
+    community.is_network_community
+    && community.onboarding_state = Db.Community_draft
+  in
+  (* The scoped network-slug grammar the database enforces on every network
+     row. Defensive: a slug outside it never becomes a setup link. *)
+  let canonical_network_slug value =
+    let n = String.length value in
+    let is_slug_char c = (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') in
+    n >= 1 && n <= 80
+    && value.[0] <> '-'
+    && value.[n - 1] <> '-'
+    &&
+    let rec ok i =
+      i >= n
+      ||
+      if is_slug_char value.[i] then ok (i + 1)
+      else value.[i] = '-' && value.[i + 1] <> '-' && ok (i + 1)
+    in
+    ok 0
+  in
+  (* The setup surface independently reauthorizes (current top_mod of this
+     community, or a durable users.is_admin holder), so this only decides
+     whether the affordance is worth showing on a surface that already knows
+     the answer for the common cases. *)
+  let can_complete_setup =
+    is_network_draft && can_edit_vis && canonical_network_slug community.slug
+  in
+  let setup_pointer_note =
+    if not can_complete_setup then
+      "<p class='cm-muted-note'>This community is still a setup draft. Its \
+       identity and publication are decided together by an authorized \
+       publisher.</p>"
+    else
+      Printf.sprintf
+        "<p class='cm-muted-note'>This community is still a private setup \
+         draft. Its name, address, description, visibility, and discovery are \
+         decided together when you <a href='/c/%s/setup'>complete setup and \
+         publish</a>.</p>"
+        slug
+  in
 
   let stat label cls value =
     Printf.sprintf
@@ -2190,7 +2257,8 @@ let community_settings_page ?user ~is_admin ~is_top_mod ~open_reports_count ~(co
         "<p class='cm-panel-desc'>This community is public by link, but <strong>excluded from the public feed, search, and discovery</strong>, and marked <code>noindex</code>.</p>"
     in
     let visibility_control =
-      if not can_edit_vis then ""
+      if is_network_draft then setup_pointer_note
+      else if not can_edit_vis then ""
       else
         (* Segmented submit control: each segment is its own one-input POST form to the
            existing route, so the control stays fully server-rendered. Clicking the
@@ -2208,7 +2276,17 @@ let community_settings_page ?user ~is_admin ~is_top_mod ~open_reports_count ~(co
           (seg "private" "Private" is_private)
     in
     let indexable_control =
-      if not can_edit_vis then ""
+      (* Indexing on a network community is not an independent switch: the
+         published shapes are "indexable and discoverable" or neither, and
+         the legacy route can only move one of the two. It refuses a network
+         community for exactly that reason, so no control is offered. *)
+      if community.is_network_community then
+        if is_network_draft then ""
+        else
+          "<p class='cm-muted-note' style='margin-top:12px'>Discovery for this \
+           community follows the Public or Unlisted choice made when it was \
+           published.</p>"
+      else if not can_edit_vis then ""
       else if is_private then
         (* No actionable indexability control while private; surface the stored flag as
            inactive copy so it doesn't look clickable. *)
@@ -2266,6 +2344,19 @@ let community_settings_page ?user ~is_admin ~is_top_mod ~open_reports_count ~(co
     | _ -> "<div class='cm-asset'><span class='cm-asset-note'>No banner uploaded yet.</span></div>"
   in
   let profile_panel =
+    if is_network_draft then
+      (* The legacy multipart route writes the description straight to the
+         community row; for a setup draft that is a canonical-identity edit
+         outside the publication flow, and the route now refuses it. No form
+         is rendered rather than one the server would reject. *)
+      Printf.sprintf "
+      <section class='cm-panel'>
+        <h2 class='cm-panel-title'>Profile</h2>
+        <p class='cm-panel-desc'>Description, rules, and imagery shown on the public community page.</p>
+        %s
+      </section>"
+        setup_pointer_note
+    else
     Printf.sprintf "
       <section class='cm-panel'>
         <h2 class='cm-panel-title'>Profile</h2>
@@ -2673,12 +2764,25 @@ let community_settings_page ?user ~is_admin ~is_top_mod ~open_reports_count ~(co
       csrf_token community.id banned_section
   in
 
+  (* Already-escaped, form-bearing HTML from the pure removal-pages module; this page adds
+     only the panel chrome and never inspects, rewrites, or re-escapes it. *)
+  let projects_panel =
+    Printf.sprintf
+      "<section class='cm-panel'>
+        <h2 class='cm-panel-title'>Connected projects</h2>
+        <p class='cm-panel-desc'>Open-source projects that use this community as their Earde home.</p>
+        %s
+      </section>"
+      connected_projects
+  in
+
   let main_panel =
     match panel with
     | "profile" -> profile_panel
     | "channels" -> channels_panel
     | "members" -> members_panel
     | "moderation" -> moderation_panel
+    | "projects" -> projects_panel
     | "bans" -> bans_panel
     | _ -> visibility_panel
   in
@@ -2690,6 +2794,41 @@ let community_settings_page ?user ~is_admin ~is_top_mod ~open_reports_count ~(co
     Printf.sprintf "<a class='cm-index-link%s%s' href='/c/%s/settings?panel=%s'>%s</a>"
       danger_cls active_cls slug key label
   in
+  (* Project home requests queue: a normal GET link to the dedicated
+     moderator route (its own handler + read model still authorize). Shown
+     only on the top-mod/admin surface — regular mods, whom this page
+     already knows are unauthorized for the queue, never see it. No badge or
+     pending count, no form, no community id. The URL is built structurally
+     from the canonical (escaped) slug, matching the other nav links. *)
+  let project_home_requests_link =
+    if is_top_mod || is_admin then
+      Printf.sprintf
+        "<a class='cm-index-link' href='/c/%s/project-home-requests'>Project home requests</a>"
+        slug
+    else ""
+  in
+  (* Connected projects: an ordinary panel nav entry, present only when the route supplied
+     the management fragment (top-mod/admin surface). Regular mods, whom this page already
+     knows are unauthorized for project-home moderation, never see it. *)
+  let connected_projects_nav =
+    if has_connected_projects then nav_item "projects" "Connected projects" else ""
+  in
+  (* Complete setup and publish: a normal GET link to the dedicated setup
+     route, which independently reauthorizes (current top_mod of this
+     community, or a durable users.is_admin holder) and independently
+     re-checks the draft lifecycle. Shown only on a network setup draft's
+     top-mod/admin surface — legacy communities, already-published network
+     communities, ordinary members, mods, and legacy_mods never see it. No
+     form, no community id, no lifecycle detail; the URL is built
+     structurally from the canonical (escaped) slug, matching the other nav
+     links. *)
+  let setup_publish_link =
+    if can_complete_setup then
+      Printf.sprintf
+        "<a class='cm-index-link' href='/c/%s/setup'>Complete setup and publish</a>"
+        slug
+    else ""
+  in
   let content = Printf.sprintf "
     <div class='cm-wrap cm-wrap--settings'>
       <div class='cm-head'>
@@ -2700,7 +2839,7 @@ let community_settings_page ?user ~is_admin ~is_top_mod ~open_reports_count ~(co
       <div class='cm-cols'>
         <nav class='cm-index'>
           <div class='cm-index-title'>Settings</div>
-          %s%s%s%s%s%s
+          %s%s%s%s%s%s%s%s%s
         </nav>
         <div class='cm-main'>
           %s
@@ -2708,11 +2847,14 @@ let community_settings_page ?user ~is_admin ~is_top_mod ~open_reports_count ~(co
       </div>
     </div>"
     slug slug
+    setup_publish_link
     (nav_item "visibility" "Visibility &amp; discovery")
     (nav_item "profile" "Profile")
     (nav_item "channels" "Channels &amp; sections")
     (nav_item "members" "Members")
     (nav_item "moderation" "Moderation")
+    connected_projects_nav
+    project_home_requests_link
     (nav_item ~danger:true "bans" "Bans")
     main_panel
   in
@@ -2886,7 +3028,7 @@ let choose_community_page ?user (communities : community list) =
         </div>
 
         <div class='create-foot'>
-            Can't find the right place? <a href='/new-community' class='create-link'>Start a community</a>
+            Can't find the right place? <a href='/bring' class='create-link'>Connect a project</a>
         </div>
       </div>
     </div>"
@@ -4373,30 +4515,95 @@ let settings_page ?user bio avatar_url request =
 let notifications_page ?user (notifs : Db.notification list) request =
   let render_notif (n : Db.notification) =
     let unread_class = if n.is_read then "" else " account-notif--unread" in
+    (* Project-home notifications are structured: no stored prose, so the
+       label and destination derive from the durable kind and the joined
+       current project/community identity. Names and slugs are escaped at
+       this template boundary; destinations are built structurally from
+       the joined slugs (never from anything browser-supplied), and each
+       destination page enforces its own authorization. The actor is
+       deliberately absent from the copy, so a deleted actor renders
+       identically. Should a joined identity be missing mid-race (the
+       subject FKs cascade), the row degrades to a generic unlinked line
+       rather than inventing names. *)
+    let project_home_label_link =
+      match n.notif_type with
+      | "project_home_requested" | "project_home_accepted"
+      | "project_home_rejected" | "project_home_removed" -> (
+          match (n.project_name, n.project_slug, n.community_name, n.community_slug) with
+          | Some project_name, Some project_slug, Some community_name, Some community_slug ->
+              let p = Components.html_escape project_name in
+              let c = Components.html_escape community_name in
+              let label, href =
+                match n.notif_type with
+                | "project_home_requested" ->
+                    ( Printf.sprintf "%s requested %s as its community home" p c,
+                      Printf.sprintf "/c/%s/project-home-requests" (Components.html_escape community_slug) )
+                | "project_home_accepted" ->
+                    ( Printf.sprintf "%s accepted the community-home request for %s" c p,
+                      Printf.sprintf "/projects/%s/request-home" (Components.html_escape project_slug) )
+                | "project_home_rejected" ->
+                    ( Printf.sprintf "%s rejected the community-home request for %s" c p,
+                      Printf.sprintf "/projects/%s/request-home" (Components.html_escape project_slug) )
+                | _ ->
+                    (* Removal is the one kind whose recipients span BOTH
+                       sides: the removal store notifies every project
+                       steward and every community top moderator (minus the
+                       actor). A steward-only destination would 404 for the
+                       moderators, so this points at the community's own
+                       page — reachable by a top moderator always, and by a
+                       steward for exactly the published (public/unlisted)
+                       communities a home can be removed from. Its
+                       Connected-projects section is also where the removal
+                       is actually visible to either side. *)
+                    ( Printf.sprintf "%s is no longer connected to %s as its home" p c,
+                      Printf.sprintf "/c/%s" (Components.html_escape community_slug) )
+              in
+              Some (label, Some href)
+          | _ -> Some ("A project community-home update", None))
+      | _ -> None
+    in
+    let message = Option.value n.message ~default:"" in
     let icon = match n.notif_type with
       | "mention"    -> "&#64;"   (* @ symbol — avoids mojibake in Printf *)
       | "mod_action" -> "&#9888;" (* ⚠ warning sign *)
+      | "project_home_requested" | "project_home_accepted"
+      | "project_home_rejected" | "project_home_removed" -> "&#127968;" (* 🏠 *)
       | _ ->
           (* Legacy comment_reply: distinguish post vs comment reply by message suffix. *)
-          let len = String.length n.message in
-          if len >= 5 && String.sub n.message (len - 5) 5 = "post." then "&#128221;" (* 📝 *)
+          let len = String.length message in
+          if len >= 5 && String.sub message (len - 5) 5 = "post." then "&#128221;" (* 📝 *)
           else "&#128172;" (* 💬 *)
+    in
+    (* Project-home labels are built above from already-escaped parts;
+       legacy prose is escaped here. *)
+    let msg_html =
+      match project_home_label_link with
+      | Some (label, _) -> label
+      | None -> Components.html_escape message
     in
     let inner = Printf.sprintf "
         <div class='account-notif-icon'>%s</div>
         <div class='account-notif-body'>
             <div class='account-notif-msg'>%s</div>
             <div class='account-notif-time'>%s</div>
-        </div>" icon (Components.html_escape n.message) (Components.time_ago n.created_at)
+        </div>" icon msg_html (Components.time_ago n.created_at)
     in
-    (* Mod-action notifications without a post link render as non-clickable divs.
+    let link =
+      match project_home_label_link with
+      | Some (_, link) -> link
+      | None -> (
+          match n.post_id with
+          | Some pid -> Some (Printf.sprintf "/p/%d" pid)
+          | None -> None)
+    in
+    (* Notifications without a destination render as non-clickable divs.
        Read state is already persisted server-side on page load (Db.mark_notifs_read);
        the onclick is a purely cosmetic clear of the unread accent on this visit. *)
-    match n.post_id with
-    | Some pid ->
+    match link with
+    | Some href ->
         Printf.sprintf "
-    <a href='/p/%d' onclick=\"this.classList.remove('account-notif--unread');\" class='account-notif%s'>%s
-    </a>" pid unread_class inner
+    <a href='%s' onclick=\"this.classList.remove('account-notif--unread');\" class='account-notif%s'>%s
+    </a>" href unread_class inner
     | None ->
         Printf.sprintf "
     <div class='account-notif%s'>%s

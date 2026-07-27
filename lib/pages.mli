@@ -13,7 +13,7 @@ val reset_password_page : token:string -> ?error:string -> Dream.request -> stri
 
 (** === COMMUNITY === *)
 val new_community_form : ?user:string -> Dream.request -> string
-val community_page : ?user:string -> ?noindex:bool -> ?section:Db.community_section -> is_member:bool -> is_current_user_mod:bool -> is_current_user_top_mod:bool -> mod_usernames:string list -> admin_usernames:string list -> banned_usernames:string list -> user_communities:Db.community list -> moderated_communities:Db.community list -> (int * int) list -> int -> string -> Db.community -> Db.post list -> Dream.request -> string
+val community_page : ?user:string -> ?noindex:bool -> ?connected_projects:string -> ?section:Db.community_section -> is_member:bool -> is_current_user_mod:bool -> is_current_user_top_mod:bool -> mod_usernames:string list -> admin_usernames:string list -> banned_usernames:string list -> user_communities:Db.community list -> moderated_communities:Db.community list -> (int * int) list -> int -> string -> Db.community -> Db.post list -> Dream.request -> string
 val community_section_shell_page : ?user:string -> ?noindex:bool -> ?thread_count:int -> ?last_activity:string -> is_current_user_mod:bool -> mod_usernames:string list -> admin_usernames:string list -> banned_usernames:string list -> rail_communities:Db.community list -> channels:Db.channel list -> sections:Db.community_section list -> section:Db.community_section -> user_votes:(int * int) list -> current_page:int -> sort_mode:string -> community:Db.community -> posts:Db.post list -> Dream.request -> string
 
 (** [/feed] — global Feed surface. [scope] is "following" | "all"; logged-out callers must pass
@@ -36,8 +36,11 @@ type thread_source_view =
     Shell-styled comments/composer; mod/admin/ban dialogs preserve post_page behavior verbatim.
     Preserves the optimistic-vote DOM contract and all comment/vote/mod/delete routes & CSRF. *)
 val thread_shell_page : ?user:string -> ?noindex:bool -> is_member:bool -> is_current_user_mod:bool -> mod_usernames:string list -> admin_usernames:string list -> banned_usernames:string list -> rail_communities:Db.community list -> channels:Db.channel list -> sections:Db.community_section list -> community:Db.community -> ?thread_source:thread_source_view -> user_post_votes:(int * int) list -> user_comment_votes:(int * int) list -> post:Db.post -> comments:Db.comment list -> Dream.request -> string
-val community_overview_page : ?user:string -> ?noindex:bool -> is_member:bool -> is_current_user_mod:bool -> is_current_user_top_mod:bool -> mod_usernames:string list -> orphaned:(int * string option) -> channels:Db.channel list -> recent_posts:Db.post list -> Db.community -> (Db.community_section * int * string option) list -> Dream.request -> string
-val community_settings_page : ?user:string -> is_admin:bool -> is_top_mod:bool -> open_reports_count:int -> community:Db.community -> mods:Db.user list -> banned_users:Db.user list -> members:Db.user list -> sections:Db.community_section list -> channels:Db.channel list -> Dream.request -> string
+val community_overview_page : ?user:string -> ?noindex:bool -> ?connected_projects:string -> is_member:bool -> is_current_user_mod:bool -> is_current_user_top_mod:bool -> mod_usernames:string list -> orphaned:(int * string option) -> channels:Db.channel list -> recent_posts:Db.post list -> Db.community -> (Db.community_section * int * string option) list -> Dream.request -> string
+(** [connected_projects] is the pre-rendered "Connected projects" management fragment for the
+    top-mod/admin settings surface (empty for every other viewer, which also removes the panel
+    and its navigation entry). *)
+val community_settings_page : ?user:string -> ?connected_projects:string -> is_admin:bool -> is_top_mod:bool -> open_reports_count:int -> community:Db.community -> mods:Db.user list -> banned_users:Db.user list -> members:Db.user list -> sections:Db.community_section list -> channels:Db.channel list -> Dream.request -> string
 val manage_mods_page : ?user:string -> is_admin:bool -> current_user_role:string option -> community:Db.community -> mods:Db.moderator_entry list -> Dream.request -> string
 
 (** === POST === *)

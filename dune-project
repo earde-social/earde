@@ -14,5 +14,6 @@
   (lwt_ppx (>= 2.1.0))
   (argon2 (>= 1.0.0))
   cohttp-lwt-unix
+  digestif
   (alcotest :with-test)
  ))

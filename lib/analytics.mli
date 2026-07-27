@@ -1,4 +1,4 @@
-(** PostHog server-side analytics (spec: docs/features/posthog-analytics.md §3.1).
+(** PostHog server-side analytics.
 
     Consent is enforced by construction: the only capture path for domain
     events is [capture_if_consented], which requires the Dream request and
@@ -60,6 +60,30 @@ type community_group = {
 }
 
 type response_mode = Response_json | Response_redirect
+
+(** The moderator's closed verdict on a hosted-home request, mapped at the
+    review handler from its route-derived decision. Deliberately an
+    analytics-local closed type: this module never depends on a transactional
+    store, and no third "unknown" spelling can be represented. *)
+type review_decision = Review_accepted | Review_rejected
+
+(** Which of the two removal routes emitted the request — product surface
+    only. Deliberately NOT the authorization source: the removal store admits
+    a project steward, a community top moderator, or a durable admin from
+    EITHER route, so exporting which applied would leak durable role state.
+    The value comes from the registered route, never inferred from roles. *)
+type removal_surface = Removal_project_route | Removal_community_route
+
+(** The committed exposure of a published network community. Deliberately
+    analytics-local rather than a re-export of
+    [Network_community_publication_form.publication_visibility]: that module
+    sits below the legacy [Db] macro-module in the dependency graph and would
+    make analytics part of a cycle. The publication handler maps the store's
+    closed value onto this one exhaustively, so a new domain constructor
+    breaks the build rather than silently degrading. Like the domain type it
+    has no [Private] constructor — a published network community is always
+    reachable, and [Private] is unrepresentable here by construction. *)
+type publication_visibility = Published_public | Published_unlisted
 
 (** Closed domain-event model (§3.2/§5.1). The compiler enforces the property
     allowlist: handlers cannot attach arbitrary properties, bodies, titles,
@@ -123,6 +147,70 @@ type event =
       (** personless aggregate deletion counter (§3.3): no user_id, no person
           [$set], no group — emitted with [$process_person_profile]=false and
           the constant [account_deletion_distinct_id], never a user identity *)
+  (** {2 GitHub-anchored project and community-home funnels}
+
+      Every constructor below is deliberately identifier-poor. None can carry
+      a GitHub installation, account or repository id, a login or namespace, a
+      repository name or URL, a project or community name or slug, an OAuth
+      state or code, PKCE material, a request or review note, a description,
+      or a form value — the closed variant makes those unrepresentable. The
+      only durable identifiers any of them carries are the acting user
+      (already the distinct id) and, where an existing public store accessor
+      supplies it, the permanent Earde project id.
+
+      Each is captured by exactly one handler branch, after the relevant
+      store has committed and returned [Ok] — never between a mutation, its
+      audit insertion, its notification insertion, and the commit. *)
+
+  | Github_app_install_started of { user_id : int }
+      (** the authenticated, rollout- and origin-authorized start of a GitHub
+          App installation: the durable onboarding state row has committed and
+          the valid GitHub redirect is about to be issued. A rejected or
+          unconfigured start attempt produces nothing. *)
+  | Github_app_installed of { user_id : int }
+      (** the OAuth callback completed: the callback state was validated and
+          consumed, the installation was verified against the GitHub user, and
+          the installation record plus the refreshed verified draft committed.
+          Installation id, account id and login stay behind in the handler. *)
+  | Github_repositories_selected of { user_id : int; repository_count : int }
+      (** the user's selected-repository set was durably accepted. Carries the
+          submitted set's size only — never repository names, full names,
+          GitHub ids, or URLs. The count is [0] when a selection was
+          deliberately cleared, which is still a committed transition. *)
+  | Github_project_created of {
+      user_id : int;
+      project_id : int64;
+          (** the permanent [open_source_projects] row id, from the existing
+              public [Project_finalization_store.project_id] accessor *)
+      project_kind : Project_identity.kind;
+      repository_count : int;
+    }
+      (** permanent project finalization committed. The anchor event of both
+          community-home funnels. *)
+  | Dedicated_home_provisioned of { user_id : int }
+      (** [Project_home_provisioning_store.provision] committed: the private
+          setup draft, its initial role/shell, the accepted home relation and
+          the audit event all exist. Deliberately NOT named
+          "community_published" — nothing is public yet. *)
+  | Network_community_published of {
+      user_id : int;
+      publication_visibility : publication_visibility;
+          (** the committed exposure, read back from the store result. The
+              closed type has no [Private] constructor, so a private
+              publication is unrepresentable. *)
+    }
+  | Project_home_request_submitted of { user_id : int }
+      (** the pending existing-community request, its audit event and its
+          notifications committed. *)
+  | Project_home_request_reviewed of {
+      user_id : int;
+          (** the REVIEWING moderator — deliberately not the requesting
+              steward, who is a different person *)
+      decision : review_decision;
+    }
+  | Project_home_removed of { user_id : int; removal_surface : removal_surface }
+      (** an accepted home became removed. Protected draft-removal attempts
+          and replayed removals produce nothing. *)
 
 (** ["user:<database_id>"] — the §4.1 authenticated distinct-ID scheme. *)
 val distinct_id_of_user_id : int -> string
@@ -134,7 +222,18 @@ val account_deletion_distinct_id : string
 
 (** ["community:<database_id>"] — the §5.3 stable group key (the immutable
     numeric id, never the mutable slug). Used by server payloads and by the
-    browser group attribute rendered in the layout. *)
+    browser group attribute rendered in the layout.
+
+    "community" remains the project's ONLY PostHog group type. A second
+    "project" group type was considered for the hosted-home funnel, which
+    crosses two people (a steward submits, a moderator reviews), and
+    deliberately not added: the five community-home lifecycle stores return
+    payload-free results or a canonical slug, so no handler at those success
+    boundaries can reach a project id through an existing safe accessor, and
+    recovering one would mean either reopening store representations or
+    running handler-side SQL purely for analytics. The consequence is
+    documented in {!docs/features/posthog-analytics.md}: the review step
+    cannot be part of a person funnel. *)
 val community_group_key : int -> string
 
 (** PostHog group_type_index of the "community" group type — the project's

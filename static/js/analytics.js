@@ -1,4 +1,4 @@
-/* PostHog browser integration (spec: docs/features/posthog-analytics.md §2/§6/§9).
+/* PostHog browser integration.
  *
  * This local file loads on every layout page, but connects to PostHog only
  * AFTER analytics consent is granted: no SDK download, no preconnect, no

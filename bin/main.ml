@@ -40,55 +40,16 @@ let () =
      | None -> ());
     handler request
   in
-  (* Private per-request slot holding the ORIGINAL (unredacted) target. Redaction
-     stashes it here before overwriting the target, and restore_token_target_middleware
-     puts it back for the route handlers. Without this, token=[REDACTED] reaches
-     Dream.query and silently breaks every token GET route (/verify, /reset-password,
-     /confirm-email). *)
-  let original_target_field : string Dream.field = Dream.new_field ~name:"earde.raw_target" () in
-  (* Mutates the request target before Dream.logger and analytics_middleware read it,
-     replacing token=<value> with token=[REDACTED] so raw tokens never appear in access
-     logs or page_views. Dream.set_target is internal; we reach it via dream-pure's
-     Message module, which is the same mutable record Dream.target reads. *)
-  let redact_token_middleware handler request =
-    let target = Dream.target request in
-    let needle = "token=" in
-    let nlen = String.length needle in
-    let tlen = String.length target in
-    let buf = Buffer.create tlen in
-    let i = ref 0 in
-    while !i < tlen do
-      if !i + nlen <= tlen && String.sub target !i nlen = needle then begin
-        Buffer.add_string buf needle;
-        Buffer.add_string buf "[REDACTED]";
-        i := !i + nlen;
-        while !i < tlen && target.[!i] <> '&' do incr i done
-      end else begin
-        Buffer.add_char buf target.[!i];
-        incr i
-      end
-    done;
-    let redacted = Buffer.contents buf in
-    if redacted <> target then begin
-      (* Keep the real target so restore_token_target_middleware can hand the
-         unredacted token to the route handler after logging/analytics ran. *)
-      Dream.set_field request original_target_field target;
-      Dream_pure.Message.set_target request redacted
-    end;
-    handler request
-  in
-  (* Runs AFTER Dream.logger and analytics_middleware (both must see the redacted
-     target) but BEFORE the router, so only the route handler gets the real token
-     back via Dream.query. No-op for requests that had no token to redact. *)
-  let restore_token_target_middleware handler request =
-    (match Dream.field request original_target_field with
-     | Some original -> Dream_pure.Message.set_target request original
-     | None -> ());
-    handler request
-  in
   Dream.run ~interface ~port:8080
   @@ proxy
-  @@ redact_token_middleware
+  (* Replaces sensitive query parameter values (token=, state=, code=) with
+     [REDACTED] before Dream.logger and analytics_middleware read the target,
+     so those secrets never appear in access logs or page_views. The original
+     target is stashed in a field private to Request_target_redaction and put
+     back by its restore_middleware below, just before the router — without
+     that, [REDACTED] would reach Dream.query and silently break every
+     sensitive-parameter GET route (/verify, /reset-password, /confirm-email). *)
+  @@ Earde.Request_target_redaction.redact_middleware
   @@ Dream.logger
   @@ Dream.sql_pool ~size:db_pool_size db_url
   @@ secret_middleware
@@ -101,7 +62,11 @@ let () =
      cannot take last_active_at (moderator auto-demotion input) down with it. *)
   @@ Earde.Handlers.presence_middleware
   @@ Earde.Handlers.analytics_middleware
-  @@ restore_token_target_middleware
+  (* Runs AFTER Dream.logger and analytics_middleware (both must see the
+     redacted target) but BEFORE the router, so only the route handler gets
+     the real sensitive query parameters back via Dream.query. No-op for
+     requests that had nothing to redact. *)
+  @@ Earde.Request_target_redaction.restore_middleware
   @@ Dream.router [
     (* / now redirects to the new global Feed. home_handler is kept (still in
        handlers.mli) so / can become a real landing page later — hence a
@@ -112,6 +77,180 @@ let () =
        the repo has no permanent-redirect (301/308) pattern. *)
     Dream.get "/all" (fun request -> Dream.redirect request "/feed");
     Dream.get "/feed" Earde.Handlers.feed_handler;
+    (* Entry and return page for GitHub onboarding: offers the start action
+       when the viewer passes the onboarding policy and shows the one-time
+       connected/failed callback feedback. Informational GET, deliberately
+       not rate-limited; the mode is re-read per request (uncached, matching
+       the other onboarding routes below). *)
+    Dream.get "/bring" (fun request ->
+        Earde.Github_onboarding_handlers.make_bring_handler
+          ~mode:(Earde.Project_onboarding.mode_from_env ())
+          request);
+    (* Starts GitHub App installation: rate-limited like the other sensitive
+       POSTs. The mode is re-read per request via the existing
+       Project_onboarding API (uncached, matching /bring) and the validated
+       GitHub App configuration is loaded per request from the environment.
+       No GET variant and no callback routes in this slice. *)
+    Dream.post "/integrations/github/install/start"
+      (Earde.Handlers.Rate_limit.middleware (fun request ->
+           Earde.Github_onboarding_handlers.make_start_installation_handler
+             ~mode:(Earde.Project_onboarding.mode_from_env ())
+             ~load_config:Earde.Github_app_config.from_env
+             request));
+    (* GitHub App setup return: GET only, and deliberately NOT wrapped in
+       Rate_limit.middleware — malformed or cookieless requests are rejected
+       before any database access, a valid encrypted per-flow cookie is
+       required before the single attach UPDATE, and the limiter's blocked
+       page is rendered HTML, while this state-bearing callback URL must only
+       ever answer with a clean redirect away. Request-target redaction keeps
+       the state out of Dream logging and analytics. *)
+    Dream.get "/integrations/github/install/return"
+      (fun request ->
+        Earde.Github_onboarding_handlers.make_setup_return_handler
+          ~mode:(Earde.Project_onboarding.mode_from_env ())
+          ~load_config:Earde.Github_app_config.from_env
+          request);
+    (* Final OAuth authorization callback: GET only and, like the setup
+       return, deliberately NOT wrapped in Rate_limit.middleware — the
+       limiter's blocked page is rendered HTML, while this code/state-bearing
+       callback URL must only ever answer a clean redirect away, and
+       request-target redaction already keeps code and state out of Dream
+       logging and analytics. Secret credentials and the three GitHub
+       transports are injected here so the handler stays testable offline. *)
+    Dream.get "/integrations/github/authorize/callback"
+      (fun request ->
+        Earde.Github_onboarding_handlers.make_oauth_callback_handler
+          ~mode:(Earde.Project_onboarding.mode_from_env ())
+          ~load_config:Earde.Github_app_config.from_env
+          ~load_credentials:Earde.Github_oauth_credentials.from_env
+          ~exchange_transport:
+            (module Earde.Github_oauth_token_exchange.Cohttp_transport)
+          ~installations_transport:
+            (module Earde.Github_user_installations.Cohttp_transport)
+          ~repositories_transport:
+            (module Earde.Github_user_installation_repositories
+                    .Cohttp_transport)
+          request);
+    (* Project setup over verified GitHub drafts. The GET is informational
+       and deliberately not rate-limited (matching /bring); the
+       selection-replacing POST reuses the same sensitive-POST rate limit as
+       the other authenticated mutations above. Mode is re-read per request
+       (uncached, matching the onboarding routes), and the POST loads the
+       validated GitHub App configuration per request only to enforce the
+       same public-origin policy as the installation start — no GitHub
+       credential is used and no outbound HTTP occurs. *)
+    Dream.get "/projects/new" (fun request ->
+        Earde.Project_setup_handlers.make_new_project_handler
+          ~mode:(Earde.Project_onboarding.mode_from_env ())
+          request);
+    Dream.post "/projects/new/repositories"
+      (Earde.Handlers.Rate_limit.middleware (fun request ->
+           Earde.Project_setup_handlers.make_repository_selection_handler
+             ~mode:(Earde.Project_onboarding.mode_from_env ())
+             ~load_config:Earde.Github_app_config.from_env
+             request));
+    (* Permanent project creation and its PRG destination. The POST shares
+       the sensitive-POST rate limit and per-request configuration load of
+       the selection POST above (origin policy only — no GitHub credential,
+       no outbound HTTP); the owner-only GET is informational and
+       deliberately not rate-limited, matching the other project-setup
+       GETs. *)
+    Dream.post "/projects"
+      (Earde.Handlers.Rate_limit.middleware (fun request ->
+           Earde.Project_creation_handlers.make_project_creation_handler
+             ~mode:(Earde.Project_onboarding.mode_from_env ())
+             ~load_config:Earde.Github_app_config.from_env
+             request));
+    Dream.get "/projects/:slug/setup" (fun request ->
+        Earde.Project_creation_handlers.make_project_home_setup_handler
+          ~mode:(Earde.Project_onboarding.mode_from_env ())
+          request);
+    (* Existing-community home request for a verified project. The
+       steward-only GET is informational and deliberately not rate-limited,
+       matching the other project-setup GETs; the request-creating POST
+       shares the sensitive-POST rate limit and per-request configuration
+       load of the project POSTs above (origin policy only — no GitHub
+       credential, no outbound HTTP). *)
+    Dream.get "/projects/:slug/request-home" (fun request ->
+        Earde.Project_home_request_handlers.make_project_home_choice_handler
+          ~mode:(Earde.Project_onboarding.mode_from_env ())
+          request);
+    Dream.post "/projects/:slug/request-home"
+      (Earde.Handlers.Rate_limit.middleware (fun request ->
+           Earde.Project_home_request_handlers
+           .make_project_home_request_handler
+             ~mode:(Earde.Project_onboarding.mode_from_env ())
+             ~load_config:Earde.Github_app_config.from_env
+             request));
+    (* Dedicated-community-home creation for a verified project. The
+       steward-only GET is informational and deliberately not rate-limited,
+       matching the other project-setup GETs; the provisioning POST is the
+       exact action that page's single form emits and shares the
+       sensitive-POST rate limit and per-request configuration load of the
+       project POSTs above (origin policy only — no GitHub credential, no
+       outbound HTTP). There is no alias and no second GET: a committed
+       provision returns the browser to the new community's existing
+       settings route. *)
+    Dream.get "/projects/:slug/community-home/new" (fun request ->
+        Earde.Project_home_provisioning_handlers
+        .make_project_home_provisioning_page_handler
+          ~mode:(Earde.Project_onboarding.mode_from_env ())
+          request);
+    Dream.post "/projects/:slug/community-home"
+      (Earde.Handlers.Rate_limit.middleware (fun request ->
+           Earde.Project_home_provisioning_handlers
+           .make_project_home_provisioning_handler
+             ~mode:(Earde.Project_onboarding.mode_from_env ())
+             ~load_config:Earde.Github_app_config.from_env
+             request));
+    (* Moderator review of pending project-home requests for a community.
+       The queue GET is informational and deliberately not rate-limited,
+       matching the other private settings GETs; the accept/reject POSTs
+       share the sensitive-POST rate limit and per-request configuration
+       load of the project POSTs above (origin policy only — no GitHub
+       credential, no outbound HTTP). Mode is re-read per request (uncached,
+       matching the onboarding routes). Authorization is decided in the read
+       model and review store SQL, not here. *)
+    Dream.get "/c/:slug/project-home-requests" (fun request ->
+        Earde.Project_home_review_handlers
+        .make_project_home_review_queue_handler
+          ~mode:(Earde.Project_onboarding.mode_from_env ())
+          request);
+    Dream.post "/c/:slug/projects/:project_slug/accept"
+      (Earde.Handlers.Rate_limit.middleware (fun request ->
+           Earde.Project_home_review_handlers.make_project_home_accept_handler
+             ~mode:(Earde.Project_onboarding.mode_from_env ())
+             ~load_config:Earde.Github_app_config.from_env
+             request));
+    Dream.post "/c/:slug/projects/:project_slug/reject"
+      (Earde.Handlers.Rate_limit.middleware (fun request ->
+           Earde.Project_home_review_handlers.make_project_home_reject_handler
+             ~mode:(Earde.Project_onboarding.mode_from_env ())
+             ~load_config:Earde.Github_app_config.from_env
+             request));
+    (* Removal of an accepted project home, from either authorized surface.
+       Both POSTs call the same transactional removal store with the same
+       two slugs and share the sensitive-POST rate limit and per-request
+       configuration load of the project POSTs above (origin policy only —
+       no GitHub credential, no outbound HTTP); they differ only in where a
+       completed or already-completed removal returns the browser. There is
+       no GET counterpart and no alias: each surface's own existing route
+       is the confirmation and the destination. Authorization is decided in
+       the removal store's SQL, not here and not by the route shape. *)
+    Dream.post "/projects/:project_slug/community-home/:community_slug/remove"
+      (Earde.Handlers.Rate_limit.middleware (fun request ->
+           Earde.Project_home_removal_handlers
+           .make_project_side_home_removal_handler
+             ~mode:(Earde.Project_onboarding.mode_from_env ())
+             ~load_config:Earde.Github_app_config.from_env
+             request));
+    Dream.post "/c/:community_slug/projects/:project_slug/remove-home"
+      (Earde.Handlers.Rate_limit.middleware (fun request ->
+           Earde.Project_home_removal_handlers
+           .make_community_side_home_removal_handler
+             ~mode:(Earde.Project_onboarding.mode_from_env ())
+             ~load_config:Earde.Github_app_config.from_env
+             request));
     Dream.get "/new-community" Earde.Handlers.new_community_page;
     Dream.post "/communities" Earde.Handlers.create_community_handler;
     Dream.post "/join" Earde.Handlers.join_community_handler;
@@ -126,6 +265,31 @@ let () =
     Dream.get "/c/:slug/t/:thread" Earde.Handlers.view_thread_handler;
     Dream.post "/messages" Earde.Handlers.send_message_handler;
     Dream.get "/c/:slug/settings" Earde.Handlers.community_settings_handler;
+    (* Final setup and publication surface of a provisioned network
+       community. Both are distinct literal segments from
+       settings/modlog/reports, so no router shadowing. The GET is
+       informational and deliberately not rate-limited, matching the other
+       setup GETs; the publication POST is exactly the action that page's
+       single form emits and shares the sensitive-POST rate limit and
+       per-request configuration load of the project POSTs above (origin
+       policy only — no GitHub credential, no outbound HTTP). Mode is re-read
+       per request (uncached, matching the onboarding routes) and
+       authorization is decided in the read model's and the publication
+       store's SQL, not here and not by the route shape. There is no alias
+       and no second GET: a committed publication returns the browser to the
+       community's own now-public home. *)
+    Dream.get "/c/:slug/setup" (fun request ->
+        Earde.Network_community_publication_handlers
+        .make_network_community_publication_page_handler
+          ~mode:(Earde.Project_onboarding.mode_from_env ())
+          request);
+    Dream.post "/c/:slug/publish"
+      (Earde.Handlers.Rate_limit.middleware (fun request ->
+           Earde.Network_community_publication_handlers
+           .make_network_community_publication_handler
+             ~mode:(Earde.Project_onboarding.mode_from_env ())
+             ~load_config:Earde.Github_app_config.from_env
+             request));
     Dream.get "/c/:slug/modlog" Earde.Handlers.modlog_handler;
     (* Reports: singular GET form + plural POST create (Slice B) + plural GET mod queue
        (read-only). Distinct literal segments from settings/modlog/manage-mods, so no router

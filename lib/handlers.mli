@@ -62,6 +62,13 @@ val start_thread_create_handler : Dream.handler
 val join_community_handler : Dream.handler
 val leave_community_handler : Dream.handler
 val community_settings_handler : Dream.handler
+(** Pure lifecycle gate for the /c/:slug/settings/visibility POST, extracted for
+    testing: [None] lets the update proceed; [Some message] is the user-facing
+    rejection (published network communities must remain public). Delegates to
+    {!Network_communities.visibility_change_allowed}. *)
+val visibility_update_rejection :
+  Db.community -> requested_visibility:Db.community_visibility -> string option
+
 val update_community_visibility_handler : Dream.handler
 val update_community_indexability_handler : Dream.handler
 val add_member_handler : Dream.handler

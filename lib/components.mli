@@ -40,6 +40,11 @@ val community_banner : wrap_class:string -> img_class:string -> fallback_class:s
 val post_thumbnail : ?alt:string -> img_class:string -> string option -> string
 
 (** === LAYOUT === *)
+(** The mono App command bar shared by every shell/App surface. Pure renderer —
+    [request] is unused and [is_admin] is passed in explicitly, so rendering tests
+    can exercise the logged-in/anonymous navigation without a Dream server. *)
+val render_app_topbar : ?user:string -> ?request:Dream.request -> is_admin:bool -> unit -> string
+
 (** [head_extra] injects markup into <head> (e.g. a page-scoped stylesheet);
     [full_bleed] drops the capped/padded <main> so a page can own its full-width
     layout. [chrome] selects the page furniture: [`Site] (default) renders the warm
