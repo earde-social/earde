@@ -4168,6 +4168,16 @@ let view_profile_handler request =
 
   Dream.sql request (fun db ->
     let%lwt user_votes = get_current_user_votes db request in
+    (* Joined communities feed the launch rail only (viewer's own memberships,
+       same source/order as every other launch surface); a failure degrades to
+       an empty rail rather than blocking the profile. *)
+    let%lwt rail_communities =
+      if viewer_id > 0 then
+        (match%lwt Db.get_user_communities db viewer_id with
+         | Ok cs -> Lwt.return cs
+         | Error _ -> Lwt.return [])
+      else Lwt.return []
+    in
     (* Slice C + D profile leak-filter. A profile aggregates a user's activity across communities
        and is itself a PUBLIC discovery surface, so it must not surface activity that is either
        (a) PRIVATE and unreadable by the *viewer* (Slice C), or (b) public-but-non-indexable, i.e.
@@ -4254,13 +4264,13 @@ let view_profile_handler request =
                   let post_ids = List.map (fun (_, _, _, pid, _, _) -> pid) user_comments in
                   let%lwt blocked = blocked_post_ids post_ids in
                   let user_comments = List.filter (fun (_, _, _, pid, _, _) -> not (List.mem pid blocked)) user_comments in
-                  Dream.html (Pages.user_profile_page ?user:current_user ~is_admin ~is_globally_banned ~profile_id:uid ~admin_usernames ~moderated_communities ~active_tab user_votes username_param joined_at bio avatar_url karma [] user_comments [] request)
+                  Dream.html (Pages.user_profile_page ?user:current_user ~is_admin ~is_globally_banned ~profile_id:uid ~admin_usernames ~moderated_communities ~active_tab ~rail_communities user_votes username_param joined_at bio avatar_url karma [] user_comments [] request)
               | Error err -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user:current_user ~title:"Error" ~message:("Database error: " ^ err) ~alert_type:"error" ~return_url:"/" request))
             else if active_tab = "communities" then
               (match%lwt Db.get_user_community_stats db uid with
               | Ok community_stats ->
                   let%lwt community_stats = Lwt_list.filter_s stat_is_readable community_stats in
-                  Dream.html (Pages.user_profile_page ?user:current_user ~is_admin ~is_globally_banned ~profile_id:uid ~admin_usernames ~moderated_communities ~active_tab user_votes username_param joined_at bio avatar_url karma [] [] community_stats request)
+                  Dream.html (Pages.user_profile_page ?user:current_user ~is_admin ~is_globally_banned ~profile_id:uid ~admin_usernames ~moderated_communities ~active_tab ~rail_communities user_votes username_param joined_at bio avatar_url karma [] [] community_stats request)
               | Error err -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user:current_user ~title:"Error" ~message:("Database error: " ^ err) ~alert_type:"error" ~return_url:"/" request))
             else
               (match%lwt Db.get_posts_by_user db uid with
@@ -4268,7 +4278,7 @@ let view_profile_handler request =
                   let post_ids = List.map (fun (p : Db.post) -> p.id) posts in
                   let%lwt blocked = blocked_post_ids post_ids in
                   let posts = List.filter (fun (p : Db.post) -> not (List.mem p.id blocked)) posts in
-                  Dream.html (Pages.user_profile_page ?user:current_user ~is_admin ~is_globally_banned ~profile_id:uid ~admin_usernames ~moderated_communities ~active_tab user_votes username_param joined_at bio avatar_url karma posts [] [] request)
+                  Dream.html (Pages.user_profile_page ?user:current_user ~is_admin ~is_globally_banned ~profile_id:uid ~admin_usernames ~moderated_communities ~active_tab ~rail_communities user_votes username_param joined_at bio avatar_url karma posts [] [] request)
               | Error err -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user:current_user ~title:"Error" ~message:("Database error: " ^ err) ~alert_type:"error" ~return_url:"/" request))
 
         | Error err -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user:current_user ~title:"Error" ~message:("Database error: " ^ err) ~alert_type:"error" ~return_url:"/" request))

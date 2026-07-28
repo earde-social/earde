@@ -103,7 +103,7 @@ val start_thread_form : ?user:string -> ?error:string -> community:Db.community 
 val post_page : ?user:string -> ?noindex:bool -> is_member:bool -> is_current_user_mod:bool -> mod_usernames:string list -> admin_usernames:string list -> banned_usernames:string list -> community:Db.community -> user_communities:Db.community list -> moderated_communities:Db.community list -> (int * int) list -> (int * int) list -> Db.post -> Db.comment list -> Dream.request -> string
 
 (** === USER === *)
-val user_profile_page : ?user:string -> is_admin:bool -> is_globally_banned:bool -> profile_id:int -> admin_usernames:string list -> moderated_communities:Db.community list -> active_tab:string -> (int * int) list -> string -> string -> string option -> string option -> int -> Db.post list -> (int * string * string * int * string * int) list -> Db.community_user_stat list -> Dream.request -> string
+val user_profile_page : ?user:string -> ?rail_communities:Db.community list -> is_admin:bool -> is_globally_banned:bool -> profile_id:int -> admin_usernames:string list -> moderated_communities:Db.community list -> active_tab:string -> (int * int) list -> string -> string -> string option -> string option -> int -> Db.post list -> (int * string * string * int * string * int) list -> Db.community_user_stat list -> Dream.request -> string
 val settings_page : ?user:string -> string option -> string option -> Dream.request -> string
 val notifications_page : ?user:string -> ?rail_communities:Db.community list -> Db.notification list -> Dream.request -> string
 

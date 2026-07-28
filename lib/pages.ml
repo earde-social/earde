@@ -4469,7 +4469,19 @@ function toggleComment(id, btn) {
 
 (* === USER === *)
 
-let user_profile_page ?user ~is_admin ~is_globally_banned ~profile_id ~admin_usernames ~moderated_communities ~active_tab user_votes username joined_at bio_opt avatar_url_opt karma posts user_comments community_stats request =
+(* /u/:username — the public user profile, on the launch app chrome
+   (Components.launch_app_page: earde.css only, no shell.css / account.css).
+   The inner account-* markup (account-prof header, account-badges,
+   account-bio, account-tabs, account-thread rows with the /vote form DOM the
+   shared behavior script drives, account-comment, account-comm-card,
+   account-admin) is kept and skinned by the "public user profile only"
+   integration section at the end of earde.css. .account-bio stays because it
+   is a replay-masking selector in analytics.js. rail_communities feeds the
+   launch rail only (VIEWER membership, same order as every other launch
+   surface); it never enters profile content. Tabs, ?tab= values, default and
+   unknown-value fallback, activity ordering and every destination link are
+   unchanged. *)
+let user_profile_page ?user ?(rail_communities = []) ~is_admin ~is_globally_banned ~profile_id ~admin_usernames ~moderated_communities ~active_tab user_votes username joined_at bio_opt avatar_url_opt karma posts user_comments community_stats request =
   let csrf_token = Dream.csrf_tag request in
   let bio = Option.value ~default:"This user hasn't written a bio yet." bio_opt in
   (* Profile avatar: route the stored URL through Components.user_avatar (safe_img_src) instead
@@ -4649,7 +4661,7 @@ let user_profile_page ?user ~is_admin ~is_globally_banned ~profile_id ~admin_use
               </div>
               <div class='account-comment-body'>%s</div>
               <a href='/p/%d' class='account-comment-link'>&#8618; Commented on: %s</a>
-          </div>" created_at score content post_id post_title
+          </div>" created_at score (Components.html_escape content) post_id (Components.html_escape post_title)
       ) user_comments)
   in
 
@@ -4717,9 +4729,15 @@ let user_profile_page ?user ~is_admin ~is_globally_banned ~profile_id ~admin_use
 
         %s
         %s
-    </div>" avatar_html username role_badges karma joined_at header_actions bio admin_controls tab_nav feed_html
+    </div>" avatar_html username role_badges karma joined_at header_actions (Components.html_escape bio) admin_controls tab_nav feed_html
   in
-  Components.account_page ?user ~request ~title:(username ^ "'s Profile") ~body ()
+  (* Standard launch scroller column around the untouched account-* fragments;
+     no noindex — the profile stays a public, crawlable discovery surface. *)
+  let content =
+    Printf.sprintf "<div class='scroll'><div class='container container--list'>%s</div></div>" body
+  in
+  Components.launch_app_page ?user ~request ~rail_communities
+    ~page_class:"launch-user-profile" ~title:(username ^ "'s Profile") ~content ()
 
 let settings_page ?user bio avatar_url request =
   let csrf_token = Dream.csrf_tag request in
