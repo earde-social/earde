@@ -40,7 +40,7 @@ val community_overview_page : ?user:string -> ?noindex:bool -> ?connected_projec
 (** [connected_projects] is the pre-rendered "Connected projects" management fragment for the
     top-mod/admin settings surface (empty for every other viewer, which also removes the panel
     and its navigation entry). *)
-val community_settings_page : ?user:string -> ?connected_projects:string -> is_admin:bool -> is_top_mod:bool -> open_reports_count:int -> community:Db.community -> mods:Db.user list -> banned_users:Db.user list -> members:Db.user list -> sections:Db.community_section list -> channels:Db.channel list -> Dream.request -> string
+val community_settings_page : ?user:string -> ?connected_projects:string -> ?rail_communities:Db.community list -> is_admin:bool -> is_top_mod:bool -> open_reports_count:int -> community:Db.community -> mods:Db.user list -> banned_users:Db.user list -> members:Db.user list -> sections:Db.community_section list -> channels:Db.channel list -> Dream.request -> string
 val manage_mods_page : ?user:string -> is_admin:bool -> current_user_role:string option -> community:Db.community -> mods:Db.moderator_entry list -> Dream.request -> string
 
 (** === POST === *)

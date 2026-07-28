@@ -2069,6 +2069,17 @@ let community_settings_handler request =
                         match%lwt Db.get_community_members db community.id with
                         | Ok m -> Lwt.return m | Error _ -> Lwt.return []
                       in
+                      (* Global-rail parity: the viewer's joined communities, in the same
+                         stable order the feed/overview/channel/section/thread handlers
+                         load. Queried only after the settings authorization above
+                         succeeded, so a denied or anonymous request never touches
+                         membership data; a failure degrades to the no-data rail rather
+                         than blocking settings. Ordering, dedup, and the active marker
+                         stay owned by the shared launch doc builder. *)
+                      let%lwt rail_communities =
+                        match%lwt Db.get_user_communities db user_id with
+                        | Ok cs -> Lwt.return cs | Error _ -> Lwt.return []
+                      in
                       (* Connected-project management: loaded only after the settings
                          authorization above succeeded, and only for the same top-mod/admin
                          surface that already gates the project-home request queue. There is
@@ -2082,7 +2093,7 @@ let community_settings_handler request =
                              (community.is_network_community
                              && community.onboarding_state = Db.Community_draft))
                         (fun connected_projects ->
-                      Dream.html (Pages.community_settings_page ?user ~connected_projects ~is_admin ~is_top_mod ~open_reports_count ~community ~mods ~banned_users ~members ~sections ~channels request))
+                      Dream.html (Pages.community_settings_page ?user ~connected_projects ~rail_communities ~is_admin ~is_top_mod ~open_reports_count ~community ~mods ~banned_users ~members ~sections ~channels request))
                   | Error e -> Dream.html ("DB Error: " ^ e))
               | Error e -> Dream.html ("DB Error: " ^ e))
         | Ok None -> Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"Not Found" ~message:"This community does not exist." ~alert_type:"error" ~return_url:"/" request)

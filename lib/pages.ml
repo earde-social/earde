@@ -623,10 +623,12 @@ let community_page ?user ?(noindex=false) ?(connected_projects="") ?section:(sec
    the section/thread handlers never load, so it is not rendered — nothing is invented. The
    virtual Uncategorized feed is appended (active) only when the viewer is on it: the handler
    404s that route unless real orphaned content exists, so the entry is always backed by
-   data. Archived channels are hidden, mirroring the pre-launch Channels nav group. *)
+   data. Archived channels are hidden, mirroring the pre-launch Channels nav group.
+   [settings_active] marks the Settings entry current — used only by the settings route
+   (pass 11A), whose surface already re-proved the can_manage gate before rendering. *)
 let launch_knowledge_sidebar ~(community : community) ~(channels : channel list)
     ~(sections : community_section list) ?active_section_slug
-    ?(append_uncategorized = false) ~can_manage () =
+    ?(append_uncategorized = false) ?(settings_active = false) ~can_manage () =
   let esc = Components.html_escape in
   let slug = esc community.slug in
   let tile_glyph =
@@ -699,8 +701,8 @@ let launch_knowledge_sidebar ~(community : community) ~(channels : channel list)
         slug
     ^ (if can_manage then
          Printf.sprintf
-           "<a class='navitem navitem--pad' href='/c/%s/settings'><span class='navitem__sigil navitem__sigil--box'>&#9881;</span>Settings</a>"
-           slug
+           "<a class='navitem navitem--pad%s' href='/c/%s/settings'><span class='navitem__sigil navitem__sigil--box'>&#9881;</span>Settings</a>"
+           (if settings_active then " navitem--active" else "") slug
        else "")
   in
   Printf.sprintf
@@ -2392,7 +2394,7 @@ let community_overview_page ?user ?(noindex=false) ?(connected_projects="") ~is_
    the read model for anyone else, and this page never loads it at all. An empty fragment
    also removes the panel from the navigation, so no ordinary moderator can reach an empty
    management surface by typing ?panel=projects. *)
-let community_settings_page ?user ?(connected_projects="") ~is_admin ~is_top_mod ~open_reports_count ~(community : community) ~(mods : user list) ~(banned_users : user list) ~(members : user list) ~(sections : community_section list) ~(channels : Db.channel list) request =
+let community_settings_page ?user ?(connected_projects="") ?(rail_communities=[]) ~is_admin ~is_top_mod ~open_reports_count ~(community : community) ~(mods : user list) ~(banned_users : user list) ~(members : user list) ~(sections : community_section list) ~(channels : Db.channel list) request =
   let csrf_token = Dream.csrf_tag request in
   let esc = Components.html_escape in
   let slug = esc community.slug in
@@ -3147,10 +3149,29 @@ let community_settings_page ?user ?(connected_projects="") ~is_admin ~is_top_mod
     (nav_item ~danger:true "bans" "Bans")
     main_panel
   in
-  Components.community_manage_page ?user ~request
-    ~analytics_community:(community.id, community.visibility)
+  (* Cartographic launch shell (pass 11A): the same four-pane chrome as the
+     overview/channel/section/thread routes, wrapping the settings content
+     verbatim — every cm-* fragment above is test-pinned or treated as such,
+     so only this outer document changed. The sidebar reuses the shared
+     knowledge grammar with Settings active; can_manage is true by
+     construction (the handler already 403'd everyone below moderator). The
+     Home requests queue entry stays exclusively in the settings index above:
+     its canonical link is pinned to exactly one occurrence per document, so
+     the sidebar must not repeat it. [rail_communities] carries the viewer's
+     joined communities exactly as the handler loaded them (post-authorization
+     only); ordering, dedup by slug, and the single active marker stay owned
+     by the shared launch doc builder, so the settings rail can never diverge
+     from the overview/channel/section/thread rails. Replay privacy keeps the
+     existing inner ph-no-capture guard for private communities (the launch
+     shell additionally marks .shell, exactly like the sibling routes). *)
+  let sidebar =
+    launch_knowledge_sidebar ~community ~channels ~sections
+      ~settings_active:true ~can_manage:true ()
+  in
+  Components.launch_community_page ?user ~request ~rail_communities ~community ~sidebar
+    ~page_class:"launch-community-settings"
     ~title:(Printf.sprintf "Settings — /c/%s" community.slug)
-    ~body:(Components.private_replay_guard ~community content) ()
+    ~content:(Components.private_replay_guard ~community content) ()
 
 let manage_mods_page ?user ~is_admin ~current_user_role ~(community : community) ~(mods : moderator_entry list) request =
   let csrf_token = Dream.csrf_tag request in
