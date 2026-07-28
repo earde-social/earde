@@ -632,11 +632,15 @@ let community_page ?user ?(noindex=false) ?(connected_projects="") ?section:(sec
    the settings suites' exactly-one-queue-link count per document stays true.
    [show_visibility_note] defaults to the existing factual marker; the review queue
    passes false because that surface never names an ineligibility reason
-   (private/draft/legacy) anywhere in its document. *)
+   (private/draft/legacy) anywhere in its document.
+   [moderation_log_active] marks the always-present Moderation log entry current —
+   used only by the modlog route (pass 14A), which is public by design, so the
+   entry itself renders for every viewer exactly as before. *)
 let launch_knowledge_sidebar ~(community : community) ~(channels : channel list)
     ~(sections : community_section list) ?active_section_slug
     ?(append_uncategorized = false) ?(settings_active = false)
-    ?(home_requests_active = false) ?(show_visibility_note = true) ~can_manage () =
+    ?(home_requests_active = false) ?(moderation_log_active = false)
+    ?(show_visibility_note = true) ~can_manage () =
   let esc = Components.html_escape in
   let slug = esc community.slug in
   let tile_glyph =
@@ -705,8 +709,8 @@ let launch_knowledge_sidebar ~(community : community) ~(channels : channel list)
   let nav_network =
     "<p class='kicker sidebar__group'>Network</p>"
     ^ Printf.sprintf
-        "<a class='navitem navitem--pad' href='/c/%s/modlog'><span class='navitem__sigil navitem__sigil--box'>&#9776;</span>Moderation log</a>"
-        slug
+        "<a class='navitem navitem--pad%s' href='/c/%s/modlog'><span class='navitem__sigil navitem__sigil--box'>&#9776;</span>Moderation log</a>"
+        (if moderation_log_active then " navitem--active" else "") slug
     ^ (if home_requests_active then
          (* Same slot and grammar as the overview's Home requests entry;
             rendered only by the queue route whose viewer the read model
@@ -5546,7 +5550,10 @@ let admin_dashboard_page ?user ~signups_enabled
 
 (* === MODERATION LOG === *)
 
-let mod_log_page ?user ?(noindex=false) ~(can_access_settings : bool) ~(community : Db.community) (actions : Db.mod_action list) request =
+let mod_log_page ?user ?(noindex=false) ?(rail_communities = [])
+    ~(can_access_settings : bool) ~(channels : channel list)
+    ~(sections : community_section list)
+    ~(community : Db.community) (actions : Db.mod_action list) request =
   let esc = Components.html_escape in
   (* Mod log is member-visible, not mod-only. Send viewers who can reach settings back into the
      moderation panel; send everyone else back to the community home. *)
@@ -5588,6 +5595,7 @@ let mod_log_page ?user ?(noindex=false) ~(can_access_settings : bool) ~(communit
     <div class='cm-wrap'>
         <div class='cm-head'>
             <h1 class='cm-h1'>Moderation <span class='accent'>log</span></h1>
+            <span class='mono launch-modlog-ctx'>/c/%s</span>
             %s
         </div>
         <section class='cm-panel'>
@@ -5608,12 +5616,34 @@ let mod_log_page ?user ?(noindex=false) ~(can_access_settings : bool) ~(communit
             </div>
         </section>
     </div>"
+    (esc community.slug)
     back_link
     table_body
   in
-  Components.community_manage_page ?user ~noindex ~request
-    ~analytics_community:(community.id, community.visibility) ~title:(community.name ^ " — Mod Log")
-    ~body:(Components.private_replay_guard ~community content) ()
+  (* Cartographic launch shell (pass 14A): the same four-pane chrome as the
+     sibling community routes, wrapping the moderation ledger verbatim — the
+     cm-* event rows, empty row and .cm-table-reason replay-mask class are
+     treated as pinned (analytics.js masks .cm-table-reason by name), so only
+     this outer document and the additive mono /c/:slug context above changed.
+     The sidebar reuses the shared knowledge grammar with Moderation log
+     active; can_manage mirrors the handler's settings gate (admin ||
+     moderator), which here only decorates navigation — the route itself
+     stays public exactly as modlog_handler allows. [rail_communities]
+     carries the viewer's joined communities exactly as the handler loaded
+     them (post-authorization only); ordering, dedup by slug, and the single
+     active marker stay owned by the shared launch doc builder. Replay
+     privacy keeps the existing inner ph-no-capture guard for private
+     communities (the launch shell additionally marks .shell, exactly like
+     the sibling routes). *)
+  let sidebar =
+    launch_knowledge_sidebar ~community ~channels ~sections
+      ~moderation_log_active:true ~can_manage:can_access_settings ()
+  in
+  Components.launch_community_page ?user ~noindex ~request ~rail_communities
+    ~community ~sidebar
+    ~page_class:"launch-community-modlog"
+    ~title:(community.name ^ " — Mod Log")
+    ~content:(Components.private_replay_guard ~community content) ()
 
 (* Standalone HTML — intentionally outside Components.layout to prevent nav/JS
    assets from loading on an admin-only internal page that needs no public shell. *)

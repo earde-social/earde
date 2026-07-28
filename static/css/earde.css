@@ -5822,3 +5822,212 @@ ol, ul { margin: 0; padding: 0; list-style: none; }
 .launch-account-settings #analytics-consent [data-analytics-error] {
   color: var(--danger); font-size: var(--fs-11);
 }
+
+/* ==========================================================================
+   EARDE INTEGRATION — community moderation log only
+   Scoped beneath body.launch-community-modlog: GET /c/:slug/modlog
+   (Pages.mod_log_page). Exists only because the real ledger surface cannot
+   emit the reference markup exactly:
+   - the cm-* event rows (when / actor / action chip / reason cells, the
+     admin-override tag variant, the empty row) and the .cm-table-reason
+     replay-mask class are analytics/test contracts, so the legacy markup is
+     spliced verbatim and skinned here onto the approved community-shell
+     anatomy (page head band over a flat chronological ledger — an auditable
+     civic record, not a dashboard);
+   - the route is intentionally public (transparency), so nothing here may
+     imply a management surface: no action controls, no statistics, only the
+     recorded events;
+   - the notification badge is revealed by the shared script removing the
+     legacy `hidden` class; honoured on the badge element only — no global
+     .hidden utility is defined;
+   - the desktop-only gate panel ships in mobile-gate.css; only the
+     launch-scope "hide the app" rule for this route lives here;
+   - the analytics consent banner markup is shared with the legacy layout
+     (same rules as the other launch sections, re-scoped).
+   ========================================================================== */
+
+/* ---- Launch chrome ---------------------------------------------------------- */
+
+/* Top-bar user menu: pure-CSS <details>, real logout POST form inside. */
+.launch-community-modlog .launch-user { position: relative; }
+.launch-community-modlog .launch-user > summary { list-style: none; }
+.launch-community-modlog .launch-user > summary::-webkit-details-marker { display: none; }
+.launch-community-modlog .launch-user .avatar { background: var(--moss); }
+.launch-community-modlog .launch-user__menu {
+  position: absolute; right: 0; top: calc(100% + 6px); z-index: 40;
+  min-width: 168px; display: flex; flex-direction: column;
+  background: var(--surface); border: var(--bw) solid var(--line2);
+  border-radius: var(--r-3); padding: var(--sp-3);
+  box-shadow: var(--shadow-overlay);
+}
+.launch-community-modlog .launch-user__menu a,
+.launch-community-modlog .launch-user__menu button {
+  display: block; width: 100%; text-align: left; background: none; border: 0;
+  font-family: var(--mono); font-size: var(--fs-12); color: var(--ink);
+  padding: var(--sp-3) var(--sp-5); border-radius: var(--r-2); cursor: pointer;
+}
+.launch-community-modlog .launch-user__menu a:hover,
+.launch-community-modlog .launch-user__menu button:hover { background: var(--surface2); }
+.launch-community-modlog .launch-user__menu form {
+  margin: var(--sp-2) 0 0; padding-top: var(--sp-2);
+  border-top: var(--bw) solid var(--line);
+}
+
+/* Notification badge: hidden until the shared one-shot fetch reveals it.
+   Badge element only — deliberately NOT a global .hidden utility. */
+.launch-community-modlog #notif-badge.hidden { display: none; }
+
+/* Real community avatars fill their fixed tile (rail, sidebar head). */
+.launch-community-modlog .launch-rail__img,
+.launch-community-modlog .launch-avatar-img {
+  width: 100%; height: 100%; object-fit: cover; border-radius: inherit;
+  display: block;
+}
+
+/* ---- Community sidebar ------------------------------------------------------ */
+
+.launch-community-modlog .launch-side-id { min-width: 0; display: block; }
+.launch-community-modlog .launch-side-vis {
+  font-family: var(--mono); font-size: var(--fs-10-5); color: var(--ochre);
+  padding: var(--sp-2) 9px var(--sp-1);
+}
+
+/* ---- Ledger anatomy --------------------------------------------------------- */
+
+/* Private communities keep the renderer's inner replay guard; keep it out of
+   the flex chain so both privacy shapes share one layout. */
+.launch-community-modlog .main > .ph-no-capture { display: contents; }
+
+/* cm-wrap fills <main> as a column: fixed head band over the scrolling ledger. */
+.launch-community-modlog .cm-wrap {
+  flex: 1; min-height: 0; display: flex; flex-direction: column;
+}
+
+/* Page head band (reference .page__head--tight geometry): serif title,
+   mono /c/:slug context, quiet mono back link right. */
+.launch-community-modlog .cm-head {
+  flex: none; display: flex; align-items: baseline; gap: var(--sp-6);
+  padding: 15px 28px; background: var(--surface);
+  border-bottom: var(--bw) solid var(--line2);
+}
+.launch-community-modlog .cm-h1 {
+  font-family: var(--serif); font-weight: 600; font-size: var(--fs-22);
+  color: var(--ink); min-width: 0;
+}
+.launch-community-modlog .cm-h1 .accent { color: var(--moss); }
+.launch-community-modlog .launch-modlog-ctx {
+  font-size: var(--fs-11-5); color: var(--muted);
+}
+.launch-community-modlog .cm-back {
+  margin-left: auto; flex: none;
+  font-family: var(--mono); font-size: var(--fs-11-5); color: var(--muted);
+  text-decoration: none;
+}
+.launch-community-modlog .cm-back:hover { color: var(--ink); }
+
+/* The ledger column is the scroller; content stays left-set at register width. */
+.launch-community-modlog .cm-panel {
+  flex: 1; min-height: 0; overflow-y: auto; scrollbar-width: thin;
+  padding: var(--sp-10) 28px 70px;
+}
+.launch-community-modlog .cm-panel > * { max-width: 940px; }
+.launch-community-modlog .cm-panel-title {
+  font-family: var(--serif); font-weight: 600; font-size: var(--fs-19);
+  color: var(--ink); margin-bottom: var(--sp-2);
+}
+.launch-community-modlog .cm-panel-desc {
+  font-size: var(--fs-13); color: var(--muted); line-height: var(--lh-prose);
+  margin: var(--sp-2) 0 var(--sp-7);
+}
+
+/* ---- Event ledger ----------------------------------------------------------- */
+
+/* Flat chronological record: one hairline frame, thin row separators, no
+   zebra, no shadows — actor → action → target reads left to right. */
+.launch-community-modlog .cm-table-wrap {
+  border: var(--bw) solid var(--line2); border-radius: var(--r-2);
+  background: var(--surface); overflow-x: auto;
+}
+.launch-community-modlog .cm-table {
+  width: 100%; border-collapse: collapse; font-size: var(--fs-13);
+}
+.launch-community-modlog .cm-table thead th {
+  font-family: var(--mono); font-size: var(--fs-10); font-weight: 600;
+  letter-spacing: var(--ls-kicker); text-transform: uppercase;
+  color: var(--muted); text-align: left;
+  padding: var(--sp-3) var(--sp-6); background: var(--surface2);
+  border-bottom: var(--bw) solid var(--line2);
+}
+.launch-community-modlog .cm-table tbody td {
+  padding: var(--sp-4) var(--sp-6); vertical-align: baseline;
+  border-bottom: var(--bw) solid var(--line);
+}
+.launch-community-modlog .cm-table tbody tr:last-child td { border-bottom: 0; }
+
+/* Mono timestamp, quiet. */
+.launch-community-modlog .cm-table-when {
+  font-family: var(--mono); font-size: var(--fs-11); color: var(--muted);
+  white-space: nowrap;
+}
+/* Actor: the acting moderator, a real /u/ link. */
+.launch-community-modlog .cm-table-actor {
+  font-family: var(--mono); font-size: var(--fs-12); color: var(--slate);
+  text-decoration: none;
+}
+.launch-community-modlog .cm-table-actor:hover { text-decoration: underline; }
+/* Event-type marker: outline chip on the raw recorded action_type — the only
+   two real categories are community-mod and admin-override (clay: the
+   provenance of authority), so nothing else is invented. */
+.launch-community-modlog .cm-action-tag {
+  display: inline-block; font-family: var(--mono); font-size: var(--fs-10-5);
+  font-weight: 600; color: var(--ink); background: var(--surface2);
+  border: var(--bw) solid var(--line2); border-radius: var(--r-1);
+  padding: 0 var(--sp-2); white-space: nowrap;
+}
+.launch-community-modlog .cm-action-tag--admin {
+  color: var(--clay); background: transparent; border-color: var(--clay);
+}
+/* Target: the recorded id, mono metadata. */
+.launch-community-modlog .cm-table-target {
+  font-family: var(--mono); font-size: var(--fs-11); color: var(--muted);
+}
+/* Reason: readable but secondary to the actor → action → target line. */
+.launch-community-modlog .cm-table-reason {
+  font-size: var(--fs-12-5); color: var(--ink); line-height: var(--lh-prose);
+}
+/* Empty state: a mono sentence, not a poster. */
+.launch-community-modlog .cm-table-empty {
+  font-family: var(--mono); font-size: var(--fs-12); color: var(--muted);
+  text-align: center; padding: var(--sp-12) var(--sp-8);
+}
+
+/* Desktop-only gate: hide this route's launch app under the shared
+   breakpoint; the gate panel itself is styled by mobile-gate.css. */
+@media (max-width: 800px) {
+  body.launch-community-modlog > .app { display: none !important; }
+}
+
+/* Analytics consent banner (markup shared with the legacy layout). */
+.launch-community-modlog #analytics-consent {
+  position: fixed; bottom: var(--sp-8); left: 50%; transform: translateX(-50%);
+  z-index: 50; width: calc(100% - 2rem); max-width: 28rem;
+  background: var(--surface); border: var(--bw) solid var(--line2);
+  border-radius: var(--r-3); padding: var(--sp-7) var(--sp-8);
+  box-shadow: var(--shadow-overlay);
+}
+.launch-community-modlog #analytics-consent p {
+  font-size: var(--fs-13); color: var(--muted); margin-bottom: var(--sp-5);
+}
+.launch-community-modlog #analytics-consent [data-analytics-accept],
+.launch-community-modlog #analytics-consent [data-analytics-refuse] {
+  font-family: var(--sans); font-weight: 600; font-size: var(--fs-12);
+  border: var(--bw) solid var(--line2); border-radius: var(--r-2);
+  padding: var(--sp-3) var(--sp-7); cursor: pointer;
+  background: var(--surface); color: var(--muted); margin-right: var(--sp-4);
+}
+.launch-community-modlog #analytics-consent [data-analytics-accept] {
+  color: #fff; background: var(--moss); border-color: var(--moss);
+}
+.launch-community-modlog #analytics-consent [data-analytics-error] {
+  color: var(--danger); font-size: var(--fs-11);
+}

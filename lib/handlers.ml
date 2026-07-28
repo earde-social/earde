@@ -2409,8 +2409,29 @@ let modlog_handler request =
             | Ok b -> Lwt.return b
             | _ -> Lwt.return false)
         in
+        (* Launch-chrome data (pass 14A), loaded only after the private-community
+           authorization decision above: sections/channels feed the shared community
+           sidebar, the viewer's joined communities the global rail. Each degrades to
+           an empty list on error rather than blocking the log; anonymous viewers
+           never touch membership data. *)
+        let%lwt sections =
+          if community.sections_enabled then
+            (match%lwt Db.get_sections_by_community db community.id with
+             | Ok secs -> Lwt.return secs | Error _ -> Lwt.return [])
+          else Lwt.return []
+        in
+        let%lwt channels =
+          match%lwt Db.get_channels_by_community db community.id with
+          | Ok cs -> Lwt.return cs | Error _ -> Lwt.return []
+        in
+        let%lwt rail_communities =
+          if user_id > 0 then
+            (match%lwt Db.get_user_communities db user_id with
+             | Ok cs -> Lwt.return cs | Error _ -> Lwt.return [])
+          else Lwt.return []
+        in
         (match%lwt Db.get_modlog db community.id with
-         | Ok actions -> Dream.html (Pages.mod_log_page ?user ~noindex:(community_noindex community) ~can_access_settings ~community actions request)
+         | Ok actions -> Dream.html (Pages.mod_log_page ?user ~noindex:(community_noindex community) ~rail_communities ~can_access_settings ~channels ~sections ~community actions request)
          | Error err -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:("Database error: " ^ err) ~alert_type:"error" ~return_url:("/c/" ^ slug) request))
     | Ok None -> Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"Not Found" ~message:"This community does not exist." ~alert_type:"error" ~return_url:"/" request)
     | Error err -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:("Database error: " ^ err) ~alert_type:"error" ~return_url:"/" request)

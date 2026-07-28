@@ -50,8 +50,11 @@ val community_settings_page : ?user:string -> ?connected_projects:string -> ?rai
     renders the Home requests entry active — callers must have re-proved the
     top-mod/admin gate first; [show_visibility_note:false] suppresses the
     private-community marker on the one surface that never names an
-    ineligibility reason. Defaults preserve every existing route's output. *)
-val launch_knowledge_sidebar : community:Db.community -> channels:Db.channel list -> sections:Db.community_section list -> ?active_section_slug:string -> ?append_uncategorized:bool -> ?settings_active:bool -> ?home_requests_active:bool -> ?show_visibility_note:bool -> can_manage:bool -> unit -> string
+    ineligibility reason; [moderation_log_active] marks the always-present
+    Moderation log entry current (modlog route only — the entry renders for
+    every viewer regardless). Defaults preserve every existing route's
+    output. *)
+val launch_knowledge_sidebar : community:Db.community -> channels:Db.channel list -> sections:Db.community_section list -> ?active_section_slug:string -> ?append_uncategorized:bool -> ?settings_active:bool -> ?home_requests_active:bool -> ?moderation_log_active:bool -> ?show_visibility_note:bool -> can_manage:bool -> unit -> string
 val manage_mods_page : ?user:string -> is_admin:bool -> current_user_role:string option -> community:Db.community -> mods:Db.moderator_entry list -> Dream.request -> string
 
 (** === POST === *)
@@ -119,7 +122,12 @@ val privacy_page : ?user:string -> Dream.request -> string
 val msg_page : ?user:string -> ?auth:bool -> title:string -> message:string -> alert_type:string -> return_url:string -> Dream.request -> string
 
 (** === MODERATION LOG === *)
-val mod_log_page : ?user:string -> ?noindex:bool -> can_access_settings:bool -> community:Db.community -> Db.mod_action list -> Dream.request -> string
+(** [rail_communities], [channels] and [sections] feed the launch chrome
+    (global rail + shared community sidebar) — supplied by the handler only
+    after the private-community authorization decision. [can_access_settings]
+    keeps its existing job (back-link target) and additionally gates the
+    sidebar's Settings entry, mirroring the sibling launch routes. *)
+val mod_log_page : ?user:string -> ?noindex:bool -> ?rail_communities:Db.community list -> can_access_settings:bool -> channels:Db.channel list -> sections:Db.community_section list -> community:Db.community -> Db.mod_action list -> Dream.request -> string
 
 (** === ADMIN === *)
 (** Display-only heuristic: [true] when a username looks bot-generated (digit-heavy,
