@@ -54,9 +54,17 @@ val community_settings_page : ?user:string -> ?connected_projects:string -> ?rai
     Moderation log entry current (modlog route only — the entry renders for
     every viewer regardless); [reports_active] renders the Reports entry
     active (report-queue route only — callers must have re-proved the M/TM/A
-    gate first). Defaults preserve every existing route's output. *)
-val launch_knowledge_sidebar : community:Db.community -> channels:Db.channel list -> sections:Db.community_section list -> ?active_section_slug:string -> ?append_uncategorized:bool -> ?settings_active:bool -> ?home_requests_active:bool -> ?moderation_log_active:bool -> ?reports_active:bool -> ?show_visibility_note:bool -> can_manage:bool -> unit -> string
-val manage_mods_page : ?user:string -> is_admin:bool -> current_user_role:string option -> community:Db.community -> mods:Db.moderator_entry list -> Dream.request -> string
+    gate first); [manage_moderators_active] renders the Manage moderators
+    entry active (manage-mods route only — callers must have re-proved the
+    TM/A gate first). Defaults preserve every existing route's output. *)
+val launch_knowledge_sidebar : community:Db.community -> channels:Db.channel list -> sections:Db.community_section list -> ?active_section_slug:string -> ?append_uncategorized:bool -> ?settings_active:bool -> ?home_requests_active:bool -> ?moderation_log_active:bool -> ?reports_active:bool -> ?manage_moderators_active:bool -> ?show_visibility_note:bool -> can_manage:bool -> unit -> string
+
+(** Moderator roster + role actions (TM/A only — gated in the handler; the
+    POST handlers re-check every role/hierarchy rule server-side, this only
+    renders). [rail_communities]/[channels]/[sections] feed the launch
+    shell's global rail and shared community sidebar (pass 14C) — loaded by
+    the handler only after authorization. *)
+val manage_mods_page : ?user:string -> ?rail_communities:Db.community list -> is_admin:bool -> current_user_role:string option -> channels:Db.channel list -> sections:Db.community_section list -> community:Db.community -> mods:Db.moderator_entry list -> Dream.request -> string
 
 (** === POST === *)
 val choose_community_page : ?user:string -> Db.community list -> string

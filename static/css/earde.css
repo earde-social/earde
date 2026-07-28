@@ -6314,3 +6314,313 @@ ol, ul { margin: 0; padding: 0; list-style: none; }
 .launch-community-reports #analytics-consent [data-analytics-error] {
   color: var(--danger); font-size: var(--fs-11);
 }
+
+/* ==========================================================================
+   EARDE INTEGRATION — community moderator management only
+   Scoped beneath body.launch-community-moderators: GET /c/:slug/manage-mods
+   (Pages.manage_mods_page). Exists only because the real stewardship surface
+   cannot emit the reference markup exactly:
+   - the cm-* role sections (Top Mods / Moderators / Legacy moderators), the
+     add / promote / remove forms with their hidden target_user_id fields,
+     the confirmModal onsubmit hooks and the role badges are handler/test
+     contracts, so the legacy markup is spliced verbatim and skinned here
+     onto the approved community-shell anatomy (page head band over a flat
+     moderator ledger — stewardship administration, not enterprise IAM);
+   - the route is TM/A-gated in the handler, so the roster may show the real
+     role actions, but nothing here adds invitations, permission matrices,
+     activity metrics or bulk actions the backend does not have;
+   - the shared behavior script composes the confirm modal from legacy
+     utility class names; the stable .fixed.inset-0 pair and the
+     #cancel-btn / #confirm-btn ids are the hooks, styled route-scoped;
+   - the notification badge is revealed by the shared script removing the
+     legacy `hidden` class; honoured on the badge element only — no global
+     .hidden utility is defined;
+   - for a private community the renderer keeps its inner ph-no-capture
+     guard div inside <main>; display:contents keeps it out of the flex
+     chain so both privacy shapes share one layout;
+   - the desktop-only gate panel ships in mobile-gate.css; only the
+     launch-scope "hide the app" rule for this route lives here;
+   - the analytics consent banner markup is shared with the legacy layout
+     (same rules as the other launch sections, re-scoped).
+   ========================================================================== */
+
+/* ---- Launch chrome ---------------------------------------------------------- */
+
+/* Top-bar user menu: pure-CSS <details>, real logout POST form inside. */
+.launch-community-moderators .launch-user { position: relative; }
+.launch-community-moderators .launch-user > summary { list-style: none; }
+.launch-community-moderators .launch-user > summary::-webkit-details-marker { display: none; }
+.launch-community-moderators .launch-user .avatar { background: var(--moss); }
+.launch-community-moderators .launch-user__menu {
+  position: absolute; right: 0; top: calc(100% + 6px); z-index: 40;
+  min-width: 168px; display: flex; flex-direction: column;
+  background: var(--surface); border: var(--bw) solid var(--line2);
+  border-radius: var(--r-3); padding: var(--sp-3);
+  box-shadow: var(--shadow-overlay);
+}
+.launch-community-moderators .launch-user__menu a,
+.launch-community-moderators .launch-user__menu button {
+  display: block; width: 100%; text-align: left; background: none; border: 0;
+  font-family: var(--mono); font-size: var(--fs-12); color: var(--ink);
+  padding: var(--sp-3) var(--sp-5); border-radius: var(--r-2); cursor: pointer;
+}
+.launch-community-moderators .launch-user__menu a:hover,
+.launch-community-moderators .launch-user__menu button:hover { background: var(--surface2); }
+.launch-community-moderators .launch-user__menu form {
+  margin: var(--sp-2) 0 0; padding-top: var(--sp-2);
+  border-top: var(--bw) solid var(--line);
+}
+
+/* Notification badge: hidden until the shared one-shot fetch reveals it.
+   Badge element only — deliberately NOT a global .hidden utility. */
+.launch-community-moderators #notif-badge.hidden { display: none; }
+
+/* Real community avatars fill their fixed tile (rail, sidebar head). */
+.launch-community-moderators .launch-rail__img,
+.launch-community-moderators .launch-avatar-img {
+  width: 100%; height: 100%; object-fit: cover; border-radius: inherit;
+  display: block;
+}
+
+/* ---- Community sidebar ------------------------------------------------------ */
+
+.launch-community-moderators .launch-side-id { min-width: 0; display: block; }
+.launch-community-moderators .launch-side-vis {
+  font-family: var(--mono); font-size: var(--fs-10-5); color: var(--ochre);
+  padding: var(--sp-2) 9px var(--sp-1);
+}
+
+/* ---- Roster anatomy --------------------------------------------------------- */
+
+/* Private communities keep the renderer's inner replay guard; keep it out of
+   the flex chain so both privacy shapes share one layout. */
+.launch-community-moderators .main > .ph-no-capture { display: contents; }
+
+/* Unlike the single-ledger siblings, this surface stacks several cm-panel
+   sections (add form, Top Mods, Moderators, Legacy) — so cm-wrap itself is
+   the scroller and the head band stays pinned above it. */
+.launch-community-moderators .cm-wrap {
+  flex: 1; min-height: 0; overflow-y: auto; scrollbar-width: thin;
+  padding-bottom: 70px;
+}
+
+/* Page head band (reference .page__head--tight geometry): compact serif
+   title; the legacy accent span carries "— /c/:slug", restyled as the quiet
+   mono route context rather than a display flourish. */
+.launch-community-moderators .cm-head {
+  position: sticky; top: 0; z-index: 5;
+  display: flex; align-items: baseline; gap: var(--sp-6);
+  padding: 15px 28px; background: var(--surface);
+  border-bottom: var(--bw) solid var(--line2);
+}
+.launch-community-moderators .cm-h1 {
+  font-family: var(--serif); font-weight: 600; font-size: var(--fs-22);
+  color: var(--ink); min-width: 0;
+}
+.launch-community-moderators .cm-h1 .accent {
+  font-family: var(--mono); font-weight: 400; font-size: var(--fs-11-5);
+  color: var(--muted); margin-left: var(--sp-3);
+}
+.launch-community-moderators .cm-back {
+  margin-left: auto; flex: none;
+  font-family: var(--mono); font-size: var(--fs-11-5); color: var(--muted);
+  text-decoration: none;
+}
+.launch-community-moderators .cm-back:hover { color: var(--ink); }
+
+/* Stacked panels at register width, thin-ruled — flat sections, no cards. */
+.launch-community-moderators .cm-panel {
+  margin: var(--sp-10) 28px 0; max-width: 860px;
+  padding-bottom: var(--sp-9);
+  border-bottom: var(--bw) solid var(--line);
+}
+.launch-community-moderators .cm-panel:last-child { border-bottom: 0; }
+.launch-community-moderators .cm-panel-title {
+  font-family: var(--serif); font-weight: 600; font-size: var(--fs-16);
+  color: var(--ink); margin-bottom: var(--sp-2);
+}
+/* Real constraint copy only (council cap, admin-only removal, inactivity
+   demotion) — reads as the protected-role explanation, nothing invented. */
+.launch-community-moderators .cm-panel-desc {
+  font-size: var(--fs-12-5); color: var(--muted); line-height: var(--lh-prose);
+  margin: var(--sp-2) 0 var(--sp-6);
+}
+
+/* ---- Moderator ledger ------------------------------------------------------- */
+
+/* Flat roster: one hairline frame, thin row separators, no zebra, no
+   shadows — username identity primary, role marker secondary, actions quiet
+   on the right. */
+.launch-community-moderators .cm-list {
+  border: var(--bw) solid var(--line2); border-radius: var(--r-2);
+  background: var(--surface);
+}
+.launch-community-moderators .cm-list-row {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: var(--sp-6); padding: var(--sp-4) var(--sp-6);
+  border-bottom: var(--bw) solid var(--line);
+}
+.launch-community-moderators .cm-list-row:last-child { border-bottom: 0; }
+
+/* Identity: the real /u/ profile link, mono, visually primary. */
+.launch-community-moderators .cm-user-link {
+  font-family: var(--mono); font-size: var(--fs-13); font-weight: 600;
+  color: var(--ink); text-decoration: none;
+}
+.launch-community-moderators .cm-user-link:hover { text-decoration: underline; }
+.launch-community-moderators .cm-user-link--muted {
+  color: var(--muted); font-weight: 400;
+}
+
+/* Role markers: outline chips on the recorded role — Top Mod carries the
+   moss steward tone, Legacy recedes to the archive tone. Secondary to the
+   username by size and weight. */
+.launch-community-moderators .cm-badge {
+  display: inline-block; font-family: var(--mono); font-size: var(--fs-10);
+  font-weight: 600; letter-spacing: .04em; text-transform: uppercase;
+  border: var(--bw) solid var(--line2); border-radius: var(--r-1);
+  padding: 1px var(--sp-3); color: var(--muted); background: var(--surface2);
+  white-space: nowrap; margin-left: var(--sp-4); vertical-align: 1px;
+}
+.launch-community-moderators .cm-badge--top {
+  color: var(--moss); border-color: var(--moss);
+  background: color-mix(in srgb, var(--moss) 9%, var(--surface));
+}
+.launch-community-moderators .cm-badge--legacy { color: var(--muted); }
+
+/* Protected-role / no-powers notes: quiet mono statements of the real
+   constraints ("Top Mod" where only an admin may act; "No active powers"). */
+.launch-community-moderators .cm-muted-note {
+  font-family: var(--mono); font-size: var(--fs-11); color: var(--muted);
+  white-space: nowrap;
+}
+
+/* ---- Role actions ----------------------------------------------------------- */
+
+/* Per-row action run: separate promote / remove forms exactly as rendered —
+   never combined. */
+.launch-community-moderators .cm-row-actions {
+  display: flex; align-items: center; gap: var(--sp-3); flex: none;
+}
+.launch-community-moderators .cm-form-inline { display: inline-flex; margin: 0; }
+.launch-community-moderators .cm-btn-sm {
+  cursor: pointer; font-family: var(--mono); font-size: var(--fs-11);
+  color: var(--slate); background: var(--surface);
+  border: var(--bw) solid var(--line2); border-radius: var(--r-2);
+  padding: var(--sp-2) var(--sp-6); white-space: nowrap;
+}
+.launch-community-moderators .cm-btn-sm:hover {
+  background: var(--surface2); color: var(--ink);
+}
+/* Promotion: moss, the affirmative stewardship action. */
+.launch-community-moderators .cm-btn-sm--promote { color: var(--moss); }
+.launch-community-moderators .cm-btn-sm--promote:hover {
+  border-color: var(--moss); color: var(--moss); background: var(--surface);
+}
+/* Removal / demotion: quiet clay-family outline, no loud destructive block. */
+.launch-community-moderators .cm-btn-sm--danger { color: var(--danger); }
+.launch-community-moderators .cm-btn-sm--danger:hover {
+  border-color: var(--danger); color: var(--danger); background: var(--surface);
+}
+
+/* ---- Add moderator ---------------------------------------------------------- */
+
+/* Compact one-line lookup: username field + moss primary submit. The exact
+   legacy form (action, method, CSRF, `username` field, required) unchanged. */
+.launch-community-moderators .cm-inline-form {
+  display: flex; align-items: center; gap: var(--sp-4); max-width: 420px;
+}
+.launch-community-moderators .cm-input {
+  flex: 1; min-width: 0;
+  font-family: var(--mono); font-size: var(--fs-12-5); color: var(--ink);
+  background: var(--surface); border: var(--bw) solid var(--line2);
+  border-radius: var(--r-2); padding: var(--sp-3) var(--sp-5);
+}
+.launch-community-moderators .cm-input::placeholder { color: var(--muted); }
+.launch-community-moderators .cm-input:focus {
+  outline: none; border-color: var(--slate);
+}
+.launch-community-moderators .cm-btn {
+  cursor: pointer; flex: none;
+  font-family: var(--sans); font-weight: 600; font-size: var(--fs-12);
+  color: #fff; background: var(--moss);
+  border: var(--bw) solid var(--moss); border-radius: var(--r-2);
+  padding: var(--sp-3) var(--sp-7); white-space: nowrap;
+}
+.launch-community-moderators .cm-btn:hover {
+  filter: brightness(1.06);
+}
+
+/* Empty states: a mono sentence, not a poster. */
+.launch-community-moderators .cm-empty {
+  font-family: var(--mono); font-size: var(--fs-12); color: var(--muted);
+  padding: var(--sp-6) 0;
+}
+
+/* ---- Shared confirm modal --------------------------------------------------- */
+
+/* The shared script composes it from legacy utility class names; the stable
+   .fixed.inset-0 pair and the #cancel-btn / #confirm-btn ids are the hooks. */
+.launch-community-moderators .fixed.inset-0 {
+  position: fixed; inset: 0; z-index: 50;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(31, 36, 33, .45); transition: opacity .2s;
+}
+.launch-community-moderators .fixed.inset-0.opacity-0 { opacity: 0; }
+.launch-community-moderators .fixed.inset-0 > div {
+  background: var(--surface); border: var(--bw) solid var(--line2);
+  border-radius: var(--r-4); padding: var(--sp-9);
+  max-width: 24rem; width: calc(100% - 2rem);
+  box-shadow: var(--shadow-overlay);
+}
+.launch-community-moderators .fixed.inset-0 h3 {
+  font-size: var(--fs-15); font-weight: 700; margin-bottom: var(--sp-3);
+}
+.launch-community-moderators .fixed.inset-0 p {
+  font-size: var(--fs-13); color: var(--muted); margin-bottom: var(--sp-7);
+}
+.launch-community-moderators .fixed.inset-0 .flex {
+  display: flex; justify-content: flex-end; gap: var(--sp-4);
+}
+.launch-community-moderators #cancel-btn,
+.launch-community-moderators #confirm-btn {
+  cursor: pointer; border: var(--bw) solid var(--line2);
+  border-radius: var(--r-2); background: var(--surface); color: var(--ink);
+  padding: var(--sp-3) var(--sp-7); font-size: var(--fs-12); font-weight: 600;
+}
+.launch-community-moderators #confirm-btn {
+  color: #fff; background: var(--danger); border-color: var(--danger);
+}
+
+/* ---- Gate + consent --------------------------------------------------------- */
+
+/* Desktop-only gate: hide this route's launch app under the shared
+   breakpoint; the gate panel itself is styled by mobile-gate.css. */
+@media (max-width: 800px) {
+  body.launch-community-moderators > .app { display: none !important; }
+}
+
+/* Analytics consent banner (markup shared with the legacy layout). */
+.launch-community-moderators #analytics-consent {
+  position: fixed; bottom: var(--sp-8); left: 50%; transform: translateX(-50%);
+  z-index: 50; width: calc(100% - 2rem); max-width: 28rem;
+  background: var(--surface); border: var(--bw) solid var(--line2);
+  border-radius: var(--r-3); padding: var(--sp-7) var(--sp-8);
+  box-shadow: var(--shadow-overlay);
+}
+.launch-community-moderators #analytics-consent p {
+  font-size: var(--fs-13); color: var(--muted); margin-bottom: var(--sp-5);
+}
+.launch-community-moderators #analytics-consent [data-analytics-accept],
+.launch-community-moderators #analytics-consent [data-analytics-refuse] {
+  font-family: var(--sans); font-weight: 600; font-size: var(--fs-12);
+  border: var(--bw) solid var(--line2); border-radius: var(--r-2);
+  padding: var(--sp-3) var(--sp-7); cursor: pointer;
+  background: var(--surface); color: var(--muted); margin-right: var(--sp-4);
+}
+.launch-community-moderators #analytics-consent [data-analytics-accept] {
+  color: #fff; background: var(--moss); border-color: var(--moss);
+}
+.launch-community-moderators #analytics-consent [data-analytics-error] {
+  color: var(--danger); font-size: var(--fs-11);
+}

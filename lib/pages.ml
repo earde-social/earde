@@ -644,7 +644,7 @@ let launch_knowledge_sidebar ~(community : community) ~(channels : channel list)
     ~(sections : community_section list) ?active_section_slug
     ?(append_uncategorized = false) ?(settings_active = false)
     ?(home_requests_active = false) ?(moderation_log_active = false)
-    ?(reports_active = false)
+    ?(reports_active = false) ?(manage_moderators_active = false)
     ?(show_visibility_note = true) ~can_manage () =
   let esc = Components.html_escape in
   let slug = esc community.slug in
@@ -730,6 +730,14 @@ let launch_knowledge_sidebar ~(community : community) ~(channels : channel list)
             authority decision of its own. *)
          Printf.sprintf
            "<a class='navitem navitem--pad navitem--active' href='/c/%s/reports'><span class='navitem__sigil navitem__sigil--box'>&#9873;</span>Reports</a>"
+           slug
+       else "")
+    ^ (if manage_moderators_active then
+         (* Rendered only by the manage-mods route, whose handler proved the
+            viewer TM/A before this document exists — never a render-time
+            authority decision of its own. *)
+         Printf.sprintf
+           "<a class='navitem navitem--pad navitem--active' href='/c/%s/manage-mods'><span class='navitem__sigil navitem__sigil--box'>&#9878;</span>Manage moderators</a>"
            slug
        else "")
     ^ (if can_manage then
@@ -3206,7 +3214,9 @@ let community_settings_page ?user ?(connected_projects="") ?(rail_communities=[]
     ~title:(Printf.sprintf "Settings — /c/%s" community.slug)
     ~content:(Components.private_replay_guard ~community content) ()
 
-let manage_mods_page ?user ~is_admin ~current_user_role ~(community : community) ~(mods : moderator_entry list) request =
+let manage_mods_page ?user ?(rail_communities = []) ~is_admin ~current_user_role
+    ~(channels : channel list) ~(sections : community_section list)
+    ~(community : community) ~(mods : moderator_entry list) request =
   let csrf_token = Dream.csrf_tag request in
   let esc = Components.html_escape in
   let slug = esc community.slug in
@@ -3336,10 +3346,32 @@ let manage_mods_page ?user ~is_admin ~current_user_role ~(community : community)
     mod_section
     legacy_section
   in
-  Components.community_manage_page ?user ~request
-    ~analytics_community:(community.id, community.visibility)
+  (* Cartographic launch shell (pass 14C): the same four-pane chrome as the
+     sibling community routes, wrapping the moderator roster verbatim — the
+     cm-* role sections, the add/promote/remove forms with their hidden
+     target_user_id fields, the confirmModal onsubmit hooks (the shared
+     launch behavior script carries confirmModal and the #modal-confirm-msg /
+     #cancel-btn / #confirm-btn contract) and the role badges are treated as
+     pinned, so only this outer document changed. The sidebar reuses the
+     shared knowledge grammar with Manage moderators active; can_manage is
+     true by construction here — the handler only renders this page for TM/A
+     viewers, exactly the settings gate. [rail_communities] carries the
+     viewer's joined communities as the handler loaded them
+     (post-authorization only); ordering, dedup by slug and the single active
+     marker stay owned by the shared launch doc builder. Replay privacy keeps
+     the existing inner ph-no-capture guard for private communities (the
+     launch shell additionally marks .shell, like the sibling routes; the
+     launch doc also owns the analytics assets with the same
+     community-id/visibility pair the legacy wrapper received). *)
+  let sidebar =
+    launch_knowledge_sidebar ~community ~channels ~sections
+      ~manage_moderators_active:true ~can_manage:true ()
+  in
+  Components.launch_community_page ?user ~request ~rail_communities
+    ~community ~sidebar
+    ~page_class:"launch-community-moderators"
     ~title:(Printf.sprintf "Manage Mods — /c/%s" community.slug)
-    ~body:(Components.private_replay_guard ~community content) ()
+    ~content:(Components.private_replay_guard ~community content) ()
 
 (* === POST === *)
 

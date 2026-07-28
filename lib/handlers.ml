@@ -4727,9 +4727,28 @@ let manage_mods_handler request =
             if not is_authorized then
               Dream.respond ~status:`Forbidden (Pages.msg_page ?user ~title:"Access Denied" ~message:"Only Top Mods and Admins can manage moderators." ~alert_type:"error" ~return_url:("/c/" ^ slug) request)
             else
+              (* Launch-chrome data (pass 14C), loaded only after the TM/A
+                 authorization above — a denied request never touches sections,
+                 channels or the viewer's membership. Each degrades to an empty
+                 list on error rather than blocking the roster. Same plumbing as
+                 the sibling converted management routes. *)
+              let%lwt sections =
+                if community.sections_enabled then
+                  (match%lwt Db.get_sections_by_community db community.id with
+                   | Ok secs -> Lwt.return secs | Error _ -> Lwt.return [])
+                else Lwt.return []
+              in
+              let%lwt channels =
+                match%lwt Db.get_channels_by_community db community.id with
+                | Ok cs -> Lwt.return cs | Error _ -> Lwt.return []
+              in
+              let%lwt rail_communities =
+                match%lwt Db.get_user_communities db user_id with
+                | Ok cs -> Lwt.return cs | Error _ -> Lwt.return []
+              in
               (match%lwt Db.get_community_mods_with_roles db community.id with
                | Ok mods ->
-                   Dream.html (Pages.manage_mods_page ?user ~is_admin ~current_user_role ~community ~mods request)
+                   Dream.html (Pages.manage_mods_page ?user ~rail_communities ~is_admin ~current_user_role ~channels ~sections ~community ~mods request)
                | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:("Database error: " ^ e) ~alert_type:"error" ~return_url:("/c/" ^ slug) request))
         | Ok None -> Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"Not Found" ~message:"This community does not exist." ~alert_type:"error" ~return_url:"/" request)
         | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:("Database error: " ^ e) ~alert_type:"error" ~return_url:"/" request)
