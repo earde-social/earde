@@ -104,7 +104,7 @@ val post_page : ?user:string -> ?noindex:bool -> is_member:bool -> is_current_us
 
 (** === USER === *)
 val user_profile_page : ?user:string -> ?rail_communities:Db.community list -> is_admin:bool -> is_globally_banned:bool -> profile_id:int -> admin_usernames:string list -> moderated_communities:Db.community list -> active_tab:string -> (int * int) list -> string -> string -> string option -> string option -> int -> Db.post list -> (int * string * string * int * string * int) list -> Db.community_user_stat list -> Dream.request -> string
-val settings_page : ?user:string -> string option -> string option -> Dream.request -> string
+val settings_page : ?user:string -> ?rail_communities:Db.community list -> string option -> string option -> Dream.request -> string
 val notifications_page : ?user:string -> ?rail_communities:Db.community list -> Db.notification list -> Dream.request -> string
 
 (** === SEARCH === *)

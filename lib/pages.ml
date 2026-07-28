@@ -4739,10 +4739,28 @@ let user_profile_page ?user ?(rail_communities = []) ~is_admin ~is_globally_bann
   Components.launch_app_page ?user ~request ~rail_communities
     ~page_class:"launch-user-profile" ~title:(username ^ "'s Profile") ~content ()
 
-let settings_page ?user bio avatar_url request =
+(* /settings — the account-global settings surface, on the launch app chrome
+   (Components.launch_app_page: earde.css only, no shell.css / account.css).
+   The five account-panel sections (multipart profile form, password form,
+   data export, the consent-managed analytics panel, the delete-account
+   danger zone) keep their markup verbatim: field names/order, CSRF
+   positions, the data-analytics-* hooks analytics.js drives, and the
+   confirmModal onsubmit are the load-bearing contracts. Launch chrome
+   renders outside them: the legacy in-page Settings/Notifications account
+   nav is superseded by the topbar user menu (same real destinations), and
+   the serif page head carries the mono account identifier plus the existing
+   view-profile link. Panels are skinned by the "account settings only"
+   integration section at the end of earde.css.
+
+   The stored bio and avatar URL are user-controlled (bio via this form,
+   avatar_url via the browser-supplied existing_avatar_url field) and were
+   previously interpolated raw; they are now escaped at this template
+   boundary — textarea text context and value='…' attribute context — per
+   the store-raw/escape-at-render convention. *)
+let settings_page ?user ?(rail_communities = []) bio avatar_url request =
   let csrf_token = Dream.csrf_tag request in
-  let current_bio = Option.value ~default:"" bio in
-  let current_avatar = Option.value ~default:"" avatar_url in
+  let current_bio = Components.html_escape (Option.value ~default:"" bio) in
+  let current_avatar = Components.html_escape (Option.value ~default:"" avatar_url) in
 
   (* Read-only preview of the stored avatar above the upload input. Same Components.user_avatar
      gate (safe_img_src) + letter-tile fallback as the profile header, so a missing/unsafe
@@ -4754,13 +4772,12 @@ let settings_page ?user bio avatar_url request =
       ~username:(Option.value ~default:"" user) avatar_url
   in
 
-  (* Account-area nav links to the private account pages only; the public profile is
-     reached through the separate "View public profile" link. *)
-  let account_nav = "
-    <nav class='account-nav'>
-        <a class='account-nav-link account-nav-link--active' href='/settings'>Settings</a>
-        <a class='account-nav-link' href='/notifications'>Notifications</a>
-    </nav>"
+  let identity_line =
+    match user with
+    | Some u ->
+        Printf.sprintf "<p class='account-ident'>u/%s</p>"
+          (Components.html_escape u)
+    | None -> ""
   in
   let view_profile_link =
     match user with
@@ -4770,15 +4787,16 @@ let settings_page ?user bio avatar_url request =
           (Components.html_escape u)
     | None -> ""
   in
+  let page_head =
+    Printf.sprintf
+      "<div class='page__head'><div class='page__head-inner page__head-inner--list account-head-launch'>\
+       <div><h1 class='page__title page__title--sm'>Account settings</h1>%s</div>\
+       %s</div></div>"
+      identity_line view_profile_link
+  in
 
   let body = Printf.sprintf "
     <div class='account-wrap account-wrap--narrow'>
-        %s
-        <div class='account-head account-head--row'>
-            <h1 class='account-h1'>Account <span class='accent'>settings</span></h1>
-            %s
-        </div>
-
         <div class='account-panel account-panel--card'>
             <h2 class='account-section-title'>Profile information</h2>
             <form action='/settings' method='POST' enctype='multipart/form-data' class='account-form'>
@@ -4852,9 +4870,15 @@ let settings_page ?user bio avatar_url request =
             </form>
         </div>
     </div>"
-    account_nav view_profile_link csrf_token avatar_preview current_avatar current_bio csrf_token csrf_token
+    csrf_token avatar_preview current_avatar current_bio csrf_token csrf_token
   in
-  Components.account_page ~noindex:true ?user ~request ~title:"Settings" ~body ()
+  let content =
+    Printf.sprintf
+      "%s<div class='scroll'><div class='container container--list'>%s</div></div>"
+      page_head body
+  in
+  Components.launch_app_page ~noindex:true ?user ~request ~rail_communities
+    ~page_class:"launch-account-settings" ~title:"Settings" ~content ()
 
 (* /notifications — the account-global notification center, on the launch
    app chrome (Components.launch_app_page: earde.css only, no shell.css /

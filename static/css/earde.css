@@ -5556,3 +5556,269 @@ ol, ul { margin: 0; padding: 0; list-style: none; }
 .launch-user-profile #analytics-consent [data-analytics-error] {
   color: var(--danger); font-size: var(--fs-11);
 }
+
+/* ==========================================================================
+   EARDE INTEGRATION — account settings only
+   Scoped beneath body.launch-account-settings: GET /settings
+   (Pages.settings_page). Exists only because the real account surface
+   cannot emit the reference markup exactly:
+   - the five account-panel sections (multipart profile form, password
+     form, data export, the consent-managed analytics panel, the
+     delete-account danger zone) are spliced verbatim — their field names,
+     CSRF positions, data-analytics-* hooks and confirmModal onsubmit are
+     contracts — and skinned here onto the approved flat settings grammar
+     (serif section titles, mono fact labels, inset controls, moss primary,
+     danger-accented destructive section);
+   - analytics.js toggles the analytics panel and its Enable/Disable
+     controls via the `hidden` ATTRIBUTE; author display rules on those
+     elements would defeat the UA default, so the attribute is honoured
+     route-wide;
+   - the confirm-modal overlay (delete account) is composed by the shared
+     behavior script from legacy utility class names; the stable
+     .fixed.inset-0 pair and the #cancel-btn / #confirm-btn ids are the
+     hooks;
+   - the notification badge is revealed by the shared script removing the
+     legacy `hidden` class; honoured on the badge element only — no global
+     .hidden utility is defined;
+   - the desktop-only gate panel ships in mobile-gate.css; only the
+     launch-scope "hide the app" rule for this route lives here;
+   - the analytics consent banner markup is shared with the legacy layout
+     (same rules as the other launch sections, re-scoped).
+   ========================================================================== */
+
+/* ---- Launch chrome ---------------------------------------------------------- */
+
+/* Top-bar user menu: pure-CSS <details>, real logout POST form inside. */
+.launch-account-settings .launch-user { position: relative; }
+.launch-account-settings .launch-user > summary { list-style: none; }
+.launch-account-settings .launch-user > summary::-webkit-details-marker { display: none; }
+.launch-account-settings .launch-user .avatar { background: var(--moss); }
+.launch-account-settings .launch-user__menu {
+  position: absolute; right: 0; top: calc(100% + 6px); z-index: 40;
+  min-width: 168px; display: flex; flex-direction: column;
+  background: var(--surface); border: var(--bw) solid var(--line2);
+  border-radius: var(--r-3); padding: var(--sp-3);
+  box-shadow: var(--shadow-overlay);
+}
+.launch-account-settings .launch-user__menu a,
+.launch-account-settings .launch-user__menu button {
+  display: block; width: 100%; text-align: left; background: none; border: 0;
+  font-family: var(--mono); font-size: var(--fs-12); color: var(--ink);
+  padding: var(--sp-3) var(--sp-5); border-radius: var(--r-2); cursor: pointer;
+}
+.launch-account-settings .launch-user__menu a:hover,
+.launch-account-settings .launch-user__menu button:hover { background: var(--surface2); }
+.launch-account-settings .launch-user__menu form {
+  margin: var(--sp-2) 0 0; padding-top: var(--sp-2);
+  border-top: var(--bw) solid var(--line);
+}
+
+/* Notification badge: hidden until the shared one-shot fetch reveals it.
+   Badge element only — deliberately NOT a global .hidden utility. */
+.launch-account-settings #notif-badge.hidden { display: none; }
+
+/* Real community avatars fill the fixed 42px rail tile. */
+.launch-account-settings .launch-rail__img {
+  width: 100%; height: 100%; object-fit: cover; border-radius: inherit;
+  display: block;
+}
+
+/* analytics.js drives the analytics panel, its Enable/Disable pair and the
+   error line through the `hidden` attribute; the author display rules on
+   .account-btn/.account-panel below would otherwise override the UA
+   [hidden] default. Route-scoped, deliberate. */
+.launch-account-settings [hidden] { display: none !important; }
+
+/* ---- Page head --------------------------------------------------------------- */
+
+/* Serif title + mono account identifier left, view-profile link right. */
+.launch-account-settings .account-head-launch {
+  display: flex; align-items: flex-end; justify-content: space-between;
+  gap: var(--sp-7);
+}
+.launch-account-settings .account-ident {
+  font-family: var(--mono); font-size: var(--fs-12); color: var(--muted);
+  margin-top: var(--sp-1);
+}
+.launch-account-settings .account-view-profile {
+  font-family: var(--mono); font-size: var(--fs-11-5); color: var(--slate);
+  text-decoration: none; white-space: nowrap; padding-bottom: 2px;
+}
+.launch-account-settings .account-view-profile:hover { text-decoration: underline; }
+
+/* ---- Panels ------------------------------------------------------------------ */
+
+/* Legacy card column recast as flat bordered form sections: hairline
+   borders, tight radii, no gradients, no decorative shadows. */
+.launch-account-settings .account-wrap {
+  display: flex; flex-direction: column; gap: var(--sp-8);
+  padding: var(--sp-9) 0 70px;
+}
+.launch-account-settings .account-panel {
+  border: var(--bw) solid var(--line2); border-radius: var(--r-3);
+  background: var(--surface); padding: var(--sp-9) var(--sp-10);
+}
+.launch-account-settings .account-section-title {
+  font-family: var(--serif); font-weight: 600; font-size: var(--fs-19);
+  color: var(--ink); margin-bottom: var(--sp-4);
+}
+.launch-account-settings .account-section-desc {
+  font-size: var(--fs-13); color: var(--muted); line-height: var(--lh-prose);
+  margin-bottom: var(--sp-6); max-width: 62ch;
+}
+.launch-account-settings .account-section-desc strong { color: var(--ink); }
+
+/* Destructive section: danger left accent, danger-toned rule set below. */
+.launch-account-settings .account-danger {
+  border-left: 3px solid var(--danger);
+}
+.launch-account-settings .account-danger .account-section-title { color: var(--danger); }
+
+/* ---- Forms ------------------------------------------------------------------- */
+
+.launch-account-settings .account-form {
+  display: flex; flex-direction: column; gap: var(--sp-7);
+  align-items: flex-start;
+}
+.launch-account-settings .account-field { width: 100%; }
+.launch-account-settings .account-field-pair {
+  display: grid; grid-template-columns: 1fr 1fr;
+  gap: var(--sp-7) var(--sp-9); width: 100%;
+}
+.launch-account-settings .account-label {
+  display: block; font-family: var(--mono); font-size: var(--fs-11);
+  color: var(--muted); margin-bottom: 5px;
+}
+.launch-account-settings .account-label-opt { color: var(--muted); }
+.launch-account-settings .account-input,
+.launch-account-settings .account-textarea {
+  width: 100%; font-family: var(--sans); font-size: var(--fs-14);
+  color: var(--ink); background: var(--surface2);
+  border: var(--bw) solid var(--line2); border-radius: var(--r-2);
+  padding: 9px var(--sp-6); outline: none;
+}
+.launch-account-settings .account-input:focus,
+.launch-account-settings .account-textarea:focus { border-color: var(--moss); }
+.launch-account-settings .account-textarea {
+  min-height: 90px; resize: vertical;
+  font-size: var(--fs-13-5); line-height: var(--lh-prose);
+}
+.launch-account-settings .account-textarea::placeholder { color: var(--muted); opacity: .8; }
+.launch-account-settings .account-hint {
+  font-family: var(--mono); font-size: var(--fs-10-5); color: var(--muted);
+}
+.launch-account-settings .account-file {
+  font-family: var(--mono); font-size: var(--fs-11); color: var(--muted);
+}
+.launch-account-settings .account-file::file-selector-button {
+  font-family: var(--sans); font-weight: 600; font-size: var(--fs-12);
+  color: var(--ink); background: var(--surface);
+  border: var(--bw) solid var(--line2); border-radius: var(--r-2);
+  padding: var(--sp-3) var(--sp-6); margin-right: var(--sp-5); cursor: pointer;
+}
+.launch-account-settings .account-file::file-selector-button:hover { background: var(--surface2); }
+
+/* Avatar preview: fixed square tile; the letter-tile fallback div centres
+   its initial (its legacy utility class names are inert here). */
+.launch-account-settings .account-avatar-row {
+  display: flex; gap: var(--sp-7); align-items: center;
+}
+.launch-account-settings .account-avatar {
+  width: 56px; height: 56px; flex: none;
+  border: var(--bw) solid var(--line2); border-radius: var(--r-3);
+  background: var(--surface3); object-fit: cover; overflow: hidden;
+  display: flex; align-items: center; justify-content: center;
+  font-weight: 700; font-size: var(--fs-19); color: var(--ink);
+}
+.launch-account-settings .account-avatar-ctl {
+  display: flex; flex-direction: column; gap: var(--sp-3); min-width: 0;
+}
+
+/* The analytics panel's button row (plain div inside its .account-form). */
+.launch-account-settings [data-analytics-settings] .account-form > div {
+  display: flex; gap: var(--sp-4);
+}
+
+/* ---- Buttons ----------------------------------------------------------------- */
+
+/* Moss primary; quiet bordered secondary; text-and-border danger that only
+   fills on hover (accents are deliberate, not decorative). The data-export
+   anchor shares the button classes, hence inline-flex + no underline. */
+.launch-account-settings .account-btn {
+  display: inline-flex; align-items: center; gap: var(--sp-3);
+  cursor: pointer; text-decoration: none;
+  font-family: var(--sans); font-weight: 600; font-size: var(--fs-12-5);
+  color: #fff; background: var(--moss);
+  border: var(--bw) solid var(--moss); border-radius: var(--r-2);
+  padding: var(--sp-4) var(--sp-8);
+}
+.launch-account-settings .account-btn:hover { background: var(--forest); border-color: var(--forest); }
+.launch-account-settings .account-btn--secondary {
+  color: var(--ink); background: var(--surface); border-color: var(--line2);
+}
+.launch-account-settings .account-btn--secondary:hover { background: var(--surface2); border-color: var(--line2); }
+.launch-account-settings .account-btn--danger {
+  color: var(--danger); background: var(--surface); border-color: var(--danger);
+}
+.launch-account-settings .account-btn--danger:hover { color: #fff; background: var(--danger); }
+
+/* ---- Confirm modal ------------------------------------------------------------ */
+
+/* Shared confirm modal (delete account): the script composes it from legacy
+   utility class names; the stable .fixed.inset-0 pair and the #cancel-btn /
+   #confirm-btn ids are the hooks. */
+.launch-account-settings .fixed.inset-0 {
+  position: fixed; inset: 0; z-index: 50;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(31, 36, 33, .45); transition: opacity .2s;
+}
+.launch-account-settings .fixed.inset-0.opacity-0 { opacity: 0; }
+.launch-account-settings .fixed.inset-0 > div {
+  background: var(--surface); border: var(--bw) solid var(--line2);
+  border-radius: var(--r-4); padding: var(--sp-9);
+  max-width: 24rem; width: calc(100% - 2rem);
+  box-shadow: var(--shadow-overlay);
+}
+.launch-account-settings .fixed.inset-0 h3 { font-size: var(--fs-15); font-weight: 700; margin-bottom: var(--sp-3); }
+.launch-account-settings .fixed.inset-0 p { font-size: var(--fs-13); color: var(--muted); margin-bottom: var(--sp-7); }
+.launch-account-settings .fixed.inset-0 .flex { display: flex; justify-content: flex-end; gap: var(--sp-4); }
+.launch-account-settings #cancel-btn,
+.launch-account-settings #confirm-btn {
+  cursor: pointer; border: var(--bw) solid var(--line2);
+  border-radius: var(--r-2); background: var(--surface); color: var(--ink);
+  padding: var(--sp-3) var(--sp-7); font-size: var(--fs-12); font-weight: 600;
+}
+.launch-account-settings #confirm-btn { color: #fff; background: var(--danger); border-color: var(--danger); }
+
+/* ---- Gate + consent --------------------------------------------------------- */
+
+/* Desktop-only gate: hide this route's launch app under the shared
+   breakpoint; the gate panel itself is styled by mobile-gate.css. */
+@media (max-width: 800px) {
+  body.launch-account-settings > .app { display: none !important; }
+}
+
+/* Analytics consent banner (markup shared with the legacy layout). */
+.launch-account-settings #analytics-consent {
+  position: fixed; bottom: var(--sp-8); left: 50%; transform: translateX(-50%);
+  z-index: 50; width: calc(100% - 2rem); max-width: 28rem;
+  background: var(--surface); border: var(--bw) solid var(--line2);
+  border-radius: var(--r-3); padding: var(--sp-7) var(--sp-8);
+  box-shadow: var(--shadow-overlay);
+}
+.launch-account-settings #analytics-consent p {
+  font-size: var(--fs-13); color: var(--muted); margin-bottom: var(--sp-5);
+}
+.launch-account-settings #analytics-consent [data-analytics-accept],
+.launch-account-settings #analytics-consent [data-analytics-refuse] {
+  font-family: var(--sans); font-weight: 600; font-size: var(--fs-12);
+  border: var(--bw) solid var(--line2); border-radius: var(--r-2);
+  padding: var(--sp-3) var(--sp-7); cursor: pointer;
+  background: var(--surface); color: var(--muted); margin-right: var(--sp-4);
+}
+.launch-account-settings #analytics-consent [data-analytics-accept] {
+  color: #fff; background: var(--moss); border-color: var(--moss);
+}
+.launch-account-settings #analytics-consent [data-analytics-error] {
+  color: var(--danger); font-size: var(--fs-11);
+}

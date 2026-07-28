@@ -4294,7 +4294,21 @@ let settings_page_handler request =
       Dream.sql request (fun db ->
         match%lwt Db.get_user_public db username with
         | Ok (Some (_, _, _, bio, avatar_url)) ->
-            Dream.html (Pages.settings_page ~user:username bio avatar_url request)
+            (* Joined communities feed the launch rail only; a failure (or a
+               missing/garbled user_id session field) degrades to an empty
+               rail rather than blocking the settings page. *)
+            let%lwt rail_communities =
+              match
+                Option.bind (Dream.session_field request "user_id")
+                  int_of_string_opt
+              with
+              | Some uid -> (
+                  match%lwt Db.get_user_communities db uid with
+                  | Ok cs -> Lwt.return cs
+                  | Error _ -> Lwt.return [])
+              | None -> Lwt.return []
+            in
+            Dream.html (Pages.settings_page ~user:username ~rail_communities bio avatar_url request)
         | _ -> Dream.redirect request "/login"
       )
 
