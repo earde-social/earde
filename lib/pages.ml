@@ -4838,7 +4838,18 @@ let settings_page ?user bio avatar_url request =
   in
   Components.account_page ~noindex:true ?user ~request ~title:"Settings" ~body ()
 
-let notifications_page ?user (notifs : Db.notification list) request =
+(* /notifications — the account-global notification center, on the launch
+   app chrome (Components.launch_app_page: earde.css only, no shell.css /
+   account.css). The row renderer below is kept byte-for-byte: its anatomy
+   (account-notif / account-notif-icon / account-notif-body / account-notif-msg
+   / account-notif-time, the account-notif--unread accent and its cosmetic
+   onclick clear) is pinned by the gated Phnt UI suite's substring checks and
+   by the replay-masking selector .account-notif-msg in analytics.js. Rows are
+   skinned onto the approved flat .notif anatomy by the "notifications only"
+   integration section at the end of earde.css. The handoff's filter tabs and
+   "mark all read" POST are deliberately absent — no such routes exist; the
+   GET itself marks everything read (Db.mark_notifs_read) exactly as before. *)
+let notifications_page ?user ?(rail_communities = []) (notifs : Db.notification list) request =
   let render_notif (n : Db.notification) =
     let unread_class = if n.is_read then "" else " account-notif--unread" in
     (* Project-home notifications are structured: no stored prose, so the
@@ -4935,26 +4946,26 @@ let notifications_page ?user (notifs : Db.notification list) request =
     <div class='account-notif%s'>%s
     </div>" unread_class inner
   in
-  let account_nav =
-    match user with
-    | Some _ -> "
-    <nav class='account-nav'>
-        <a class='account-nav-link' href='/settings'>Settings</a>
-        <a class='account-nav-link account-nav-link--active' href='/notifications'>Notifications</a>
-    </nav>"
-    | None -> ""
-  in
   let list_html =
     if notifs = [] then "<div class='account-empty'>No notifications yet.</div>"
     else Printf.sprintf "<div class='account-notifs'>%s</div>" (String.concat "\n" (List.map render_notif notifs))
   in
-  let body = Printf.sprintf "
-    <div class='account-wrap account-wrap--narrow'>
-        %s
-        <div class='account-head'><h1 class='account-h1'>Notifications</h1></div>
-        %s
-    </div>" account_nav list_html
-  in Components.account_page ~noindex:true ?user ~request ~title:"Notifications" ~body ()
+  (* Launch chrome renders outside the pinned row fragments: serif page head
+     (the legacy in-page Settings/Notifications nav is superseded by the
+     topbar user menu), then the standard scroller column. The sub line names
+     only kinds the backend actually produces — no "promotions". *)
+  let page_head =
+    "<div class='page__head'><div class='page__head-inner page__head-inner--list'>\
+     <h1 class='page__title'>Notifications</h1>\
+     <p class='page__sub'>Replies, mentions, moderation decisions and project requests.</p>\
+     </div></div>"
+  in
+  let content =
+    Printf.sprintf "%s<div class='scroll'><div class='container container--list'>%s</div></div>"
+      page_head list_html
+  in
+  Components.launch_app_page ~noindex:true ?user ~request ~rail_communities
+    ~page_class:"launch-notifications" ~title:"Notifications" ~content ()
 
 (* === SEARCH === *)
 

@@ -4742,3 +4742,146 @@ ol, ul { margin: 0; padding: 0; list-style: none; }
 .launch-project-home-review #analytics-consent [data-analytics-error] {
   color: var(--danger); font-size: var(--fs-11);
 }
+
+/* ==========================================================================
+   EARDE INTEGRATION — notifications only
+   Scoped beneath body.launch-notifications: GET /notifications
+   (Pages.notifications_page). Exists only because the real notification
+   center cannot emit the reference markup exactly:
+   - the row anatomy (account-notif / -icon / -body / -msg / -time, the
+     account-notif--unread accent and its cosmetic onclick clear) is pinned
+     by the gated Phnt UI suite and by the replay-masking selector
+     .account-notif-msg in analytics.js, so the legacy rows are spliced
+     verbatim and skinned here onto the approved flat .notif anatomy;
+   - the handoff's filter tabs and "mark all read" POST have no backing
+     routes and are deliberately absent (the GET itself marks rows read);
+   - the row carries no context line and no separate right column, so the
+     mono time sits right-aligned on the message baseline and the unread
+     clay dot is drawn from the time cell — same signals, real fields only;
+   - the notification badge is revealed by the shared script removing the
+     legacy `hidden` class; honoured on the badge element only — no global
+     .hidden utility is defined;
+   - the desktop-only gate panel ships in mobile-gate.css; only the
+     launch-scope "hide the app" rule for this route lives here;
+   - the analytics consent banner markup is shared with the legacy layout
+     (same rules as the other launch sections, re-scoped).
+   ========================================================================== */
+
+/* ---- Launch chrome ---------------------------------------------------------- */
+
+/* Top-bar user menu: pure-CSS <details>, real logout POST form inside. */
+.launch-notifications .launch-user { position: relative; }
+.launch-notifications .launch-user > summary { list-style: none; }
+.launch-notifications .launch-user > summary::-webkit-details-marker { display: none; }
+.launch-notifications .launch-user .avatar { background: var(--moss); }
+.launch-notifications .launch-user__menu {
+  position: absolute; right: 0; top: calc(100% + 6px); z-index: 40;
+  min-width: 168px; display: flex; flex-direction: column;
+  background: var(--surface); border: var(--bw) solid var(--line2);
+  border-radius: var(--r-3); padding: var(--sp-3);
+  box-shadow: var(--shadow-overlay);
+}
+.launch-notifications .launch-user__menu a,
+.launch-notifications .launch-user__menu button {
+  display: block; width: 100%; text-align: left; background: none; border: 0;
+  font-family: var(--mono); font-size: var(--fs-12); color: var(--ink);
+  padding: var(--sp-3) var(--sp-5); border-radius: var(--r-2); cursor: pointer;
+}
+.launch-notifications .launch-user__menu a:hover,
+.launch-notifications .launch-user__menu button:hover { background: var(--surface2); }
+.launch-notifications .launch-user__menu form {
+  margin: var(--sp-2) 0 0; padding-top: var(--sp-2);
+  border-top: var(--bw) solid var(--line);
+}
+
+/* Notification badge: hidden until the shared one-shot fetch reveals it.
+   Badge element only — deliberately NOT a global .hidden utility. */
+.launch-notifications #notif-badge.hidden { display: none; }
+
+/* Real community avatars fill the fixed 42px rail tile. */
+.launch-notifications .launch-rail__img {
+  width: 100%; height: 100%; object-fit: cover; border-radius: inherit;
+  display: block;
+}
+
+/* ---- Rows ------------------------------------------------------------------- */
+
+/* Legacy card list recast as the approved flat list: no gap, hairline
+   separators only. */
+.launch-notifications .account-notifs { display: flex; flex-direction: column; }
+
+/* Row = 28px icon tile · message · right-aligned mono time (.notif
+   geometry over the pinned account-notif markup). */
+.launch-notifications .account-notif {
+  display: flex; gap: 13px; padding: 13px var(--sp-3);
+  border-bottom: var(--bw) solid var(--line);
+  text-decoration: none; color: var(--ink);
+}
+.launch-notifications a.account-notif { cursor: pointer; }
+.launch-notifications a.account-notif:hover { background: var(--surface2); }
+.launch-notifications .account-notif--unread {
+  background: color-mix(in srgb, var(--ochre) 7%, var(--surface));
+}
+.launch-notifications .account-notif-icon {
+  width: 28px; height: 28px; flex: none; display: grid; place-items: center;
+  border: var(--bw) solid var(--line2); border-radius: var(--r-3);
+  font-size: var(--fs-13); color: var(--muted); background: var(--surface);
+}
+.launch-notifications .account-notif-body {
+  flex: 1; min-width: 0; display: flex; align-items: baseline; gap: var(--sp-7);
+  padding-top: 1px;
+}
+.launch-notifications .account-notif-msg {
+  flex: 1; min-width: 0; font-size: var(--fs-13-5); line-height: 1.45;
+  color: var(--ink);
+}
+.launch-notifications .account-notif-time {
+  flex: none; display: flex; align-items: center; gap: var(--sp-4);
+  font-family: var(--mono); font-size: var(--fs-11); color: var(--muted);
+  white-space: nowrap; margin: 0;
+}
+/* Unread signal: 7px clay dot beside the time (the row markup has no
+   dedicated dot element; the onclick unread-clear removes both signals). */
+.launch-notifications .account-notif--unread .account-notif-time::after {
+  content: ''; width: 7px; height: 7px; flex: none;
+  border-radius: var(--r-pill); background: var(--clay);
+}
+
+/* Empty state: a mono sentence, nothing else. */
+.launch-notifications .account-empty {
+  padding: 46px var(--sp-3); text-align: center;
+  font-family: var(--mono); font-size: var(--fs-12-5); color: var(--muted);
+}
+
+/* ---- Gate + consent --------------------------------------------------------- */
+
+/* Desktop-only gate: hide this route's launch app under the shared
+   breakpoint; the gate panel itself is styled by mobile-gate.css. */
+@media (max-width: 800px) {
+  body.launch-notifications > .app { display: none !important; }
+}
+
+/* Analytics consent banner (markup shared with the legacy layout). */
+.launch-notifications #analytics-consent {
+  position: fixed; bottom: var(--sp-8); left: 50%; transform: translateX(-50%);
+  z-index: 50; width: calc(100% - 2rem); max-width: 28rem;
+  background: var(--surface); border: var(--bw) solid var(--line2);
+  border-radius: var(--r-3); padding: var(--sp-7) var(--sp-8);
+  box-shadow: var(--shadow-overlay);
+}
+.launch-notifications #analytics-consent p {
+  font-size: var(--fs-13); color: var(--muted); margin-bottom: var(--sp-5);
+}
+.launch-notifications #analytics-consent [data-analytics-accept],
+.launch-notifications #analytics-consent [data-analytics-refuse] {
+  font-family: var(--sans); font-weight: 600; font-size: var(--fs-12);
+  border: var(--bw) solid var(--line2); border-radius: var(--r-2);
+  padding: var(--sp-3) var(--sp-7); cursor: pointer;
+  background: var(--surface); color: var(--muted); margin-right: var(--sp-4);
+}
+.launch-notifications #analytics-consent [data-analytics-accept] {
+  color: #fff; background: var(--moss); border-color: var(--moss);
+}
+.launch-notifications #analytics-consent [data-analytics-error] {
+  color: var(--danger); font-size: var(--fs-11);
+}

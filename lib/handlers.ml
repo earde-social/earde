@@ -4477,8 +4477,12 @@ let notifications_handler request =
       Dream.sql request (fun db ->
         let%lwt notifs = Db.get_notifications db user_id in
         let%lwt _ = Db.mark_notifs_read db user_id in
+        (* Joined communities feed the launch rail only; a failure degrades to
+           an empty rail rather than blocking the notification list. *)
+        let%lwt rail_communities_res = Db.get_user_communities db user_id in
+        let rail_communities = match rail_communities_res with Ok cs -> cs | Error _ -> [] in
         match notifs with
-        | Ok n -> Dream.html (Pages.notifications_page ?user n request)
+        | Ok n -> Dream.html (Pages.notifications_page ?user ~rail_communities n request)
         | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:("Database error: " ^ e) ~alert_type:"error" ~return_url:"/" request)
       )
 
