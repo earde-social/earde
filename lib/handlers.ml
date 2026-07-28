@@ -556,9 +556,17 @@ let login_handler request =
                 if is_banned then
                   Dream.html (Pages.msg_page ~auth:true ~title:"Account Banned" ~message:"Your account has been permanently banned from Earde." ~alert_type:"error" ~return_url:"/login" request)
                 else
+                  (* The browser may present a session that already carries
+                     another user's identity (or a pre-auth session an attacker
+                     could have fixated). Invalidate it so the new login starts
+                     from a fresh, empty session with a rotated session id,
+                     then write every canonical auth field from the newly
+                     authenticated row — is_admin unconditionally, so a prior
+                     admin session can never leak privileges into this one. *)
+                  let%lwt () = Dream.invalidate_session request in
                   let%lwt () = Dream.set_session_field request "user_id" (string_of_int id) in
                   let%lwt () = Dream.set_session_field request "username" user in
-                  let%lwt () = if is_admin then Dream.set_session_field request "is_admin" "true" else Lwt.return () in
+                  let%lwt () = Dream.set_session_field request "is_admin" (if is_admin then "true" else "false") in
                   (* Exactly once per fully successful login (credentials
                      verified, not banned); the incoming request still carries
                      the consent cookie the gate reads. *)
