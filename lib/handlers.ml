@@ -3504,6 +3504,25 @@ let reports_queue_handler request =
             if not is_authorized then
               Dream.respond ~status:`Forbidden (Pages.msg_page ?user ~title:"Access Denied" ~message:"You must be a moderator to view reports." ~alert_type:"error" ~return_url:("/c/" ^ slug) request)
             else
+              (* Launch-chrome data (pass 14B), loaded only after the M/TM/A
+                 authorization above — a denied request never touches sections,
+                 channels or the viewer's membership. Each degrades to an empty
+                 list on error rather than blocking the queue. Same plumbing as
+                 the sibling converted management routes. *)
+              let%lwt sections =
+                if community.sections_enabled then
+                  (match%lwt Db.get_sections_by_community db community.id with
+                   | Ok secs -> Lwt.return secs | Error _ -> Lwt.return [])
+                else Lwt.return []
+              in
+              let%lwt channels =
+                match%lwt Db.get_channels_by_community db community.id with
+                | Ok cs -> Lwt.return cs | Error _ -> Lwt.return []
+              in
+              let%lwt rail_communities =
+                match%lwt Db.get_user_communities db user_id with
+                | Ok cs -> Lwt.return cs | Error _ -> Lwt.return []
+              in
               (match%lwt Db.get_reports_by_community db community.id ~status with
                | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:("Database error: " ^ e) ~alert_type:"error" ~return_url:("/c/" ^ slug) request)
                | Ok reports ->
@@ -3520,7 +3539,7 @@ let reports_queue_handler request =
                        | _ -> Lwt.return None)
                        (take preview_cap reports)
                    in
-                   Dream.html (Pages.reports_queue_page ?user ~community ~status ~reports ~previews request)))
+                   Dream.html (Pages.reports_queue_page ?user ~rail_communities ~channels ~sections ~community ~status ~reports ~previews request)))
 
 (* Slice E: resolve an open report (dismiss / mark action-taken) and write a modlog entry.
    Shared by dismiss_report_handler and action_report_handler. Both gate exactly like the

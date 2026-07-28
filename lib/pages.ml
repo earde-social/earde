@@ -635,11 +635,16 @@ let community_page ?user ?(noindex=false) ?(connected_projects="") ?section:(sec
    (private/draft/legacy) anywhere in its document.
    [moderation_log_active] marks the always-present Moderation log entry current —
    used only by the modlog route (pass 14A), which is public by design, so the
-   entry itself renders for every viewer exactly as before. *)
+   entry itself renders for every viewer exactly as before.
+   [reports_active] renders the Reports entry (active) — used only by the
+   report-queue route (pass 14B), whose handler already re-proved the M/TM/A
+   gate before anything renders; every other route keeps the entry absent, so
+   the queue link never shows to a viewer who cannot open the route. *)
 let launch_knowledge_sidebar ~(community : community) ~(channels : channel list)
     ~(sections : community_section list) ?active_section_slug
     ?(append_uncategorized = false) ?(settings_active = false)
     ?(home_requests_active = false) ?(moderation_log_active = false)
+    ?(reports_active = false)
     ?(show_visibility_note = true) ~can_manage () =
   let esc = Components.html_escape in
   let slug = esc community.slug in
@@ -717,6 +722,14 @@ let launch_knowledge_sidebar ~(community : community) ~(channels : channel list)
             already proved top_mod-or-durable-admin. *)
          Printf.sprintf
            "<a class='navitem navitem--pad navitem--active' href='/c/%s/project-home-requests'><span class='navitem__sigil navitem__sigil--box navitem__sigil--project'>&#9672;</span>Home requests</a>"
+           slug
+       else "")
+    ^ (if reports_active then
+         (* Rendered only by the report-queue route, whose handler proved the
+            viewer M/TM/A before this document exists — never a render-time
+            authority decision of its own. *)
+         Printf.sprintf
+           "<a class='navitem navitem--pad navitem--active' href='/c/%s/reports'><span class='navitem__sigil navitem__sigil--box'>&#9873;</span>Reports</a>"
            slug
        else "")
     ^ (if can_manage then
@@ -3671,7 +3684,8 @@ let report_form_page ?user ~(community : community) ~(target_type : Db.report_ta
    assoc the handler built with a bounded per-row lookup; rows missing from it (chat,
    deleted, or beyond the preview cap) degrade to "Target unavailable or deleted". This
    page is PRIVATE — the handler gates it on M/TM/A; it adds no authority of its own. *)
-let reports_queue_page ?user ~(community : community) ~(status : Db.report_status)
+let reports_queue_page ?user ?(rail_communities = []) ~(channels : channel list)
+    ~(sections : community_section list) ~(community : community) ~(status : Db.report_status)
     ~(reports : Db.report_row list) ~(previews : (int * (string * string)) list) request =
   let esc = Components.html_escape in
   let csrf_token = Dream.csrf_tag request in
@@ -3788,6 +3802,7 @@ let reports_queue_page ?user ~(community : community) ~(status : Db.report_statu
     <div class='cm-wrap cm-wrap--wide'>
         <div class='cm-head'>
             <h1 class='cm-h1'>Reports <span class='accent'>queue</span></h1>
+            <span class='mono launch-reports-ctx'>/c/%s</span>
             <a href='/c/%s/settings?panel=moderation' class='cm-back'>&larr; Back to settings</a>
         </div>
         <section class='cm-panel'>
@@ -3812,13 +3827,33 @@ let reports_queue_page ?user ~(community : community) ~(status : Db.report_statu
         </section>
     </div>"
     slug
+    slug
     tabs
     preview_note
     table_body
   in
-  Components.community_manage_page ?user ~request
-    ~analytics_community:(community.id, community.visibility) ~title:(community.name ^ " — Reports")
-    ~body:(Components.private_replay_guard ~community content) ()
+  (* Cartographic launch shell (pass 14B): the same four-pane chrome as the
+     sibling community routes, wrapping the review docket verbatim — the cm-*
+     report rows, the one-form-two-formaction dismiss/action submits, the
+     status tabs and the ph-mask replay classes are treated as pinned, so only
+     this outer document and the additive mono /c/:slug context above changed.
+     The sidebar reuses the shared knowledge grammar with Reports active;
+     can_manage is true by construction here — the handler only renders this
+     page for M/TM/A viewers, exactly the settings gate. [rail_communities]
+     carries the viewer's joined communities as the handler loaded them
+     (post-authorization only); ordering, dedup by slug and the single active
+     marker stay owned by the shared launch doc builder. Replay privacy keeps
+     the existing inner ph-no-capture guard for private communities (the
+     launch shell additionally marks .shell, like the sibling routes). *)
+  let sidebar =
+    launch_knowledge_sidebar ~community ~channels ~sections
+      ~reports_active:true ~can_manage:true ()
+  in
+  Components.launch_community_page ?user ~request ~rail_communities
+    ~community ~sidebar
+    ~page_class:"launch-community-reports"
+    ~title:(community.name ^ " — Reports")
+    ~content:(Components.private_replay_guard ~community content) ()
 
 let post_page ?user ?(noindex=false) ~is_member ~is_current_user_mod ~mod_usernames ~admin_usernames ~banned_usernames ~community ~user_communities:_ ~moderated_communities:_ user_post_votes user_comment_votes (post : post) (comments : comment list) request =
   let csrf_token = Dream.csrf_tag request in

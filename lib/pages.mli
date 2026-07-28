@@ -52,9 +52,10 @@ val community_settings_page : ?user:string -> ?connected_projects:string -> ?rai
     private-community marker on the one surface that never names an
     ineligibility reason; [moderation_log_active] marks the always-present
     Moderation log entry current (modlog route only — the entry renders for
-    every viewer regardless). Defaults preserve every existing route's
-    output. *)
-val launch_knowledge_sidebar : community:Db.community -> channels:Db.channel list -> sections:Db.community_section list -> ?active_section_slug:string -> ?append_uncategorized:bool -> ?settings_active:bool -> ?home_requests_active:bool -> ?moderation_log_active:bool -> ?show_visibility_note:bool -> can_manage:bool -> unit -> string
+    every viewer regardless); [reports_active] renders the Reports entry
+    active (report-queue route only — callers must have re-proved the M/TM/A
+    gate first). Defaults preserve every existing route's output. *)
+val launch_knowledge_sidebar : community:Db.community -> channels:Db.channel list -> sections:Db.community_section list -> ?active_section_slug:string -> ?append_uncategorized:bool -> ?settings_active:bool -> ?home_requests_active:bool -> ?moderation_log_active:bool -> ?reports_active:bool -> ?show_visibility_note:bool -> can_manage:bool -> unit -> string
 val manage_mods_page : ?user:string -> is_admin:bool -> current_user_role:string option -> community:Db.community -> mods:Db.moderator_entry list -> Dream.request -> string
 
 (** === POST === *)
@@ -68,8 +69,10 @@ val report_form_page : ?user:string -> community:Db.community -> target_type:Db.
 
 (** Read-only mod queue (M/TM/A only — gated in the handler). [previews] maps a report id to
     its (context_url, excerpt), built by the handler's bounded per-row lookup; rows absent from
-    it render a safe "Target unavailable or deleted" cell. Renders nothing mutable. *)
-val reports_queue_page : ?user:string -> community:Db.community -> status:Db.report_status -> reports:Db.report_row list -> previews:(int * (string * string)) list -> Dream.request -> string
+    it render a safe "Target unavailable or deleted" cell. Renders nothing mutable.
+    [rail_communities]/[channels]/[sections] feed the launch shell's global rail and shared
+    community sidebar (pass 14B) — loaded by the handler only after authorization. *)
+val reports_queue_page : ?user:string -> ?rail_communities:Db.community list -> channels:Db.channel list -> sections:Db.community_section list -> community:Db.community -> status:Db.report_status -> reports:Db.report_row list -> previews:(int * (string * string)) list -> Dream.request -> string
 
 (** "Start thread from chat" pure helpers (title prefill, checkbox-id parsing, server-side
     selection guard, provenance summary, reverse-navigation parsing). Pure — unit-tested
