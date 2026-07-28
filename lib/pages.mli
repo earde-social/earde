@@ -72,8 +72,11 @@ val join_to_post_page : ?user:string -> Db.community -> Dream.request -> string
 val new_post_form : ?user:string -> ?preselected_section_id:int -> Db.community_section list -> Db.community -> Dream.request -> string
 
 (** SSR report form (no JS). [target_title] is shown as a trimmed, escaped context excerpt;
-    [return_url] is the Cancel target. The handler re-validates everything — this only renders. *)
-val report_form_page : ?user:string -> community:Db.community -> target_type:Db.report_target -> target_id:int -> target_title:string -> return_url:string -> Dream.request -> string
+    [return_url] is the Cancel target. The handler re-validates everything — this only renders.
+    Launch chrome (pass 14D): [rail_communities]/[channels]/[sections] feed the shared
+    community shell, loaded by the handler only after every access gate passed; [can_manage]
+    is the handler's real admin-or-moderator check and only gates the sidebar Settings link. *)
+val report_form_page : ?user:string -> ?rail_communities:Db.community list -> channels:Db.channel list -> sections:Db.community_section list -> can_manage:bool -> community:Db.community -> target_type:Db.report_target -> target_id:int -> target_title:string -> return_url:string -> Dream.request -> string
 
 (** Read-only mod queue (M/TM/A only — gated in the handler). [previews] maps a report id to
     its (context_url, excerpt), built by the handler's bounded per-row lookup; rows absent from

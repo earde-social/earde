@@ -3633,12 +3633,13 @@ let new_post_form ?user ?preselected_section_id (sections : community_section li
   Components.create_page ?user ~request ~analytics_community:(community.id, community.visibility)
     ~title:("Post to " ^ community.name) ~body:content ()
 
-(* SSR report form (cool-grey create.css idiom, no JS). The handler is the security
-   boundary: it re-resolves the target from the trusted slug + hidden type/id and re-runs
-   the ban/self-report gates, so this page only sets up the inputs. target_type is emitted
-   as the closed-variant string; the reason <select> values mirror report_reason_to_string. *)
-let report_form_page ?user ~(community : community) ~(target_type : Db.report_target)
-    ~target_id ~target_title ~return_url request =
+(* SSR report form (no JS). The handler is the security boundary: it re-resolves the
+   target from the trusted slug + hidden type/id and re-runs the ban/self-report gates,
+   so this page only sets up the inputs. target_type is emitted as the closed-variant
+   string; the reason <select> values mirror report_reason_to_string. *)
+let report_form_page ?user ?(rail_communities = []) ~(channels : channel list)
+    ~(sections : community_section list) ~can_manage ~(community : community)
+    ~(target_type : Db.report_target) ~target_id ~target_title ~return_url request =
   let esc = Components.html_escape in
   let csrf_token = Dream.csrf_tag request in
   let kind_label = match target_type with
@@ -3708,9 +3709,34 @@ let report_form_page ?user ~(community : community) ~(target_type : Db.report_ta
     reasons
     (Components.safe_internal_path return_url)
   in
-  Components.create_page ?user ~request ~noindex:true
-    ~analytics_community:(community.id, community.visibility) ~title:("Report " ^ kind_label)
-    ~body:content ()
+  (* Cartographic launch shell (pass 14D): the same four-pane chrome as the
+     sibling community routes, wrapping the report form verbatim — the create-*
+     fields, the hidden target_type/target_id inputs, the reason <select>
+     values, the details maxlength and the ph-mask excerpt class are treated
+     as pinned, so only this outer document changed (create.css idiom → the
+     route-scoped earde.css section). The sidebar reuses the shared knowledge
+     grammar with NO active entry: reporting is a contextual action, not a
+     permanent sidebar destination, and the moderator-only entries (Reports,
+     Manage moderators, Home requests) stay hidden because their active flags
+     default to false. can_manage is the handler's real admin-or-moderator
+     check, so Settings shows only to authorized viewers — exactly the
+     overview's render-time visibility rule; the settings handler re-checks
+     authority. [rail_communities] carries the viewer's joined communities as
+     the handler loaded them (post-authorization only); ordering, dedup by
+     slug and the single active marker stay owned by the shared launch doc
+     builder. Replay privacy keeps the inner ph-no-capture guard for private
+     communities (the launch shell additionally marks .shell, like the
+     sibling routes; the launch doc also owns the analytics assets with the
+     same community-id/visibility pair the legacy wrapper received), and the
+     legacy wrapper's unconditional noindex is preserved. *)
+  let sidebar =
+    launch_knowledge_sidebar ~community ~channels ~sections ~can_manage ()
+  in
+  Components.launch_community_page ?user ~request ~noindex:true ~rail_communities
+    ~community ~sidebar
+    ~page_class:"launch-report-form"
+    ~title:("Report " ^ kind_label)
+    ~content:(Components.private_replay_guard ~community content) ()
 
 (* Read-only community mod queue. [previews] is a (report_id -> (context_url, excerpt))
    assoc the handler built with a bounded per-row lookup; rows missing from it (chat,

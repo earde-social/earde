@@ -3423,7 +3423,37 @@ let report_form_handler request =
                           ~message:"You cannot report your own content. You can delete it instead."
                           ~alert_type:"error" ~return_url request)
                       else
-                        Dream.html (Pages.report_form_page ?user ~community ~target_type ~target_id ~target_title ~return_url request)))
+                        (* Launch-chrome data (pass 14D), loaded only after every
+                           gate above passed — a banned viewer, a foreign or
+                           deleted target and a self-report never touch sections,
+                           channels or the viewer's membership. Each degrades to
+                           an empty list on error rather than blocking the form.
+                           can_manage mirrors modlog's can_access_settings gate
+                           (admin || moderator) and only picks the sidebar
+                           Settings visibility; the settings handler re-checks. *)
+                        let is_admin = Dream.session_field request "is_admin" = Some "true" in
+                        let%lwt can_manage =
+                          if is_admin then Lwt.return true
+                          else (match%lwt Db.is_moderator db user_id community.id with
+                            | Ok b -> Lwt.return b
+                            | _ -> Lwt.return false)
+                        in
+                        let%lwt sections =
+                          if community.sections_enabled then
+                            (match%lwt Db.get_sections_by_community db community.id with
+                             | Ok secs -> Lwt.return secs | Error _ -> Lwt.return [])
+                          else Lwt.return []
+                        in
+                        let%lwt channels =
+                          match%lwt Db.get_channels_by_community db community.id with
+                          | Ok cs -> Lwt.return cs | Error _ -> Lwt.return []
+                        in
+                        let%lwt rail_communities =
+                          match%lwt Db.get_user_communities db user_id with
+                          | Ok cs -> Lwt.return cs | Error _ -> Lwt.return []
+                        in
+                        Dream.html (Pages.report_form_page ?user ~rail_communities ~channels ~sections
+                          ~can_manage ~community ~target_type ~target_id ~target_title ~return_url request)))
        | _ -> bad ())
 
 let create_report_handler request =
