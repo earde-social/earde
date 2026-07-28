@@ -625,10 +625,18 @@ let community_page ?user ?(noindex=false) ?(connected_projects="") ?section:(sec
    404s that route unless real orphaned content exists, so the entry is always backed by
    data. Archived channels are hidden, mirroring the pre-launch Channels nav group.
    [settings_active] marks the Settings entry current — used only by the settings route
-   (pass 11A), whose surface already re-proved the can_manage gate before rendering. *)
+   (pass 11A), whose surface already re-proved the can_manage gate before rendering.
+   [home_requests_active] renders the Home requests entry (active) — used only by the
+   review-queue route (pass 11B), whose read model already re-proved the top-mod/admin
+   gate in SQL before anything renders; every other route keeps the entry absent, so
+   the settings suites' exactly-one-queue-link count per document stays true.
+   [show_visibility_note] defaults to the existing factual marker; the review queue
+   passes false because that surface never names an ineligibility reason
+   (private/draft/legacy) anywhere in its document. *)
 let launch_knowledge_sidebar ~(community : community) ~(channels : channel list)
     ~(sections : community_section list) ?active_section_slug
-    ?(append_uncategorized = false) ?(settings_active = false) ~can_manage () =
+    ?(append_uncategorized = false) ?(settings_active = false)
+    ?(home_requests_active = false) ?(show_visibility_note = true) ~can_manage () =
   let esc = Components.html_escape in
   let slug = esc community.slug in
   let tile_glyph =
@@ -660,7 +668,7 @@ let launch_knowledge_sidebar ~(community : community) ~(channels : channel list)
       slug
   in
   let vis_note =
-    if community.visibility = Db.Community_private then
+    if show_visibility_note && community.visibility = Db.Community_private then
       "<div class='launch-side-vis'>private community</div>"
     else ""
   in
@@ -699,6 +707,14 @@ let launch_knowledge_sidebar ~(community : community) ~(channels : channel list)
     ^ Printf.sprintf
         "<a class='navitem navitem--pad' href='/c/%s/modlog'><span class='navitem__sigil navitem__sigil--box'>&#9776;</span>Moderation log</a>"
         slug
+    ^ (if home_requests_active then
+         (* Same slot and grammar as the overview's Home requests entry;
+            rendered only by the queue route whose viewer the read model
+            already proved top_mod-or-durable-admin. *)
+         Printf.sprintf
+           "<a class='navitem navitem--pad navitem--active' href='/c/%s/project-home-requests'><span class='navitem__sigil navitem__sigil--box navitem__sigil--project'>&#9672;</span>Home requests</a>"
+           slug
+       else "")
     ^ (if can_manage then
          Printf.sprintf
            "<a class='navitem navitem--pad%s' href='/c/%s/settings'><span class='navitem__sigil navitem__sigil--box'>&#9881;</span>Settings</a>"

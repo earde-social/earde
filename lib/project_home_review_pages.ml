@@ -57,6 +57,20 @@ type feedback =
   | Target_ineligible
   | Review_failed
 
+(* Cartographic Civic shell data the handler loads only after the read model
+   has authorized the reviewer: the durable community record (rail tile,
+   analytics community context, private-community replay marker), the
+   viewer's joined communities for the shared global rail, and the prebuilt
+   shared knowledge sidebar. Absent (pure rendering, or a degraded shell
+   load) the page falls back to the legacy create-shell document; the
+   feature fragment between the create-shell marker and </main> is
+   byte-identical either way. *)
+type launch_shell = {
+  community_record : Db.community;
+  rail_communities : Db.community list;
+  sidebar : string;
+}
+
 let esc = Components.html_escape
 
 (* The same canonical grammar the route and read model require. A project
@@ -289,7 +303,7 @@ let body_html ?request ~(state : state) () =
     (ineligible_notice_html state.community)
     requests_section
 
-let project_home_review_page ?user ?request ~state ~feedback () =
+let project_home_review_page ?user ?request ?shell ~state ~feedback () =
   let body =
     Printf.sprintf
       "<div class='create-wrap project-home-review'><div \
@@ -297,6 +311,31 @@ let project_home_review_page ?user ?request ~state ~feedback () =
       (feedback_html feedback)
       (body_html ?request ~state ())
   in
-  (* noindex: a moderator-only workflow surface — not for search indexes. *)
-  Components.create_page ?user ?request ~noindex:true
-    ~title:"Project home requests" ~body ()
+  match shell with
+  | None ->
+      (* noindex: a moderator-only workflow surface — not for search
+         indexes. *)
+      Components.create_page ?user ?request ~noindex:true
+        ~title:"Project home requests" ~body ()
+  | Some shell ->
+      (* Cartographic Civic conversion: only the outer document changes.
+         The mono community context precedes the create-shell marker, so
+         the test-sliced feature fragment (create-shell → </main>) stays
+         byte-identical to the legacy document; everything inside it is the
+         exact body above. *)
+      let context =
+        Printf.sprintf
+          "<div class='launch-review-context'><span \
+           class='launch-review-context-name'>%s</span><span \
+           class='launch-review-context-slug'>/c/%s</span></div>"
+          (esc state.community.name)
+          (esc state.community.slug)
+      in
+      Components.launch_community_page ?user ?request ~noindex:true
+        ~rail_communities:shell.rail_communities
+        ~community:shell.community_record ~sidebar:shell.sidebar
+        ~page_class:"launch-project-home-review"
+        ~title:"Project home requests"
+        ~content:
+          (context ^ Printf.sprintf "<div class='create-shell'>%s</div>" body)
+        ()

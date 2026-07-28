@@ -87,9 +87,26 @@ type feedback =
   | Target_ineligible
   | Review_failed
 
+(** Cartographic Civic shell data, loaded by the handler strictly after the
+    read model has authorized the reviewer: the durable community record,
+    the viewer's joined communities for the shared global rail, and the
+    prebuilt shared knowledge sidebar. When supplied the page renders on the
+    launch community chrome ([Components.launch_community_page], body class
+    [launch-project-home-review]); when absent (pure DB-free rendering, or a
+    degraded shell load) it renders the legacy create-shell document. The
+    feature fragment between the [create-shell] marker and [</main>] —
+    every phrv-* element, form, and copy string — is byte-identical in both
+    documents. *)
+type launch_shell = {
+  community_record : Db.community;
+  rail_communities : Db.community list;
+  sidebar : string;
+}
+
 val project_home_review_page :
   ?user:string ->
   ?request:Dream.request ->
+  ?shell:launch_shell ->
   state:state ->
   feedback:feedback option ->
   unit ->

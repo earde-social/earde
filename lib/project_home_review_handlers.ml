@@ -194,6 +194,58 @@ let state_of_view view : Pages_phrv.state =
    form carries a fresh Dream CSRF field. Reviewer authorization is inside
    the read-model SQL; a lost authorization during reload collapses to the
    generic 404 exactly like every other non-viewable state. *)
+(* Cartographic Civic shell data for an ALREADY-AUTHORIZED queue render:
+   the durable community record (rail tile, analytics community context),
+   the viewer's joined communities in the same stable order the
+   feed/overview/channel/section/thread/settings handlers load, and the
+   shared knowledge sidebar with Home requests active. Queried only after
+   the read model authorized the reviewer in SQL, so a denied, anonymous,
+   or missing-community request never touches membership data and the
+   generic-404 anti-enumeration collapse is unchanged. Every failure
+   degrades to None — the page then falls back to its legacy document
+   rather than turning a decorative load into a new error path. Ordering,
+   dedup by slug, and the single active rail marker stay owned by the
+   shared launch doc builder. The sidebar suppresses the private-community
+   visibility marker: this surface never names an ineligibility reason
+   (private/draft/legacy) anywhere in its document. can_manage is true by
+   construction — the read model only admits current top mods and durable
+   admins, exactly the settings surface. *)
+let load_launch_shell request ~user_id ~canonical_slug =
+  let%lwt loaded =
+    Dream.sql request (fun db ->
+        match%lwt Db.get_community_by_slug db canonical_slug with
+        | Ok (Some community) ->
+            let%lwt channels =
+              match%lwt Db.get_channels_by_community db community.Db.id with
+              | Ok channels -> Lwt.return channels
+              | Error _ -> Lwt.return []
+            in
+            let%lwt sections =
+              match%lwt Db.get_sections_by_community db community.Db.id with
+              | Ok sections -> Lwt.return sections
+              | Error _ -> Lwt.return []
+            in
+            let%lwt rail_communities =
+              match%lwt Db.get_user_communities db user_id with
+              | Ok communities -> Lwt.return communities
+              | Error _ -> Lwt.return []
+            in
+            let sidebar =
+              Pages.launch_knowledge_sidebar ~community ~channels ~sections
+                ~home_requests_active:true ~show_visibility_note:false
+                ~can_manage:true ()
+            in
+            Lwt.return
+              (Some
+                 {
+                   Pages_phrv.community_record = community;
+                   rail_communities;
+                   sidebar;
+                 })
+        | Ok None | Error _ -> Lwt.return None)
+  in
+  Lwt.return loaded
+
 let respond_current_queue request ~user_id ~community_slug ~feedback ~status =
   let%lwt loaded =
     Dream.sql request (fun db ->
@@ -211,9 +263,13 @@ let respond_current_queue request ~user_id ~community_slug ~feedback ~status =
   | Error (Read.Inconsistent_data | Read.Storage_error) ->
       server_error_page request
   | Ok (Some view) ->
+      let%lwt shell =
+        load_launch_shell request ~user_id
+          ~canonical_slug:(Read.community_slug (Read.community view))
+      in
       Dream.respond ~status ~headers:page_headers
         (Pages_phrv.project_home_review_page ?user:(session_user request)
-           ~request ~state:(state_of_view view) ~feedback ())
+           ~request ?shell ~state:(state_of_view view) ~feedback ())
 
 (* --- Shared rollout and authentication gates ---
 

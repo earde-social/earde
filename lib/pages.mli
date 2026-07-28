@@ -41,6 +41,17 @@ val community_overview_page : ?user:string -> ?noindex:bool -> ?connected_projec
     top-mod/admin settings surface (empty for every other viewer, which also removes the panel
     and its navigation entry). *)
 val community_settings_page : ?user:string -> ?connected_projects:string -> ?rail_communities:Db.community list -> is_admin:bool -> is_top_mod:bool -> open_reports_count:int -> community:Db.community -> mods:Db.user list -> banned_users:Db.user list -> members:Db.user list -> sections:Db.community_section list -> channels:Db.channel list -> Dream.request -> string
+
+(** The shared launch community sidebar (identity head, Overview, factual
+    visibility marker, Live channels, Knowledge sections, Network links) in
+    the exact grammar the converted /c/:slug routes render. Exposed for the
+    project-home review handler, which supplies the prebuilt sidebar to its
+    page module rather than duplicating this renderer. [home_requests_active]
+    renders the Home requests entry active — callers must have re-proved the
+    top-mod/admin gate first; [show_visibility_note:false] suppresses the
+    private-community marker on the one surface that never names an
+    ineligibility reason. Defaults preserve every existing route's output. *)
+val launch_knowledge_sidebar : community:Db.community -> channels:Db.channel list -> sections:Db.community_section list -> ?active_section_slug:string -> ?append_uncategorized:bool -> ?settings_active:bool -> ?home_requests_active:bool -> ?show_visibility_note:bool -> can_manage:bool -> unit -> string
 val manage_mods_page : ?user:string -> is_admin:bool -> current_user_role:string option -> community:Db.community -> mods:Db.moderator_entry list -> Dream.request -> string
 
 (** === POST === *)

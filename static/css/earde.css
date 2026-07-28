@@ -4467,3 +4467,278 @@ ol, ul { margin: 0; padding: 0; list-style: none; }
 .launch-community-settings #analytics-consent [data-analytics-error] {
   color: var(--danger); font-size: var(--fs-11);
 }
+
+/* ==========================================================================
+   EARDE INTEGRATION — project-home review only
+   Scoped beneath body.launch-project-home-review: GET
+   /c/:slug/project-home-requests (Project_home_review_pages) and every
+   re-render the accept/reject POSTs produce on this page (Stale_form 403,
+   Review_unavailable / Project_unavailable / Target_ineligible 409).
+   Exists only because the real review surface cannot emit the reference
+   markup exactly:
+   - every phrv-* fragment (request cards, the two nameless zero-field
+     forms, notes, markers, feedback and empty copy) is pinned by the
+     review suites (fragment slice = create-shell → </main>, form and
+     name= counts, exact action paths and copy) or treated as pinned, so
+     the legacy markup is spliced verbatim and skinned here from outside;
+   - the mono community context band precedes the create-shell marker, so
+     all launch chrome stays outside the sliced fragment;
+   - this surface never names an ineligibility reason, so the sidebar is
+     rendered without the private-community visibility marker (handler
+     contract, not CSS);
+   - the notification badge is revealed by the shared script removing the
+     legacy `hidden` class; honoured on the badge element only — no global
+     .hidden utility is defined;
+   - the desktop-only gate panel ships in mobile-gate.css; only the
+     launch-scope "hide the app" rule for this route lives here;
+   - the analytics consent banner markup is shared with the legacy layout
+     (same rules as the other launch sections, re-scoped).
+   ========================================================================== */
+
+/* ---- Launch chrome ---------------------------------------------------------- */
+
+/* Top-bar user menu: pure-CSS <details>, real logout POST form inside. */
+.launch-project-home-review .launch-user { position: relative; }
+.launch-project-home-review .launch-user > summary { list-style: none; }
+.launch-project-home-review .launch-user > summary::-webkit-details-marker { display: none; }
+.launch-project-home-review .launch-user .avatar { background: var(--moss); }
+.launch-project-home-review .launch-user__menu {
+  position: absolute; right: 0; top: calc(100% + 6px); z-index: 40;
+  min-width: 168px; display: flex; flex-direction: column;
+  background: var(--surface); border: var(--bw) solid var(--line2);
+  border-radius: var(--r-3); padding: var(--sp-3);
+  box-shadow: var(--shadow-overlay);
+}
+.launch-project-home-review .launch-user__menu a,
+.launch-project-home-review .launch-user__menu button {
+  display: block; width: 100%; text-align: left; background: none; border: 0;
+  font-family: var(--mono); font-size: var(--fs-12); color: var(--ink);
+  padding: var(--sp-3) var(--sp-5); border-radius: var(--r-2); cursor: pointer;
+}
+.launch-project-home-review .launch-user__menu a:hover,
+.launch-project-home-review .launch-user__menu button:hover { background: var(--surface2); }
+.launch-project-home-review .launch-user__menu form {
+  margin: var(--sp-2) 0 0; padding-top: var(--sp-2);
+  border-top: var(--bw) solid var(--line);
+}
+
+/* Notification badge: hidden until the shared one-shot fetch reveals it.
+   Badge element only — deliberately NOT a global .hidden utility. */
+.launch-project-home-review #notif-badge.hidden { display: none; }
+
+/* Real community avatars fill their fixed tile (rail, sidebar head). */
+.launch-project-home-review .launch-rail__img,
+.launch-project-home-review .launch-avatar-img {
+  width: 100%; height: 100%; object-fit: cover; border-radius: inherit;
+  display: block;
+}
+
+.launch-project-home-review .launch-side-id { min-width: 0; display: block; }
+
+/* ---- Page anatomy ----------------------------------------------------------- */
+
+/* Compact head band: mono community context above the sliced fragment
+   (reference .page__head--tight geometry, context only — the serif title
+   lives inside the pinned create-head). */
+.launch-project-home-review .launch-review-context {
+  flex: none; display: flex; align-items: baseline; gap: var(--sp-4);
+  padding: 12px 28px; background: var(--surface);
+  border-bottom: var(--bw) solid var(--line2);
+  font-family: var(--mono); font-size: var(--fs-11); color: var(--muted);
+}
+.launch-project-home-review .launch-review-context-name { color: var(--ink); }
+.launch-project-home-review .launch-review-context-slug { color: var(--muted); }
+
+/* Legacy create.css wrappers, recast as the main scroller and its column. */
+.launch-project-home-review .create-shell {
+  flex: 1; min-height: 0; overflow-y: auto; scrollbar-width: thin;
+}
+.launch-project-home-review .create-wrap {
+  max-width: 760px; margin: 0 auto; padding: var(--sp-11) 30px 70px;
+}
+.launch-project-home-review .create-panel { display: block; }
+
+/* Serif page title over factual explanatory copy. */
+.launch-project-home-review .create-head { margin-bottom: var(--sp-9); }
+.launch-project-home-review .create-title {
+  font-family: var(--serif); font-weight: 600; font-size: var(--fs-22);
+  color: var(--ink);
+}
+.launch-project-home-review .create-sub {
+  color: var(--muted); font-size: var(--fs-12-5); line-height: var(--lh-prose);
+  margin-top: var(--sp-2);
+}
+
+/* ---- Feedback + page-level notices (pinned copy, styled from outside) ------- */
+
+/* Outcome feedback: flat 1px ochre-tinted notice — never a shadowed alert. */
+.launch-project-home-review .phrv-alert {
+  border: var(--bw) solid var(--ochre); border-radius: var(--r-2);
+  background: color-mix(in srgb, var(--ochre) 8%, var(--surface));
+  color: var(--ink); font-size: var(--fs-13); line-height: var(--lh-prose);
+  padding: 13px var(--sp-8); margin-bottom: var(--sp-8);
+}
+.launch-project-home-review .phrv-alert p { margin: 0; }
+
+/* Ineligible-host notice: factual, muted, no reason named. */
+.launch-project-home-review .phrv-ineligible {
+  border: var(--bw) solid var(--line2); border-radius: var(--r-2);
+  background: var(--surface2); color: var(--muted);
+  font-size: var(--fs-12-5); line-height: var(--lh-prose);
+  padding: 11px var(--sp-8); margin-bottom: var(--sp-8);
+}
+.launch-project-home-review .phrv-ineligible p { margin: 0; }
+
+/* Explicit empty queue. */
+.launch-project-home-review .phrv-empty {
+  border: var(--bw) dashed var(--line2); border-radius: var(--r-2);
+  background: var(--surface2); color: var(--muted);
+  font-size: var(--fs-13); padding: var(--sp-8) var(--sp-9);
+}
+
+/* ---- Request cards (pinned phrv-* fragment, styled from outside) ------------ */
+
+.launch-project-home-review .phrv-request-list {
+  list-style: none; margin: 0; padding: 0;
+  display: flex; flex-direction: column; gap: var(--sp-8);
+}
+
+/* Pending request frame: the reference .notice--pending recipe — 1px ochre,
+   3px left ochre rule, tight radius, computed ochre tint. Flat. */
+.launch-project-home-review .phrv-request {
+  border: var(--bw) solid var(--ochre); border-left: 3px solid var(--ochre);
+  border-radius: var(--r-2);
+  background: color-mix(in srgb, var(--ochre) 8%, var(--surface));
+  padding: var(--sp-8) var(--sp-9);
+}
+
+/* Project identity: name 16/700, mono metadata under it. */
+.launch-project-home-review .phrv-identity { margin-bottom: var(--sp-5); }
+.launch-project-home-review .phrv-project-name {
+  font-size: var(--fs-16); font-weight: 700; color: var(--ink);
+  line-height: var(--lh-title); margin: 0;
+}
+.launch-project-home-review .phrv-project-kind,
+.launch-project-home-review .phrv-namespace {
+  font-family: var(--mono); font-size: var(--fs-10-5); color: var(--muted);
+  margin: var(--sp-1) 0 0;
+}
+.launch-project-home-review .phrv-verification {
+  font-family: var(--mono); font-size: var(--fs-10-5); color: var(--ochre);
+  margin: var(--sp-2) 0 0;
+}
+.launch-project-home-review .phrv-connected {
+  font-family: var(--mono); font-size: var(--fs-10-5); color: var(--muted);
+  margin: var(--sp-1) 0 0;
+}
+
+/* Repositories: mono rows; links stay quiet slate, markers are micro pills. */
+.launch-project-home-review .phrv-repos {
+  list-style: none; margin: 0 0 var(--sp-5); padding: 0;
+  display: flex; flex-direction: column; gap: var(--sp-1);
+}
+.launch-project-home-review .phrv-repo {
+  font-family: var(--mono); font-size: var(--fs-11); color: var(--ink);
+}
+.launch-project-home-review .phrv-repo-link {
+  color: var(--slate); text-decoration: none;
+}
+.launch-project-home-review .phrv-repo-link:hover { text-decoration: underline; }
+.launch-project-home-review .phrv-repo-name { color: var(--ink); }
+.launch-project-home-review .phrv-marker {
+  display: inline-block; font-family: var(--mono); font-size: var(--fs-9);
+  font-weight: 600; letter-spacing: .06em; text-transform: uppercase;
+  border: var(--bw) solid var(--line2); border-radius: var(--r-1);
+  padding: 0 var(--sp-2); margin-left: var(--sp-2); color: var(--muted);
+  vertical-align: 1px;
+}
+.launch-project-home-review .phrv-primary {
+  color: var(--moss); border-color: var(--moss);
+}
+.launch-project-home-review .phrv-no-repos {
+  font-family: var(--mono); font-size: var(--fs-11); color: var(--muted);
+  margin: 0 0 var(--sp-5);
+}
+
+/* Requester: mono meta, secondary. */
+.launch-project-home-review .phrv-requester {
+  font-family: var(--mono); font-size: var(--fs-11); color: var(--muted);
+  margin: 0 0 var(--sp-4);
+}
+
+/* Private note: inner plain-surface box; readable but secondary. */
+.launch-project-home-review .phrv-note {
+  border: var(--bw) solid var(--line); border-radius: var(--r-2);
+  background: var(--surface); padding: var(--sp-5) var(--sp-7);
+  margin-bottom: var(--sp-6);
+}
+.launch-project-home-review .phrv-note-label {
+  font-family: var(--mono); font-size: var(--fs-10-5); color: var(--muted);
+  margin: 0 0 var(--sp-3);
+}
+.launch-project-home-review .phrv-note-body {
+  font-size: var(--fs-13); color: var(--ink); line-height: var(--lh-prose);
+  margin: 0; overflow-wrap: anywhere;
+}
+
+/* ---- Actions (two pinned nameless zero-field forms) ------------------------- */
+
+.launch-project-home-review .phrv-actions {
+  display: flex; align-items: center; gap: var(--sp-5);
+  padding-top: var(--sp-5); border-top: var(--bw) solid var(--line);
+}
+.launch-project-home-review .phrv-review-form { margin: 0; }
+.launch-project-home-review .phrv-btn {
+  cursor: pointer; font-family: var(--sans); font-weight: 600;
+  font-size: var(--fs-12); border-radius: var(--r-2);
+  padding: var(--sp-3) var(--sp-8);
+}
+/* Moss accept. */
+.launch-project-home-review .phrv-accept .phrv-btn {
+  color: #fff; background: var(--moss); border: var(--bw) solid var(--moss);
+}
+.launch-project-home-review .phrv-accept .phrv-btn:hover { background: var(--forest); }
+/* Restrained clay reject: quiet outline, clay ink. */
+.launch-project-home-review .phrv-reject .phrv-btn {
+  color: var(--clay); background: var(--surface);
+  border: var(--bw) solid var(--line2);
+}
+.launch-project-home-review .phrv-reject .phrv-btn:hover { border-color: var(--clay); }
+/* Acceptance unavailable: factual copy in the accept slot, never a
+   disabled control. */
+.launch-project-home-review .phrv-accept-unavailable {
+  font-size: var(--fs-12); color: var(--muted); margin: 0;
+}
+
+/* ---- Gate + consent --------------------------------------------------------- */
+
+/* Desktop-only gate: hide this route's launch app under the shared
+   breakpoint; the gate panel itself is styled by mobile-gate.css. */
+@media (max-width: 800px) {
+  body.launch-project-home-review > .app { display: none !important; }
+}
+
+/* Analytics consent banner (markup shared with the legacy layout). */
+.launch-project-home-review #analytics-consent {
+  position: fixed; bottom: var(--sp-8); left: 50%; transform: translateX(-50%);
+  z-index: 50; width: calc(100% - 2rem); max-width: 28rem;
+  background: var(--surface); border: var(--bw) solid var(--line2);
+  border-radius: var(--r-3); padding: var(--sp-7) var(--sp-8);
+  box-shadow: var(--shadow-overlay);
+}
+.launch-project-home-review #analytics-consent p {
+  font-size: var(--fs-13); color: var(--muted); margin-bottom: var(--sp-5);
+}
+.launch-project-home-review #analytics-consent [data-analytics-accept],
+.launch-project-home-review #analytics-consent [data-analytics-refuse] {
+  font-family: var(--sans); font-weight: 600; font-size: var(--fs-12);
+  border: var(--bw) solid var(--line2); border-radius: var(--r-2);
+  padding: var(--sp-3) var(--sp-7); cursor: pointer;
+  background: var(--surface); color: var(--muted); margin-right: var(--sp-4);
+}
+.launch-project-home-review #analytics-consent [data-analytics-accept] {
+  color: #fff; background: var(--moss); border-color: var(--moss);
+}
+.launch-project-home-review #analytics-consent [data-analytics-error] {
+  color: var(--danger); font-size: var(--fs-11);
+}
