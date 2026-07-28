@@ -108,7 +108,7 @@ val settings_page : ?user:string -> string option -> string option -> Dream.requ
 val notifications_page : ?user:string -> ?rail_communities:Db.community list -> Db.notification list -> Dream.request -> string
 
 (** === SEARCH === *)
-val search_results_page : ?user:string -> admin_usernames:string list -> ?chat_sources:(int * string * string * int) list -> (int * int) list -> int -> string -> string -> Db.community list -> (int * string * string * string option * string option) list -> Db.post list -> (int * string * string * string * int * int) list -> Dream.request -> string
+val search_results_page : ?user:string -> admin_usernames:string list -> ?chat_sources:(int * string * string * int) list -> ?rail_communities:Db.community list -> (int * int) list -> int -> string -> string -> Db.community list -> (int * string * string * string option * string option) list -> Db.post list -> (int * string * string * string * int * int) list -> Dream.request -> string
 
 (** === LEGAL / PRIVACY === *)
 val privacy_page : ?user:string -> Dream.request -> string

@@ -4885,3 +4885,333 @@ ol, ul { margin: 0; padding: 0; list-style: none; }
 .launch-notifications #analytics-consent [data-analytics-error] {
   color: var(--danger); font-size: var(--fs-11);
 }
+
+/* ==========================================================================
+   EARDE INTEGRATION — search only
+   Scoped beneath body.launch-search: GET /search
+   (Pages.search_results_page). Exists only because the real search surface
+   cannot emit the reference markup exactly (there is no search mockup — the
+   approved global shell is extended around the real implementation):
+   - the result anatomy (sr-row / -title / -meta / -excerpt / -src / -stats /
+     -link, the #sr-analytics container and the sr-q input) is pinned by the
+     analytics suites and by the replay-masking selectors .sr-row-title /
+     .sr-row-excerpt in analytics.js, so the legacy fragments are spliced
+     verbatim and skinned here onto the flat launch list language;
+   - the page keeps its own primary GET form (.sr-head) alongside the topbar
+     command field — both are real, un-nested /search?q= forms with distinct
+     input ids (#sr-q vs #q), the existing product behavior;
+   - the serif page heading IS the existing .sr-label (restyled), so nothing
+     is added inside the pinned wrapper;
+   - moderation/self-action controls (own-post delete, admin-remove dialog)
+     ship legacy Tailwind class names that are inert here; the same skin the
+     feed section gives them is re-scoped for this route;
+   - the notification badge is revealed by the shared script removing the
+     legacy `hidden` class; honoured on the badge element only — no global
+     .hidden utility is defined;
+   - the desktop-only gate panel ships in mobile-gate.css; only the
+     launch-scope "hide the app" rule for this route lives here;
+   - the analytics consent banner markup is shared with the legacy layout
+     (same rules as the other launch sections, re-scoped).
+   ========================================================================== */
+
+/* ---- Launch chrome ---------------------------------------------------------- */
+
+/* Top-bar user menu: pure-CSS <details>, real logout POST form inside. */
+.launch-search .launch-user { position: relative; }
+.launch-search .launch-user > summary { list-style: none; }
+.launch-search .launch-user > summary::-webkit-details-marker { display: none; }
+.launch-search .launch-user .avatar { background: var(--moss); }
+.launch-search .launch-user__menu {
+  position: absolute; right: 0; top: calc(100% + 6px); z-index: 40;
+  min-width: 168px; display: flex; flex-direction: column;
+  background: var(--surface); border: var(--bw) solid var(--line2);
+  border-radius: var(--r-3); padding: var(--sp-3);
+  box-shadow: var(--shadow-overlay);
+}
+.launch-search .launch-user__menu a,
+.launch-search .launch-user__menu button {
+  display: block; width: 100%; text-align: left; background: none; border: 0;
+  font-family: var(--mono); font-size: var(--fs-12); color: var(--ink);
+  padding: var(--sp-3) var(--sp-5); border-radius: var(--r-2); cursor: pointer;
+}
+.launch-search .launch-user__menu a:hover,
+.launch-search .launch-user__menu button:hover { background: var(--surface2); }
+.launch-search .launch-user__menu form {
+  margin: var(--sp-2) 0 0; padding-top: var(--sp-2);
+  border-top: var(--bw) solid var(--line);
+}
+
+/* Notification badge: hidden until the shared one-shot fetch reveals it.
+   Badge element only — deliberately NOT a global .hidden utility. */
+.launch-search #notif-badge.hidden { display: none; }
+
+/* Real community avatars fill the fixed 42px rail tile. */
+.launch-search .launch-rail__img {
+  width: 100%; height: 100%; object-fit: cover; border-radius: inherit;
+  display: block;
+}
+
+/* ---- Header: serif title + command-field query box -------------------------- */
+
+.launch-search .sr-wrap {
+  width: 100%; max-width: 760px; margin: 0 auto;
+  padding: var(--sp-13) 0 var(--sp-15);
+}
+
+.launch-search .sr-head { margin: 0 0 var(--sp-10); }
+
+/* The compact serif page heading is the existing pinned label element. */
+.launch-search .sr-label {
+  display: block; font-family: var(--serif); font-weight: 600;
+  font-size: var(--fs-24); line-height: var(--lh-tight); color: var(--ink);
+  margin: 0 0 var(--sp-8);
+}
+
+/* Prominent but restrained query field: sigil cell · input · mono go. */
+.launch-search .sr-inputrow {
+  display: flex; align-items: stretch;
+  border: var(--bw) solid var(--line2); border-radius: var(--r-2);
+  background: var(--surface); overflow: hidden;
+}
+.launch-search .sr-inputrow:focus-within { border-color: var(--moss); }
+.launch-search .sr-sigil {
+  display: grid; place-items: center; padding: 0 var(--sp-6);
+  font-family: var(--mono); font-size: var(--fs-15); color: var(--muted);
+  border-right: var(--bw) solid var(--line); background: var(--surface2);
+}
+.launch-search .sr-input {
+  flex: 1; border: 0; outline: none; background: transparent;
+  font-family: var(--sans); font-size: var(--fs-15); color: var(--ink);
+  padding: var(--sp-5) var(--sp-6);
+}
+.launch-search .sr-input::placeholder { color: var(--muted); }
+.launch-search .sr-input:focus-visible { outline: none; }
+.launch-search .sr-go {
+  border: 0; border-left: var(--bw) solid var(--line);
+  background: var(--surface3); color: var(--muted); cursor: pointer;
+  font-family: var(--mono); font-size: var(--fs-12);
+  letter-spacing: var(--ls-badge); padding: 0 var(--sp-8);
+}
+.launch-search .sr-go:hover { background: var(--moss); color: #fff; }
+
+/* ---- Result tabs ------------------------------------------------------------- */
+
+.launch-search .sr-tabs {
+  display: flex; gap: var(--sp-11); align-items: center; flex-wrap: wrap;
+  border-bottom: var(--bw) solid var(--line); margin: 0 0 var(--sp-4);
+}
+.launch-search .sr-tab {
+  font-family: var(--mono); font-size: var(--fs-12); font-weight: 600;
+  letter-spacing: var(--ls-badge); color: var(--muted);
+  padding: 0 0 var(--sp-5); border-bottom: var(--bw-accent) solid transparent;
+  margin-bottom: -1px;
+}
+.launch-search .sr-tab:hover { color: var(--ink); }
+.launch-search .sr-tab.is-active { color: var(--moss); border-bottom-color: var(--moss); }
+
+/* ---- Result rows: flat list, hairline separators ----------------------------- */
+
+.launch-search .sr-results { display: flex; flex-direction: column; }
+.launch-search .sr-row {
+  display: flex; gap: var(--sp-7); align-items: flex-start;
+  padding: 13px var(--sp-3);
+  border-bottom: var(--bw) solid var(--line);
+  color: var(--ink); text-decoration: none;
+}
+.launch-search a.sr-row--link:hover { background: var(--surface2); color: var(--ink); }
+.launch-search .sr-row-main { flex: 1; min-width: 0; }
+
+.launch-search .sr-row-title {
+  font-family: var(--sans); font-size: var(--fs-15-5); font-weight: 600;
+  line-height: var(--lh-title); color: var(--ink); margin: 0 0 var(--sp-2);
+  overflow-wrap: anywhere;
+}
+.launch-search .sr-row-title a { color: var(--ink); }
+.launch-search .sr-row-title a:hover { color: var(--moss); }
+
+.launch-search .sr-row-meta {
+  font-family: var(--mono); font-size: var(--fs-11); color: var(--muted);
+  line-height: var(--lh-ui); margin: 0 0 var(--sp-2); overflow-wrap: anywhere;
+}
+.launch-search .sr-row-meta a { color: var(--muted); }
+.launch-search .sr-row-meta a:hover { color: var(--ink); }
+.launch-search .sr-row-meta .sr-c,
+.launch-search .sr-row-meta .sr-s { color: var(--slate); font-weight: 600; }
+.launch-search .sr-row-meta .sr-c:hover,
+.launch-search .sr-row-meta .sr-s:hover { color: var(--moss); }
+.launch-search .sr-dot { color: var(--line2); padding: 0 1px; }
+.launch-search .sr-sep { color: var(--line2); }
+
+.launch-search .sr-row-excerpt {
+  font-size: var(--fs-13); color: var(--muted); line-height: var(--lh-prose);
+  margin: var(--sp-2) 0 0; overflow-wrap: anywhere;
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3;
+  overflow: hidden;
+}
+
+/* Started-from-chat provenance: the system-wide clay left rule. */
+.launch-search .sr-row-src {
+  font-family: var(--mono); font-size: var(--fs-11); color: var(--muted);
+  border-left: var(--bw-accent) solid var(--clay);
+  padding-left: var(--sp-4); margin: var(--sp-3) 0 var(--sp-1);
+}
+.launch-search .sr-row-src a { color: var(--clay); font-weight: 600; }
+
+.launch-search .sr-row-stats {
+  font-family: var(--mono); font-size: var(--fs-11); color: var(--muted);
+  margin-top: var(--sp-3);
+}
+.launch-search .sr-row-stats a { color: var(--muted); }
+.launch-search .sr-row-stats a:hover { color: var(--ink); }
+.launch-search .sr-score { color: var(--ink); font-weight: 600; }
+.launch-search .sr-score::before { content: '\2191 '; color: var(--muted); }
+
+.launch-search .sr-row-link {
+  display: inline-block; margin-top: var(--sp-4);
+  font-family: var(--mono); font-size: var(--fs-11-5); font-weight: 600;
+  color: var(--slate);
+}
+.launch-search .sr-row-link:hover { color: var(--moss); }
+
+/* People / community avatars: 40px tile, letter-tile fallback. */
+.launch-search .sr-avatar {
+  width: 40px; height: 40px; border-radius: var(--r-3); object-fit: cover;
+  flex-shrink: 0; border: var(--bw) solid var(--line);
+}
+.launch-search .sr-avatar--mono {
+  display: grid; place-items: center; background: var(--surface3);
+  font-family: var(--mono); font-weight: 600; color: var(--muted);
+}
+
+/* [MOD]/[ADMIN] author badges (legacy Tailwind names inert here). */
+.launch-search .mod-badge {
+  font-family: var(--mono); font-size: var(--fs-9); color: var(--clay);
+  margin-left: 4px;
+}
+
+/* Compact secondary strip for admin/self actions — dim at rest, never
+   dominating the public result row. */
+.launch-search .sr-row-admin {
+  flex-shrink: 0; display: flex; align-items: flex-start; gap: var(--sp-2);
+  padding-left: var(--sp-5); margin-left: auto;
+  opacity: 0.7; transition: opacity 0.12s ease;
+}
+.launch-search .sr-row:hover .sr-row-admin,
+.launch-search .sr-row-admin:focus-within { opacity: 1; }
+.launch-search .sr-row-admin button {
+  cursor: pointer; background: none; border: var(--bw) solid var(--line2);
+  border-radius: var(--r-2); color: var(--muted);
+  font-size: var(--fs-12); padding: var(--sp-1) var(--sp-3);
+}
+.launch-search .sr-row-admin button:hover { color: var(--danger); border-color: var(--danger); }
+
+/* ---- Empty / prompt / pagination --------------------------------------------- */
+
+.launch-search .sr-empty {
+  border: var(--bw) dashed var(--line2); border-radius: var(--r-2);
+  padding: 36px var(--sp-10); text-align: center;
+  font-family: var(--mono); font-size: var(--fs-12-5); color: var(--muted);
+}
+.launch-search .sr-empty--prompt { padding: 56px var(--sp-12); }
+
+.launch-search .sr-pager {
+  display: flex; justify-content: space-between; align-items: center;
+  gap: var(--sp-6); margin-top: var(--sp-9);
+}
+.launch-search .sr-pager:empty { display: none; }
+.launch-search .sr-page {
+  font-family: var(--mono); font-size: var(--fs-12); font-weight: 600;
+  color: var(--ink); background: var(--surface);
+  border: var(--bw) solid var(--line2); border-radius: var(--r-2);
+  padding: var(--sp-3) var(--sp-7);
+}
+.launch-search .sr-page:hover { border-color: var(--moss); color: var(--moss); }
+/* keep Next pinned right when Prev is absent on page 1 */
+.launch-search .sr-page:only-child { margin-left: auto; }
+
+/* ---- Moderation dialogs + shared confirm modal ------------------------------- */
+
+/* Legacy moderation <dialog>s (Tailwind classes inert here): keep them
+   readable and usable; admin-only surface. */
+.launch-search dialog {
+  border: var(--bw) solid var(--line2); border-radius: var(--r-4);
+  padding: var(--sp-9); max-width: 28rem; width: calc(100% - 2rem);
+  background: var(--surface); color: var(--ink);
+}
+.launch-search dialog::backdrop { background: rgba(31, 36, 33, .45); }
+.launch-search dialog form {
+  display: flex; flex-direction: column; gap: var(--sp-6);
+  margin-top: var(--sp-4);
+}
+.launch-search dialog textarea {
+  width: 100%; border: var(--bw) solid var(--line2); border-radius: var(--r-2);
+  background: var(--surface2); padding: var(--sp-4);
+  font-family: var(--sans); font-size: var(--fs-13); min-height: 70px;
+}
+.launch-search dialog button {
+  cursor: pointer; border: var(--bw) solid var(--line2);
+  border-radius: var(--r-2); background: var(--surface); color: var(--ink);
+  padding: var(--sp-3) var(--sp-7); font-size: var(--fs-12); font-weight: 600;
+}
+.launch-search dialog button[type='submit'] {
+  color: #fff; background: var(--danger); border-color: var(--danger);
+}
+
+/* Shared confirm modal (own-post delete): the script composes it from legacy
+   utility class names; the stable .fixed.inset-0 pair and the #cancel-btn /
+   #confirm-btn ids are the hooks. */
+.launch-search .fixed.inset-0 {
+  position: fixed; inset: 0; z-index: 50;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(31, 36, 33, .45); transition: opacity .2s;
+}
+.launch-search .fixed.inset-0.opacity-0 { opacity: 0; }
+.launch-search .fixed.inset-0 > div {
+  background: var(--surface); border: var(--bw) solid var(--line2);
+  border-radius: var(--r-4); padding: var(--sp-9);
+  max-width: 24rem; width: calc(100% - 2rem);
+  box-shadow: var(--shadow-overlay);
+}
+.launch-search .fixed.inset-0 h3 { font-size: var(--fs-15); font-weight: 700; margin-bottom: var(--sp-3); }
+.launch-search .fixed.inset-0 p { font-size: var(--fs-13); color: var(--muted); margin-bottom: var(--sp-7); }
+.launch-search .fixed.inset-0 .flex { display: flex; justify-content: flex-end; gap: var(--sp-4); }
+.launch-search #cancel-btn,
+.launch-search #confirm-btn {
+  cursor: pointer; border: var(--bw) solid var(--line2);
+  border-radius: var(--r-2); background: var(--surface); color: var(--ink);
+  padding: var(--sp-3) var(--sp-7); font-size: var(--fs-12); font-weight: 600;
+}
+.launch-search #confirm-btn { color: #fff; background: var(--danger); border-color: var(--danger); }
+
+/* ---- Gate + consent ----------------------------------------------------------- */
+
+/* Desktop-only gate: hide this route's launch app under the shared
+   breakpoint; the gate panel itself is styled by mobile-gate.css. */
+@media (max-width: 800px) {
+  body.launch-search > .app { display: none !important; }
+}
+
+/* Analytics consent banner (markup shared with the legacy layout). */
+.launch-search #analytics-consent {
+  position: fixed; bottom: var(--sp-8); left: 50%; transform: translateX(-50%);
+  z-index: 50; width: calc(100% - 2rem); max-width: 28rem;
+  background: var(--surface); border: var(--bw) solid var(--line2);
+  border-radius: var(--r-3); padding: var(--sp-7) var(--sp-8);
+  box-shadow: var(--shadow-overlay);
+}
+.launch-search #analytics-consent p {
+  font-size: var(--fs-13); color: var(--muted); margin-bottom: var(--sp-5);
+}
+.launch-search #analytics-consent [data-analytics-accept],
+.launch-search #analytics-consent [data-analytics-refuse] {
+  font-family: var(--sans); font-weight: 600; font-size: var(--fs-12);
+  border: var(--bw) solid var(--line2); border-radius: var(--r-2);
+  padding: var(--sp-3) var(--sp-7); cursor: pointer;
+  background: var(--surface); color: var(--muted); margin-right: var(--sp-4);
+}
+.launch-search #analytics-consent [data-analytics-accept] {
+  color: #fff; background: var(--moss); border-color: var(--moss);
+}
+.launch-search #analytics-consent [data-analytics-error] {
+  color: var(--danger); font-size: var(--fs-11);
+}

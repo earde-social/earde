@@ -4969,15 +4969,20 @@ let notifications_page ?user ?(rail_communities = []) (notifs : Db.notification 
 
 (* === SEARCH === *)
 
-(* Post-pivot search surface: App chrome (mono topbar, no footer), cool-grey graph-paper shell,
-   everything scoped under .search-shell (search.css). Answers "where was this discussed / which
-   thread / which community / did it come from chat?" An empty query renders a local prompt state
-   instead of redirecting; the route and q/t/page semantics are unchanged. The visible Threads tab
-   keeps the internal tab value "posts". chat_sources is the bounded per-page provenance lookup
-   (post_id -> channel slug/name/source count) from Db.get_thread_sources_for_posts — no N+1. *)
+(* Launch search surface (Cartographic Civic pass 12B): the same result body the cool-grey
+   shell rendered — header form, tabs, sr-* rows, pager, analytics container, all pinned by
+   the analytics suites and the replay-masking selectors — re-parented under the shared
+   launch app chrome (Components.launch_app_page, body.launch-search) instead of
+   Components.search_page. Answers "where was this discussed / which thread / which
+   community / did it come from chat?" An empty query renders a local prompt state instead
+   of redirecting; the route and q/t/page semantics are unchanged. The visible Threads tab
+   keeps the internal tab value "posts". chat_sources is the bounded per-page provenance
+   lookup (post_id -> channel slug/name/source count) from Db.get_thread_sources_for_posts —
+   no N+1. rail_communities feeds the launch rail only (viewer membership, same order as
+   every other launch surface); it never enters result content. *)
 (* user_votes is part of the stable positional API (vote state for the old card renderer); the
    compact search rows show score but no vote arrows, so it is intentionally unused here. *)
-let search_results_page ?user ~admin_usernames ?(chat_sources=[]) _user_votes current_page active_tab query (communities: community list) users (posts: post list) comments request =
+let search_results_page ?user ~admin_usernames ?(chat_sources=[]) ?(rail_communities=[]) _user_votes current_page active_tab query (communities: community list) users (posts: post list) comments request =
   (* Escape the raw query once — reused in HTML text, the input value, the <title>, and href
      attributes. HTML-encoding in href is correct: browsers decode entities before navigating. *)
   let q = String.trim query in
@@ -5171,7 +5176,14 @@ let search_results_page ?user ~admin_usernames ?(chat_sources=[]) _user_votes cu
      (replay snapshots, $title) — the search term must never appear there.
      The visible UI still echoes the query via the input value (masked). *)
   let title = "Search" in
-  Components.search_page ?user ~request ~title ~body ()
+  (* Standard launch scroller column around the untouched .sr-wrap fragment;
+     the serif page heading is the existing .sr-label, restyled in the
+     launch-search CSS section rather than duplicated here. *)
+  let content =
+    Printf.sprintf "<div class='scroll'><div class='container container--list'>%s</div></div>" body
+  in
+  Components.launch_app_page ?user ~request ~rail_communities
+    ~page_class:"launch-search" ~title ~content ()
 
 (* === LEGAL / PRIVACY === *)
 

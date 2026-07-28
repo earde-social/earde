@@ -760,7 +760,19 @@ let search_handler request =
   let search_term = match Dream.query request "q" with Some q -> String.trim q | None -> "" in
 
   if search_term = "" then
-    Dream.html (Pages.search_results_page ?user ~admin_usernames:[] [] 1 active_tab "" [] [] [] [] request)
+    (* The empty-query prompt state needs no search data, but members still get
+       their joined communities for the launch rail (same degrade-to-empty rule
+       as notifications). Anonymous prompts stay DB-free. *)
+    if user_id > 0 then
+      Dream.sql request (fun db ->
+        let%lwt rail_communities =
+          match%lwt Db.get_user_communities db user_id with
+          | Ok cs -> Lwt.return cs
+          | Error _ -> Lwt.return []
+        in
+        Dream.html (Pages.search_results_page ?user ~admin_usernames:[] ~rail_communities [] 1 active_tab "" [] [] [] [] request))
+    else
+      Dream.html (Pages.search_results_page ?user ~admin_usernames:[] [] 1 active_tab "" [] [] [] [] request)
   else begin
       let page = match Dream.query request "page" with Some p_str -> (try int_of_string p_str with _ -> 1) | None -> 1 in
       let limit = 20 in
@@ -774,6 +786,15 @@ let search_handler request =
         let%lwt user_votes = if user_id > 0 then Db.get_user_post_votes db user_id else Lwt.return_ok [] in
         let%lwt admin_usernames_res = Db.get_admin_usernames db in
         let admin_usernames = match admin_usernames_res with Ok l -> l | Error _ -> [] in
+        (* Joined communities feed the launch rail only; a failure degrades to
+           an empty rail rather than failing the search. *)
+        let%lwt rail_communities =
+          if user_id > 0 then
+            match%lwt Db.get_user_communities db user_id with
+            | Ok cs -> Lwt.return cs
+            | Error _ -> Lwt.return []
+          else Lwt.return []
+        in
 
         match communities_res, users_res, posts_res, comments_res, user_votes with
         | Ok communities, Ok users, Ok posts, Ok comments, Ok votes ->
@@ -787,7 +808,7 @@ let search_handler request =
                 | Ok l -> Lwt.return l
                 | Error _ -> Lwt.return []
             in
-            Dream.html (Pages.search_results_page ?user ~admin_usernames ~chat_sources votes page active_tab search_term communities users posts comments request)
+            Dream.html (Pages.search_results_page ?user ~admin_usernames ~chat_sources ~rail_communities votes page active_tab search_term communities users posts comments request)
         | _ -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:"Database error during search. Please try again." ~alert_type:"error" ~return_url:"/" request)
       )
     end
