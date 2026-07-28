@@ -610,27 +610,102 @@ let community_page ?user ?(noindex=false) ?(connected_projects="") ?section:(sec
   Components.layout ?user ~noindex ~request ~analytics_community:(community.id, community.visibility)
     ~title:community.name content
 
-(* First real adopter of Components.community_shell: the forum-section feed inside a structured
-   community, rendered as the Discord-like multi-pane shell instead of the warm card layout.
-   Kept as a separate function (not folded into community_page) so the simple-community feed and
-   the section feed can diverge in chrome without one breaking the other. SSR-only — every link
-   works with JS disabled; render_post's JS only enhances. *)
-(* The col-2 sidebar's Channels group, shared by the chat-channel and forum-section shell
-   views so a user can hop between chat and forum from either. Archived channels are hidden.
-   Returns [] (no group rendered) when the community has no visible channels. ?active
-   highlights the current channel (set only on the channel page). *)
-let channels_nav_group ~(community : community) ~(channels : channel list) ?active () =
-  let items = List.filter_map (fun (c : channel) ->
-    if c.is_archived then None
-    else Some
-      { Components.ni_label = c.name;
-        ni_href  = Printf.sprintf "/c/%s/ch/%s" community.slug c.slug;
-        ni_sigil = "#";
-        ni_active = (match active with Some s -> s = c.slug | None -> false);
-        ni_badge  = None })
-    channels
+(* The forum-section feed inside a structured community, and (below) the canonical thread
+   view — the pass-10 knowledge routes, now on the Cartographic Civic launch chrome. Kept as
+   separate functions (not folded into community_page) so the simple-community feed and the
+   section feed can diverge in chrome without one breaking the other. SSR-only — every link
+   works with JS disabled; the page JS only enhances. *)
+(* Launch community sidebar for the knowledge routes (section + thread), in the exact
+   pass-8/9 grammar: identity head, Overview link, factual visibility marker, Live channels
+   (never active here — these are forum surfaces), Knowledge sections with the current/parent
+   section active, and the intentionally public moderation log. Settings renders only under
+   the is_mod-or-admin gate its handler enforces; Home requests needs the top-mod authority
+   the section/thread handlers never load, so it is not rendered — nothing is invented. The
+   virtual Uncategorized feed is appended (active) only when the viewer is on it: the handler
+   404s that route unless real orphaned content exists, so the entry is always backed by
+   data. Archived channels are hidden, mirroring the pre-launch Channels nav group. *)
+let launch_knowledge_sidebar ~(community : community) ~(channels : channel list)
+    ~(sections : community_section list) ?active_section_slug
+    ?(append_uncategorized = false) ~can_manage () =
+  let esc = Components.html_escape in
+  let slug = esc community.slug in
+  let tile_glyph =
+    String.capitalize_ascii
+      (if String.length community.slug >= 2 then String.sub community.slug 0 2
+       else if community.slug = "" then "?" else community.slug)
   in
-  if items = [] then [] else [ { Components.ng_label = "Channels"; ng_items = items } ]
+  let side_face =
+    match community.avatar_url with
+    | Some url when String.trim url <> "" ->
+        (match Components.safe_img_src url with
+         | "#" ->
+             Printf.sprintf "<span class='avatar avatar--32' style='background:%s'>%s</span>"
+               (Components.launch_tile_color community.slug) (esc tile_glyph)
+         | src ->
+             Printf.sprintf "<span class='avatar avatar--32'><img class='launch-avatar-img' src='%s' alt=''></span>" src)
+    | _ ->
+        Printf.sprintf "<span class='avatar avatar--32' style='background:%s'>%s</span>"
+          (Components.launch_tile_color community.slug) (esc tile_glyph)
+  in
+  let side_head =
+    Printf.sprintf
+      "<a class='sidebar__head' href='/c/%s'>%s<span class='launch-side-id'><span class='sidebar__name'>%s</span><span class='sidebar__slug'>/c/%s</span></span></a>"
+      slug side_face (esc community.name) slug
+  in
+  let nav_overview =
+    Printf.sprintf
+      "<a class='navitem navitem--pad' href='/c/%s'><span class='navitem__sigil navitem__sigil--box'>&#8962;</span>Overview</a>"
+      slug
+  in
+  let vis_note =
+    if community.visibility = Db.Community_private then
+      "<div class='launch-side-vis'>private community</div>"
+    else ""
+  in
+  let live_channels = List.filter (fun (c : channel) -> not c.is_archived) channels in
+  let nav_live =
+    if live_channels = [] then ""
+    else
+      "<p class='kicker sidebar__group'>Live</p>"
+      ^ String.concat "" (List.map (fun (c : channel) ->
+          Printf.sprintf
+            "<a class='navitem' href='/c/%s/ch/%s'><span class='navitem__sigil navitem__sigil--live'>#</span>%s</a>"
+            slug (esc c.slug) (esc c.slug))
+          live_channels)
+  in
+  let section_item (s : community_section) =
+    let cls =
+      if active_section_slug = Some s.slug then "navitem navitem--active" else "navitem" in
+    Printf.sprintf
+      "<a class='%s' href='/c/%s/s/%s'><span class='navitem__sigil navitem__sigil--live'>&sect;</span>%s</a>"
+      cls slug (esc s.slug) (esc s.name)
+  in
+  let knowledge_items =
+    List.map section_item sections
+    @ (if append_uncategorized then
+         [ Printf.sprintf
+             "<a class='navitem navitem--active' href='/c/%s/s/uncategorized'><span class='navitem__sigil navitem__sigil--live'>&sect;</span>Uncategorized</a>"
+             slug ]
+       else [])
+  in
+  let nav_knowledge =
+    if knowledge_items = [] then ""
+    else "<p class='kicker sidebar__group'>Knowledge</p>" ^ String.concat "" knowledge_items
+  in
+  let nav_network =
+    "<p class='kicker sidebar__group'>Network</p>"
+    ^ Printf.sprintf
+        "<a class='navitem navitem--pad' href='/c/%s/modlog'><span class='navitem__sigil navitem__sigil--box'>&#9776;</span>Moderation log</a>"
+        slug
+    ^ (if can_manage then
+         Printf.sprintf
+           "<a class='navitem navitem--pad' href='/c/%s/settings'><span class='navitem__sigil navitem__sigil--box'>&#9881;</span>Settings</a>"
+           slug
+       else "")
+  in
+  Printf.sprintf
+    "<aside class='sidebar' aria-label='%s community'>%s<div class='sidebar__body'>%s%s%s%s%s</div></aside>"
+    (esc community.name) side_head nav_overview vis_note nav_live nav_knowledge nav_network
 
 let community_section_shell_page ?user ?(noindex=false) ?thread_count ?last_activity ~is_current_user_mod ~mod_usernames ~admin_usernames
     ~banned_usernames ~(rail_communities : community list) ~(channels : channel list)
@@ -641,28 +716,17 @@ let community_section_shell_page ?user ?(noindex=false) ?thread_count ?last_acti
   (* base_url drives the sort tabs, the New-thread link, and pagination — all stay on the section URL. *)
   let base_url = Printf.sprintf "/c/%s/s/%s" (esc community.slug) (esc section.slug) in
 
-  (* col-2 sidebar: one "Forum Sections" group, one nav_item per section, active = current slug.
-     `s` annotated because `open Db` makes slug/name ambiguous between community and section. *)
-  let section_items = List.map (fun (s : community_section) ->
-    { Components.ni_label = s.name;
-      ni_href  = Printf.sprintf "/c/%s/s/%s" community.slug s.slug;
-      ni_sigil = "§";
-      ni_active = (s.slug = section.slug);
-      ni_badge  = None })
-    sections
-  in
-  (* The virtual Uncategorized feed isn't a real section row, so append it only when we're on it —
-     keeps it highlighted without an extra orphaned-count query just to decorate the sidebar. *)
-  let section_items =
-    if section.slug = "uncategorized" then
-      section_items @ [ { Components.ni_label = "Uncategorized"; ni_href = base_url;
-                          ni_sigil = "§"; ni_active = true; ni_badge = None } ]
-    else section_items
-  in
-  (* Channels group first (none active — we're on a forum section), then Forum Sections. *)
-  let nav_groups =
-    channels_nav_group ~community ~channels ()
-    @ [ { Components.ng_label = "Forum Sections"; ng_items = section_items } ]
+  (* Launch community sidebar (pass-8/9 grammar): the current section is active; the virtual
+     Uncategorized feed isn't a real section row, so it is appended (active) only when we're
+     on it — keeps it highlighted without an extra orphaned-count query just to decorate the
+     sidebar. Settings gate mirrors the overview: the render-time check is visibility only,
+     the settings handler re-checks authority. *)
+  let is_admin = Dream.session_field request "is_admin" = Some "true" in
+  let sidebar =
+    launch_knowledge_sidebar ~community ~channels ~sections
+      ?active_section_slug:(if section.slug = "uncategorized" then None else Some section.slug)
+      ~append_uncategorized:(section.slug = "uncategorized")
+      ~can_manage:(is_current_user_mod || is_admin) ()
   in
 
   (* New-thread action: pre-selects this section; suppressed for anon users and the virtual
@@ -759,8 +823,18 @@ let community_section_shell_page ?user ?(noindex=false) ?thread_count ?last_acti
   let right_pane = stats_block ^ rules_block ^ mods_block in
 
   let title = Printf.sprintf "%s · %s" section.name community.name in
-  Components.community_shell ?user ~noindex ~request ~rail_communities ~active_slug:community.slug
-    ~title ~community ~nav_groups ~main ~right_pane ()
+  (* The complete <main> element, built here so the launch wrapper can never interpose a
+     box: .cs-main is a flex column whose forum head and scrolling body MUST stay direct
+     children, and for a private community the ph-no-capture replay guard rides on this
+     element itself (never a wrapper div — see the chat-layout regression). *)
+  let main_el =
+    Printf.sprintf "<main class='%s'>%s</main>"
+      (if community.visibility = Db.Community_private then "cs-main ph-no-capture" else "cs-main")
+      main
+  in
+  let aside = Printf.sprintf "<aside class='aside'>%s</aside>" right_pane in
+  Components.launch_community_surface_page ?user ~noindex ~request ~rail_communities
+    ~aside ~community ~sidebar ~page_class:"launch-community-section" ~title ~main_el ()
 
 (* /feed — the global Feed surface, now the first App route on the launch
    chrome (Components.launch_app_page: earde.css only, no shell.css/Tailwind).
@@ -1331,14 +1405,17 @@ type thread_source_view =
   | Ts_private
   | Ts_visible of (string * string) option * Db.thread_source_msg list
 
-(* /c/:slug/t/:post_id-:post_slug — the canonical thread view, inside the persistent shell.
+(* /c/:slug/t/:post_id-:post_slug — the canonical thread view, now on the Cartographic Civic
+   launch chrome (Components.launch_community_surface_page: earde.css only, no shell.css).
    Replaces the legacy warm-card post_page for normal threads (post_page stays only as the
-   unmappable-post fallback and is left byte-for-byte unchanged). Visible comment/composer UI is
-   shell-styled with custom CSS; the security-critical mod/admin/ban *dialogs* are copied verbatim
-   from post_page (identical routes, CSRF, dialog ids and Rule A/B/C logic) so moderation behavior
-   cannot drift — re-skinning those overlays would be risky for zero user-facing benefit.
+   unmappable-post fallback and is left byte-for-byte unchanged). Visible comment/composer UI
+   keeps its markup and is re-skinned by the route-scoped CSS; the security-critical
+   mod/admin/ban *dialogs* are copied verbatim from post_page (identical routes, CSRF, dialog
+   ids and Rule A/B/C logic) so moderation behavior cannot drift — re-skinning those overlays
+   would be risky for zero user-facing benefit.
    The optimistic-vote DOM contract (cs-vote = [upvote form, score span, downvote form], buttons
-   carrying the exact Tailwind colour classes the global vote JS toggles) is preserved exactly. *)
+   carrying the exact legacy Tailwind colour classes the shared vote JS toggles — mapped to
+   launch accents in earde.css) is preserved exactly. *)
 let thread_shell_page ?user ?(noindex=false) ~is_member ~is_current_user_mod ~mod_usernames ~admin_usernames
     ~banned_usernames ~(rail_communities : community list) ~(channels : channel list)
     ~(sections : community_section list) ~(community : community)
@@ -1349,13 +1426,13 @@ let thread_shell_page ?user ?(noindex=false) ~is_member ~is_current_user_mod ~mo
   let current_user = Dream.session_field request "username" in
   let is_admin = Dream.session_field request "is_admin" = Some "true" in
 
-  (* col-2 sidebar: Channels group + Forum Sections group; the post's own section is active. *)
-  let section_items = List.map (fun (s : community_section) ->
-    { Components.ni_label = s.name; ni_href = Printf.sprintf "/c/%s/s/%s" community.slug s.slug;
-      ni_sigil = "§"; ni_active = (match post.section_slug with Some ss -> ss = s.slug | None -> false);
-      ni_badge = None }) sections in
-  let section_group = if section_items = [] then [] else [ { Components.ng_label = "Forum Sections"; ng_items = section_items } ] in
-  let nav_groups = channels_nav_group ~community ~channels () @ section_group in
+  (* Launch community sidebar (pass-8/9 grammar): the post's own (parent) section is active.
+     Settings gate mirrors the overview: render-time visibility only, handler re-checks. *)
+  let sidebar =
+    launch_knowledge_sidebar ~community ~channels ~sections
+      ?active_section_slug:post.section_slug
+      ~can_manage:(is_current_user_mod || is_admin) ()
+  in
 
   (* Breadcrumb + back-to-section (only when the post actually belongs to a section). *)
   let section_crumb = match post.section_name, post.section_slug with
@@ -1945,8 +2022,19 @@ let thread_shell_page ?user ?(noindex=false) ~is_member ~is_current_user_mod ~mo
     "<link rel='canonical' href='%s'><meta name='description' content='%s'><script src='/static/js/thread.js' defer></script>"
     (esc canonical) (esc excerpt) in
 
-  Components.community_shell ?user ~noindex ~request ~rail_communities ~active_slug:community.slug
-    ~head_extra ~title:post.title ~community ~nav_groups ~main ~right_pane ()
+  (* The complete <main> element, built here so the launch wrapper can never interpose a
+     box: .cs-main is a flex column whose only child (.thread-shell-main) owns the scroll,
+     and for a private community the ph-no-capture replay guard rides on this element
+     itself (never a wrapper div — see the chat-layout regression). *)
+  let main_el =
+    Printf.sprintf "<main class='%s'>%s</main>"
+      (if community.visibility = Db.Community_private then "cs-main ph-no-capture" else "cs-main")
+      main
+  in
+  let aside = Printf.sprintf "<aside class='aside'>%s</aside>" right_pane in
+  Components.launch_community_surface_page ?user ~noindex ~request ~rail_communities
+    ~head_extra ~aside ~community ~sidebar ~page_class:"launch-community-thread"
+    ~title:post.title ~main_el ()
 
 (* /c/:slug — the public community home / overview / entry page. NOT the persistent shell
    (that is Components.community_shell, used by section feeds). Flat cool-grey markup scoped
