@@ -7271,3 +7271,283 @@ ol, ul { margin: 0; padding: 0; list-style: none; }
 .launch-flat-community #analytics-consent [data-analytics-error] {
   color: var(--danger); font-size: var(--fs-11);
 }
+
+/* ==========================================================================
+   EARDE INTEGRATION — post creation only
+   Scoped beneath body.launch-post-creation: the three states of GET
+   /new-post (Pages.new_post_form, Pages.choose_community_page,
+   Pages.join_to_post_page) — the global composer. Exists only because the
+   real creation surface cannot emit the reference markup exactly:
+   - the create-* fragments (the /posts multipart form with its hidden
+     community_id, the required section <select> for structured communities,
+     the title/url/image/content fields, the chooser's community list and
+     the members-only join gate with its real POST /join form) are treated
+     as pinned, so the legacy markup is spliced verbatim inside the
+     .create-shell marker and skinned here onto the approved anatomy: page
+     head band over one restrained form column — drafting a durable
+     community contribution, not posting to a social network;
+   - no drafts, previews, tags, attachments-beyond-image, post types or
+     sections are invented: every control styled here already exists in the
+     renderer, and flat communities simply render no section field;
+   - validation failures answer via the legacy shared msg_page (out of
+     scope), so this section carries no error-notice skin of its own;
+   - the notification badge is revealed by the shared script removing the
+     legacy `hidden` class; honoured on the badge element only — no global
+     .hidden utility is defined;
+   - the desktop-only gate panel ships in mobile-gate.css; only the
+     launch-scope "hide the app" rule for this route lives here;
+   - the analytics consent banner markup is shared with the legacy layout
+     (same rules as the other launch sections, re-scoped).
+   ========================================================================== */
+
+/* ---- Launch chrome ---------------------------------------------------------- */
+
+/* Top-bar user menu: pure-CSS <details>, real logout POST form inside. */
+.launch-post-creation .launch-user { position: relative; }
+.launch-post-creation .launch-user > summary { list-style: none; }
+.launch-post-creation .launch-user > summary::-webkit-details-marker { display: none; }
+.launch-post-creation .launch-user .avatar { background: var(--moss); }
+.launch-post-creation .launch-user__menu {
+  position: absolute; right: 0; top: calc(100% + 6px); z-index: 40;
+  min-width: 168px; display: flex; flex-direction: column;
+  background: var(--surface); border: var(--bw) solid var(--line2);
+  border-radius: var(--r-3); padding: var(--sp-3);
+  box-shadow: var(--shadow-overlay);
+}
+.launch-post-creation .launch-user__menu a,
+.launch-post-creation .launch-user__menu button {
+  display: block; width: 100%; text-align: left; background: none; border: 0;
+  font-family: var(--mono); font-size: var(--fs-12); color: var(--ink);
+  padding: var(--sp-3) var(--sp-5); border-radius: var(--r-2); cursor: pointer;
+}
+.launch-post-creation .launch-user__menu a:hover,
+.launch-post-creation .launch-user__menu button:hover { background: var(--surface2); }
+.launch-post-creation .launch-user__menu form {
+  margin: var(--sp-2) 0 0; padding-top: var(--sp-2);
+  border-top: var(--bw) solid var(--line);
+}
+
+/* Notification badge: hidden until the shared one-shot fetch reveals it.
+   Badge element only — deliberately NOT a global .hidden utility. */
+.launch-post-creation #notif-badge.hidden { display: none; }
+
+/* Real community avatars fill their fixed rail tile. */
+.launch-post-creation .launch-rail__img {
+  width: 100%; height: 100%; object-fit: cover; border-radius: inherit;
+  display: block;
+}
+
+/* ---- Composer anatomy ------------------------------------------------------- */
+
+/* create-shell fills <main> as a column: fixed head band over the scrolling
+   state below; create-wrap/create-panel are legacy grouping divs with no
+   launch-side geometry of their own. */
+.launch-post-creation .create-shell {
+  flex: 1; min-height: 0; display: flex; flex-direction: column;
+}
+.launch-post-creation .create-wrap {
+  flex: 1; min-height: 0; display: flex; flex-direction: column;
+}
+.launch-post-creation .create-panel { display: contents; }
+
+/* Page head band: serif title over the renderer's real subtitle; the
+   destination path (/c/:slug accent in the title) reads as mono moss. */
+.launch-post-creation .create-head {
+  flex: none; padding: 15px 28px; background: var(--surface);
+  border-bottom: var(--bw) solid var(--line2);
+}
+.launch-post-creation .create-title {
+  font-family: var(--serif); font-weight: 600; font-size: var(--fs-22);
+  color: var(--ink);
+}
+.launch-post-creation .create-title .accent {
+  font-family: var(--mono); font-weight: 400; font-size: var(--fs-16);
+  color: var(--moss);
+}
+.launch-post-creation .create-sub {
+  font-size: var(--fs-12-5); color: var(--muted); margin-top: var(--sp-1);
+  line-height: var(--lh-prose);
+}
+
+/* ---- The creation form (member + community state) --------------------------- */
+
+/* The form is the scroller: one restrained left-aligned column under the
+   band, capped at a reading measure. Direct child of the panel only — the
+   join gate's inner form must keep its card flow. */
+.launch-post-creation .create-panel > .create-form {
+  flex: 1; min-height: 0; overflow-y: auto; scrollbar-width: thin;
+  padding: var(--sp-10) 28px 70px;
+}
+.launch-post-creation .create-panel > .create-form > * { max-width: 620px; }
+
+.launch-post-creation .create-field { margin-bottom: var(--sp-8); }
+.launch-post-creation .create-label {
+  display: block; font-family: var(--mono); font-size: var(--fs-10);
+  font-weight: 600; letter-spacing: var(--ls-kicker); text-transform: uppercase;
+  color: var(--muted); margin-bottom: var(--sp-3);
+}
+.launch-post-creation .create-label .req { color: var(--clay); }
+.launch-post-creation .create-label .create-label-opt,
+.launch-post-creation .create-label-opt {
+  font-weight: 400; text-transform: none; letter-spacing: normal;
+  color: var(--muted);
+}
+
+/* Inset controls: hairline frame, tight radii, quiet slate focus. */
+.launch-post-creation .create-input,
+.launch-post-creation .create-select,
+.launch-post-creation .create-textarea {
+  width: 100%; font-family: var(--sans); font-size: var(--fs-13);
+  color: var(--ink); background: var(--surface);
+  border: var(--bw) solid var(--line2); border-radius: var(--r-2);
+  padding: var(--sp-3) var(--sp-4);
+}
+.launch-post-creation .create-textarea { resize: vertical; }
+.launch-post-creation .create-input::placeholder,
+.launch-post-creation .create-textarea::placeholder { color: var(--muted); }
+.launch-post-creation .create-input:focus,
+.launch-post-creation .create-select:focus,
+.launch-post-creation .create-textarea:focus {
+  outline: none; border-color: var(--slate);
+}
+
+/* Image input: the native picker restyled as a quiet mono control. */
+.launch-post-creation .create-file {
+  width: 100%; font-family: var(--mono); font-size: var(--fs-11);
+  color: var(--muted); background: var(--surface);
+  border: var(--bw) solid var(--line2); border-radius: var(--r-2);
+  padding: var(--sp-3) var(--sp-4);
+}
+.launch-post-creation .create-file::file-selector-button {
+  font-family: var(--sans); font-weight: 600; font-size: var(--fs-11-5);
+  color: var(--muted); background: var(--surface2);
+  border: var(--bw) solid var(--line2); border-radius: var(--r-2);
+  padding: var(--sp-2) var(--sp-5); margin-right: var(--sp-5); cursor: pointer;
+}
+
+/* Field hints (WebP conversion note): quiet mono metadata. */
+.launch-post-creation .create-hint {
+  font-family: var(--mono); font-size: var(--fs-11); color: var(--muted);
+  margin-top: var(--sp-2);
+}
+
+/* Actions: moss submit — a constructive, durable contribution. The legacy
+   --block modifier loses its full-width meaning inside this measured column. */
+.launch-post-creation .create-actions {
+  display: flex; align-items: center; gap: var(--sp-4);
+  margin-top: var(--sp-9); padding-top: var(--sp-7);
+  border-top: var(--bw) solid var(--line);
+}
+.launch-post-creation .create-btn {
+  cursor: pointer; font-family: var(--sans); font-weight: 600;
+  font-size: var(--fs-12-5); color: #fff; background: var(--moss);
+  border: var(--bw) solid var(--moss); border-radius: var(--r-2);
+  padding: var(--sp-3) var(--sp-8); text-decoration: none;
+}
+.launch-post-creation .create-btn:hover {
+  background: color-mix(in srgb, var(--moss) 88%, #000);
+}
+.launch-post-creation .create-btn--block { width: auto; }
+
+/* ---- The community chooser (no ?community state) ---------------------------- */
+
+/* The list is the scroller: hairline ledger rows, not cards. Each row is the
+   renderer's real link into /new-post?community=:slug. */
+.launch-post-creation .create-list {
+  flex: 1; min-height: 0; overflow-y: auto; scrollbar-width: thin;
+  padding: var(--sp-6) 28px var(--sp-10);
+}
+.launch-post-creation .create-comm {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: var(--sp-8); max-width: 620px;
+  padding: var(--sp-6) var(--sp-2); border-bottom: var(--bw) solid var(--line);
+}
+.launch-post-creation .create-comm:hover { background: var(--surface2); }
+.launch-post-creation .create-comm-name {
+  display: block; font-weight: 600; font-size: var(--fs-13-5);
+  color: var(--ink); line-height: var(--lh-title);
+}
+.launch-post-creation .create-comm-slug {
+  display: block; font-family: var(--mono); font-size: var(--fs-11);
+  color: var(--muted); margin-top: var(--sp-1);
+}
+.launch-post-creation .create-comm-go {
+  flex: none; font-family: var(--mono); font-size: var(--fs-11-5);
+  color: var(--slate); white-space: nowrap;
+}
+.launch-post-creation .create-comm:hover .create-comm-go { color: var(--ink); }
+
+/* Chooser footer: fixed quiet strip under the list (the /bring fallback). */
+.launch-post-creation .create-panel > .create-foot {
+  flex: none; padding: var(--sp-6) 28px; background: var(--surface);
+  border-top: var(--bw) solid var(--line2);
+  font-family: var(--mono); font-size: var(--fs-11-5); color: var(--muted);
+}
+.launch-post-creation .create-link { color: var(--slate); }
+.launch-post-creation .create-link:hover { color: var(--ink); }
+
+/* ---- The members-only join gate (non-member state) -------------------------- */
+
+/* Narrow wrap centres one flat bordered card; the gate's inner form and
+   footer keep their card flow (the scroller rules above are direct-child
+   scoped away from here). */
+.launch-post-creation .create-wrap--narrow {
+  align-items: center; justify-content: center; padding: var(--sp-12);
+}
+.launch-post-creation .create-gate {
+  width: 100%; max-width: 400px; text-align: center;
+  background: var(--surface); border: var(--bw) solid var(--line2);
+  border-radius: var(--r-3); padding: var(--sp-13) var(--sp-12);
+}
+.launch-post-creation .create-gate-icon {
+  width: 40px; height: 40px; margin: 0 auto var(--sp-7);
+  display: flex; align-items: center; justify-content: center;
+  color: var(--muted); background: var(--surface2);
+  border: var(--bw) solid var(--line2); border-radius: var(--r-3);
+}
+.launch-post-creation .create-gate-icon svg { width: 18px; height: 18px; }
+.launch-post-creation .create-gate-text {
+  font-size: var(--fs-13); color: var(--muted); line-height: var(--lh-prose);
+  margin-top: var(--sp-3);
+}
+.launch-post-creation .create-gate-name {
+  font-family: var(--mono); font-size: var(--fs-12); color: var(--moss);
+}
+.launch-post-creation .create-gate .create-form { margin-top: var(--sp-9); }
+.launch-post-creation .create-gate .create-btn--block {
+  display: block; width: 100%; text-align: center;
+}
+.launch-post-creation .create-gate .create-foot {
+  margin-top: var(--sp-7); font-family: var(--mono); font-size: var(--fs-11);
+}
+
+/* Desktop-only gate: hide this route's launch app under the shared
+   breakpoint; the gate panel itself is styled by mobile-gate.css. */
+@media (max-width: 800px) {
+  body.launch-post-creation > .app { display: none !important; }
+}
+
+/* Analytics consent banner (markup shared with the legacy layout). */
+.launch-post-creation #analytics-consent {
+  position: fixed; bottom: var(--sp-8); left: 50%; transform: translateX(-50%);
+  z-index: 50; width: calc(100% - 2rem); max-width: 28rem;
+  background: var(--surface); border: var(--bw) solid var(--line2);
+  border-radius: var(--r-3); padding: var(--sp-7) var(--sp-8);
+  box-shadow: var(--shadow-overlay);
+}
+.launch-post-creation #analytics-consent p {
+  font-size: var(--fs-13); color: var(--muted); margin-bottom: var(--sp-5);
+}
+.launch-post-creation #analytics-consent [data-analytics-accept],
+.launch-post-creation #analytics-consent [data-analytics-refuse] {
+  font-family: var(--sans); font-weight: 600; font-size: var(--fs-12);
+  border: var(--bw) solid var(--line2); border-radius: var(--r-2);
+  padding: var(--sp-3) var(--sp-7); cursor: pointer;
+  background: var(--surface); color: var(--muted); margin-right: var(--sp-4);
+}
+.launch-post-creation #analytics-consent [data-analytics-accept] {
+  color: #fff; background: var(--moss); border-color: var(--moss);
+}
+.launch-post-creation #analytics-consent [data-analytics-error] {
+  color: var(--danger); font-size: var(--fs-11);
+}

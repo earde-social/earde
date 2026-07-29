@@ -105,8 +105,13 @@ val launch_auth_page : ?noindex:bool -> ?request:Dream.request -> page_class:str
     documents carry no script. [request] feeds the shared analytics assets and
     the admin session flag. [page_class] (e.g. "launch-feed") is the scoping
     root stamped on <body> for the integration CSS at the end of earde.css.
+    [analytics_community] threads the (id, authoritative visibility) pair to
+    the shared analytics assets exactly as [create_page] does — the community
+    group attribute and the private no-capture marker — for global launch
+    surfaces whose content is community-bound (the post-creation form and its
+    join gate); absent, the assets are byte-identical to before.
     Used only by [Pages.feed_page]; no existing wrapper changes. *)
-val launch_app_page : ?noindex:bool -> ?request:Dream.request -> ?user:string -> ?rail_communities:Db.community list -> ?aside:string -> page_class:string -> title:string -> content:string -> unit -> string
+val launch_app_page : ?noindex:bool -> ?request:Dream.request -> ?user:string -> ?rail_communities:Db.community list -> ?analytics_community:(int * Db.community_visibility) -> ?aside:string -> page_class:string -> title:string -> content:string -> unit -> string
 
 (** Cartographic Civic launch onboarding document (pass 4: /projects/new only).
     A complete, self-contained document loading only /static/css/earde.css plus

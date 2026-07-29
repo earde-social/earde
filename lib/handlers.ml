@@ -2748,14 +2748,33 @@ let new_post_page request =
   | Some uid_str ->
       let user_id = int_of_string uid_str in
       let user = Dream.session_field request "username" in
+      let is_admin = Dream.session_field request "is_admin" = Some "true" in
       let community_slug_opt = Dream.query request "community" in
       let section_slug_opt = Dream.query request "section" in
+
+      (* Joined communities feed the launch rail only; a failure degrades to
+         an empty rail rather than blocking the composer. Called only after
+         the viewer is authorized for the requested state. *)
+      let load_rail db =
+        match%lwt Db.get_user_communities db user_id with
+        | Ok cs -> Lwt.return cs
+        | Error _ -> Lwt.return []
+      in
 
       match community_slug_opt with
       | Some slug ->
           Dream.sql request (fun db ->
             match%lwt Db.get_community_by_slug db slug with
             | Ok (Some community) ->
+                (* Privacy gate: a private community must be indistinguishable
+                   from a missing one for outsiders — the same rule as the
+                   overview/section/thread/report surfaces. Previously this
+                   route answered a non-member's ?community=<private-slug>
+                   with the join gate, confirming existence and leaking the
+                   community name in the title. *)
+                let%lwt authorized = can_view_community db ~user_id ~is_admin community in
+                if not authorized then community_not_found ?user request
+                else
                 (match%lwt Db.is_member db user_id community.id with
                 | Ok true ->
                     let%lwt sections =
@@ -2773,19 +2792,32 @@ let new_post_page request =
                            | Ok (Some s) -> Lwt.return (Some s.Db.section_id)
                            | _ -> Lwt.return None)
                     in
-                    Dream.html (Pages.new_post_form ?user ?preselected_section_id:preselected_section_id_opt sections community request)
+                    let%lwt rail_communities = load_rail db in
+                    Dream.html (Pages.new_post_form ?user ?preselected_section_id:preselected_section_id_opt ~rail_communities sections community request)
                 | Ok false ->
-                    Dream.html (Pages.join_to_post_page ?user community request)
+                    let%lwt rail_communities = load_rail db in
+                    Dream.html (Pages.join_to_post_page ?user ~rail_communities community request)
                 | Error err -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:("Database error: " ^ err) ~alert_type:"error" ~return_url:"/" request))
 
-            | Ok None -> Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"Not Found" ~message:"This community does not exist." ~alert_type:"error" ~return_url:"/" request)
+            | Ok None -> community_not_found ?user request
             | Error err -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:("Database error: " ^ err) ~alert_type:"error" ~return_url:"/" request)
           )
       | None ->
           Dream.sql request (fun db ->
             match%lwt Db.get_all_communities db with
             | Ok communities ->
-                Dream.html (Pages.choose_community_page ?user communities)
+                (* The chooser must never list a community the viewer cannot
+                   see: get_all_communities returns every row, and the legacy
+                   page exposed private community names and slugs to any
+                   logged-in user. Filter with the same per-community
+                   authorization the content surfaces use. *)
+                let%lwt visible =
+                  Lwt_list.filter_s
+                    (fun c -> can_view_community db ~user_id ~is_admin c)
+                    communities
+                in
+                let%lwt rail_communities = load_rail db in
+                Dream.html (Pages.choose_community_page ?user ~request ~rail_communities visible)
             | Error err -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:("Database error: " ^ err) ~alert_type:"error" ~return_url:"/" request)
           )
 

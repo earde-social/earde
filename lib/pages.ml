@@ -3406,7 +3406,19 @@ let manage_mods_page ?user ?(rail_communities = []) ~is_admin ~current_user_role
 
 (* === POST === *)
 
-let choose_community_page ?user (communities : community list) =
+(* The three /new-post states below (community chooser, join gate, creation
+   form) moved onto the Cartographic launch shell (pass 15B). The create-*
+   fragments are kept verbatim — every field name/id/value, the hidden
+   community_id, the section <select>, the Dream CSRF tag and the legacy
+   .create-shell marker are unchanged — and only the outer document swapped
+   Components.create_page → Components.launch_app_page (page_class
+   launch-post-creation), which owns the topbar, dark rail, analytics assets
+   and the member behavior script. [rail_communities] carries the viewer's
+   joined communities as the handler loaded them (post-authorization only);
+   ordering and the rail tiles stay owned by the shared launch doc. The
+   community-bound states keep their (id, visibility) analytics pair through
+   the wrapper's [analytics_community], exactly what create_page received. *)
+let choose_community_page ?user ?request ?(rail_communities = []) (communities : community list) =
   let render_option (community : community) =
     Printf.sprintf "
     <a href='/new-post?community=%s' class='create-comm'>
@@ -3440,9 +3452,11 @@ let choose_community_page ?user (communities : community list) =
     </div>"
     list_html
   in
-  Components.create_page ?user ~title:"Choose Community" ~body:content ()
+  Components.launch_app_page ?user ?request ~rail_communities
+    ~page_class:"launch-post-creation" ~title:"Choose Community"
+    ~content:(Printf.sprintf "<div class='create-shell'>%s</div>" content) ()
 
-let join_to_post_page ?user (community : community) request =
+let join_to_post_page ?user ?(rail_communities = []) (community : community) request =
   let csrf_token = Dream.csrf_tag request in
   let content = Printf.sprintf "
     <div class='create-wrap create-wrap--narrow'>
@@ -3472,8 +3486,10 @@ let join_to_post_page ?user (community : community) request =
     </div>"
     (Components.html_escape community.slug) csrf_token community.id community.slug
   in
-  Components.create_page ?user ~request ~analytics_community:(community.id, community.visibility)
-    ~title:("Join " ^ community.name) ~body:content ()
+  Components.launch_app_page ?user ~request ~rail_communities
+    ~analytics_community:(community.id, community.visibility)
+    ~page_class:"launch-post-creation" ~title:("Join " ^ community.name)
+    ~content:(Printf.sprintf "<div class='create-shell'>%s</div>" content) ()
 
 (* GET form for "Start thread from chat". Mirrors new_post_form's create-* shell so it
    inherits the community shell language (no legacy Site chrome). The seed message is
@@ -3592,7 +3608,7 @@ let start_thread_form ?user ?error ~(community : community) ~(channel : channel)
   Components.create_page ?user ~request ~analytics_community:(community.id, community.visibility)
     ~title:("Start thread — #" ^ channel.name) ~body:content ()
 
-let new_post_form ?user ?preselected_section_id (sections : community_section list) (community : community) request =
+let new_post_form ?user ?preselected_section_id ?(rail_communities = []) (sections : community_section list) (community : community) request =
   let csrf_token = Dream.csrf_tag request in
   let section_dropdown =
     if sections = [] then ""
@@ -3661,8 +3677,10 @@ let new_post_form ?user ?preselected_section_id (sections : community_section li
     community.id
     section_dropdown
   in
-  Components.create_page ?user ~request ~analytics_community:(community.id, community.visibility)
-    ~title:("Post to " ^ community.name) ~body:content ()
+  Components.launch_app_page ?user ~request ~rail_communities
+    ~analytics_community:(community.id, community.visibility)
+    ~page_class:"launch-post-creation" ~title:("Post to " ^ community.name)
+    ~content:(Printf.sprintf "<div class='create-shell'>%s</div>" content) ()
 
 (* SSR report form (no JS). The handler is the security boundary: it re-resolves the
    target from the trusted slug + hidden type/id and re-runs the ban/self-report gates,

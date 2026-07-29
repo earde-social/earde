@@ -898,8 +898,10 @@ let launch_behavior_script = {js|<script>
    Existing wrappers ([layout], [global_shell], [feed_shell], …) and their
    callers are untouched. *)
 let launch_app_page ?(noindex = false) ?request ?user ?(rail_communities = [])
-    ?(aside = "") ~page_class ~title ~content () =
-  let analytics_head, analytics_banner = analytics_assets ?request () in
+    ?analytics_community ?(aside = "") ~page_class ~title ~content () =
+  let analytics_head, analytics_banner =
+    analytics_assets ?request ?analytics_community ()
+  in
   let robots_meta =
     if noindex then "<meta name='robots' content='noindex'>" else ""
   in

@@ -67,9 +67,20 @@ val launch_knowledge_sidebar : community:Db.community -> channels:Db.channel lis
 val manage_mods_page : ?user:string -> ?rail_communities:Db.community list -> is_admin:bool -> current_user_role:string option -> channels:Db.channel list -> sections:Db.community_section list -> community:Db.community -> mods:Db.moderator_entry list -> Dream.request -> string
 
 (** === POST === *)
-val choose_community_page : ?user:string -> Db.community list -> string
-val join_to_post_page : ?user:string -> Db.community -> Dream.request -> string
-val new_post_form : ?user:string -> ?preselected_section_id:int -> Db.community_section list -> Db.community -> Dream.request -> string
+
+(** The three GET /new-post states on the launch shell (pass 15B). The
+    create-* fragments (form action/method/enctype, every field name and
+    hidden input, the Dream CSRF tag and the .create-shell marker) are
+    unchanged; only the outer document is the shared launch app chrome.
+    [rail_communities] is the viewer's joined communities as the handler
+    loaded them — after the community authorization gate on the
+    community-bound states, so an unauthorized request never loads rail
+    data. The chooser's [request] feeds the shared analytics assets and the
+    admin session flag; the community-bound states also carry their
+    (id, visibility) analytics pair exactly as before. *)
+val choose_community_page : ?user:string -> ?request:Dream.request -> ?rail_communities:Db.community list -> Db.community list -> string
+val join_to_post_page : ?user:string -> ?rail_communities:Db.community list -> Db.community -> Dream.request -> string
+val new_post_form : ?user:string -> ?preselected_section_id:int -> ?rail_communities:Db.community list -> Db.community_section list -> Db.community -> Dream.request -> string
 
 (** SSR report form (no JS). [target_title] is shown as a trimmed, escaped context excerpt;
     [return_url] is the Cancel target. The handler re-validates everything — this only renders.
