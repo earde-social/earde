@@ -8,6 +8,16 @@ module Rate_limit : sig
   val middleware : Dream.handler -> Dream.handler
 end
 
+val safe_local_redirect : ?default:string -> Dream.request -> string -> string
+(** Reduce an attacker-controlled redirect target (Referer header or
+    form-carried return path) to a local path+query. A path starting with '/'
+    passes through; an absolute http(s) URL whose host and effective port
+    match the request's Host header is reduced to its path+query. Everything
+    else — protocol-relative, foreign-host, userinfo-bearing, malformed,
+    backslash- or control-character-bearing values — collapses to [default]
+    (itself a trusted local path, "/" when omitted). Fragments are dropped;
+    the result never carries a scheme or authority. *)
+
 (** === AUTHENTICATION === *)
 val signup_page : Dream.handler
 val signup_handler : Dream.handler

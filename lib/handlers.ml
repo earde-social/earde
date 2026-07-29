@@ -1,10 +1,84 @@
-(* Only allow local (same-origin) redirects from attacker-controlled headers.
-   Protocol-relative URLs (//) redirect to external hosts despite leading slash.
-   Used wherever we follow the Referer header to send the user back. *)
-let safe_local_redirect target =
-  if String.length target >= 2 && String.sub target 0 2 = "//" then "/"
-  else if String.length target > 0 && target.[0] = '/' then target
-  else "/"
+(* Only allow local (same-origin) redirects from attacker-controlled values —
+   the Referer header and form-carried return paths. Browsers send Referer as
+   an absolute URL (scheme://host/path), so a same-origin absolute http(s) URL
+   is reduced to its path+query; anything else must already be a local path
+   starting with '/'. The result never carries a scheme or authority:
+   protocol-relative (//...), backslash, control-character, foreign-host,
+   userinfo-bearing and malformed values all collapse to [default] (itself a
+   trusted local path), and fragments are dropped. Same-origin means the URL's
+   host and effective port match this request's Host header; the scheme only
+   has to be http(s) — behind a TLS-terminating proxy the app cannot see the
+   outer scheme, and only path+query survives extraction anyway. *)
+let safe_local_redirect ?(default = "/") request target =
+  let has_forbidden_byte s =
+    String.exists (fun c -> c < ' ' || c = '\x7f' || c = '\\') s
+  in
+  let drop_fragment s =
+    match String.index_opt s '#' with
+    | Some i -> String.sub s 0 i
+    | None -> s
+  in
+  let local_path s =
+    if String.length s >= 2 && String.sub s 0 2 = "//" then None
+    else if String.length s > 0 && s.[0] = '/' then Some s
+    else None
+  in
+  let same_origin_path s =
+    let uri = Uri.of_string s in
+    match (Uri.scheme uri, Uri.host uri, Dream.header request "Host") with
+    | Some scheme, Some url_host, Some host_header
+      when Uri.userinfo uri = None -> (
+        let scheme = String.lowercase_ascii scheme in
+        if not (String.equal scheme "http" || String.equal scheme "https") then
+          None
+        else
+          let url_host = String.lowercase_ascii url_host in
+          let url_port =
+            match Uri.port uri with
+            | Some p -> p
+            | None -> if String.equal scheme "https" then 443 else 80
+          in
+          let host_header = String.lowercase_ascii (String.trim host_header) in
+          let header_host, header_port =
+            match String.rindex_opt host_header ':' with
+            | Some i -> (
+                let suffix =
+                  String.sub host_header (i + 1)
+                    (String.length host_header - i - 1)
+                in
+                match int_of_string_opt suffix with
+                | Some p -> (String.sub host_header 0 i, Some p)
+                | None -> (host_header, None))
+            | None -> (host_header, None)
+          in
+          let port_matches =
+            match header_port with
+            | Some p -> p = url_port
+            (* A portless Host header implies a default port; both http and
+               https defaults count as ours because the proxy owns the outer
+               scheme. *)
+            | None -> url_port = 80 || url_port = 443
+          in
+          if String.equal header_host url_host && port_matches then
+            let path = match Uri.path uri with "" -> "/" | p -> p in
+            let with_query =
+              match Uri.verbatim_query uri with
+              | Some q when not (String.equal q "") -> path ^ "?" ^ q
+              | _ -> path
+            in
+            (* A same-origin URL can still carry a protocol-relative path
+               (https://host//evil) — re-check through the local-path rules. *)
+            local_path with_query
+          else None)
+    | _ -> None
+  in
+  if has_forbidden_byte target then default
+  else
+    let target = drop_fragment target in
+    match local_path target with
+    | Some p -> p
+    | None -> (
+        match same_origin_path target with Some p -> p | None -> default)
 
 (* Scan body text for @username tokens without external library deps.
    Only ASCII-alphanumeric + underscore is valid; deduped via sort_uniq to avoid
@@ -1637,7 +1711,7 @@ let send_message_handler request =
                                  | Error `Empty ->
                                      if respond_json then
                                        json_error `Bad_Request ~code:"empty" ~message:"Message is empty."
-                                     else Dream.redirect request (safe_local_redirect back_url)
+                                     else Dream.redirect request (safe_local_redirect request back_url)
                                  | Error `Too_long ->
                                      if respond_json then
                                        json_error `Bad_Request ~code:"too_long"
@@ -1695,7 +1769,7 @@ let send_message_handler request =
                                                  ~channel_id:channel.id
                                                  ~community_id:community.id
                                                  (message, Some username)))
-                                       else Dream.redirect request (safe_local_redirect back_url)
+                                       else Dream.redirect request (safe_local_redirect request back_url)
                                    | Error e ->
                                        if respond_json then internal_error e
                                        else Dream.html (Pages.msg_page ?user:uname ~title:"Error" ~message:("Could not send message: " ^ e) ~alert_type:"error" ~return_url:back_url request))))
@@ -2032,7 +2106,7 @@ let join_community_handler request =
                             profile (§5.3). *)
                          Analytics.identify_community_if_consented request
                            ~distinct_id (community_group_of community));
-                     Dream.redirect request (safe_local_redirect redirect_url)
+                     Dream.redirect request (safe_local_redirect request redirect_url)
                  | Error _ -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Error" ~message:"Failed to join community. Please try again." ~alert_type:"error" ~return_url:"/" request))
           ))
       | _ -> Dream.respond ~status:`Bad_Request (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Form Error" ~message:"Invalid form submission." ~alert_type:"error" ~return_url:"/" request)
@@ -2062,7 +2136,7 @@ let leave_community_handler request =
                       Analytics.capture_if_consented request
                         ~distinct_id:(Analytics.distinct_id_of_user_id user_id)
                         (Analytics.Community_left { user_id; community_id }));
-                Dream.redirect request (safe_local_redirect redirect_to)
+                Dream.redirect request (safe_local_redirect request redirect_to)
             | Error err -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Error" ~message:("Database error: " ^ err) ~alert_type:"error" ~return_url:"/" request)
           ))
       | _ -> Dream.respond ~status:`Bad_Request (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Form Error" ~message:"Invalid form submission." ~alert_type:"error" ~return_url:"/" request)
@@ -3237,7 +3311,7 @@ let delete_post_handler request =
             in
             match db_action with
             | Ok () ->
-                let target = safe_local_redirect (match Dream.header request "Referer" with Some r -> r | None -> "/") in
+                let target = safe_local_redirect request (match Dream.header request "Referer" with Some r -> r | None -> "/") in
                 Dream.redirect request target
             | Error err -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Error" ~message:("Database error: " ^ err) ~alert_type:"error" ~return_url:"/" request)
           )
@@ -3944,7 +4018,7 @@ let vote_handler request =
 
             match db_action with
             | Ok () ->
-                let referer = safe_local_redirect (match Dream.header request "Referer" with Some r -> r | None -> "/") in
+                let referer = safe_local_redirect request (match Dream.header request "Referer" with Some r -> r | None -> "/") in
                 Dream.redirect request referer
             | Error err -> Dream.respond ~status:`Internal_Server_Error ("DB Error: " ^ err)
           )
@@ -3981,7 +4055,7 @@ let vote_comment_handler request =
 
             match db_action with
             | Ok () ->
-                let referer = safe_local_redirect (match Dream.header request "Referer" with Some r -> r | None -> "/") in
+                let referer = safe_local_redirect request (match Dream.header request "Referer" with Some r -> r | None -> "/") in
                 Dream.redirect request referer
             | Error err -> Dream.respond ~status:`Internal_Server_Error ("DB Error: " ^ err)
           )
@@ -4732,7 +4806,12 @@ let hq_dashboard_handler request =
 
 let ban_user_handler request =
   match Dream.session_field request "is_admin" with
-  | Some "true" ->
+  | Some "true" -> (
+      (* The ban form carries only Dream's CSRF field; parsing the body is
+         what actually validates the session-bound token, and it must happen
+         before any mutation. Path ids never grant authority on their own. *)
+      match%lwt Dream.form request with
+      | `Ok _ ->
       let user_id_to_ban = try int_of_string (Dream.param request "id") with _ -> 0 in
       if user_id_to_ban = 0 then Dream.respond ~status:`Bad_Request "Invalid user ID." else
       Dream.sql request (fun db ->
@@ -4742,24 +4821,30 @@ let ban_user_handler request =
             let%lwt _ = Db.create_notif db user_id_to_ban None "mod_action" "You have been globally banned by an administrator." in
             (* Redirect back to the profile page rather than "/" so the admin
                immediately sees the updated 🚫 badge and the Unban button. *)
-            let target = safe_local_redirect (match Dream.header request "Referer" with Some r -> r | None -> "/") in
+            let target = safe_local_redirect request (match Dream.header request "Referer" with Some r -> r | None -> "/") in
             Dream.redirect request target
         | Error err -> Dream.html (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Error" ~message:("Error banning user: " ^ err) ~alert_type:"error" ~return_url:"/admin" request)
       )
+      | _ -> Dream.respond ~status:`Bad_Request (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Form Error" ~message:"Invalid form submission." ~alert_type:"error" ~return_url:"/" request))
   | _ -> Dream.html (Pages.msg_page ~title:"Access Denied" ~message:"You are not an Admin." ~alert_type:"error" ~return_url:"/" request)
 
 let unban_user_global_handler request =
   match Dream.session_field request "is_admin" with
-  | Some "true" ->
+  | Some "true" -> (
+      (* Same contract as ban_user_handler: the unban form has no application
+         fields, but Dream.form must still run — it is the CSRF validation. *)
+      match%lwt Dream.form request with
+      | `Ok _ ->
       let user_id_to_unban = try int_of_string (Dream.param request "id") with _ -> 0 in
       if user_id_to_unban = 0 then Dream.respond ~status:`Bad_Request "Invalid user ID." else
       Dream.sql request (fun db ->
         match%lwt Db.unban_user_global db user_id_to_unban with
         | Ok () ->
-            let target = safe_local_redirect (match Dream.header request "Referer" with Some r -> r | None -> "/admin") in
+            let target = safe_local_redirect ~default:"/admin" request (match Dream.header request "Referer" with Some r -> r | None -> "/admin") in
             Dream.redirect request target
         | Error err -> Dream.html (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Error" ~message:("Error unbanning user: " ^ err) ~alert_type:"error" ~return_url:"/admin" request)
       )
+      | _ -> Dream.respond ~status:`Bad_Request (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Form Error" ~message:"Invalid form submission." ~alert_type:"error" ~return_url:"/admin" request))
   | _ -> Dream.html (Pages.msg_page ~title:"Access Denied" ~message:"You are not an Admin." ~alert_type:"error" ~return_url:"/" request)
 
 let admin_dashboard_handler request =
@@ -4780,9 +4865,19 @@ let admin_dashboard_handler request =
         let%lwt banned_res  = Db.get_globally_banned_users db in
         let%lwt recent_res  = Db.Admin.list_recent_users db ~limit:50 in
         let%lwt pending_res = Db.Admin.list_recent_pending db ~limit:50 in
+        (* Joined communities feed the shared launch rail only; loaded here —
+           after the admin gate — so denied requests never touch membership
+           data, and a failure degrades to an empty rail rather than blocking
+           the dashboard. *)
+        let%lwt rail_res =
+          match Option.bind (Dream.session_field request "user_id") int_of_string_opt with
+          | Some uid -> Db.get_user_communities db uid
+          | None -> Lwt.return (Ok [])
+        in
+        let rail_communities = match rail_res with Ok cs -> cs | Error _ -> [] in
         match banned_res, recent_res, pending_res with
         | Ok banned_users, Ok recent_users, Ok pending ->
-            Dream.html (Pages.admin_dashboard_page ?user ~signups_enabled ~turnstile
+            Dream.html (Pages.admin_dashboard_page ?user ~rail_communities ~signups_enabled ~turnstile
               ~brevo_configured ~recent_users ~pending ~banned_users request)
         | (Error e, _, _) | (_, Error e, _) | (_, _, Error e) ->
             Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:("Database error: " ^ e) ~alert_type:"error" ~return_url:"/" request)

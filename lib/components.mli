@@ -91,6 +91,18 @@ val launch_entry_page : ?noindex:bool -> ?request:Dream.request -> page_class:st
     [Pages.login_form] and [Pages.signup_form]; no existing wrapper changes. *)
 val launch_auth_page : ?noindex:bool -> ?request:Dream.request -> page_class:string -> title:string -> content:string -> unit -> string
 
+(** Cartographic Civic launch message document (pass 17: the shared
+    [Pages.msg_page] only). A complete, self-contained document loading only
+    /static/css/earde.css — no Tailwind, no external fonts, no auth.css, no
+    mobile gate, no behavior script, no notification wiring — and no chrome
+    at all beyond the paper shell: no top bar, no rail, no sidebar, no
+    footer, no forms. Strictly viewer- and resource-independent (the only
+    per-render variation is [title] and [content]) because its ~400 handler
+    call sites include byte-identity anti-enumeration pins. The single body
+    class is the neutral "launch-message-page". [request] feeds only the
+    shared analytics assets (identical to [layout]'s). *)
+val launch_message_page : ?noindex:bool -> ?request:Dream.request -> title:string -> content:string -> unit -> string
+
 (** Cartographic Civic launch app document (pass 3: /feed only). A complete,
     self-contained document loading only /static/css/earde.css plus the shared
     desktop-only mobile gate — no Tailwind, no external fonts, no shell.css —

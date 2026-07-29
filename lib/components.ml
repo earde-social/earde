@@ -706,6 +706,50 @@ let launch_auth_page ?(noindex = false) ?request ~page_class ~title ~content () 
     (html_escape title) robots_meta analytics_head page_class content
     analytics_banner
 
+(* Cartographic Civic launch message document (pass 17: the shared
+   Pages.msg_page only). Like the other launch documents, complete and
+   self-contained, loading only earde.css — no Tailwind, no external fonts,
+   no auth.css, no mobile gate, no behavior script, no notification wiring —
+   but with NO chrome at all beyond the paper shell: no top bar, no rail, no
+   sidebar, no footer, no forms. ~400 handler call sites across every status
+   family (200/400/403/404/409/429/500) share this one document, several of
+   them under byte-identity anti-enumeration pins (existing-private vs
+   missing resources), so the wrapper must stay strictly viewer- and
+   resource-independent: the only per-render variation is [title] and
+   [content], both caller-supplied. The single body class is the neutral
+   "launch-message-page" — never status- or resource-derived. Analytics
+   behavior is the shared [analytics_assets], identical to [layout] and the
+   other launch wrappers; msg_page has always rendered without a robots
+   meta, so [noindex] keeps the same default. *)
+let launch_message_page ?(noindex = false) ?request ~title ~content () =
+  let analytics_head, analytics_banner = analytics_assets ?request () in
+  let robots_meta =
+    if noindex then "<meta name='robots' content='noindex'>" else ""
+  in
+  Printf.sprintf
+    "<!DOCTYPE html>\n\
+     <html lang='en'>\n\
+     <head>\n\
+     <meta charset='UTF-8'>\n\
+     <meta name='viewport' content='width=device-width, initial-scale=1.0'>\n\
+     <title>%s - Earde</title>\n\
+     %s\n\
+     <link rel='stylesheet' href='/static/css/earde.css'>\n\
+     %s\n\
+     </head>\n\
+     <body class='launch-message-page'>\n\
+     <div class='app'>\n\
+     <div class='shell'>\
+     <main class='main main--paper'><div class='scroll'>\n\
+     %s\n\
+     </div></main>\
+     </div>\n\
+     </div>\n\
+     %s\n\
+     </body>\n\
+     </html>"
+    (html_escape title) robots_meta analytics_head content analytics_banner
+
 (* Deterministic launch-palette colour for a community tile/avatar. The
    database stores no per-community colour, so the launch chrome derives a
    stable presentational value from the slug alone (same slug → same colour

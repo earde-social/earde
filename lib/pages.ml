@@ -5530,55 +5530,45 @@ let privacy_page ?user:_ request =
 (* === MESSAGE PAGE === *)
 
 (* Single shell for errors, successes, and info — avoids per-handler inline HTML
-   fragments that diverge in style and don't inherit the shared layout/nav. *)
-let msg_page ?user ?(auth=false) ~title ~message ~alert_type ~return_url request =
-  (* auth:true renders the focused auth panel (auth.css) so confirm-email / verify /
-     reset / login result pages match the new auth layout. The default (false) keeps
-     the warm `Site card byte-for-byte for every non-auth caller. *)
-  if auth then begin
-    let icon_html = match alert_type with
-      | "success" ->
-          "<div class='auth-msg-icon auth-msg-icon--success'><svg viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'><path d='M5 13l4 4L19 7'/></svg></div>"
-      | "info" ->
-          "<div class='auth-msg-icon auth-msg-icon--info'><svg viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z'/></svg></div>"
-      | _ ->
-          "<div class='auth-msg-icon auth-msg-icon--error'><svg viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'><path d='M6 18L18 6M6 6l12 12'/></svg></div>"
-    in
-    let card = Printf.sprintf "
-        <div class='auth-msg'>
-          %s
-          <h1 class='auth-title'>%s</h1>
-          <p class='auth-msg-text'>%s</p>
-          <a href='%s' class='auth-btn auth-btn--inline'>Go back</a>
-        </div>"
-      icon_html (Components.html_escape title) (Components.html_escape message) return_url
-    in
-    Components.auth_page ?user ~request ~title ~card ()
-  end else
-  (* Default (non-auth) callers: render the same focused cool-grey message panel as
-     the auth branch (auth.css), via auth_page. This drops the warm `Site card +
-     navbar + footer that used to interrupt the cool-grey app on every error/empty
-     state. auth_page's brand mark links to /feed (recovery) and the panel keeps an
-     explicit return-to-context link from return_url. Works logged-in or logged-out;
-     no new CSS, no JS. *)
+   fragments that diverge in style and don't inherit the shared layout/nav.
+
+   Cartographic Civic (pass 17): both historical ~auth branches — which had
+   already converged on one byte-identical auth.css panel — now render one
+   neutral launch message sheet via Components.launch_message_page. The
+   caller contract is untouched: same signature, [title] and [message] are
+   always escaped text (never trusted HTML), [return_url] is the renderer's
+   own "Go back" destination interpolated exactly as before, and
+   [alert_type] keeps its success / info / everything-else-is-error mapping
+   onto the same three SVG glyphs. ?user and ?auth are accepted and ignored:
+   the old `Auth chrome already rendered no viewer-dependent bytes, and the
+   document must stay viewer-independent because anti-enumeration pins
+   require byte-identical denials. No handler, status, header, redirect or
+   message string changes. *)
+let msg_page ?user:_ ?auth:_ ~title ~message ~alert_type ~return_url request =
   let icon_html = match alert_type with
     | "success" ->
-        "<div class='auth-msg-icon auth-msg-icon--success'><svg viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'><path d='M5 13l4 4L19 7'/></svg></div>"
+        "<div class='launch-msg__icon launch-msg__icon--success'><svg viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'><path d='M5 13l4 4L19 7'/></svg></div>"
     | "info" ->
-        "<div class='auth-msg-icon auth-msg-icon--info'><svg viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z'/></svg></div>"
+        "<div class='launch-msg__icon launch-msg__icon--info'><svg viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z'/></svg></div>"
     | _ ->
-        "<div class='auth-msg-icon auth-msg-icon--error'><svg viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'><path d='M6 18L18 6M6 6l12 12'/></svg></div>"
+        "<div class='launch-msg__icon launch-msg__icon--error'><svg viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'><path d='M6 18L18 6M6 6l12 12'/></svg></div>"
   in
-  let card = Printf.sprintf "
-        <div class='auth-msg'>
-          %s
-          <h1 class='auth-title'>%s</h1>
-          <p class='auth-msg-text'>%s</p>
-          <a href='%s' class='auth-btn auth-btn--inline'>Go back</a>
+  let content = Printf.sprintf "
+        <div class='auth launch-msg'>
+          <div class='auth__head'>
+            <a class='launch-msg__brand' href='/feed' aria-label='Earde feed'><img class='auth__mark' src='/static/images/logo-mark.svg' alt=''></a>
+            <p class='launch-msg__kicker'>Earde &middot; notice</p>
+            <h1 class='auth__title'>%s</h1>
+          </div>
+          <div class='auth__card launch-msg__card'>
+            %s
+            <p class='launch-msg__text'>%s</p>
+            <div class='launch-msg__foot'><a href='%s' class='launch-msg__back'>Go back</a></div>
+          </div>
         </div>"
-    icon_html (Components.html_escape title) (Components.html_escape message) return_url
+    (Components.html_escape title) icon_html (Components.html_escape message) return_url
   in
-  Components.auth_page ?user ~request ~title ~card ()
+  Components.launch_message_page ~request ~title ~content ()
 
 (* === ADMIN === *)
 
@@ -5611,13 +5601,18 @@ let looks_random_username raw =
     || (!letters >= 6 && vowel_ratio < 0.15)
   end
 
-(* Restyled admin dashboard: the focused cool-grey admin layout (Components.admin_page),
-   NOT the legacy Site shell. Read-only operational panels (status / recent users /
-   pending signups) plus the preserved global ban/unban action. Authorization is enforced
-   by admin_dashboard_handler (is_admin session field); this renderer assumes it. All
-   config status is a safe boolean/label — no secret value (site key, API key, URL) is
-   ever rendered. *)
-let admin_dashboard_page ?user ~signups_enabled
+(* Global admin dashboard on the Cartographic Civic launch shell (pass 18A):
+   launch_app_page under body.launch-global-admin — earde.css only, no
+   admin.css/shell.css/Tailwind/Google Fonts. Read-only operational panels
+   (status / recent users / pending signups) plus the preserved global unban
+   action are spliced verbatim below a serif Administration head; the legacy
+   admin-head is the only markup replaced (its KPI-dashboard link is gone —
+   KPI monitoring lives in PostHog now). Authorization is enforced by
+   admin_dashboard_handler (is_admin session field); this renderer assumes it.
+   All config status is a safe boolean/label — no secret value (site key, API
+   key, URL) is ever rendered. [rail_communities] feeds the shared launch rail
+   only. *)
+let admin_dashboard_page ?user ?(rail_communities = []) ~signups_enabled
     ~(turnstile : [ `Configured | `Disabled | `Misconfigured ]) ~brevo_configured
     ~(recent_users : Db.admin_recent_user list) ~(pending : Db.pending_signup_row list)
     ~(banned_users : user list) request =
@@ -5762,17 +5757,22 @@ let admin_dashboard_page ?user ~signups_enabled
        </section>"
       rows
   in
-  let body = Printf.sprintf
-    "<div class='admin-wrap'>\
-       <div class='admin-head'>\
-         <h1 class='admin-h1'>admin <span class='accent'>·</span> dashboard</h1>\
-         <a class='admin-head-link' href='/earde-hq-dashboard'>KPI dashboard &rarr;</a>\
-       </div>\
-       %s%s%s%s\
-     </div>"
-    status_panel recent_users_panel pending_panel banned_panel
+  (* Serif civic head band outside the panel stack. KPI monitoring moved to
+     PostHog, so the head carries no dashboard link. *)
+  let page_head =
+    "<div class='page__head'><div class='page__head-inner page__head-inner--list'>\
+     <h1 class='page__title'>Administration</h1>\
+     <p class='page__sub launch-admin-ctx'>/admin &middot; global registry &mdash; signup status, accounts, bans</p>\
+     </div></div>"
   in
-  Components.admin_page ?user ~request ~noindex:true ~title:"Admin Dashboard" ~body ()
+  let content = Printf.sprintf
+    "%s<div class='scroll'><div class='container container--list'>\
+     <div class='admin-wrap'>%s%s%s%s</div>\
+     </div></div>"
+    page_head status_panel recent_users_panel pending_panel banned_panel
+  in
+  Components.launch_app_page ~noindex:true ?user ~request ~rail_communities
+    ~page_class:"launch-global-admin" ~title:"Admin Dashboard" ~content ()
 
 (* === MODERATION LOG === *)
 

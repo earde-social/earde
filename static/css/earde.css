@@ -8005,3 +8005,355 @@ body.launch-privacy #analytics-consent [data-analytics-accept] {
 body.launch-privacy #analytics-consent [data-analytics-error] {
   color: var(--danger); font-size: var(--fs-11);
 }
+
+/* ==========================================================================
+   EARDE INTEGRATION — shared message page only
+   Scoped beneath body.launch-message-page (Pages.msg_page through
+   launch_message_page). One neutral sheet for every handler-authored
+   message document — success, info and error alike, across ~400 call
+   sites in every status family, several under byte-identity
+   anti-enumeration pins — so nothing here may key on status, route or
+   resource. The sheet reuses the base .auth / .auth__head / .auth__card
+   column (measured width, thin line, tight radius, paper surface, no
+   shadow); only the message-specific pieces are skinned here. The glyph
+   variants are the renderer's existing alert_type contract restated in
+   launch tones: moss success, slate info, clay error — quiet accents,
+   never a full-page treatment. No new visual vocabulary is introduced.
+   ========================================================================== */
+
+/* Brand mark above the sheet keeps its historical /feed recovery link. */
+body.launch-message-page .launch-msg__brand {
+  display: inline-block; line-height: 0; text-decoration: none;
+}
+
+/* Static generic context label (mirrors .section-head__kicker). */
+body.launch-message-page .launch-msg__kicker {
+  font-family: var(--mono); font-size: var(--fs-10-5); font-weight: 600;
+  letter-spacing: var(--ls-kicker); text-transform: uppercase;
+  color: var(--muted); margin: var(--sp-6) 0 0;
+}
+body.launch-message-page .auth__title { margin-top: var(--sp-4); }
+
+/* The card centres its short message column. */
+body.launch-message-page .launch-msg__card {
+  text-align: center; padding: var(--sp-11) var(--sp-10);
+}
+
+/* Alert glyph well (mirrors .notif__icon: bordered well, tight radius). */
+body.launch-message-page .launch-msg__icon {
+  width: 34px; height: 34px; margin: 0 auto;
+  display: grid; place-items: center;
+  border: var(--bw) solid var(--line2); border-radius: var(--r-3);
+  background: var(--surface2); color: var(--muted);
+}
+body.launch-message-page .launch-msg__icon svg { width: 16px; height: 16px; }
+body.launch-message-page .launch-msg__icon--success {
+  color: var(--moss); border-color: var(--moss);
+}
+body.launch-message-page .launch-msg__icon--info { color: var(--slate); }
+body.launch-message-page .launch-msg__icon--error { color: var(--clay); }
+
+/* Caller-supplied message body; long tokens (slugs, addresses) must wrap. */
+body.launch-message-page .launch-msg__text {
+  font-size: var(--fs-13-5); line-height: var(--lh-prose); color: var(--ink);
+  margin: var(--sp-7) 0 0; overflow-wrap: anywhere;
+}
+
+/* Thin rule between the message and its return-to-context action. */
+body.launch-message-page .launch-msg__foot {
+  margin-top: var(--sp-9); padding-top: var(--sp-8);
+  border-top: var(--bw) solid var(--line);
+}
+
+/* The renderer's own Go back link (mirrors .btn: quiet secondary). */
+body.launch-message-page .launch-msg__back {
+  display: inline-flex; align-items: center; justify-content: center;
+  font-family: var(--sans); font-weight: 600; font-size: var(--fs-13);
+  color: var(--ink); background: var(--surface);
+  border: var(--bw) solid var(--line2); border-radius: var(--r-2);
+  padding: 7px var(--sp-9); text-decoration: none; white-space: nowrap;
+}
+body.launch-message-page .launch-msg__back:hover { background: var(--surface2); }
+
+/* Analytics consent banner (markup shared with the legacy layout, whose
+   utility classes are inert without Tailwind — same overlay rules as the
+   other launch scopes, re-scoped). */
+body.launch-message-page #analytics-consent {
+  position: fixed; bottom: var(--sp-8); left: 50%; transform: translateX(-50%);
+  z-index: 50; width: calc(100% - 2rem); max-width: 28rem;
+  background: var(--surface); border: var(--bw) solid var(--line2);
+  border-radius: var(--r-3); padding: var(--sp-7) var(--sp-8);
+  box-shadow: var(--shadow-overlay);
+}
+body.launch-message-page #analytics-consent p {
+  font-size: var(--fs-13); color: var(--muted); margin-bottom: var(--sp-5);
+}
+body.launch-message-page #analytics-consent [data-analytics-accept],
+body.launch-message-page #analytics-consent [data-analytics-refuse] {
+  font-family: var(--sans); font-weight: 600; font-size: var(--fs-12);
+  border: var(--bw) solid var(--line2); border-radius: var(--r-2);
+  padding: var(--sp-3) var(--sp-7); cursor: pointer;
+  background: var(--surface); color: var(--muted); margin-right: var(--sp-4);
+}
+body.launch-message-page #analytics-consent [data-analytics-accept] {
+  color: #fff; background: var(--moss); border-color: var(--moss);
+}
+body.launch-message-page #analytics-consent [data-analytics-error] {
+  color: var(--danger); font-size: var(--fs-11);
+}
+
+/* ==========================================================================
+   EARDE INTEGRATION — global admin dashboard only
+   Scoped beneath body.launch-global-admin: GET /admin
+   (Pages.admin_dashboard_page). Exists only because the real dashboard
+   cannot emit the reference markup exactly:
+   - the four operational panels (status ledger, recent users, pending
+     signups, banned users) are the legacy admin-* fragments spliced
+     verbatim — tables, badges, suspicious-signal flags and the unban POST
+     form keep their markup and are re-skinned here as a flat civic
+     registry: thin rules, no zebra, no cards beyond a hairline panel box;
+   - the unban action is restorative, not destructive, so it takes the moss
+     neutral treatment; clay/danger are reserved for the admin/banned
+     status chips whose semantics are genuinely alarming;
+   - the ph-no-capture class on each table is the replay-masking contract
+     (emails, IPs, usernames) and doubles as no CSS hook at all — masking
+     stays intact by leaving the markup alone;
+   - the confirm-modal overlay is built by the shared behavior script from
+     legacy utility class names; the stable .fixed.inset-0 pair and the
+     #cancel-btn / #confirm-btn ids are the hooks (unban confirmation);
+   - the desktop-only gate panel ships in mobile-gate.css; only the
+     launch-scope "hide the app" rule for this route lives here;
+   - the analytics consent banner markup is shared with the legacy layout
+     (same rules as the other launch sections, re-scoped).
+   ========================================================================== */
+
+/* ---- Launch chrome ---------------------------------------------------------- */
+
+/* Top-bar user menu: pure-CSS <details>, real logout POST form inside. */
+body.launch-global-admin .launch-user { position: relative; }
+body.launch-global-admin .launch-user > summary { list-style: none; }
+body.launch-global-admin .launch-user > summary::-webkit-details-marker { display: none; }
+body.launch-global-admin .launch-user .avatar { background: var(--moss); }
+body.launch-global-admin .launch-user__menu {
+  position: absolute; right: 0; top: calc(100% + 6px); z-index: 40;
+  min-width: 168px; display: flex; flex-direction: column;
+  background: var(--surface); border: var(--bw) solid var(--line2);
+  border-radius: var(--r-3); padding: var(--sp-3);
+  box-shadow: var(--shadow-overlay);
+}
+body.launch-global-admin .launch-user__menu a,
+body.launch-global-admin .launch-user__menu button {
+  display: block; width: 100%; text-align: left; background: none; border: 0;
+  font-family: var(--mono); font-size: var(--fs-12); color: var(--ink);
+  padding: var(--sp-3) var(--sp-5); border-radius: var(--r-2); cursor: pointer;
+}
+body.launch-global-admin .launch-user__menu a:hover,
+body.launch-global-admin .launch-user__menu button:hover { background: var(--surface2); }
+body.launch-global-admin .launch-user__menu form {
+  margin: var(--sp-2) 0 0; padding-top: var(--sp-2);
+  border-top: var(--bw) solid var(--line);
+}
+
+/* Notification badge: hidden until the shared one-shot fetch reveals it.
+   Badge element only — deliberately NOT a global .hidden utility. */
+body.launch-global-admin #notif-badge.hidden { display: none; }
+
+/* Real community avatars fill the fixed 42px rail tile. */
+body.launch-global-admin .launch-rail__img {
+  width: 100%; height: 100%; object-fit: cover; border-radius: inherit;
+  display: block;
+}
+
+/* ---- Head band -------------------------------------------------------------- */
+
+/* Serif title over a mono operational context line. */
+body.launch-global-admin .launch-admin-ctx {
+  font-family: var(--mono); font-size: var(--fs-11); color: var(--muted);
+}
+
+/* ---- Panels ----------------------------------------------------------------- */
+
+/* Registry sections: hairline box, tight radius, no shadow, no gradient. */
+body.launch-global-admin .admin-wrap {
+  display: flex; flex-direction: column; gap: var(--sp-9);
+  padding-top: var(--sp-9);
+}
+body.launch-global-admin .admin-panel {
+  background: var(--surface); border: var(--bw) solid var(--line);
+  border-radius: var(--r-2); padding: var(--sp-8) var(--sp-9) var(--sp-9);
+}
+body.launch-global-admin .admin-panel-title {
+  font-family: var(--serif); font-weight: 600; font-size: var(--fs-16);
+  color: var(--ink); margin: 0 0 var(--sp-1);
+}
+body.launch-global-admin .admin-panel-desc {
+  font-size: var(--fs-12-5); color: var(--muted); line-height: 1.5;
+  margin: 0 0 var(--sp-7);
+}
+body.launch-global-admin .admin-empty {
+  font-family: var(--mono); font-size: var(--fs-12); color: var(--muted);
+  padding: var(--sp-6) 0; text-align: center;
+}
+
+/* ---- Status ledger ---------------------------------------------------------- */
+
+/* Count-free config ledger: hairline-separated rows, mono labels, outline
+   value chips. Semantics: ok = moss, off/quiet = muted, warn = ochre,
+   misconfigured = clay. */
+body.launch-global-admin .admin-stats { display: flex; flex-direction: column; }
+body.launch-global-admin .admin-stat {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: var(--sp-8); padding: var(--sp-4) 0;
+  border-bottom: var(--bw) solid var(--line);
+}
+body.launch-global-admin .admin-stat:last-child { border-bottom: 0; }
+body.launch-global-admin .admin-stat-label {
+  font-family: var(--mono); font-size: var(--fs-12); color: var(--ink);
+}
+body.launch-global-admin .admin-stat-val {
+  font-family: var(--mono); font-size: var(--fs-10-5); font-weight: 600;
+  letter-spacing: .02em; text-transform: uppercase;
+  padding: 1px var(--sp-4); border-radius: var(--r-2);
+  border: var(--bw) solid var(--line2); color: var(--muted);
+  background: var(--surface);
+}
+body.launch-global-admin .admin-stat-val--ok   { color: var(--moss);  border-color: var(--moss); }
+body.launch-global-admin .admin-stat-val--off  { color: var(--muted); border-color: var(--line2); }
+body.launch-global-admin .admin-stat-val--warn { color: var(--ochre); border-color: var(--ochre); }
+body.launch-global-admin .admin-stat-val--bad  { color: var(--clay);  border-color: var(--clay); }
+
+/* ---- Data tables ------------------------------------------------------------ */
+
+body.launch-global-admin .admin-table-wrap { overflow-x: auto; }
+body.launch-global-admin .admin-table {
+  width: 100%; border-collapse: collapse; font-size: var(--fs-13);
+}
+body.launch-global-admin .admin-table thead th {
+  font-family: var(--mono); font-size: var(--fs-10-5); font-weight: 600;
+  text-transform: uppercase; letter-spacing: .04em; color: var(--muted);
+  text-align: left; padding: var(--sp-3) var(--sp-5);
+  border-bottom: var(--bw) solid var(--line2); white-space: nowrap;
+}
+body.launch-global-admin .admin-table tbody td {
+  padding: var(--sp-4) var(--sp-5);
+  border-bottom: var(--bw) solid var(--line);
+  color: var(--ink); vertical-align: middle;
+}
+body.launch-global-admin .admin-table tbody tr:last-child td { border-bottom: 0; }
+body.launch-global-admin .admin-user-link {
+  font-family: var(--mono); font-weight: 600; color: var(--ink);
+  text-decoration: none;
+}
+body.launch-global-admin .admin-user-link:hover {
+  color: var(--moss); text-decoration: underline;
+}
+body.launch-global-admin .admin-cell-muted { color: var(--muted); }
+body.launch-global-admin .admin-cell-mono {
+  font-family: var(--mono); font-size: var(--fs-12); color: var(--muted);
+}
+body.launch-global-admin .admin-num {
+  font-family: var(--mono); text-align: right; color: var(--ink);
+}
+body.launch-global-admin .admin-num--zero { color: var(--muted); }
+
+/* ---- Badges + suspicious-signal flags --------------------------------------- */
+
+/* Outline chips, profile idiom: admin = clay, banned = danger. */
+body.launch-global-admin .admin-badge {
+  display: inline-block; font-family: var(--mono); font-size: 10px;
+  font-weight: 600; text-transform: uppercase; letter-spacing: .03em;
+  padding: 0 var(--sp-3); border-radius: var(--r-2); margin-left: var(--sp-3);
+  border: var(--bw) solid var(--line2); color: var(--muted);
+  background: var(--surface);
+}
+body.launch-global-admin .admin-badge--admin  { color: var(--clay);   border-color: var(--clay); }
+body.launch-global-admin .admin-badge--banned { color: var(--danger); border-color: var(--danger); }
+body.launch-global-admin .admin-flag {
+  display: inline-block; font-family: var(--mono); font-size: 10px;
+  font-weight: 600; padding: 0 var(--sp-3); border-radius: var(--r-2);
+  margin: 1px var(--sp-2) 1px 0;
+  color: var(--ochre); border: var(--bw) solid var(--ochre);
+  background: var(--surface);
+}
+body.launch-global-admin .admin-flag--quiet { color: var(--muted); border-color: var(--line2); }
+
+/* ---- Unban action ----------------------------------------------------------- */
+
+/* Restorative moss action; POST /admin/unban/user/:id form kept verbatim. */
+body.launch-global-admin .admin-act-form { display: inline; margin: 0; padding: 0; }
+body.launch-global-admin .admin-btn-unban {
+  font-family: var(--mono); font-size: var(--fs-11); font-weight: 600;
+  cursor: pointer; color: var(--moss); background: var(--surface);
+  border: var(--bw) solid var(--moss); border-radius: var(--r-2);
+  padding: var(--sp-2) var(--sp-6);
+}
+body.launch-global-admin .admin-btn-unban:hover { color: #fff; background: var(--moss); }
+
+/* ---- Confirm modal ---------------------------------------------------------- */
+
+/* Overlay composed by the shared behavior script from legacy utility class
+   names; the stable .fixed.inset-0 pair and the #cancel-btn / #confirm-btn
+   ids are the hooks. */
+body.launch-global-admin .fixed.inset-0 {
+  position: fixed; inset: 0; z-index: 50;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(31, 36, 33, .45); transition: opacity .2s;
+}
+body.launch-global-admin .fixed.inset-0.opacity-0 { opacity: 0; }
+body.launch-global-admin .fixed.inset-0 > div {
+  background: var(--surface); border: var(--bw) solid var(--line2);
+  border-radius: var(--r-4); padding: var(--sp-9);
+  max-width: 24rem; width: calc(100% - 2rem);
+  box-shadow: var(--shadow-overlay);
+}
+body.launch-global-admin .fixed.inset-0 h3 {
+  font-size: var(--fs-15); font-weight: 700; margin-bottom: var(--sp-3);
+}
+body.launch-global-admin .fixed.inset-0 p {
+  font-size: var(--fs-13); color: var(--muted); margin-bottom: var(--sp-7);
+}
+body.launch-global-admin .fixed.inset-0 .flex {
+  display: flex; justify-content: flex-end; gap: var(--sp-4);
+}
+body.launch-global-admin #cancel-btn,
+body.launch-global-admin #confirm-btn {
+  cursor: pointer; border: var(--bw) solid var(--line2);
+  border-radius: var(--r-2); background: var(--surface); color: var(--ink);
+  padding: var(--sp-3) var(--sp-7); font-size: var(--fs-12); font-weight: 600;
+}
+body.launch-global-admin #confirm-btn {
+  color: #fff; background: var(--danger); border-color: var(--danger);
+}
+
+/* ---- Gate + consent --------------------------------------------------------- */
+
+/* Desktop-only gate: hide this route's launch app under the shared
+   breakpoint; the gate panel itself is styled by mobile-gate.css. */
+@media (max-width: 800px) {
+  body.launch-global-admin > .app { display: none !important; }
+}
+
+/* Analytics consent banner (markup shared with the legacy layout). */
+body.launch-global-admin #analytics-consent {
+  position: fixed; bottom: var(--sp-8); left: 50%; transform: translateX(-50%);
+  z-index: 50; width: calc(100% - 2rem); max-width: 28rem;
+  background: var(--surface); border: var(--bw) solid var(--line2);
+  border-radius: var(--r-3); padding: var(--sp-7) var(--sp-8);
+  box-shadow: var(--shadow-overlay);
+}
+body.launch-global-admin #analytics-consent p {
+  font-size: var(--fs-13); color: var(--muted); margin-bottom: var(--sp-5);
+}
+body.launch-global-admin #analytics-consent [data-analytics-accept],
+body.launch-global-admin #analytics-consent [data-analytics-refuse] {
+  font-family: var(--sans); font-weight: 600; font-size: var(--fs-12);
+  border: var(--bw) solid var(--line2); border-radius: var(--r-2);
+  padding: var(--sp-3) var(--sp-7); cursor: pointer;
+  background: var(--surface); color: var(--muted); margin-right: var(--sp-4);
+}
+body.launch-global-admin #analytics-consent [data-analytics-accept] {
+  color: #fff; background: var(--moss); border-color: var(--moss);
+}
+body.launch-global-admin #analytics-consent [data-analytics-error] {
+  color: var(--danger); font-size: var(--fs-11);
+}

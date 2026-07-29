@@ -53333,9 +53333,10 @@ module Auth_session_replacement = struct
            ; Dream.post "/logout" Earde.Handlers.logout_handler
            ; Dream.get "/confirm" Earde.Handlers.confirm_email_handler
            ; Dream.get "/admin" Earde.Handlers.admin_dashboard_handler
-           ; Dream.post "/admin/ban/user/:id" Earde.Handlers.ban_user_handler
+           ; Dream.post "/admin/ban/user/:id"
+               (with_form Earde.Handlers.ban_user_handler)
            ; Dream.post "/admin/unban/user/:id"
-               Earde.Handlers.unban_user_global_handler
+               (with_form Earde.Handlers.unban_user_global_handler)
            ; Dream.get "/whoami" (fun req ->
                  Dream.respond
                    (String.concat "\n"
@@ -53445,9 +53446,11 @@ module Auth_session_replacement = struct
           body;
         let* status, _ = send client "/admin" in
         Alcotest.(check int) "admin dashboard allowed" 200 status;
-        (* Reversible protected POST: ban then unban really hit the DB. *)
+        (* Reversible protected POST: ban then unban really hit the DB. The
+           empty form still carries the session's minted dream.csrf — the
+           hardened handlers validate it before mutating. *)
         let* status, _ =
-          send client ~method_:`POST
+          send client ~method_:`POST ~form:[]
             (Printf.sprintf "/admin/ban/user/%d" victim)
         in
         Alcotest.(check bool) "ban redirects" true (status / 100 = 3);
@@ -53455,7 +53458,7 @@ module Auth_session_replacement = struct
         let* banned = or_fail "banned" banned in
         Alcotest.(check bool) "victim banned by admin" true banned;
         let* status, _ =
-          send client ~method_:`POST
+          send client ~method_:`POST ~form:[]
             (Printf.sprintf "/admin/unban/user/%d" victim)
         in
         Alcotest.(check bool) "unban redirects" true (status / 100 = 3);
@@ -55484,6 +55487,857 @@ module Privacy_launch = struct
   let suite =
     [ wrapper_case; legal_identity_case; viewer_independence_case;
       signup_consent_link_case ]
+end
+
+(* Cartographic Civic pass 17: the shared Pages.msg_page through the new
+   launch message wrapper. ~400 handler call sites across every status
+   family render through this one document, several under byte-identity
+   anti-enumeration pins, so the suite pins the wrapper contract (single
+   local stylesheet, no legacy assets, no forms, no notification wiring,
+   viewer- and ~auth-independence) and the renderer contract (title and
+   message always escaped — markup supplied in either stays inert text —
+   the alert_type glyph mapping, and the verbatim return_url Go back
+   link). Handlers stay authoritative for status and headers; the gated
+   suites keep pinning those and the byte-identity pairs. *)
+module Msg_launch = struct
+  let case name f = Alcotest.test_case name `Quick f
+
+  let render ?user ?auth ?(title = "Not Found")
+      ?(message = "This page does not exist.") ?(alert_type = "error")
+      ?(return_url = "/") () =
+    let rendered = ref "" in
+    let (_ : Dream.response) =
+      Lwt_main.run
+        (Dream.memory_sessions
+           (fun req ->
+             rendered :=
+               Earde.Pages.msg_page ?user ?auth ~title ~message ~alert_type
+                 ~return_url req;
+             Dream.html "")
+           (Dream.request ~method_:`GET ~target:"/qa-msg" ""))
+    in
+    !rendered
+
+  let wrapper_case =
+    case "wrapper: neutral launch message document, only local assets"
+      (fun () ->
+        let page = render () in
+        ps_must page "<body class='launch-message-page'>";
+        ps_must page "<title>Not Found - Earde</title>";
+        ps_must page "<link rel='stylesheet' href='/static/css/earde.css'>";
+        Alcotest.(check int) "exactly one stylesheet" 1
+          (ps_count page "<link rel='stylesheet'");
+        ps_must_not page "tailwind";
+        ps_must_not page "fonts.googleapis";
+        ps_must_not page "auth.css";
+        ps_must_not page "shell.css";
+        ps_must_not page "mobile-gate.css";
+        ps_must_not page "unread-notifs";
+        ps_must_not page "notif-badge";
+        ps_must_not page "copyPostLink";
+        ps_must_not page "confirmModal";
+        ps_must_not page "noindex";
+        ps_must_not page "href='#'";
+        (* No chrome that could vary by resource or viewer. *)
+        ps_must_not page "rail__item";
+        ps_must_not page "topbar";
+        (* The document introduces no forms and (analytics unconfigured in
+           tests) no ids at all — trivially no duplicates. *)
+        ps_must_not page "<form";
+        Alcotest.(check int) "no ids" 0 (ps_count page " id='"))
+
+  (* Both historical ~auth branches collapse into the same document family —
+     byte-identical, since they already were under the legacy wrapper. *)
+  let auth_branch_parity_case =
+    case "~auth:true and ~auth:false render byte-identically" (fun () ->
+        let a = render ~auth:true () and b = render ~auth:false () in
+        ps_must a "<body class='launch-message-page'>";
+        Alcotest.(check string) "auth branches identical" a b)
+
+  let viewer_independence_case =
+    case "ignored ?user changes nothing" (fun () ->
+        Alcotest.(check string) "anonymous = authenticated" (render ())
+          (render ~user:"qa-viewer" ()))
+
+  (* The always-escaped-text contract: no caller-supplied markup in title or
+     message may reach the document unescaped (msg_page has never accepted
+     trusted HTML). *)
+  let escaping_case =
+    case "title and message stay escaped text" (fun () ->
+        let page =
+          render ~title:"Alert <\"quoted\"> & 'ticked'"
+            ~message:"See <a href='/x'>link</a> & <script>alert(1)</script>" ()
+        in
+        ps_must page
+          "<h1 class='auth__title'>Alert &lt;&quot;quoted&quot;&gt; &amp; \
+           &#39;ticked&#39;</h1>";
+        ps_must page
+          "<title>Alert &lt;&quot;quoted&quot;&gt; &amp; &#39;ticked&#39; - \
+           Earde</title>";
+        ps_must page
+          "See &lt;a href=&#39;/x&#39;&gt;link&lt;/a&gt; &amp; \
+           &lt;script&gt;alert(1)&lt;/script&gt;";
+        ps_must_not page "<a href='/x'>";
+        ps_must_not page "<script>alert")
+
+  (* The renderer's own return-to-context link: verbatim caller URL, one
+     link, unchanged label. *)
+  let go_back_case =
+    case "return_url renders as the single Go back link" (fun () ->
+        let page = render ~return_url:"/c/qa-somewhere/settings" () in
+        ps_must page
+          "<a href='/c/qa-somewhere/settings' class='launch-msg__back'>Go \
+           back</a>";
+        Alcotest.(check int) "exactly one Go back" 1 (ps_count page "Go back"))
+
+  (* alert_type keeps its historical mapping: success / info / everything
+     else (including unknown values) is the error glyph. *)
+  let alert_type_case =
+    case "alert_type maps onto the three glyph variants" (fun () ->
+        List.iter
+          (fun (alert_type, variant) ->
+            let page = render ~alert_type () in
+            ps_must page ("launch-msg__icon launch-msg__icon--" ^ variant);
+            Alcotest.(check int) (alert_type ^ ": one glyph") 1
+              (ps_count page "launch-msg__icon "))
+          [ ("success", "success"); ("info", "info"); ("error", "error");
+            ("banana", "error") ])
+
+  (* The wrapper must not introduce the substrings the project-home 409
+     neutrality tests forbid, nor any resource-derived copy. *)
+  let neutral_copy_case =
+    case "wrapper adds no forbidden or resource-derived copy" (fun () ->
+        let page =
+          String.lowercase_ascii
+            (render ~title:"Not Allowed"
+               ~message:"This request is not allowed." ())
+        in
+        ps_must_not page "private";
+        ps_must_not page "draft";
+        ps_must_not page "legacy")
+
+  let suite =
+    [ wrapper_case; auth_branch_parity_case; viewer_independence_case;
+      escaping_case; go_back_case; alert_type_case; neutral_copy_case ]
+end
+
+(* === Global admin dashboard on the launch shell (pass 18A) =================
+   DB-free renderer pins for Pages.admin_dashboard_page: wrapper identity
+   (body.launch-global-admin, local assets only, noindex), the preserved
+   unban form contract (route, method, CSRF, confirm hook), escaping of the
+   rendered usernames/emails, the replay-masking tables, and the
+   single-notification-fetch contract. Authorization itself (200 admin / 403
+   everyone else, no queries on denial) is pinned end-to-end by the gated
+   login_session_replacement suite. *)
+module Admin_launch = struct
+  let case name f = Alcotest.test_case name `Quick f
+  let ( let* ) = Lwt.bind
+
+  let mk_recent ?(id = 1) ?(username = "alice") ?(email = "alice@example.com")
+      ?(created_at = "2026-01-01 00:00:00") ?(is_admin = false)
+      ?(is_banned = false) ?(post_count = 0) ?(comment_count = 0)
+      ?(message_count = 0) () : Earde.Db.admin_recent_user =
+    { id; username; email; created_at; is_admin; is_banned; post_count;
+      comment_count; message_count }
+
+  let mk_pending ?(id = 1) ?(username = "penny")
+      ?(email = "penny@example.com") ?(created_at = "2026-01-01 00:00:00")
+      ?(expires_at = "2026-01-02 00:00:00") ?ip_address () :
+      Earde.Db.pending_signup_row =
+    { id; username; email; created_at; expires_at; ip_address }
+
+  let mk_banned ~id ~username ~email : Earde.Db.user = { id; username; email }
+
+  (* Renders the real page through real session middleware (the unban forms
+     embed a CSRF tag); the session carries the admin identity the topbar
+     user menu reads. The handler's own gate is not re-tested here. *)
+  let render ?(recent_users = []) ?(pending = []) ?(banned_users = [])
+      ?(signups_enabled = true) ?(turnstile = `Configured)
+      ?(brevo_configured = true) () =
+    let rendered = ref "" in
+    let (_ : Dream.response) =
+      Lwt_main.run
+        (Dream.memory_sessions
+           (fun req ->
+             let* () = Dream.set_session_field req "user_id" "1" in
+             let* () = Dream.set_session_field req "username" "qa-admin" in
+             let* () = Dream.set_session_field req "is_admin" "true" in
+             rendered :=
+               Earde.Pages.admin_dashboard_page ~user:"qa-admin"
+                 ~signups_enabled ~turnstile ~brevo_configured ~recent_users
+                 ~pending ~banned_users req;
+             Dream.html "")
+           (Dream.request ~method_:`GET ~target:"/admin" ""))
+    in
+    !rendered
+
+  let wrapper_case =
+    case "wrapper: launch document, local assets only, noindex" (fun () ->
+        let page = render () in
+        ps_must page "<body class='launch-global-admin'>";
+        ps_must page "<title>Admin Dashboard - Earde</title>";
+        ps_must page "<meta name='robots' content='noindex'>";
+        Alcotest.(check int) "exactly one earde.css" 1
+          (ps_count page "href='/static/css/earde.css'");
+        Alcotest.(check int) "exactly one mobile-gate.css" 1
+          (ps_count page "mobile-gate.css");
+        Alcotest.(check int) "exactly two stylesheets" 2
+          (ps_count page "<link rel='stylesheet'");
+        ps_must_not page "tailwind";
+        ps_must_not page "fonts.googleapis";
+        ps_must_not page "admin.css";
+        ps_must_not page "shell.css";
+        ps_must_not page "href='#'";
+        (* Serif head; KPI monitoring moved to PostHog — no dashboard link. *)
+        ps_must page "<h1 class='page__title'>Administration</h1>";
+        ps_must_not page "earde-hq-dashboard";
+        (* Exactly one one-shot notification fetch, one badge, one shared
+           behavior script (one confirmModal definition). *)
+        Alcotest.(check int) "one notification fetch" 1
+          (ps_count page "fetch('/api/unread-notifs')");
+        Alcotest.(check int) "one notif badge" 1
+          (ps_count page "id='notif-badge'");
+        Alcotest.(check int) "one confirmModal definition" 1
+          (ps_count page "function confirmModal");
+        (* Admin session: the user menu links back to /admin exactly once. *)
+        Alcotest.(check int) "one /admin menu link" 1
+          (ps_count page "href='/admin'"))
+
+  let empty_states_case =
+    case "empty dashboard keeps the three real empty states" (fun () ->
+        let page = render () in
+        ps_must page "No users yet.";
+        ps_must page "No active pending signups.";
+        ps_must page "No users are currently globally banned.";
+        (* All three data tables stay replay-masked. *)
+        Alcotest.(check int) "three masked tables" 3
+          (ps_count page "<table class='admin-table ph-no-capture'>"))
+
+  (* The one action form on the dashboard: POST /admin/unban/user/:id with a
+     framework CSRF field and the existing confirm hook — byte contract. *)
+  let unban_form_case =
+    case "unban forms keep route, method, CSRF and confirm hook" (fun () ->
+        let page =
+          render
+            ~banned_users:
+              [ mk_banned ~id:41 ~username:"marge" ~email:"marge@example.com"
+              ; mk_banned ~id:42 ~username:"o'brien"
+                  ~email:"obrien@example.com"
+              ] ()
+        in
+        ps_must page
+          "<form class='admin-act-form' action='/admin/unban/user/41' method='POST' onsubmit=\"confirmModal(event, 'Lift global ban on u/marge?')\">";
+        ps_must page
+          "<form class='admin-act-form' action='/admin/unban/user/42' method='POST' onsubmit=\"confirmModal(event, 'Lift global ban on u/o&#39;brien?')\">";
+        Alcotest.(check int) "exactly two unban forms" 2
+          (ps_count page "action='/admin/unban/user/");
+        Alcotest.(check int) "one Unban button per form" 2
+          (ps_count page
+             "<button type='submit' class='admin-btn-unban'>Unban</button>");
+        (* CSRF census: the unban forms are the only token-carrying forms on
+           the page (search is GET; the menu logout form has never carried
+           one). *)
+        Alcotest.(check int) "exactly two CSRF fields" 2
+          (List.length
+             (List.filter ps_is_csrf_input (ps_input_tags page))))
+
+  (* Usernames and emails reach three different tables; all render through
+     html_escape in both text and attribute contexts. *)
+  let escaping_case =
+    case "hostile usernames and emails stay escaped everywhere" (fun () ->
+        let u = "ban<script>me" and e = "evil&<x>\"@qa" in
+        let page =
+          render
+            ~recent_users:[ mk_recent ~id:9 ~username:u ~email:e () ]
+            ~pending:[ mk_pending ~id:5 ~username:u ~email:e () ]
+            ~banned_users:[ mk_banned ~id:7 ~username:u ~email:e ] ()
+        in
+        ps_must_not page "ban<script>me";
+        ps_must_not page "evil&<x>";
+        ps_must page "ban&lt;script&gt;me";
+        ps_must page "evil&amp;&lt;x&gt;&quot;@qa";
+        (* Profile links build from the escaped username too. *)
+        ps_must page "href='/u/ban&lt;script&gt;me'";
+        (* The recent-users table shows no email column — the address must
+           appear exactly twice (pending + banned). *)
+        Alcotest.(check int) "email in pending and banned only" 2
+          (ps_count page "evil&amp;&lt;x&gt;&quot;@qa"))
+
+  (* Real config/status values render; no invented metrics appear. *)
+  let status_ledger_case =
+    case "status ledger maps real config states onto the chips" (fun () ->
+        let page =
+          render ~signups_enabled:false ~turnstile:`Misconfigured
+            ~brevo_configured:false ()
+        in
+        ps_must page "admin-stat-val--off'>closed";
+        ps_must page "admin-stat-val--bad'>misconfigured";
+        ps_must page "admin-stat-val--warn'>not configured";
+        let page2 = render () in
+        ps_must page2 "admin-stat-val--ok'>enabled";
+        ps_must page2 "admin-stat-val--ok'>required &amp; configured";
+        ps_must page2 "admin-stat-val--ok'>configured")
+
+  let suite =
+    [ wrapper_case; empty_states_case; unban_form_case; escaping_case;
+      status_ledger_case ]
+end
+
+(* === safe_local_redirect grammar (global-admin hardening) ===
+   The helper reduces attacker-controlled redirect targets (the Referer
+   header, form-carried return paths) to a local path+query. Browsers send
+   Referer as an absolute URL, so a same-origin absolute http(s) URL must be
+   accepted and reduced; everything else must collapse to the caller's
+   trusted local default. Pure, DB-free. *)
+module Slr = struct
+  let case name f = Alcotest.test_case name `Quick f
+
+  let request ?(host = Some "earde.com") () =
+    Dream.request
+      ~headers:(match host with Some h -> [ ("Host", h) ] | None -> [])
+      ""
+
+  let check ?default ?host label target expected =
+    Alcotest.(check string) label expected
+      (Earde.Handlers.safe_local_redirect ?default (request ?host ()) target)
+
+  let local_paths_case =
+    case "local relative paths pass; query kept; fragment dropped" (fun () ->
+        check "plain path" "/admin" "/admin";
+        check "root" "/" "/";
+        check "query preserved" "/u/gab_target?tab=posts" "/u/gab_target?tab=posts";
+        check "fragment dropped" "/admin#banned" "/admin";
+        check "query kept, fragment dropped" "/u/bob?tab=posts#top" "/u/bob?tab=posts")
+
+  let same_origin_case =
+    case "absolute same-origin URLs reduce to path+query" (fun () ->
+        check "https referer" "https://earde.com/admin" "/admin";
+        check "http referer" "http://earde.com/admin" "/admin";
+        check "query preserved" "https://earde.com/u/gab_target?tab=posts"
+          "/u/gab_target?tab=posts";
+        check "fragment dropped" "https://earde.com/admin#sec" "/admin";
+        check "explicit https port" "https://earde.com:443/admin" "/admin";
+        check "explicit http port" "http://earde.com:80/admin" "/admin";
+        check "empty path becomes root" "https://earde.com" "/";
+        check "case-insensitive host and scheme" "HTTPS://EARDE.COM/admin" "/admin";
+        check ~host:(Some "localhost:8080") "host with port"
+          "http://localhost:8080/admin?tab=x" "/admin?tab=x")
+
+  let foreign_case =
+    case "foreign origins collapse to the default" (fun () ->
+        check "foreign host" "https://evil.example/admin" "/";
+        check "foreign subdomain" "https://evil.earde.com/admin" "/";
+        check ~default:"/admin" "foreign host, caller default"
+          "https://evil.example/admin" "/admin";
+        check ~host:(Some "localhost:8080") "mismatched port"
+          "http://localhost:9090/admin" "/";
+        check ~host:(Some "earde.com") "unexpected explicit port"
+          "https://earde.com:8443/admin" "/";
+        check ~host:None "no Host header to compare against"
+          "https://earde.com/admin" "/")
+
+  let hostile_case =
+    case "protocol-relative, userinfo, malformed and encoded tricks fall back"
+      (fun () ->
+        check "protocol-relative" "//evil.example" "/";
+        check "protocol-relative with path" "//evil.example/admin" "/";
+        check "same-origin protocol-relative path"
+          "https://earde.com//evil.example" "/";
+        check "userinfo trick" "https://earde.com@evil.example/admin" "/";
+        check "userinfo on own host" "https://user@earde.com/admin" "/";
+        check "backslash path" "/admin\\evil.example" "/";
+        check "absolute with backslash" "https://earde.com/a\\b" "/";
+        check "header-splitting CR LF" "/admin\r\nSet-Cookie: x=y" "/";
+        check "control byte" "/admin\x00" "/";
+        check "non-http scheme" "javascript:alert(1)" "/";
+        check "schemeless authority" "earde.com/admin" "/";
+        check "half scheme" "https:/earde.com/admin" "/";
+        check "empty" "" "/";
+        check ~default:"/admin" "default honored on garbage" "not a url" "/admin")
+
+  (* The output can never carry a scheme or authority, whatever comes in. *)
+  let never_absolute_case =
+    case "no input yields a scheme, authority, or fragment" (fun () ->
+        List.iter
+          (fun target ->
+            let out =
+              Earde.Handlers.safe_local_redirect (request ()) target
+            in
+            Alcotest.(check bool)
+              (target ^ ": starts with single /") true
+              (String.length out > 0 && out.[0] = '/'
+              && not (String.length out >= 2 && out.[1] = '/'));
+            Alcotest.(check bool) (target ^ ": no scheme") false
+              (contains out "://");
+            Alcotest.(check bool) (target ^ ": no fragment") false
+              (String.contains out '#'))
+          [ "/admin"; "https://earde.com/u/x?tab=posts#f"; "//evil.example";
+            "https://evil.example/x"; "https://earde.com//evil.example";
+            "ftp://earde.com/x"; "\\\\evil.example"; "https://earde.com#f";
+            "https://earde.com"; "" ])
+
+  let suite =
+    [ local_paths_case; same_origin_case; foreign_case; hostile_case;
+      never_absolute_case ]
+end
+
+(* === Global-admin ban/unban POST hardening ===
+   Two pre-existing defects, both regressed here through the real routes over
+   a real database: (1) the forms rendered Dream's CSRF tag but the handlers
+   never parsed the body, so any cross-site POST from an admin's browser
+   mutated ban state; (2) the post-action redirect fed the browser's absolute
+   Referer into a helper that only accepted local paths, so every successful
+   action bounced to "/" instead of the originating /admin or /u/:username
+   surface. Database-gated (EARDE_TEST_DATABASE_URL). *)
+module Gab = struct
+  let ( let* ) = Lwt.bind
+
+  open Caqti_request.Infix
+
+  let status_of response = Dream.status_to_int (Dream.status response)
+
+  let q_cleanup =
+    List.map
+      (fun sql -> (Caqti_type.unit ->. Caqti_type.unit) sql)
+      [ "DELETE FROM notifications WHERE user_id IN \
+         (SELECT id FROM users WHERE username LIKE 'gab_%')"
+      ; "DELETE FROM users WHERE username LIKE 'gab_%'"
+      ]
+
+  let q_insert_user =
+    (Caqti_type.(t3 string bool bool) ->! Caqti_type.int)
+      "INSERT INTO users \
+         (username, email, password_hash, is_email_verified, is_admin, is_banned) \
+       VALUES ($1, $1 || '@test.invalid', 'x', TRUE, $2, $3) RETURNING id"
+
+  let q_set_banned =
+    (Caqti_type.(t2 bool int) ->. Caqti_type.unit)
+      "UPDATE users SET is_banned = $1 WHERE id = $2"
+
+  let q_is_banned =
+    (Caqti_type.int ->! Caqti_type.bool)
+      "SELECT is_banned FROM users WHERE id = $1"
+
+  let q_notif_count =
+    (Caqti_type.int ->! Caqti_type.int)
+      "SELECT COUNT(*) FROM notifications WHERE user_id = $1"
+
+  let q_mod_action_notifs =
+    (Caqti_type.int ->! Caqti_type.int)
+      "SELECT COUNT(*) FROM notifications \
+       WHERE user_id = $1 AND notif_type = 'mod_action'"
+
+  let or_fail label = function
+    | Ok v -> Lwt.return v
+    | Error e -> Alcotest.failf "%s: %s" label (Caqti_error.show e)
+
+  let db_case name f =
+    Alcotest.test_case name `Quick (fun () ->
+        match Sys.getenv_opt "EARDE_TEST_DATABASE_URL" with
+        | None | Some "" -> Alcotest.skip ()
+        | Some url ->
+            Lwt_main.run
+              (let* conn = Caqti_lwt_unix.connect (Uri.of_string url) in
+               let* conn = or_fail "connect" conn in
+               let (module C : Caqti_lwt.CONNECTION) = conn in
+               let cleanup () =
+                 Lwt_list.iter_s
+                   (fun q ->
+                     let* r = C.exec q () in
+                     let* _ = or_fail "cleanup" r in
+                     Lwt.return_unit)
+                   q_cleanup
+               in
+               let* () = cleanup () in
+               Lwt.finalize
+                 (fun () -> f ~url (module C : Caqti_lwt.CONNECTION))
+                 (fun () ->
+                   Lwt.finalize cleanup (fun () -> C.disconnect ()))))
+
+  let insert_user ?(admin = false) ?(banned = false) (module C : Caqti_lwt.CONNECTION)
+      username =
+    let* id = C.find q_insert_user (username, admin, banned) in
+    or_fail username id
+
+  let set_banned (module C : Caqti_lwt.CONNECTION) ~banned id =
+    let* r = C.exec q_set_banned (banned, id) in
+    or_fail "set_banned" r
+
+  let is_banned (module C : Caqti_lwt.CONNECTION) id =
+    let* r = C.find q_is_banned id in
+    or_fail "is_banned" r
+
+  let notif_count (module C : Caqti_lwt.CONNECTION) id =
+    let* r = C.find q_notif_count id in
+    or_fail "notif_count" r
+
+  let mod_action_notifs (module C : Caqti_lwt.CONNECTION) id =
+    let* r = C.find q_mod_action_notifs id in
+    or_fail "mod_action_notifs" r
+
+  (* One shared pipeline: real routes, real handlers, real session and CSRF
+     machinery. The identity middleware plants the session the way login
+     would, once per fresh cookie. *)
+  let shared_identity : (int * string * bool) option ref = ref None
+  let shared_pipeline = ref None
+
+  let identity_middleware handler request =
+    match Dream.session_field request "user_id" with
+    | Some _ -> handler request
+    | None -> (
+        match !shared_identity with
+        | None -> handler request
+        | Some (uid, username, is_admin) ->
+            let* () =
+              Dream.set_session_field request "user_id" (string_of_int uid)
+            in
+            let* () = Dream.set_session_field request "username" username in
+            let* () =
+              if is_admin then Dream.set_session_field request "is_admin" "true"
+              else Lwt.return_unit
+            in
+            handler request)
+
+  let build_pipeline ~url =
+    Dream.sql_pool ~size:2 url @@ Dream.set_secret gck_secret
+    @@ Dream.memory_sessions @@ identity_middleware
+    @@ Dream.router
+         [ Dream.get "/mint" (fun req -> Dream.respond (Dream.csrf_token req));
+           Dream.get "/mint-expired" (fun req ->
+               Dream.respond (Dream.csrf_token ~valid_for:(-60.) req));
+           Dream.get "/u/:username" Earde.Handlers.view_profile_handler;
+           Dream.get "/admin" Earde.Handlers.admin_dashboard_handler;
+           Dream.post "/admin/ban/user/:id" Earde.Handlers.ban_user_handler;
+           Dream.post "/admin/unban/user/:id"
+             Earde.Handlers.unban_user_global_handler
+         ]
+
+  let pipeline_for ~url =
+    match !shared_pipeline with
+    | Some pipeline -> pipeline
+    | None ->
+        let pipeline = build_pipeline ~url in
+        shared_pipeline := Some pipeline;
+        pipeline
+
+  let as_user identity = shared_identity := Some identity
+  let as_anonymous () = shared_identity := None
+
+  (* Every request carries the Host header a real browser sends — the
+     same-origin Referer reduction compares against it. *)
+  let host = "earde.com"
+
+  let do_get ?cookie ~url ~target () =
+    let pipeline = pipeline_for ~url in
+    let headers =
+      ("Host", host)
+      :: (match cookie with Some c -> [ ("Cookie", c) ] | None -> [])
+    in
+    let* response = pipeline (Dream.request ~method_:`GET ~target ~headers "") in
+    let* body = Dream.body response in
+    Lwt.return (response, body)
+
+  (* [omit_token] posts an empty urlencoded body — exactly what a scripted
+     cross-site POST without the token would carry. *)
+  let do_post ?cookie ?referer ?(omit_token = false) ~url ~target ~token () =
+    let pipeline = pipeline_for ~url in
+    let headers =
+      [ ("Host", host); ("Content-Type", "application/x-www-form-urlencoded") ]
+      @ (match cookie with Some c -> [ ("Cookie", c) ] | None -> [])
+      @ (match referer with Some r -> [ ("Referer", r) ] | None -> [])
+    in
+    let body =
+      if omit_token then "" else Pch.form_body [ ("dream.csrf", token) ]
+    in
+    let* response =
+      pipeline (Dream.request ~method_:`POST ~target ~headers body)
+    in
+    let* body = Dream.body response in
+    Lwt.return (response, body)
+
+  (* One cookie-less GET that opens a fresh session for this identity and
+     returns its cookie plus a live same-session CSRF token. *)
+  let open_session label ~url identity =
+    as_user identity;
+    let* response, token = do_get ~url ~target:"/mint" () in
+    Alcotest.(check int) (label ^ ": mint 200") 200 (status_of response);
+    Lwt.return (Pch.session_cookie label response, token)
+
+  let mint_expired label ~url ~cookie =
+    let* response, body = do_get ~url ~cookie ~target:"/mint-expired" () in
+    Alcotest.(check int) (label ^ ": mint 200") 200 (status_of response);
+    Lwt.return body
+
+  let ban_target id = Printf.sprintf "/admin/ban/user/%d" id
+  let unban_target id = Printf.sprintf "/admin/unban/user/%d" id
+
+  let check_redirect label expected response =
+    Alcotest.(check int) (label ^ ": 303") 303 (status_of response);
+    Alcotest.(check (option string)) (label ^ ": Location") (Some expected)
+      (Dream.header response "Location")
+
+  let check_form_error label response body =
+    Alcotest.(check int) (label ^ ": 400") 400 (status_of response);
+    Alcotest.(check bool) (label ^ ": form-error copy") true
+      (contains body "Invalid form submission.");
+    Alcotest.(check (option string)) (label ^ ": no redirect") None
+      (Dream.header response "Location")
+
+  (* --- 13. the rendered forms are the contract the browser submits --- *)
+  let form_contract_case =
+    db_case "profile ban form and /admin unban form keep route, method, CSRF \
+             field and confirm hook" (fun ~url conn ->
+        let* admin = insert_user ~admin:true conn "gab_admin" in
+        let* target = insert_user conn "gab_target" in
+        let* banned = insert_user ~banned:true conn "gab_banned" in
+        let* cookie, _ = open_session "forms" ~url (admin, "gab_admin", true) in
+        let* response, body = do_get ~url ~cookie ~target:"/u/gab_target" () in
+        Alcotest.(check int) "profile 200" 200 (status_of response);
+        Alcotest.(check bool) "ban form action" true
+          (contains body
+             (Printf.sprintf "<form action='/admin/ban/user/%d' method='POST'"
+                target));
+        Alcotest.(check bool) "ban confirm hook" true
+          (contains body "confirmModal(event, 'Permanently ban u/gab_target?");
+        let* _ = Lwt.return (Pch.csrf_of_page "profile ban form CSRF" body) in
+        let* response, body = do_get ~url ~cookie ~target:"/admin" () in
+        Alcotest.(check int) "/admin 200" 200 (status_of response);
+        Alcotest.(check bool) "unban form action" true
+          (contains body
+             (Printf.sprintf
+                "<form class='admin-act-form' action='/admin/unban/user/%d' \
+                 method='POST'"
+                banned));
+        Alcotest.(check bool) "unban confirm hook" true
+          (contains body "confirmModal(event, 'Lift global ban on u/gab_banned?");
+        let* _ = Lwt.return (Pch.csrf_of_page "/admin unban form CSRF" body) in
+        Lwt.return_unit)
+
+  (* --- 1, 2, 14, 15: the happy paths, returning to the real surfaces --- *)
+  let happy_path_case =
+    db_case "valid same-session token bans and unbans; absolute same-origin \
+             Referers return to the profile and /admin" (fun ~url conn ->
+        let* admin = insert_user ~admin:true conn "gab_admin" in
+        let* target = insert_user conn "gab_target" in
+        let* cookie, token =
+          open_session "happy" ~url (admin, "gab_admin", true)
+        in
+        let* response, _ =
+          do_post ~url ~cookie ~token
+            ~referer:"https://earde.com/u/gab_target"
+            ~target:(ban_target target) ()
+        in
+        check_redirect "ban" "/u/gab_target" response;
+        let* banned = is_banned conn target in
+        Alcotest.(check bool) "target banned" true banned;
+        let* notifs = mod_action_notifs conn target in
+        Alcotest.(check int) "one mod_action notification" 1 notifs;
+        let* response, _ =
+          do_post ~url ~cookie ~token ~referer:"https://earde.com/admin"
+            ~target:(unban_target target) ()
+        in
+        check_redirect "unban" "/admin" response;
+        let* banned = is_banned conn target in
+        Alcotest.(check bool) "target unbanned" false banned;
+        (* Unban never notifies — the count is still the ban's single row. *)
+        let* notifs = notif_count conn target in
+        Alcotest.(check int) "no unban notification" 1 notifs;
+        Lwt.return_unit)
+
+  (* --- 3-9: every rejected token leaves zero side effects --- *)
+  let rejected_tokens_case label ~action ~initially_banned =
+    db_case label (fun ~url conn ->
+        let* admin = insert_user ~admin:true conn "gab_admin" in
+        let* target =
+          insert_user ~banned:initially_banned conn "gab_target"
+        in
+        let* cookie, live =
+          open_session "rejects" ~url (admin, "gab_admin", true)
+        in
+        let* expired = mint_expired "rejects" ~url ~cookie in
+        let* _other_cookie, foreign =
+          open_session "foreign" ~url (admin, "gab_admin", true)
+        in
+        as_user (admin, "gab_admin", true);
+        let post_target =
+          if action = `Ban then ban_target target else unban_target target
+        in
+        let attempts =
+          [ ("missing token", None, true); ("forged token", Some "not-a-token", false);
+            ("stale token", Some expired, false);
+            ("foreign-session token", Some foreign, false)
+          ]
+        in
+        let* () =
+          Lwt_list.iter_s
+            (fun (name, token, omit_token) ->
+              let* response, body =
+                do_post ~url ~cookie ~omit_token
+                  ~token:(Option.value token ~default:"")
+                  ~referer:"https://earde.com/admin" ~target:post_target ()
+              in
+              check_form_error name response body;
+              let* banned = is_banned conn target in
+              Alcotest.(check bool) (name ^ ": ban state untouched")
+                initially_banned banned;
+              let* notifs = notif_count conn target in
+              Alcotest.(check int) (name ^ ": no notification") 0 notifs;
+              Lwt.return_unit)
+            attempts
+        in
+        (* The live token still works afterwards — rejection is per-request,
+           not a session poison. *)
+        let* response, _ =
+          do_post ~url ~cookie ~token:live ~referer:"https://earde.com/admin"
+            ~target:post_target ()
+        in
+        check_redirect "live token still accepted" "/admin" response;
+        let* banned = is_banned conn target in
+        Alcotest.(check bool) "action applied" (action = `Ban) banned;
+        Lwt.return_unit)
+
+  let ban_rejects_case =
+    rejected_tokens_case
+      "ban: missing, forged, stale and foreign-session tokens are rejected \
+       with zero side effects"
+      ~action:`Ban ~initially_banned:false
+
+  let unban_rejects_case =
+    rejected_tokens_case
+      "unban: missing, forged, stale and foreign-session tokens are rejected \
+       with zero side effects"
+      ~action:`Unban ~initially_banned:true
+
+  (* --- 10, 11: authorization comes first and is not bought by a token --- *)
+  let authorization_case =
+    db_case "non-admin with a valid token and anonymous POSTs keep the \
+             existing denial; no mutation" (fun ~url conn ->
+        let* _admin = insert_user ~admin:true conn "gab_admin" in
+        let* peon = insert_user conn "gab_peon" in
+        let* target = insert_user conn "gab_target" in
+        let* banned_user = insert_user ~banned:true conn "gab_banned" in
+        let* cookie, token =
+          open_session "peon" ~url (peon, "gab_peon", false)
+        in
+        let* response, body =
+          do_post ~url ~cookie ~token ~target:(ban_target target) ()
+        in
+        Alcotest.(check int) "non-admin ban: 200 page" 200 (status_of response);
+        Alcotest.(check bool) "non-admin ban: denial copy" true
+          (contains body "You are not an Admin.");
+        let* response, body =
+          do_post ~url ~cookie ~token ~target:(unban_target banned_user) ()
+        in
+        Alcotest.(check int) "non-admin unban: 200 page" 200
+          (status_of response);
+        Alcotest.(check bool) "non-admin unban: denial copy" true
+          (contains body "You are not an Admin.");
+        as_anonymous ();
+        let* response, body =
+          do_post ~url ~token:"" ~omit_token:true ~target:(ban_target target) ()
+        in
+        Alcotest.(check int) "anonymous ban: 200 page" 200 (status_of response);
+        Alcotest.(check bool) "anonymous ban: denial copy" true
+          (contains body "You are not an Admin.");
+        let* banned = is_banned conn target in
+        Alcotest.(check bool) "target never banned" false banned;
+        let* still = is_banned conn banned_user in
+        Alcotest.(check bool) "banned user still banned" true still;
+        let* notifs = notif_count conn target in
+        Alcotest.(check int) "no notification" 0 notifs;
+        Lwt.return_unit)
+
+  (* --- 12: target resolution stays authoritative and post-CSRF --- *)
+  let unknown_target_case =
+    db_case "unknown and malformed target ids keep the existing post-CSRF \
+             behavior" (fun ~url conn ->
+        let* admin = insert_user ~admin:true conn "gab_admin" in
+        let* cookie, token =
+          open_session "unknown" ~url (admin, "gab_admin", true)
+        in
+        (* A nonexistent id: the 0-row UPDATE still reads as success, the
+           best-effort notification insert fails silently, and the redirect
+           follows the usual fallback. Pinned as the pre-existing contract. *)
+        let* response, _ =
+          do_post ~url ~cookie ~token ~target:(ban_target 999999999) ()
+        in
+        check_redirect "unknown ban target" "/" response;
+        let* response, _ =
+          do_post ~url ~cookie ~token ~target:(unban_target 999999999) ()
+        in
+        check_redirect "unknown unban target" "/admin" response;
+        (* A non-numeric id parses to 0 and stays the plain 400. *)
+        let* response, body =
+          do_post ~url ~cookie ~token ~target:"/admin/ban/user/abc" ()
+        in
+        Alcotest.(check int) "malformed id: 400" 400 (status_of response);
+        Alcotest.(check bool) "malformed id: copy" true
+          (contains body "Invalid user ID.");
+        Lwt.return_unit)
+
+  (* --- 16-21 + missing-Referer fallbacks, through the real handlers --- *)
+  let redirect_grammar_case =
+    db_case "Referer handling: local and same-origin values return to their \
+             surface, hostile values fall back, no response ever leaves the \
+             origin" (fun ~url conn ->
+        let* admin = insert_user ~admin:true conn "gab_admin" in
+        let* target = insert_user conn "gab_target" in
+        let* cookie, token =
+          open_session "grammar" ~url (admin, "gab_admin", true)
+        in
+        let ban ?referer () =
+          let* () = set_banned conn ~banned:false target in
+          do_post ~url ~cookie ~token ?referer ~target:(ban_target target) ()
+        in
+        let unban ?referer () =
+          let* () = set_banned conn ~banned:true target in
+          do_post ~url ~cookie ~token ?referer ~target:(unban_target target) ()
+        in
+        (* 16: relative local destinations stay accepted. *)
+        let* response, _ = unban ~referer:"/admin" () in
+        check_redirect "relative Referer" "/admin" response;
+        (* 19: same-origin query strings survive. *)
+        let* response, _ =
+          ban ~referer:"https://earde.com/u/gab_target?tab=posts" ()
+        in
+        check_redirect "query preserved" "/u/gab_target?tab=posts" response;
+        (* 20: fragments never reach the Location header. *)
+        let* response, _ = unban ~referer:"https://earde.com/admin#banned" () in
+        check_redirect "fragment dropped" "/admin" response;
+        (* 17: a foreign origin falls back to each action's local default. *)
+        let* response, _ = ban ~referer:"https://evil.example/u/gab_target" () in
+        check_redirect "foreign Referer, ban fallback" "/" response;
+        let* response, _ = unban ~referer:"https://evil.example/admin" () in
+        check_redirect "foreign Referer, unban fallback" "/admin" response;
+        (* 18: protocol-relative and malformed values fall back safely. *)
+        let* response, _ = ban ~referer:"//evil.example/admin" () in
+        check_redirect "protocol-relative Referer" "/" response;
+        let* response, _ = unban ~referer:"earde.com/admin" () in
+        check_redirect "malformed Referer" "/admin" response;
+        (* Missing Referer: the documented local fallbacks. *)
+        let* response, _ = ban () in
+        check_redirect "no Referer, ban" "/" response;
+        let* response, _ = unban () in
+        check_redirect "no Referer, unban" "/admin" response;
+        (* 21: sweep — no redirect above may carry a foreign origin; spot-
+           check the worst offender end to end. *)
+        let* response, _ =
+          ban ~referer:"https://earde.com@evil.example/admin" ()
+        in
+        (match Dream.header response "Location" with
+        | Some l ->
+            Alcotest.(check bool) "userinfo trick: local Location" true
+              (String.length l > 0 && l.[0] = '/'
+              && not (String.length l >= 2 && l.[1] = '/'));
+            Alcotest.(check bool) "userinfo trick: no evil.example" false
+              (contains l "evil.example")
+        | None -> Alcotest.fail "userinfo trick: no redirect");
+        Lwt.return_unit)
+
+  let suite =
+    [ form_contract_case; happy_path_case; ban_rejects_case;
+      unban_rejects_case; authorization_case; unknown_target_case;
+      redirect_grammar_case ]
 end
 
 let () =
@@ -61980,4 +62834,15 @@ let () =
          DB-free. *)
     ; ("reset_token_attribute_escaping", Reset_token_escaping.suite)
     ; ("privacy_launch_page", Privacy_launch.suite)
+    ; ("launch_message_page", Msg_launch.suite)
+    ; ("admin_launch_page", Admin_launch.suite)
+      (* Global-admin ban/unban hardening: the pure redirect-target grammar
+         (local paths, same-origin Referer reduction, hostile fallbacks), and
+         the real POST routes over a real database — rendered form contracts,
+         happy paths returning to their originating surface, the full
+         CSRF-rejection matrix with zero side effects, authorization and
+         target-resolution order, and the Referer grammar end to end.
+         The grammar suite is DB-free; the action suite is database-gated. *)
+    ; ("safe_local_redirect_grammar", Slr.suite)
+    ; ("global_admin_ban_actions", Gab.suite)
     ]

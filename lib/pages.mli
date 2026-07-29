@@ -164,6 +164,7 @@ val mod_log_page : ?user:string -> ?noindex:bool -> ?rail_communities:Db.communi
 val looks_random_username : string -> bool
 val admin_dashboard_page :
   ?user:string ->
+  ?rail_communities:Db.community list ->
   signups_enabled:bool ->
   turnstile:[ `Configured | `Disabled | `Misconfigured ] ->
   brevo_configured:bool ->
