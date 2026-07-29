@@ -182,34 +182,65 @@ let login_form ?user:_ request =
   Components.launch_auth_page ~request ~page_class:"launch-login"
     ~title:"Log in" ~content ()
 
+(* Cartographic Civic (pass 16B): /forgot-password through the launch auth
+   wrapper. The inner form is preserved verbatim — POST /forgot-password,
+   Dream CSRF tag first, single 'email' field with its id/label/placeholder/
+   required flags, and the legacy auth-form/auth-field/auth-input/auth-btn
+   classes intact (skinned by the scoped "password recovery only" section of
+   earde.css) — only the outer chrome moved. Heading and sub keep their exact
+   factual wording: no copy may hint at whether an account exists (the POST's
+   anti-enumeration contract lives in the handler and stays msg_page-rendered,
+   untouched). noindex preserved from the legacy auth_page call. *)
 let forgot_password_page request =
   let csrf_token = Dream.csrf_tag request in
-  let card = Printf.sprintf "
-        <h1 class='auth-title'>Forgot password?</h1>
-        <p class='auth-sub'>Enter your email address and we'll send you a reset link.</p>
-        <form action='/forgot-password' method='POST' class='auth-form'>
+  let content = Printf.sprintf "
+        <div class='auth'>
+          <div class='auth__head'>
+            <img class='auth__mark' src='/static/images/logo-mark.svg' alt=''>
+            <h1 class='auth__title'>Forgot password?</h1>
+            <p class='auth__sub'>Enter your email address and we'll send you a reset link.</p>
+          </div>
+          <form action='/forgot-password' method='POST' class='auth-form'>
             %s
             <div class='auth-field'>
                 <label class='auth-label' for='fp-email'>Email address</label>
                 <input class='auth-input' type='email' id='fp-email' name='email' required placeholder='you@example.com'>
             </div>
             <button type='submit' class='auth-btn'>Send reset link</button>
-        </form>
-        <div class='auth-foot'><a href='/login' class='auth-link'>Back to login</a></div>"
+          </form>
+          <div class='auth-foot'><a href='/login' class='auth-link'>Back to login</a></div>
+        </div>"
     csrf_token
-  in Components.auth_page ~noindex:true ~request ~title:"Forgot Password" ~card ()
+  in
+  Components.launch_auth_page ~noindex:true ~request
+    ~page_class:"launch-forgot-password" ~title:"Forgot Password" ~content ()
 
+(* Cartographic Civic (pass 16B): /reset-password through the same launch
+   wrapper. Form contract unchanged — POST /reset-password, Dream CSRF tag,
+   hidden 'token' field, 'password'/'confirm_password' names with their
+   required+minlength flags, and the renderer-owned error alert keeps its
+   legacy auth-alert classes and its position above the form. Passwords are
+   never echoed back on re-render (unchanged). Fix carried by this pass: the
+   hidden token value is now HTML-escaped — previously the raw ?token= query
+   value (attacker-controlled) was interpolated verbatim into a single-quoted
+   attribute, an injection vector on the validation re-render path. Error
+   messages stay server-authored constants. Missing/invalid/expired-token
+   branches still render through the legacy msg_page, untouched. *)
 let reset_password_page ~token ?error request =
   let csrf_token = Dream.csrf_tag request in
   let error_html = match error with
     | None -> ""
     | Some msg -> Printf.sprintf "<div class='auth-alert auth-alert--error'>%s</div>" msg
   in
-  let card = Printf.sprintf "
-        <h1 class='auth-title'>Set new password</h1>
-        <p class='auth-sub'>Enter a new password for your account.</p>
-        %s
-        <form action='/reset-password' method='POST' class='auth-form'>
+  let content = Printf.sprintf "
+        <div class='auth'>
+          <div class='auth__head'>
+            <img class='auth__mark' src='/static/images/logo-mark.svg' alt=''>
+            <h1 class='auth__title'>Set new password</h1>
+            <p class='auth__sub'>Enter a new password for your account.</p>
+          </div>
+          %s
+          <form action='/reset-password' method='POST' class='auth-form'>
             %s
             <input type='hidden' name='token' value='%s'>
             <div class='auth-field'>
@@ -221,9 +252,13 @@ let reset_password_page ~token ?error request =
                 <input class='auth-input' type='password' id='rp-confirm' name='confirm_password' required minlength='8'>
             </div>
             <button type='submit' class='auth-btn'>Reset password</button>
-        </form>"
-    error_html csrf_token token
-  in Components.auth_page ~noindex:true ~request ~title:"Reset Password" ~card ()
+          </form>
+          <div class='auth-foot'><a href='/login' class='auth-link'>Back to login</a></div>
+        </div>"
+    error_html csrf_token (Components.html_escape token)
+  in
+  Components.launch_auth_page ~noindex:true ~request
+    ~page_class:"launch-reset-password" ~title:"Reset Password" ~content ()
 
 (* === COMMUNITY === *)
 
