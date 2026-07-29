@@ -3491,11 +3491,16 @@ let join_to_post_page ?user ?(rail_communities = []) (community : community) req
     ~page_class:"launch-post-creation" ~title:("Join " ^ community.name)
     ~content:(Printf.sprintf "<div class='create-shell'>%s</div>" content) ()
 
-(* GET form for "Start thread from chat". Mirrors new_post_form's create-* shell so it
-   inherits the community shell language (no legacy Site chrome). The seed message is
-   shown selected + locked; nearby messages are checkboxes; the thread body is editable
-   notes. SSR, normal POST, CSRF. No JS. *)
-let start_thread_form ?user ?error ~(community : community) ~(channel : channel)
+(* GET form for "Start thread from chat", on the Cartographic launch shell
+   (pass 16A). The seed message is shown selected + locked; nearby messages are
+   checkboxes; the thread body is editable notes. SSR, normal POST, CSRF; the
+   only JS is the pre-existing page-scoped selection counter below. The
+   create-shell fragment (candidate ledger, hidden seed input, msg_<id>
+   checkboxes, title/content/section fields) is pinned — only the outer
+   document changed (Components.create_page → launch_community_page). *)
+let start_thread_form ?user ?error ?(rail_communities = [])
+    ~(channels : channel list) ~can_manage
+    ~(community : community) ~(channel : channel)
     ~(seed_id : int64) ~(candidates : (chat_message * string option) list)
     ~(sections : community_section list)
     ~(default_section_id : int) ~default_title ~default_body request =
@@ -3605,8 +3610,38 @@ let start_thread_form ?user ?error ~(community : community) ~(channel : channel)
     (esc default_body)
     (esc community.slug) (esc channel.slug)
   in
-  Components.create_page ?user ~request ~analytics_community:(community.id, community.visibility)
-    ~title:("Start thread — #" ^ channel.name) ~body:content ()
+  (* Cartographic launch shell (pass 16A): the same four-pane chrome as the
+     sibling community routes, wrapping the promotion form verbatim — the
+     create-* fields, the hidden seed input, the msg_<id> checkbox names and
+     ordering, the section <select>, the Dream CSRF tag, the selection-count
+     script and the legacy .create-shell marker are unchanged; only the outer
+     document swapped create_page → launch_community_page. The mono context
+     crumb is Cartographic chrome placed OUTSIDE the pinned fragment. The
+     sidebar reuses the shared knowledge grammar with NO active entry —
+     starting a thread is a contextual action, not a permanent sidebar
+     destination — and the moderator-only entries stay hidden because their
+     active flags default to false. can_manage is the handler's real
+     admin-or-moderator check, so Settings shows only to authorized viewers
+     (the settings handler re-checks). [rail_communities] carries the viewer's
+     joined communities as the handler loaded them (post-authorization only);
+     ordering, dedup by slug and the single active marker stay owned by the
+     shared launch doc builder, which also owns the analytics assets with the
+     same community-id/visibility pair the legacy wrapper received and marks
+     .shell ph-no-capture for private communities. *)
+  let crumb =
+    Printf.sprintf
+      "<div class='launch-st-context'><a href='/c/%s'>/c/%s</a> <span class='launch-st-context__sep'>/</span> <a href='/c/%s/ch/%s'>#%s</a> <span class='launch-st-context__sep'>/</span> <b>start thread</b></div>"
+      (esc community.slug) (esc community.slug)
+      (esc community.slug) (esc channel.slug) (esc channel.slug)
+  in
+  let sidebar =
+    launch_knowledge_sidebar ~community ~channels ~sections ~can_manage ()
+  in
+  Components.launch_community_page ?user ~request ~rail_communities
+    ~community ~sidebar
+    ~page_class:"launch-start-thread"
+    ~title:("Start thread — #" ^ channel.name)
+    ~content:(crumb ^ Printf.sprintf "<div class='create-shell'>%s</div>" content) ()
 
 let new_post_form ?user ?preselected_section_id ?(rail_communities = []) (sections : community_section list) (community : community) request =
   let csrf_token = Dream.csrf_tag request in

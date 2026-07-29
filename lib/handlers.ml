@@ -1827,7 +1827,23 @@ let start_thread_form_handler request =
                                           messages render on the thread from their persisted relations; the
                                           textarea carries only text the curator deliberately writes. *)
                                        let def_section_id = default_thread_section_id sections in
-                                       Dream.html (Pages.start_thread_form ?user ~community ~channel ~seed_id:message_id ~candidates ~sections ~default_section_id:def_section_id ~default_title ~default_body:"" request)))))))
+                                       (* Launch-chrome data (pass 16A), loaded only after every gate
+                                          above passed — a hidden private community, a missing/foreign
+                                          seed, a banned viewer and a non-member never touch the
+                                          viewer's memberships or the channel list. Each degrades to an
+                                          empty list on error rather than blocking the form. can_manage
+                                          mirrors the report form's gate (admin || moderator) and only
+                                          picks the sidebar Settings visibility; the settings handler
+                                          re-checks. *)
+                                       let%lwt channels = (match%lwt Db.get_channels_by_community db community.id with Ok cs -> Lwt.return cs | Error _ -> Lwt.return []) in
+                                       let%lwt rail_communities = (match%lwt Db.get_user_communities db user_id with Ok cs -> Lwt.return cs | Error _ -> Lwt.return []) in
+                                       let%lwt can_manage =
+                                         if is_admin then Lwt.return true
+                                         else (match%lwt Db.is_moderator db user_id community.id with
+                                           | Ok b -> Lwt.return b
+                                           | _ -> Lwt.return false)
+                                       in
+                                       Dream.html (Pages.start_thread_form ?user ~rail_communities ~channels ~can_manage ~community ~channel ~seed_id:message_id ~candidates ~sections ~default_section_id:def_section_id ~default_title ~default_body:"" request)))))))
 
 (* POST same path — validate everything server-side (never trust the client), force the
    seed into the source set, then create the thread + provenance atomically. *)
@@ -1892,7 +1908,19 @@ let start_thread_create_handler request =
                                             let selected = Pages.Start_thread.parse_selected_ids form_data in
                                             let context = Pages.Start_thread.normalize_selection ~seed:message_id ~max_total:start_thread_max_total ~valid selected in
                                             let rerender ?(error="") () =
-                                              Dream.html (Pages.start_thread_form ?user ~error ~community ~channel ~seed_id:message_id ~candidates ~sections ~default_section_id:def_section_id ~default_title:title ~default_body:content_raw request)
+                                              (* Launch-chrome data (pass 16A), loaded only when a validation
+                                                 state actually re-renders the form — the success path keeps
+                                                 its exact query set. Same post-gate position and degradation
+                                                 as the GET handler. *)
+                                              let%lwt channels = (match%lwt Db.get_channels_by_community db community.id with Ok cs -> Lwt.return cs | Error _ -> Lwt.return []) in
+                                              let%lwt rail_communities = (match%lwt Db.get_user_communities db user_id with Ok cs -> Lwt.return cs | Error _ -> Lwt.return []) in
+                                              let%lwt can_manage =
+                                                if is_admin then Lwt.return true
+                                                else (match%lwt Db.is_moderator db user_id community.id with
+                                                  | Ok b -> Lwt.return b
+                                                  | _ -> Lwt.return false)
+                                              in
+                                              Dream.html (Pages.start_thread_form ?user ~error ~rail_communities ~channels ~can_manage ~community ~channel ~seed_id:message_id ~candidates ~sections ~default_section_id:def_section_id ~default_title:title ~default_body:content_raw request)
                                             in
                                             if title = "" then rerender ~error:"Please enter a title for the thread." ()
                                             else if String.length title > 300 then rerender ~error:"Title cannot exceed 300 characters." ()

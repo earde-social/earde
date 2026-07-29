@@ -7551,3 +7551,284 @@ ol, ul { margin: 0; padding: 0; list-style: none; }
 .launch-post-creation #analytics-consent [data-analytics-error] {
   color: var(--danger); font-size: var(--fs-11);
 }
+
+/* ==========================================================================
+   EARDE INTEGRATION — start thread from chat only
+   Scoped beneath body.launch-start-thread: GET/POST
+   /c/:slug/ch/:channel_slug/messages/:message_id/start-thread
+   (Pages.start_thread_form), the contextual form that crystallizes a live
+   conversation into a durable thread. Exists only because the real promotion
+   surface cannot emit the reference markup exactly:
+   - the create-* form fragment (the hidden seed input, the msg_<id>
+     candidate checkboxes in their chronological order, the required
+     title with its 300 maxlength, the optional introduction textarea, the
+     required section <select> for structured communities and the Dream CSRF
+     tag) is treated as pinned, so the legacy markup is spliced verbatim
+     inside the .create-shell marker and skinned here onto the approved
+     community-shell anatomy: mono context crumb + page head band over one
+     restrained form column — preserving a useful live conversation as
+     durable knowledge, not copying chat into a generic posting form;
+   - no summaries, generated titles, drag selection, previews or extra
+     workflow steps are invented: every control styled here already exists
+     in the renderer, and the only script is the renderer's pre-existing
+     page-scoped selection counter;
+   - the candidate ledger keeps its flat rows: seed row locked (clay
+     provenance tag), author/time metadata in mono, moss checkboxes;
+   - renderer-owned validation states re-render this same document; the
+     .st-error notice reads ochre (pending/attention), never a red banner;
+   - the sidebar carries no permanent Start-thread entry — promotion is a
+     contextual action, so no navitem is active on this route;
+   - the notification badge is revealed by the shared script removing the
+     legacy `hidden` class; honoured on the badge element only — no global
+     .hidden utility is defined;
+   - for a private community the launch shell marks .shell ph-no-capture
+     (the legacy wrapper had no inner guard on this route, so none exists
+     inside <main>);
+   - the desktop-only gate panel ships in mobile-gate.css; only the
+     launch-scope "hide the app" rule for this route lives here;
+   - the analytics consent banner markup is shared with the legacy layout
+     (same rules as the other launch sections, re-scoped).
+   ========================================================================== */
+
+/* ---- Launch chrome ---------------------------------------------------------- */
+
+/* Top-bar user menu: pure-CSS <details>, real logout POST form inside. */
+.launch-start-thread .launch-user { position: relative; }
+.launch-start-thread .launch-user > summary { list-style: none; }
+.launch-start-thread .launch-user > summary::-webkit-details-marker { display: none; }
+.launch-start-thread .launch-user .avatar { background: var(--moss); }
+.launch-start-thread .launch-user__menu {
+  position: absolute; right: 0; top: calc(100% + 6px); z-index: 40;
+  min-width: 168px; display: flex; flex-direction: column;
+  background: var(--surface); border: var(--bw) solid var(--line2);
+  border-radius: var(--r-3); padding: var(--sp-3);
+  box-shadow: var(--shadow-overlay);
+}
+.launch-start-thread .launch-user__menu a,
+.launch-start-thread .launch-user__menu button {
+  display: block; width: 100%; text-align: left; background: none; border: 0;
+  font-family: var(--mono); font-size: var(--fs-12); color: var(--ink);
+  padding: var(--sp-3) var(--sp-5); border-radius: var(--r-2); cursor: pointer;
+}
+.launch-start-thread .launch-user__menu a:hover,
+.launch-start-thread .launch-user__menu button:hover { background: var(--surface2); }
+.launch-start-thread .launch-user__menu form {
+  margin: var(--sp-2) 0 0; padding-top: var(--sp-2);
+  border-top: var(--bw) solid var(--line);
+}
+
+/* Notification badge: hidden until the shared one-shot fetch reveals it.
+   Badge element only — deliberately NOT a global .hidden utility. */
+.launch-start-thread #notif-badge.hidden { display: none; }
+
+/* Real community avatars fill their fixed tile (rail, sidebar head). */
+.launch-start-thread .launch-rail__img,
+.launch-start-thread .launch-avatar-img {
+  width: 100%; height: 100%; object-fit: cover; border-radius: inherit;
+  display: block;
+}
+
+/* ---- Community sidebar ------------------------------------------------------ */
+
+.launch-start-thread .launch-side-id { min-width: 0; display: block; }
+.launch-start-thread .launch-side-vis {
+  font-family: var(--mono); font-size: var(--fs-10-5); color: var(--ochre);
+  padding: var(--sp-2) 9px var(--sp-1);
+}
+
+/* ---- Form anatomy ----------------------------------------------------------- */
+
+/* Mono context crumb (Cartographic chrome outside the pinned fragment):
+   community / #channel / start thread. */
+.launch-start-thread .launch-st-context {
+  flex: none; font-family: var(--mono); font-size: var(--fs-11);
+  color: var(--muted); padding: var(--sp-4) 28px 0;
+}
+.launch-start-thread .launch-st-context a { color: var(--slate); text-decoration: none; }
+.launch-start-thread .launch-st-context a:hover { color: var(--ink); }
+.launch-start-thread .launch-st-context b { font-weight: 600; color: var(--ink); }
+.launch-start-thread .launch-st-context__sep { color: var(--line2); }
+
+/* create-shell/create-wrap fill <main> as a column: crumb + fixed head band
+   over the scrolling form; create-panel is a legacy grouping div with no
+   launch-side geometry of its own. */
+.launch-start-thread .create-shell {
+  flex: 1; min-height: 0; display: flex; flex-direction: column;
+}
+.launch-start-thread .create-wrap {
+  flex: 1; min-height: 0; display: flex; flex-direction: column;
+}
+.launch-start-thread .create-panel { display: contents; }
+
+/* Page head band: serif title over the renderer's real subtitle; the
+   #channel accent in the title reads as mono moss (live sigil). */
+.launch-start-thread .create-head {
+  flex: none; padding: 15px 28px; background: var(--surface);
+  border-bottom: var(--bw) solid var(--line2);
+}
+.launch-start-thread .create-title {
+  font-family: var(--serif); font-weight: 600; font-size: var(--fs-22);
+  color: var(--ink);
+}
+.launch-start-thread .create-title .accent {
+  font-family: var(--mono); font-weight: 400; font-size: var(--fs-16);
+  color: var(--moss);
+}
+.launch-start-thread .create-sub {
+  font-size: var(--fs-12-5); color: var(--muted); margin-top: var(--sp-1);
+  line-height: var(--lh-prose);
+}
+
+/* Renderer-owned validation notice: ochre attention, thin rule, no banner
+   theatrics. Sits between the head band and the form. */
+.launch-start-thread .st-error {
+  flex: none; font-family: var(--mono); font-size: var(--fs-12);
+  color: var(--ochre); background: var(--surface2);
+  border-left: 2px solid var(--ochre);
+  padding: var(--sp-4) 28px; margin: 0;
+}
+
+/* The form is the scroller: one restrained left-aligned column under the
+   band, capped at a reading measure. */
+.launch-start-thread .create-form {
+  flex: 1; min-height: 0; overflow-y: auto; scrollbar-width: thin;
+  padding: var(--sp-8) 28px 70px;
+}
+.launch-start-thread .create-form > * { max-width: 680px; }
+
+.launch-start-thread .create-field { margin-bottom: var(--sp-8); }
+.launch-start-thread .create-label {
+  display: block; font-family: var(--mono); font-size: var(--fs-10);
+  font-weight: 600; letter-spacing: var(--ls-kicker); text-transform: uppercase;
+  color: var(--muted); margin-bottom: var(--sp-3);
+}
+.launch-start-thread .create-label .req { color: var(--clay); }
+.launch-start-thread .create-label .create-label-opt,
+.launch-start-thread .create-label-opt {
+  font-weight: 400; text-transform: none; letter-spacing: normal;
+  color: var(--muted);
+}
+
+/* Field hints (selection guidance, introduction note): quiet mono metadata. */
+.launch-start-thread .create-hint {
+  font-family: var(--mono); font-size: var(--fs-11); color: var(--muted);
+  margin-top: var(--sp-2); margin-bottom: var(--sp-3);
+}
+
+/* ---- Candidate-message ledger ------------------------------------------------ */
+
+/* Flat hairline ledger, not chat bubbles: each row is the renderer's real
+   <label> so the whole row toggles its checkbox. */
+.launch-start-thread .st-msglist {
+  display: flex; flex-direction: column;
+  max-height: 340px; overflow-y: auto; scrollbar-width: thin;
+  border: var(--bw) solid var(--line2); border-radius: var(--r-2);
+  background: var(--surface);
+}
+.launch-start-thread .st-msg {
+  display: flex; gap: var(--sp-5); align-items: flex-start;
+  padding: var(--sp-4) var(--sp-6); cursor: pointer;
+  border-bottom: var(--bw) solid var(--line);
+}
+.launch-start-thread .st-msg:last-child { border-bottom: 0; }
+.launch-start-thread .st-msg:hover { background: var(--surface2); }
+.launch-start-thread .st-msg--seed { background: var(--surface2); cursor: default; }
+.launch-start-thread .st-check {
+  margin-top: 2px; flex: none; accent-color: var(--moss);
+  width: 13px; height: 13px;
+}
+.launch-start-thread .st-msg-body {
+  display: flex; flex-direction: column; gap: var(--sp-1); min-width: 0;
+}
+.launch-start-thread .st-msg-meta { display: flex; align-items: center; gap: var(--sp-4); }
+.launch-start-thread .st-msg-author {
+  font-family: var(--mono); font-size: var(--fs-11-5); font-weight: 600;
+  color: var(--ink);
+}
+.launch-start-thread .st-msg-time {
+  font-family: var(--mono); font-size: var(--fs-10-5); color: var(--muted);
+}
+.launch-start-thread .st-seed-tag {
+  font-family: var(--mono); font-size: var(--fs-10); text-transform: uppercase;
+  letter-spacing: var(--ls-kicker); color: var(--clay);
+  border: var(--bw) solid var(--clay); border-radius: var(--r-1);
+  padding: 0 var(--sp-2);
+}
+.launch-start-thread .st-msg-text {
+  font-size: var(--fs-13); color: var(--ink); line-height: var(--lh-prose);
+  overflow-wrap: anywhere;
+}
+
+/* ---- Inset controls ----------------------------------------------------------- */
+
+.launch-start-thread .create-input,
+.launch-start-thread .create-select,
+.launch-start-thread .create-textarea {
+  width: 100%; font-family: var(--sans); font-size: var(--fs-13);
+  color: var(--ink); background: var(--surface);
+  border: var(--bw) solid var(--line2); border-radius: var(--r-2);
+  padding: var(--sp-3) var(--sp-4);
+}
+.launch-start-thread .create-textarea { resize: vertical; }
+.launch-start-thread .create-input::placeholder,
+.launch-start-thread .create-textarea::placeholder { color: var(--muted); }
+.launch-start-thread .create-input:focus,
+.launch-start-thread .create-select:focus,
+.launch-start-thread .create-textarea:focus {
+  outline: none; border-color: var(--slate);
+}
+
+/* Actions: moss submit (preserving knowledge is constructive) beside the
+   quiet mono cancel back to the live channel. The legacy --block modifier
+   loses its full-width meaning inside this measured column. */
+.launch-start-thread .create-actions {
+  display: flex; align-items: center; gap: var(--sp-4);
+  margin-top: var(--sp-9); padding-top: var(--sp-7);
+  border-top: var(--bw) solid var(--line);
+}
+.launch-start-thread .create-btn {
+  cursor: pointer; font-family: var(--sans); font-weight: 600;
+  font-size: var(--fs-12-5); color: #fff; background: var(--moss);
+  border: var(--bw) solid var(--moss); border-radius: var(--r-2);
+  padding: var(--sp-3) var(--sp-8); text-decoration: none;
+}
+.launch-start-thread .create-btn:hover {
+  background: color-mix(in srgb, var(--moss) 88%, #000);
+}
+.launch-start-thread .create-btn--block { width: auto; }
+.launch-start-thread .st-cancel {
+  font-family: var(--mono); font-size: var(--fs-11-5); color: var(--slate);
+  text-decoration: none;
+}
+.launch-start-thread .st-cancel:hover { color: var(--ink); }
+
+/* Desktop-only gate: hide this route's launch app under the shared
+   breakpoint; the gate panel itself is styled by mobile-gate.css. */
+@media (max-width: 800px) {
+  body.launch-start-thread > .app { display: none !important; }
+}
+
+/* Analytics consent banner (markup shared with the legacy layout). */
+.launch-start-thread #analytics-consent {
+  position: fixed; bottom: var(--sp-8); left: 50%; transform: translateX(-50%);
+  z-index: 50; width: calc(100% - 2rem); max-width: 28rem;
+  background: var(--surface); border: var(--bw) solid var(--line2);
+  border-radius: var(--r-3); padding: var(--sp-7) var(--sp-8);
+  box-shadow: var(--shadow-overlay);
+}
+.launch-start-thread #analytics-consent p {
+  font-size: var(--fs-13); color: var(--muted); margin-bottom: var(--sp-5);
+}
+.launch-start-thread #analytics-consent [data-analytics-accept],
+.launch-start-thread #analytics-consent [data-analytics-refuse] {
+  font-family: var(--sans); font-weight: 600; font-size: var(--fs-12);
+  border: var(--bw) solid var(--line2); border-radius: var(--r-2);
+  padding: var(--sp-3) var(--sp-7); cursor: pointer;
+  background: var(--surface); color: var(--muted); margin-right: var(--sp-4);
+}
+.launch-start-thread #analytics-consent [data-analytics-accept] {
+  color: #fff; background: var(--moss); border-color: var(--moss);
+}
+.launch-start-thread #analytics-consent [data-analytics-error] {
+  color: var(--danger); font-size: var(--fs-11);
+}

@@ -126,8 +126,11 @@ module Start_thread : sig
   }
   val summarize_source : Db.thread_source_msg list -> source_summary
 end
-(** GET form to start a durable thread from a seed chat message + nearby context. *)
-val start_thread_form : ?user:string -> ?error:string -> community:Db.community -> channel:Db.channel -> seed_id:int64 -> candidates:(Db.chat_message * string option) list -> sections:Db.community_section list -> default_section_id:int -> default_title:string -> default_body:string -> Dream.request -> string
+(** GET form to start a durable thread from a seed chat message + nearby context.
+    Launch chrome (pass 16A): [rail_communities]/[channels]/[sections] feed the shared
+    launch shell's global rail and community sidebar; [can_manage] is the handler's real
+    admin-or-moderator check and only picks the sidebar Settings visibility. *)
+val start_thread_form : ?user:string -> ?error:string -> ?rail_communities:Db.community list -> channels:Db.channel list -> can_manage:bool -> community:Db.community -> channel:Db.channel -> seed_id:int64 -> candidates:(Db.chat_message * string option) list -> sections:Db.community_section list -> default_section_id:int -> default_title:string -> default_body:string -> Dream.request -> string
 val post_page : ?user:string -> ?noindex:bool -> is_member:bool -> is_current_user_mod:bool -> mod_usernames:string list -> admin_usernames:string list -> banned_usernames:string list -> community:Db.community -> user_communities:Db.community list -> moderated_communities:Db.community list -> (int * int) list -> (int * int) list -> Db.post -> Db.comment list -> Dream.request -> string
 
 (** === USER === *)
