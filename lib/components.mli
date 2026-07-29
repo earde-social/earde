@@ -146,11 +146,21 @@ val launch_onboarding_page : ?noindex:bool -> ?request:Dream.request -> ?user:st
     from [community] itself; for a private community the ph-no-capture
     replay guard rides on the existing `.shell` element (no wrapper div).
     Member documents carry the shared launch behavior script; anonymous
-    documents carry no script. [page_class] ("launch-community-overview") is
-    the scoping root stamped on <body> for the integration CSS at the end of
-    earde.css. Used only by [Pages.community_overview_page]; no existing
-    wrapper changes. *)
-val launch_community_page : ?noindex:bool -> ?request:Dream.request -> ?user:string -> ?rail_communities:Db.community list -> community:Db.community -> sidebar:string -> page_class:string -> title:string -> content:string -> unit -> string
+    documents carry no script by default. [head_extra] (default absent — all
+    pre-15A callers' output is byte-identical) appends a per-page <head>
+    fragment after the analytics assets; the flat community home uses it to
+    ship [launch_share_script] to guests. [page_class]
+    ("launch-community-overview") is the scoping root stamped on <body> for
+    the integration CSS at the end of earde.css. *)
+val launch_community_page : ?noindex:bool -> ?request:Dream.request -> ?user:string -> ?rail_communities:Db.community list -> ?head_extra:string -> community:Db.community -> sidebar:string -> page_class:string -> title:string -> content:string -> unit -> string
+
+(** Guest-only public-interaction script: exactly the shared [copyPostLink]
+    definition the authenticated behavior script also embeds (one source
+    snippet, so the two can never diverge) and nothing else — no confirm
+    modal, no vote handler, and no /api/unread-notifs fetch. For routes whose
+    byte-pinned rows show the Share control to anonymous viewers (currently
+    the flat community home). *)
+val launch_share_script : string
 
 (** Cartographic Civic launch community document, channel-safe variant
     (pass 9: GET /c/:slug/ch/:channel_slug only). Identical launch chrome to

@@ -729,6 +729,35 @@ let launch_tile_color slug =
    touching [layout] itself. Anonymous launch documents omit it entirely: they
    render no vote forms, no ⋯ menu and no badge, so there is nothing for it to
    do and no /api/unread-notifs request should fire. *)
+(* The one copyPostLink definition, shared verbatim by the authenticated
+   behavior script below and the guest-only [launch_share_script] — the
+   Share button render_post emits is the SAME byte-pinned control for both
+   viewer states, so the two documents must never ship diverging copies. *)
+let launch_share_snippet = {js|        /* Clipboard write is async; we optimistically swap innerHTML and class list
+           rather than disabling the button — avoids layout shift on fast connections. */
+        function copyPostLink(path, btn) {
+          var fullUrl = window.location.origin + path;
+          navigator.clipboard.writeText(fullUrl).then(function() {
+            var originalHTML = btn.innerHTML;
+            btn.innerHTML = '<svg class="w-4 h-4 mr-1 inline" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg> Copied';
+            btn.classList.add('text-emerald-600');
+            btn.classList.remove('text-gray-500', 'hover:text-gray-900');
+            setTimeout(function() {
+              btn.innerHTML = originalHTML;
+              btn.classList.remove('text-emerald-600');
+              btn.classList.add('text-gray-500', 'hover:text-gray-900');
+            }, 2000);
+          }).catch(function(err) { console.error('Failed to copy: ', err); });
+        }|js}
+
+(* Guest-only public-interaction script: exactly the shared copyPostLink and
+   nothing else — no confirm modal, no vote handler, and above all no
+   /api/unread-notifs fetch (anonymous documents must fire zero requests
+   beyond assets). Emitted per route (currently the flat community home,
+   whose byte-pinned rows show Share to every viewer); the doc builders'
+   anonymous default stays script-free. *)
+let launch_share_script = "<script>\n" ^ launch_share_snippet ^ "\n      </script>"
+
 let launch_behavior_script = {js|<script>
         /* Custom confirmation modal: replaces native window.confirm() — the browser's
            built-in dialog is synchronous, unstyled, and blocks the JS thread. */
@@ -765,22 +794,7 @@ let launch_behavior_script = {js|<script>
           /* form.submit() bypasses the submit event so onsubmit won't re-fire. */
           document.getElementById('confirm-btn').onclick = () => { close(); form.submit(); };
         }
-        /* Clipboard write is async; we optimistically swap innerHTML and class list
-           rather than disabling the button — avoids layout shift on fast connections. */
-        function copyPostLink(path, btn) {
-          var fullUrl = window.location.origin + path;
-          navigator.clipboard.writeText(fullUrl).then(function() {
-            var originalHTML = btn.innerHTML;
-            btn.innerHTML = '<svg class="w-4 h-4 mr-1 inline" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg> Copied';
-            btn.classList.add('text-emerald-600');
-            btn.classList.remove('text-gray-500', 'hover:text-gray-900');
-            setTimeout(function() {
-              btn.innerHTML = originalHTML;
-              btn.classList.remove('text-emerald-600');
-              btn.classList.add('text-gray-500', 'hover:text-gray-900');
-            }, 2000);
-          }).catch(function(err) { console.error('Failed to copy: ', err); });
-        }
+|js} ^ launch_share_snippet ^ {js|
         /* Optimistic vote update: mutate DOM immediately, then fire-and-forget XHR.
            If the request fails the server state is authoritative on next page load —
            acceptable UX trade-off for a forum where stale scores are low-stakes. */
@@ -1362,13 +1376,16 @@ let launch_community_doc ?(noindex = false) ?request ?user
 
 (* Public pass-8 entry point: the overview content is wrapped in the exact
    `<main class='main'>` element (same newlines) the pre-extraction template
-   emitted, with no head extras and no aside. [rail_communities] carries the
-   viewer's joined communities so the overview's global rail matches the feed
-   and channel routes instead of collapsing to the current tile alone. *)
-let launch_community_page ?noindex ?request ?user ?rail_communities
+   emitted, with no aside. [rail_communities] carries the viewer's joined
+   communities so the overview's global rail matches the feed and channel
+   routes instead of collapsing to the current tile alone. [head_extra]
+   (default absent — every pre-15A caller's output is byte-identical) lets a
+   route add a small head fragment; the flat community home uses it to ship
+   the guest-only [launch_share_script]. *)
+let launch_community_page ?noindex ?request ?user ?rail_communities ?head_extra
     ~(community : community) ~sidebar ~page_class ~title ~content () =
-  launch_community_doc ?noindex ?request ?user ?rail_communities ~community
-    ~sidebar ~page_class
+  launch_community_doc ?noindex ?request ?user ?rail_communities ?head_extra
+    ~community ~sidebar ~page_class
     ~title ~main_el:("<main class='main'>\n" ^ content ^ "\n</main>") ()
 
 (* Pass-9 channel-safe variant: identical launch chrome (topbar, rail,

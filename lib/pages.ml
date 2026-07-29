@@ -367,9 +367,96 @@ let new_community_form ?user request =
    community route (Community_connected_projects_pages), or "" when the community has no
    accepted project home — and always "" on the section feeds, which are not /c/:slug.
    Defaulting to "" keeps every existing caller unchanged. *)
-let community_page ?user ?(noindex=false) ?(connected_projects="") ?section:(section : community_section option) ~is_member ~is_current_user_mod ~is_current_user_top_mod ~mod_usernames ~admin_usernames ~banned_usernames ~user_communities ~moderated_communities user_votes current_page sort_mode (community : community) (posts : post list) request =
+(* Launch sidebar for the flat (sections_enabled = false) community home — the
+   pass-8/9 grammar reduced to what a single-feed community really has: the
+   identity head, the one Feed surface (always current — /c/:slug IS the feed),
+   the factual private marker, and the Network group with the intentionally
+   public moderation log plus Settings under the exact mod-or-admin gate the
+   settings handler enforces. No Live or Knowledge groups: a flat community has
+   no channel or section surfaces, and nothing is invented. Home requests,
+   Reports and Manage moderators stay off this sidebar (the settings/report
+   suites count those links per document); Manage moderators keeps its legacy
+   placement inside the Moderators panel instead. *)
+let launch_flat_community_sidebar ~(community : community) ~can_manage () =
+  let esc = Components.html_escape in
+  let slug = esc community.slug in
+  let tile_glyph =
+    String.capitalize_ascii
+      (if String.length community.slug >= 2 then String.sub community.slug 0 2
+       else if community.slug = "" then "?" else community.slug)
+  in
+  let side_face =
+    match community.avatar_url with
+    | Some url when String.trim url <> "" ->
+        (match Components.safe_img_src url with
+         | "#" ->
+             Printf.sprintf "<span class='avatar avatar--32' style='background:%s'>%s</span>"
+               (Components.launch_tile_color community.slug) (esc tile_glyph)
+         | src ->
+             Printf.sprintf "<span class='avatar avatar--32'><img class='launch-avatar-img' src='%s' alt=''></span>" src)
+    | _ ->
+        Printf.sprintf "<span class='avatar avatar--32' style='background:%s'>%s</span>"
+          (Components.launch_tile_color community.slug) (esc tile_glyph)
+  in
+  let side_head =
+    Printf.sprintf
+      "<a class='sidebar__head' href='/c/%s'>%s<span class='launch-side-id'><span class='sidebar__name'>%s</span><span class='sidebar__slug'>/c/%s</span></span></a>"
+      slug side_face (esc community.name) slug
+  in
+  let nav_feed =
+    Printf.sprintf
+      "<a class='navitem navitem--pad navitem--active' href='/c/%s'><span class='navitem__sigil navitem__sigil--box'>&#8962;</span>Feed</a>"
+      slug
+  in
+  let vis_note =
+    if community.visibility = Db.Community_private then
+      "<div class='launch-side-vis'>private community</div>"
+    else ""
+  in
+  let nav_network =
+    "<p class='kicker sidebar__group'>Network</p>"
+    ^ Printf.sprintf
+        "<a class='navitem navitem--pad' href='/c/%s/modlog'><span class='navitem__sigil navitem__sigil--box'>&#9776;</span>Moderation log</a>"
+        slug
+    ^ (if can_manage then
+         Printf.sprintf
+           "<a class='navitem navitem--pad' href='/c/%s/settings'><span class='navitem__sigil navitem__sigil--box'>&#9881;</span>Settings</a>"
+           slug
+       else "")
+  in
+  Printf.sprintf
+    "<aside class='sidebar' aria-label='%s community'>%s<div class='sidebar__body'>%s%s%s</div></aside>"
+    (esc community.name) side_head nav_feed vis_note nav_network
+
+(* /c/:slug (flat, sections_enabled = false) — the single-feed community home,
+   now on the Cartographic Civic launch chrome (Components.launch_community_page:
+   earde.css only, no Tailwind/Google Fonts). This stays a wrapper-and-CSS
+   conversion of the legacy simple feed, not a structured community: one feed,
+   no channels, no sections, no invented hierarchy. Every contract is the
+   pre-launch behavior reskinned:
+   - the feed rows and the empty state come from the untouched shared
+     Components.render_post / legacy strings byte-for-byte (their DOM is the
+     optimistic-vote, confirmModal, dialog and ph-mask contract shared with the
+     legacy / and /all feeds) and are skinned purely by the route-scoped CSS;
+   - sort (?sort=hot|new|top, unknown→hot upstream) and pagination
+     (?sort=&page=, "Page N", prev iff page>1, next iff a full 20-row page)
+     keep their exact URLs and grammar;
+   - the /join and /leave POSTs keep their exact fields and presence rules
+     (anon: none; member: Leave; non-member: Join unless private);
+   - + New post keeps the real /new-post?community= destination (still legacy);
+   - Settings (mod/admin), Manage moderators (top-mod/admin), the public
+     modlog and the top-mod/admin downvote toggle keep their gates and routes;
+   - the pre-rendered ccp-* connected-projects fragment is spliced verbatim
+     (its markup is pinned by the fragment suites) and restyled by CSS only. *)
+let community_page ?user ?(noindex=false) ?(connected_projects="") ~is_member ~is_current_user_mod ~is_current_user_top_mod ~mod_usernames ~admin_usernames ~banned_usernames ~user_communities ~moderated_communities user_votes current_page sort_mode (community : community) (posts : post list) request =
   let csrf_token = Dream.csrf_tag request in
   let is_admin = Dream.session_field request "is_admin" = Some "true" in
+  let esc = Components.html_escape in
+  let slug = esc community.slug in
+  (* Fed only the legacy left sidebar; the launch shell's global rail owns
+     joined-community navigation now. Kept in the signature so the handler
+     call site (shared with the structured branch's data load) stays intact. *)
+  ignore (moderated_communities : community list);
   let has_next = List.length posts = 20 in
 
   let posts_html =
@@ -377,238 +464,182 @@ let community_page ?user ?(noindex=false) ?(connected_projects="") ?section:(sec
     else String.concat "\n" (List.map (Components.render_post ~is_current_user_mod ~mod_usernames ~admin_usernames ~banned_usernames request user_votes) posts)
   in
 
-  (* base_url drives pagination and sort tabs — slug URL for sections, community URL for simple feeds *)
-  let base_url = match section with
-    | None -> Printf.sprintf "/c/%s" (Components.html_escape community.slug)
-    | Some s -> Printf.sprintf "/c/%s/s/%s" (Components.html_escape community.slug) (Components.html_escape s.slug)
+  let base_url = Printf.sprintf "/c/%s" slug in
+
+  (* Sort chips — the exact hrefs and accepted values of the legacy tabs
+     (hot/new/top; the handler maps anything else to hot). *)
+  let chip mode label =
+    let cls = if mode = sort_mode then "chip chip--active" else "chip" in
+    Printf.sprintf "<a class='%s' href='%s?sort=%s'>%s</a>" cls base_url mode label
+  in
+  let sort_bar =
+    Printf.sprintf
+      "<div class='tabbar launch-flat-sortbar'><div class='chips' aria-label='Sort'>%s%s%s</div></div>"
+      (chip "hot" "Hot") (chip "new" "New") (chip "top" "Top")
   in
 
-  let prev_btn = if current_page <= 1 then "" else Printf.sprintf "<a href='%s?sort=%s&page=%d' class='bg-white border border-[#D0C9BC] text-gray-700 px-4 py-2 rounded font-bold hover:bg-[#EDE9DF] transition'>&larr; Previous</a>" base_url sort_mode (current_page - 1) in
-  let next_btn = if not has_next then "" else Printf.sprintf "<a href='%s?sort=%s&page=%d' class='bg-white border border-[#D0C9BC] text-gray-700 px-4 py-2 rounded font-bold hover:bg-[#EDE9DF] transition'>Next &rarr;</a>" base_url sort_mode (current_page + 1) in
-
-  let get_sort_class s = if s = sort_mode then "text-[#C94C4C] border-b-2 border-[#C94C4C] pb-1" else "text-gray-500 hover:text-gray-800 transition" in
-  (* Active sort only in section feeds; simple communities use Hot/New/Top. *)
-  let section_header, sort_menu = match section with
-    | Some s ->
-        let hdr = Printf.sprintf "
-    <div class='bg-[#FAF7F2] border border-[#E0D9CC] rounded-xl px-5 py-3 mb-3 mt-3'>
-        <div class='flex items-center gap-2'>
-            <a href='/c/%s' class='text-xs text-[#C94C4C] hover:underline font-medium'>&larr; All Sections</a>
-            <span class='text-xs text-gray-300'>/</span>
-            <h2 class='text-base font-bold text-gray-900'>%s</h2>
-        </div>
-        %s
-    </div>"
-          (Components.html_escape community.slug)
-          (Components.html_escape s.name)
-          (match s.description with
-           | Some d when d <> "" -> Printf.sprintf "<p class='text-xs text-gray-500 mt-0.5'>%s</p>" (Components.html_escape d)
-           | _ -> "")
-        in
-        let menu = Printf.sprintf "
-    <div class='flex space-x-6 mb-6 px-2 border-b border-[#E0D9CC] mt-2'>
-        <a href='%s?sort=hot' class='font-bold text-sm tracking-wide uppercase %s'>🔥 Hot</a>
-        <a href='%s?sort=new' class='font-bold text-sm tracking-wide uppercase %s'>✨ New</a>
-        <a href='%s?sort=top' class='font-bold text-sm tracking-wide uppercase %s'>🏆 Top</a>
-        <a href='%s?sort=active' class='font-bold text-sm tracking-wide uppercase %s'>⚡ Active</a>
-    </div>"
-          base_url (get_sort_class "hot")
-          base_url (get_sort_class "new")
-          base_url (get_sort_class "top")
-          base_url (get_sort_class "active")
-        in
-        (hdr, menu)
-    | None ->
-        let menu = Printf.sprintf "
-    <div class='flex space-x-6 mb-6 px-2 border-b border-[#E0D9CC] mt-6'>
-        <a href='%s?sort=hot' class='font-bold text-sm tracking-wide uppercase %s'>🔥 Hot</a>
-        <a href='%s?sort=new' class='font-bold text-sm tracking-wide uppercase %s'>✨ New</a>
-        <a href='%s?sort=top' class='font-bold text-sm tracking-wide uppercase %s'>🏆 Top</a>
-    </div>"
-          base_url (get_sort_class "hot")
-          base_url (get_sort_class "new")
-          base_url (get_sort_class "top")
-        in
-        ("", menu)
-  in
+  (* Pager — same ?sort=&page= URLs and the same presence rules as before. *)
+  let prev_btn = if current_page <= 1 then "" else Printf.sprintf "<a class='btn btn--secondary btn--sm' href='%s?sort=%s&page=%d'>&larr; Previous</a>" base_url sort_mode (current_page - 1) in
+  let next_btn = if not has_next then "" else Printf.sprintf "<a class='btn btn--secondary btn--sm' href='%s?sort=%s&page=%d'>Next &rarr;</a>" base_url sort_mode (current_page + 1) in
+  let pager = Printf.sprintf "<div class='pager launch-pager'>%s<span>Page %d</span>%s</div>" prev_btn current_page next_btn in
 
   let membership_btn =
     match user with
     | None -> ""
     | Some _ ->
-        if is_member then Printf.sprintf "<form action='/leave' method='POST' class='m-0 p-0'>%s<input type='hidden' name='community_id' value='%d'><input type='hidden' name='redirect_to' value='/c/%s'><button type='submit' class='rounded-full px-5 py-1.5 border border-[#D0C9BC] hover:bg-gray-50 text-sm font-medium text-gray-700 transition'>Leave</button></form>" csrf_token community.id community.slug
+        if is_member then Printf.sprintf "<form action='/leave' method='POST'>%s<input type='hidden' name='community_id' value='%d'><input type='hidden' name='redirect_to' value='/c/%s'><button type='submit' class='btn btn--secondary btn--block launch-leave'>Leave</button></form>" csrf_token community.id community.slug
         (* No self-serve join for private communities (Slice C): a non-member who can see this
            page is a mod/admin; show no misleading Join button (the /join route 404s anyway). *)
         else if community.visibility = Db.Community_private then ""
-        else Printf.sprintf "<form action='/join' method='POST' class='m-0 p-0'>%s<input type='hidden' name='community_id' value='%d'><input type='hidden' name='redirect_to' value='/c/%s'><button type='submit' class='rounded-full px-5 py-1.5 bg-[#C94C4C] text-white text-sm font-semibold hover:bg-[#A83A3A] transition'>Join</button></form>" csrf_token community.id community.slug
+        else Printf.sprintf "<form action='/join' method='POST'>%s<input type='hidden' name='community_id' value='%d'><input type='hidden' name='redirect_to' value='/c/%s'><button type='submit' class='btn btn--primary btn--block'>Join</button></form>" csrf_token community.id community.slug
   in
 
-  (* Admins see the edit button without needing mod status — global authority. *)
+  (* Admins see the settings entry without needing mod status — global authority. *)
   let settings_btn =
     if is_current_user_mod || is_admin then
-      Printf.sprintf "<a href='/c/%s/settings' class='rounded-full px-4 py-1.5 border border-[#D0C9BC] hover:bg-gray-50 text-sm font-medium text-gray-700 transition'>Edit Community</a>" community.slug
+      Printf.sprintf "<a class='btn btn--secondary' href='/c/%s/settings'>&#9881; Settings</a>" slug
     else ""
   in
 
-  (* Create Post shortcut lives in the header, not the sidebar, for immediate access.
-     In a section feed, pre-select the section so the form loads with it already chosen.
-     Hidden in the virtual Uncategorized section — users cannot post directly into it. *)
+  (* Create Post shortcut keeps its real legacy destination and query parameter
+     (/new-post stays a legacy page this pass). Logged-in viewers only. *)
   let create_post_btn =
     match user with
     | None -> ""
     | Some _ ->
-        (match section with
-         | Some s when s.slug = "uncategorized" -> ""
-         | _ ->
-             let post_url = match section with
-               | None -> Printf.sprintf "/new-post?community=%s" community.slug
-               | Some s -> Printf.sprintf "/new-post?community=%s&section=%s" community.slug s.slug
-             in
-             Printf.sprintf "<a href='%s' class='rounded-full px-5 py-1.5 bg-[#C94C4C] text-white text-sm font-semibold hover:bg-[#A83A3A] transition'>+ Post</a>" post_url)
+        Printf.sprintf "<a class='btn btn--primary' href='/new-post?community=%s'>+ New post</a>" community.slug
   in
 
-  (* safe_img_src (via Components.community_banner/avatar) replaces the prior raw interpolation:
-     banner_url/avatar_url are stored, attacker-influenceable values (settings accepts an
-     existing_*_url fallback), so they must be escaped before reaching the src attribute. *)
+  (* Community face: avatar image when set and safe, else the launch tile glyph
+     on the deterministic palette tone — same fallback as the rail and sidebar. *)
+  let tile_glyph =
+    String.capitalize_ascii
+      (if String.length community.slug >= 2 then String.sub community.slug 0 2
+       else if community.slug = "" then "?" else community.slug)
+  in
+  let face size_cls =
+    match community.avatar_url with
+    | Some url when String.trim url <> "" ->
+        (match Components.safe_img_src url with
+         | "#" ->
+             Printf.sprintf "<span class='avatar %s' style='background:%s'>%s</span>"
+               size_cls (Components.launch_tile_color community.slug) (esc tile_glyph)
+         | src ->
+             Printf.sprintf "<span class='avatar %s'><img class='launch-avatar-img' src='%s' alt=''></span>"
+               size_cls src)
+    | _ ->
+        Printf.sprintf "<span class='avatar %s' style='background:%s'>%s</span>"
+          size_cls (Components.launch_tile_color community.slug) (esc tile_glyph)
+  in
+
+  (* Optional banner — rendered only when a safe banner_url is present; no
+     gradient placeholder (launch grammar, matching the structured overview). *)
   let banner_html =
-    Components.community_banner
-      ~wrap_class:"h-24 md:h-40 w-full bg-gray-100 rounded-2xl overflow-hidden"
-      ~img_class:"w-full h-full object-cover"
-      ~fallback_class:"h-24 md:h-40 w-full bg-gradient-to-r from-[#EDE9DF] to-[#E8E2D9] rounded-2xl"
-      community.banner_url
-  in
-
-  let avatar_html =
-    Components.community_avatar
-      ~img_class:"w-20 h-20 md:w-24 md:h-24 rounded-full border-4 border-white bg-white shadow-sm object-cover"
-      ~tile_class:"w-20 h-20 md:w-24 md:h-24 rounded-full border-4 border-white bg-[#69C3D2] flex items-center justify-center text-white text-2xl font-bold shadow-sm"
-      ~name:community.name community.avatar_url
-  in
-
-  let mods_sidebar_html =
-    if mod_usernames = [] then "<p class='text-xs text-gray-400 italic'>No moderators yet.</p>"
-    else
-      let links = String.concat "\n" (List.map (fun u ->
-        Printf.sprintf "<li><a href='/u/%s' class='text-sm text-gray-700 hover:text-[#C94C4C] transition'>u/%s</a></li>" (Components.html_escape u) (Components.html_escape u)
-      ) mod_usernames) in
-      Printf.sprintf "<ul class='space-y-1'>%s</ul>" links
-  in
-
-  (* Three separate sidebar cards: clearer hierarchy than one combined card. *)
-  let community_info_card = Printf.sprintf "
-    <div class='bg-white border border-[#E0D9CC] rounded-xl shadow-sm p-5'>
-        <h2 class='font-bold text-gray-900 mb-1'>%s</h2>
-        <div class='text-xs text-[#C94C4C] font-mono mb-3'>/c/%s</div>
-        <p class='text-sm text-gray-600'>%s</p>
-        <a href='/c/%s/modlog' class='mt-4 flex items-center gap-2 text-sm text-gray-400 hover:text-gray-600 transition-colors'>
-            <span>&#128220;</span><span>Public Modlog</span>
-        </a>
-    </div>"
-    (Components.html_escape community.name) (Components.html_escape community.slug)
-    (Components.html_escape (Option.value ~default:"No description." community.description))
-    (Components.html_escape community.slug)
-  in
-
-  let rules_card =
-    match community.rules with
-    | Some rules when rules <> "" ->
-        Printf.sprintf "
-    <div class='bg-white border border-[#E0D9CC] rounded-xl shadow-sm p-5'>
-        <h3 class='text-xs font-bold text-gray-500 uppercase tracking-wider mb-3'>Rules</h3>
-        <p class='text-xs text-gray-600 whitespace-pre-wrap'>%s</p>
-    </div>" (Components.html_escape rules)
+    match community.banner_url with
+    | Some url when String.trim url <> "" ->
+        (match Components.safe_img_src url with
+         | "#" -> ""
+         | src -> Printf.sprintf "<div class='launch-banner'><img src='%s' class='launch-banner-img' alt=''></div>" src)
     | _ -> ""
   in
 
-  (* Manage Mods link: top_mod role or admin authority required — regular mods
-     cannot appoint or demote peers, preventing collusion against the council. *)
+  (* Header band. Badges are facts the record already states; public is
+     unmarked. No stats line — this page loads no community-wide counts and
+     none are fabricated. *)
+  let badges =
+    (if community.is_network_community then
+       " <span class='badge badge--network badge--lg'>&#9672; Network community</span>"
+     else "")
+    ^ (if community.visibility = Db.Community_private then
+         " <span class='badge badge--plain badge--lg'>Private</span>"
+       else "")
+  in
+  let actions = create_post_btn ^ membership_btn ^ settings_btn in
+  let chead =
+    Printf.sprintf
+      "<div class='chead'><div class='chead__row'>%s<div class='launch-chead-id'>\
+       <div class='titleline'><h1 class='chead__title'>%s</h1><span class='chead__slug'>/c/%s</span>%s</div>\
+       <p class='chead__desc'>%s</p>\
+       </div>%s</div></div>"
+      (face "avatar--62") (esc community.name) slug badges
+      (esc (Option.value ~default:"No description." community.description))
+      (if actions = "" then "" else Printf.sprintf "<div class='chead__actions'>%s</div>" actions)
+  in
+
+  (* Moderators panel. Manage moderators keeps its legacy placement here and
+     its exact top-mod-or-admin gate — regular mods cannot appoint or demote
+     peers, preventing collusion against the council. *)
   let manage_mods_link =
     if is_current_user_top_mod || is_admin then
-      Printf.sprintf "<div class='mt-3'><a href='/c/%s/manage-mods' class='text-xs text-[#C94C4C] hover:underline font-semibold'>Manage Moderators &rarr;</a></div>" (Components.html_escape community.slug)
+      Printf.sprintf "<div class='launch-manage-mods'><a class='btn--link mono' href='/c/%s/manage-mods'>Manage moderators &rarr;</a></div>" slug
     else ""
+  in
+  let mods_inner =
+    if mod_usernames = [] then "<div class='empty--inline'>No moderators yet.</div>"
+    else
+      Printf.sprintf "<div class='launch-mods'>%s</div>"
+        (String.concat "" (List.map (fun u ->
+          let initial =
+            if String.length u > 0 then esc (String.sub (String.uppercase_ascii u) 0 1) else "?" in
+          Printf.sprintf
+            "<a class='launch-modrow' href='/u/%s'><span class='avatar avatar--22 avatar--mod'>%s</span><span class='launch-mod-name'>u/%s</span></a>"
+            (esc u) initial (esc u)) mod_usernames))
+  in
+  let mods_panel =
+    Printf.sprintf
+      "<section class='panel'><div class='section-head'><span class='kicker'>Moderators</span></div>%s%s</section>"
+      mods_inner manage_mods_link
+  in
+
+  let rules_panel = match community.rules with
+    | Some r when r <> "" ->
+        Printf.sprintf
+          "<section class='panel'><div class='section-head'><span class='kicker'>Rules</span></div><div class='panel__body launch-rules'>%s</div></section>"
+          (esc r)
+    | _ -> ""
   in
 
   (* Toggle downvotes: exposed only to top_mod/admin to prevent vote manipulation arms races
-     by regular mods who have less community-wide accountability. *)
-  let toggle_downvotes_card =
+     by regular mods who have less community-wide accountability. Same POST
+     route and allow_downvotes field as before. *)
+  let mod_tools_panel =
     if is_current_user_top_mod || is_admin then
-      let (indicator, next_val, label) =
-        if community.allow_downvotes then ("🔴", "false", "Disable Downvotes")
-        else ("🟢", "true", "Enable Downvotes")
+      let (next_val, label, state) =
+        if community.allow_downvotes then ("false", "Disable downvotes", "enabled")
+        else ("true", "Enable downvotes", "disabled")
       in
-      Printf.sprintf "
-    <div class='bg-white border border-[#E0D9CC] rounded-xl shadow-sm p-5'>
-        <h3 class='text-xs font-bold text-gray-500 uppercase tracking-wider mb-3'>Mod Tools</h3>
-        <form action='/c/%s/toggle_downvotes' method='POST' class='m-0 p-0'>
-            %s
-            <input type='hidden' name='allow_downvotes' value='%s'>
-            <button type='submit' class='text-xs font-semibold text-gray-700 hover:text-gray-900 transition'>%s %s</button>
-        </form>
-    </div>"
-      (Components.html_escape community.slug) csrf_token next_val indicator label
+      Printf.sprintf
+        "<section class='panel'><div class='section-head'><span class='kicker'>Mod tools</span></div><div class='panel__body'><p class='launch-modtool-state'>Downvotes are currently %s.</p><form action='/c/%s/toggle_downvotes' method='POST'>%s<input type='hidden' name='allow_downvotes' value='%s'><button type='submit' class='btn btn--secondary btn--sm'>%s</button></form></div></section>"
+        state slug csrf_token next_val label
     else ""
   in
 
-  let mods_card = Printf.sprintf "
-    <div class='bg-white border border-[#E0D9CC] rounded-xl shadow-sm p-5'>
-        <h3 class='text-xs font-bold text-gray-500 uppercase tracking-wider mb-3'>Moderators</h3>
-        %s
-        %s
-    </div>"
-    mods_sidebar_html manage_mods_link
+  let sidebar =
+    launch_flat_community_sidebar ~community
+      ~can_manage:(is_current_user_mod || is_admin) ()
   in
 
-  let content = Printf.sprintf "
-    <div class='flex gap-6'>
-        <div class='w-60 hidden lg:block shrink-0 self-start sticky top-20'>
-            %s
-        </div>
-        <div class='flex-1 flex flex-col min-w-0'>
-            <div>
-                %s
-                <div class='flex items-end justify-between px-2 -mt-10 relative z-10 mb-4'>
-                    <div class='flex items-end gap-4'>
-                        %s
-                        <div class='mb-2'>
-                            <h1 class='text-2xl font-bold text-gray-900'>%s</h1>
-                        </div>
-                    </div>
-                    <div class='flex items-center gap-2 mb-3'>
-                        %s
-                        %s
-                        %s
-                    </div>
-                </div>
-            </div>
-            <div class='flex items-start gap-6'>
-                <div class='flex-1 min-w-0'>
-                    %s
-                    <div>%s</div>
-                    <div class='flex justify-between items-center mt-8 mb-4'>
-                        <div>%s</div><div class='text-sm text-gray-500 font-bold'>Page %d</div><div>%s</div>
-                    </div>
-                </div>
-                <div class='w-80 hidden lg:flex flex-col gap-6 self-start sticky top-24 h-[calc(100vh-6rem)] overflow-y-auto pb-8 [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:bg-transparent hover:[&::-webkit-scrollbar-thumb]:bg-gray-300 [&::-webkit-scrollbar-thumb]:rounded-full'>
-                    %s
-                    %s
-                    %s
-                    %s
-                    %s
-                </div>
-            </div>
-        </div>
-    </div>"
-    (Components.left_sidebar ?user ~moderated_communities user_communities)
-    banner_html
-    avatar_html
-    (Components.html_escape community.name)
-    create_post_btn settings_btn membership_btn
-    (section_header ^ sort_menu) posts_html
-    prev_btn current_page next_btn
-    community_info_card rules_card mods_card toggle_downvotes_card connected_projects
+  (* Single-feed body: the ledger column plus the factual side panels. The
+     pre-rendered ccp-* fragment closes the side stack, spliced verbatim. *)
+  let content =
+    Printf.sprintf
+      "<div class='scroll'>%s%s<div class='container launch-flat-body'><div class='two-col'><div class='stack'>%s<div class='launch-flat-ledger'>%s</div>%s</div><div class='stack stack--sm'>%s%s%s%s</div></div></div></div>"
+      banner_html chead
+      sort_bar posts_html pager
+      mods_panel rules_panel mod_tools_panel connected_projects
   in
-  Components.layout ?user ~noindex ~request ~analytics_community:(community.id, community.visibility)
-    ~title:community.name content
+  (* The byte-pinned rows show Share to every viewer, but only member
+     documents carry the full behavior script (which defines copyPostLink).
+     Guests get the share-only script — same single copyPostLink source, no
+     notification fetch — so the control works in both viewer states and each
+     document holds exactly one definition. *)
+  let head_extra = match user with
+    | None -> Components.launch_share_script
+    | Some _ -> ""
+  in
+  Components.launch_community_page ?user ~noindex ~request ~head_extra
+    ~rail_communities:user_communities ~community ~sidebar
+    ~page_class:"launch-flat-community" ~title:community.name ~content ()
 
 (* The forum-section feed inside a structured community, and (below) the canonical thread
    view — the pass-10 knowledge routes, now on the Cartographic Civic launch chrome. Kept as
