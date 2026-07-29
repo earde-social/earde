@@ -7911,3 +7911,97 @@ body.launch-reset-password .auth-foot {
   text-align: center; margin-top: var(--sp-9);
   font-family: var(--mono); font-size: var(--fs-12); color: var(--muted);
 }
+
+/* ==========================================================================
+   EARDE INTEGRATION — privacy policy only
+   Scoped beneath body.launch-privacy (GET /privacy through
+   launch_entry_page). The legal document keeps its legacy inner markup
+   byte-for-byte — headings, paragraphs, lists, the /settings and
+   /export-data links, and the Tailwind utility classes it has always
+   carried. Those utility classes are inert without the CDN, so they serve
+   here purely as scoping hooks (.max-w-2xl = the document column,
+   .space-y-8 = the section stack), the same skin-the-legacy-markup idiom
+   as the password-recovery section above. Each rule mirrors an existing
+   base rule (noted inline); no new visual vocabulary is introduced.
+   ========================================================================== */
+
+/* Readable long-form measure inside the wrapper's .container--form column
+   (mirrors the capped content columns; ~65ch at base body size). */
+body.launch-privacy .max-w-2xl { max-width: 640px; margin: 0 auto; }
+
+/* Serif document title (mirrors .page__title at the community/project
+   title size). */
+body.launch-privacy .max-w-2xl h1 {
+  font-family: var(--serif); font-weight: 600; font-size: var(--fs-27);
+  line-height: var(--lh-tight); color: var(--ink);
+  margin-bottom: var(--sp-4);
+}
+
+/* Existing plain-terms subtitle as the quiet mono context line under the
+   title (mirrors .breadcrumb / mono meta). */
+body.launch-privacy .max-w-2xl h1 + p {
+  font-family: var(--mono); font-size: var(--fs-11); color: var(--muted);
+  margin-bottom: var(--sp-14);
+}
+
+/* Section rhythm (replaces the inert space-y-8 utility). */
+body.launch-privacy .space-y-8 > section + section { margin-top: var(--sp-13); }
+
+/* Section headings over a thin separator (mirrors .panel h2 / the fs-19
+   section-title step; the legacy markup already drew a bottom border). */
+body.launch-privacy .space-y-8 h2 {
+  font-family: var(--serif); font-weight: 600; font-size: var(--fs-19);
+  color: var(--ink); padding-bottom: var(--sp-3);
+  border-bottom: var(--bw) solid var(--line);
+  margin-bottom: var(--sp-6);
+}
+
+/* Long-form body text (mirrors the prose line-height step). */
+body.launch-privacy .space-y-8 p {
+  font-size: var(--fs-14); line-height: var(--lh-prose); color: var(--ink);
+}
+body.launch-privacy .space-y-8 p + p { margin-top: var(--sp-6); }
+
+/* Restore the semantic bullet lists the global reset strips (the legacy
+   list-disc/list-inside utilities are inert). */
+body.launch-privacy .space-y-8 ul {
+  list-style: disc; padding-left: var(--sp-11);
+  margin-top: var(--sp-5);
+}
+body.launch-privacy .space-y-8 li {
+  font-size: var(--fs-13-5); line-height: var(--lh-body); color: var(--ink);
+}
+body.launch-privacy .space-y-8 li + li { margin-top: var(--sp-3); }
+
+/* Inline document links: keep the system slate but underline for in-prose
+   affordance (base `a` rule is unchanged elsewhere). */
+body.launch-privacy .space-y-8 a {
+  color: var(--slate); text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+/* Analytics consent banner (markup shared with the legacy layout; mirrors
+   the .launch-bring block byte-for-byte under this root). */
+body.launch-privacy #analytics-consent {
+  position: fixed; bottom: var(--sp-8); left: 50%; transform: translateX(-50%);
+  z-index: 50; width: calc(100% - 2rem); max-width: 28rem;
+  background: var(--surface); border: var(--bw) solid var(--line2);
+  border-radius: var(--r-3); padding: var(--sp-7) var(--sp-8);
+  box-shadow: var(--shadow-overlay);
+}
+body.launch-privacy #analytics-consent p {
+  font-size: var(--fs-13); color: var(--muted); margin-bottom: var(--sp-5);
+}
+body.launch-privacy #analytics-consent [data-analytics-accept],
+body.launch-privacy #analytics-consent [data-analytics-refuse] {
+  font-family: var(--sans); font-weight: 600; font-size: var(--fs-12);
+  border: var(--bw) solid var(--line2); border-radius: var(--r-2);
+  padding: var(--sp-3) var(--sp-7); cursor: pointer;
+  background: var(--surface); color: var(--muted); margin-right: var(--sp-4);
+}
+body.launch-privacy #analytics-consent [data-analytics-accept] {
+  color: #fff; background: var(--moss); border-color: var(--moss);
+}
+body.launch-privacy #analytics-consent [data-analytics-error] {
+  color: var(--danger); font-size: var(--fs-11);
+}

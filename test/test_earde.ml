@@ -55343,6 +55343,149 @@ module Reset_token_escaping = struct
       wrapper_case; login_signup_case ]
 end
 
+(* Cartographic Civic pass 16C: /privacy through the launch entry wrapper.
+   The legal document is authoritative: its complete inner fragment is pinned
+   byte-for-byte below, so any wording, structure, heading, list or link
+   drift in the policy fails loudly. The wrapper contract is asserted against
+   the real renderer through real session middleware: single local
+   stylesheet, no Tailwind CDN, no Google Fonts, no auth.css, no
+   notification chrome, no forms, and a viewer-independent document (the
+   ignored ?user must not change a byte). *)
+module Privacy_launch = struct
+  let case name f = Alcotest.test_case name `Quick f
+
+  let render_privacy ?user () =
+    let rendered = ref "" in
+    let (_ : Dream.response) =
+      Lwt_main.run
+        (Dream.memory_sessions
+           (fun req ->
+             rendered := Earde.Pages.privacy_page ?user req;
+             Dream.html "")
+           (Dream.request ~method_:`GET ~target:"/privacy" ""))
+    in
+    !rendered
+
+  (* Byte-for-byte copy of the legal fragment the renderer embeds. *)
+  let legal_fragment = {|
+    <div class='max-w-2xl mx-auto mt-10 mb-16 px-4'>
+
+      <h1 class='text-3xl font-extrabold text-gray-900 mb-2'>Privacy Policy</h1>
+      <p class='text-sm text-gray-400 mb-10'>This page explains, in plain terms, what data Earde handles and why.</p>
+
+      <div class='space-y-8 text-gray-700 leading-relaxed'>
+
+        <section>
+          <h2 class='text-lg font-bold text-gray-900 mb-3 pb-1 border-b border-[#E0D9CC]'>What Earde is</h2>
+          <p>Earde is a community platform for technical communities. It combines live chat with durable discussion threads and a searchable archive.</p>
+        </section>
+
+        <section>
+          <h2 class='text-lg font-bold text-gray-900 mb-3 pb-1 border-b border-[#E0D9CC]'>Data we may collect or store</h2>
+          <p class='mb-3'>To operate the service, Earde may store:</p>
+          <ul class='list-disc list-inside space-y-2 text-sm'>
+            <li>Account information, such as your username and email address.</li>
+            <li>Profile information you choose to add.</li>
+            <li>Community content, posts, and comments you create.</li>
+            <li>Chat messages you send.</li>
+            <li>Session and authentication data needed to keep you signed in.</li>
+            <li>Moderation records related to reports and enforcement actions.</li>
+            <li>Operational and security logs.</li>
+          </ul>
+        </section>
+
+        <section>
+          <h2 class='text-lg font-bold text-gray-900 mb-3 pb-1 border-b border-[#E0D9CC]'>How we use data</h2>
+          <ul class='list-disc list-inside space-y-2 text-sm'>
+            <li>To operate and provide the service.</li>
+            <li>To authenticate users and keep accounts secure.</li>
+            <li>To display community content.</li>
+            <li>To moderate abuse and enforce community rules.</li>
+            <li>To maintain the security of the service.</li>
+            <li>To debug problems and improve reliability.</li>
+          </ul>
+        </section>
+
+        <section>
+          <h2 class='text-lg font-bold text-gray-900 mb-3 pb-1 border-b border-[#E0D9CC]'>Cookies and sessions</h2>
+          <p>Earde may use cookies or similar browser storage for login and session functionality and for basic operation of the site.</p>
+        </section>
+
+        <section>
+          <h2 class='text-lg font-bold text-gray-900 mb-3 pb-1 border-b border-[#E0D9CC]'>Analytics and tracking</h2>
+          <p>If analytics or tracking tools are added in the future, they should be disclosed here and configured deliberately.</p>
+        </section>
+
+        <section>
+          <h2 class='text-lg font-bold text-gray-900 mb-3 pb-1 border-b border-[#E0D9CC]'>Your controls</h2>
+          <p class='mb-3'>You can contact the operator of this site with any questions about your account or your data.</p>
+          <p>From your <a href='/settings' class='text-[#C94C4C] underline hover:text-[#A83A3A]'>account settings</a> you can update your profile or delete your account, and you can <a href='/export-data' class='text-[#C94C4C] underline hover:text-[#A83A3A]'>export your data</a>.</p>
+        </section>
+
+        <section>
+          <h2 class='text-lg font-bold text-gray-900 mb-3 pb-1 border-b border-[#E0D9CC]'>Changes to this page</h2>
+          <p>This page may be updated as Earde changes.</p>
+        </section>
+
+      </div>
+    </div>|}
+
+  let wrapper_case =
+    case "wrapper: launch entry shell, only local launch assets" (fun () ->
+        let page = render_privacy () in
+        ps_must page "<body class='launch-privacy'>";
+        ps_must page "<title>Privacy Policy - Earde</title>";
+        ps_must page "<link rel='stylesheet' href='/static/css/earde.css'>";
+        Alcotest.(check int) "exactly one stylesheet" 1
+          (ps_count page "<link rel='stylesheet'");
+        ps_must_not page "tailwind";
+        ps_must_not page "fonts.googleapis";
+        ps_must_not page "auth.css";
+        ps_must_not page "mobile-gate.css";
+        ps_must_not page "unread-notifs";
+        ps_must_not page "notif-badge";
+        ps_must_not page "noindex";
+        ps_must_not page "href='#'";
+        (* Entry chrome is form-free and the document carries none. *)
+        ps_must_not page "<form")
+
+  let legal_identity_case =
+    case "legal fragment is embedded byte-for-byte" (fun () ->
+        let page = render_privacy () in
+        ps_must page legal_fragment;
+        Alcotest.(check int) "one h1" 1 (ps_count page "<h1");
+        Alcotest.(check int) "seven h2" 7 (ps_count page "<h2");
+        Alcotest.(check int) "two lists" 2 (ps_count page "<ul");
+        Alcotest.(check int) "thirteen items" 13 (ps_count page "<li>");
+        Alcotest.(check int) "settings link" 1 (ps_count page "href='/settings'");
+        Alcotest.(check int) "export link" 1 (ps_count page "href='/export-data'"))
+
+  let viewer_independence_case =
+    case "ignored ?user changes nothing" (fun () ->
+        Alcotest.(check string) "anonymous = authenticated"
+          (render_privacy ()) (render_privacy ~user:"qa-viewer" ()))
+
+  (* The signup consent link is the page's primary inbound route: pin its
+     exact destination and security attributes. *)
+  let signup_consent_link_case =
+    case "signup consent link still targets /privacy" (fun () ->
+        let rendered = ref "" in
+        let (_ : Dream.response) =
+          Lwt_main.run
+            (Dream.memory_sessions
+               (fun req ->
+                 rendered := Earde.Pages.signup_form req;
+                 Dream.html "")
+               (Dream.request ~method_:`GET ~target:"/signup" ""))
+        in
+        ps_must !rendered
+          "<a href='/privacy' target='_blank'>Privacy Policy</a>")
+
+  let suite =
+    [ wrapper_case; legal_identity_case; viewer_independence_case;
+      signup_consent_link_case ]
+end
+
 let () =
   Alcotest.run "earde"
     [ ( "smoke"
@@ -61836,4 +61979,5 @@ let () =
          launch wrapper and the sibling login/signup contracts pinned.
          DB-free. *)
     ; ("reset_token_attribute_escaping", Reset_token_escaping.suite)
+    ; ("privacy_launch_page", Privacy_launch.suite)
     ]

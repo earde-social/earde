@@ -5446,8 +5446,21 @@ let search_results_page ?user ~admin_usernames ?(chat_sources=[]) ?(rail_communi
 (* === LEGAL / PRIVACY === *)
 
 (* Single-section structure: plain-English human summary up top, then technical spec.
-   Grounded in actual schema/auth.ml — no invented infrastructure or fictional DPO. *)
-let privacy_page ?user request =
+   Grounded in actual schema/auth.ml — no invented infrastructure or fictional DPO.
+
+   Cartographic Civic (pass 16C): /privacy renders through the isolated launch
+   entry wrapper instead of Components.layout `Site. The inner legal fragment
+   below is preserved byte-for-byte — every heading, paragraph, list, link and
+   its wording is authoritative and untouched; the legacy Tailwind utility
+   classes it carries are inert without the CDN and are re-used as scoped
+   styling hooks by the "privacy policy only" section of earde.css (same
+   skin-the-legacy-markup idiom as the pass-16B recovery forms). The
+   viewer-dependent ?user chrome is gone by design (the entry chrome is
+   deterministic and viewer-independent), so ?user is accepted for signature
+   compatibility and ignored; analytics assets are the same shared helper the
+   legacy layout used, so consent-banner and identity-attribute behavior is
+   unchanged. *)
+let privacy_page ?user:_ request =
   let content = "
     <div class='max-w-2xl mx-auto mt-10 mb-16 px-4'>
 
@@ -5511,7 +5524,8 @@ let privacy_page ?user request =
       </div>
     </div>"
   in
-  Components.layout ?user ~request ~title:"Privacy Policy" content
+  Components.launch_entry_page ~request ~page_class:"launch-privacy"
+    ~title:"Privacy Policy" ~content ()
 
 (* === MESSAGE PAGE === *)
 
