@@ -8668,3 +8668,385 @@ body.launch-message-page .create-shell .phrv-actions button {
 body.launch-message-page .create-shell .phrv-actions .phrv-accept button {
   color: #fff; background: var(--moss); border-color: var(--moss);
 }
+
+/* ==========================================================================
+   EARDE INTEGRATION — legacy post fallback only
+   Scoped beneath body.launch-legacy-post: the GET /p/:id safe fallback
+   (Pages.post_page), which renders only for the pathological unmappable post
+   (community_slug = "") — every mappable post 301s to its canonical thread
+   URL before this page exists. Exists only because the fallback's warm-card
+   fragment is pinned byte-for-byte (post card, recursive comment tree, every
+   vote/comment/delete/mod_delete/ban/join form, the mod/admin/ban <dialog>s,
+   the toggleComment ids and the optimistic-vote DOM contract), so only the
+   outer document wrapper changed and the legacy Tailwind class names arrive
+   inert. The pinned fragment is skinned here onto the Cartographic grammar:
+   - a route-scoped structural subset of the exact utility class names the
+     fragment carries (flex/gap/width/spacing/whitespace) — mapped only under
+     this root, never globally;
+   - reply/collapse toggles flip the legacy `hidden` class on comment
+     content/children/reply forms, so a route-scoped equivalent is defined
+     beneath THIS root only (the sticky right column re-opts in by the
+     .w-80.hidden pair) — still no global .hidden utility;
+   - the optimistic-vote script toggles legacy Tailwind colour class names on
+     the vote buttons; those exact names are mapped to launch accents here
+     (same mapping as the canonical thread route);
+   - the shared confirm-modal script composes its overlay from legacy utility
+     class names; the stable .fixed.inset-0 pair and the #cancel-btn /
+     #confirm-btn ids are the hooks;
+   - the security-critical mod/admin/ban <dialog>s keep their legacy Tailwind
+     markup verbatim; they are kept readable and usable via element rules;
+   - the notification badge is revealed by the shared script removing the
+     legacy `hidden` class (badge element rule, as everywhere else);
+   - the desktop-only gate panel ships in mobile-gate.css; only this route's
+     launch-scope "hide the app" rule lives here;
+   - the analytics consent banner markup is shared with the legacy layout
+     (same rules as the other launch sections, re-scoped).
+   ========================================================================== */
+
+/* ---- Launch chrome ---------------------------------------------------------- */
+
+/* Top-bar user menu: pure-CSS <details>, real logout POST form inside. */
+.launch-legacy-post .launch-user { position: relative; }
+.launch-legacy-post .launch-user > summary { list-style: none; }
+.launch-legacy-post .launch-user > summary::-webkit-details-marker { display: none; }
+.launch-legacy-post .launch-user .avatar { background: var(--moss); }
+.launch-legacy-post .launch-user__menu {
+  position: absolute; right: 0; top: calc(100% + 6px); z-index: 40;
+  min-width: 168px; display: flex; flex-direction: column;
+  background: var(--surface); border: var(--bw) solid var(--line2);
+  border-radius: var(--r-3); padding: var(--sp-3);
+  box-shadow: var(--shadow-overlay);
+}
+.launch-legacy-post .launch-user__menu a,
+.launch-legacy-post .launch-user__menu button {
+  display: block; width: 100%; text-align: left; background: none; border: 0;
+  font-family: var(--mono); font-size: var(--fs-12); color: var(--ink);
+  padding: var(--sp-3) var(--sp-5); border-radius: var(--r-2); cursor: pointer;
+}
+.launch-legacy-post .launch-user__menu a:hover,
+.launch-legacy-post .launch-user__menu button:hover { background: var(--surface2); }
+.launch-legacy-post .launch-user__menu form {
+  margin: var(--sp-2) 0 0; padding-top: var(--sp-2);
+  border-top: var(--bw) solid var(--line);
+}
+
+/* Notification badge: hidden until the shared one-shot fetch reveals it. */
+.launch-legacy-post #notif-badge.hidden { display: none; }
+
+/* Real community avatars fill the fixed 42px rail tile. */
+.launch-legacy-post .launch-rail__img {
+  width: 100%; height: 100%; object-fit: cover; border-radius: inherit;
+  display: block;
+}
+
+/* ---- Main pane: this route's scroll owner + centred reading column ---------- */
+
+/* The pinned fragment has no .scroll wrapper, so the main pane itself scrolls. */
+.launch-legacy-post .main { display: block; overflow-y: auto; scrollbar-width: thin; }
+.launch-legacy-post .main > .flex {
+  max-width: var(--content-feed); margin: 0 auto;
+  padding: var(--sp-12) var(--sp-13) var(--sp-15);
+}
+
+/* ---- Structural subset of the pinned fragment's legacy class names ---------- */
+
+.launch-legacy-post .hidden { display: none; }
+.launch-legacy-post .flex { display: flex; }
+.launch-legacy-post .inline { display: inline; }
+.launch-legacy-post .block { display: block; }
+.launch-legacy-post .flex-col { flex-direction: column; }
+/* Desktop-only surface: the lg: variants are unconditionally active. */
+.launch-legacy-post .lg\:flex-row { flex-direction: row; }
+.launch-legacy-post .flex-wrap { flex-wrap: wrap; }
+.launch-legacy-post .flex-1 { flex: 1 1 0%; }
+.launch-legacy-post .flex-shrink-0 { flex-shrink: 0; }
+.launch-legacy-post .items-start { align-items: flex-start; }
+.launch-legacy-post .items-center { align-items: center; }
+.launch-legacy-post .justify-center { justify-content: center; }
+.launch-legacy-post .justify-end { justify-content: flex-end; }
+.launch-legacy-post .gap-1 { gap: 4px; }
+.launch-legacy-post .gap-1\.5 { gap: 6px; }
+.launch-legacy-post .gap-2 { gap: 8px; }
+.launch-legacy-post .gap-3 { gap: 12px; }
+.launch-legacy-post .gap-4 { gap: 16px; }
+.launch-legacy-post .gap-6 { gap: 24px; }
+.launch-legacy-post .space-y-1 > * + * { margin-top: 4px; }
+.launch-legacy-post .min-w-0 { min-width: 0; }
+.launch-legacy-post .w-full { width: 100%; }
+.launch-legacy-post .w-4 { width: 16px; }
+.launch-legacy-post .h-4 { height: 16px; }
+.launch-legacy-post .w-7 { width: 28px; }
+.launch-legacy-post .h-7 { height: 28px; }
+.launch-legacy-post .w-8 { width: 32px; }
+.launch-legacy-post .h-8 { height: 32px; }
+.launch-legacy-post .self-start { align-self: flex-start; }
+.launch-legacy-post .overflow-hidden { overflow: hidden; }
+.launch-legacy-post .overflow-y-auto { overflow-y: auto; }
+.launch-legacy-post .whitespace-pre-wrap { white-space: pre-wrap; }
+.launch-legacy-post .break-words { overflow-wrap: anywhere; }
+.launch-legacy-post .break-all { word-break: break-all; }
+.launch-legacy-post .object-contain { object-fit: contain; }
+.launch-legacy-post .object-cover { object-fit: cover; }
+.launch-legacy-post .max-h-\[700px\] { max-height: 700px; }
+.launch-legacy-post .text-center { text-align: center; }
+.launch-legacy-post .uppercase { text-transform: uppercase; letter-spacing: var(--ls-kicker); }
+.launch-legacy-post .italic { font-style: italic; }
+.launch-legacy-post .leading-none { line-height: 1; }
+.launch-legacy-post .leading-snug { line-height: var(--lh-title); }
+.launch-legacy-post .leading-relaxed { line-height: var(--lh-read); }
+.launch-legacy-post .cursor-pointer { cursor: pointer; }
+
+/* Spacing names the fragment actually carries (Tailwind 4px scale). */
+.launch-legacy-post .m-0 { margin: 0; }
+.launch-legacy-post .mx-1 { margin-left: 4px; margin-right: 4px; }
+.launch-legacy-post .mt-0 { margin-top: 0; }
+.launch-legacy-post .mt-0\.5 { margin-top: 2px; }
+.launch-legacy-post .mt-2 { margin-top: 8px; }
+.launch-legacy-post .mt-3 { margin-top: 12px; }
+.launch-legacy-post .mt-4 { margin-top: 16px; }
+.launch-legacy-post .mt-6 { margin-top: 24px; }
+.launch-legacy-post .mb-1 { margin-bottom: 4px; }
+.launch-legacy-post .mb-2 { margin-bottom: 8px; }
+.launch-legacy-post .mb-3 { margin-bottom: 12px; }
+.launch-legacy-post .mb-4 { margin-bottom: 16px; }
+.launch-legacy-post .mb-6 { margin-bottom: 24px; }
+.launch-legacy-post .mb-8 { margin-bottom: 32px; }
+.launch-legacy-post .ml-1 { margin-left: 4px; }
+.launch-legacy-post .ml-1\.5 { margin-left: 6px; }
+.launch-legacy-post .ml-2\.5 { margin-left: 10px; }
+.launch-legacy-post .ml-3 { margin-left: 12px; }
+.launch-legacy-post .p-0 { padding: 0; }
+.launch-legacy-post .p-3 { padding: 12px; }
+.launch-legacy-post .p-5 { padding: 20px; }
+.launch-legacy-post .p-6 { padding: 24px; }
+.launch-legacy-post .px-1\.5 { padding-left: 6px; padding-right: 6px; }
+.launch-legacy-post .px-2 { padding-left: 8px; padding-right: 8px; }
+.launch-legacy-post .px-3 { padding-left: 12px; padding-right: 12px; }
+.launch-legacy-post .px-4 { padding-left: 16px; padding-right: 16px; }
+.launch-legacy-post .px-6 { padding-left: 24px; padding-right: 24px; }
+.launch-legacy-post .py-0\.5 { padding-top: 2px; padding-bottom: 2px; }
+.launch-legacy-post .py-1 { padding-top: 4px; padding-bottom: 4px; }
+.launch-legacy-post .py-1\.5 { padding-top: 6px; padding-bottom: 6px; }
+.launch-legacy-post .py-2 { padding-top: 8px; padding-bottom: 8px; }
+.launch-legacy-post .py-3 { padding-top: 12px; padding-bottom: 12px; }
+.launch-legacy-post .py-4 { padding-top: 16px; padding-bottom: 16px; }
+.launch-legacy-post .py-5 { padding-top: 20px; padding-bottom: 20px; }
+.launch-legacy-post .pl-3 { padding-left: 12px; }
+.launch-legacy-post .pr-2 { padding-right: 8px; }
+.launch-legacy-post .pt-1 { padding-top: 4px; }
+.launch-legacy-post .pt-4 { padding-top: 16px; }
+.launch-legacy-post .pb-8 { padding-bottom: 32px; }
+
+/* Borders and radii (arbitrary-value colour names stay inert; the line
+   tokens supply every colour). Tight civic radii, flat elevation. */
+.launch-legacy-post .border { border: var(--bw) solid var(--line); }
+.launch-legacy-post .border-0 { border: 0; }
+.launch-legacy-post .border-t { border-top: var(--bw) solid var(--line); }
+.launch-legacy-post .border-b { border-bottom: var(--bw) solid var(--line); }
+.launch-legacy-post .border-l-2 { border-left: var(--bw-accent) solid var(--line); }
+.launch-legacy-post .rounded { border-radius: var(--r-1); }
+.launch-legacy-post .rounded-r { border-top-right-radius: var(--r-1); border-bottom-right-radius: var(--r-1); }
+.launch-legacy-post .rounded-xl { border-radius: var(--r-3); }
+.launch-legacy-post .rounded-2xl { border-radius: var(--r-4); }
+.launch-legacy-post .rounded-full { border-radius: 999px; }
+
+/* ---- Type + colour mapping (legacy names → launch tokens) ------------------- */
+
+.launch-legacy-post .text-\[10px\] { font-size: var(--fs-10); }
+.launch-legacy-post .text-xs { font-size: var(--fs-11); }
+.launch-legacy-post .text-sm { font-size: var(--fs-13); }
+.launch-legacy-post .text-base { font-size: var(--fs-14); }
+.launch-legacy-post .text-lg { font-size: var(--fs-16); }
+.launch-legacy-post .font-medium { font-weight: 500; }
+.launch-legacy-post .font-semibold { font-weight: 600; }
+.launch-legacy-post .font-bold { font-weight: 700; }
+.launch-legacy-post .font-mono { font-family: var(--mono); }
+.launch-legacy-post .text-white { color: #fff; }
+.launch-legacy-post .text-gray-900,
+.launch-legacy-post .text-gray-800,
+.launch-legacy-post .text-gray-700 { color: var(--ink); }
+.launch-legacy-post .text-gray-600,
+.launch-legacy-post .text-gray-500,
+.launch-legacy-post .text-gray-400 { color: var(--muted); }
+.launch-legacy-post .text-red-500,
+.launch-legacy-post .text-red-600,
+.launch-legacy-post .text-red-700,
+.launch-legacy-post .text-red-900 { color: var(--danger); }
+.launch-legacy-post .text-amber-700,
+.launch-legacy-post .text-amber-900 { color: var(--ochre); }
+.launch-legacy-post .text-green-700 { color: var(--moss); }
+.launch-legacy-post .text-blue-600 { color: var(--slate); }
+.launch-legacy-post .text-\[\#C94C4C\] { color: var(--clay); }
+.launch-legacy-post .text-\[\#69C3D2\] { color: var(--slate); }
+/* Active-vote colours: the exact legacy class names the vote script toggles. */
+.launch-legacy-post .text-orange-500 { color: var(--clay); }
+.launch-legacy-post .text-emerald-600 { color: var(--moss); }
+.launch-legacy-post .bg-white { background: var(--surface); }
+.launch-legacy-post .bg-gray-50,
+.launch-legacy-post .bg-gray-100 { background: var(--surface2); }
+.launch-legacy-post .bg-transparent { background: transparent; }
+.launch-legacy-post .bg-\[\#DFF5F8\] { background: var(--surface3); }
+.launch-legacy-post .bg-\[\#F0EDE4\] { background: var(--surface2); }
+
+/* Author badges rendered by render_author (legacy Tailwind classes inert). */
+.launch-legacy-post .mod-badge {
+  font-family: var(--mono); font-size: var(--fs-9); color: var(--clay);
+  margin-left: 4px;
+}
+.launch-legacy-post .bg-green-100 { background: var(--surface2); }
+.launch-legacy-post .bg-red-100 { background: var(--surface2); }
+
+/* ---- Post card + comments skin ---------------------------------------------- */
+
+/* The pinned card title (h1.font-bold beats the .text-lg utility above). */
+.launch-legacy-post h1.font-bold {
+  font-family: var(--serif); font-weight: 600; font-size: var(--fs-24);
+  line-height: var(--lh-tight); color: var(--ink);
+}
+.launch-legacy-post .ph-mask { font-size: var(--fs-15); line-height: var(--lh-read); }
+.launch-legacy-post .w-80 { width: var(--aside-w); flex: none; }
+/* The sticky right column carries the legacy `hidden lg:flex` pair; on this
+   desktop-only surface the lg: branch wins (three classes beat the scoped
+   .hidden above regardless of order). */
+.launch-legacy-post .w-80.hidden { display: flex; }
+.launch-legacy-post .sticky { position: sticky; }
+.launch-legacy-post .top-20 { top: 0; }
+.launch-legacy-post .h-\[calc\(100vh-5rem\)\] { max-height: calc(100vh - var(--topbar-h) - 40px); }
+
+/* Buttons: quiet text controls by default; solid submits are named below.
+   (Without Tailwind's preflight the UA default would paint grey chips.) */
+.launch-legacy-post button {
+  background: none; border: 0; cursor: pointer;
+  font-family: inherit; font-size: inherit; color: inherit; padding: 0;
+}
+.launch-legacy-post button.border { border: var(--bw) solid var(--line2); }
+.launch-legacy-post button.px-2 { padding-left: 8px; padding-right: 8px; }
+.launch-legacy-post button.px-3 { padding-left: 12px; padding-right: 12px; }
+.launch-legacy-post button.px-4 { padding-left: 16px; padding-right: 16px; }
+.launch-legacy-post button.py-0\.5 { padding-top: 2px; padding-bottom: 2px; }
+.launch-legacy-post button.py-1 { padding-top: 4px; padding-bottom: 4px; }
+.launch-legacy-post button.py-1\.5 { padding-top: 6px; padding-bottom: 6px; }
+.launch-legacy-post button.py-2 { padding-top: 8px; padding-bottom: 8px; }
+
+/* Solid primary submits: top-level comment composer, reply forms, join. */
+.launch-legacy-post form[action='/comments'] button[type='submit'],
+.launch-legacy-post form[action='/join'] button[type='submit'] {
+  color: #fff; background: var(--moss);
+  border: var(--bw) solid var(--moss); border-radius: var(--r-2);
+  font-weight: 600; font-size: var(--fs-12);
+  padding: var(--sp-3) var(--sp-7);
+}
+.launch-legacy-post form[action='/comments'] button[type='submit']:hover,
+.launch-legacy-post form[action='/join'] button[type='submit']:hover { filter: brightness(1.06); }
+
+/* Vote arrows keep the optimistic-vote DOM contract: bare mono glyphs. */
+.launch-legacy-post form[action='/vote'] button,
+.launch-legacy-post form[action='/vote-comment'] button {
+  font-family: var(--mono); font-weight: 700; line-height: 1;
+}
+
+/* Textareas (composer, replies, dialog reasons). */
+.launch-legacy-post textarea {
+  width: 100%; border: var(--bw) solid var(--line2); border-radius: var(--r-2);
+  background: var(--surface2); padding: var(--sp-4);
+  font-family: var(--sans); font-size: var(--fs-13); min-height: 70px;
+}
+.launch-legacy-post textarea:focus-visible { outline: 2px solid var(--moss); outline-offset: 1px; }
+.launch-legacy-post .resize-y { resize: vertical; }
+.launch-legacy-post .resize-none { resize: none; }
+
+/* Comment thread line + row hover keep their quiet legacy roles. */
+.launch-legacy-post .border-l-2 { border-left-color: var(--line2); }
+.launch-legacy-post .hover\:bg-\[\#EDE9DF\]:hover { background: var(--surface2); }
+
+/* The sidebar's Create Post anchor is the fragment's one white-on-accent
+   link; its legacy background class is inert, so the accent is re-supplied
+   (otherwise white text sits invisible on the panel). */
+.launch-legacy-post a.text-white { background: var(--moss); }
+.launch-legacy-post a.text-white:hover { color: #fff; filter: brightness(1.06); }
+
+/* ---- Legacy moderation <dialog>s (Tailwind classes inert) ------------------- */
+
+.launch-legacy-post dialog {
+  border: var(--bw) solid var(--line2); border-radius: var(--r-4);
+  padding: var(--sp-9); max-width: 28rem; width: calc(100% - 2rem);
+  background: var(--surface); color: var(--ink);
+}
+.launch-legacy-post dialog::backdrop { background: rgba(31, 36, 33, .45); }
+.launch-legacy-post dialog form {
+  display: flex; flex-direction: column; gap: var(--sp-6);
+  margin-top: var(--sp-4);
+}
+.launch-legacy-post dialog textarea {
+  width: 100%; border: var(--bw) solid var(--line2); border-radius: var(--r-2);
+  background: var(--surface2); padding: var(--sp-4);
+  font-family: var(--sans); font-size: var(--fs-13); min-height: 70px;
+}
+.launch-legacy-post dialog button {
+  cursor: pointer; border: var(--bw) solid var(--line2);
+  border-radius: var(--r-2); background: var(--surface); color: var(--ink);
+  padding: var(--sp-3) var(--sp-7); font-size: var(--fs-12); font-weight: 600;
+}
+.launch-legacy-post dialog button[type='submit'] {
+  color: #fff; background: var(--danger); border-color: var(--danger);
+}
+
+/* ---- Shared confirm modal ---------------------------------------------------- */
+
+/* The script composes it from legacy utility class names; the stable
+   .fixed.inset-0 pair and the #cancel-btn / #confirm-btn ids are the hooks. */
+.launch-legacy-post .fixed.inset-0 {
+  position: fixed; inset: 0; z-index: 50;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(31, 36, 33, .45); transition: opacity .2s;
+}
+.launch-legacy-post .fixed.inset-0.opacity-0 { opacity: 0; }
+.launch-legacy-post .fixed.inset-0 > div {
+  background: var(--surface); border: var(--bw) solid var(--line2);
+  border-radius: var(--r-4); padding: var(--sp-9);
+  max-width: 24rem; width: calc(100% - 2rem);
+  box-shadow: var(--shadow-overlay);
+}
+.launch-legacy-post .fixed.inset-0 h3 { font-size: var(--fs-15); font-weight: 700; margin-bottom: var(--sp-3); }
+.launch-legacy-post .fixed.inset-0 p { font-size: var(--fs-13); color: var(--muted); margin-bottom: var(--sp-7); }
+.launch-legacy-post .fixed.inset-0 .flex { display: flex; justify-content: flex-end; gap: var(--sp-4); }
+.launch-legacy-post #cancel-btn,
+.launch-legacy-post #confirm-btn {
+  cursor: pointer; border: var(--bw) solid var(--line2);
+  border-radius: var(--r-2); background: var(--surface); color: var(--ink);
+  padding: var(--sp-3) var(--sp-7); font-size: var(--fs-12); font-weight: 600;
+}
+.launch-legacy-post #confirm-btn { color: #fff; background: var(--danger); border-color: var(--danger); }
+
+/* ---- Gate + consent ---------------------------------------------------------- */
+
+/* Desktop-only gate: hide this route's launch app under the shared
+   breakpoint; the gate panel itself is styled by mobile-gate.css. */
+@media (max-width: 800px) {
+  body.launch-legacy-post > .app { display: none !important; }
+}
+
+/* Analytics consent banner (markup shared with the legacy layout). */
+.launch-legacy-post #analytics-consent {
+  position: fixed; bottom: var(--sp-8); left: 50%; transform: translateX(-50%);
+  z-index: 50; width: calc(100% - 2rem); max-width: 28rem;
+  background: var(--surface); border: var(--bw) solid var(--line2);
+  border-radius: var(--r-3); padding: var(--sp-7) var(--sp-8);
+  box-shadow: var(--shadow-overlay);
+}
+.launch-legacy-post #analytics-consent p {
+  font-size: var(--fs-13); color: var(--muted); margin-bottom: var(--sp-5);
+}
+.launch-legacy-post #analytics-consent [data-analytics-accept],
+.launch-legacy-post #analytics-consent [data-analytics-refuse] {
+  font-family: var(--sans); font-weight: 600; font-size: var(--fs-12);
+  border: var(--bw) solid var(--line2); border-radius: var(--r-2);
+  padding: var(--sp-3) var(--sp-7); cursor: pointer;
+  background: var(--surface); color: var(--muted); margin-right: var(--sp-4);
+}
+.launch-legacy-post #analytics-consent [data-analytics-accept] {
+  color: #fff; background: var(--moss); border-color: var(--moss);
+}
+.launch-legacy-post #analytics-consent [data-analytics-error] {
+  color: var(--danger); font-size: var(--fs-11);
+}

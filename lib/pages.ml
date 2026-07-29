@@ -4053,7 +4053,23 @@ let reports_queue_page ?user ?(rail_communities = []) ~(channels : channel list)
     ~title:(community.name ^ " — Reports")
     ~content:(Components.private_replay_guard ~community content) ()
 
-let post_page ?user ?(noindex=false) ~is_member ~is_current_user_mod ~mod_usernames ~admin_usernames ~banned_usernames ~community ~user_communities:_ ~moderated_communities:_ user_post_votes user_comment_votes (post : post) (comments : comment list) request =
+(* The legacy /p/:id fallback (pass 20A), reachable only for the pathological
+   unmappable post (community_slug = "" — view_post_handler 301s every mappable
+   post to its canonical thread URL before this renders). The inner warm-card
+   fragment — post card, recursive comment tree, every /vote, /vote-comment,
+   /comments, /delete-post, /delete-comment, mod_delete, /ban-community-user
+   and /join form, the mod/admin/ban dialogs and the toggleComment script — is
+   treated as pinned and kept byte-identical; only the outer document wrapper
+   changed (Components.layout `Site → Components.launch_app_page under
+   body.launch-legacy-post, skinned by the "legacy post fallback only" section
+   of earde.css). [user_communities] (already loaded by the handler, previously
+   ignored) now feeds the launch rail — VIEWER membership only, same source and
+   order as every other launch surface; it never enters page content.
+   [moderated_communities] stays unused. Members get the shared launch behavior
+   script from the wrapper (confirmModal, copyPostLink, optimistic voting, one
+   notification fetch); guests get the share-only script so the byte-pinned
+   Share control keeps working, and zero notification fetches. *)
+let post_page ?user ?(noindex=false) ~is_member ~is_current_user_mod ~mod_usernames ~admin_usernames ~banned_usernames ~community ~user_communities ~moderated_communities:_ user_post_votes user_comment_votes (post : post) (comments : comment list) request =
   let csrf_token = Dream.csrf_tag request in
   let current_user = Dream.session_field request "username" in
 
@@ -4678,7 +4694,9 @@ let post_page ?user ?(noindex=false) ~is_member ~is_current_user_mod ~mod_userna
     post_author_initial
     (Components.render_author ~mod_usernames ~admin_usernames post.username) (Components.time_ago post.created_at) (post_action_btn ^ ban_post_btn)
     post_local_stats_html
-    post.title
+    (* The one interpolation in this renderer that reached the document raw —
+       every sibling renderer escapes post.title; pinned by a regression test. *)
+    (Components.html_escape post.title)
     image_content link_content post_content voting_pill
     action_section comments_html
     post_right_sidebar
@@ -4701,8 +4719,20 @@ function toggleComment(id, btn) {
   }
 }
 </script>|} in
-  Components.layout ?user ~noindex ~request ~analytics_community:(post.community_id, community.visibility)
-    ~title:post.title (toggle_script ^ content)
+  (* The byte-pinned voting_pill shows Share to every viewer; only member
+     documents carry the wrapper's behavior script (which defines
+     copyPostLink). Guests get the share-only script — same single
+     copyPostLink source, no notification fetch — appended after the pinned
+     fragment so each document holds exactly one definition. *)
+  let guest_share_script = match user with
+    | None -> Components.launch_share_script
+    | Some _ -> ""
+  in
+  Components.launch_app_page ?user ~noindex ~request
+    ~rail_communities:user_communities
+    ~analytics_community:(post.community_id, community.visibility)
+    ~page_class:"launch-legacy-post" ~title:post.title
+    ~content:(toggle_script ^ content ^ guest_share_script) ()
 
 (* === USER === *)
 
