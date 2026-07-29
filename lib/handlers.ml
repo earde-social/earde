@@ -3360,7 +3360,9 @@ let mod_delete_comment_handler request =
 
 (* Slice B: report creation for posts & comments (chat messages out of scope). The form
    is no-JS SSR; the POST handler — not the render-time link gate — is the security
-   boundary. Both handlers re-resolve the target from the trusted :slug + hidden type/id,
+   boundary. Both handlers gate on can_view_community first (an outsider to a private
+   community gets the canonical community_not_found 404 before any ban check or target
+   resolution), then re-resolve the target from the trusted :slug + hidden type/id,
    verify it belongs to this community, re-run the global/community ban gates (active
    sessions outlive a ban, mirroring create_comment_handler), and disallow self-reports. *)
 
@@ -3404,8 +3406,16 @@ let report_form_handler request =
            Dream.sql request (fun db ->
              match%lwt Db.get_community_by_slug db slug with
              | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:("Database error: " ^ e) ~alert_type:"error" ~return_url:"/" request)
-             | Ok None -> Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"Not Found" ~message:"This community does not exist." ~alert_type:"error" ~return_url:"/" request)
+             | Ok None -> community_not_found ?user request
              | Ok (Some community) ->
+                 (* Private-community read gate BEFORE any ban check or target
+                    resolution: an outsider must get the same 404 as a missing
+                    community — a ban page or target-dependent response here
+                    would confirm the community (or target) exists. *)
+                 let is_admin = Dream.session_field request "is_admin" = Some "true" in
+                 let%lwt authorized = can_view_community db ~user_id ~is_admin community in
+                 if not authorized then community_not_found ?user request
+                 else
                  let%lwt is_gb = match%lwt Db.is_globally_banned db user_id with Ok b -> Lwt.return b | Error _ -> Lwt.return false in
                  if is_gb then
                    Dream.respond ~status:`Forbidden (Pages.msg_page ?user ~title:"Account Banned" ~message:"Your account has been permanently banned from Earde." ~alert_type:"error" ~return_url:"/" request)
@@ -3431,7 +3441,6 @@ let report_form_handler request =
                            can_manage mirrors modlog's can_access_settings gate
                            (admin || moderator) and only picks the sidebar
                            Settings visibility; the settings handler re-checks. *)
-                        let is_admin = Dream.session_field request "is_admin" = Some "true" in
                         let%lwt can_manage =
                           if is_admin then Lwt.return true
                           else (match%lwt Db.is_moderator db user_id community.id with
@@ -3478,8 +3487,17 @@ let create_report_handler request =
                Dream.sql request (fun db ->
                  match%lwt Db.get_community_by_slug db slug with
                  | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:("Database error: " ^ e) ~alert_type:"error" ~return_url:"/" request)
-                 | Ok None -> Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"Not Found" ~message:"This community does not exist." ~alert_type:"error" ~return_url:"/" request)
+                 | Ok None -> community_not_found ?user request
                  | Ok (Some community) ->
+                     (* Same private-community read gate as the GET form, re-proved
+                        from server-side state — the POST must not trust that the
+                        viewer ever loaded the form. Denial happens before target
+                        resolution so valid and invalid private target ids are
+                        indistinguishable and no report row is ever inserted. *)
+                     let is_admin = Dream.session_field request "is_admin" = Some "true" in
+                     let%lwt authorized = can_view_community db ~user_id ~is_admin community in
+                     if not authorized then community_not_found ?user request
+                     else
                      let%lwt is_gb = match%lwt Db.is_globally_banned db user_id with Ok b -> Lwt.return b | Error _ -> Lwt.return false in
                      if is_gb then
                        Dream.respond ~status:`Forbidden (Pages.msg_page ?user ~title:"Account Banned" ~message:"Your account has been permanently banned from Earde." ~alert_type:"error" ~return_url:"/" request)
