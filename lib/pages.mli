@@ -12,7 +12,11 @@ val forgot_password_page : Dream.request -> string
 val reset_password_page : token:string -> ?error:string -> Dream.request -> string
 
 (** === COMMUNITY === *)
-val new_community_form : ?user:string -> Dream.request -> string
+(** Global-admin-only legacy community creation form (GET /new-community), on
+    the Cartographic Civic launch app chrome. [rail_communities] is the
+    viewer's joined communities for the dark rail, loaded by the handler only
+    AFTER the global-admin gate; defaults to [] so pure renders need no DB. *)
+val new_community_form : ?user:string -> ?rail_communities:Db.community list -> Dream.request -> string
 val community_page : ?user:string -> ?noindex:bool -> ?connected_projects:string -> is_member:bool -> is_current_user_mod:bool -> is_current_user_top_mod:bool -> mod_usernames:string list -> admin_usernames:string list -> banned_usernames:string list -> user_communities:Db.community list -> moderated_communities:Db.community list -> (int * int) list -> int -> string -> Db.community -> Db.post list -> Dream.request -> string
 val community_section_shell_page : ?user:string -> ?noindex:bool -> ?thread_count:int -> ?last_activity:string -> is_current_user_mod:bool -> mod_usernames:string list -> admin_usernames:string list -> banned_usernames:string list -> rail_communities:Db.community list -> channels:Db.channel list -> sections:Db.community_section list -> section:Db.community_section -> user_votes:(int * int) list -> current_page:int -> sort_mode:string -> community:Db.community -> posts:Db.post list -> Dream.request -> string
 

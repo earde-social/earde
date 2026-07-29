@@ -315,8 +315,21 @@ let project_home_review_page ?user ?request ?shell ~state ~feedback () =
   | None ->
       (* noindex: a moderator-only workflow surface — not for search
          indexes. *)
-      Components.create_page ?user ?request ~noindex:true
-        ~title:"Project home requests" ~body ()
+      (* Degraded document (pass 19): [shell] is None only when the durable
+         community record could not be re-read for launch chrome AFTER the
+         read model already authorized this reviewer (a mid-request deletion
+         race or a storage failure in the decorative load). Without a
+         trustworthy Db.community there is no honest community sidebar,
+         rail tile, or analytics group — so the queue body renders inside
+         the chrome-free launch message document instead: no fabricated
+         community data, no extra queries, no behavior script, no
+         notification fetch. The create-shell wrapper create_page used to
+         emit is kept verbatim so the test-sliced feature fragment
+         (create-shell → </main>) stays byte-identical; [user] only fed the
+         legacy top bar, which this document intentionally has none of. *)
+      Components.launch_message_page ?request ~noindex:true
+        ~title:"Project home requests"
+        ~content:(Printf.sprintf "<div class='create-shell'>%s</div>" body) ()
   | Some shell ->
       (* Cartographic Civic conversion: only the outer document changes.
          The mono community context precedes the create-shell marker, so

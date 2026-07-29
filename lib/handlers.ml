@@ -910,9 +910,21 @@ let new_community_page request =
   match Dream.session_field request "user_id" with
   | None ->
       Dream.redirect request "/login"
-  | Some _ ->
+  | Some uid_str ->
       let user = Dream.session_field request "username" in
-      Dream.html (Pages.new_community_form ?user request)
+      (* Rail data only AFTER both gates above: denied or redirected viewers
+         never reach this query. Best-effort — a failure degrades to an
+         empty rail rather than blocking the admin utility. *)
+      let%lwt rail_communities =
+        match int_of_string_opt uid_str with
+        | None -> Lwt.return []
+        | Some uid ->
+            Dream.sql request (fun db ->
+                match%lwt Db.get_user_communities db uid with
+                | Ok communities -> Lwt.return communities
+                | Error _ -> Lwt.return [])
+      in
+      Dream.html (Pages.new_community_form ?user ~rail_communities request)
 
 let create_community_handler request =
   (* Server-side admin gate before any form parsing, so a forged form from a

@@ -262,7 +262,18 @@ let reset_password_page ~token ?error request =
 
 (* === COMMUNITY === *)
 
-let new_community_form ?user request =
+(* Cartographic Civic (pass 19): only the outer document changes — the legacy
+   create_page wrapper becomes the launch app chrome (Components.launch_app_page:
+   earde.css + the shared mobile gate only, no shell.css / create.css / Tailwind).
+   The inner create-* fragment — the POST /communities form contract (action,
+   method, Dream CSRF, field names/ids, hidden counts, row scripts) — is byte
+   preserved inside the same <div class='create-shell'> marker create_page
+   emitted. The handler still gates on the global-admin session BEFORE loading
+   rail data or rendering; [rail_communities] defaults to [] so pure renders
+   stay possible. The mono context strip is factual (an administrator utility,
+   not the onboarding flow) and precedes the create-shell marker so the feature
+   fragment slice (create-shell → </main>) carries no launch chrome. *)
+let new_community_form ?user ?(rail_communities = []) request =
   let csrf_token = Dream.csrf_tag request in
   let content = Printf.sprintf {html|
     <div class='create-wrap'>
@@ -396,7 +407,17 @@ let new_community_form ?user request =
     |html}
   csrf_token
   in
-  Components.create_page ?user ~request ~title:"New Community" ~body:content ()
+  let context =
+    "<div class='launch-newcomm-context'>\
+     <span class='launch-newcomm-context-label'>Administrator utility</span>\
+     <span class='launch-newcomm-context-path'>/new-community</span>\
+     </div>"
+  in
+  Components.launch_app_page ?user ~request ~rail_communities
+    ~page_class:"launch-new-community" ~title:"New Community"
+    ~content:
+      (context ^ Printf.sprintf "<div class='create-shell'>%s</div>" content)
+    ()
 
 (* [connected_projects] is the pre-rendered Connected-projects fragment supplied by the
    community route (Community_connected_projects_pages), or "" when the community has no

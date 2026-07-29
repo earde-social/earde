@@ -8357,3 +8357,314 @@ body.launch-global-admin #analytics-consent [data-analytics-accept] {
 body.launch-global-admin #analytics-consent [data-analytics-error] {
   color: var(--danger); font-size: var(--fs-11);
 }
+
+/* ==========================================================================
+   EARDE INTEGRATION — final create-page callers only
+   Pass 19: the last two legacy create_page documents.
+
+   1) body.launch-new-community — GET /new-community
+      (Pages.new_community_form through launch_app_page). A global-admin
+      administrative utility, not the onboarding flow: /bring, GitHub
+      verification and project setup remain the product path, and nothing
+      links here. The create-* fragment (the POST /communities form with its
+      Dream CSRF field, hidden section/channel counts, name/slug/description
+      fields, default #general and General chips, and the JS-managed extra
+      rows) is treated as pinned legacy markup, spliced verbatim inside the
+      .create-shell marker and skinned onto the approved anatomy: a mono
+      administrative context strip, a serif head band, one measured inset
+      form column, thin rules, a moss primary action. No new fields,
+      options, or onboarding illustration are invented.
+
+   2) body.launch-message-page .create-shell — the review queue's degraded
+      document (Project_home_review_pages, shell unavailable). The neutral
+      message wrapper owns the page; only the minimal rules needed to keep
+      the spliced queue fragment readable live here, keyed on the
+      .create-shell marker that exists in no other message document. No
+      status-, route- or resource-derived selector is introduced.
+   ========================================================================== */
+
+/* ---- Launch chrome (same rules as the other launch app scopes) ------------- */
+
+.launch-new-community .launch-user { position: relative; }
+.launch-new-community .launch-user > summary { list-style: none; }
+.launch-new-community .launch-user > summary::-webkit-details-marker { display: none; }
+.launch-new-community .launch-user .avatar { background: var(--moss); }
+.launch-new-community .launch-user__menu {
+  position: absolute; right: 0; top: calc(100% + 6px); z-index: 40;
+  min-width: 168px; display: flex; flex-direction: column;
+  background: var(--surface); border: var(--bw) solid var(--line2);
+  border-radius: var(--r-3); padding: var(--sp-3);
+  box-shadow: var(--shadow-overlay);
+}
+.launch-new-community .launch-user__menu a,
+.launch-new-community .launch-user__menu button {
+  display: block; width: 100%; text-align: left; background: none; border: 0;
+  font-family: var(--mono); font-size: var(--fs-12); color: var(--ink);
+  padding: var(--sp-3) var(--sp-5); border-radius: var(--r-2); cursor: pointer;
+}
+.launch-new-community .launch-user__menu a:hover,
+.launch-new-community .launch-user__menu button:hover { background: var(--surface2); }
+.launch-new-community .launch-user__menu form {
+  margin: var(--sp-2) 0 0; padding-top: var(--sp-2);
+  border-top: var(--bw) solid var(--line);
+}
+
+/* Notification badge: hidden until the shared one-shot fetch reveals it.
+   Badge element only — deliberately NOT a global .hidden utility. */
+.launch-new-community #notif-badge.hidden { display: none; }
+
+/* Real community avatars fill their fixed rail tile. */
+.launch-new-community .launch-rail__img {
+  width: 100%; height: 100%; object-fit: cover; border-radius: inherit;
+  display: block;
+}
+
+/* ---- Administrative context strip ------------------------------------------ */
+
+/* Mono, factual, ahead of the create-shell marker: names the utility and
+   its route, never sells it as onboarding. */
+.launch-new-community .launch-newcomm-context {
+  flex: none; display: flex; align-items: baseline; gap: var(--sp-5);
+  padding: var(--sp-4) 28px; background: var(--surface2);
+  border-bottom: var(--bw) solid var(--line);
+  font-family: var(--mono); font-size: var(--fs-10-5);
+  letter-spacing: var(--ls-kicker); text-transform: uppercase;
+}
+.launch-new-community .launch-newcomm-context-label { color: var(--muted); }
+.launch-new-community .launch-newcomm-context-path {
+  text-transform: none; letter-spacing: normal; color: var(--slate);
+}
+
+/* ---- Form anatomy ------------------------------------------------------------ */
+
+/* main is the column: context strip, head band, then the scrolling form. */
+.launch-new-community .main {
+  display: flex; flex-direction: column; min-height: 0;
+}
+.launch-new-community .create-shell {
+  flex: 1; min-height: 0; display: flex; flex-direction: column;
+}
+.launch-new-community .create-wrap {
+  flex: 1; min-height: 0; display: flex; flex-direction: column;
+}
+.launch-new-community .create-panel { display: contents; }
+
+/* Head band: compact serif title over the renderer's factual subtitle. */
+.launch-new-community .create-head {
+  flex: none; padding: 15px 28px; background: var(--surface);
+  border-bottom: var(--bw) solid var(--line2);
+}
+.launch-new-community .create-title {
+  font-family: var(--serif); font-weight: 600; font-size: var(--fs-22);
+  color: var(--ink);
+}
+.launch-new-community .create-sub {
+  font-size: var(--fs-12-5); color: var(--muted); margin-top: var(--sp-1);
+  line-height: var(--lh-prose); max-width: 620px;
+}
+
+/* The form is the scroller: one measured inset column. */
+.launch-new-community .create-panel > .create-form {
+  flex: 1; min-height: 0; overflow-y: auto; scrollbar-width: thin;
+  padding: var(--sp-10) 28px 70px;
+}
+.launch-new-community .create-panel > .create-form > * { max-width: 620px; }
+
+.launch-new-community .create-field { margin-bottom: var(--sp-8); }
+.launch-new-community .create-label {
+  display: block; font-family: var(--mono); font-size: var(--fs-10);
+  font-weight: 600; letter-spacing: var(--ls-kicker); text-transform: uppercase;
+  color: var(--muted); margin-bottom: var(--sp-3);
+}
+.launch-new-community .create-label .req { color: var(--clay); }
+
+/* Inset controls: hairline frame, tight radii, quiet slate focus. */
+.launch-new-community .create-input,
+.launch-new-community .create-select,
+.launch-new-community .create-textarea {
+  width: 100%; font-family: var(--sans); font-size: var(--fs-13);
+  color: var(--ink); background: var(--surface);
+  border: var(--bw) solid var(--line2); border-radius: var(--r-2);
+  padding: var(--sp-3) var(--sp-4);
+}
+.launch-new-community .create-textarea { resize: vertical; min-height: 84px; }
+.launch-new-community .create-input::placeholder,
+.launch-new-community .create-textarea::placeholder { color: var(--muted); }
+.launch-new-community .create-input:focus,
+.launch-new-community .create-select:focus,
+.launch-new-community .create-textarea:focus {
+  outline: none; border-color: var(--slate);
+}
+
+/* Slug field: mono /c/ prefix welded to its input. */
+.launch-new-community .create-slug {
+  display: flex; align-items: stretch;
+}
+.launch-new-community .create-slug-prefix {
+  display: flex; align-items: center; font-family: var(--mono);
+  font-size: var(--fs-12); color: var(--muted); background: var(--surface2);
+  border: var(--bw) solid var(--line2); border-right: 0;
+  border-radius: var(--r-2) 0 0 var(--r-2); padding: 0 var(--sp-4);
+}
+.launch-new-community .create-slug .create-input {
+  border-radius: 0 var(--r-2) var(--r-2) 0; font-family: var(--mono);
+}
+
+/* Field hints: quiet mono metadata. */
+.launch-new-community .create-hint {
+  font-family: var(--mono); font-size: var(--fs-11); color: var(--muted);
+  margin-top: var(--sp-2);
+}
+
+/* Channel / section groups: thin-ruled subsections, mono sigils. */
+.launch-new-community .create-group {
+  margin-bottom: var(--sp-9); padding-top: var(--sp-7);
+  border-top: var(--bw) solid var(--line);
+}
+.launch-new-community .create-group-head { margin-bottom: var(--sp-5); }
+.launch-new-community .create-group-title {
+  font-family: var(--sans); font-weight: 600; font-size: var(--fs-13);
+  color: var(--ink);
+}
+.launch-new-community .create-group-title .sigil {
+  font-family: var(--mono); color: var(--moss); margin-right: var(--sp-2);
+}
+.launch-new-community .create-group-desc {
+  font-size: var(--fs-12); color: var(--muted); margin-top: var(--sp-1);
+  line-height: var(--lh-prose);
+}
+
+/* Default chips (#general / General): locked ledger rows, not buttons. */
+.launch-new-community .create-chip {
+  display: flex; align-items: center; gap: var(--sp-3);
+  background: var(--surface2); border: var(--bw) solid var(--line);
+  border-radius: var(--r-2); padding: var(--sp-3) var(--sp-5);
+  margin-bottom: var(--sp-3); max-width: 620px;
+}
+.launch-new-community .create-chip-sigil {
+  font-family: var(--mono); color: var(--moss);
+}
+.launch-new-community .create-chip-name {
+  font-family: var(--mono); font-size: var(--fs-12); color: var(--ink);
+}
+.launch-new-community .create-chip-lock {
+  margin-left: auto; font-family: var(--mono); font-size: var(--fs-10);
+  letter-spacing: var(--ls-kicker); text-transform: uppercase;
+  color: var(--muted);
+}
+
+/* JS-added extra rows: one hairline row per channel/section. */
+.launch-new-community .create-rows { display: block; }
+.launch-new-community .create-row {
+  display: flex; align-items: center; gap: var(--sp-3);
+  margin-bottom: var(--sp-3); max-width: 620px;
+}
+.launch-new-community .create-row-sigil {
+  flex: none; font-family: var(--mono); color: var(--muted);
+}
+.launch-new-community .create-row .create-input { flex: 1; min-width: 0; }
+.launch-new-community .create-row .create-select { flex: none; width: auto; }
+.launch-new-community .create-row-remove {
+  flex: none; cursor: pointer; font-size: var(--fs-13); line-height: 1;
+  color: var(--muted); background: var(--surface);
+  border: var(--bw) solid var(--line2); border-radius: var(--r-2);
+  padding: var(--sp-2) var(--sp-4);
+}
+.launch-new-community .create-row-remove:hover { color: var(--clay); }
+
+/* Add-row affordance: quiet secondary, never the page's primary action. */
+.launch-new-community .create-add {
+  cursor: pointer; font-family: var(--mono); font-size: var(--fs-11-5);
+  color: var(--slate); background: var(--surface);
+  border: var(--bw) solid var(--line2); border-radius: var(--r-2);
+  padding: var(--sp-2) var(--sp-6);
+}
+.launch-new-community .create-add:hover { background: var(--surface2); }
+
+/* Actions: moss submit above a thin closing rule. */
+.launch-new-community .create-actions {
+  display: flex; align-items: center; gap: var(--sp-4);
+  margin-top: var(--sp-9); padding-top: var(--sp-7);
+  border-top: var(--bw) solid var(--line);
+}
+.launch-new-community .create-btn {
+  cursor: pointer; font-family: var(--sans); font-weight: 600;
+  font-size: var(--fs-12-5); color: #fff; background: var(--moss);
+  border: var(--bw) solid var(--moss); border-radius: var(--r-2);
+  padding: var(--sp-3) var(--sp-8); text-decoration: none;
+}
+.launch-new-community .create-btn:hover {
+  background: color-mix(in srgb, var(--moss) 88%, #000);
+}
+.launch-new-community .create-btn--block { width: auto; }
+
+/* Desktop-only gate: hide this route's launch app under the shared
+   breakpoint; the gate panel itself is styled by mobile-gate.css. */
+@media (max-width: 800px) {
+  body.launch-new-community > .app { display: none !important; }
+}
+
+/* Analytics consent banner (markup shared with the legacy layout). */
+.launch-new-community #analytics-consent {
+  position: fixed; bottom: var(--sp-8); left: 50%; transform: translateX(-50%);
+  z-index: 50; width: calc(100% - 2rem); max-width: 28rem;
+  background: var(--surface); border: var(--bw) solid var(--line2);
+  border-radius: var(--r-3); padding: var(--sp-7) var(--sp-8);
+  box-shadow: var(--shadow-overlay);
+}
+.launch-new-community #analytics-consent p {
+  font-size: var(--fs-13); color: var(--muted); margin-bottom: var(--sp-5);
+}
+.launch-new-community #analytics-consent [data-analytics-accept],
+.launch-new-community #analytics-consent [data-analytics-refuse] {
+  font-family: var(--sans); font-weight: 600; font-size: var(--fs-12);
+  border: var(--bw) solid var(--line2); border-radius: var(--r-2);
+  padding: var(--sp-3) var(--sp-7); cursor: pointer;
+  background: var(--surface); color: var(--muted); margin-right: var(--sp-4);
+}
+.launch-new-community #analytics-consent [data-analytics-accept] {
+  color: #fff; background: var(--moss); border-color: var(--moss);
+}
+.launch-new-community #analytics-consent [data-analytics-error] {
+  color: var(--danger); font-size: var(--fs-11);
+}
+
+/* ---- Degraded review queue inside the neutral message document -------------- */
+
+/* Keyed on the .create-shell marker, which no other message document
+   contains; nothing here derives from status, route or resource. Just
+   enough for the spliced queue fragment to read as one measured column. */
+body.launch-message-page .create-shell {
+  width: 100%; max-width: 680px; margin: 0 auto;
+  padding: var(--sp-10) var(--sp-8) var(--sp-13);
+}
+body.launch-message-page .create-shell .create-head { margin-bottom: var(--sp-8); }
+body.launch-message-page .create-shell .create-title {
+  font-family: var(--serif); font-weight: 600; font-size: var(--fs-22);
+  color: var(--ink);
+}
+body.launch-message-page .create-shell .create-sub {
+  font-size: var(--fs-12-5); color: var(--muted); margin-top: var(--sp-1);
+  line-height: var(--lh-prose);
+}
+body.launch-message-page .create-shell .phrv-request-list {
+  list-style: none; margin: 0; padding: 0;
+}
+body.launch-message-page .create-shell .phrv-request {
+  border: var(--bw) solid var(--line2); border-radius: var(--r-2);
+  background: var(--surface); padding: var(--sp-7) var(--sp-8);
+  margin-bottom: var(--sp-6);
+}
+body.launch-message-page .create-shell .phrv-actions {
+  display: flex; gap: var(--sp-4); margin-top: var(--sp-6);
+  padding-top: var(--sp-6); border-top: var(--bw) solid var(--line);
+}
+body.launch-message-page .create-shell .phrv-actions button {
+  cursor: pointer; font-family: var(--sans); font-weight: 600;
+  font-size: var(--fs-12); color: var(--ink); background: var(--surface);
+  border: var(--bw) solid var(--line2); border-radius: var(--r-2);
+  padding: var(--sp-3) var(--sp-7);
+}
+body.launch-message-page .create-shell .phrv-actions .phrv-accept button {
+  color: #fff; background: var(--moss); border-color: var(--moss);
+}
