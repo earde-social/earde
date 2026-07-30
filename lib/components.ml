@@ -223,6 +223,33 @@ let analytics_assets ?request ?analytics_community () =
    wrappers below: they load /static/css/earde.css (plus the shared
    desktop-only mobile gate on app surfaces) and nothing external. *)
 
+(* The persistent top-right launch-topbar action: the compact, always-present
+   entry point to /bring. One shared value so the four launch documents below
+   cannot drift apart.
+
+   The mark is the same local GitHub path the /bring start button draws, at
+   topbar scale (15px) and inheriting the button's white foreground through
+   fill='currentColor' — no external asset, no icon font, no emoji. It carries
+   no meaning of its own (aria-hidden), so the accessible name comes from
+   aria-label ("Connect GitHub"): screen readers get the GitHub context
+   without a second visible or layout-affecting text node. The element stays a
+   plain same-tab <a href='/bring'> — the /bring page keeps the explicit
+   full-label primary action. *)
+let launch_connect_cta =
+  "<a class='btn btn--connect-github' href='/bring' \
+   title='Connect an open-source project' aria-label='Connect GitHub'>\
+   <svg width='15' height='15' viewBox='0 0 16 16' fill='currentColor' \
+   aria-hidden='true'><path d='M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 \
+   5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 \
+   1.08.58 1.23.82.72 1.21 1.87.87 \
+   2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 \
+   0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 \
+   7.6 0 0 1 4 0c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 \
+   2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 \
+   3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 \
+   .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z'/></svg>\
+   <span>Connect</span></a>"
+
 (* Cartographic Civic launch entry document (pass 1: /bring only). A complete,
    self-contained HTML document that loads only the launch stylesheet
    (earde.css) — no Tailwind, no external fonts, no legacy per-page CSS.
@@ -272,9 +299,7 @@ let launch_entry_page ?(noindex = false) ?request ~page_class ~title ~content ()
      <span class='launch-search__hint'>grep threads &middot; projects &middot; communities&hellip;</span>\
      <span class='launch-search__enter' aria-hidden='true'>&#8629;</span>\
      </a>\
-     <div class='topbar__actions'>\
-     <a class='btn btn--outline-ochre' href='/bring' title='Connect an open-source project'>&#65291; Connect</a>\
-     </div>\
+     <div class='topbar__actions'>%s</div>\
      </header>\n\
      <div class='shell'>\
      <nav class='rail' aria-label='Primary'>\
@@ -290,8 +315,8 @@ let launch_entry_page ?(noindex = false) ?request ~page_class ~title ~content ()
      %s\n\
      </body>\n\
      </html>"
-    (html_escape title) robots_meta analytics_head page_class house_icon
-    content analytics_banner
+    (html_escape title) robots_meta analytics_head page_class
+    launch_connect_cta house_icon content analytics_banner
 
 (* Cartographic Civic launch auth document (pass 2: /login and /signup only).
    Like [launch_entry_page], a complete self-contained document that loads only
@@ -641,7 +666,7 @@ let launch_app_page ?(noindex = false) ?request ?user ?(rail_communities = [])
            its existing action/semantics. The bell keeps id='notif-badge' and
            the `hidden` class exactly where the behavior script expects them. *)
         Printf.sprintf
-          "<a class='btn btn--outline-ochre' href='/bring' title='Connect an open-source project'>&#65291; Connect</a>\
+          "%s\
            <a class='bell' href='/notifications' title='Notifications' aria-label='Notifications'>%s<span id='notif-badge' class='bell__count hidden'>0</span></a>\
            <details class='launch-user'>\
            <summary class='userchip'><span class='avatar avatar--24'>%s</span><span class='userchip__name'>u/%s</span></summary>\
@@ -653,7 +678,7 @@ let launch_app_page ?(noindex = false) ?request ?user ?(rail_communities = [])
            <form action='/logout' method='POST'><button type='submit'>Log out</button></form>\
            </div>\
            </details>"
-          bell_icon initial u u admin_item
+          launch_connect_cta bell_icon initial u u admin_item
     | None ->
         (* Anonymous cluster (04-ROUTES): no bell, no user chip, no logout,
            and therefore no notification fetch anywhere in the document. *)
@@ -755,7 +780,7 @@ let launch_app_page ?(noindex = false) ?request ?user ?(rail_communities = [])
    the 54px top bar (brand → /feed, the command field as a styled LINK to
    /search — this wrapper adds no form of its own beyond the page content —
    and viewer-state actions: anonymous Bring/Log in/Sign up, or the member
-   ＋ Connect, the id='notif-badge' bell, and the user chip as a plain link to
+   GitHub-mark Connect, the id='notif-badge' bell, and the user chip as a plain link to
    /u/:name), the dark 64px icon rail (Feed, ＋ → /bring; no community tiles —
    the onboarding renderers receive no membership data and none is invented),
    and a centred onboarding column ([container--form]).
@@ -807,10 +832,10 @@ let launch_onboarding_page ?(noindex = false) ?request ?user ?(stepper = "")
            the shared behavior script expects them; the user chip is the
            reference markup's plain link — no menu, no extra form. *)
         Printf.sprintf
-          "<a class='btn btn--outline-ochre' href='/bring' title='Connect an open-source project'>&#65291; Connect</a>\
+          "%s\
            <a class='bell' href='/notifications' title='Notifications' aria-label='Notifications'>%s<span id='notif-badge' class='bell__count hidden'>0</span></a>\
            <a class='userchip' href='/u/%s'><span class='avatar avatar--24'>%s</span><span class='userchip__name'>u/%s</span></a>"
-          bell_icon u initial u
+          launch_connect_cta bell_icon u initial u
     | None ->
         "<a class='btn btn--quiet' href='/bring'>Bring a project</a>\
          <a class='btn btn--secondary btn--auth' href='/login'>Log in</a>\
@@ -943,7 +968,7 @@ let launch_community_doc ?(noindex = false) ?request ?user
           else "?"
         in
         Printf.sprintf
-          "<a class='btn btn--outline-ochre' href='/bring' title='Connect an open-source project'>&#65291; Connect</a>\
+          "%s\
            <a class='bell' href='/notifications' title='Notifications' aria-label='Notifications'>%s<span id='notif-badge' class='bell__count hidden'>0</span></a>\
            <details class='launch-user'>\
            <summary class='userchip'><span class='avatar avatar--24'>%s</span><span class='userchip__name'>u/%s</span></summary>\
@@ -955,7 +980,7 @@ let launch_community_doc ?(noindex = false) ?request ?user
            <form action='/logout' method='POST'><button type='submit'>Log out</button></form>\
            </div>\
            </details>"
-          bell_icon initial u u admin_item
+          launch_connect_cta bell_icon initial u u admin_item
     | None ->
         "<a class='btn btn--quiet' href='/bring'>Bring a project</a>\
          <a class='btn btn--secondary btn--auth' href='/login'>Log in</a>\

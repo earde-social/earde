@@ -216,6 +216,25 @@ ol, ul { margin: 0; padding: 0; list-style: none; }
 }
 .topbar__actions--anon { gap: 9px; }
 
+/* Persistent GitHub-connect action. Scoped to the top bar so no generic button
+   or other topbar control inherits it. The colour treatment is .btn--dark's,
+   value for value — the same --ink fill and border, the same white foreground
+   the inlined mark picks up through fill='currentColor', the same
+   brightness-lift hover, and no focus rule of its own so the global
+   :focus-visible ring applies exactly as it does on /bring's CTA. Only the
+   *dimensions* stay compact and topbar-native: mono at --fs-11-5, the tight
+   default .btn radius, and 6px/14px padding rather than .btn--dark's larger
+   type, --r-3 radius and 11px/22px box. So the two controls read as the same
+   black GitHub action at two scales, and /bring's full-label CTA stays the
+   more prominent one. */
+.topbar__actions .btn--connect-github {
+  font-family: var(--mono); font-weight: 600; font-size: var(--fs-11-5);
+  color: #fff; background: var(--ink); border-color: var(--ink);
+  padding: var(--sp-3) var(--sp-7);
+}
+.topbar__actions .btn--connect-github svg { display: block; flex: none; }
+.topbar__actions .btn--connect-github:hover { filter: brightness(1.15); color: #fff; }
+
 /* bell */
 .bell {
   position: relative; display: flex; align-items: center; color: var(--muted);
@@ -891,7 +910,7 @@ ol, ul { margin: 0; padding: 0; list-style: none; }
   .topbar__search-cell { grid-column: 1 / -1; order: 3; }
   .topbar__wordmark { height: 19px; }
   .topbar__mark { height: 26px; width: 26px; }
-  .topbar__actions .btn--outline-ochre { display: none; }
+  .topbar__actions .btn--connect-github { display: none; }
   .userchip__name { display: none; }
 
   /* rail → fixed bottom bar */

@@ -86,7 +86,7 @@ val launch_message_page : ?noindex:bool -> ?request:Dream.request -> title:strin
     desktop-only mobile gate — no Tailwind, no external fonts, no legacy
     per-page CSS — under the approved app chrome: 54px top bar (brand → /feed, a real /search
     form, viewer-state actions: anonymous Bring/Log in/Sign up, or the member
-    ＋ Connect, the id='notif-badge' bell, and a pure-CSS user menu whose
+    GitHub-mark Connect, the id='notif-badge' bell, and a pure-CSS user menu whose
     logout stays a POST form), the dark 64px icon rail (Feed active, one tile
     per real joined community targeting the legacy /c/:slug/ch/general
     destination, ＋ → /bring), the central main column and an optional right
@@ -108,7 +108,7 @@ val launch_app_page : ?noindex:bool -> ?request:Dream.request -> ?user:string ->
     the shared desktop-only mobile gate — no Tailwind, no external fonts, no
     legacy per-page CSS — under the launch app chrome: the 54px top bar
     (brand → /feed, command field as a styled link to /search, viewer-state
-    actions: anonymous Bring/Log in/Sign up, or the member ＋ Connect, the
+    actions: anonymous Bring/Log in/Sign up, or the member GitHub-mark Connect, the
     id='notif-badge' bell and the user chip as a plain /u/:name link), the dark
     64px icon rail (Feed, ＋ → /bring; no community tiles — the onboarding
     renderers receive no membership data), and a centred onboarding column.

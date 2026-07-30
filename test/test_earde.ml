@@ -57886,6 +57886,273 @@ module Legacy_census = struct
     ; single_behavior_script_case ]
 end
 
+(* The persistent top-right launch-topbar action (Components.launch_connect_cta).
+   It replaced the ochre "＋ Connect" outline control with a compact dark
+   GitHub-mark "Connect" button, and it is the ONE shared value the four launch
+   documents render, so the assertions here are both rendered-document and
+   source-census: no wrapper may grow a private copy or drift back to the plus
+   glyph.
+
+   The second half pins what must NOT have moved: /bring's own full-label
+   primary action stays byte-identical (the whole <form>…</form>, mark
+   included), the anonymous cluster keeps its three links and no Connect
+   button, and the auth/message documents — which have no application topbar —
+   gain nothing at all. Pure renderers plus a file scan: no database, no
+   server. *)
+module Launch_cta = struct
+  let cc_case name f = Alcotest.test_case name `Quick f
+
+  let community = nav_test_community
+
+  (* The exact element, as the wrapper emits it. Byte-exact on purpose: copy,
+     destination, element type, accessible name and icon size are all product
+     decisions, and a diff here should be a deliberate edit, not a surprise. *)
+  let cta_open =
+    "<a class='btn btn--connect-github' href='/bring' title='Connect an \
+     open-source project' aria-label='Connect GitHub'>"
+
+  let github_path = "<path d='M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59"
+
+  (* Every live launch document whose top bar carries the persistent action:
+     the viewer-independent entry chrome plus the member arm of each app-chrome
+     wrapper. *)
+  let cta_documents () =
+    [ ( "launch_entry_page"
+      , Earde.Components.launch_entry_page ~page_class:"launch-bring"
+          ~title:"T" ~content:"B" () )
+    ; ( "launch_app_page (member)"
+      , Earde.Components.launch_app_page ~user:"alice"
+          ~page_class:"launch-feed" ~title:"T" ~content:"B" () )
+    ; ( "launch_onboarding_page (member)"
+      , Earde.Components.launch_onboarding_page ~user:"alice"
+          ~page_class:"launch-project-new" ~title:"T" ~content:"B" () )
+    ; ( "launch_community_page (member)"
+      , Earde.Components.launch_community_page ~user:"alice" ~community
+          ~sidebar:"S" ~page_class:"launch-community-overview" ~title:"T"
+          ~content:"B" () )
+    ; ( "launch_community_surface_page (member)"
+      , Earde.Components.launch_community_surface_page ~user:"alice" ~community
+          ~sidebar:"S" ~page_class:"launch-community-channel" ~title:"T"
+          ~main_el:"<main class='cs-main'>B</main>" () )
+    ]
+
+  (* 1./2./3./4./5. — the shape of the control itself, on every wrapper that
+     renders it. /feed, /search, /notifications, /u/:name, /settings and /admin
+     are all launch_app_page; the community surfaces are launch_community_doc;
+     so covering the wrappers covers the routes. *)
+  let shape_case =
+    cc_case "every launch topbar renders one compact GitHub Connect action"
+      (fun () ->
+        List.iter
+          (fun (label, html) ->
+            Alcotest.(check int)
+              (label ^ ": exactly one CTA")
+              1 (count_sub html cta_open);
+            Alcotest.(check bool)
+              (label ^ ": visible text is Connect")
+              true
+              (contains html (cta_open ^ "<svg"));
+            Alcotest.(check bool)
+              (label ^ ": label closes the element")
+              true
+              (contains html "<span>Connect</span></a>");
+            (* exactly one local GitHub mark in the topbar chrome *)
+            Alcotest.(check int)
+              (label ^ ": one GitHub mark")
+              1 (count_sub html github_path);
+            Alcotest.(check bool)
+              (label ^ ": mark is 15px and decorative")
+              true
+              (contains html
+                 "<svg width='15' height='15' viewBox='0 0 16 16' \
+                  fill='currentColor' aria-hidden='true'>");
+            (* no plus glyph anywhere in the actions cluster wording *)
+            List.iter
+              (fun needle ->
+                Alcotest.(check bool)
+                  (label ^ ": no " ^ needle)
+                  false (contains html needle))
+              [ "&#65291; Connect"; "btn--outline-ochre" ];
+            (* still a same-tab GET link to /bring: no form, no new window, no
+               query string, no script hook *)
+            List.iter
+              (fun needle ->
+                Alcotest.(check bool)
+                  (label ^ ": CTA keeps no " ^ needle)
+                  false
+                  (contains cta_open needle))
+              [ "target="; "onclick"; "?"; "method"; "http" ])
+          (cta_documents ()))
+
+  (* 10. the mark is inlined local markup — no request leaves the origin for
+     it, and no icon font or sprite is introduced. *)
+  (* The rendered element, sliced out of a real document so the test never
+     needs the helper itself in Components' public surface. *)
+  let cta_element html =
+    let rec find_open from =
+      if from + String.length cta_open > String.length html then
+        Alcotest.fail "no launch Connect CTA in document"
+      else if String.sub html from (String.length cta_open) = cta_open then from
+      else find_open (from + 1)
+    in
+    let i = find_open 0 in
+    let close = "</a>" in
+    let rec find_close from =
+      if from + String.length close > String.length html then
+        Alcotest.fail "launch Connect CTA is unclosed"
+      else if String.sub html from (String.length close) = close then
+        from + String.length close
+      else find_close (from + 1)
+    in
+    let j = find_close i in
+    String.sub html i (j - i)
+
+  let no_external_asset_case =
+    cc_case "the GitHub mark is inlined, not fetched" (fun () ->
+        let cta =
+          cta_element
+            (Earde.Components.launch_app_page ~user:"alice"
+               ~page_class:"launch-feed" ~title:"T" ~content:"B" ())
+        in
+        List.iter
+          (fun needle ->
+            Alcotest.(check bool)
+              ("CTA references " ^ needle)
+              false (contains cta needle))
+          [ "http"; "//"; "<img"; "url("; "@font-face"; "github.com"
+          ; "githubusercontent" ];
+        Alcotest.(check bool) "mark is an inline svg" true
+          (contains cta github_path))
+
+  (* State behavior: anonymous viewers keep exactly the cluster they had. *)
+  let anonymous_case =
+    cc_case "anonymous launch chrome is unchanged and shows no Connect button"
+      (fun () ->
+        List.iter
+          (fun (label, html) ->
+            Alcotest.(check int)
+              (label ^ ": no Connect button")
+              0 (count_sub html cta_open);
+            Alcotest.(check int)
+              (label ^ ": no GitHub mark")
+              0 (count_sub html github_path);
+            List.iter
+              (fun needle ->
+                Alcotest.(check bool)
+                  (label ^ ": keeps " ^ needle)
+                  true (contains html needle))
+              [ "<a class='btn btn--quiet' href='/bring'>Bring a project</a>"
+              ; "<a class='btn btn--secondary btn--auth' href='/login'>Log \
+                 in</a>"
+              ; "<a class='btn btn--primary btn--auth' href='/signup'>Sign \
+                 up</a>" ])
+          [ ( "launch_app_page (anonymous)"
+            , Earde.Components.launch_app_page ~page_class:"launch-feed"
+                ~title:"T" ~content:"B" () )
+          ; ( "launch_onboarding_page (anonymous)"
+            , Earde.Components.launch_onboarding_page
+                ~page_class:"launch-project-new" ~title:"T" ~content:"B" () )
+          ; ( "launch_community_page (anonymous)"
+            , Earde.Components.launch_community_page ~community ~sidebar:"S"
+                ~page_class:"launch-community-overview" ~title:"T" ~content:"B"
+                () )
+          ])
+
+  (* 8. documents without the application topbar gain nothing. *)
+  let chromeless_case =
+    cc_case "auth and message documents keep no application Connect action"
+      (fun () ->
+        List.iter
+          (fun (label, html) ->
+            List.iter
+              (fun needle ->
+                Alcotest.(check bool)
+                  (label ^ ": no " ^ needle)
+                  false (contains html needle))
+              [ "btn--connect-github"; github_path; "&#65291; Connect" ])
+          [ ( "launch_auth_page (login)"
+            , Earde.Components.launch_auth_page ~page_class:"launch-login"
+                ~title:"T" ~content:"B" () )
+          ; ( "launch_auth_page (signup)"
+            , Earde.Components.launch_auth_page ~page_class:"launch-signup"
+                ~title:"T" ~content:"B" () )
+          ; ( "launch_message_page"
+            , Earde.Components.launch_message_page ~title:"T" ~content:"B" () )
+          ])
+
+  (* 6./7. /bring's own primary action is untouched, byte-for-byte: element,
+     method, action, classes, 20px mark and full label. Rendered through the
+     real handler, so this is the page a browser gets. *)
+  let bring_start_form =
+    "<form method='POST' action='/integrations/github/install/start'><button \
+     type='submit' class='btn btn--dark'><svg width='20' height='20' \
+     viewBox='0 0 16 16' fill='currentColor' aria-hidden='true'><path d='M8 \
+     0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 \
+     7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 \
+     1.08.58 1.23.82.72 1.21 1.87.87 \
+     2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 \
+     0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 \
+     7.6 0 0 1 4 0c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 \
+     2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 \
+     3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 \
+     .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z'/></svg> \
+     Connect a GitHub project</button></form>"
+
+  let bring_untouched_case =
+    cc_case "/bring keeps its byte-identical full-label primary action"
+      (fun () ->
+        let body =
+          Gh_bring.body_of (Gh_bring.run ~session:Gh_bring.member ())
+        in
+        Alcotest.(check int) "start form appears exactly once" 1
+          (count_sub body bring_start_form);
+        Alcotest.(check bool) "full label intact" true
+          (contains body "Connect a GitHub project");
+        (* Intentional on /bring only: the compact topbar action and the
+           explicit page CTA are both present, so the page carries two marks
+           and exactly one of them is the topbar's. *)
+        Alcotest.(check int) "topbar CTA present too" 1
+          (count_sub body cta_open);
+        Alcotest.(check int) "two GitHub marks in total" 2
+          (count_sub body github_path);
+        (* The topbar action is still a link: /bring's non-ready states assert
+           zero forms, so the chrome must not have grown one. *)
+        Alcotest.(check int) "still exactly one form" 1
+          (count_sub body "<form"))
+
+  (* One definition, four call sites, no survivors: the control cannot drift
+     between wrappers and the retired outline class is gone from production. *)
+  let single_definition_case =
+    cc_case "one shared CTA definition feeds every launch topbar" (fun () ->
+        let components =
+          List.assoc "lib/components.ml" Legacy_census.production_sources
+        in
+        Alcotest.(check int) "one definition" 1
+          (count_sub components "let launch_connect_cta");
+        Alcotest.(check int) "definition plus four call sites" 5
+          (count_sub components "launch_connect_cta");
+        Alcotest.(check int) "four topbar action clusters" 4
+          (count_sub components "<div class='topbar__actions'>");
+        Legacy_census.absent_everywhere "retired plus glyph" "&#65291; Connect";
+        (* The generic ochre outline button survives for its own callers, but
+           no launch topbar uses it any more. *)
+        Alcotest.(check int) "components.ml drops btn--outline-ochre" 0
+          (count_sub components "btn--outline-ochre");
+        (* CSS isolation: the modifier exists and is scoped under the top bar,
+           and the responsive hide rule followed the class rename. *)
+        let css = Legacy_census.read "static/css/earde.css" in
+        Alcotest.(check bool) "modifier is topbar-scoped" true
+          (contains css ".topbar__actions .btn--connect-github {");
+        Alcotest.(check int) "modifier is never styled unscoped" 0
+          (count_sub css "\n.btn--connect-github");
+        Alcotest.(check bool) "narrow viewports still hide it" true
+          (contains css ".topbar__actions .btn--connect-github { display: none; }"))
+
+  let suite =
+    [ shape_case; no_external_asset_case; anonymous_case; chromeless_case
+    ; bring_untouched_case; single_definition_case ]
+end
+
 let () =
   Alcotest.run "earde"
     [ ( "smoke"
@@ -64452,4 +64719,10 @@ let () =
          had to survive are all still there. Static source census plus pure
          renders — DB-free. *)
     ; ("legacy_asset_census", Legacy_census.suite)
+      (* The persistent top-right launch-topbar action: one shared compact
+         GitHub-mark "Connect" link on every application topbar, no plus glyph
+         left, anonymous and chromeless documents unchanged, and /bring's own
+         full-label primary action still byte-identical. Pure renders plus a
+         source/CSS census — DB-free. *)
+    ; ("launch_connect_cta", Launch_cta.suite)
     ]
