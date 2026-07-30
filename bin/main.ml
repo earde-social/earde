@@ -68,9 +68,9 @@ let () =
      requests that had nothing to redact. *)
   @@ Earde.Request_target_redaction.restore_middleware
   @@ Dream.router [
-    (* / now redirects to the new global Feed. home_handler is kept (still in
-       handlers.mli) so / can become a real landing page later — hence a
-       temporary redirect, not a 301. *)
+    (* / redirects to the global Feed. Temporary (302), not a 301, so / can
+       become a real landing page later without a cached permanent redirect
+       standing in the way. *)
     Dream.get "/" (fun request -> Dream.redirect request "/feed");
     (* Legacy /all is superseded by /feed. Redirect (not 404) to preserve old
        bookmarks. Temporary redirect to match the existing /-> /feed style above;
@@ -371,7 +371,9 @@ let () =
     Dream.post "/analytics/consent" Earde.Handlers.analytics_consent_handler;
     Dream.any "/analytics/consent" Earde.Handlers.analytics_consent_method_not_allowed;
     Dream.get "/export-data" Earde.Handlers.export_data_handler;
-    Dream.get "/earde-hq-dashboard" Earde.Handlers.hq_dashboard_handler;
+    (* There is deliberately no KPI-dashboard route: PostHog is the
+       authoritative analytics product, and /earde-hq-dashboard was removed
+       without a replacement page and without a redirect. *)
     Dream.get "/_debug/state" Earde.Handlers.debug_state_handler;
     Dream.get "/static/**" (Dream.static "static");
   ]

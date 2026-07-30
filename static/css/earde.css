@@ -2628,8 +2628,8 @@ ol, ul { margin: 0; padding: 0; list-style: none; }
    EARDE INTEGRATION — structured /c/:slug overview only
    Scoped beneath body.launch-community-overview: the structured-community
    branch of GET /c/:slug (Pages.community_overview_page). Flat communities
-   (sections_enabled = false) keep the legacy Site renderer and never load
-   this stylesheet; channel/section/thread pages stay on shell.css. Exists
+   (sections_enabled = false) render Pages.community_page and are scoped by
+   their own section below; channel/section/thread pages likewise. Exists
    only because the real overview cannot emit the reference markup exactly:
    - the connected-projects fragment (ccp-*) is byte-pinned by its fragment
      suites (tag allow-list, counts, DOM order, escaping), so it is spliced
@@ -2892,13 +2892,14 @@ ol, ul { margin: 0; padding: 0; list-style: none; }
    EARDE INTEGRATION — live community channel only
    Scoped beneath body.launch-community-channel: GET /c/:slug/ch/:channel_slug
    (Pages.community_channel_shell_page). Section, thread, settings and every
-   other community surface stay on shell.css. The live chat DOM is a strict
+   other community surface have their own scoped sections. The live chat DOM
+   is a strict
    JS contract (chat_live.js): #chat-live-root IS the scroller
    (.cs-main-body), .cs-main is a flex column whose head / .cs-chat-stage /
    typing row / composer are DIRECT children, the cursor overlay is an
    absolutely-positioned sibling of the scroller inside the stage, and the
-   [hidden] typing row must keep its reserved height. shell.css no longer
-   loads on this route, so its load-bearing cs-* layout rules are
+   [hidden] typing row must keep its reserved height. The retired shell.css
+   no longer exists, so its load-bearing cs-* layout rules are
    re-provided here 1:1 (same boxes, same scroll owner, same flex chain) and
    only re-skinned onto the approved Cartographic chat grammar
    (.chat__head/.msg/.typing/.composer from the design handoff). Other notes:
@@ -3238,8 +3239,8 @@ ol, ul { margin: 0; padding: 0; list-style: none; }
    Scoped beneath body.launch-community-section (GET /c/:slug/s/:section_slug,
    Pages.community_section_shell_page) and body.launch-community-thread
    (GET /c/:slug/t/:id-:slug, Pages.thread_shell_page). Settings, modlog,
-   profiles and every other surface stay on their legacy CSS. shell.css no
-   longer loads on these two routes, so its load-bearing layout rules are
+   profiles and every other surface have their own scoped sections. The
+   retired shell.css no longer exists, so its load-bearing layout rules are
    re-provided here 1:1 (same boxes, same scroll owner, same flex chain) and
    re-skinned onto the approved Cartographic grammar. Exists only because the
    real pages cannot emit reference markup exactly:

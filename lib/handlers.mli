@@ -32,7 +32,6 @@ val reset_password_page_handler : Dream.handler
 val reset_password_handler : Dream.handler
 
 (** === CORE FEED === *)
-val home_handler : Dream.handler
 val feed_handler : Dream.handler
 val search_handler : Dream.handler
 
@@ -162,7 +161,6 @@ val unread_notifs_api : Dream.handler
 val privacy_page_handler : Dream.handler
 
 (** === ADMIN === *)
-val hq_dashboard_handler : Dream.handler
 val ban_user_handler : Dream.handler
 val unban_user_global_handler : Dream.handler
 val admin_dashboard_handler : Dream.handler

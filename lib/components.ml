@@ -133,74 +133,11 @@ let post_thumbnail ?(alt="Post image") ~img_class image_url =
       else Printf.sprintf "<img src='%s' class='%s' alt='%s'>" src img_class (html_escape alt)
   | _ -> ""
 
-(* === LAYOUT === *)
-
-(* CDN Tailwind avoids a build step — acceptable for dev/staging; swap for a
-   bundled stylesheet before serving under high traffic to remove the round-trip. *)
-(* request is optional so callers without session context (e.g. choose_community_page)
-   can omit it and get is_admin=false by default — no forced parameter threading. *)
-(* head_extra/full_bleed are opt-in per page (default to today's behavior) so feature
-   pages — e.g. the community shell — can pull in their own stylesheet and go edge-to-edge
-   without affecting any existing call site. *)
-
-(* The App command bar: the mono, app-like topbar used by every shell surface (feed + community
-   channel/section/thread). It is deliberately distinct from the warm Site navbar so the in-app
-   shell reads as one coherent product instead of half-old-site. Markup mirrors the mockup's
-   .topbar; styles live in shell.css (.app-topbar…), which is loaded only on shell pages, so these
-   unscoped class names never leak to Site pages. Uses only real routes — no fake links. *)
-let render_app_topbar ?user ?request:_ ~is_admin () =
-  let nav = "" in
-  (* Same /search route + ?q= contract as the Site search; only the styling is grep-like. *)
-  let search =
-    "<form class='app-search' action='/search' method='GET'>\
-       <span class='app-sigil'>/</span>\
-       <input type='text' name='q' required placeholder='grep public threads · communities…'>\
-       <button type='submit' title='Search'>&#8629;</button>\
-     </form>"
-  in
-  let right =
-    match user with
-    | Some username ->
-        let u = html_escape username in
-        (* /admin is admin-only; the handler re-checks is_admin, so the link leaks nothing. There is
-           no global mod dashboard route, so no Mod link is offered (no fake links). *)
-        let admin_item = if is_admin then "<a href='/admin'>Admin</a>" else "" in
-        let initial =
-          if String.length username > 0
-          then html_escape (String.sub (String.uppercase_ascii username) 0 1)
-          else "?"
-        in
-        (* User menu is a pure-CSS <details> (no JS), modeled on the existing .cs-row-mod menu.
-           Log out stays a POST form — unchanged route semantics. The notifications link keeps
-           id='notif-badge' exactly where the layout's polling JS expects it. *)
-        Printf.sprintf "
-          <a class='app-start' href='/bring'>Connect a project</a>
-          <a class='app-bell' href='/notifications' title='Notifications' aria-label='Notifications'><svg class='app-icon' aria-hidden='true' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'><path d='M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9'></path><path d='M10 21h4'></path></svg><span id='notif-badge' class='app-badge hidden'>0</span></a>
-          <details class='app-user'>
-            <summary><span class='app-avatar'>%s</span><span class='app-uname'>u/%s</span></summary>
-            <div class='app-user-menu'>
-              <a href='/u/%s'>Profile</a>
-              <a href='/settings'>Settings</a>
-              <a href='/notifications'>Notifications</a>
-              %s
-              <form action='/logout' method='POST' class='app-logout'><button type='submit'>Log out</button></form>
-            </div>
-          </details>"
-          initial u u admin_item
-    | None ->
-        "<a class='app-login' href='/login'>Log in</a>\
-         <a class='app-cta' href='/signup'>Sign up</a>"
-  in
-  Printf.sprintf "
-      <header class='app-topbar'>
-        <div class='app-topbar-inner'>
-          <a class='app-brand' href='/feed' aria-label='Earde feed'><img src='/static/images/logo-mark.svg' alt='' class='app-logo-mark'><img src='/static/images/logo-wordmark.svg' alt='Earde' class='app-logo-wordmark'></a>
-          %s
-          %s
-          <div class='app-right'>%s</div>
-        </div>
-      </header>"
-    nav search right
+(* === LAYOUT ===
+   Every live document is a complete, self-contained Cartographic Civic
+   launch page (the launch_* wrappers below). They share exactly two
+   ingredients — the desktop-only mobile gate and the analytics assets —
+   and load no external stylesheet, font or script. *)
 
 (* Desktop-only gate. MVP is desktop-first: rather than making the multi-pane app shell
    responsive, a phone-width viewport gets a centered "open on desktop" panel instead of the
@@ -228,9 +165,8 @@ let mobile_desktop_gate =
    The same root carries the §4.2 identity attribute (authenticated pages
    only: exactly user:<id>, nothing else — no username/email/raw id) and
    the §5.3 group attribute (community-scoped pages only: exactly
-   community:<id>, keyed by the immutable numeric id). Shared by [layout]
-   and [launch_entry_page] so every document family carries the exact same
-   analytics assets. *)
+   community:<id>, keyed by the immutable numeric id). Shared by every
+   launch_* document so all of them carry the exact same analytics assets. *)
 let analytics_assets ?request ?analytics_community () =
   match Posthog.browser_config () with
     | None -> ("", "")
@@ -281,301 +217,15 @@ let analytics_assets ?request ?analytics_community () =
             (html_escape cfg.Posthog.browser_deployment_environment)
             identity_attr group_attr private_attr )
 
-(* chrome selects the page furniture: `Site = the warm Tailwind navbar + Privacy footer
-   (every legacy/marketing/private page); `App = the mono command bar and NO footer, for the
-   in-app shell. The shell surfaces (feed, section/channel/thread, account, admin, community
-   management, and the public /c/:slug community-home) opt into `App via their wrappers; the
-   remaining legacy/marketing pages keep `Site, byte-for-byte unchanged. *)
-let layout ?(noindex=false) ?user ?request ?(head_extra="") ?(full_bleed=false) ?(chrome=`Site) ?analytics_community ~title content =
-  let is_admin = match request with
-    | Some req -> Dream.session_field req "is_admin" = Some "true"
-    | None -> false
-  in
-  let analytics_head, analytics_banner =
-    analytics_assets ?request ?analytics_community ()
-  in
-  let auth_menu =
-    match user with
-    | Some username ->
-        (* Admin link: shown only in-session to keep the navbar uncluttered for
-           non-admins; linking to /admin exposes no data on its own — the handler
-           re-checks is_admin before rendering anything sensitive. *)
-        let admin_link =
-          if is_admin then
-            "<a href='/admin' class='text-red-600 hover:text-red-800 font-semibold text-xs border border-red-200 px-2 py-1 rounded-xl hover:bg-red-50 transition' title='Admin Dashboard'>🛡️ Admin</a>"
-          else ""
-        in
-        Printf.sprintf "
-          <div class='flex flex-row items-center gap-2 sm:gap-3'>
-            <a href='/u/%s' class='hidden sm:block text-[#3C3630] hover:text-[#C94C4C] font-medium text-sm transition'>u/%s</a>
-            %s
-            <a href='/notifications' class='relative text-gray-400 hover:text-gray-600 text-base' title='Notifications'>
-                🔔 <span id='notif-badge' class='hidden absolute -top-1 -right-2 bg-red-500 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full'>0</span>
-            </a>
-            <form action='/logout' method='POST' class='m-0 p-0 flex items-center'>
-               <button type='submit' class='text-xs text-gray-500 hover:text-red-600 font-medium border border-[#E0D9CC] px-3 py-1 rounded-xl hover:border-red-200 transition'>
-                 Log out
-               </button>
-            </form>
-          </div>"
-        (html_escape username) (html_escape username) admin_link
-    | None ->
-        "<div class='flex items-center space-x-3'>
-           <a href='/login' class='text-[#3C3630] hover:text-[#C94C4C] font-medium text-sm transition'>Log in</a>
-           <a href='/signup' class='bg-[#C94C4C] text-[#F7F3E8] px-4 py-1.5 rounded-xl hover:bg-[#A83A3A] font-semibold text-sm transition'>Sign up</a>
-         </div>"
-  in
-
-  let robots_meta = if noindex then "<meta name='robots' content='noindex'>" else "" in
-
-  (* `App surfaces carry the desktop-only gate: the stylesheet in <head> plus the panel in
-     <body>. mobile-gate.css hides the app chrome and reveals the panel under the breakpoint;
-     above it the panel stays display:none. `Site/`Auth (legal/marketing, focused auth card)
-     are left usable, so they get neither. *)
-  let gate_css, gate_html = match chrome with
-    | `App -> mobile_gate_css_link, mobile_desktop_gate
-    | `Site | `Auth -> "", ""
-  in
-
-  (* full_bleed hands width/height control to the page (the community shell sizes its own
-     fixed multi-pane grid); the default keeps the capped, padded content column. *)
-  let main_class =
-    if full_bleed then "flex-grow w-full"
-    else "flex-grow max-w-[1600px] w-full mx-auto px-6 sm:px-8 py-6"
-  in
-
-  (* Topbar + footer are chosen together by chrome. `App drops the footer entirely (the shell fills
-     the viewport) and swaps in the mono command bar; `Site keeps the existing navbar + footer. *)
-  let topbar_html, footer_html =
-    match chrome with
-    | `App -> render_app_topbar ?user ?request ~is_admin (), ""
-    (* `Auth: focused auth/account-lifecycle pages own the full viewport with their
-       own centered card (auth.css) — no command bar, no navbar, no footer. *)
-    | `Auth -> "", ""
-    | `Site ->
-        let site_topbar = Printf.sprintf "
-      <nav class='bg-[#F7F3E8] border-b border-[#E0D9CC] sticky top-0 z-50'>
-          <div class='w-full px-4 md:px-6 py-3 flex items-center justify-between'>
-              <div class='flex-shrink-0 flex items-center'>
-                  <a href='/' class='app-brand flex items-center gap-[9px] py-1' aria-label='Earde home'><img src='/static/images/logo-mark.svg' alt='' class='app-logo-mark block h-8 w-8 shrink-0 object-contain'><img src='/static/images/logo-wordmark.svg' alt='Earde' class='app-logo-wordmark block h-7 w-auto max-w-[130px] shrink object-contain mr-4'></a>
-              </div>
-              <div class='flex-1 flex justify-center max-w-2xl px-4'>
-                  <form action='/search' method='GET' class='hidden md:flex items-center w-full'>
-                      <div class='relative w-full'>
-                          <div class='absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none'>
-                              <span class='text-gray-400 text-sm'>🔍</span>
-                          </div>
-                          <input type='text' name='q' placeholder='Search communities, users, posts...' required
-                                 class='w-full pl-9 pr-4 py-1.5 bg-[#EDE9DF] border border-transparent text-[#3C3630] text-sm rounded-xl focus:bg-white focus:border-[#C94C4C] focus:ring-1 focus:outline-none transition'>
-                      </div>
-                  </form>
-              </div>
-              <div class='flex flex-row items-center justify-end gap-2 sm:gap-4 shrink-0'>
-                  %s
-              </div>
-          </div>
-      </nav>" auth_menu
-        in
-        let site_footer = "
-      <footer class='border-t border-[#E0D9CC] mt-auto'>
-          <div class='max-w-screen-2xl mx-auto py-4 px-6 sm:px-8'>
-              <p class='text-center text-[#8C7E6E] text-xs'>&copy; 2026 Earde &middot; <a href='/privacy' class='hover:text-[#C94C4C] transition'>Privacy</a></p>
-          </div>
-      </footer>"
-        in
-        site_topbar, site_footer
-  in
-
-  Printf.sprintf "
-  <!DOCTYPE html>
-  <html lang='en' class='scroll-smooth'>
-  <head>
-      <meta charset='UTF-8'>
-      <meta name='viewport' content='width=device-width, initial-scale=1.0'>
-      <title>%s - Earde</title>
-      %s
-      %s
-      %s
-      <link rel='preconnect' href='https://fonts.googleapis.com'>
-      <link rel='preconnect' href='https://fonts.gstatic.com' crossorigin>
-      <link href='https://fonts.googleapis.com/css2?family=Nunito:wght@400;500;600;700;800&display=swap' rel='stylesheet'>
-      <script src='https://cdn.tailwindcss.com'></script>
-      <style>body { font-family: 'Nunito', sans-serif; letter-spacing: 0.015em; }</style>
-      %s
-  </head>
-  <body class='bg-[#F7F3E8] text-[#3C3630] min-h-screen flex flex-col'>
-      %s
-      <main class='%s'>
-          %s
-      </main>
-      %s
-      %s
-      %s
-
-      <script>
-        /* Custom confirmation modal: replaces native window.confirm() — the browser's
-           built-in dialog is synchronous, unstyled, and blocks the JS thread. */
-        function confirmModal(event, message) {
-          event.preventDefault();
-          const form = event.target;
-          const overlay = document.createElement('div');
-          overlay.className = 'fixed inset-0 bg-gray-900/40 backdrop-blur-sm z-50 flex items-center justify-center opacity-0 transition-opacity duration-200';
-          const modal = document.createElement('div');
-          modal.className = 'bg-white rounded-2xl shadow-xl p-6 max-w-sm w-full mx-4 transform scale-95 transition-transform duration-200';
-          modal.innerHTML = `
-            <h3 class='text-lg font-semibold text-gray-900 mb-2'>Are you sure?</h3>
-            <p class='text-sm text-gray-500 mb-6' id='modal-confirm-msg'></p>
-            <div class='flex justify-end gap-3'>
-              <button type='button' class='px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-xl hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-[#C94C4C]' id='cancel-btn'>Cancel</button>
-              <button type='button' class='px-4 py-2 text-sm font-medium text-white bg-red-600 border border-transparent rounded-xl hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-600' id='confirm-btn'>Confirm</button>
-            </div>`;
-          /* textContent prevents innerHTML XSS — message may contain user-supplied
-             usernames (e.g., ban dialog). Using textContent treats the value as
-             plain text regardless of what it contains. */
-          modal.querySelector('#modal-confirm-msg').textContent = message;
-          overlay.appendChild(modal);
-          document.body.appendChild(overlay);
-          requestAnimationFrame(() => {
-            overlay.classList.remove('opacity-0');
-            modal.classList.remove('scale-95');
-          });
-          const close = () => {
-            overlay.classList.add('opacity-0');
-            modal.classList.add('scale-95');
-            setTimeout(() => overlay.remove(), 200);
-          };
-          document.getElementById('cancel-btn').onclick = close;
-          /* form.submit() bypasses the submit event so onsubmit won't re-fire. */
-          document.getElementById('confirm-btn').onclick = () => { close(); form.submit(); };
-        }
-        /* Clipboard write is async; we optimistically swap innerHTML and class list
-           rather than disabling the button — avoids layout shift on fast connections. */
-        function copyPostLink(path, btn) {
-          var fullUrl = window.location.origin + path;
-          navigator.clipboard.writeText(fullUrl).then(function() {
-            var originalHTML = btn.innerHTML;
-            btn.innerHTML = '<svg class=\"w-4 h-4 mr-1 inline\" fill=\"none\" stroke=\"currentColor\" viewBox=\"0 0 24 24\"><path stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"2\" d=\"M5 13l4 4L19 7\"></path></svg> Copied';
-            btn.classList.add('text-emerald-600');
-            btn.classList.remove('text-gray-500', 'hover:text-gray-900');
-            setTimeout(function() {
-              btn.innerHTML = originalHTML;
-              btn.classList.remove('text-emerald-600');
-              btn.classList.add('text-gray-500', 'hover:text-gray-900');
-            }, 2000);
-          }).catch(function(err) { console.error('Failed to copy: ', err); });
-        }
-        /* Optimistic vote update: mutate DOM immediately, then fire-and-forget XHR.
-           If the request fails the server state is authoritative on next page load —
-           acceptable UX trade-off for a forum where stale scores are low-stakes. */
-        document.querySelectorAll(\"form[action='/vote'], form[action='/vote-comment']\").forEach(form => {
-            form.addEventListener(\"submit\", async (e) => {
-                e.preventDefault();
-                const formData = new FormData(form);
-                const urlEncodedData = new URLSearchParams(formData).toString();
-
-                fetch(form.action, {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-                    body: urlEncodedData
-                });
-
-                const container = form.parentElement;
-                const scoreSpan = container.querySelector(\"span\");
-                let score = parseInt(scoreSpan.innerText);
-
-                const upForm = container.firstElementChild;
-                /* downForm may be absent when allow_downvotes=false — guard against
-                   lastElementChild being the score <span> rather than a vote form. */
-                const lastEl = container.lastElementChild;
-                const downForm = (lastEl && lastEl.tagName === 'FORM') ? lastEl : null;
-
-                const upBtn = upForm?.querySelector(\"button\");
-                const downBtn = downForm?.querySelector(\"button\");
-
-                const upInput = upForm?.querySelector(\"input[name='direction']\");
-                const downInput = downForm?.querySelector(\"input[name='direction']\");
-
-                const action = parseInt(formData.get(\"direction\"));
-                const isUpvoteBtn = form === upForm;
-
-                const resetColors = () => {
-                    upBtn?.classList.remove(\"text-orange-500\");
-                    upBtn?.classList.add(\"text-gray-400\", \"hover:text-orange-500\");
-                    downBtn?.classList.remove(\"text-[#69C3D2]\");
-                    downBtn?.classList.add(\"text-gray-400\", \"hover:text-[#69C3D2]\");
-                };
-
-                if (action === 1) {
-                    /* downInput===null means downvotes disabled → no prior downvote possible */
-                    if (downInput && parseInt(downInput.value) === 0) score += 2;
-                    else score += 1;
-                    resetColors();
-                    upBtn?.classList.remove(\"text-gray-400\", \"hover:text-orange-500\");
-                    upBtn?.classList.add(\"text-orange-500\");
-                    if (upInput) upInput.value = \"0\";
-                    if (downInput) downInput.value = \"-1\";
-                }
-                else if (action === -1) {
-                    if (upInput && parseInt(upInput.value) === 0) score -= 2;
-                    else score -= 1;
-                    resetColors();
-                    downBtn?.classList.remove(\"text-gray-400\", \"hover:text-[#69C3D2]\");
-                    downBtn?.classList.add(\"text-[#69C3D2]\");
-                    if (upInput) upInput.value = \"1\";
-                    if (downInput) downInput.value = \"0\";
-                }
-                else if (action === 0) {
-                    if (isUpvoteBtn) score -= 1;
-                    else score += 1;
-                    resetColors();
-                    if (upInput) upInput.value = \"1\";
-                    if (downInput) downInput.value = \"-1\";
-                }
-
-                scoreSpan.innerText = score;
-            });
-        });
-      // Notif badge polling — fires once per page load to avoid repeated DB hits
-        fetch('/api/unread-notifs')
-            .then(response => response.text())
-            .then(count => {
-                let c = parseInt(count);
-                if (c > 0) {
-                    let badge = document.getElementById('notif-badge');
-                    if (badge) {
-                        badge.innerText = c;
-                        badge.classList.remove('hidden');
-                    }
-                }
-            }).catch(e => console.log(e));
-      </script>
-  </body>
-  </html>"
-  title robots_meta head_extra gate_css analytics_head topbar_html main_class content footer_html gate_html analytics_banner
-
-(* Focused auth/account-lifecycle layout: a single centered card in the cool-grey
-   shell idiom (auth.css), with no rail/sidebar/command bar. Uses `Auth chrome (no
-   topbar, no footer) and full_bleed so .auth-shell can own the whole viewport. The
-   brand mark mirrors render_app_topbar's and links to /feed. [card] is the inner
-   card HTML the caller renders (form or message panel). *)
-let auth_css_link = "<link rel='stylesheet' href='/static/css/auth.css'>"
-
-let auth_page ?user ?(noindex=false) ?request ~title ~card () =
-  let body =
-    Printf.sprintf
-      "<div class='auth-shell'>\
-         <a class='auth-brand' href='/feed' aria-label='Earde feed'><img src='/static/images/logo-mark.svg' alt='' class='auth-logo-mark'><img src='/static/images/logo-wordmark.svg' alt='Earde' class='auth-logo-wordmark'></a>\
-         <div class='auth-card'>%s</div>\
-       </div>"
-      card
-  in
-  layout ?user ?request ~noindex ~full_bleed:true ~chrome:`Auth ~head_extra:auth_css_link ~title body
+(* The pre-launch page furniture (the warm Tailwind `Site navbar + footer, the
+   mono `App command bar, and the focused `Auth card) is gone. Every live
+   document is now one of the self-contained Cartographic Civic launch
+   wrappers below: they load /static/css/earde.css (plus the shared
+   desktop-only mobile gate on app surfaces) and nothing external. *)
 
 (* Cartographic Civic launch entry document (pass 1: /bring only). A complete,
    self-contained HTML document that loads only the launch stylesheet
-   (earde.css) — no Tailwind, no external fonts, no legacy per-page CSS — so
-   the two design systems never collide on one page. Not wired into [layout]:
-   existing wrappers and their callers are untouched.
+   (earde.css) — no Tailwind, no external fonts, no legacy per-page CSS.
 
    The chrome is deliberately viewer-independent and form-free: /bring's
    non-ready states assert zero <form> elements across the whole document,
@@ -584,10 +234,9 @@ let auth_page ?user ?(noindex=false) ?request ~title ~card () =
    no logout, and no login/signup. Every link is a real route (/feed,
    /search, /bring).
 
-   Analytics behavior is unchanged: the same shared [analytics_assets] as
-   [layout] (script + consent banner); the scoped integration CSS at the end
-   of earde.css positions the banner, whose utility classes are inert
-   without Tailwind. [page_class] is the route-specific scoping root for
+   Analytics behavior is the shared [analytics_assets] (script + consent
+   banner); the scoped integration CSS at the end of earde.css positions the
+   banner, whose utility classes are inert without Tailwind. [page_class] is the route-specific scoping root for
    that integration CSS (e.g. "launch-bring"), stamped on <body>. *)
 let launch_entry_page ?(noindex = false) ?request ~page_class ~title ~content () =
   let analytics_head, analytics_banner = analytics_assets ?request () in
@@ -646,8 +295,8 @@ let launch_entry_page ?(noindex = false) ?request ~page_class ~title ~content ()
 
 (* Cartographic Civic launch auth document (pass 2: /login and /signup only).
    Like [launch_entry_page], a complete self-contained document that loads only
-   earde.css — no Tailwind, no external fonts, no auth.css, no mobile gate, no
-   notification polling — but with the approved *anonymous* top bar (Bring a
+   earde.css — no Tailwind, no external fonts, no legacy per-page CSS, no
+   mobile gate, no notification polling — but with the approved *anonymous* top bar (Bring a
    project / Log in / Sign up) instead of the entry chrome, and no icon rail:
    the /login and /signup routes render no panes at all (04-ROUTES).
 
@@ -655,7 +304,7 @@ let launch_entry_page ?(noindex = false) ?request ~page_class ~title ~content ()
    routes for every request, no bell, no user chip, no logout form. The
    command field stays a styled link to /search (same trick as pass 1) so this
    wrapper adds no form contract beyond the page's own auth form. Analytics
-   behavior is the shared [analytics_assets], identical to [layout] and
+   behavior is the shared [analytics_assets], identical to
    [launch_entry_page]. [page_class] ("launch-login" / "launch-signup") lands
    on <body> next to the shared "launch-auth" scope root that the integration
    CSS at the end of earde.css keys on. Existing wrappers and their callers
@@ -709,7 +358,8 @@ let launch_auth_page ?(noindex = false) ?request ~page_class ~title ~content () 
 (* Cartographic Civic launch message document (pass 17: the shared
    Pages.msg_page only). Like the other launch documents, complete and
    self-contained, loading only earde.css — no Tailwind, no external fonts,
-   no auth.css, no mobile gate, no behavior script, no notification wiring —
+   no legacy per-page CSS, no mobile gate, no behavior script, no
+   notification wiring —
    but with NO chrome at all beyond the paper shell: no top bar, no rail, no
    sidebar, no footer, no forms. ~400 handler call sites across every status
    family (200/400/403/404/409/429/500) share this one document, several of
@@ -718,8 +368,8 @@ let launch_auth_page ?(noindex = false) ?request ~page_class ~title ~content () 
    resource-independent: the only per-render variation is [title] and
    [content], both caller-supplied. The single body class is the neutral
    "launch-message-page" — never status- or resource-derived. Analytics
-   behavior is the shared [analytics_assets], identical to [layout] and the
-   other launch wrappers; msg_page has always rendered without a robots
+   behavior is the shared [analytics_assets], identical to the other launch
+   wrappers; msg_page has always rendered without a robots
    meta, so [noindex] keeps the same default. *)
 let launch_message_page ?(noindex = false) ?request ~title ~content () =
   let analytics_head, analytics_banner = analytics_assets ?request () in
@@ -762,15 +412,14 @@ let launch_tile_color slug =
   String.iter (fun c -> sum := !sum + Char.code c) slug;
   palette.(!sum mod Array.length palette)
 
-(* The behavior script members' launch app documents carry: byte-for-byte the
-   inline script [layout] ships (confirm modal for the own-post delete form,
-   share-link copy, optimistic voting over form[action='/vote'] /
-   form[action='/vote-comment'], and the ONE-SHOT notification-badge fetch —
-   one request per page load, no polling loop). Kept as a verbatim copy so the
-   launch document preserves every DOM contract (parentElement traversal,
-   first/lastElementChild vote forms, the legacy Tailwind colour class names
-   the vote handler toggles, id='notif-badge' + the `hidden` class) without
-   touching [layout] itself. Anonymous launch documents omit it entirely: they
+(* The behavior script members' launch app documents carry: the confirm modal
+   for the own-post delete form, share-link copy, optimistic voting over
+   form[action='/vote'] / form[action='/vote-comment'], and the ONE-SHOT
+   notification-badge fetch — one request per page load, no polling loop. It is
+   the pre-launch inline script carried over verbatim, so every DOM contract
+   still holds (parentElement traversal, first/lastElementChild vote forms, the
+   colour class names the vote handler toggles, id='notif-badge' + the `hidden`
+   class). Anonymous launch documents omit it entirely: they
    render no vote forms, no ⋯ menu and no badge, so there is nothing for it to
    do and no /api/unread-notifs request should fire. *)
 (* The one copyPostLink definition, shared verbatim by the authenticated
@@ -927,20 +576,19 @@ let launch_behavior_script = {js|<script>
 
 (* Cartographic Civic launch app document (pass 3: /feed only). Like the pass
    1/2 documents, a complete self-contained page loading only earde.css — no
-   Tailwind, no external fonts, no shell.css — but with the approved full app
+   Tailwind, no external fonts, no legacy per-page CSS — but with the full app
    chrome: the 54px top bar (brand → /feed, a REAL /search form, viewer-state
    actions), the dark 64px icon rail (Feed active with its bleeding marker,
    one tile per real joined community, ＋ → /bring), the central main column,
    and an optional right aside. Unlike the entry/auth documents it also
-   carries the desktop-only mobile gate (same stylesheet + panel as `App
-   [layout] surfaces) and, for members only, the exact [layout] behavior
+   carries the desktop-only mobile gate (the shared stylesheet + panel) and,
+   for members only, the shared launch behavior
    script (optimistic voting, confirm modal, one-shot notification fetch) —
    see [launch_behavior_script]. Community tiles keep the existing rail
    destination (/c/:slug/ch/general) and face fallback (avatar image when it
    passes the gate, else the 2-letter slug glyph) so the launch rail offers
-   exactly the capabilities the legacy rail does. Every link is a real route.
-   Existing wrappers ([layout], [global_shell], [feed_shell], …) and their
-   callers are untouched. *)
+   exactly the capabilities the pre-launch rail did. Every link is a real
+   route. *)
 let launch_app_page ?(noindex = false) ?request ?user ?(rail_communities = [])
     ?analytics_community ?(aside = "") ~page_class ~title ~content () =
   let analytics_head, analytics_banner =
@@ -981,8 +629,8 @@ let launch_app_page ?(noindex = false) ?request ?user ?(rail_communities = [])
     match user with
     | Some username ->
         let u = html_escape username in
-        (* /admin is admin-only; the handler re-checks is_admin, so the link
-           leaks nothing (same rule as render_app_topbar). *)
+        (* /admin is admin-only; the handler re-checks is_admin, so offering
+           the link to a flagged session leaks nothing. *)
         let admin_item = if is_admin then "<a href='/admin'>Admin</a>" else "" in
         let initial =
           if String.length username > 0
@@ -1103,7 +751,7 @@ let launch_app_page ?(noindex = false) ?request ?user ?(rail_communities = [])
 (* Cartographic Civic launch onboarding document (pass 4: /projects/new only).
    Like the pass 1-3 documents, a complete self-contained page loading only
    earde.css plus the shared desktop-only mobile gate — no Tailwind, no
-   external fonts, no shell.css, no create.css — under the launch app chrome:
+   external fonts, no legacy per-page CSS — under the launch app chrome:
    the 54px top bar (brand → /feed, the command field as a styled LINK to
    /search — this wrapper adds no form of its own beyond the page content —
    and viewer-state actions: anonymous Bring/Log in/Sign up, or the member
@@ -1117,18 +765,17 @@ let launch_app_page ?(noindex = false) ?request ?user ?(rail_communities = [])
    slicing marker for the feature test suites (fragment = create-shell →
    </main>), so all launch chrome — stepper included — must precede it and
    nothing may follow its close inside <main>. [content] is the existing
-   feature body, wrapped in the identical <div class='create-shell'>…</div>
-   that [create_page] emits, byte-for-byte.
+   feature body, wrapped in a <div class='create-shell'>…</div>, byte-for-byte
+   as this route has always emitted it.
 
-   Member documents carry the exact shared [launch_behavior_script] (the bell
-   badge is its only live consumer here — vote selectors match nothing), the
-   same behavior the legacy create_page/[layout] document had on this route;
-   anonymous documents carry no script. Analytics assets are the shared
+   Member documents carry the shared [launch_behavior_script] (the bell badge
+   is its only live consumer here — vote selectors match nothing), the same
+   behavior this route's pre-launch document had; anonymous documents carry no
+   script. Analytics assets are the shared
    [analytics_assets], identical to every other launch document. [page_class]
    (e.g. "launch-project-new") is the scoping root stamped on <body> for the
    route's integration CSS at the end of earde.css. Used only by
-   [Project_setup_pages.project_setup_page]; existing wrappers ([create_page],
-   [layout], the other launch documents) and their callers are untouched. *)
+   [Project_setup_pages.project_setup_page]. *)
 let launch_onboarding_page ?(noindex = false) ?request ?user ?(stepper = "")
     ~page_class ~title ~content () =
   let analytics_head, analytics_banner = analytics_assets ?request () in
@@ -1221,8 +868,8 @@ let launch_onboarding_page ?(noindex = false) ?request ?user ?(stepper = "")
 (* Cartographic Civic launch community document (pass 8: the structured
    /c/:slug overview only). Like the pass 1-7 documents, a complete
    self-contained page loading only earde.css plus the shared desktop-only
-   mobile gate — no Tailwind, no external fonts, no shell.css, no
-   community-home.css — but with the approved four-pane community shell: the
+   mobile gate — no Tailwind, no external fonts, no legacy per-page CSS —
+   but with the approved four-pane community shell: the
    54px top bar (brand → /feed, the REAL /search form, viewer-state actions —
    identical clusters to [launch_app_page], including the member ⋯ menu with
    the existing logout POST form and the id='notif-badge' bell), the dark
@@ -1233,8 +880,8 @@ let launch_onboarding_page ?(noindex = false) ?request ?user ?(stepper = "")
    not the `.aside` pane, so no aside parameter exists.
 
    Analytics assets carry the §5.3 community group attribute (and the §13
-   private marker) exactly as the legacy [community_home_page] wrapper did:
-   the (id, visibility) pair comes from the [community] record itself.
+   private marker): the (id, visibility) pair comes from the [community]
+   record itself, never from URL shape.
    Replay privacy: for a private community the ph-no-capture class rides on
    the existing `.shell` element (sidebar + main together) — never a new
    wrapper div, so the flex chain is untouched. Member documents carry the
@@ -1245,9 +892,7 @@ let launch_onboarding_page ?(noindex = false) ?request ?user ?(stepper = "")
    the route's integration CSS at the end of earde.css. Shared doc builder
    behind [launch_community_page] (pass 8 overview) and
    [launch_community_surface_page] (pass 9 channel), so the two routes'
-   global rails can never diverge;
-   existing wrappers ([layout], [community_home_page], [community_shell],
-   the other launch documents) and their callers are untouched. *)
+   global rails can never diverge. *)
 let launch_community_doc ?(noindex = false) ?request ?user
     ?(rail_communities = []) ?(head_extra = "") ?(aside = "")
     ~(community : community) ~sidebar ~page_class ~title ~main_el () =
@@ -2064,213 +1709,13 @@ let render_forum_row ?(is_current_user_mod=false) ?(mod_usernames=[]) ?(admin_us
     domain_html (render_author ~mod_usernames ~admin_usernames post.username) (time_ago post.created_at) thread_href post.comment_count
     mod_menu
 
-let community_card (community : community) =
-  Printf.sprintf "
-  <div class='bg-white rounded-xl p-5 border border-[#E0D9CC] hover:border-[#C94C4C] transition border-l-4 border-l-[#C94C4C] shadow-[0_2px_8px_rgba(60,54,48,0.06)]'>
-      <h2 class='text-base font-semibold text-gray-900 mb-1'>%s</h2>
-      <div class='text-xs text-[#C94C4C] mb-2 font-mono'>/c/%s</div>
-      <p class='text-gray-500 text-sm'>%s</p>
-  </div>"
-    (html_escape community.name)
-    (html_escape community.slug)
-    (html_escape (Option.value ~default:"No description." community.description))
-
-(* Shared left nav: drives the "Your Communities" list on index, community, and post pages.
-   Extracted to avoid divergent copies of the same community list markup. *)
-let left_sidebar ?user ~moderated_communities (user_communities : community list) =
-  match user with
-  | None ->
-      "<div class='bg-[#EDE9DF] p-4 rounded-xl border border-[#D8D0C0]'><h3 class='font-semibold text-[#3C3630] mb-1 text-sm'>Join Earde</h3><p class='text-xs text-[#5C5248] mb-3'>Create an account to follow communities and join the conversation.</p><a href='/signup' class='block w-full bg-[#C94C4C] text-[#F7F3E8] text-center py-2 rounded-xl font-semibold text-sm hover:bg-[#A83A3A] transition'>Sign Up</a></div><div class='mt-4 bg-stone-50 border border-stone-200 rounded-xl p-4'><h3 class='text-xs font-semibold text-stone-500 uppercase tracking-wider mb-2'>Learn More</h3><ul class='space-y-2'><li><a href='/privacy' class='flex items-center gap-2 text-sm text-stone-700 hover:underline transition'><span>&#128737;&#65039;</span><span>Privacy Policy</span></a></li></ul></div>"
-  | Some _ ->
-      if user_communities = [] && moderated_communities = [] then
-        "<div class='p-4 bg-white rounded-xl border border-[#E0D9CC] shadow-[0_2px_8px_rgba(60,54,48,0.06)]'><p class='text-sm text-gray-500 mb-3'>You haven't joined any communities yet.</p><a href='/bring' class='text-[#C94C4C] font-bold text-sm hover:underline'>Connect a project &rarr;</a></div>"
-      else
-        (* Dedup: following list excludes communities the user already moderates. *)
-        let mod_ids = List.map (fun (a : community) -> a.id) moderated_communities in
-        let following_communities = List.filter (fun (a : community) -> not (List.mem a.id mod_ids)) user_communities in
-        let home_link = "<li><a href='/' class='flex items-center space-x-2 p-2 rounded-xl hover:bg-gray-50 text-gray-700 font-medium transition'><span class='text-gray-400 mr-1'>🏠</span><span class='truncate'>Home</span></a></li>" in
-        let privacy_link = "<li><a href='/privacy' class='flex items-center space-x-2 p-2 rounded-xl hover:bg-gray-50 text-gray-700 font-medium transition'><span class='text-gray-400 mr-1'>&#128737;&#65039;</span><span class='truncate'>Privacy Policy</span></a></li>" in
-        let mod_section =
-          if moderated_communities = [] then ""
-          else
-            let mod_items = List.map (fun (a : community) ->
-              Printf.sprintf "<li><a href='/c/%s' class='flex items-center space-x-2 p-2 rounded-xl hover:bg-gray-50 text-gray-700 font-medium transition'><span class='text-[#69C3D2] font-bold'>/c/</span><span class='truncate'>%s</span><span class='ml-auto text-xs' title='Moderating'>🛡️</span></a></li>"
-                (html_escape a.slug) (html_escape a.name)
-            ) moderated_communities in
-            Printf.sprintf "<h3 class='px-2 mb-1 text-xs font-semibold text-gray-500 uppercase tracking-wider mt-3'>Moderating</h3><ul class='space-y-1'>%s</ul>" (String.concat "\n" mod_items)
-        in
-        let follow_section =
-          if following_communities = [] then ""
-          else
-            let items = List.map (fun (a : community) ->
-              Printf.sprintf "<li><a href='/c/%s' class='flex items-center space-x-2 p-2 rounded-xl hover:bg-gray-50 text-gray-700 font-medium transition'><span class='text-[#69C3D2] font-bold'>/c/</span><span class='truncate'>%s</span></a></li>"
-                (html_escape a.slug) (html_escape a.name)
-            ) following_communities in
-            Printf.sprintf "<h3 class='px-2 mb-1 text-xs font-semibold text-gray-500 uppercase tracking-wider mt-3'>Following</h3><ul class='space-y-1'>%s</ul>" (String.concat "\n" items)
-        in
-        Printf.sprintf "<div class='bg-white p-4 rounded-xl border border-[#E0D9CC] shadow-sm'><ul class='space-y-1'>%s%s</ul>%s%s</div>"
-          home_link privacy_link mod_section follow_section
-
-(* === COMMUNITY SHELL === *)
-
-(* The persistent in-app community shell: a Discord-like multi-pane layout (community rail ·
-   community sidebar · main pane · optional right pane) reused by future chat/forum/thread
-   pages. This branch ships only the structural chrome — no chat, no realtime, no routes.
-
-   nav_item/nav_group are shell-local with prefixed fields on purpose: Db.channel and
-   Db.community_section both carry id/slug/name, so generic records here keep the shell
-   decoupled from those schemas AND dodge record-field disambiguation. *)
-type nav_item = {
-  ni_label  : string;          (* display text; html-escaped here *)
-  ni_href   : string;          (* target app path *)
-  ni_sigil  : string;          (* "#" channel, "§" forum section, "" none *)
-  ni_active : bool;            (* highlights the current page *)
-  ni_badge  : string option;   (* optional right-aligned count/label *)
-}
-
-type nav_group = {
-  ng_label : string;           (* group heading; "" renders an untitled group *)
-  ng_items : nav_item list;
-}
-
-(* The shell's stylesheet is opt-in via layout's head_extra so it loads only on shell pages,
-   keeping the "minimal CSS by default" rule. Scoped entirely under .community-shell. *)
-let shell_css_link = "<link rel='stylesheet' href='/static/css/shell.css'>"
-
-(* col 2 channel/section list. Each nav_item renders as a link so the shell works with no JS;
-   active state is a class the CSS highlights. *)
-let render_nav_item (it : nav_item) =
-  let active = if it.ni_active then " active" else "" in
-  let sigil =
-    if it.ni_sigil = "" then ""
-    else Printf.sprintf "<span class='cs-item-sigil'>%s</span>" (html_escape it.ni_sigil)
-  in
-  let badge = match it.ni_badge with
-    | Some b -> Printf.sprintf "<span class='cs-item-badge'>%s</span>" (html_escape b)
-    | None -> ""
-  in
-  (* Internal path, not an external URL — safe_internal_path keeps relative links navigable
-     (safe_url would turn "/c/slug/ch/x" into "#"). *)
-  Printf.sprintf "<a class='cs-item%s' href='%s'>%s<span class='cs-item-label'>%s</span>%s</a>"
-    active (safe_internal_path it.ni_href) sigil (html_escape it.ni_label) badge
-
-let render_nav_group (g : nav_group) =
-  let label =
-    if g.ng_label = "" then ""
-    else Printf.sprintf "<div class='cs-group-label'>%s</div>" (html_escape g.ng_label)
-  in
-  let items = String.concat "\n" (List.map render_nav_item g.ng_items) in
-  Printf.sprintf "<div class='cs-group'>%s%s</div>" label items
-
-(* Which tile in the global rail is the current location. Drives the active marker without the
-   rail needing to know about routing — feed_shell passes Rail_feed, community_shell passes
-   Rail_community slug, and anything off the rail passes Rail_none. *)
-type rail_active = Rail_feed | Rail_community of string | Rail_none
-
-(* Tile glyph = first two letters of the slug (1 if short, "?" if empty). *)
-let rail_glyph slug =
-  if String.length slug >= 2 then String.sub slug 0 2
-  else if String.length slug = 1 then slug
-  else "?"
-
-(* col 1 GLOBAL rail: the left icon rail is workspace-wide navigation, not community-only. It
-   always renders Feed/home first, then one square per community the user belongs to, then the
-   join/create + tile. Reuses Db.community (annotated like left_sidebar) — no new DB type, no
-   Channel/Chat contact. One renderer for every shell surface so the tiles can never diverge. *)
-let render_global_rail ~(active : rail_active) (communities : community list) =
-  let feed_active = (match active with Rail_feed -> true | _ -> false) in
-  let home =
-    Printf.sprintf "<a class='cs-rail-item cs-rail-home%s' href='/feed' title='Feed'>⌂</a>"
-      (if feed_active then " active" else "") in
-  let tiles = List.map (fun (c : community) ->
-    let is_active = (match active with Rail_community s -> s = c.slug | _ -> false) in
-    let cls = if is_active then "cs-rail-item active" else "cs-rail-item" in
-    (* Tile face: the community avatar when it's set and passes the image gate, else the existing
-       2-letter slug glyph. NOT community_avatar — that falls back to a first-letter tile, but the
-       rail's established empty-state is the 2-letter rail_glyph, kept here so avatarless tiles read
-       exactly as before. The <img> fills the fixed 42x42 tile (see shell.css), so there's no
-       layout shift between the image and glyph cases. *)
-    let face =
-      match c.avatar_url with
-      | Some url when String.trim url <> "" ->
-          let src = safe_img_src url in
-          if src = "#" then html_escape (rail_glyph c.slug)
-          else Printf.sprintf "<img class='cs-rail-img' src='%s' alt=''>" src
-      | _ -> html_escape (rail_glyph c.slug)
-    in
-    (* The rail is a workspace switcher: a tile means "enter this community", so it targets the
-       default chat channel (every community has a "general" channel after the default-structure
-       merge), NOT the legacy /c/:slug overview, which isn't a shell page yet. A future branch can
-       swap this for a shell overview or last-visited destination. *)
-    Printf.sprintf "<a class='%s' href='/c/%s/ch/general' title='/c/%s'>%s</a>"
-      cls (html_escape c.slug) (html_escape c.slug) face
-  ) communities in
-  let add =
-    "<a class='cs-rail-item cs-rail-add' href='/bring' title='Connect a project'>+</a>" in
-  Printf.sprintf "<nav class='cs-rail'>%s%s%s</nav>"
-    home (String.concat "\n" tiles) add
-
-(* col 2 community sidebar: header (small avatar + community name + /c/slug) then the nav groups.
-   The avatar reinforces "where am I"; community_avatar falls back to a name letter-tile (never a
-   broken image) so avatarless communities keep a clean header. *)
-let render_sidebar (community : community) (nav_groups : nav_group list) =
-  let groups = String.concat "\n" (List.map render_nav_group nav_groups) in
-  let avatar =
-    community_avatar ~img_class:"cs-side-avatar"
-      ~tile_class:"cs-side-avatar cs-side-avatar--mono" ~name:community.name community.avatar_url
-  in
-  let community_href = Printf.sprintf "/c/%s" community.slug in
-  Printf.sprintf "
-    <aside class='cs-side'>
-      <div class='cs-side-head'>
-        <a class='cs-side-head-link' href='%s'>
-          %s
-          <span class='cs-side-head-text'>
-            <span class='cs-side-name'>%s</span>
-            <span class='cs-side-slug'>/c/%s</span>
-          </span>
-        </a>
-      </div>
-      <div class='cs-side-scroll'>%s</div>
-    </aside>"
-    (safe_internal_path community_href)
-    avatar (html_escape community.name) (html_escape community.slug) groups
-
-(* === GLOBAL APP SHELL ===
-   The base shell for every in-app surface (feed, channel, section, thread). It owns the layout
-   wrapper (full_bleed + shell stylesheet), the global icon rail, the main pane, an OPTIONAL
-   local sidebar (community channels/sections), and an OPTIONAL right pane. The shell is NOT
-   community-only: Feed is a shell surface too. community_shell / feed_shell are thin wrappers
-   that differ only in the local sidebar and which rail tile is active.
-   `main`/`sidebar`/`right_pane` are caller-rendered HTML fragments. *)
-let global_shell ?user ?request ?noindex ?(rail_communities=[]) ~(rail_active : rail_active)
-    ?sidebar ?right_pane ?(head_extra="") ?analytics_community ?(main_extra_class="") ~title ~main () =
-  let rail = render_global_rail ~active:rail_active rail_communities in
-  let sidebar_html = Option.value sidebar ~default:"" in
-  let aside = match right_pane with
-    | Some html -> Printf.sprintf "<aside class='cs-aside'>%s</aside>" html
-    | None -> ""
-  in
-  (* .community-shell keeps the existing scoped CSS working unchanged; .app-shell is a semantic
-     alias so future code stops treating the whole shell as community-only. Without a local
-     sidebar we add .feed-shell, whose grid drops the col-2 column. with-aside switches to the
-     wider grid; the CSS hides the aside on narrow viewports. *)
-  let base = "community-shell app-shell" in
-  let base = if sidebar = None then base ^ " feed-shell" else base in
-  let shell_cls = if right_pane = None then base else base ^ " with-aside" in
-  (* main_extra_class rides on the <main> element itself (never a wrapper div):
-     .cs-main is a flex column whose panes (head / scroller / composer) must be
-     its DIRECT children, so an interposed box would collapse the height chain. *)
-  let main_cls =
-    if main_extra_class = "" then "cs-main" else "cs-main " ^ main_extra_class in
-  let grid =
-    Printf.sprintf "<div class='%s'>%s%s<main class='%s'>%s</main>%s</div>"
-      shell_cls rail sidebar_html main_cls main aside
-  in
-  (* head_extra lets a shell page add per-page <head> tags (canonical, meta description, a
-     page-scoped script) after the shell stylesheet; default "" keeps pages byte-for-byte
-     unchanged. *)
-  layout ?noindex ?user ?request ~head_extra:(shell_css_link ^ head_extra) ~full_bleed:true ~chrome:`App ?analytics_community ~title grid
+(* === REPLAY PRIVACY ===
+   The multi-pane legacy shell (global_shell / community_shell / feed_shell,
+   their nav_item/nav_group/rail_active types and renderers) and the focused
+   single-column wrappers (create/account/admin/community-manage/
+   community-home/search) are gone with their per-page stylesheets; the
+   launch_* documents above own every live surface. Only the replay guard,
+   which the launch community pages still call, survives here. *)
 
 (* Replay privacy (analytics spec §6): private-community page content is
    blocked from session replay entirely via PostHog's built-in ph-no-capture
@@ -2279,113 +1724,3 @@ let private_replay_guard ~(community : Db.community) body =
   if community.Db.visibility = Db.Community_private then
     "<div class='ph-no-capture'>" ^ body ^ "</div>"
   else body
-
-(* The community shell: global app shell + the local community sidebar (channels + forum
-   sections). active_slug lights up this community's rail tile. Public signature unchanged so
-   existing callers (section/channel/thread pages) need no edits. *)
-let community_shell ?user ?request ?noindex ?(rail_communities=[]) ?active_slug
-    ?right_pane ?(head_extra="") ~title ~community ~nav_groups ~main () =
-  let sidebar = render_sidebar community nav_groups in
-  (* Private communities: the whole main column is excluded from replay. The
-     class goes on <main class='cs-main'> itself rather than through
-     [private_replay_guard]: wrapping the fragment in a div would break the
-     .cs-main flex column, whose panes must be direct flex children. *)
-  let main_extra_class =
-    if Db.community_is_private community.Db.visibility then "ph-no-capture" else "" in
-  let rail_active = match active_slug with Some s -> Rail_community s | None -> Rail_none in
-  global_shell ?user ?request ?noindex ~rail_communities ~rail_active
-    ~sidebar ?right_pane ~head_extra ~main_extra_class
-    ~analytics_community:(community.id, community.Db.visibility) ~title ~main ()
-
-(* The global Feed shell: the same app shell with NO community sidebar (Feed lives outside any
-   one community) and the Feed rail tile active. *)
-let feed_shell ?user ?request ?noindex ?(rail_communities=[]) ?right_pane ?(head_extra="") ~title ~main () =
-  global_shell ?user ?request ?noindex ~rail_communities ~rail_active:Rail_feed
-    ?right_pane ~head_extra ~title ~main ()
-
-(* Focused in-product creation layout: the mono app command bar (so the page stays in
-   the app, coherent with the topbar's "Connect a project" CTA) over a single centered
-   cool-grey panel on a graph-paper background (create.css), with no rail/sidebar — long
-   forms read better in one column than wedged into the multi-pane shell grid. shell.css
-   is loaded for the .app-topbar styles; create.css owns everything under .create-shell.
-   [body] is the inner page HTML the caller renders (the form, list, or gate panel). *)
-let create_css_link = "<link rel='stylesheet' href='/static/css/create.css'>"
-
-let create_page ?user ?request ?(noindex=false) ?analytics_community ~title ~body () =
-  let shell =
-    Printf.sprintf "<div class='create-shell'>%s</div>" body
-  in
-  layout ?user ?request ~noindex ~full_bleed:true ~chrome:`App ?analytics_community
-    ~head_extra:(shell_css_link ^ create_css_link) ~title shell
-
-(* Focused in-product account layout: the mono app command bar over a single centered
-   cool-grey column (account.css), with no rail/sidebar/footer — the personal account
-   pages (profile / settings / notifications) are reading/editing surfaces, not the
-   multi-pane community workspace, so they read better in one focused column. shell.css
-   is loaded for the .app-topbar styles AND the .cs-thread/.ft-* row styles that the
-   profile's post list reuses via render_forum_row; account.css owns everything under
-   .account-shell. [body] is the inner page HTML the caller renders. *)
-let account_css_link = "<link rel='stylesheet' href='/static/css/account.css'>"
-
-let account_page ?user ?request ?(noindex=false) ~title ~body () =
-  let shell =
-    Printf.sprintf "<div class='account-shell'>%s</div>" body
-  in
-  layout ?user ?request ~noindex ~full_bleed:true ~chrome:`App
-    ~head_extra:(shell_css_link ^ account_css_link) ~title shell
-
-(* Focused in-product admin layout: the mono app command bar over a single centered
-   cool-grey column (admin.css), with no rail/sidebar/footer. Same idiom as account_page;
-   used only by the admin-only /admin dashboard. shell.css is loaded for .app-topbar;
-   admin.css owns everything under .admin-shell. The handler always gates this on the
-   is_admin session field — this wrapper adds NO authorization of its own. *)
-let admin_css_link = "<link rel='stylesheet' href='/static/css/admin.css'>"
-
-let admin_page ?user ?request ?(noindex=false) ~title ~body () =
-  let shell =
-    Printf.sprintf "<div class='admin-shell'>%s</div>" body
-  in
-  layout ?user ?request ~noindex ~full_bleed:true ~chrome:`App
-    ~head_extra:(shell_css_link ^ admin_css_link) ~title shell
-
-(* Focused in-product community-management layout: the mono app command bar over
-   a single centered cool-grey column (community-manage.css), with no
-   rail/sidebar/footer. Same idiom as admin_page; shared by the per-community
-   management surfaces (/c/:slug/settings, /c/:slug/manage-mods, /c/:slug/modlog)
-   so they read as one operator console. shell.css is loaded for .app-topbar;
-   community-manage.css owns everything under .cm-shell. The handlers gate these
-   on mod/top_mod/admin authority — this wrapper adds NO authorization of its own
-   (and modlog stays public exactly as the handler allows). *)
-let community_manage_css_link = "<link rel='stylesheet' href='/static/css/community-manage.css'>"
-
-let community_manage_page ?user ?request ?(noindex=false) ?analytics_community ~title ~body () =
-  let shell =
-    Printf.sprintf "<div class='cm-shell'>%s</div>" body
-  in
-  layout ?user ?request ~noindex ~full_bleed:true ~chrome:`App ?analytics_community
-    ~head_extra:(shell_css_link ^ community_manage_css_link) ~title shell
-
-(* The public community home (/c/:slug). Unlike the focused single-column wrappers above it
-   does NOT wrap [body] in an extra shell div — the page already emits its own full-bleed
-   .community-home structure (hero band + checkered body). It only supplies the App command bar
-   (no warm navbar, no footer) and loads shell.css (for .app-topbar) + community-home.css (which
-   owns everything under .community-home). SSR-only: every link/form works with JS off. *)
-let community_home_css_link = "<link rel='stylesheet' href='/static/css/community-home.css'>"
-
-let community_home_page ?user ?request ?(noindex=false) ?analytics_community ~title ~body () =
-  layout ?user ?request ~noindex ~full_bleed:true ~chrome:`App ?analytics_community
-    ~head_extra:(shell_css_link ^ community_home_css_link) ~title body
-
-(* Focused in-product search layout: the mono app command bar over a single centered
-   cool-grey column (search.css), with no rail/sidebar/footer — search is a reading/retrieval
-   surface, not the multi-pane community workspace. Same idiom as account_page. shell.css is
-   loaded for .app-topbar; search.css owns everything under .search-shell. [body] is the
-   inner page HTML the caller renders (header + tabs + result rows). SSR-only. *)
-let search_css_link = "<link rel='stylesheet' href='/static/css/search.css'>"
-
-let search_page ?user ?request ?(noindex=false) ~title ~body () =
-  let shell =
-    Printf.sprintf "<div class='search-shell'>%s</div>" body
-  in
-  layout ?user ?request ~noindex ~full_bleed:true ~chrome:`App
-    ~head_extra:(shell_css_link ^ search_css_link) ~title shell

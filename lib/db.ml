@@ -2437,70 +2437,6 @@ module Analytics = struct
     C.exec log_page_view_query (path, referer, session_hash) >>= function
     | Ok () -> Lwt.return (Ok ())
     | Error e -> Lwt.return (Error (Caqti_error.show e))
-
-  (* 5 scalar columns fit in t2(t3, t2) — no arity overflow.
-     end_date is inclusive: we shift it to the next day's midnight with ::date + INTERVAL '1 day'
-     so that "2026-03-23" captures all events on that calendar day. *)
-  let kpi_stats_type =
-    let open Caqti_type in
-    t2 (t3 int int int) (t2 int int)
-
-  let get_kpi_dashboard_query =
-    let open Caqti_request.Infix in
-    (Caqti_type.(t2 string string) ->! kpi_stats_type)
-    "SELECT
-      (SELECT COUNT(*)::int       FROM page_views WHERE created_at >= $1::timestamptz AND created_at < $2::date + INTERVAL '1 day'),
-      (SELECT COUNT(DISTINCT session_hash)::int FROM page_views WHERE created_at >= $1::timestamptz AND created_at < $2::date + INTERVAL '1 day'),
-      (SELECT COUNT(*)::int       FROM users    WHERE created_at >= $1::timestamptz AND created_at < $2::date + INTERVAL '1 day'),
-      (SELECT COUNT(*)::int FROM posts    WHERE created_at >= $1::timestamptz AND created_at < $2::date + INTERVAL '1 day')
-        + (SELECT COUNT(*)::int FROM comments WHERE created_at >= $1::timestamptz AND created_at < $2::date + INTERVAL '1 day'),
-      (SELECT COUNT(*)::int       FROM users    WHERE last_active_at >= $1::timestamptz AND last_active_at < $2::date + INTERVAL '1 day')"
-
-  let get_kpi_dashboard (module C: Caqti_lwt.CONNECTION) ~start_date ~end_date =
-    C.find get_kpi_dashboard_query (start_date, end_date) >>= function
-    | Ok res -> Lwt.return (Ok res)
-    | Error e -> Lwt.return (Error (Caqti_error.show e))
-
-  (* DAU/MAU: avg per-day unique contributors / total unique contributors in the range.
-     posts+comments are used as the activity proxy because last_active_at tracks only the
-     most recent timestamp per user, giving no per-day granularity.
-     LEFT JOIN + GROUP BY collapses the N daily rows into a single AVG; COALESCE handles
-     ranges with zero activity without returning NULL. *)
-  let get_dau_mau_ratio_query =
-    let open Caqti_request.Infix in
-    (Caqti_type.(t2 string string) ->! Caqti_type.float)
-    {sql|WITH daily_active AS (
-      SELECT DATE(created_at) AS day, COUNT(DISTINCT user_id) AS dau
-      FROM (
-        SELECT created_at, user_id FROM posts
-        WHERE created_at >= $1::timestamptz AND created_at < $2::date + INTERVAL '1 day'
-        UNION ALL
-        SELECT created_at, user_id FROM comments
-        WHERE created_at >= $1::timestamptz AND created_at < $2::date + INTERVAL '1 day'
-      ) all_activity
-      GROUP BY DATE(created_at)
-    ),
-    mau AS (
-      SELECT COUNT(DISTINCT user_id)::float AS total
-      FROM (
-        SELECT user_id FROM posts
-        WHERE created_at >= $1::timestamptz AND created_at < $2::date + INTERVAL '1 day'
-        UNION ALL
-        SELECT user_id FROM comments
-        WHERE created_at >= $1::timestamptz AND created_at < $2::date + INTERVAL '1 day'
-      ) all_mau
-    )
-    SELECT CASE WHEN mau.total = 0 THEN 0.0
-                ELSE COALESCE(AVG(daily_active.dau::float), 0.0) / mau.total
-           END
-    FROM mau
-    LEFT JOIN daily_active ON true
-    GROUP BY mau.total|sql}
-
-  let get_dau_mau_ratio (module C: Caqti_lwt.CONNECTION) ~start_date ~end_date =
-    C.find get_dau_mau_ratio_query (start_date, end_date) >>= function
-    | Ok res -> Lwt.return (Ok res)
-    | Error e -> Lwt.return (Error (Caqti_error.show e))
 end
 
 (* Presence is operational state, not analytics: last_active_at is read by
@@ -3559,8 +3495,6 @@ let get_comment_owner = Notification.get_comment_owner
 let get_comment_post_id = Notification.get_comment_post_id
 
 let log_page_view = Analytics.log_page_view
-let get_kpi_dashboard = Analytics.get_kpi_dashboard
-let get_dau_mau_ratio = Analytics.get_dau_mau_ratio
 
 let touch_user_active = Presence.touch_user_active
 

@@ -4,63 +4,9 @@ module Posthog = Analytics
 
 open Db
 
-(* === CORE FEED === *)
-
-let index ?user user_votes current_page sort_mode ~feed_type ~admin_usernames ~moderated_communities (posts : post list) (user_communities : community list) request =
-  let has_next = List.length posts = 20 in
-  (* base_url drives pagination and sort links so they stay within the correct feed *)
-  let base_url = if feed_type = "home" then "/" else "/all" in
-
-  let posts_html =
-    if posts = [] then
-      "<div class='text-center py-10 text-gray-500 border border-dashed border-[#E0D9CC] rounded-xl'>It's quiet here. Too quiet. <br><a href='/bring' class='text-[#C94C4C] underline'>Bring your community</a> and start posting!</div>"
-    else String.concat "\n" (List.map (Components.render_post ~admin_usernames request user_votes) posts)
-  in
-
-  let prev_btn = if current_page <= 1 then "" else Printf.sprintf "<a href='%s?sort=%s&page=%d' class='bg-white border border-[#D0C9BC] text-gray-700 px-4 py-2 rounded font-bold hover:bg-[#EDE9DF] transition'>&larr; Prev</a>" base_url sort_mode (current_page - 1) in
-  let next_btn = if not has_next then "" else Printf.sprintf "<a href='%s?sort=%s&page=%d' class='bg-white border border-[#D0C9BC] text-gray-700 px-4 py-2 rounded font-bold hover:bg-[#EDE9DF] transition'>Next &rarr;</a>" base_url sort_mode (current_page + 1) in
-
-  let get_sort_class s = if s = sort_mode then "text-[#C94C4C] border-b-2 border-[#C94C4C] pb-1" else "text-gray-500 hover:text-gray-800 transition" in
-  let sort_menu = Printf.sprintf "
-    <div class='flex space-x-6 mb-6 px-2 border-b border-[#E0D9CC]'>
-        <a href='%s?sort=hot' class='font-bold text-sm tracking-wide uppercase %s'>🔥 Hot</a>
-        <a href='%s?sort=new' class='font-bold text-sm tracking-wide uppercase %s'>✨ New</a>
-        <a href='%s?sort=top' class='font-bold text-sm tracking-wide uppercase %s'>🏆 Top</a>
-    </div>" base_url (get_sort_class "hot") base_url (get_sort_class "new") base_url (get_sort_class "top")
-  in
-
-  (* Feed toggle: active tab gets a teal bottom border; inactive is muted *)
-  let get_tab_class t = if t = feed_type then "font-bold text-[#C94C4C] border-b-2 border-[#C94C4C] pb-2" else "font-medium text-gray-500 hover:text-gray-800 pb-2 transition" in
-  let feed_tabs = Printf.sprintf "
-    <div class='flex space-x-6 mb-4 border-b border-gray-100'>
-        <a href='/' class='%s'>Home</a>
-        <a href='/all' class='%s'>All</a>
-    </div>" (get_tab_class "home") (get_tab_class "all")
-  in
-
-  let feed_title = if feed_type = "home" then "Home" else "All" in
-
-  let sidebar_html = Components.left_sidebar ?user ~moderated_communities user_communities in
-
-  let content = Printf.sprintf "
-    <div class='flex flex-col lg:flex-row gap-6'>
-        <div class='w-full lg:w-1/4 hidden lg:block'><div class='sticky top-20'>%s</div></div>
-        <div class='w-full lg:w-2/4 min-w-0'>
-            <div class='flex justify-between items-center mb-4'>
-                <h1 class='text-2xl font-bold text-gray-900'>%s</h1>
-            </div>
-            %s
-            <div class='block lg:hidden mb-6 bg-blue-50 border border-blue-100 rounded-xl p-4 shadow-sm'><h3 class='text-sm font-bold text-blue-900 mb-1'>Talk to me!</h3><p class='text-xs text-blue-800 mb-3 leading-relaxed'>For feature requests, ideas, critiques, if you are a Reddit mod and want to become a mod on the specular community here, or just to say hi!</p><a href='https://t.me/tolwiz' target='_blank' rel='noopener noreferrer' class='w-full flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold py-2 rounded-xl transition-colors'>&#128172; Text me (the dev)!</a></div>
-            %s <div>%s</div>
-            <div class='flex justify-between items-center mt-8 mb-4'>
-                <div>%s</div><div class='text-sm text-gray-500 font-bold'>Page %d</div><div>%s</div>
-            </div>
-        </div>
-        <div class='w-full lg:w-1/4'><div class='bg-white p-5 rounded-xl border border-[#E0D9CC] sticky top-20'><h2 class='text-sm font-semibold text-gray-800 mb-1'>Earde</h2><p class='text-xs text-gray-500 mb-4'>Your personal frontpage.</p><div class='flex flex-col space-y-2'><a href='/new-post' class='w-full bg-[#C94C4C] text-white text-center py-2 rounded-xl font-semibold text-sm hover:bg-[#A83A3A] transition'>Create Post</a><a href='/bring' class='w-full bg-white text-[#C94C4C] border border-[#C94C4C] text-center py-2 rounded-xl font-semibold text-sm hover:bg-[#F0EDE4] transition'>Connect a project</a></div></div><div class='mt-6 bg-blue-50 border border-blue-100 rounded-xl p-4 shadow-sm'><h3 class='text-sm font-bold text-blue-900 mb-1'>Talk to me!</h3><p class='text-xs text-blue-800 mb-3 leading-relaxed'>For feature requests, ideas, critiques, if you are a Reddit mod and want to become a mod on the specular community here, or just to say hi!</p><a href='https://t.me/tolwiz' target='_blank' rel='noopener noreferrer' class='w-full flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold py-2 rounded-xl transition-colors'>&#128172; Text me (the dev)!</a></div></div>
-    </div>"
-    sidebar_html feed_title feed_tabs sort_menu posts_html prev_btn current_page next_btn
-  in
-  Components.layout ?user ~request ~title:feed_title content
+(* The pre-/feed global feed renderer and its warm-chrome sidebar are gone:
+   feed_page below serves /feed, the only global feed surface, and / and /all
+   redirect to it. *)
 
 (* === AUTHENTICATION === *)
 
@@ -264,7 +210,7 @@ let reset_password_page ~token ?error request =
 
 (* Cartographic Civic (pass 19): only the outer document changes — the legacy
    create_page wrapper becomes the launch app chrome (Components.launch_app_page:
-   earde.css + the shared mobile gate only, no shell.css / create.css / Tailwind).
+   earde.css + the shared mobile gate only, no legacy per-page CSS, no Tailwind).
    The inner create-* fragment — the POST /communities form contract (action,
    method, Dream CSRF, field names/ids, hidden counts, row scripts) — is byte
    preserved inside the same <div class='create-shell'> marker create_page
@@ -967,7 +913,7 @@ let community_section_shell_page ?user ?(noindex=false) ?thread_count ?last_acti
     ~aside ~community ~sidebar ~page_class:"launch-community-section" ~title ~main_el ()
 
 (* /feed — the global Feed surface, now the first App route on the launch
-   chrome (Components.launch_app_page: earde.css only, no shell.css/Tailwind).
+   chrome (Components.launch_app_page: earde.css only, no Tailwind).
    Rows still come from render_forum_row with ~show_context — its markup is a
    load-bearing contract (optimistic-vote DOM, replay-masking classes, the ⋯
    moderation menu) — and are skinned onto the approved .thread-row anatomy by
@@ -1536,7 +1482,7 @@ type thread_source_view =
   | Ts_visible of (string * string) option * Db.thread_source_msg list
 
 (* /c/:slug/t/:post_id-:post_slug — the canonical thread view, now on the Cartographic Civic
-   launch chrome (Components.launch_community_surface_page: earde.css only, no shell.css).
+   launch chrome (Components.launch_community_surface_page: earde.css only).
    Replaces the legacy warm-card post_page for normal threads (post_page stays only as the
    unmappable-post fallback and is left byte-for-byte unchanged). Visible comment/composer UI
    keeps its markup and is re-skinned by the route-scoped CSS; the security-critical
@@ -2080,7 +2026,7 @@ let thread_shell_page ?user ?(noindex=false) ~is_member ~is_current_user_mod ~mo
     </section>"
     post.comment_count composer comments_html in
   (* .thread-shell-main is the readable column AND the scroll pane: it sits straight inside cs-main
-     (no cs-main-body) and shell.css makes it flex:1 + overflow-y:auto, so the thread scrolls inside
+     (no cs-main-body) and earde.css makes it flex:1 + overflow-y:auto, so the thread scrolls inside
      the viewport-locked app shell (same containment as feed/section/chat) — the topbar and the
      rail/sidebar/right rail stay fixed; only this pane scrolls. *)
   let main = Printf.sprintf "<div class='thread-shell-main'>%s%s%s</div>" topbar post_block discussion in
@@ -2166,8 +2112,8 @@ let thread_shell_page ?user ?(noindex=false) ~is_member ~is_current_user_mod ~mo
     ~head_extra ~aside ~community ~sidebar ~page_class:"launch-community-thread"
     ~title:post.title ~main_el ()
 
-(* /c/:slug — the public community home / overview / entry page. NOT the persistent shell
-   (that is Components.community_shell, used by section feeds). Flat cool-grey markup scoped
+(* /c/:slug — the public community home / overview / entry page of a FLAT
+   community (structured ones render community_overview_page). Markup scoped
    under .community-home; every datum here is real — no fake member/online/message counts and
    no created_at, because Db.community carries neither. SSR-only: every link/form works with JS
    off. Public presentation only — management (downvotes, mods, sections, bans) lives in
@@ -2176,7 +2122,7 @@ let thread_shell_page ?user ?(noindex=false) ~is_member ~is_current_user_mod ~mo
    same /c/:slug route after its existing authorization, and "" when there is nothing to show. *)
 (* /c/:slug (structured) — the community overview, now on the Cartographic
    Civic launch chrome (Components.launch_community_page: earde.css only, no
-   shell.css/community-home.css/Tailwind). Every form, destination, and
+   no legacy per-page CSS, no Tailwind). Every form, destination, and
    permission gate is the pre-launch contract reskinned: the /join and /leave
    POSTs keep their exact fields, the settings and review links keep their
    existing mod/top-mod gates, and the pre-rendered ccp-* connected-projects
@@ -3466,8 +3412,8 @@ let manage_mods_page ?user ?(rail_communities = []) ~is_admin ~current_user_role
    form) moved onto the Cartographic launch shell (pass 15B). The create-*
    fragments are kept verbatim — every field name/id/value, the hidden
    community_id, the section <select>, the Dream CSRF tag and the legacy
-   .create-shell marker are unchanged — and only the outer document swapped
-   Components.create_page → Components.launch_app_page (page_class
+   .create-shell marker are unchanged — and only the outer document moved onto
+   Components.launch_app_page (page_class
    launch-post-creation), which owns the topbar, dark rail, analytics assets
    and the member behavior script. [rail_communities] carries the viewer's
    joined communities as the handler loaded them (post-authorization only);
@@ -3553,7 +3499,7 @@ let join_to_post_page ?user ?(rail_communities = []) (community : community) req
    only JS is the pre-existing page-scoped selection counter below. The
    create-shell fragment (candidate ledger, hidden seed input, msg_<id>
    checkboxes, title/content/section fields) is pinned — only the outer
-   document changed (Components.create_page → launch_community_page). *)
+   document moved onto Components.launch_community_page. *)
 let start_thread_form ?user ?error ?(rail_communities = [])
     ~(channels : channel list) ~can_manage
     ~(community : community) ~(channel : channel)
@@ -3853,8 +3799,8 @@ let report_form_page ?user ?(rail_communities = []) ~(channels : channel list)
      sibling community routes, wrapping the report form verbatim — the create-*
      fields, the hidden target_type/target_id inputs, the reason <select>
      values, the details maxlength and the ph-mask excerpt class are treated
-     as pinned, so only this outer document changed (create.css idiom → the
-     route-scoped earde.css section). The sidebar reuses the shared knowledge
+     as pinned, so only this outer document changed; it is styled by the
+     route-scoped earde.css section. The sidebar reuses the shared knowledge
      grammar with NO active entry: reporting is a contextual action, not a
      permanent sidebar destination, and the moderator-only entries (Reports,
      Manage moderators, Home requests) stay hidden because their active flags
@@ -4060,7 +4006,7 @@ let reports_queue_page ?user ?(rail_communities = []) ~(channels : channel list)
    /comments, /delete-post, /delete-comment, mod_delete, /ban-community-user
    and /join form, the mod/admin/ban dialogs and the toggleComment script — is
    treated as pinned and kept byte-identical; only the outer document wrapper
-   changed (Components.layout `Site → Components.launch_app_page under
+   moved onto Components.launch_app_page under
    body.launch-legacy-post, skinned by the "legacy post fallback only" section
    of earde.css). [user_communities] (already loaded by the handler, previously
    ignored) now feeds the launch rail — VIEWER membership only, same source and
@@ -4737,7 +4683,7 @@ function toggleComment(id, btn) {
 (* === USER === *)
 
 (* /u/:username — the public user profile, on the launch app chrome
-   (Components.launch_app_page: earde.css only, no shell.css / account.css).
+   (Components.launch_app_page: earde.css only, no legacy per-page CSS).
    The inner account-* markup (account-prof header, account-badges,
    account-bio, account-tabs, account-thread rows with the /vote form DOM the
    shared behavior script drives, account-comment, account-comm-card,
@@ -4846,11 +4792,11 @@ let user_profile_page ?user ?(rail_communities = []) ~is_admin ~is_globally_bann
     </div>" username (tab_class "posts") username (tab_class "comments") username (tab_class "communities")
   in
 
-  (* Profile-specific thread row. The shell's render_forum_row markup is styled only under
-     .community-shell (shell.css), so it renders unstyled inside the focused .account-shell.
+  (* Profile-specific thread row. The shared render_forum_row markup is scoped to the
+     community surfaces, so the profile carries its own row instead of inheriting it.
      This row reuses the SAME real post data and the SAME vote-form DOM (up-form, score span,
      down-form, with the optimistic-vote colour classes) so voting behaves identically — only
-     the surrounding layout is account.css-scoped. No query / canonical-URL change. *)
+     the surrounding layout differs. No query / canonical-URL change. *)
   let render_thread_row (post : Db.post) =
     let current_vote = Option.value ~default:0 (List.assoc_opt post.id user_votes) in
     let up_color = if current_vote = 1 then "text-orange-500" else "text-gray-400 hover:text-orange-500" in
@@ -5007,7 +4953,7 @@ let user_profile_page ?user ?(rail_communities = []) ~is_admin ~is_globally_bann
     ~page_class:"launch-user-profile" ~title:(username ^ "'s Profile") ~content ()
 
 (* /settings — the account-global settings surface, on the launch app chrome
-   (Components.launch_app_page: earde.css only, no shell.css / account.css).
+   (Components.launch_app_page: earde.css only, no legacy per-page CSS).
    The five account-panel sections (multipart profile form, password form,
    data export, the consent-managed analytics panel, the delete-account
    danger zone) keep their markup verbatim: field names/order, CSRF
@@ -5148,8 +5094,8 @@ let settings_page ?user ?(rail_communities = []) bio avatar_url request =
     ~page_class:"launch-account-settings" ~title:"Settings" ~content ()
 
 (* /notifications — the account-global notification center, on the launch
-   app chrome (Components.launch_app_page: earde.css only, no shell.css /
-   account.css). The row renderer below is kept byte-for-byte: its anatomy
+   app chrome (Components.launch_app_page: earde.css only, no legacy
+   per-page CSS). The row renderer below is kept byte-for-byte: its anatomy
    (account-notif / account-notif-icon / account-notif-body / account-notif-msg
    / account-notif-time, the account-notif--unread accent and its cosmetic
    onclick clear) is pinned by the gated Phnt UI suite's substring checks and
@@ -5281,8 +5227,8 @@ let notifications_page ?user ?(rail_communities = []) (notifs : Db.notification 
 (* Launch search surface (Cartographic Civic pass 12B): the same result body the cool-grey
    shell rendered — header form, tabs, sr-* rows, pager, analytics container, all pinned by
    the analytics suites and the replay-masking selectors — re-parented under the shared
-   launch app chrome (Components.launch_app_page, body.launch-search) instead of
-   Components.search_page. Answers "where was this discussed / which thread / which
+   launch app chrome (Components.launch_app_page, body.launch-search).
+   Answers "where was this discussed / which thread / which
    community / did it come from chat?" An empty query renders a local prompt state instead
    of redirecting; the route and q/t/page semantics are unchanged. The visible Threads tab
    keeps the internal tab value "posts". chat_sources is the bounded per-page provenance
@@ -5500,10 +5446,10 @@ let search_results_page ?user ~admin_usernames ?(chat_sources=[]) ?(rail_communi
    Grounded in actual schema/auth.ml — no invented infrastructure or fictional DPO.
 
    Cartographic Civic (pass 16C): /privacy renders through the isolated launch
-   entry wrapper instead of Components.layout `Site. The inner legal fragment
+   entry wrapper. The inner legal fragment
    below is preserved byte-for-byte — every heading, paragraph, list, link and
-   its wording is authoritative and untouched; the legacy Tailwind utility
-   classes it carries are inert without the CDN and are re-used as scoped
+   its wording is authoritative and untouched; the Tailwind utility
+   classes it carries are inert (no CDN is loaded) and are re-used as scoped
    styling hooks by the "privacy policy only" section of earde.css (same
    skin-the-legacy-markup idiom as the pass-16B recovery forms). The
    viewer-dependent ?user chrome is gone by design (the entry chrome is
@@ -5584,7 +5530,7 @@ let privacy_page ?user:_ request =
    fragments that diverge in style and don't inherit the shared layout/nav.
 
    Cartographic Civic (pass 17): both historical ~auth branches — which had
-   already converged on one byte-identical auth.css panel — now render one
+   already converged on one byte-identical focused panel — now render one
    neutral launch message sheet via Components.launch_message_page. The
    caller contract is untouched: same signature, [title] and [message] are
    always escaped text (never trusted HTML), [return_url] is the renderer's
@@ -5654,7 +5600,7 @@ let looks_random_username raw =
 
 (* Global admin dashboard on the Cartographic Civic launch shell (pass 18A):
    launch_app_page under body.launch-global-admin — earde.css only, no
-   admin.css/shell.css/Tailwind/Google Fonts. Read-only operational panels
+   legacy per-page CSS, no Tailwind, no Google Fonts. Read-only operational panels
    (status / recent users / pending signups) plus the preserved global unban
    action are spliced verbatim below a serif Administration head; the legacy
    admin-head is the only markup replaced (its KPI-dashboard link is gone —
@@ -5921,130 +5867,3 @@ let mod_log_page ?user ?(noindex=false) ?(rail_communities = [])
     ~page_class:"launch-community-modlog"
     ~title:(community.name ^ " — Mod Log")
     ~content:(Components.private_replay_guard ~community content) ()
-
-(* Standalone HTML — intentionally outside Components.layout to prevent nav/JS
-   assets from loading on an admin-only internal page that needs no public shell. *)
-let hq_dashboard_page ((views, unique_visitors, signups), (content, _active)) ~dau_mau_ratio ~start_date ~end_date =
-  Printf.sprintf {html|<!DOCTYPE html>
-<html lang='en'>
-<head>
-    <meta charset='UTF-8'>
-    <meta name='viewport' content='width=device-width, initial-scale=1.0'>
-    <title>Earde HQ - Mission Control</title>
-    <script src='https://cdn.tailwindcss.com'></script>
-</head>
-<body class='bg-gray-950 text-green-400 font-mono min-h-screen p-8'>
-    <div class='max-w-7xl mx-auto'>
-
-        <header class='flex justify-between items-end border-b border-green-900 pb-4 mb-6'>
-            <div>
-                <h1 class='text-4xl font-bold tracking-tighter text-white'>Earde <span class='text-green-500'>SYS.CORE</span></h1>
-                <p class='text-green-700 text-sm mt-1'>range: %s &rarr; %s</p>
-            </div>
-            <div class='text-right'>
-                <div class='text-3xl font-bold text-white'>%.1f%%</div>
-                <div class='text-xs text-green-700'>RETENTION</div>
-            </div>
-        </header>
-
-        <form method='GET' action='/earde-hq-dashboard' class='mb-8 bg-gray-900 border border-green-900 rounded-xl p-4'>
-            <div class='flex flex-wrap gap-2 items-end'>
-                <div class='flex gap-2 flex-wrap'>
-                    <button type='button' onclick='setRange(0,0)'
-                        class='px-3 py-1.5 text-xs border border-green-800 text-green-500 rounded hover:bg-green-900 hover:text-white transition-colors'>
-                        Today
-                    </button>
-                    <button type='button' onclick='setRange(6,0)'
-                        class='px-3 py-1.5 text-xs border border-green-800 text-green-500 rounded hover:bg-green-900 hover:text-white transition-colors'>
-                        Last 7 Days
-                    </button>
-                    <button type='button' onclick='setRange(29,0)'
-                        class='px-3 py-1.5 text-xs border border-green-800 text-green-500 rounded hover:bg-green-900 hover:text-white transition-colors'>
-                        Last 30 Days
-                    </button>
-                    <button type='button' onclick='setAllTime()'
-                        class='px-3 py-1.5 text-xs border border-green-800 text-green-500 rounded hover:bg-green-900 hover:text-white transition-colors'>
-                        All Time
-                    </button>
-                </div>
-                <div class='flex gap-2 items-center ml-auto'>
-                    <label class='text-xs text-green-700'>FROM</label>
-                    <input type='date' name='start' value='%s'
-                        class='bg-gray-800 border border-green-900 text-green-300 text-xs rounded px-2 py-1.5 focus:outline-none focus:border-green-500'>
-                    <label class='text-xs text-green-700'>TO</label>
-                    <input type='date' name='end' value='%s'
-                        class='bg-gray-800 border border-green-900 text-green-300 text-xs rounded px-2 py-1.5 focus:outline-none focus:border-green-500'>
-                    <button type='submit'
-                        class='px-4 py-1.5 text-xs bg-green-900 text-green-300 border border-green-700 rounded hover:bg-green-800 hover:text-white transition-colors'>
-                        Apply
-                    </button>
-                </div>
-            </div>
-        </form>
-
-        <div class='grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-6'>
-
-            <div class='bg-gray-900 border border-green-900 p-6 rounded-xl shadow-[0_0_15px_rgba(34,197,94,0.1)]'>
-                <h2 class='text-green-600 text-sm font-bold mb-4 tracking-widest'>PAGE VIEWS</h2>
-                <div class='text-5xl font-bold text-white mb-2'>%d</div>
-                <div class='text-xs text-green-700 mb-3'>TOTAL IN RANGE</div>
-                <div class='border-t border-green-900 pt-3'>
-                    <div class='text-lg font-bold text-green-400'>%d</div>
-                    <div class='text-xs text-green-700'>UNIQUE VISITORS</div>
-                </div>
-                <p class='text-xs text-gray-500 mt-3 leading-relaxed'>Total number of pages loaded. Measures raw traffic volume and top-of-funnel reach.</p>
-            </div>
-
-            <div class='bg-gray-900 border border-green-900 p-6 rounded-xl shadow-[0_0_15px_rgba(34,197,94,0.1)]'>
-                <h2 class='text-green-600 text-sm font-bold mb-4 tracking-widest'>NEW SIGNUPS</h2>
-                <div class='text-5xl font-bold text-white mb-2'>%d</div>
-                <div class='text-xs text-green-700'>TOTAL IN RANGE</div>
-                <p class='text-xs text-gray-500 mt-3 leading-relaxed'>Total registered users. Measures our ability to convert casual visitors into community members.</p>
-            </div>
-
-            <div class='bg-gray-900 border border-green-900 p-6 rounded-xl shadow-[0_0_15px_rgba(34,197,94,0.1)]'>
-                <h2 class='text-green-600 text-sm font-bold mb-4 tracking-widest'>CONTENT ACTIVITY</h2>
-                <div class='text-5xl font-bold text-white mb-2'>%d</div>
-                <div class='text-xs text-green-700'>POSTS + COMMENTS IN RANGE</div>
-                <p class='text-xs text-gray-500 mt-3 leading-relaxed'>Total posts and comments created. Indicates if the platform is actively generating discussion or if it&apos;s read-only.</p>
-            </div>
-
-            <div class='bg-gray-900 border border-green-900 p-6 rounded-xl shadow-[0_0_15px_rgba(34,197,94,0.1)] relative overflow-hidden'>
-                <div class='absolute top-0 right-0 w-16 h-16 bg-green-500 opacity-10 rounded-bl-full'></div>
-                <h2 class='text-green-500 text-sm font-bold mb-4 tracking-widest'>RETENTION</h2>
-                <div class='text-5xl font-bold text-white mb-2'>%.1f%%</div>
-                <div class='text-xs text-green-700'>DAU/MAU RATIO</div>
-                <p class='text-xs text-gray-500 mt-3 leading-relaxed'>Percentage of monthly users who return daily. A DAU/MAU ratio &gt; 20&percnt; indicates strong user retention.</p>
-            </div>
-
-        </div>
-    </div>
-
-    <script>
-        function isoDate(d) {
-            return d.toISOString().slice(0, 10);
-        }
-        function setRange(daysBack, daysEnd) {
-            var now = new Date();
-            var end = new Date(now);
-            end.setDate(end.getDate() - daysEnd);
-            var start = new Date(end);
-            start.setDate(start.getDate() - daysBack);
-            document.querySelector('input[name=start]').value = isoDate(start);
-            document.querySelector('input[name=end]').value = isoDate(end);
-            document.querySelector('form').submit();
-        }
-        function setAllTime() {
-            document.querySelector('input[name=start]').value = '1970-01-01';
-            document.querySelector('input[name=end]').value = '2099-12-31';
-            document.querySelector('form').submit();
-        }
-    </script>
-</body>
-</html>|html}
-  start_date end_date (dau_mau_ratio *. 100.0)
-  start_date end_date
-  views unique_visitors
-  signups
-  content
-  (dau_mau_ratio *. 100.0)

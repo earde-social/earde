@@ -3,8 +3,8 @@
    MVP is desktop-first: instead of making the multi-pane app shell responsive,
    a phone-width viewport is shown a centered "open on desktop" panel. Pure CSS,
    no JS, no user-agent detection — the gate is just SSR HTML that this stylesheet
-   hides above the breakpoint and reveals below it. Loaded only on `App surfaces
-   (Components.layout), so these rules never reach Site/auth pages.
+   hides above the breakpoint and reveals below it. Loaded only by the launch
+   app documents, so these rules never reach the entry/auth/message pages.
    Cool-grey / IBM Plex idiom, matching the rest of the app shell.
    ========================================================================== */
 

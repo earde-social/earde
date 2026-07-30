@@ -447,8 +447,6 @@ end
 
 module Analytics : sig
   val log_page_view : (module Caqti_lwt.CONNECTION) -> string -> string option -> string -> (unit, string) result Lwt.t
-  val get_kpi_dashboard : (module Caqti_lwt.CONNECTION) -> start_date:string -> end_date:string -> (((int * int * int) * (int * int)), string) result Lwt.t
-  val get_dau_mau_ratio : (module Caqti_lwt.CONNECTION) -> start_date:string -> end_date:string -> (float, string) result Lwt.t
 end
 
 (* Presence is operational state, not analytics: last_active_at feeds
@@ -718,8 +716,6 @@ val get_post_owner : (module Caqti_lwt.CONNECTION) -> int -> (int, string) resul
 val get_comment_owner : (module Caqti_lwt.CONNECTION) -> int -> (int, string) result Lwt.t
 val get_comment_post_id : (module Caqti_lwt.CONNECTION) -> int -> (int, string) result Lwt.t
 val log_page_view : (module Caqti_lwt.CONNECTION) -> string -> string option -> string -> (unit, string) result Lwt.t
-val get_kpi_dashboard : (module Caqti_lwt.CONNECTION) -> start_date:string -> end_date:string -> (((int * int * int) * (int * int)), string) result Lwt.t
-val get_dau_mau_ratio : (module Caqti_lwt.CONNECTION) -> start_date:string -> end_date:string -> (float, string) result Lwt.t
 val touch_user_active : (module Caqti_lwt.CONNECTION) -> int -> (unit, string) result Lwt.t
 
 val search_communities : (module Caqti_lwt.CONNECTION) -> string -> int -> int -> (community list, string) result Lwt.t

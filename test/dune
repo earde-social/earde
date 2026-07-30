@@ -4,8 +4,16 @@
  ; suite only; without that env var no test touches a database.
  ; dream and yojson are referenced directly by the analytics tests (mock
  ; requests for the consent gate; payload JSON assertions). analytics.js is a
- ; dep so the replay-masking coverage test can read it from the sandbox.
- (deps ../static/js/analytics.js)
+ ; dep so the replay-masking coverage test can read it from the sandbox, and
+ ; the production sources + shipped stylesheets are deps so the legacy-asset
+ ; census can read them the same way.
+ (deps
+  ../static/js/analytics.js
+  ../static/css/earde.css
+  ../static/css/mobile-gate.css
+  ../bin/main.ml
+  (glob_files ../lib/*.ml)
+  (glob_files ../lib/*.mli))
  ; cohttp-lwt-unix provides the local Persons-API stub server for the step-7
  ; deletion-client tests — no real network or PostHog access.
  (libraries earde alcotest caqti caqti-lwt caqti-lwt.unix caqti-driver-postgresql lwt lwt.unix uri dream yojson cohttp cohttp-lwt cohttp-lwt-unix)

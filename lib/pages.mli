@@ -1,9 +1,6 @@
-(** Full-page HTML assembly. Each function calls Components.layout and inlines
-    page-specific content. hq_dashboard_page is the only exception — it emits
-    standalone HTML with no shared nav, intentionally isolated from the main shell. *)
-
-(** === CORE FEED === *)
-val index : ?user:string -> (int * int) list -> int -> string -> feed_type:string -> admin_usernames:string list -> moderated_communities:Db.community list -> Db.post list -> Db.community list -> Dream.request -> string
+(** Full-page HTML assembly. Every function renders through one of the
+    Cartographic Civic launch document wrappers in [Components] and inlines
+    page-specific content. *)
 
 (** === AUTHENTICATION === *)
 val signup_form : ?user:string -> ?error:string -> ?turnstile_site_key:string -> Dream.request -> string
@@ -149,8 +146,10 @@ val search_results_page : ?user:string -> admin_usernames:string list -> ?chat_s
 val privacy_page : ?user:string -> Dream.request -> string
 
 (** === MESSAGE PAGE === *)
-(** [auth:true] renders the focused auth panel (auth.css) for account-lifecycle
-    flows; the default keeps the warm `Site card for every other caller. *)
+(** One chrome-free launch message document for every caller. [auth] is
+    accepted for signature compatibility with the ~400 existing call sites and
+    no longer varies the output — the anti-enumeration pins require byte
+    identity between the account-lifecycle and general outcomes. *)
 val msg_page : ?user:string -> ?auth:bool -> title:string -> message:string -> alert_type:string -> return_url:string -> Dream.request -> string
 
 (** === MODERATION LOG === *)
@@ -176,4 +175,3 @@ val admin_dashboard_page :
   pending:Db.pending_signup_row list ->
   banned_users:Db.user list ->
   Dream.request -> string
-val hq_dashboard_page : ((int * int * int) * (int * int)) -> dau_mau_ratio:float -> start_date:string -> end_date:string -> string

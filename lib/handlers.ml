@@ -734,50 +734,11 @@ let reset_password_handler request =
                   Dream.html (Pages.msg_page ~auth:true ~title:"Error" ~message:"An error occurred. Please try again." ~alert_type:"error" ~return_url:"/forgot-password" request)))
   | _ -> Dream.html (Pages.msg_page ~auth:true ~title:"Form Error" ~message:"Your form submission failed. Please try again." ~alert_type:"error" ~return_url:"/forgot-password" request)
 
-(* === CORE FEED === *)
+(* === CORE FEED ===
 
-let home_handler request =
-  let user = Dream.session_field request "username" in
-  let user_id = match Dream.session_field request "user_id" with Some id -> int_of_string id | None -> 0 in
-  let is_logged_in = user_id > 0 in
-
-  let page = match Dream.query request "page" with
-    | Some p_str -> (try int_of_string p_str with _ -> 1)
-    | None -> 1
-  in
-  let sort_mode = match Dream.query request "sort" with
-    | Some "new"    -> Db.Newest
-    | Some "top"    -> Db.Top
-    | Some "active" -> Db.Active
-    | _             -> Db.Hot
-  in
-  let sort_str = match sort_mode with Db.Newest -> "new" | Db.Top -> "top" | Db.Hot -> "hot" | Db.Active -> "active" in
-  let limit = 20 in
-  let offset = (max 1 page - 1) * limit in
-
-  Dream.sql request (fun db ->
-    (* Logged-in users get a personalised feed from their joined communities;
-       guests fall back to the global feed so the page is never empty. *)
-    let%lwt posts =
-      if is_logged_in then Db.get_personalized_feed db user_id sort_mode limit offset
-      else Db.get_all_posts db sort_mode limit offset
-    in
-    let feed_type = if is_logged_in then "home" else "all" in
-    let%lwt user_votes =
-      if user_id > 0 then Db.get_user_post_votes db user_id else Lwt.return_ok []
-    in
-    let%lwt user_communities =
-      if user_id > 0 then Db.get_user_communities db user_id else Lwt.return_ok []
-    in
-    let%lwt admin_usernames_res = Db.get_admin_usernames db in
-    let admin_usernames = match admin_usernames_res with Ok l -> l | Error _ -> [] in
-    let%lwt moderated_communities_res = if user_id > 0 then Db.get_moderated_communities db user_id else Lwt.return_ok [] in
-    let moderated_communities = match moderated_communities_res with Ok l -> l | Error _ -> [] in
-
-    match posts, user_votes, user_communities with
-    | Ok p, Ok v, Ok a -> Dream.html (Pages.index ?user v page sort_str ~feed_type ~admin_usernames ~moderated_communities p a request)
-    | Error e, _, _ | _, Error e, _ | _, _, Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:("Database error: " ^ e) ~alert_type:"error" ~return_url:"/" request)
-  )
+   /feed is the only global feed surface; / and /all are redirects to it (see
+   bin/main.ml). The pre-/feed home handler and its warm-chrome renderer were
+   removed with the rest of the legacy chrome. *)
 
 (* /feed — the global Feed surface (shell-language, outside any one community). Reuses the same
    feed queries as home/all: "following" → personalized feed from joined communities, "all" →
@@ -4789,32 +4750,12 @@ let privacy_page_handler request =
   let user = Dream.session_field request "username" in
   Dream.html (Pages.privacy_page ?user request)
 
-(* === ADMIN === *)
+(* === ADMIN ===
 
-(* KPI dashboard exposes aggregate user/post/engagement metrics — admin-only.
-   No session check existed before; added to prevent data leakage to any visitor. *)
-let hq_dashboard_handler request =
-  match Dream.session_field request "is_admin" with
-  | Some "true" ->
-      let format_date t =
-        let tm = Unix.gmtime t in
-        Printf.sprintf "%04d-%02d-%02d" (tm.Unix.tm_year + 1900) (tm.Unix.tm_mon + 1) tm.Unix.tm_mday
-      in
-      let now = Unix.gettimeofday () in
-      let today = format_date now in
-      let thirty_days_ago = format_date (now -. (30. *. 86400.)) in
-      let start_date = Option.value ~default:thirty_days_ago (Dream.query request "start") in
-      let end_date   = Option.value ~default:today (Dream.query request "end") in
-      Dream.sql request (fun db ->
-        let%lwt kpi_res   = Db.get_kpi_dashboard db ~start_date ~end_date in
-        let%lwt ratio_res = Db.get_dau_mau_ratio  db ~start_date ~end_date in
-        match kpi_res, ratio_res with
-        | Ok stats, Ok ratio -> Dream.html (Pages.hq_dashboard_page stats ~dau_mau_ratio:ratio ~start_date ~end_date)
-        | Error e, _ | _, Error e ->
-            Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Error" ~message:("Analytics error: " ^ e) ~alert_type:"error" ~return_url:"/" request)
-      )
-  | _ -> Dream.respond ~status:`Forbidden
-      (Pages.msg_page ~title:"Access Denied" ~message:"You are not an Admin." ~alert_type:"error" ~return_url:"/" request)
+   PostHog is the authoritative KPI/analytics product; the old in-app KPI
+   dashboard (GET /earde-hq-dashboard) was removed with its renderer and its
+   two exclusive aggregate queries. Nothing replaced it and no route redirects
+   to PostHog — /admin stays the operational admin surface. *)
 
 let ban_user_handler request =
   match Dream.session_field request "is_admin" with
@@ -5129,8 +5070,11 @@ let is_tracked_request ~path ~user_agent =
   in
 
   let is_admin_route =
-    (* Exclude admin-only routes to prevent self-inflating page-view counts when admins
-       refresh the dashboard. Uses prefix match to cover query-string variants too. *)
+    (* Retired path: the KPI dashboard route is gone (PostHog is authoritative),
+       but the exclusion stays so page-view logging and the last_active_at touch
+       behave exactly as before for anything still hitting the old URL — its
+       requests now 404 and must not become tracked traffic. Prefix match covers
+       query-string variants too. *)
     let admin_prefix = "/earde-hq-dashboard" in
     let plen = String.length path and alen = String.length admin_prefix in
     (plen >= alen && String.sub path 0 alen = admin_prefix
