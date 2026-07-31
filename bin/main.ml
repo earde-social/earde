@@ -62,6 +62,12 @@ let () =
      cannot take last_active_at (moderator auto-demotion input) down with it. *)
   @@ Earde.Handlers.presence_middleware
   @@ Earde.Handlers.analytics_middleware
+  (* Inside sql_pool + sql_sessions, like presence: resolves the signed-in
+     user's unread-notification count once and stashes it on the request, so
+     every authenticated document renders its top-bar badge from the same
+     durable query instead of each page fetching its own answer. Best-effort
+     — a failed count leaves the field unset and the badge simply absent. *)
+  @@ Earde.Notification_badge.middleware
   (* Runs AFTER Dream.logger and analytics_middleware (both must see the
      redacted target) but BEFORE the router, so only the route handler gets
      the real sensitive query parameters back via Dream.query. No-op for
@@ -369,7 +375,6 @@ let () =
     Dream.get "/settings" Earde.Handlers.settings_page_handler;
     Dream.post "/settings" Earde.Handlers.update_profile_handler;
     Dream.get "/notifications" Earde.Handlers.notifications_handler;
-    Dream.get "/api/unread-notifs" Earde.Handlers.unread_notifs_api;
     Dream.post "/delete-account" Earde.Handlers.delete_account_handler;
     Dream.post "/delete-post" Earde.Handlers.delete_post_handler;
     Dream.post "/c/:slug/posts/:id/mod_delete" Earde.Handlers.mod_delete_post_handler;

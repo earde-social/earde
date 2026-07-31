@@ -243,8 +243,11 @@ let outgoing_section outgoing =
      requests</h2>%s</section>"
     body
 
-(* --- Section 4: the entry point into the search flow --- *)
+(* --- The entry point into the search flow --- *)
 
+(* Rendered first on the management page: starting a connection is what a
+   moderator comes here to do, and the three lists below are the record of
+   what that produced. *)
 let connect_section ~(community : community) =
   if not (valid_community_slug community.slug) then ""
   else if not community.eligible then
@@ -252,11 +255,16 @@ let connect_section ~(community : community) =
      community</h2><p class='ccn-empty'>Unavailable while this community \
      cannot connect.</p></section>"
   else
+    (* The panel's primary action, on the shared .btn/.btn--primary control
+       so it reads as an action rather than as prose. Still an ordinary
+       link to the same destination: no JavaScript, and nothing outside the
+       anchor itself is clickable. *)
     Printf.sprintf
       "<section class='ccn-section'><h2 class='ccn-section-title'>Connect a \
        community</h2><p class='ccn-section-desc'>Find a community to connect \
-       with. Both sides must agree: they review your request.</p><p><a \
-       class='ccn-link' href='%s/new'>Find a community</a></p></section>"
+       with. Both sides must agree: they review your request.</p><p \
+       class='ccn-cta'><a class='btn btn--primary' href='%s/new'>Find a \
+       community</a></p></section>"
       (esc (base_path ~community_slug:community.slug))
 
 let heading_html =
@@ -264,13 +272,17 @@ let heading_html =
    class='create-sub ccn-intro'>Mutual connections between this community \
    and others.</p></div>"
 
+(* Action first, then the record: Connect a community, then the connected
+   communities, then the two pending lists. The order is fixed, so an empty
+   page and a busy one read the same way. Row order inside each section is
+   the read model's. *)
 let management_body ?request ~(state : state) () =
   Printf.sprintf "%s%s%s%s%s%s" heading_html
     (ineligible_notice_html state.community)
+    (connect_section ~community:state.community)
     (accepted_section ?request ~community:state.community state.accepted)
     (incoming_section ?request ~community:state.community state.incoming)
     (outgoing_section state.outgoing)
-    (connect_section ~community:state.community)
 
 (* --- Search (step one) --- *)
 

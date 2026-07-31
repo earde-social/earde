@@ -24,6 +24,7 @@
 open Lwt.Infix
 
 module Cc = Community_connections
+module Notifications = Community_connection_notifications
 
 type decision =
   | Accept
@@ -263,6 +264,33 @@ let with_locked_pair conn ~rollback_to ~requester ~recipient k =
           in
           k ~requester_eligible ~recipient_eligible))
 
+(* Recipient resolution and notification insertion for one committed
+   transition, on the same open transaction as the mutation and its audit
+   event and before the commit — so a notification failure rolls the mutation
+   and the event back with it, and a stale or losing transition, which never
+   reaches here, creates neither.
+
+   [community_id] is always the notified moderators' own management context:
+   the community whose top_mod rows are read, whose id is stored, and whose
+   connections page the rendered notification links to. Zero recipients is a
+   legitimate outcome and continues straight to [k]. *)
+let with_notifications (module C : Caqti_lwt.CONNECTION) ~rollback_to ~kind
+    ~actor_user_id ~community_id ~connection_id k =
+  let of_notification_error = function
+    | Notifications.Inconsistent_data -> Inconsistent_data
+    | Notifications.Storage_error -> Storage_error
+  in
+  Notifications.community_top_moderator_ids (module C) ~community_id
+  >>= function
+  | Error e -> rollback_to (of_notification_error e)
+  | Ok recipient_user_ids -> (
+      Notifications.insert_many
+        (module C)
+        ~kind ~actor_user_id ~community_id ~connection_id ~recipient_user_ids
+      >>= function
+      | Error e -> rollback_to (of_notification_error e)
+      | Ok () -> k ())
+
 (* The locked row rebuilt through the pure domain, then replayed forward to
    [target] one legal transition at a time. Returns None on any structural
    incoherence — that is Inconsistent_data at the call site, never a
@@ -353,10 +381,21 @@ let request (module C : Caqti_lwt.CONNECTION) ~actor_user_id ~connection =
                         rollback_to Inconsistent_data
                     | Error Community_connection_audit.Storage_error ->
                         rollback_to Storage_error
-                    | Ok () -> (
-                        C.commit () >>= function
-                        | Error _ -> Lwt.return (Error Storage_error)
-                        | Ok () -> Lwt.return (Ok { created_id = new_id }))))
+                    | Ok () ->
+                        (* A request is addressed to the recipient community,
+                           so its own top moderators are the ones who need to
+                           act on it, and their management context is that
+                           community. *)
+                        with_notifications
+                          (module C)
+                          ~rollback_to ~kind:Notifications.Connection_requested
+                          ~actor_user_id ~community_id:recipient
+                          ~connection_id:new_id
+                          (fun () ->
+                            C.commit () >>= function
+                            | Error _ -> Lwt.return (Error Storage_error)
+                            | Ok () ->
+                                Lwt.return (Ok { created_id = new_id }))))
 
 (* === review === *)
 
@@ -469,18 +508,33 @@ let review (module C : Caqti_lwt.CONNECTION) ~reviewer_user_id ~connection_id
                           rollback_to Inconsistent_data
                       | Error Community_connection_audit.Storage_error ->
                           rollback_to Storage_error
-                      | Ok () -> (
-                          C.commit () >>= function
-                          | Error _ -> Lwt.return (Error Storage_error)
-                          | Ok () ->
-                              Lwt.return
-                                (Ok
-                                   {
-                                     reviewed_id = connection_id;
-                                     reviewed_requester = requester;
-                                     reviewed_recipient = recipient;
-                                     reviewed_result = new_status;
-                                   })))
+                      | Ok () ->
+                          (* A review answers the requesting community, so its
+                             own top moderators hear about it and their
+                             management context is that community. The
+                             reviewing side is not notified: it is the side
+                             that just acted. *)
+                          with_notifications
+                            (module C)
+                            ~rollback_to
+                            ~kind:
+                              (match decision with
+                              | Accept -> Notifications.Connection_accepted
+                              | Reject -> Notifications.Connection_rejected)
+                            ~actor_user_id:reviewer_user_id
+                            ~community_id:requester ~connection_id
+                            (fun () ->
+                              C.commit () >>= function
+                              | Error _ -> Lwt.return (Error Storage_error)
+                              | Ok () ->
+                                  Lwt.return
+                                    (Ok
+                                       {
+                                         reviewed_id = connection_id;
+                                         reviewed_requester = requester;
+                                         reviewed_recipient = recipient;
+                                         reviewed_result = new_status;
+                                       })))
                 | Ok (_ :: _ :: _) -> rollback_to Inconsistent_data))))
 
 (* === remove === *)
@@ -574,16 +628,31 @@ let remove (module C : Caqti_lwt.CONNECTION) ~actor_user_id ~connection_id
                           rollback_to Inconsistent_data
                       | Error Community_connection_audit.Storage_error ->
                           rollback_to Storage_error
-                      | Ok () -> (
-                          C.commit () >>= function
-                          | Error _ -> Lwt.return (Error Storage_error)
-                          | Ok () ->
-                              Lwt.return
-                                (Ok
-                                   {
-                                     removed_id = connection_id;
-                                     removed_requester = requester;
-                                     removed_recipient = recipient;
-                                     removed_result = new_status;
-                                   })))
+                      | Ok () ->
+                          (* Removal is symmetric — either side may detach —
+                             so the notified side is whichever community did
+                             not act, derived from the acting community the
+                             guarded UPDATE already verified is in the pair.
+                             That community is also the notified moderators'
+                             own management context. *)
+                          let opposite =
+                            if acting_community_id = requester then recipient
+                            else requester
+                          in
+                          with_notifications
+                            (module C)
+                            ~rollback_to ~kind:Notifications.Connection_removed
+                            ~actor_user_id ~community_id:opposite ~connection_id
+                            (fun () ->
+                              C.commit () >>= function
+                              | Error _ -> Lwt.return (Error Storage_error)
+                              | Ok () ->
+                                  Lwt.return
+                                    (Ok
+                                       {
+                                         removed_id = connection_id;
+                                         removed_requester = requester;
+                                         removed_recipient = recipient;
+                                         removed_result = new_status;
+                                       })))
                 | Ok (_ :: _ :: _) -> rollback_to Inconsistent_data))))

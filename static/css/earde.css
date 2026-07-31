@@ -1234,9 +1234,9 @@ ol, ul { margin: 0; padding: 0; list-style: none; }
    - the shared confirm-modal script builds its overlay from legacy utility
      class names (inert without Tailwind), so the overlay, card and buttons
      are styled via their stable ids and class pairs;
-   - the notification badge is revealed by the shared script removing the
-     legacy `hidden` class; that class is honoured here on the badge element
-     only — no global .hidden utility is defined;
+   - the notification badge is server-rendered from the request's unread
+     count and is absent entirely at zero, so this scope needs no rule for
+     it (Notification_badge);
    - the analytics consent banner markup is shared with the legacy layout
      (same rules as the /bring and /login sections, re-scoped).
    ========================================================================== */
@@ -1266,9 +1266,6 @@ ol, ul { margin: 0; padding: 0; list-style: none; }
   border-top: var(--bw) solid var(--line);
 }
 
-/* Notification badge: hidden until the shared one-shot fetch reveals it.
-   Badge element only — deliberately NOT a global .hidden utility. */
-.launch-feed #notif-badge.hidden { display: none; }
 
 /* Rail tiles: real community avatars fill the fixed 42px tile. */
 .launch-feed .launch-rail__img {
@@ -1471,9 +1468,9 @@ ol, ul { margin: 0; padding: 0; list-style: none; }
      cells are skinned here;
    - the onboarding stepper (.steps, approved sheet above) is rendered by the
      wrapper before the untouched fragment and needs no extra rules;
-   - the notification badge is revealed by the shared script removing the
-     legacy `hidden` class; honoured on the badge element only — no global
-     .hidden utility is defined;
+   - the notification badge is server-rendered from the request's unread
+     count and is absent entirely at zero, so this scope needs no rule for
+     it (Notification_badge);
    - the desktop-only gate panel ships in mobile-gate.css; only the
      launch-scope "hide the app" rule for this route's document hierarchy
      lives here (mirrors mobile-gate.css's body.launch-feed > .app rule);
@@ -1496,9 +1493,8 @@ ol, ul { margin: 0; padding: 0; list-style: none; }
   padding: 0 13px;
 }
 
-/* Member top-bar cluster: chip avatar tone + badge reveal hook. */
+/* Member top-bar cluster: chip avatar tone. */
 .launch-project-new .userchip .avatar { background: var(--moss); }
-.launch-project-new #notif-badge.hidden { display: none; }
 
 /* Legacy create.css wrappers, flat on the launch column (no cool-grey card). */
 .launch-project-new .create-shell { display: block; }
@@ -1752,9 +1748,9 @@ ol, ul { margin: 0; padding: 0; list-style: none; }
      zero-extra-form trick as the other launch documents);
    - the onboarding stepper (.steps, approved sheet above) is rendered by
      the wrapper before the untouched fragment and needs no extra rules;
-   - the notification badge is revealed by the shared script removing the
-     legacy `hidden` class; honoured on the badge element only — no global
-     .hidden utility is defined;
+   - the notification badge is server-rendered from the request's unread
+     count and is absent entirely at zero, so this scope needs no rule for
+     it (Notification_badge);
    - the desktop-only gate panel ships in mobile-gate.css; only the
      launch-scope "hide the app" rule for this route's document hierarchy
      lives here (mirrors mobile-gate.css's body.launch-feed > .app rule);
@@ -1777,9 +1773,8 @@ ol, ul { margin: 0; padding: 0; list-style: none; }
   padding: 0 13px;
 }
 
-/* Member top-bar cluster: chip avatar tone + badge reveal hook. */
+/* Member top-bar cluster: chip avatar tone. */
 .launch-project-home-setup .userchip .avatar { background: var(--moss); }
-.launch-project-home-setup #notif-badge.hidden { display: none; }
 
 /* Legacy create.css wrappers, flat on the launch column (no cool-grey card). */
 .launch-project-home-setup .create-shell { display: block; }
@@ -1991,9 +1986,9 @@ ol, ul { margin: 0; padding: 0; list-style: none; }
      zero-extra-form trick as the other launch documents);
    - the onboarding stepper (.steps, approved sheet above) is rendered by
      the wrapper before the untouched fragment and needs no extra rules;
-   - the notification badge is revealed by the shared script removing the
-     legacy `hidden` class; honoured on the badge element only — no global
-     .hidden utility is defined;
+   - the notification badge is server-rendered from the request's unread
+     count and is absent entirely at zero, so this scope needs no rule for
+     it (Notification_badge);
    - the desktop-only gate panel ships in mobile-gate.css; only the
      launch-scope "hide the app" rules for these routes' document
      hierarchies live here (mirrors mobile-gate.css's body.launch-feed
@@ -2024,11 +2019,9 @@ ol, ul { margin: 0; padding: 0; list-style: none; }
   padding: 0 13px;
 }
 
-/* Member top-bar cluster: chip avatar tone + badge reveal hook. */
+/* Member top-bar cluster: chip avatar tone. */
 .launch-project-request-home .userchip .avatar,
 .launch-project-community-home .userchip .avatar { background: var(--moss); }
-.launch-project-request-home #notif-badge.hidden,
-.launch-project-community-home #notif-badge.hidden { display: none; }
 
 /* Legacy create.css wrappers, flat on the launch column (no cool-grey card). */
 .launch-project-request-home .create-shell,
@@ -2399,9 +2392,9 @@ ol, ul { margin: 0; padding: 0; list-style: none; }
      zero-extra-form trick as the other launch documents);
    - the onboarding stepper (.steps, approved sheet above) is rendered by
      the wrapper before the untouched fragment and needs no extra rules;
-   - the notification badge is revealed by the shared script removing the
-     legacy `hidden` class; honoured on the badge element only — no global
-     .hidden utility is defined;
+   - the notification badge is server-rendered from the request's unread
+     count and is absent entirely at zero, so this scope needs no rule for
+     it (Notification_badge);
    - the desktop-only gate panel ships in mobile-gate.css; only the
      launch-scope "hide the app" rule for this route's document hierarchy
      lives here;
@@ -2426,9 +2419,8 @@ ol, ul { margin: 0; padding: 0; list-style: none; }
   padding: 0 13px;
 }
 
-/* Member top-bar cluster: chip avatar tone + badge reveal hook. */
+/* Member top-bar cluster: chip avatar tone. */
 .launch-community-publication .userchip .avatar { background: var(--moss); }
-.launch-community-publication #notif-badge.hidden { display: none; }
 
 /* Legacy create.css wrappers, flat on the launch column (no cool-grey card). */
 .launch-community-publication .create-shell { display: block; }
@@ -2656,9 +2648,9 @@ ol, ul { margin: 0; padding: 0; list-style: none; }
      project-grid anatomy — no markup inside the fragment changes;
    - the join/leave controls are the legacy POST forms (exact fields)
      restyled; the reference's static Joined button is the real Leave form;
-   - the notification badge is revealed by the shared script removing the
-     legacy `hidden` class; honoured on the badge element only — no global
-     .hidden utility is defined;
+   - the notification badge is server-rendered from the request's unread
+     count and is absent entirely at zero, so this scope needs no rule for
+     it (Notification_badge);
    - the desktop-only gate panel ships in mobile-gate.css; only the
      launch-scope "hide the app" rule for this route lives here;
    - the analytics consent banner markup is shared with the legacy layout
@@ -2692,9 +2684,6 @@ ol, ul { margin: 0; padding: 0; list-style: none; }
   border-top: var(--bw) solid var(--line);
 }
 
-/* Notification badge: hidden until the shared one-shot fetch reveals it.
-   Badge element only — deliberately NOT a global .hidden utility. */
-.launch-community-overview #notif-badge.hidden { display: none; }
 
 /* Real community avatars fill their fixed tile (rail, sidebar head, crest). */
 .launch-community-overview .launch-rail__img,
@@ -2874,6 +2863,51 @@ ol, ul { margin: 0; padding: 0; list-style: none; }
 }
 .launch-community-overview .ccp-primary { color: var(--moss); border-color: var(--moss); }
 
+/* ---- Connected communities (ccc-* fragment, same panel grammar) ------------- */
+
+/* The community↔community block reuses the connected-projects panel
+   language — same frame, same kicker/mono section-head, same 1px gutter
+   acting as the rule — so the two blocks read as one system rather than as
+   two designs.
+
+   It does NOT reuse that block's two-up grid. A project cell carries several
+   lines (kind, namespace, verification, repos) and fills a half-width tile;
+   a connected community is one line of linked text, so two-up left an orphan
+   cell at every odd count and read as a tile grid rather than a list. One
+   community per full-width row, stacked. */
+.launch-community-overview .ccc-section {
+  border: var(--bw) solid var(--line); border-radius: var(--r-3);
+  background: var(--surface); overflow: hidden;
+}
+.launch-community-overview .ccc-title {
+  font-family: var(--mono); font-size: var(--fs-10-5); font-weight: 600;
+  letter-spacing: var(--ls-kicker); text-transform: uppercase; color: var(--muted);
+  margin: 0; padding: var(--sp-6) var(--sp-8) 2px;
+}
+.launch-community-overview .ccc-sub {
+  font-family: var(--mono); font-size: var(--fs-10-5); color: var(--muted);
+  margin: 0; padding: 0 var(--sp-8) var(--sp-6);
+  border-bottom: var(--bw) solid var(--line);
+}
+/* A plain column, never a track list: the gutter between rows is the rule,
+   and no count can produce a half-filled one. */
+.launch-community-overview .ccc-communities {
+  list-style: none; margin: 0; padding: 0;
+  display: flex; flex-direction: column; gap: var(--bw);
+  background: var(--line);
+}
+.launch-community-overview .ccc-community {
+  background: var(--surface); padding: 11px var(--sp-7); min-width: 0;
+}
+/* The name is the row's only content and its link target. It wraps rather
+   than truncating — a clipped community name is worse than a two-line one —
+   and stays inside the panel however long it is. */
+.launch-community-overview .ccc-name {
+  display: block; margin: 0; font-family: var(--sans); font-weight: 600;
+  font-size: var(--fs-13-5); color: var(--ink); overflow-wrap: anywhere;
+}
+.launch-community-overview a.ccc-name:hover { text-decoration: underline; }
+
 /* ---- Gate + consent -------------------------------------------------------- */
 
 /* Desktop-only gate: hide this route's launch app under the shared
@@ -2960,9 +2994,6 @@ ol, ul { margin: 0; padding: 0; list-style: none; }
   border-top: var(--bw) solid var(--line);
 }
 
-/* Notification badge: hidden until the shared one-shot fetch reveals it.
-   Badge element only — deliberately NOT a global .hidden utility. */
-.launch-community-channel #notif-badge.hidden { display: none; }
 
 /* Real community avatars fill their fixed tile (rail, sidebar head). */
 .launch-community-channel .launch-rail__img,
@@ -3324,10 +3355,6 @@ ol, ul { margin: 0; padding: 0; list-style: none; }
   border-top: var(--bw) solid var(--line);
 }
 
-/* Notification badge: hidden until the shared one-shot fetch reveals it.
-   Badge element only — deliberately NOT a global .hidden utility. */
-.launch-community-section #notif-badge.hidden,
-.launch-community-thread #notif-badge.hidden { display: none; }
 
 /* Real community avatars fill their fixed tile (rail, sidebar head). */
 .launch-community-section .launch-rail__img,
@@ -3934,9 +3961,9 @@ ol, ul { margin: 0; padding: 0; list-style: none; }
      legacy utility class names; the stable .fixed.inset-0 pair and the
      #cancel-btn / #confirm-btn ids are the hooks (same idiom as the other
      launch routes);
-   - the notification badge is revealed by the shared script removing the
-     legacy `hidden` class; honoured on the badge element only — no global
-     .hidden utility is defined;
+   - the notification badge is server-rendered from the request's unread
+     count and is absent entirely at zero, so this scope needs no rule for
+     it (Notification_badge);
    - for a private community the renderer keeps its inner ph-no-capture
      guard div inside <main>; display:contents keeps it out of the flex
      chain so both privacy shapes share one layout;
@@ -3973,9 +4000,6 @@ ol, ul { margin: 0; padding: 0; list-style: none; }
   border-top: var(--bw) solid var(--line);
 }
 
-/* Notification badge: hidden until the shared one-shot fetch reveals it.
-   Badge element only — deliberately NOT a global .hidden utility. */
-.launch-community-settings #notif-badge.hidden { display: none; }
 
 /* Real community avatars fill their fixed tile (rail, sidebar head). */
 .launch-community-settings .launch-rail__img,
@@ -4506,9 +4530,9 @@ ol, ul { margin: 0; padding: 0; list-style: none; }
    - this surface never names an ineligibility reason, so the sidebar is
      rendered without the private-community visibility marker (handler
      contract, not CSS);
-   - the notification badge is revealed by the shared script removing the
-     legacy `hidden` class; honoured on the badge element only — no global
-     .hidden utility is defined;
+   - the notification badge is server-rendered from the request's unread
+     count and is absent entirely at zero, so this scope needs no rule for
+     it (Notification_badge);
    - the desktop-only gate panel ships in mobile-gate.css; only the
      launch-scope "hide the app" rule for this route lives here;
    - the analytics consent banner markup is shared with the legacy layout
@@ -4542,9 +4566,6 @@ ol, ul { margin: 0; padding: 0; list-style: none; }
   border-top: var(--bw) solid var(--line);
 }
 
-/* Notification badge: hidden until the shared one-shot fetch reveals it.
-   Badge element only — deliberately NOT a global .hidden utility. */
-.launch-project-home-review #notif-badge.hidden { display: none; }
 
 /* Real community avatars fill their fixed tile (rail, sidebar head). */
 .launch-project-home-review .launch-rail__img,
@@ -4778,9 +4799,9 @@ ol, ul { margin: 0; padding: 0; list-style: none; }
    - the row carries no context line and no separate right column, so the
      mono time sits right-aligned on the message baseline and the unread
      clay dot is drawn from the time cell — same signals, real fields only;
-   - the notification badge is revealed by the shared script removing the
-     legacy `hidden` class; honoured on the badge element only — no global
-     .hidden utility is defined;
+   - the notification badge is server-rendered from the request's unread
+     count and is absent entirely at zero, so this scope needs no rule for
+     it (Notification_badge);
    - the desktop-only gate panel ships in mobile-gate.css; only the
      launch-scope "hide the app" rule for this route lives here;
    - the analytics consent banner markup is shared with the legacy layout
@@ -4814,9 +4835,6 @@ ol, ul { margin: 0; padding: 0; list-style: none; }
   border-top: var(--bw) solid var(--line);
 }
 
-/* Notification badge: hidden until the shared one-shot fetch reveals it.
-   Badge element only — deliberately NOT a global .hidden utility. */
-.launch-notifications #notif-badge.hidden { display: none; }
 
 /* Real community avatars fill the fixed 42px rail tile. */
 .launch-notifications .launch-rail__img {
@@ -4925,9 +4943,9 @@ ol, ul { margin: 0; padding: 0; list-style: none; }
    - moderation/self-action controls (own-post delete, admin-remove dialog)
      ship legacy Tailwind class names that are inert here; the same skin the
      feed section gives them is re-scoped for this route;
-   - the notification badge is revealed by the shared script removing the
-     legacy `hidden` class; honoured on the badge element only — no global
-     .hidden utility is defined;
+   - the notification badge is server-rendered from the request's unread
+     count and is absent entirely at zero, so this scope needs no rule for
+     it (Notification_badge);
    - the desktop-only gate panel ships in mobile-gate.css; only the
      launch-scope "hide the app" rule for this route lives here;
    - the analytics consent banner markup is shared with the legacy layout
@@ -4961,9 +4979,6 @@ ol, ul { margin: 0; padding: 0; list-style: none; }
   border-top: var(--bw) solid var(--line);
 }
 
-/* Notification badge: hidden until the shared one-shot fetch reveals it.
-   Badge element only — deliberately NOT a global .hidden utility. */
-.launch-search #notif-badge.hidden { display: none; }
 
 /* Real community avatars fill the fixed 42px rail tile. */
 .launch-search .launch-rail__img {
@@ -5255,9 +5270,9 @@ ol, ul { margin: 0; padding: 0; list-style: none; }
      stable .fixed.inset-0 pair and #cancel-btn / #confirm-btn are the hooks;
    - the ?tab= contract (posts default, comments, communities, unknown →
      posts) is server-rendered; the tabs are plain links, no client tabs;
-   - the notification badge is revealed by the shared script removing the
-     legacy `hidden` class; honoured on the badge element only — no global
-     .hidden utility is defined;
+   - the notification badge is server-rendered from the request's unread
+     count and is absent entirely at zero, so this scope needs no rule for
+     it (Notification_badge);
    - the desktop-only gate panel ships in mobile-gate.css; only the
      launch-scope "hide the app" rule for this route lives here;
    - the analytics consent banner markup is shared with the legacy layout
@@ -5291,9 +5306,6 @@ ol, ul { margin: 0; padding: 0; list-style: none; }
   border-top: var(--bw) solid var(--line);
 }
 
-/* Notification badge: hidden until the shared one-shot fetch reveals it.
-   Badge element only — deliberately NOT a global .hidden utility. */
-.launch-user-profile #notif-badge.hidden { display: none; }
 
 /* Real community avatars fill the fixed 42px rail tile. */
 .launch-user-profile .launch-rail__img {
@@ -5597,9 +5609,9 @@ ol, ul { margin: 0; padding: 0; list-style: none; }
      behavior script from legacy utility class names; the stable
      .fixed.inset-0 pair and the #cancel-btn / #confirm-btn ids are the
      hooks;
-   - the notification badge is revealed by the shared script removing the
-     legacy `hidden` class; honoured on the badge element only — no global
-     .hidden utility is defined;
+   - the notification badge is server-rendered from the request's unread
+     count and is absent entirely at zero, so this scope needs no rule for
+     it (Notification_badge);
    - the desktop-only gate panel ships in mobile-gate.css; only the
      launch-scope "hide the app" rule for this route lives here;
    - the analytics consent banner markup is shared with the legacy layout
@@ -5633,9 +5645,6 @@ ol, ul { margin: 0; padding: 0; list-style: none; }
   border-top: var(--bw) solid var(--line);
 }
 
-/* Notification badge: hidden until the shared one-shot fetch reveals it.
-   Badge element only — deliberately NOT a global .hidden utility. */
-.launch-account-settings #notif-badge.hidden { display: none; }
 
 /* Real community avatars fill the fixed 42px rail tile. */
 .launch-account-settings .launch-rail__img {
@@ -5857,9 +5866,9 @@ ol, ul { margin: 0; padding: 0; list-style: none; }
    - the route is intentionally public (transparency), so nothing here may
      imply a management surface: no action controls, no statistics, only the
      recorded events;
-   - the notification badge is revealed by the shared script removing the
-     legacy `hidden` class; honoured on the badge element only — no global
-     .hidden utility is defined;
+   - the notification badge is server-rendered from the request's unread
+     count and is absent entirely at zero, so this scope needs no rule for
+     it (Notification_badge);
    - the desktop-only gate panel ships in mobile-gate.css; only the
      launch-scope "hide the app" rule for this route lives here;
    - the analytics consent banner markup is shared with the legacy layout
@@ -5893,9 +5902,6 @@ ol, ul { margin: 0; padding: 0; list-style: none; }
   border-top: var(--bw) solid var(--line);
 }
 
-/* Notification badge: hidden until the shared one-shot fetch reveals it.
-   Badge element only — deliberately NOT a global .hidden utility. */
-.launch-community-modlog #notif-badge.hidden { display: none; }
 
 /* Real community avatars fill their fixed tile (rail, sidebar head). */
 .launch-community-modlog .launch-rail__img,
@@ -6067,9 +6073,9 @@ ol, ul { margin: 0; padding: 0; list-style: none; }
    - the route is M/TM/A-gated in the handler, so the docket may show the
      real resolution controls, but nothing here adds bulk actions,
      statistics or workflow states the backend does not have;
-   - the notification badge is revealed by the shared script removing the
-     legacy `hidden` class; honoured on the badge element only — no global
-     .hidden utility is defined;
+   - the notification badge is server-rendered from the request's unread
+     count and is absent entirely at zero, so this scope needs no rule for
+     it (Notification_badge);
    - for a private community the renderer keeps its inner ph-no-capture
      guard div inside <main>; display:contents keeps it out of the flex
      chain so both privacy shapes share one layout;
@@ -6106,9 +6112,6 @@ ol, ul { margin: 0; padding: 0; list-style: none; }
   border-top: var(--bw) solid var(--line);
 }
 
-/* Notification badge: hidden until the shared one-shot fetch reveals it.
-   Badge element only — deliberately NOT a global .hidden utility. */
-.launch-community-reports #notif-badge.hidden { display: none; }
 
 /* Real community avatars fill their fixed tile (rail, sidebar head). */
 .launch-community-reports .launch-rail__img,
@@ -6352,9 +6355,9 @@ ol, ul { margin: 0; padding: 0; list-style: none; }
    - the shared behavior script composes the confirm modal from legacy
      utility class names; the stable .fixed.inset-0 pair and the
      #cancel-btn / #confirm-btn ids are the hooks, styled route-scoped;
-   - the notification badge is revealed by the shared script removing the
-     legacy `hidden` class; honoured on the badge element only — no global
-     .hidden utility is defined;
+   - the notification badge is server-rendered from the request's unread
+     count and is absent entirely at zero, so this scope needs no rule for
+     it (Notification_badge);
    - for a private community the renderer keeps its inner ph-no-capture
      guard div inside <main>; display:contents keeps it out of the flex
      chain so both privacy shapes share one layout;
@@ -6391,9 +6394,6 @@ ol, ul { margin: 0; padding: 0; list-style: none; }
   border-top: var(--bw) solid var(--line);
 }
 
-/* Notification badge: hidden until the shared one-shot fetch reveals it.
-   Badge element only — deliberately NOT a global .hidden utility. */
-.launch-community-moderators #notif-badge.hidden { display: none; }
 
 /* Real community avatars fill their fixed tile (rail, sidebar head). */
 .launch-community-moderators .launch-rail__img,
@@ -6662,9 +6662,9 @@ ol, ul { margin: 0; padding: 0; list-style: none; }
      invented: every control styled here already exists in the renderer;
    - the sidebar carries no permanent Report entry — reporting is a
      contextual action, so no navitem is active on this route;
-   - the notification badge is revealed by the shared script removing the
-     legacy `hidden` class; honoured on the badge element only — no global
-     .hidden utility is defined;
+   - the notification badge is server-rendered from the request's unread
+     count and is absent entirely at zero, so this scope needs no rule for
+     it (Notification_badge);
    - for a private community the renderer keeps its inner ph-no-capture
      guard div inside <main>; display:contents keeps it out of the flex
      chain so both privacy shapes share one layout;
@@ -6701,9 +6701,6 @@ ol, ul { margin: 0; padding: 0; list-style: none; }
   border-top: var(--bw) solid var(--line);
 }
 
-/* Notification badge: hidden until the shared one-shot fetch reveals it.
-   Badge element only — deliberately NOT a global .hidden utility. */
-.launch-report-form #notif-badge.hidden { display: none; }
 
 /* Real community avatars fill their fixed tile (rail, sidebar head). */
 .launch-report-form .launch-rail__img,
@@ -6882,9 +6879,9 @@ ol, ul { margin: 0; padding: 0; list-style: none; }
    - the connected-projects fragment (ccp-*) is byte-pinned by its fragment
      suites, so it is spliced verbatim and skinned in place (single-column:
      it sits in the narrow side stack on this route);
-   - the notification badge is revealed by the shared script removing the
-     legacy `hidden` class; honoured on the badge element only — no global
-     .hidden utility is defined;
+   - the notification badge is server-rendered from the request's unread
+     count and is absent entirely at zero, so this scope needs no rule for
+     it (Notification_badge);
    - the desktop-only gate panel ships in mobile-gate.css; only the
      launch-scope "hide the app" rule for this route lives here;
    - the analytics consent banner markup is shared with the legacy layout
@@ -6918,9 +6915,6 @@ ol, ul { margin: 0; padding: 0; list-style: none; }
   border-top: var(--bw) solid var(--line);
 }
 
-/* Notification badge: hidden until the shared one-shot fetch reveals it.
-   Badge element only — deliberately NOT a global .hidden utility. */
-.launch-flat-community #notif-badge.hidden { display: none; }
 
 /* Real community avatars fill their fixed tile (rail, sidebar head, crest). */
 .launch-flat-community .launch-rail__img,
@@ -7199,6 +7193,39 @@ ol, ul { margin: 0; padding: 0; list-style: none; }
 }
 .launch-flat-community .ccp-primary { color: var(--moss); border-color: var(--moss); }
 
+/* ---- Connected communities (ccc-* fragment, same panel grammar) ------------- */
+
+/* Same panel language as the connected-projects block above, and the same
+   one-community-per-row column as the structured overview: a connected
+   community is one line of linked text, never a tile. */
+.launch-flat-community .ccc-section {
+  border: var(--bw) solid var(--line); border-radius: var(--r-3);
+  background: var(--surface); overflow: hidden;
+}
+.launch-flat-community .ccc-title {
+  font-family: var(--mono); font-size: var(--fs-10-5); font-weight: 600;
+  letter-spacing: var(--ls-kicker); text-transform: uppercase; color: var(--muted);
+  margin: 0; padding: var(--sp-6) var(--sp-8) 2px;
+}
+.launch-flat-community .ccc-sub {
+  font-family: var(--mono); font-size: var(--fs-10-5); color: var(--muted);
+  margin: 0; padding: 0 var(--sp-8) var(--sp-6);
+  border-bottom: var(--bw) solid var(--line);
+}
+.launch-flat-community .ccc-communities {
+  list-style: none; margin: 0; padding: 0;
+  display: flex; flex-direction: column; gap: var(--bw);
+  background: var(--line);
+}
+.launch-flat-community .ccc-community {
+  background: var(--surface); padding: 11px var(--sp-7); min-width: 0;
+}
+.launch-flat-community .ccc-name {
+  display: block; margin: 0; font-family: var(--sans); font-weight: 600;
+  font-size: var(--fs-13-5); color: var(--ink); overflow-wrap: anywhere;
+}
+.launch-flat-community a.ccc-name:hover { text-decoration: underline; }
+
 /* ---- Moderation dialogs + shared confirm modal ------------------------------- */
 
 /* Legacy moderation <dialog>s (Tailwind classes inert here): keep them
@@ -7311,9 +7338,9 @@ ol, ul { margin: 0; padding: 0; list-style: none; }
      renderer, and flat communities simply render no section field;
    - validation failures answer via the legacy shared msg_page (out of
      scope), so this section carries no error-notice skin of its own;
-   - the notification badge is revealed by the shared script removing the
-     legacy `hidden` class; honoured on the badge element only — no global
-     .hidden utility is defined;
+   - the notification badge is server-rendered from the request's unread
+     count and is absent entirely at zero, so this scope needs no rule for
+     it (Notification_badge);
    - the desktop-only gate panel ships in mobile-gate.css; only the
      launch-scope "hide the app" rule for this route lives here;
    - the analytics consent banner markup is shared with the legacy layout
@@ -7347,9 +7374,6 @@ ol, ul { margin: 0; padding: 0; list-style: none; }
   border-top: var(--bw) solid var(--line);
 }
 
-/* Notification badge: hidden until the shared one-shot fetch reveals it.
-   Badge element only — deliberately NOT a global .hidden utility. */
-.launch-post-creation #notif-badge.hidden { display: none; }
 
 /* Real community avatars fill their fixed rail tile. */
 .launch-post-creation .launch-rail__img {
@@ -7598,9 +7622,9 @@ ol, ul { margin: 0; padding: 0; list-style: none; }
      .st-error notice reads ochre (pending/attention), never a red banner;
    - the sidebar carries no permanent Start-thread entry — promotion is a
      contextual action, so no navitem is active on this route;
-   - the notification badge is revealed by the shared script removing the
-     legacy `hidden` class; honoured on the badge element only — no global
-     .hidden utility is defined;
+   - the notification badge is server-rendered from the request's unread
+     count and is absent entirely at zero, so this scope needs no rule for
+     it (Notification_badge);
    - for a private community the launch shell marks .shell ph-no-capture
      (the legacy wrapper had no inner guard on this route, so none exists
      inside <main>);
@@ -7637,9 +7661,6 @@ ol, ul { margin: 0; padding: 0; list-style: none; }
   border-top: var(--bw) solid var(--line);
 }
 
-/* Notification badge: hidden until the shared one-shot fetch reveals it.
-   Badge element only — deliberately NOT a global .hidden utility. */
-.launch-start-thread #notif-badge.hidden { display: none; }
 
 /* Real community avatars fill their fixed tile (rail, sidebar head). */
 .launch-start-thread .launch-rail__img,
@@ -8174,9 +8195,6 @@ body.launch-global-admin .launch-user__menu form {
   border-top: var(--bw) solid var(--line);
 }
 
-/* Notification badge: hidden until the shared one-shot fetch reveals it.
-   Badge element only — deliberately NOT a global .hidden utility. */
-body.launch-global-admin #notif-badge.hidden { display: none; }
 
 /* Real community avatars fill the fixed 42px rail tile. */
 body.launch-global-admin .launch-rail__img {
@@ -8429,9 +8447,6 @@ body.launch-global-admin #analytics-consent [data-analytics-error] {
   border-top: var(--bw) solid var(--line);
 }
 
-/* Notification badge: hidden until the shared one-shot fetch reveals it.
-   Badge element only — deliberately NOT a global .hidden utility. */
-.launch-new-community #notif-badge.hidden { display: none; }
 
 /* Real community avatars fill their fixed rail tile. */
 .launch-new-community .launch-rail__img {
@@ -8715,8 +8730,9 @@ body.launch-message-page .create-shell .phrv-actions .phrv-accept button {
      #confirm-btn ids are the hooks;
    - the security-critical mod/admin/ban <dialog>s keep their legacy Tailwind
      markup verbatim; they are kept readable and usable via element rules;
-   - the notification badge is revealed by the shared script removing the
-     legacy `hidden` class (badge element rule, as everywhere else);
+   - the notification badge is server-rendered from the request's unread
+     count and is absent entirely at zero, so this scope needs no rule for
+     it (Notification_badge);
    - the desktop-only gate panel ships in mobile-gate.css; only this route's
      launch-scope "hide the app" rule lives here;
    - the analytics consent banner markup is shared with the legacy layout
@@ -8749,9 +8765,6 @@ body.launch-message-page .create-shell .phrv-actions .phrv-accept button {
   margin: var(--sp-2) 0 0; padding-top: var(--sp-2);
   border-top: var(--bw) solid var(--line);
 }
-
-/* Notification badge: hidden until the shared one-shot fetch reveals it. */
-.launch-legacy-post #notif-badge.hidden { display: none; }
 
 /* Real community avatars fill the fixed 42px rail tile. */
 .launch-legacy-post .launch-rail__img {
@@ -9081,7 +9094,86 @@ body.launch-message-page .create-shell .phrv-actions .phrv-accept button {
    the sibling project-home review surface; only the ccn-* fragment is new,
    skinned from outside so the markup stays exactly what the page module
    emits. No relationship labels, no usernames, no map visuals.
+
+   A launch scope is only complete when it carries BOTH halves: the shared
+   chrome/anatomy rules every launch surface repeats for its own page class,
+   and its feature fragment. This block shipped with the fragment alone, so
+   the community shell rendered the page as unstyled markup — no main-column
+   width or gutter, no head band (the two context spans collapsed into
+   "name/c/slug"), no user menu, no mobile gate. The shared half below is the
+   sibling project-home review recipe, re-scoped verbatim.
    ========================================================================== */
+
+/* ---- Launch chrome ---------------------------------------------------------- */
+
+/* Top-bar user menu: pure-CSS <details>, real logout POST form inside. */
+.launch-community-connections .launch-user { position: relative; }
+.launch-community-connections .launch-user > summary { list-style: none; }
+.launch-community-connections .launch-user > summary::-webkit-details-marker { display: none; }
+.launch-community-connections .launch-user .avatar { background: var(--moss); }
+.launch-community-connections .launch-user__menu {
+  position: absolute; right: 0; top: calc(100% + 6px); z-index: 40;
+  min-width: 168px; display: flex; flex-direction: column;
+  background: var(--surface); border: var(--bw) solid var(--line2);
+  border-radius: var(--r-3); padding: var(--sp-3);
+  box-shadow: var(--shadow-overlay);
+}
+.launch-community-connections .launch-user__menu a,
+.launch-community-connections .launch-user__menu button {
+  display: block; width: 100%; text-align: left; background: none; border: 0;
+  font-family: var(--mono); font-size: var(--fs-12); color: var(--ink);
+  padding: var(--sp-3) var(--sp-5); border-radius: var(--r-2); cursor: pointer;
+}
+.launch-community-connections .launch-user__menu a:hover,
+.launch-community-connections .launch-user__menu button:hover { background: var(--surface2); }
+.launch-community-connections .launch-user__menu form {
+  margin: var(--sp-2) 0 0; padding-top: var(--sp-2);
+  border-top: var(--bw) solid var(--line);
+}
+
+/* Real community avatars fill their fixed tile (rail, sidebar head). */
+.launch-community-connections .launch-rail__img,
+.launch-community-connections .launch-avatar-img {
+  width: 100%; height: 100%; object-fit: cover; border-radius: inherit;
+  display: block;
+}
+
+.launch-community-connections .launch-side-id { min-width: 0; display: block; }
+
+/* ---- Page anatomy ----------------------------------------------------------- */
+
+/* Compact head band: mono community context above the create-shell marker
+   (reference .page__head--tight geometry). Without these rules the name and
+   the address render as two adjacent inline spans and read as one malformed
+   token — the "smoke/c/smoke" symptom. */
+.launch-community-connections .launch-review-context {
+  flex: none; display: flex; align-items: baseline; gap: var(--sp-4);
+  padding: 12px 28px; background: var(--surface);
+  border-bottom: var(--bw) solid var(--line2);
+  font-family: var(--mono); font-size: var(--fs-11); color: var(--muted);
+}
+.launch-community-connections .launch-review-context-name { color: var(--ink); }
+.launch-community-connections .launch-review-context-slug { color: var(--muted); }
+
+/* Legacy create.css wrappers, recast as the main scroller and its column. */
+.launch-community-connections .create-shell {
+  flex: 1; min-height: 0; overflow-y: auto; scrollbar-width: thin;
+}
+.launch-community-connections .create-wrap {
+  max-width: 760px; margin: 0 auto; padding: var(--sp-11) 30px 70px;
+}
+.launch-community-connections .create-panel { display: block; }
+
+/* Serif page title over factual explanatory copy. */
+.launch-community-connections .create-head { margin-bottom: var(--sp-9); }
+.launch-community-connections .create-title {
+  font-family: var(--serif); font-weight: 600; font-size: var(--fs-22);
+  color: var(--ink);
+}
+.launch-community-connections .create-sub {
+  color: var(--muted); font-size: var(--fs-12-5); line-height: var(--lh-prose);
+  margin-top: var(--sp-2);
+}
 
 .launch-community-connections .ccn-intro { margin-top: var(--sp-2); }
 
@@ -9102,12 +9194,18 @@ body.launch-message-page .create-shell .phrv-actions .phrv-accept button {
 }
 .launch-community-connections .ccn-ineligible p { margin: 0; }
 
-/* Sections: a plain stack, one heading each, no cards competing with the
-   community chrome. */
-.launch-community-connections .ccn-section { margin-bottom: var(--sp-10); }
+/* Sections: the settings surface's panel primitive (.cm-panel geometry),
+   re-scoped onto the pinned ccn-* class names. Four panels read as four
+   distinct areas of one page; the previous plain stack separated them with
+   nothing but the rows' own full-width borders. */
+.launch-community-connections .ccn-section {
+  margin-bottom: var(--sp-9);
+  border: var(--bw) solid var(--line2); border-radius: var(--r-3);
+  background: var(--surface); padding: var(--sp-9) var(--sp-10) var(--sp-10);
+}
 .launch-community-connections .ccn-section-title {
-  font-size: var(--fs-13); font-weight: 700; color: var(--ink);
-  letter-spacing: .01em; margin: 0 0 var(--sp-4);
+  font-family: var(--serif); font-weight: 600; font-size: var(--fs-19);
+  color: var(--ink); margin: 0 0 var(--sp-5);
 }
 .launch-community-connections .ccn-section-desc,
 .launch-community-connections .ccn-empty,
@@ -9118,33 +9216,49 @@ body.launch-message-page .create-shell .phrv-actions .phrv-accept button {
   margin: 0 0 var(--sp-3);
 }
 
+/* Rows are hairline-separated list rows inside the panel (.cm-list grammar),
+   not cards nested in a card. */
 .launch-community-connections .ccn-list {
   list-style: none; margin: 0; padding: 0;
-  display: flex; flex-direction: column; gap: var(--sp-4);
+  display: flex; flex-direction: column;
+  border: var(--bw) solid var(--line2); border-radius: var(--r-2);
+  overflow: hidden;
 }
 .launch-community-connections .ccn-row {
-  border: var(--bw) solid var(--line); border-radius: var(--r-2);
-  background: var(--surface); padding: var(--sp-5) var(--sp-7);
-  display: flex; flex-wrap: wrap; align-items: baseline;
-  gap: var(--sp-3) var(--sp-6);
+  background: var(--surface); padding: var(--sp-4) var(--sp-6);
+  border-bottom: var(--bw) solid var(--line);
+  display: flex; flex-wrap: wrap; align-items: center;
+  justify-content: space-between; gap: var(--sp-3) var(--sp-5);
 }
+.launch-community-connections .ccn-row:last-child { border-bottom: 0; }
 /* A pending row is a workflow item, not a fact: the same ochre left rule
-   the review surface gives its pending requests. */
+   the review surface gives its pending requests. It stacks instead of
+   sitting on one line, because it carries the private note. */
 .launch-community-connections .ccn-row--incoming,
 .launch-community-connections .ccn-row--outgoing {
-  border-left: 3px solid var(--ochre);
+  border-left: var(--bw-accent) solid var(--ochre);
   background: color-mix(in srgb, var(--ochre) 6%, var(--surface));
-  display: block;
+  display: block; padding: var(--sp-5) var(--sp-6);
 }
 
-.launch-community-connections .ccn-identity { flex: 1 1 auto; }
+/* Name over address, kept together and allowed to wrap: a long community
+   name must never push the row's action off the panel. */
+.launch-community-connections .ccn-identity {
+  flex: 1 1 16rem; min-width: 0;
+  display: flex; flex-direction: column; gap: var(--sp-1);
+}
 .launch-community-connections .ccn-name {
   font-size: var(--fs-13); font-weight: 700; color: var(--ink);
-  text-decoration: none; margin-right: var(--sp-3);
+  text-decoration: none; overflow-wrap: anywhere;
 }
 .launch-community-connections a.ccn-name:hover { text-decoration: underline; }
 .launch-community-connections .ccn-slug {
   font-family: var(--mono); font-size: var(--fs-10-5); color: var(--muted);
+  overflow-wrap: anywhere;
+}
+/* The confirmation step renders one bare identity block outside any row. */
+.launch-community-connections .create-panel > .ccn-identity {
+  margin-bottom: var(--sp-6);
 }
 
 /* Private note: inner plain box, readable but secondary — identical
@@ -9182,6 +9296,10 @@ body.launch-message-page .create-shell .phrv-actions .phrv-accept button {
   font-family: var(--mono); font-size: var(--fs-11); color: var(--slate);
 }
 
+/* The panel's primary action wears the shared .btn/.btn--primary control;
+   only its standoff from the explanatory copy above belongs to this scope. */
+.launch-community-connections .ccn-cta { margin-top: var(--sp-2); }
+
 /* Search and confirmation: one field each, ordinary server-rendered forms. */
 .launch-community-connections .ccn-search-form {
   display: flex; flex-wrap: wrap; align-items: flex-end;
@@ -9203,3 +9321,38 @@ body.launch-message-page .create-shell .phrv-actions .phrv-accept button {
   line-height: var(--lh-prose); margin-bottom: var(--sp-5);
 }
 .launch-community-connections .ccn-confirm-form { margin-top: var(--sp-6); }
+
+/* ---- Gate + consent --------------------------------------------------------- */
+
+/* Desktop-only gate: hide this route's launch app under the shared
+   breakpoint; the gate panel itself is styled by mobile-gate.css. Missing
+   with the rest of the shared half, so a phone-width viewport rendered the
+   broken app shell *behind* the gate panel instead of only the panel. */
+@media (max-width: 800px) {
+  body.launch-community-connections > .app { display: none !important; }
+}
+
+/* Analytics consent banner (markup shared with the legacy layout). */
+.launch-community-connections #analytics-consent {
+  position: fixed; bottom: var(--sp-8); left: 50%; transform: translateX(-50%);
+  z-index: 50; width: calc(100% - 2rem); max-width: 28rem;
+  background: var(--surface); border: var(--bw) solid var(--line2);
+  border-radius: var(--r-3); padding: var(--sp-7) var(--sp-8);
+  box-shadow: var(--shadow-overlay);
+}
+.launch-community-connections #analytics-consent p {
+  font-size: var(--fs-13); color: var(--muted); margin-bottom: var(--sp-5);
+}
+.launch-community-connections #analytics-consent [data-analytics-accept],
+.launch-community-connections #analytics-consent [data-analytics-refuse] {
+  font-family: var(--sans); font-weight: 600; font-size: var(--fs-12);
+  border: var(--bw) solid var(--line2); border-radius: var(--r-2);
+  padding: var(--sp-3) var(--sp-7); cursor: pointer;
+  background: var(--surface); color: var(--muted); margin-right: var(--sp-4);
+}
+.launch-community-connections #analytics-consent [data-analytics-accept] {
+  color: #fff; background: var(--moss); border-color: var(--moss);
+}
+.launch-community-connections #analytics-consent [data-analytics-error] {
+  color: var(--danger); font-size: var(--fs-11);
+}

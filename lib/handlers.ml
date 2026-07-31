@@ -1067,6 +1067,31 @@ let with_connected_projects db ?user request ~community_slug k =
   | Error (R.Inconsistent_data | R.Storage_error) ->
       connected_projects_error_page ?user request
 
+(* The community↔community counterpart of [with_connected_projects], on the same discipline:
+   read only AFTER the route's own community lookup and can_view_community decision, reuse the
+   route's generic unavailable response for a slug that stopped resolving, and never render
+   durable corruption away as a quietly incomplete page.
+
+   Public visibility is entirely the read model's: it applies the connection-eligibility
+   predicate to the viewed community and to every counterpart, so this helper has no rule of
+   its own to keep in sync. An ineligible community simply comes back with an empty list and
+   the fragment collapses to "". *)
+let with_connected_communities db ?user request ~community_slug k =
+  let module R = Community_connected_communities_read_model in
+  match%lwt R.load_for_community db ~community_slug with
+  | Ok communities ->
+      k
+        (Community_connected_communities_pages.connected_communities_section
+           ~communities:
+             (List.map
+                (fun c : Community_connected_communities_pages.connected_community ->
+                  { name = R.community_name c; slug = R.community_slug c })
+                communities))
+  | Error (R.Invalid_community_slug | R.Community_unavailable) ->
+      community_not_found ?user request
+  | Error (R.Inconsistent_data | R.Storage_error) ->
+      connected_projects_error_page ?user request
+
 (* The private settings counterpart of [with_connected_projects]: the same read model, the
    same generic failure responses, but rendered through the removal-pages management
    fragment so each accepted project carries a removal form.
@@ -1168,9 +1193,11 @@ let community_page_handler request =
              let is_mod = user_id > 0 && List.exists (fun (e: Db.moderator_entry) -> e.user_id = user_id) mods in
              let is_top_mod = user_id > 0 && List.exists (fun (e: Db.moderator_entry) -> e.user_id = user_id && e.role = "top_mod") mods in
              (* Order: lookup → authorization → existing page data → connected projects →
-                render. Never before the authorization decision above. *)
+                connected communities → render. Never before the authorization decision
+                above. *)
              with_connected_projects db ?user request ~community_slug:slug (fun connected_projects ->
-               Dream.html (Pages.community_overview_page ?user ~noindex:(community_noindex community) ~connected_projects ~is_member:m ~is_current_user_mod:is_mod ~is_current_user_top_mod:is_top_mod ~mod_usernames ~orphaned ~rail_communities:user_communities ~channels ~recent_posts community section_stats request))
+             with_connected_communities db ?user request ~community_slug:slug (fun connected_communities ->
+               Dream.html (Pages.community_overview_page ?user ~noindex:(community_noindex community) ~connected_projects ~connected_communities ~is_member:m ~is_current_user_mod:is_mod ~is_current_user_top_mod:is_top_mod ~mod_usernames ~orphaned ~rail_communities:user_communities ~channels ~recent_posts community section_stats request)))
          | _ -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:"Failed to load community sections." ~alert_type:"error" ~return_url:"/" request))
     | Ok (Some community) ->
         let%lwt authorized = can_view_community db ~user_id ~is_admin community in
@@ -1192,10 +1219,11 @@ let community_page_handler request =
              let mod_usernames = List.map (fun (e: Db.moderator_entry) -> e.username) mods in
              let is_mod = user_id > 0 && List.exists (fun (e: Db.moderator_entry) -> e.user_id = user_id) mods in
              let is_top_mod = user_id > 0 && List.exists (fun (e: Db.moderator_entry) -> e.user_id = user_id && e.role = "top_mod") mods in
-             (* Same order as the structured branch: the connected-projects read follows the
+             (* Same order as the structured branch: both connected-* reads follow the
                 authorization decision and the existing feed load. *)
              with_connected_projects db ?user request ~community_slug:slug (fun connected_projects ->
-               Dream.html (Pages.community_page ?user ~noindex:(community_noindex community) ~connected_projects ~is_member:m ~is_current_user_mod:is_mod ~is_current_user_top_mod:is_top_mod ~mod_usernames ~admin_usernames ~banned_usernames ~user_communities ~moderated_communities v page sort_str community p request))
+             with_connected_communities db ?user request ~community_slug:slug (fun connected_communities ->
+               Dream.html (Pages.community_page ?user ~noindex:(community_noindex community) ~connected_projects ~connected_communities ~is_member:m ~is_current_user_mod:is_mod ~is_current_user_top_mod:is_top_mod ~mod_usernames ~admin_usernames ~banned_usernames ~user_communities ~moderated_communities v page sort_str community p request)))
          | _ -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:"Failed to load community data." ~alert_type:"error" ~return_url:"/" request))
     | Ok None -> Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"Not Found" ~message:"This community does not exist." ~alert_type:"error" ~return_url:"/" request)
     | Error err -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:("Database error: " ^ err) ~alert_type:"error" ~return_url:"/" request)
@@ -4734,15 +4762,10 @@ let notifications_handler request =
         | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:("Database error: " ^ e) ~alert_type:"error" ~return_url:"/" request)
       )
 
-let unread_notifs_api request =
-  match Dream.session_field request "user_id" with
-  | None -> Dream.respond "0"
-  | Some uid_str ->
-      Dream.sql request (fun db ->
-        match%lwt Db.count_unread_notifs db (int_of_string uid_str) with
-        | Ok c -> Dream.respond (string_of_int c)
-        | Error _ -> Dream.respond "0"
-      )
+(* GET /api/unread-notifs is gone with the client-side badge it existed to
+   feed. It could only answer "0" when the count query failed, which the
+   browser could not distinguish from a real zero. The count is now resolved
+   server-side, once per request, by Notification_badge.middleware. *)
 
 (* === LEGAL / PRIVACY === *)
 
@@ -5031,8 +5054,9 @@ let manage_mods_remove_handler request =
 
 (* Shared eligibility gate for both the presence touch and page-view logging.
    Pure. Skips the admin dashboard (reads page_view data — recursive
-   self-counting), /api/unread-notifs (polled every page load — would inflate
-   counts and keep idle users "active"), static assets, and bot user agents.
+   self-counting), /api/unread-notifs (a retired path — the route is gone with
+   the client-side badge, but the exclusion stays so anything still hitting the
+   old URL cannot become tracked traffic), static assets, and bot user agents.
    Both middlewares must use this same decision so presence keeps the exact
    pre-extraction touch semantics. *)
 let is_tracked_request ~path ~user_agent =

@@ -2,10 +2,24 @@
     communities: request, accept, reject, remove.
 
     Each call is one explicit transaction. Every successful mutation writes
-    exactly one {!Community_connection_audit} event on the same transaction,
-    so a committed connection change without its event — or an event without
-    its change — cannot exist. Every failure rolls back whole: no partial
-    row, no orphan event, no timestamp left behind.
+    exactly one {!Community_connection_audit} event and its
+    {!Community_connection_notifications} rows on that same transaction, so a
+    committed connection change without its event — or an event without its
+    change, or a notification without either — cannot exist. Every failure
+    rolls back whole: no partial row, no orphan event, no notification, no
+    timestamp left behind. A stale or losing concurrent transition fails its
+    guard before reaching either, so it creates neither.
+
+    {b Notification recipients} are computed here, at mutation time, from
+    current durable [community_moderators] rows under the held locks — never
+    from handler input, a session claim, or a snapshot taken earlier. A
+    {!request} notifies the recipient community's exact ['top_mod']s; a
+    {!review} notifies the requesting community's; a {!remove} notifies those
+    of whichever community did not act. The acting user is always excluded
+    and the set is deduplicated, so no one is notified of their own act and a
+    user holding ['top_mod'] on both sides receives at most one row. Zero
+    recipients is a legitimate outcome and never fails the transition. No
+    email is sent and no external call is made inside the transaction.
 
     {b Lock order.} There is exactly one order and every function follows it
     whole: the two [communities] rows in ascending id order ([FOR SHARE]),

@@ -368,7 +368,10 @@ let new_community_form ?user ?(rail_communities = []) request =
 (* [connected_projects] is the pre-rendered Connected-projects fragment supplied by the
    community route (Community_connected_projects_pages), or "" when the community has no
    accepted project home — and always "" on the section feeds, which are not /c/:slug.
-   Defaulting to "" keeps every existing caller unchanged. *)
+   [connected_communities] is its community↔community counterpart
+   (Community_connected_communities_pages), "" when nothing is publicly connected and "" for
+   every community that is not itself connection-eligible — that decision belongs to the read
+   model, not to this template. Both default to "" so every existing caller is unchanged. *)
 (* Launch sidebar for the flat (sections_enabled = false) community home — the
    pass-8/9 grammar reduced to what a single-feed community really has: the
    identity head, the one Feed surface (always current — /c/:slug IS the feed),
@@ -450,7 +453,7 @@ let launch_flat_community_sidebar ~(community : community) ~can_manage () =
      modlog and the top-mod/admin downvote toggle keep their gates and routes;
    - the pre-rendered ccp-* connected-projects fragment is spliced verbatim
      (its markup is pinned by the fragment suites) and restyled by CSS only. *)
-let community_page ?user ?(noindex=false) ?(connected_projects="") ~is_member ~is_current_user_mod ~is_current_user_top_mod ~mod_usernames ~admin_usernames ~banned_usernames ~user_communities ~moderated_communities user_votes current_page sort_mode (community : community) (posts : post list) request =
+let community_page ?user ?(noindex=false) ?(connected_projects="") ?(connected_communities="") ~is_member ~is_current_user_mod ~is_current_user_top_mod ~mod_usernames ~admin_usernames ~banned_usernames ~user_communities ~moderated_communities user_votes current_page sort_mode (community : community) (posts : post list) request =
   let csrf_token = Dream.csrf_tag request in
   let is_admin = Dream.session_field request "is_admin" = Some "true" in
   let esc = Components.html_escape in
@@ -625,10 +628,11 @@ let community_page ?user ?(noindex=false) ?(connected_projects="") ~is_member ~i
      pre-rendered ccp-* fragment closes the side stack, spliced verbatim. *)
   let content =
     Printf.sprintf
-      "<div class='scroll'>%s%s<div class='container launch-flat-body'><div class='two-col'><div class='stack'>%s<div class='launch-flat-ledger'>%s</div>%s</div><div class='stack stack--sm'>%s%s%s%s</div></div></div></div>"
+      "<div class='scroll'>%s%s<div class='container launch-flat-body'><div class='two-col'><div class='stack'>%s<div class='launch-flat-ledger'>%s</div>%s</div><div class='stack stack--sm'>%s%s%s%s%s</div></div></div></div>"
       banner_html chead
       sort_bar posts_html pager
       mods_panel rules_panel mod_tools_panel connected_projects
+      connected_communities
   in
   (* The byte-pinned rows show Share to every viewer, but only member
      documents carry the full behavior script (which defines copyPostLink).
@@ -2137,7 +2141,7 @@ let thread_shell_page ?user ?(noindex=false) ~is_member ~is_current_user_mod ~mo
    existing mod/top-mod gates, and the pre-rendered ccp-* connected-projects
    fragment is spliced in verbatim (its markup is pinned by the fragment
    suites) and restyled purely by the route-scoped CSS. *)
-let community_overview_page ?user ?(noindex=false) ?(connected_projects="") ~is_member ~is_current_user_mod ~is_current_user_top_mod
+let community_overview_page ?user ?(noindex=false) ?(connected_projects="") ?(connected_communities="") ~is_member ~is_current_user_mod ~is_current_user_top_mod
     ~mod_usernames ~orphaned ~(rail_communities : community list)
     ~(channels : channel list) ~(recent_posts : post list)
     (community : community) (section_stats : (community_section * int * string option) list) request =
@@ -2471,9 +2475,9 @@ let community_overview_page ?user ?(noindex=false) ?(connected_projects="") ~is_
      spliced verbatim. *)
   let content =
     Printf.sprintf
-      "<div class='scroll'>%s%s<div class='container launch-overview-body'><div class='two-col'><div class='stack'>%s%s%s</div><div class='stack stack--sm'>%s%s%s%s</div></div></div></div>"
+      "<div class='scroll'>%s%s<div class='container launch-overview-body'><div class='two-col'><div class='stack'>%s%s%s%s</div><div class='stack stack--sm'>%s%s%s%s</div></div></div></div>"
       banner_html chead
-      connected_projects sections_panel recent_panel
+      connected_projects connected_communities sections_panel recent_panel
       channels_panel mods_panel rules_panel modlog_panel
   in
   Components.launch_community_page ?user ~noindex ~request ~rail_communities
@@ -5184,22 +5188,70 @@ let notifications_page ?user ?(rail_communities = []) (notifs : Db.notification 
           | _ -> Some ("A project community-home update", None))
       | _ -> None
     in
+    (* Community-connection notifications are structured the same way: no
+       stored prose, so the copy and destination derive from the durable kind,
+       the joined counterpart identity, and the recipient's own management
+       context. The counterpart is derived by the read model relative to the
+       stored community, so one row reads correctly from either direction.
+       Every destination is that recipient's own connections surface, which
+       re-proves its top-mod/admin gate for itself — the link grants nothing.
+       Reviewer and remover are deliberately absent from the copy, so a
+       deleted actor renders identically and no username ever appears. If the
+       connection or either community has gone, the row degrades to a generic
+       unlinked line rather than inventing a name. *)
+    let connection_label_link =
+      match n.notif_type with
+      | "community_connection_requested" | "community_connection_accepted"
+      | "community_connection_rejected" | "community_connection_removed" -> (
+          match (n.counterpart_name, n.community_slug) with
+          | Some counterpart_name, Some context_slug ->
+              let other = Components.html_escape counterpart_name in
+              let label =
+                match n.notif_type with
+                | "community_connection_requested" ->
+                    Printf.sprintf "%s wants to connect with your community." other
+                | "community_connection_accepted" ->
+                    Printf.sprintf "%s accepted your connection request." other
+                | "community_connection_rejected" ->
+                    Printf.sprintf "%s rejected your connection request." other
+                | _ ->
+                    Printf.sprintf "%s removed the community connection." other
+              in
+              Some
+                ( label,
+                  Some
+                    (Printf.sprintf "/c/%s/settings/connections"
+                       (Components.html_escape context_slug)) )
+          | _ -> Some ("A community connection update", None))
+      | _ -> None
+    in
+    (* One structured slot: a notification is either project-home or
+       community-connection, never both, so the two derivations cannot
+       collide. *)
+    let structured_label_link =
+      match project_home_label_link with
+      | Some _ as label -> label
+      | None -> connection_label_link
+    in
     let message = Option.value n.message ~default:"" in
     let icon = match n.notif_type with
       | "mention"    -> "&#64;"   (* @ symbol — avoids mojibake in Printf *)
       | "mod_action" -> "&#9888;" (* ⚠ warning sign *)
       | "project_home_requested" | "project_home_accepted"
       | "project_home_rejected" | "project_home_removed" -> "&#127968;" (* 🏠 *)
+      | "community_connection_requested" | "community_connection_accepted"
+      | "community_connection_rejected" | "community_connection_removed" ->
+          "&#8644;" (* ⇄ — the same sigil the Connections nav entry uses *)
       | _ ->
           (* Legacy comment_reply: distinguish post vs comment reply by message suffix. *)
           let len = String.length message in
           if len >= 5 && String.sub message (len - 5) 5 = "post." then "&#128221;" (* 📝 *)
           else "&#128172;" (* 💬 *)
     in
-    (* Project-home labels are built above from already-escaped parts;
-       legacy prose is escaped here. *)
+    (* Structured labels are built above from already-escaped parts; legacy
+       prose is escaped here. *)
     let msg_html =
-      match project_home_label_link with
+      match structured_label_link with
       | Some (label, _) -> label
       | None -> Components.html_escape message
     in
@@ -5211,7 +5263,7 @@ let notifications_page ?user ?(rail_communities = []) (notifs : Db.notification 
         </div>" icon msg_html (Components.time_ago n.created_at)
     in
     let link =
-      match project_home_label_link with
+      match structured_label_link with
       | Some (_, link) -> link
       | None -> (
           match n.post_id with

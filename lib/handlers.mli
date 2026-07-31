@@ -155,7 +155,6 @@ val delete_account_handler : Dream.handler
 
 (** === NOTIFICATIONS === *)
 val notifications_handler : Dream.handler
-val unread_notifs_api : Dream.handler
 
 (** === LEGAL / PRIVACY === *)
 val privacy_page_handler : Dream.handler

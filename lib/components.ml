@@ -438,15 +438,18 @@ let launch_tile_color slug =
   palette.(!sum mod Array.length palette)
 
 (* The behavior script members' launch app documents carry: the confirm modal
-   for the own-post delete form, share-link copy, optimistic voting over
-   form[action='/vote'] / form[action='/vote-comment'], and the ONE-SHOT
-   notification-badge fetch — one request per page load, no polling loop. It is
-   the pre-launch inline script carried over verbatim, so every DOM contract
-   still holds (parentElement traversal, first/lastElementChild vote forms, the
-   colour class names the vote handler toggles, id='notif-badge' + the `hidden`
-   class). Anonymous launch documents omit it entirely: they
-   render no vote forms, no ⋯ menu and no badge, so there is nothing for it to
-   do and no /api/unread-notifs request should fire. *)
+   for the own-post delete form, share-link copy, and optimistic voting over
+   form[action='/vote'] / form[action='/vote-comment']. It is the pre-launch
+   inline script carried over, so every DOM contract still holds
+   (parentElement traversal, first/lastElementChild vote forms, the colour
+   class names the vote handler toggles). Anonymous launch documents omit it
+   entirely: they render no vote forms and no ⋯ menu, so there is nothing for
+   it to do.
+
+   It no longer fetches the notification count. That badge is now rendered by
+   the server from the request's own unread count ([Notification_badge]), so
+   there is one answer per page load instead of a hard-coded zero that a
+   later fetch may or may not correct. *)
 (* The one copyPostLink definition, shared verbatim by the authenticated
    behavior script below and the guest-only [launch_share_script] — the
    Share button render_post emits is the SAME byte-pinned control for both
@@ -469,9 +472,8 @@ let launch_share_snippet = {js|        /* Clipboard write is async; we optimisti
         }|js}
 
 (* Guest-only public-interaction script: exactly the shared copyPostLink and
-   nothing else — no confirm modal, no vote handler, and above all no
-   /api/unread-notifs fetch (anonymous documents must fire zero requests
-   beyond assets). Emitted per route (currently the flat community home,
+   nothing else — no confirm modal and no vote handler (anonymous documents
+   must fire zero requests beyond assets). Emitted per route (currently the flat community home,
    whose byte-pinned rows show Share to every viewer); the doc builders'
    anonymous default stays script-free. *)
 let launch_share_script = "<script>\n" ^ launch_share_snippet ^ "\n      </script>"
@@ -584,19 +586,6 @@ let launch_behavior_script = {js|<script>
                 scoreSpan.innerText = score;
             });
         });
-      // Notif badge polling — fires once per page load to avoid repeated DB hits
-        fetch('/api/unread-notifs')
-            .then(response => response.text())
-            .then(count => {
-                let c = parseInt(count);
-                if (c > 0) {
-                    let badge = document.getElementById('notif-badge');
-                    if (badge) {
-                        badge.innerText = c;
-                        badge.classList.remove('hidden');
-                    }
-                }
-            }).catch(e => console.log(e));
       </script>|js}
 
 (* Cartographic Civic launch app document (pass 3: /feed only). Like the pass
@@ -608,7 +597,7 @@ let launch_behavior_script = {js|<script>
    and an optional right aside. Unlike the entry/auth documents it also
    carries the desktop-only mobile gate (the shared stylesheet + panel) and,
    for members only, the shared launch behavior
-   script (optimistic voting, confirm modal, one-shot notification fetch) —
+   script (optimistic voting, confirm modal) —
    see [launch_behavior_script]. Community tiles keep the existing rail
    destination (/c/:slug/ch/general) and face fallback (avatar image when it
    passes the gate, else the 2-letter slug glyph) so the launch rail offers
@@ -663,11 +652,12 @@ let launch_app_page ?(noindex = false) ?request ?user ?(rail_communities = [])
           else "?"
         in
         (* User menu is a pure-CSS <details>; Log out stays a POST form with
-           its existing action/semantics. The bell keeps id='notif-badge' and
-           the `hidden` class exactly where the behavior script expects them. *)
+           its existing action/semantics. The bell's badge is server-rendered
+           from the request's unread count and is simply absent at zero — see
+           [Notification_badge]. *)
         Printf.sprintf
           "%s\
-           <a class='bell' href='/notifications' title='Notifications' aria-label='Notifications'>%s<span id='notif-badge' class='bell__count hidden'>0</span></a>\
+           <a class='bell' href='/notifications' title='Notifications' aria-label='Notifications'>%s%s</a>\
            <details class='launch-user'>\
            <summary class='userchip'><span class='avatar avatar--24'>%s</span><span class='userchip__name'>u/%s</span></summary>\
            <div class='launch-user__menu'>\
@@ -678,7 +668,9 @@ let launch_app_page ?(noindex = false) ?request ?user ?(rail_communities = [])
            <form action='/logout' method='POST'><button type='submit'>Log out</button></form>\
            </div>\
            </details>"
-          launch_connect_cta bell_icon initial u u admin_item
+          launch_connect_cta bell_icon
+          (Notification_badge.badge_html ?request ())
+          initial u u admin_item
     | None ->
         (* Anonymous cluster (04-ROUTES): no bell, no user chip, no logout,
            and therefore no notification fetch anywhere in the document. *)
@@ -828,14 +820,17 @@ let launch_onboarding_page ?(noindex = false) ?request ?user ?(stepper = "")
           then html_escape (String.sub (String.uppercase_ascii username) 0 1)
           else "?"
         in
-        (* The bell keeps id='notif-badge' + the `hidden` class exactly where
-           the shared behavior script expects them; the user chip is the
-           reference markup's plain link — no menu, no extra form. *)
+        (* The bell's badge is server-rendered from the request's unread count
+           and is simply absent at zero (see [Notification_badge]); the user
+           chip is the reference markup's plain link — no menu, no extra
+           form. *)
         Printf.sprintf
           "%s\
-           <a class='bell' href='/notifications' title='Notifications' aria-label='Notifications'>%s<span id='notif-badge' class='bell__count hidden'>0</span></a>\
+           <a class='bell' href='/notifications' title='Notifications' aria-label='Notifications'>%s%s</a>\
            <a class='userchip' href='/u/%s'><span class='avatar avatar--24'>%s</span><span class='userchip__name'>u/%s</span></a>"
-          launch_connect_cta bell_icon u initial u
+          launch_connect_cta bell_icon
+          (Notification_badge.badge_html ?request ())
+          u initial u
     | None ->
         "<a class='btn btn--quiet' href='/bring'>Bring a project</a>\
          <a class='btn btn--secondary btn--auth' href='/login'>Log in</a>\
@@ -910,9 +905,8 @@ let launch_onboarding_page ?(noindex = false) ?request ?user ?(stepper = "")
    Replay privacy: for a private community the ph-no-capture class rides on
    the existing `.shell` element (sidebar + main together) — never a new
    wrapper div, so the flex chain is untouched. Member documents carry the
-   exact shared [launch_behavior_script] (bell badge one-shot fetch; vote
-   selectors match nothing here); anonymous documents carry no script and
-   fire no /api/unread-notifs request. [page_class]
+   exact shared [launch_behavior_script] (its vote selectors match nothing
+   here); anonymous documents carry no script at all. [page_class]
    ("launch-community-overview") is the scoping root stamped on <body> for
    the route's integration CSS at the end of earde.css. Shared doc builder
    behind [launch_community_page] (pass 8 overview) and
@@ -967,9 +961,11 @@ let launch_community_doc ?(noindex = false) ?request ?user
           then html_escape (String.sub (String.uppercase_ascii username) 0 1)
           else "?"
         in
+        (* Badge server-rendered from the request's unread count; absent at
+           zero (see [Notification_badge]). *)
         Printf.sprintf
           "%s\
-           <a class='bell' href='/notifications' title='Notifications' aria-label='Notifications'>%s<span id='notif-badge' class='bell__count hidden'>0</span></a>\
+           <a class='bell' href='/notifications' title='Notifications' aria-label='Notifications'>%s%s</a>\
            <details class='launch-user'>\
            <summary class='userchip'><span class='avatar avatar--24'>%s</span><span class='userchip__name'>u/%s</span></summary>\
            <div class='launch-user__menu'>\
@@ -980,7 +976,9 @@ let launch_community_doc ?(noindex = false) ?request ?user
            <form action='/logout' method='POST'><button type='submit'>Log out</button></form>\
            </div>\
            </details>"
-          launch_connect_cta bell_icon initial u u admin_item
+          launch_connect_cta bell_icon
+          (Notification_badge.badge_html ?request ())
+          initial u u admin_item
     | None ->
         "<a class='btn btn--quiet' href='/bring'>Bring a project</a>\
          <a class='btn btn--secondary btn--auth' href='/login'>Log in</a>\
