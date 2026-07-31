@@ -9070,3 +9070,136 @@ body.launch-message-page .create-shell .phrv-actions .phrv-accept button {
 .launch-legacy-post #analytics-consent [data-analytics-error] {
   color: var(--danger); font-size: var(--fs-11);
 }
+
+/* ==========================================================================
+   EARDE INTEGRATION — community connections only
+   Scoped beneath body.launch-community-connections: the management page
+   (GET /c/:slug/settings/connections), the two-step connect flow
+   (GET /c/:slug/settings/connections/new) and every re-render the four
+   mutation POSTs produce on them (Stale_form 403, the 409 outcomes, the
+   422 note refusal). Reuses the launch chrome and create-shell recipe of
+   the sibling project-home review surface; only the ccn-* fragment is new,
+   skinned from outside so the markup stays exactly what the page module
+   emits. No relationship labels, no usernames, no map visuals.
+   ========================================================================== */
+
+.launch-community-connections .ccn-intro { margin-top: var(--sp-2); }
+
+/* Feedback and the generic ineligibility notice: the same restrained
+   ochre/plain-surface pair the review surface uses. */
+.launch-community-connections .ccn-alert {
+  border: var(--bw) solid var(--ochre); border-left: 3px solid var(--ochre);
+  border-radius: var(--r-2);
+  background: color-mix(in srgb, var(--ochre) 8%, var(--surface));
+  padding: var(--sp-5) var(--sp-7); margin-bottom: var(--sp-8);
+}
+.launch-community-connections .ccn-alert p { margin: 0; }
+
+.launch-community-connections .ccn-ineligible {
+  border: var(--bw) solid var(--line2); border-radius: var(--r-2);
+  background: var(--surface); padding: var(--sp-5) var(--sp-7);
+  margin-bottom: var(--sp-8); color: var(--muted);
+}
+.launch-community-connections .ccn-ineligible p { margin: 0; }
+
+/* Sections: a plain stack, one heading each, no cards competing with the
+   community chrome. */
+.launch-community-connections .ccn-section { margin-bottom: var(--sp-10); }
+.launch-community-connections .ccn-section-title {
+  font-size: var(--fs-13); font-weight: 700; color: var(--ink);
+  letter-spacing: .01em; margin: 0 0 var(--sp-4);
+}
+.launch-community-connections .ccn-section-desc,
+.launch-community-connections .ccn-empty,
+.launch-community-connections .ccn-state,
+.launch-community-connections .ccn-accept-unavailable,
+.launch-community-connections .ccn-hint {
+  font-family: var(--mono); font-size: var(--fs-11); color: var(--muted);
+  margin: 0 0 var(--sp-3);
+}
+
+.launch-community-connections .ccn-list {
+  list-style: none; margin: 0; padding: 0;
+  display: flex; flex-direction: column; gap: var(--sp-4);
+}
+.launch-community-connections .ccn-row {
+  border: var(--bw) solid var(--line); border-radius: var(--r-2);
+  background: var(--surface); padding: var(--sp-5) var(--sp-7);
+  display: flex; flex-wrap: wrap; align-items: baseline;
+  gap: var(--sp-3) var(--sp-6);
+}
+/* A pending row is a workflow item, not a fact: the same ochre left rule
+   the review surface gives its pending requests. */
+.launch-community-connections .ccn-row--incoming,
+.launch-community-connections .ccn-row--outgoing {
+  border-left: 3px solid var(--ochre);
+  background: color-mix(in srgb, var(--ochre) 6%, var(--surface));
+  display: block;
+}
+
+.launch-community-connections .ccn-identity { flex: 1 1 auto; }
+.launch-community-connections .ccn-name {
+  font-size: var(--fs-13); font-weight: 700; color: var(--ink);
+  text-decoration: none; margin-right: var(--sp-3);
+}
+.launch-community-connections a.ccn-name:hover { text-decoration: underline; }
+.launch-community-connections .ccn-slug {
+  font-family: var(--mono); font-size: var(--fs-10-5); color: var(--muted);
+}
+
+/* Private note: inner plain box, readable but secondary — identical
+   treatment to the review surface's private request note. */
+.launch-community-connections .ccn-note {
+  border: var(--bw) solid var(--line); border-radius: var(--r-2);
+  background: var(--bg); padding: var(--sp-4) var(--sp-6);
+  margin: var(--sp-4) 0;
+}
+.launch-community-connections .ccn-note-label {
+  font-family: var(--mono); font-size: var(--fs-10-5); color: var(--muted);
+  margin: 0 0 var(--sp-2);
+}
+.launch-community-connections .ccn-note-body {
+  font-size: var(--fs-13); color: var(--ink); line-height: var(--lh-prose);
+  margin: 0; white-space: pre-wrap; overflow-wrap: anywhere;
+}
+
+.launch-community-connections .ccn-actions {
+  display: flex; flex-wrap: wrap; gap: var(--sp-4); margin-top: var(--sp-3);
+}
+.launch-community-connections .ccn-form { display: inline-block; margin: 0; }
+.launch-community-connections .ccn-btn {
+  font: inherit; font-size: var(--fs-11); font-weight: 600;
+  border: var(--bw) solid var(--line2); border-radius: var(--r-2);
+  background: var(--surface); color: var(--ink);
+  padding: var(--sp-2) var(--sp-6); cursor: pointer;
+}
+.launch-community-connections .ccn-btn:hover { border-color: var(--slate); }
+.launch-community-connections .ccn-accept .ccn-btn {
+  color: #fff; background: var(--moss); border-color: var(--moss);
+}
+
+.launch-community-connections .ccn-link {
+  font-family: var(--mono); font-size: var(--fs-11); color: var(--slate);
+}
+
+/* Search and confirmation: one field each, ordinary server-rendered forms. */
+.launch-community-connections .ccn-search-form {
+  display: flex; flex-wrap: wrap; align-items: flex-end;
+  gap: var(--sp-4); margin-bottom: var(--sp-8);
+}
+.launch-community-connections .ccn-label {
+  display: block; font-family: var(--mono); font-size: var(--fs-10-5);
+  color: var(--muted); margin-bottom: var(--sp-2);
+}
+.launch-community-connections .ccn-input,
+.launch-community-connections .ccn-textarea {
+  font: inherit; font-size: var(--fs-13); color: var(--ink);
+  border: var(--bw) solid var(--line2); border-radius: var(--r-2);
+  background: var(--surface); padding: var(--sp-3) var(--sp-5);
+}
+.launch-community-connections .ccn-input { min-width: 18rem; }
+.launch-community-connections .ccn-textarea {
+  display: block; width: 100%; max-width: 42rem; resize: vertical;
+  line-height: var(--lh-prose); margin-bottom: var(--sp-5);
+}
+.launch-community-connections .ccn-confirm-form { margin-top: var(--sp-6); }

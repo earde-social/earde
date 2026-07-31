@@ -676,7 +676,8 @@ let community_page ?user ?(noindex=false) ?(connected_projects="") ~is_member ~i
 let launch_knowledge_sidebar ~(community : community) ~(channels : channel list)
     ~(sections : community_section list) ?active_section_slug
     ?(append_uncategorized = false) ?(settings_active = false)
-    ?(home_requests_active = false) ?(moderation_log_active = false)
+    ?(home_requests_active = false) ?(connections_active = false)
+    ?(moderation_log_active = false)
     ?(reports_active = false) ?(manage_moderators_active = false)
     ?(show_visibility_note = true) ~can_manage () =
   let esc = Components.html_escape in
@@ -755,6 +756,14 @@ let launch_knowledge_sidebar ~(community : community) ~(channels : channel list)
             already proved top_mod-or-durable-admin. *)
          Printf.sprintf
            "<a class='navitem navitem--pad navitem--active' href='/c/%s/project-home-requests'><span class='navitem__sigil navitem__sigil--box navitem__sigil--project'>&#9672;</span>Home requests</a>"
+           slug
+       else "")
+    ^ (if connections_active then
+         (* Same slot and grammar as the settings nav's Connections entry;
+            rendered only by the connections route, whose read model already
+            proved the viewer top_mod-or-durable-admin in SQL. *)
+         Printf.sprintf
+           "<a class='navitem navitem--pad navitem--active' href='/c/%s/settings/connections'><span class='navitem__sigil navitem__sigil--box'>&#8644;</span>Connections</a>"
            slug
        else "")
     ^ (if reports_active then
@@ -2301,6 +2310,14 @@ let community_overview_page ?user ?(noindex=false) ?(connected_projects="") ~is_
            "<a class='navitem navitem--pad' href='/c/%s/project-home-requests'><span class='navitem__sigil navitem__sigil--box navitem__sigil--project'>&#9672;</span>Home requests</a>"
            slug
        else "")
+    ^ (if is_current_user_top_mod || is_admin then
+         (* Same top_mod-or-admin gate the connections read model applies in
+            SQL to /c/:slug/settings/connections. The link grants nothing —
+            that surface reauthorizes from scratch. *)
+         Printf.sprintf
+           "<a class='navitem navitem--pad' href='/c/%s/settings/connections'><span class='navitem__sigil navitem__sigil--box'>&#8644;</span>Connections</a>"
+           slug
+       else "")
     ^ (if is_current_user_mod || is_admin then
          Printf.sprintf
            "<a class='navitem navitem--pad' href='/c/%s/settings'><span class='navitem__sigil navitem__sigil--box'>&#9881;</span>Settings</a>"
@@ -3172,6 +3189,18 @@ let community_settings_page ?user ?(connected_projects="") ?(rail_communities=[]
         slug
     else ""
   in
+  (* Connections: the entry point to the community-connections management
+     surface, on the same top-mod/admin gate its read model applies in SQL.
+     Regular mods, whom this page already knows are unauthorized there, never
+     see it. The link grants nothing — that route reauthorizes from scratch —
+     and carries no count, no form, and no community id. *)
+  let connections_link =
+    if is_top_mod || is_admin then
+      Printf.sprintf
+        "<a class='cm-index-link' href='/c/%s/settings/connections'>Connections</a>"
+        slug
+    else ""
+  in
   (* Connected projects: an ordinary panel nav entry, present only when the route supplied
      the management fragment (top-mod/admin surface). Regular mods, whom this page already
      knows are unauthorized for project-home moderation, never see it. *)
@@ -3204,7 +3233,7 @@ let community_settings_page ?user ?(connected_projects="") ?(rail_communities=[]
       <div class='cm-cols'>
         <nav class='cm-index'>
           <div class='cm-index-title'>Settings</div>
-          %s%s%s%s%s%s%s%s%s
+          %s%s%s%s%s%s%s%s%s%s
         </nav>
         <div class='cm-main'>
           %s
@@ -3220,6 +3249,7 @@ let community_settings_page ?user ?(connected_projects="") ?(rail_communities=[]
     (nav_item "moderation" "Moderation")
     connected_projects_nav
     project_home_requests_link
+    connections_link
     (nav_item ~danger:true "bans" "Bans")
     main_panel
   in

@@ -7,15 +7,25 @@
     its change — cannot exist. Every failure rolls back whole: no partial
     row, no orphan event, no timestamp left behind.
 
-    {b Lock order.} There is exactly one order, and every function takes a
-    prefix of it: the two [communities] rows in ascending id order
-    ([FOR KEY SHARE] — the same lock the foreign keys take, so concurrent
-    callers never block each other and a deletion of a referenced community
-    cannot slip between the check and the insertion), then the exact
-    [community_connections] row ([FOR UPDATE]). {!request} takes the
-    community prefix because it creates new references; {!review} and
-    {!remove} take only the connection row, which already carries an
-    immutable pair.
+    {b Lock order.} There is exactly one order and every function follows it
+    whole: the two [communities] rows in ascending id order ([FOR SHARE]),
+    then the exact [community_connections] row ([FOR UPDATE]). [FOR SHARE] —
+    rather than the weaker [FOR KEY SHARE] — because the eligibility decision
+    below reads visibility, onboarding state and discoverability, and only
+    [FOR SHARE] conflicts with the row lock a concurrent visibility or
+    publication change takes; it also blocks deletion of a referenced
+    community. [FOR SHARE] locks are mutually compatible, so two connection
+    transactions sharing a community never wait on each other and no ordering
+    cycle can form among them.
+
+    {!review} and {!remove} do not know the pair before they have seen the
+    row, so each begins with one {b unlocked} read of that row's two
+    community ids, purely to decide the lock order. That read is never the
+    race-safety mechanism: the guarded [UPDATE] re-verifies status and
+    subject under the row lock, and a row reviewed or removed in between
+    simply fails the guard. The locked row's pair is additionally checked
+    against the discovered one — those two columns are immutable, so a
+    difference is durable corruption, not a race.
 
     {b Race safety} is the partial unique index over
     [(LEAST(requester, recipient), GREATEST(requester, recipient))
@@ -33,11 +43,15 @@
     handler slice owns all of that, and no value returned here grants
     anything.
 
-    {b No eligibility policy} either: this slice enforces no
-    network/published/public predicate on the two communities, because none
-    has been decided yet. Only structural coherence of the durable rows is
-    checked, so valid lifecycle drift on either side never welds a
-    connection in place or hides it.
+    {b Eligibility} is the one durable policy this module does enforce, and
+    only where creating a connection is at stake. {!request} and an accepting
+    {!review} require both communities to satisfy
+    {!Community_connections.connection_eligible} — revalidated here, under
+    the held locks, because the search and confirmation surfaces decided on
+    an older snapshot. A rejecting {!review} and {!remove} deliberately
+    require nothing: an ineligible community must still be able to close a
+    pending request and detach an accepted connection, or going private would
+    weld its connections in place.
 
     Error privacy: every error is payload-free, every collapsible cause
     collapses into one variant, and no printer or serializer exists — the
@@ -89,6 +103,13 @@ type error =
   | Invalid_community_id
   | Invalid_connection
   | Community_unavailable
+  | Requester_ineligible
+      (** The requesting community may not currently create a connection. *)
+  | Recipient_ineligible
+      (** The recipient community may not currently take part in creating
+          one. Callers rendering for the other side must collapse this into
+          their generic "target unavailable" outcome: which of missing,
+          private, draft, or undiscoverable it was must not cross. *)
   | Active_connection_exists
   | Review_unavailable
   | Removal_unavailable
@@ -113,7 +134,10 @@ val request :
     {!Community_connections.request_note}, already canonical.
 
     [Community_unavailable] covers a missing community on either side alike,
-    without saying which. [Active_connection_exists] deliberately collapses
+    without saying which. [Requester_ineligible] and [Recipient_ineligible]
+    report the two eligibility failures separately so the caller can speak
+    about the community whose moderators are asking without describing the
+    other one. [Active_connection_exists] deliberately collapses
     an existing pending request, an existing accepted connection, the same
     request arriving twice, the mirrored request arriving from the other
     side, and any concurrently committed winner — without identifying the
@@ -142,7 +166,13 @@ val review :
     [Review_unavailable] collapses every zero-row cause alike: no such
     connection, another community's request, an already accepted, rejected,
     or removed row, and a concurrent review that committed first. Nothing is
-    written in any of those cases, and no audit event is appended. *)
+    written in any of those cases, and no audit event is appended.
+
+    Accepting additionally requires both communities to be currently
+    eligible, checked under the held locks: [Recipient_ineligible] first (the
+    reviewing community — the one its own moderators may hear about), then
+    [Requester_ineligible]. Rejecting reaches neither check and stays
+    available on an ineligible pair, so a request can always be closed. *)
 
 val remove :
   (module Caqti_lwt.CONNECTION) ->

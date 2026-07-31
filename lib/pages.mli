@@ -58,7 +58,7 @@ val community_settings_page : ?user:string -> ?connected_projects:string -> ?rai
     gate first); [manage_moderators_active] renders the Manage moderators
     entry active (manage-mods route only — callers must have re-proved the
     TM/A gate first). Defaults preserve every existing route's output. *)
-val launch_knowledge_sidebar : community:Db.community -> channels:Db.channel list -> sections:Db.community_section list -> ?active_section_slug:string -> ?append_uncategorized:bool -> ?settings_active:bool -> ?home_requests_active:bool -> ?moderation_log_active:bool -> ?reports_active:bool -> ?manage_moderators_active:bool -> ?show_visibility_note:bool -> can_manage:bool -> unit -> string
+val launch_knowledge_sidebar : community:Db.community -> channels:Db.channel list -> sections:Db.community_section list -> ?active_section_slug:string -> ?append_uncategorized:bool -> ?settings_active:bool -> ?home_requests_active:bool -> ?connections_active:bool -> ?moderation_log_active:bool -> ?reports_active:bool -> ?manage_moderators_active:bool -> ?show_visibility_note:bool -> can_manage:bool -> unit -> string
 
 (** Moderator roster + role actions (TM/A only — gated in the handler; the
     POST handlers re-check every role/hierarchy rule server-side, this only

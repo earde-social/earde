@@ -290,6 +290,34 @@ let () =
              ~mode:(Earde.Project_onboarding.mode_from_env ())
              ~load_config:Earde.Github_app_config.from_env
              request));
+    (* Community-connections management: the authorized surface where a
+       community's top moderators (or a durable global admin) see their
+       connected communities, review incoming requests, watch outgoing ones,
+       and send new ones. Every route is community-scoped under
+       /c/:slug/settings/connections — distinct longer paths than the
+       /c/:slug/settings GET and the Slice E/F settings POSTs, so nothing
+       shadows anything. The two GETs are informational and deliberately not
+       rate-limited, matching the other private settings GETs; the four
+       mutations share the sensitive-POST rate limit. Authorization is
+       decided in the read model's SQL and the subject binding inside the
+       store's guarded mutations — never by the route shape, and never by a
+       form field. *)
+    Dream.get "/c/:slug/settings/connections"
+      Earde.Community_connections_handlers.make_connections_page_handler;
+    Dream.get "/c/:slug/settings/connections/new"
+      Earde.Community_connections_handlers.make_connections_search_handler;
+    Dream.post "/c/:slug/settings/connections/request"
+      (Earde.Handlers.Rate_limit.middleware
+         Earde.Community_connections_handlers.make_connection_request_handler);
+    Dream.post "/c/:slug/settings/connections/:id/accept"
+      (Earde.Handlers.Rate_limit.middleware
+         Earde.Community_connections_handlers.make_connection_accept_handler);
+    Dream.post "/c/:slug/settings/connections/:id/reject"
+      (Earde.Handlers.Rate_limit.middleware
+         Earde.Community_connections_handlers.make_connection_reject_handler);
+    Dream.post "/c/:slug/settings/connections/:id/remove"
+      (Earde.Handlers.Rate_limit.middleware
+         Earde.Community_connections_handlers.make_connection_removal_handler);
     Dream.get "/c/:slug/modlog" Earde.Handlers.modlog_handler;
     (* Reports: singular GET form + plural POST create (Slice B) + plural GET mod queue
        (read-only). Distinct literal segments from settings/modlog/manage-mods, so no router

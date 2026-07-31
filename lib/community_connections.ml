@@ -13,6 +13,19 @@
    rejected note, length, malformed byte, community id, status, or action
    can travel through the error channel. *)
 
+(* The one connection-eligibility rule, shared by target search, request
+   submission, and acceptance so the three booleans cannot drift apart
+   between surfaces. Deliberately blind to is_network_community: ordinary
+   open-source communities that predate the GitHub pivot must be able to
+   participate. It gates only the creation of new connections — rejecting a
+   pending request and removing an accepted one stay available to an
+   ineligible community, or going private would weld its connections in
+   place. *)
+let connection_eligible ~visibility ~onboarding_state ~discoverable =
+  visibility = Db.Community_public
+  && onboarding_state = Db.Community_published
+  && discoverable
+
 type status =
   | Pending
   | Accepted

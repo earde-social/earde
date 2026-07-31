@@ -29,6 +29,31 @@
     malformed byte, community id, status, or action can leave through the
     error channel, and no [string_of_error] or printer exists. *)
 
+val connection_eligible :
+  visibility:Db.community_visibility ->
+  onboarding_state:Db.community_onboarding_state ->
+  discoverable:bool ->
+  bool
+(** The single rule deciding whether a community may take part in {i creating}
+    a new connection — sending a request or accepting one. Exactly three
+    durable facts, and no fourth: public visibility, a published onboarding
+    state, and the discovery flag. Every surface that must agree — target
+    search, request submission, acceptance — calls this, so the three
+    booleans exist in one place.
+
+    Deliberately {b not} conditioned on [is_network_community]: an ordinary
+    community that predates the GitHub pivot is a legitimate participant, and
+    gating on the network flag would exclude it.
+
+    It governs creation only. An ineligible community keeps its authorized
+    management surface: it can still inspect its history, reject a pending
+    request, and remove an existing accepted connection — otherwise going
+    private would durably weld its connections in place. Callers must not
+    reuse this predicate to gate those actions.
+
+    Nothing about visibility to a particular viewer, membership, moderation
+    authority, or the existence of another connection is decided here. *)
+
 type status =
   | Pending
   | Accepted
