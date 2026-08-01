@@ -202,15 +202,22 @@ type notification = {
   user_id : int;
   post_id : int option;
   notif_type : string;
-  (* NULL for the structured project-home kinds, which render from the
-     joined project/community display fields instead of stored prose. *)
+  (* NULL for the structured project-home and community-connection kinds,
+     which render from the joined display fields instead of stored prose. *)
   message : string option;
   is_read : bool;
   created_at : string;
   project_name : string option;
   project_slug : string option;
+  (* The notification's own community subject. For the community-connection
+     kinds this is the recipient's management context, never the
+     counterpart. *)
   community_name : string option;
   community_slug : string option;
+  (* The other community of a connection notification, derived at read time
+     relative to community_slug. NULL for every other kind. *)
+  counterpart_name : string option;
+  counterpart_slug : string option;
 }
 
 type mod_action = {
@@ -2341,27 +2348,45 @@ end
 module Notification = struct
   let get_notifications_query =
     let open Caqti_request.Infix in
-    (* Caqti arity limit: encode 11 columns as t2(t2(t4, t3), t4) nested tuples.
+    (* Caqti arity limit: encode 13 columns as t2(t2(t2(t4, t3), t4), t2)
+       nested tuples.
        post_id is nullable since ban notifications have no associated post;
-       message is nullable since project-home notifications carry no prose.
+       message is nullable since the structured kinds carry no prose.
        The project/community display fields ride the same bounded query
        (LEFT JOINs are NULL for legacy rows) so the notification list never
-       issues per-row entity lookups. *)
+       issues per-row entity lookups.
+
+       The last two columns are the community-connection counterpart, derived
+       here rather than stored: the connection row carries the unordered pair,
+       and the counterpart is whichever side is not n.community_id — the
+       recipient's own management context. That makes the same stored row read
+       correctly from either direction, and lets a later slug or name change
+       show through without touching notification history. The join chain is
+       NULL for every non-connection kind, and NULL again if the connection or
+       either community has since gone: the renderer degrades to a generic
+       line rather than inventing names. *)
     (Caqti_type.int
      ->* Caqti_type.(
            t2
-             (t2 (t4 int int (option int) string) (t3 (option string) bool string))
-             (t4 (option string) (option string) (option string) (option string))))
+             (t2
+                (t2 (t4 int int (option int) string) (t3 (option string) bool string))
+                (t4 (option string) (option string) (option string) (option string)))
+             (t2 (option string) (option string))))
     "SELECT n.id, n.user_id, n.post_id, n.notif_type, n.message, n.is_read, n.created_at::text,
-            p.name, p.slug, c.name, c.slug
+            p.name, p.slug, c.name, c.slug, cp.name, cp.slug
      FROM notifications n
      LEFT JOIN open_source_projects p ON p.id = n.project_id
      LEFT JOIN communities c ON c.id = n.community_id
+     LEFT JOIN community_connections cc ON cc.id = n.connection_id
+     LEFT JOIN communities cp
+            ON cp.id = CASE WHEN cc.requester_community_id = n.community_id
+                            THEN cc.recipient_community_id
+                            ELSE cc.requester_community_id END
      WHERE n.user_id = $1 ORDER BY n.created_at DESC LIMIT 50"
 
   let get_notifications (module C: Caqti_lwt.CONNECTION) user_id =
     C.collect_list get_notifications_query user_id >>= function
-    | Ok rows -> Lwt.return (Ok (List.map (fun (((id, user_id, post_id, notif_type), (message, is_read, created_at)), (project_name, project_slug, community_name, community_slug)) -> {id; user_id; post_id; notif_type; message; is_read; created_at; project_name; project_slug; community_name; community_slug}) rows))
+    | Ok rows -> Lwt.return (Ok (List.map (fun ((((id, user_id, post_id, notif_type), (message, is_read, created_at)), (project_name, project_slug, community_name, community_slug)), (counterpart_name, counterpart_slug)) -> {id; user_id; post_id; notif_type; message; is_read; created_at; project_name; project_slug; community_name; community_slug; counterpart_name; counterpart_slug}) rows))
     | Error e -> Lwt.return (Error (Caqti_error.show e))
 
   let count_unread_notifs_query =

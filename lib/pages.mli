@@ -14,7 +14,7 @@ val reset_password_page : token:string -> ?error:string -> Dream.request -> stri
     viewer's joined communities for the dark rail, loaded by the handler only
     AFTER the global-admin gate; defaults to [] so pure renders need no DB. *)
 val new_community_form : ?user:string -> ?rail_communities:Db.community list -> Dream.request -> string
-val community_page : ?user:string -> ?noindex:bool -> ?connected_projects:string -> is_member:bool -> is_current_user_mod:bool -> is_current_user_top_mod:bool -> mod_usernames:string list -> admin_usernames:string list -> banned_usernames:string list -> user_communities:Db.community list -> moderated_communities:Db.community list -> (int * int) list -> int -> string -> Db.community -> Db.post list -> Dream.request -> string
+val community_page : ?user:string -> ?noindex:bool -> ?connected_projects:string -> ?connected_communities:string -> is_member:bool -> is_current_user_mod:bool -> is_current_user_top_mod:bool -> mod_usernames:string list -> admin_usernames:string list -> banned_usernames:string list -> user_communities:Db.community list -> moderated_communities:Db.community list -> (int * int) list -> int -> string -> Db.community -> Db.post list -> Dream.request -> string
 val community_section_shell_page : ?user:string -> ?noindex:bool -> ?thread_count:int -> ?last_activity:string -> is_current_user_mod:bool -> mod_usernames:string list -> admin_usernames:string list -> banned_usernames:string list -> rail_communities:Db.community list -> channels:Db.channel list -> sections:Db.community_section list -> section:Db.community_section -> user_votes:(int * int) list -> current_page:int -> sort_mode:string -> community:Db.community -> posts:Db.post list -> Dream.request -> string
 
 (** [/feed] — global Feed surface. [scope] is "following" | "all"; logged-out callers must pass
@@ -37,7 +37,11 @@ type thread_source_view =
     Shell-styled comments/composer; mod/admin/ban dialogs preserve post_page behavior verbatim.
     Preserves the optimistic-vote DOM contract and all comment/vote/mod/delete routes & CSRF. *)
 val thread_shell_page : ?user:string -> ?noindex:bool -> is_member:bool -> is_current_user_mod:bool -> mod_usernames:string list -> admin_usernames:string list -> banned_usernames:string list -> rail_communities:Db.community list -> channels:Db.channel list -> sections:Db.community_section list -> community:Db.community -> ?thread_source:thread_source_view -> user_post_votes:(int * int) list -> user_comment_votes:(int * int) list -> post:Db.post -> comments:Db.comment list -> Dream.request -> string
-val community_overview_page : ?user:string -> ?noindex:bool -> ?connected_projects:string -> is_member:bool -> is_current_user_mod:bool -> is_current_user_top_mod:bool -> mod_usernames:string list -> orphaned:(int * string option) -> rail_communities:Db.community list -> channels:Db.channel list -> recent_posts:Db.post list -> Db.community -> (Db.community_section * int * string option) list -> Dream.request -> string
+(** [connected_projects_count] and [connected_communities_count] are how many records the
+    two public connected-* read models returned for this community — the sizes of exactly
+    the lists [/c/:slug/network] renders. The home carries the compact Network entry point
+    only: the lists themselves live on that page, and a zero count still renders its row. *)
+val community_overview_page : ?user:string -> ?noindex:bool -> ?connected_projects_count:int -> ?connected_communities_count:int -> is_member:bool -> is_current_user_mod:bool -> is_current_user_top_mod:bool -> mod_usernames:string list -> orphaned:(int * string option) -> rail_communities:Db.community list -> channels:Db.channel list -> recent_posts:Db.post list -> Db.community -> (Db.community_section * int * string option) list -> Dream.request -> string
 (** [connected_projects] is the pre-rendered "Connected projects" management fragment for the
     top-mod/admin settings surface (empty for every other viewer, which also removes the panel
     and its navigation entry). *)
@@ -58,7 +62,7 @@ val community_settings_page : ?user:string -> ?connected_projects:string -> ?rai
     gate first); [manage_moderators_active] renders the Manage moderators
     entry active (manage-mods route only — callers must have re-proved the
     TM/A gate first). Defaults preserve every existing route's output. *)
-val launch_knowledge_sidebar : community:Db.community -> channels:Db.channel list -> sections:Db.community_section list -> ?active_section_slug:string -> ?append_uncategorized:bool -> ?settings_active:bool -> ?home_requests_active:bool -> ?moderation_log_active:bool -> ?reports_active:bool -> ?manage_moderators_active:bool -> ?show_visibility_note:bool -> can_manage:bool -> unit -> string
+val launch_knowledge_sidebar : community:Db.community -> channels:Db.channel list -> sections:Db.community_section list -> ?active_section_slug:string -> ?append_uncategorized:bool -> ?settings_active:bool -> ?home_requests_active:bool -> ?connections_active:bool -> ?moderation_log_active:bool -> ?reports_active:bool -> ?manage_moderators_active:bool -> ?show_visibility_note:bool -> can_manage:bool -> unit -> string
 
 (** Moderator roster + role actions (TM/A only — gated in the handler; the
     POST handlers re-check every role/hierarchy rule server-side, this only

@@ -116,11 +116,18 @@ type comment_report_target = {
 
 type notification = {
   id : int; user_id : int; post_id : int option; notif_type : string;
-  (* NULL for the structured project-home kinds, which render from the
-     joined project/community display fields instead of stored prose. *)
+  (* NULL for the structured project-home and community-connection kinds,
+     which render from the joined display fields instead of stored prose. *)
   message : string option; is_read : bool; created_at : string;
   project_name : string option; project_slug : string option;
+  (* The notification's own community subject. For the community-connection
+     kinds this is the recipient's management context — the community whose
+     connections surface the rendered row links to — never the counterpart. *)
   community_name : string option; community_slug : string option;
+  (* The other community of a connection notification, derived at read time
+     relative to [community_slug] so the same stored row reads correctly from
+     either direction. NULL for every other kind. *)
+  counterpart_name : string option; counterpart_slug : string option;
 }
 
 type mod_action = {

@@ -368,7 +368,10 @@ let new_community_form ?user ?(rail_communities = []) request =
 (* [connected_projects] is the pre-rendered Connected-projects fragment supplied by the
    community route (Community_connected_projects_pages), or "" when the community has no
    accepted project home — and always "" on the section feeds, which are not /c/:slug.
-   Defaulting to "" keeps every existing caller unchanged. *)
+   [connected_communities] is its community↔community counterpart
+   (Community_connected_communities_pages), "" when nothing is publicly connected and "" for
+   every community that is not itself connection-eligible — that decision belongs to the read
+   model, not to this template. Both default to "" so every existing caller is unchanged. *)
 (* Launch sidebar for the flat (sections_enabled = false) community home — the
    pass-8/9 grammar reduced to what a single-feed community really has: the
    identity head, the one Feed surface (always current — /c/:slug IS the feed),
@@ -450,7 +453,7 @@ let launch_flat_community_sidebar ~(community : community) ~can_manage () =
      modlog and the top-mod/admin downvote toggle keep their gates and routes;
    - the pre-rendered ccp-* connected-projects fragment is spliced verbatim
      (its markup is pinned by the fragment suites) and restyled by CSS only. *)
-let community_page ?user ?(noindex=false) ?(connected_projects="") ~is_member ~is_current_user_mod ~is_current_user_top_mod ~mod_usernames ~admin_usernames ~banned_usernames ~user_communities ~moderated_communities user_votes current_page sort_mode (community : community) (posts : post list) request =
+let community_page ?user ?(noindex=false) ?(connected_projects="") ?(connected_communities="") ~is_member ~is_current_user_mod ~is_current_user_top_mod ~mod_usernames ~admin_usernames ~banned_usernames ~user_communities ~moderated_communities user_votes current_page sort_mode (community : community) (posts : post list) request =
   let csrf_token = Dream.csrf_tag request in
   let is_admin = Dream.session_field request "is_admin" = Some "true" in
   let esc = Components.html_escape in
@@ -625,10 +628,11 @@ let community_page ?user ?(noindex=false) ?(connected_projects="") ~is_member ~i
      pre-rendered ccp-* fragment closes the side stack, spliced verbatim. *)
   let content =
     Printf.sprintf
-      "<div class='scroll'>%s%s<div class='container launch-flat-body'><div class='two-col'><div class='stack'>%s<div class='launch-flat-ledger'>%s</div>%s</div><div class='stack stack--sm'>%s%s%s%s</div></div></div></div>"
+      "<div class='scroll'>%s%s<div class='container launch-flat-body'><div class='two-col'><div class='stack'>%s<div class='launch-flat-ledger'>%s</div>%s</div><div class='stack stack--sm'>%s%s%s%s%s</div></div></div></div>"
       banner_html chead
       sort_bar posts_html pager
       mods_panel rules_panel mod_tools_panel connected_projects
+      connected_communities
   in
   (* The byte-pinned rows show Share to every viewer, but only member
      documents carry the full behavior script (which defines copyPostLink).
@@ -676,7 +680,8 @@ let community_page ?user ?(noindex=false) ?(connected_projects="") ~is_member ~i
 let launch_knowledge_sidebar ~(community : community) ~(channels : channel list)
     ~(sections : community_section list) ?active_section_slug
     ?(append_uncategorized = false) ?(settings_active = false)
-    ?(home_requests_active = false) ?(moderation_log_active = false)
+    ?(home_requests_active = false) ?(connections_active = false)
+    ?(moderation_log_active = false)
     ?(reports_active = false) ?(manage_moderators_active = false)
     ?(show_visibility_note = true) ~can_manage () =
   let esc = Components.html_escape in
@@ -755,6 +760,14 @@ let launch_knowledge_sidebar ~(community : community) ~(channels : channel list)
             already proved top_mod-or-durable-admin. *)
          Printf.sprintf
            "<a class='navitem navitem--pad navitem--active' href='/c/%s/project-home-requests'><span class='navitem__sigil navitem__sigil--box navitem__sigil--project'>&#9672;</span>Home requests</a>"
+           slug
+       else "")
+    ^ (if connections_active then
+         (* Same slot and grammar as the settings nav's Connections entry;
+            rendered only by the connections route, whose read model already
+            proved the viewer top_mod-or-durable-admin in SQL. *)
+         Printf.sprintf
+           "<a class='navitem navitem--pad navitem--active' href='/c/%s/settings/connections'><span class='navitem__sigil navitem__sigil--box'>&#8644;</span>Connections</a>"
            slug
        else "")
     ^ (if reports_active then
@@ -2118,8 +2131,10 @@ let thread_shell_page ?user ?(noindex=false) ~is_member ~is_current_user_mod ~mo
    no created_at, because Db.community carries neither. SSR-only: every link/form works with JS
    off. Public presentation only — management (downvotes, mods, sections, bans) lives in
    /c/:slug/settings; the only management affordance here is the gated "Edit community" link. *)
-(* [connected_projects]: see community_page — the same pre-rendered fragment, supplied by the
-   same /c/:slug route after its existing authorization, and "" when there is nothing to show. *)
+(* [connected_projects_count]/[connected_communities_count]: how many records the two public
+   read models returned for this community, counted by the same /c/:slug route after its
+   existing authorization from exactly the sets /c/:slug/network renders. Counts, not
+   fragments — this page names the two destinations and their sizes; the lists live there. *)
 (* /c/:slug (structured) — the community overview, now on the Cartographic
    Civic launch chrome (Components.launch_community_page: earde.css only, no
    no legacy per-page CSS, no Tailwind). Every form, destination, and
@@ -2127,8 +2142,15 @@ let thread_shell_page ?user ?(noindex=false) ~is_member ~is_current_user_mod ~mo
    POSTs keep their exact fields, the settings and review links keep their
    existing mod/top-mod gates, and the pre-rendered ccp-* connected-projects
    fragment is spliced in verbatim (its markup is pinned by the fragment
-   suites) and restyled purely by the route-scoped CSS. *)
-let community_overview_page ?user ?(noindex=false) ?(connected_projects="") ~is_member ~is_current_user_mod ~is_current_user_top_mod
+   suites) and restyled purely by the route-scoped CSS.
+   The main column is what happens inside the community: community spaces
+   (live channels beside forum sections), then recent knowledge. The
+   community's external network is not activity, so the full connection lists
+   moved to /c/:slug/network and only a compact entry point with their two
+   counts remains, at the foot of the subordinate column. That grouping is
+   built here, in the composition, so the CSS never has to reorder or fill
+   cards by position. *)
+let community_overview_page ?user ?(noindex=false) ?(connected_projects_count=0) ?(connected_communities_count=0) ~is_member ~is_current_user_mod ~is_current_user_top_mod
     ~mod_usernames ~orphaned ~(rail_communities : community list)
     ~(channels : channel list) ~(recent_posts : post list)
     (community : community) (section_stats : (community_section * int * string option) list) request =
@@ -2301,6 +2323,14 @@ let community_overview_page ?user ?(noindex=false) ?(connected_projects="") ~is_
            "<a class='navitem navitem--pad' href='/c/%s/project-home-requests'><span class='navitem__sigil navitem__sigil--box navitem__sigil--project'>&#9672;</span>Home requests</a>"
            slug
        else "")
+    ^ (if is_current_user_top_mod || is_admin then
+         (* Same top_mod-or-admin gate the connections read model applies in
+            SQL to /c/:slug/settings/connections. The link grants nothing —
+            that surface reauthorizes from scratch. *)
+         Printf.sprintf
+           "<a class='navitem navitem--pad' href='/c/%s/settings/connections'><span class='navitem__sigil navitem__sigil--box'>&#8644;</span>Connections</a>"
+           slug
+       else "")
     ^ (if is_current_user_mod || is_admin then
          Printf.sprintf
            "<a class='navitem navitem--pad' href='/c/%s/settings'><span class='navitem__sigil navitem__sigil--box'>&#9881;</span>Settings</a>"
@@ -2339,7 +2369,7 @@ let community_overview_page ?user ?(noindex=false) ?(connected_projects="") ~is_
       primary_cta membership_btn settings_btn
   in
 
-  (* --- knowledge sections: flat panel rows over real per-section counts. --- *)
+  (* --- forum sections: flat panel rows over real per-section counts. --- *)
   let render_section ((s : community_section), post_count, _last_activity) =
     Printf.sprintf
       "<a class='project-row launch-secrow' href='/c/%s/s/%s'><span class='launch-sec-sigil'>&sect;</span><span class='launch-sec-main'><span class='launch-sec-name'>%s</span>%s</span><span class='launch-sec-count'>%d</span></a>"
@@ -2359,7 +2389,7 @@ let community_overview_page ?user ?(noindex=false) ?(connected_projects="") ~is_
   let sections_inner = String.concat "" (List.map render_section section_stats) ^ uncategorized_row in
   let sections_panel =
     Printf.sprintf
-      "<section class='panel'><div class='section-head'><span class='kicker'>Knowledge sections</span><span class='count-pill'>%d</span></div>%s</section>"
+      "<section class='panel'><div class='section-head'><span class='kicker'>Forum sections</span><span class='count-pill'>%d</span></div>%s</section>"
       section_count
       (if sections_inner = "" then "<div class='empty--inline'>No sections yet.</div>" else sections_inner)
   in
@@ -2448,16 +2478,67 @@ let community_overview_page ?user ?(noindex=false) ?(connected_projects="") ~is_
     | _ -> ""
   in
 
+  (* Compact network entry point. Two stable navigation rows — a zero count is
+     rendered, never hidden, because the destination exists either way and a
+     row that disappears at zero would make the panel's shape depend on data.
+     Each row is one anchor, so the whole row is the link with no JavaScript
+     and no nested interactive elements; the arrow is decoration and is hidden
+     from assistive technology. Both rows lead to the same public page, at the
+     block they name. *)
+  let network_row ~anchor ~label ~count =
+    Printf.sprintf
+      "<a class='project-row launch-netrow' href='/c/%s/network#%s'><span class='launch-net-label'>%s</span><span class='launch-net-count'>%d</span><span class='launch-net-go' aria-hidden='true'>&rarr;</span></a>"
+      slug anchor label count
+  in
+  (* Same top-mod-or-admin gate the sidebar applies to this exact destination,
+     and the same non-authorization: the connections surface re-decides in SQL.
+     Management itself — requests, notes, review, removal — stays there; this
+     is only a way in. *)
+  let network_cta =
+    if is_current_user_top_mod || is_admin then
+      Printf.sprintf
+        "<div class='panel__body launch-net-cta'><a class='btn--link mono' href='/c/%s/settings/connections/new'>Connect a community &rarr;</a></div>"
+        slug
+    else ""
+  in
+  let network_panel =
+    Printf.sprintf
+      "<section class='panel'><div class='section-head'><span class='kicker'>Network</span></div>%s%s%s</section>"
+      (network_row ~anchor:"projects" ~label:"Connected projects"
+         ~count:connected_projects_count)
+      (network_row ~anchor:"communities" ~label:"Connected communities"
+         ~count:connected_communities_count)
+      network_cta
+  in
+
+  (* Group sibling panels under one wrapper. Absent panels never leave a frame
+     behind: no surface at all means no container, and a lone surface stands on
+     its own rather than inside a one-child group — which is also why the CSS
+     needs no count-dependent rule to fill a half-empty track. *)
+  let group cls panels =
+    match List.filter (fun p -> p <> "") panels with
+    | [] -> ""
+    | [ only ] -> only
+    | present ->
+        Printf.sprintf "<div class='%s'>%s</div>" cls (String.concat "" present)
+  in
+  (* Community spaces: live chat and durable forum structure are the two ways to
+     take part here, so they are one composition of equal siblings — channels
+     left, sections right — rather than two panels that happened to land in
+     different columns. *)
+  let spaces_block = group "launch-spaces" [ channels_panel; sections_panel ] in
+
   (* The overview's right column is page content inside the main scroller
      (two-col), not the shell's `.aside` pane — exactly the reference's
-     anatomy. The pre-rendered ccp-* fragment leads the left column and is
-     spliced verbatim. *)
+     anatomy. It holds what is subordinate to activity inside the community:
+     its own rules, then governance (moderators + the public moderation log),
+     and last the way out to its external network. *)
   let content =
     Printf.sprintf
-      "<div class='scroll'>%s%s<div class='container launch-overview-body'><div class='two-col'><div class='stack'>%s%s%s</div><div class='stack stack--sm'>%s%s%s%s</div></div></div></div>"
+      "<div class='scroll'>%s%s<div class='container launch-overview-body'><div class='two-col'><div class='stack'>%s%s</div><div class='stack stack--sm'>%s%s%s%s</div></div></div></div>"
       banner_html chead
-      connected_projects sections_panel recent_panel
-      channels_panel mods_panel rules_panel modlog_panel
+      spaces_block recent_panel
+      rules_panel mods_panel modlog_panel network_panel
   in
   Components.launch_community_page ?user ~noindex ~request ~rail_communities
     ~community ~sidebar ~page_class:"launch-community-overview" ~title:community.name ~content ()
@@ -3172,6 +3253,18 @@ let community_settings_page ?user ?(connected_projects="") ?(rail_communities=[]
         slug
     else ""
   in
+  (* Connections: the entry point to the community-connections management
+     surface, on the same top-mod/admin gate its read model applies in SQL.
+     Regular mods, whom this page already knows are unauthorized there, never
+     see it. The link grants nothing — that route reauthorizes from scratch —
+     and carries no count, no form, and no community id. *)
+  let connections_link =
+    if is_top_mod || is_admin then
+      Printf.sprintf
+        "<a class='cm-index-link' href='/c/%s/settings/connections'>Connections</a>"
+        slug
+    else ""
+  in
   (* Connected projects: an ordinary panel nav entry, present only when the route supplied
      the management fragment (top-mod/admin surface). Regular mods, whom this page already
      knows are unauthorized for project-home moderation, never see it. *)
@@ -3204,7 +3297,7 @@ let community_settings_page ?user ?(connected_projects="") ?(rail_communities=[]
       <div class='cm-cols'>
         <nav class='cm-index'>
           <div class='cm-index-title'>Settings</div>
-          %s%s%s%s%s%s%s%s%s
+          %s%s%s%s%s%s%s%s%s%s
         </nav>
         <div class='cm-main'>
           %s
@@ -3220,6 +3313,7 @@ let community_settings_page ?user ?(connected_projects="") ?(rail_communities=[]
     (nav_item "moderation" "Moderation")
     connected_projects_nav
     project_home_requests_link
+    connections_link
     (nav_item ~danger:true "bans" "Bans")
     main_panel
   in
@@ -5154,22 +5248,70 @@ let notifications_page ?user ?(rail_communities = []) (notifs : Db.notification 
           | _ -> Some ("A project community-home update", None))
       | _ -> None
     in
+    (* Community-connection notifications are structured the same way: no
+       stored prose, so the copy and destination derive from the durable kind,
+       the joined counterpart identity, and the recipient's own management
+       context. The counterpart is derived by the read model relative to the
+       stored community, so one row reads correctly from either direction.
+       Every destination is that recipient's own connections surface, which
+       re-proves its top-mod/admin gate for itself — the link grants nothing.
+       Reviewer and remover are deliberately absent from the copy, so a
+       deleted actor renders identically and no username ever appears. If the
+       connection or either community has gone, the row degrades to a generic
+       unlinked line rather than inventing a name. *)
+    let connection_label_link =
+      match n.notif_type with
+      | "community_connection_requested" | "community_connection_accepted"
+      | "community_connection_rejected" | "community_connection_removed" -> (
+          match (n.counterpart_name, n.community_slug) with
+          | Some counterpart_name, Some context_slug ->
+              let other = Components.html_escape counterpart_name in
+              let label =
+                match n.notif_type with
+                | "community_connection_requested" ->
+                    Printf.sprintf "%s wants to connect with your community." other
+                | "community_connection_accepted" ->
+                    Printf.sprintf "%s accepted your connection request." other
+                | "community_connection_rejected" ->
+                    Printf.sprintf "%s rejected your connection request." other
+                | _ ->
+                    Printf.sprintf "%s removed the community connection." other
+              in
+              Some
+                ( label,
+                  Some
+                    (Printf.sprintf "/c/%s/settings/connections"
+                       (Components.html_escape context_slug)) )
+          | _ -> Some ("A community connection update", None))
+      | _ -> None
+    in
+    (* One structured slot: a notification is either project-home or
+       community-connection, never both, so the two derivations cannot
+       collide. *)
+    let structured_label_link =
+      match project_home_label_link with
+      | Some _ as label -> label
+      | None -> connection_label_link
+    in
     let message = Option.value n.message ~default:"" in
     let icon = match n.notif_type with
       | "mention"    -> "&#64;"   (* @ symbol — avoids mojibake in Printf *)
       | "mod_action" -> "&#9888;" (* ⚠ warning sign *)
       | "project_home_requested" | "project_home_accepted"
       | "project_home_rejected" | "project_home_removed" -> "&#127968;" (* 🏠 *)
+      | "community_connection_requested" | "community_connection_accepted"
+      | "community_connection_rejected" | "community_connection_removed" ->
+          "&#8644;" (* ⇄ — the same sigil the Connections nav entry uses *)
       | _ ->
           (* Legacy comment_reply: distinguish post vs comment reply by message suffix. *)
           let len = String.length message in
           if len >= 5 && String.sub message (len - 5) 5 = "post." then "&#128221;" (* 📝 *)
           else "&#128172;" (* 💬 *)
     in
-    (* Project-home labels are built above from already-escaped parts;
-       legacy prose is escaped here. *)
+    (* Structured labels are built above from already-escaped parts; legacy
+       prose is escaped here. *)
     let msg_html =
-      match project_home_label_link with
+      match structured_label_link with
       | Some (label, _) -> label
       | None -> Components.html_escape message
     in
@@ -5181,7 +5323,7 @@ let notifications_page ?user ?(rail_communities = []) (notifs : Db.notification 
         </div>" icon msg_html (Components.time_ago n.created_at)
     in
     let link =
-      match project_home_label_link with
+      match structured_label_link with
       | Some (_, link) -> link
       | None -> (
           match n.post_id with

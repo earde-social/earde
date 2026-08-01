@@ -67,3 +67,11 @@ val connected_projects_section : projects:project list -> string
     linked from a page ordinary visitors can reach. The fragment contains no
     inline styles, scripts, event handlers, [javascript:] URLs, or refresh
     behavior. *)
+
+val empty_projects_section : string
+(** The same section with a quiet "No connected projects yet." line in place of
+    the project list, for the dedicated Network page — which names both
+    destinations whether or not either holds anything. Shares the heading
+    constant with {!connected_projects_section}, so the two surfaces cannot
+    drift apart. Not for the community page, whose contract stays "nothing
+    connected, nothing rendered". *)

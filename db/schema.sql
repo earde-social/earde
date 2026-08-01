@@ -195,6 +195,88 @@ CREATE TABLE public.community_bans (
 
 
 --
+-- Name: community_connection_audit_events; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.community_connection_audit_events (
+    id bigint NOT NULL,
+    action text NOT NULL,
+    actor_user_id integer,
+    connection_id bigint NOT NULL,
+    requester_community_id integer NOT NULL,
+    recipient_community_id integer NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT community_connection_audit_events_action_check CHECK ((action = ANY (ARRAY['community_connection_requested'::text, 'community_connection_accepted'::text, 'community_connection_rejected'::text, 'community_connection_removed'::text])))
+);
+
+
+--
+-- Name: community_connection_audit_events_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.community_connection_audit_events_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: community_connection_audit_events_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.community_connection_audit_events_id_seq OWNED BY public.community_connection_audit_events.id;
+
+
+--
+-- Name: community_connections; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.community_connections (
+    id bigint NOT NULL,
+    requester_community_id integer NOT NULL,
+    recipient_community_id integer NOT NULL,
+    status text NOT NULL,
+    requested_by_user_id integer,
+    reviewed_by_user_id integer,
+    removed_by_user_id integer,
+    request_note text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    reviewed_at timestamp with time zone,
+    removed_at timestamp with time zone,
+    CONSTRAINT community_connections_distinct_communities_check CHECK ((requester_community_id <> recipient_community_id)),
+    CONSTRAINT community_connections_removed_after_created_check CHECK (((removed_at IS NULL) OR (removed_at >= created_at))),
+    CONSTRAINT community_connections_removed_after_reviewed_check CHECK (((removed_at IS NULL) OR (reviewed_at IS NULL) OR (removed_at >= reviewed_at))),
+    CONSTRAINT community_connections_request_note_check CHECK (((request_note IS NULL) OR (char_length(request_note) <= 2000))),
+    CONSTRAINT community_connections_reviewed_after_created_check CHECK (((reviewed_at IS NULL) OR (reviewed_at >= created_at))),
+    CONSTRAINT community_connections_status_check CHECK ((status = ANY (ARRAY['pending'::text, 'accepted'::text, 'rejected'::text, 'removed'::text]))),
+    CONSTRAINT community_connections_status_shape_check CHECK ((((status = 'pending'::text) AND (reviewed_at IS NULL) AND (removed_at IS NULL) AND (reviewed_by_user_id IS NULL) AND (removed_by_user_id IS NULL)) OR ((status = 'accepted'::text) AND (reviewed_at IS NOT NULL) AND (removed_at IS NULL) AND (removed_by_user_id IS NULL)) OR ((status = 'rejected'::text) AND (reviewed_at IS NOT NULL) AND (removed_at IS NULL) AND (removed_by_user_id IS NULL)) OR ((status = 'removed'::text) AND (reviewed_at IS NOT NULL) AND (removed_at IS NOT NULL)))),
+    CONSTRAINT community_connections_updated_after_created_check CHECK ((updated_at >= created_at))
+);
+
+
+--
+-- Name: community_connections_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.community_connections_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: community_connections_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.community_connections_id_seq OWNED BY public.community_connections.id;
+
+
+--
 -- Name: community_members; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -483,8 +565,9 @@ CREATE TABLE public.notifications (
     project_id bigint,
     community_id integer,
     relation_id bigint,
-    CONSTRAINT notifications_notif_type_check CHECK (((notif_type)::text = ANY ((ARRAY['comment_reply'::character varying, 'mention'::character varying, 'mod_action'::character varying, 'project_home_requested'::character varying, 'project_home_accepted'::character varying, 'project_home_rejected'::character varying, 'project_home_removed'::character varying])::text[]))),
-    CONSTRAINT notifications_project_home_shape_check CHECK (((((notif_type)::text = ANY ((ARRAY['project_home_requested'::character varying, 'project_home_accepted'::character varying, 'project_home_rejected'::character varying, 'project_home_removed'::character varying])::text[])) AND (project_id IS NOT NULL) AND (community_id IS NOT NULL) AND (relation_id IS NOT NULL) AND (message IS NULL) AND (post_id IS NULL)) OR (((notif_type)::text <> ALL ((ARRAY['project_home_requested'::character varying, 'project_home_accepted'::character varying, 'project_home_rejected'::character varying, 'project_home_removed'::character varying])::text[])) AND (project_id IS NULL) AND (community_id IS NULL) AND (relation_id IS NULL) AND (actor_user_id IS NULL) AND (message IS NOT NULL))))
+    connection_id bigint,
+    CONSTRAINT notifications_notif_type_check CHECK (((notif_type)::text = ANY ((ARRAY['comment_reply'::character varying, 'mention'::character varying, 'mod_action'::character varying, 'project_home_requested'::character varying, 'project_home_accepted'::character varying, 'project_home_rejected'::character varying, 'project_home_removed'::character varying, 'community_connection_requested'::character varying, 'community_connection_accepted'::character varying, 'community_connection_rejected'::character varying, 'community_connection_removed'::character varying])::text[]))),
+    CONSTRAINT notifications_shape_check CHECK (((((notif_type)::text = ANY ((ARRAY['project_home_requested'::character varying, 'project_home_accepted'::character varying, 'project_home_rejected'::character varying, 'project_home_removed'::character varying])::text[])) AND (project_id IS NOT NULL) AND (community_id IS NOT NULL) AND (relation_id IS NOT NULL) AND (connection_id IS NULL) AND (message IS NULL) AND (post_id IS NULL)) OR (((notif_type)::text = ANY ((ARRAY['community_connection_requested'::character varying, 'community_connection_accepted'::character varying, 'community_connection_rejected'::character varying, 'community_connection_removed'::character varying])::text[])) AND (community_id IS NOT NULL) AND (connection_id IS NOT NULL) AND (project_id IS NULL) AND (relation_id IS NULL) AND (message IS NULL) AND (post_id IS NULL)) OR (((notif_type)::text <> ALL ((ARRAY['project_home_requested'::character varying, 'project_home_accepted'::character varying, 'project_home_rejected'::character varying, 'project_home_removed'::character varying, 'community_connection_requested'::character varying, 'community_connection_accepted'::character varying, 'community_connection_rejected'::character varying, 'community_connection_removed'::character varying])::text[])) AND (project_id IS NULL) AND (community_id IS NULL) AND (relation_id IS NULL) AND (connection_id IS NULL) AND (actor_user_id IS NULL) AND (message IS NOT NULL))))
 );
 
 
@@ -1121,6 +1204,20 @@ ALTER TABLE ONLY public.communities ALTER COLUMN id SET DEFAULT nextval('public.
 
 
 --
+-- Name: community_connection_audit_events id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.community_connection_audit_events ALTER COLUMN id SET DEFAULT nextval('public.community_connection_audit_events_id_seq'::regclass);
+
+
+--
+-- Name: community_connections id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.community_connections ALTER COLUMN id SET DEFAULT nextval('public.community_connections_id_seq'::regclass);
+
+
+--
 -- Name: community_projects id; Type: DEFAULT; Schema: public; Owner: -
 --
 
@@ -1322,6 +1419,22 @@ ALTER TABLE ONLY public.communities
 
 ALTER TABLE ONLY public.community_bans
     ADD CONSTRAINT community_bans_pkey PRIMARY KEY (user_id, community_id);
+
+
+--
+-- Name: community_connection_audit_events community_connection_audit_events_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.community_connection_audit_events
+    ADD CONSTRAINT community_connection_audit_events_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: community_connections community_connections_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.community_connections
+    ADD CONSTRAINT community_connections_pkey PRIMARY KEY (id);
 
 
 --
@@ -1685,6 +1798,13 @@ ALTER TABLE ONLY public.users
 
 
 --
+-- Name: community_connections_one_active_pair_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX community_connections_one_active_pair_idx ON public.community_connections USING btree (LEAST(requester_community_id, recipient_community_id), GREATEST(requester_community_id, recipient_community_id)) WHERE (status = ANY (ARRAY['pending'::text, 'accepted'::text]));
+
+
+--
 -- Name: community_projects_one_active_home_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -1703,6 +1823,55 @@ CREATE INDEX idx_chat_messages_channel_id ON public.chat_messages USING btree (c
 --
 
 CREATE INDEX idx_chat_messages_search_tsv ON public.chat_messages USING gin (search_tsv);
+
+
+--
+-- Name: idx_community_connection_audit_events_actor; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_community_connection_audit_events_actor ON public.community_connection_audit_events USING btree (actor_user_id, created_at DESC);
+
+
+--
+-- Name: idx_community_connection_audit_events_connection; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_community_connection_audit_events_connection ON public.community_connection_audit_events USING btree (connection_id, created_at DESC);
+
+
+--
+-- Name: idx_community_connection_audit_events_recipient; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_community_connection_audit_events_recipient ON public.community_connection_audit_events USING btree (recipient_community_id, created_at DESC);
+
+
+--
+-- Name: idx_community_connection_audit_events_requester; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_community_connection_audit_events_requester ON public.community_connection_audit_events USING btree (requester_community_id, created_at DESC);
+
+
+--
+-- Name: idx_community_connections_pair_history; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_community_connections_pair_history ON public.community_connections USING btree (LEAST(requester_community_id, recipient_community_id), GREATEST(requester_community_id, recipient_community_id), created_at DESC);
+
+
+--
+-- Name: idx_community_connections_recipient_status; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_community_connections_recipient_status ON public.community_connections USING btree (recipient_community_id, status, created_at);
+
+
+--
+-- Name: idx_community_connections_requester_status; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_community_connections_requester_status ON public.community_connections USING btree (requester_community_id, status, created_at);
 
 
 --
@@ -1759,6 +1928,13 @@ CREATE INDEX idx_notifications_actor ON public.notifications USING btree (actor_
 --
 
 CREATE INDEX idx_notifications_community ON public.notifications USING btree (community_id) WHERE (community_id IS NOT NULL);
+
+
+--
+-- Name: idx_notifications_connection; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_notifications_connection ON public.notifications USING btree (connection_id) WHERE (connection_id IS NOT NULL);
 
 
 --
@@ -1937,6 +2113,13 @@ CREATE UNIQUE INDEX uniq_thread_source_seed_message ON public.thread_source_mess
 
 
 --
+-- Name: uq_notifications_recipient_kind_connection; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX uq_notifications_recipient_kind_connection ON public.notifications USING btree (user_id, notif_type, connection_id) WHERE (connection_id IS NOT NULL);
+
+
+--
 -- Name: uq_notifications_recipient_kind_relation; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -2021,6 +2204,78 @@ ALTER TABLE ONLY public.community_bans
 
 ALTER TABLE ONLY public.community_bans
     ADD CONSTRAINT community_bans_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+
+
+--
+-- Name: community_connection_audit_events community_connection_audit_events_actor_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.community_connection_audit_events
+    ADD CONSTRAINT community_connection_audit_events_actor_user_id_fkey FOREIGN KEY (actor_user_id) REFERENCES public.users(id) ON DELETE SET NULL;
+
+
+--
+-- Name: community_connection_audit_events community_connection_audit_events_connection_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.community_connection_audit_events
+    ADD CONSTRAINT community_connection_audit_events_connection_id_fkey FOREIGN KEY (connection_id) REFERENCES public.community_connections(id);
+
+
+--
+-- Name: community_connection_audit_events community_connection_audit_events_recipient_community_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.community_connection_audit_events
+    ADD CONSTRAINT community_connection_audit_events_recipient_community_id_fkey FOREIGN KEY (recipient_community_id) REFERENCES public.communities(id);
+
+
+--
+-- Name: community_connection_audit_events community_connection_audit_events_requester_community_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.community_connection_audit_events
+    ADD CONSTRAINT community_connection_audit_events_requester_community_id_fkey FOREIGN KEY (requester_community_id) REFERENCES public.communities(id);
+
+
+--
+-- Name: community_connections community_connections_recipient_community_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.community_connections
+    ADD CONSTRAINT community_connections_recipient_community_id_fkey FOREIGN KEY (recipient_community_id) REFERENCES public.communities(id) ON DELETE CASCADE;
+
+
+--
+-- Name: community_connections community_connections_removed_by_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.community_connections
+    ADD CONSTRAINT community_connections_removed_by_user_id_fkey FOREIGN KEY (removed_by_user_id) REFERENCES public.users(id) ON DELETE SET NULL;
+
+
+--
+-- Name: community_connections community_connections_requested_by_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.community_connections
+    ADD CONSTRAINT community_connections_requested_by_user_id_fkey FOREIGN KEY (requested_by_user_id) REFERENCES public.users(id) ON DELETE SET NULL;
+
+
+--
+-- Name: community_connections community_connections_requester_community_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.community_connections
+    ADD CONSTRAINT community_connections_requester_community_id_fkey FOREIGN KEY (requester_community_id) REFERENCES public.communities(id) ON DELETE CASCADE;
+
+
+--
+-- Name: community_connections community_connections_reviewed_by_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.community_connections
+    ADD CONSTRAINT community_connections_reviewed_by_user_id_fkey FOREIGN KEY (reviewed_by_user_id) REFERENCES public.users(id) ON DELETE SET NULL;
 
 
 --
@@ -2157,6 +2412,14 @@ ALTER TABLE ONLY public.notifications
 
 ALTER TABLE ONLY public.notifications
     ADD CONSTRAINT notifications_community_id_fkey FOREIGN KEY (community_id) REFERENCES public.communities(id) ON DELETE CASCADE;
+
+
+--
+-- Name: notifications notifications_connection_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.notifications
+    ADD CONSTRAINT notifications_connection_id_fkey FOREIGN KEY (connection_id) REFERENCES public.community_connections(id) ON DELETE CASCADE;
 
 
 --
@@ -2436,4 +2699,6 @@ INSERT INTO public.schema_migrations (version) VALUES
     ('20260726120000'),
     ('20260726130000'),
     ('20260727120000'),
-    ('20260727130000');
+    ('20260727130000'),
+    ('20260731120000'),
+    ('20260731130000');

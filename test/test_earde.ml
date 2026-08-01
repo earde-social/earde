@@ -4086,9 +4086,13 @@ let nav_entry_cases =
         must_not "/new-community")
   ; nav_case "logged-in launch top bar keeps unrelated actions" (fun () ->
         let html = nav_launch_doc ~user:"alice" () in
-        let must, _ = nav_check html in
+        let must, must_not = nav_check html in
         must "href='/notifications'";
-        must "notif-badge";
+        (* The bell is unconditional; the badge is not. This document is
+           rendered with no request, so there is no count and therefore no
+           badge element and no "0" anywhere. *)
+        must "class='bell'";
+        must_not "notif-badge";
         must "href='/settings'";
         must "Log out")
   ; nav_case "admin launch top bar offers /bring, not the legacy route"
@@ -32016,19 +32020,27 @@ module Ccph = struct
                    in
                    handler request)
           @@ Dream.router
-               [ Dream.get "/c/:slug" Earde.Handlers.community_page_handler ]
+               [ Dream.get "/c/:slug" Earde.Handlers.community_page_handler
+               ; Dream.get "/c/:slug/network"
+                   Earde.Handlers.community_network_handler ]
         in
         shared_pipeline := Some pipeline;
         pipeline
 
-  let visit ?session_user_id ?(session_admin = false) ~url ~slug () =
+  (* The complete list moved off the structured community home to the public
+     Network page, so [visit] follows it there by default: same read model,
+     same route-level authorization decision, one page further along. The
+     surfaces that still carry the section inline — the flat community's own
+     side stack — pass [~path:""] explicitly. *)
+  let visit ?session_user_id ?(session_admin = false) ?(path = "/network") ~url
+      ~slug () =
     let pipeline = pipeline_for ~url in
     shared_identity :=
       (match session_user_id with
        | None -> None
        | Some uid -> Some (uid, session_admin));
     let* response =
-      pipeline (Dream.request ~method_:`GET ~target:("/c/" ^ slug) "")
+      pipeline (Dream.request ~method_:`GET ~target:("/c/" ^ slug ^ path) "")
     in
     let* body = Dream.body response in
     Lwt.return (response, body)
@@ -32049,6 +32061,29 @@ module Ccph = struct
       (contains body section_marker);
     Alcotest.(check bool) (label ^ ": no heading") false
       (contains body "Connected projects")
+
+  (* The community home carries no list either way now: only the compact
+     Network panel, whose row is labelled "Connected projects" — so absence is
+     judged on the fragment's own markup, never on that label. *)
+  let check_no_list label body =
+    Alcotest.(check bool) (label ^ ": no fragment") false
+      (contains body section_marker);
+    Alcotest.(check bool) (label ^ ": no fragment heading") false
+      (contains body "<h2 class='ccp-title'>");
+    Alcotest.(check bool) (label ^ ": no supporting copy") false
+      (contains body
+         "Open-source projects that use this community as their Earde home.")
+
+  (* The Network page names both destinations whether or not either holds
+     anything, so nothing connected is a quiet line inside the block rather
+     than a missing block — the opposite of the community page's contract. *)
+  let check_empty_section label body =
+    Alcotest.(check bool) (label ^ ": block still framed") true
+      (contains body section_marker);
+    Alcotest.(check bool) (label ^ ": quiet empty line") true
+      (contains body "No connected projects yet.");
+    Alcotest.(check bool) (label ^ ": no project list") false
+      (contains body "<ul class='ccp-projects'>")
 
   (* Nothing in this feature may imply endorsement or officiality. *)
   let check_no_officiality label body =
@@ -32174,15 +32209,25 @@ module Ccph = struct
   (* === cases === *)
 
   let empty_case =
-    db_case "community page: a public community with no accepted project home \
-             renders no section at all" (fun ~url conn ->
+    db_case "network page: a public community with no accepted project home \
+             keeps the block and says so quietly; the home carries neither"
+      (fun ~url conn ->
         let* _cid = insert_community conn "ccph-empty" in
         let* response, body = visit ~url ~slug:"ccph-empty" () in
         check_ok "anonymous" response;
-        check_no_section "anonymous" body;
-        (* The community page itself is unchanged. *)
+        check_empty_section "anonymous" body;
+        (* The page itself renders around it. *)
         Alcotest.(check bool) "community still renders" true
           (contains body "ccph-empty");
+        (* The community home has no list at all any more — only the compact
+           entry point with its count. *)
+        let* home_response, home_body =
+          visit ~path:"" ~url ~slug:"ccph-empty" ()
+        in
+        check_ok "home" home_response;
+        check_no_list "home" home_body;
+        Alcotest.(check bool) "home links the network page" true
+          (contains home_body "href='/c/ccph-empty/network#projects'");
         Lwt.return_unit)
 
   let anonymous_case =
@@ -32218,6 +32263,43 @@ module Ccph = struct
           (contains body "/projects/ccph-alpha/setup");
         check_no_officiality "anonymous" body;
         check_no_credentials "anonymous" response body;
+        Lwt.return_unit)
+
+  (* The home's compact entry point, over the same durable relation: the count
+     is the size of exactly the list the Network page renders, and no part of
+     that list reaches the home. *)
+  let home_entry_point_case =
+    db_case "community home: the connected projects are one counted link to \
+             the network page, never a list" (fun ~url conn ->
+        let* owner = insert_user conn "ccph_hep_owner" in
+        let* moderator = insert_user conn "ccph_hep_mod" in
+        let* _project =
+          make_project conn ~user:owner ~ext_id:947000005L ~slug:"ccph-hep"
+            ~name:"Ccph Entry Point" ~website:"https://ccph-hep.example/"
+        in
+        let* cid = insert_community conn "ccph-hep" in
+        let* () = add_top_mod conn ~user:moderator ~community:cid in
+        let* () =
+          accept_reviewed "hep" conn ~owner ~reviewer:moderator
+            ~slug:"ccph-hep" ~cid ~community_slug:"ccph-hep"
+        in
+        let* response, body = visit ~path:"" ~url ~slug:"ccph-hep" () in
+        check_ok "home" response;
+        check_no_list "home" body;
+        Alcotest.(check bool) "no project identity on the home" false
+          (contains body "Ccph Entry Point");
+        Alcotest.(check bool) "counted row" true
+          (contains body
+             "<span class='launch-net-label'>Connected projects</span><span \
+              class='launch-net-count'>1</span>");
+        Alcotest.(check bool) "row links the network page" true
+          (contains body "href='/c/ccph-hep/network#projects'");
+        (* And the list itself is one click away, complete. *)
+        let* net_response, net_body = visit ~url ~slug:"ccph-hep" () in
+        check_ok "network" net_response;
+        check_has_section "network" net_body;
+        Alcotest.(check bool) "project identity on the network page" true
+          (contains net_body "Ccph Entry Point");
         Lwt.return_unit)
 
   let ordering_case =
@@ -32288,7 +32370,7 @@ module Ccph = struct
         let* () = exec conn "removed row" q_insert_removed (removed, cid) in
         let* response, body = visit ~url ~slug:"ccph-ex" () in
         check_ok "closed states" response;
-        check_no_section "only closed states" body;
+        check_empty_section "only closed states" body;
         List.iter
           (fun needle ->
             Alcotest.(check bool) ("absent: " ^ needle) false
@@ -32351,8 +32433,8 @@ module Ccph = struct
         Lwt.return_unit)
 
   let legacy_branch_case =
-    db_case "community page: the simple-feed branch renders the section too"
-      (fun ~url conn ->
+    db_case "community page: the simple-feed branch still renders the section \
+             inline, and its network page renders it too" (fun ~url conn ->
         let* owner = insert_user conn "ccph_leg_owner" in
         let* moderator = insert_user conn "ccph_leg_mod" in
         let* _project =
@@ -32366,11 +32448,15 @@ module Ccph = struct
             ~cid ~community_slug:"ccph-leg"
         in
         let* () = exec conn "simple feed" q_legacy_community cid in
-        let* response, body = visit ~url ~slug:"ccph-leg" () in
+        let* response, body = visit ~path:"" ~url ~slug:"ccph-leg" () in
         check_ok "simple feed" response;
         check_has_section "simple feed" body;
         Alcotest.(check bool) "project listed" true
           (contains body "Ccph Legacy");
+        (* The Network page exists for a flat community as well. *)
+        let* net_response, net_body = visit ~url ~slug:"ccph-leg" () in
+        check_ok "simple feed network" net_response;
+        check_has_section "simple feed network" net_body;
         Lwt.return_unit)
 
   let unlisted_case =
@@ -32538,10 +32624,10 @@ module Ccph = struct
           (fun () -> exec conn "restore relations" q_show_relations ()))
 
   let suite =
-    [ empty_case; anonymous_case; ordering_case; excluded_case;
-      drifted_verification_case; provisioned_case; legacy_branch_case;
-      unlisted_case; private_case; draft_case; missing_case;
-      inconsistency_case; storage_failure_case ]
+    [ empty_case; anonymous_case; home_entry_point_case; ordering_case;
+      excluded_case; drifted_verification_case; provisioned_case;
+      legacy_branch_case; unlisted_case; private_case; draft_case;
+      missing_case; inconsistency_case; storage_failure_case ]
 end
 
 (* ===== Accepted project-home removal (Project_home_removal_store) =====
@@ -34992,6 +35078,8 @@ module Phrh = struct
                [ Dream.get "/mint" (fun req ->
                      Dream.respond (Dream.csrf_token req));
                  Dream.get "/c/:slug" Earde.Handlers.community_page_handler;
+                 Dream.get "/c/:slug/network"
+                   Earde.Handlers.community_network_handler;
                  Dream.get "/c/:slug/settings"
                    Earde.Handlers.community_settings_handler;
                  Dream.get "/projects/:slug/request-home" (fun req ->
@@ -35308,15 +35396,23 @@ module Phrh = struct
           (contains after_body "phrh-cproj/remove-home");
         Alcotest.(check bool) "empty-state copy" true
           (contains after_body "No connected projects.");
-        (* The public community page also drops it. *)
+        (* The public Network page — where the list lives — also drops it, and
+           the community home's count falls back to zero. *)
         let* public_response, public_body =
-          do_get ~cookie ~url ~target:"/c/phrh-chome" ()
+          do_get ~cookie ~url ~target:"/c/phrh-chome/network" ()
         in
-        Alcotest.(check int) "public page 200" 200 (status_of public_response);
-        Alcotest.(check bool) "no connected-projects section" false
-          (contains public_body "<section class='ccp-section'>");
+        Alcotest.(check int) "network page 200" 200 (status_of public_response);
+        Alcotest.(check bool) "no project list" false
+          (contains public_body "<ul class='ccp-projects'>");
+        Alcotest.(check bool) "quiet empty state instead" true
+          (contains public_body "No connected projects yet.");
         Alcotest.(check bool) "project absent from the public page" false
           (contains public_body "Phrh Cproj");
+        let* _, home_body = do_get ~cookie ~url ~target:"/c/phrh-chome" () in
+        Alcotest.(check bool) "home count back to zero" true
+          (contains home_body
+             "<span class='launch-net-label'>Connected projects</span><span \
+              class='launch-net-count'>0</span>");
         check_untouched "community side" conn ~project ~community:cid before)
 
   (* === settings-surface authorization and content === *)
@@ -35444,13 +35540,18 @@ module Phrh = struct
         let* () = denied "ordinary member" member in
         let* stranger = insert_user conn "phrh_sstranger" in
         let* () = denied "unrelated user" stranger in
-        (* The public community page never carries removal controls. *)
+        (* The public surfaces never carry removal controls. The list itself
+           lives on the community's Network page now; the home only counts
+           it. *)
         as_anonymous ();
         let* _, public_body = do_get ~url ~target:"/c/phrh-shome" () in
         Alcotest.(check bool) "public page: no controls" false
           (contains public_body "remove-home");
-        Alcotest.(check bool) "public page: still lists the projects" true
-          (contains public_body "Phrh Accepted");
+        let* _, network_body = do_get ~url ~target:"/c/phrh-shome/network" () in
+        Alcotest.(check bool) "network page: no controls" false
+          (contains network_body "remove-home");
+        Alcotest.(check bool) "network page: still lists the projects" true
+          (contains network_body "Phrh Accepted");
         Lwt.return_unit)
 
   let settings_labels_case =
@@ -50247,6 +50348,129 @@ module Phnt = struct
          ON notifications (actor_user_id) WHERE actor_user_id IS NOT NULL"
       ]
 
+  (* A later migration (the community-connection notification kinds) now
+     sits on top of this one and replaces its shape CHECK, so this
+     migration's down statements are no longer runnable on their own.
+     Migrations unwind in reverse order: these two lists are that later
+     migration's own down and up, wrapped around the pair below so the
+     round-trip is over the same stack production actually applies. *)
+  let q_later_down_statements =
+    List.map ddl
+      [ "DELETE FROM notifications \
+         WHERE notif_type IN ('community_connection_requested', \
+                              'community_connection_accepted', \
+                              'community_connection_rejected', \
+                              'community_connection_removed')"
+      ; "DROP INDEX idx_notifications_connection"
+      ; "DROP INDEX uq_notifications_recipient_kind_connection"
+      ; "ALTER TABLE notifications DROP CONSTRAINT notifications_shape_check"
+      ; "ALTER TABLE notifications \
+         ADD CONSTRAINT notifications_project_home_shape_check CHECK ( \
+           (notif_type IN ('project_home_requested', \
+                           'project_home_accepted', \
+                           'project_home_rejected', \
+                           'project_home_removed') \
+             AND project_id IS NOT NULL \
+             AND community_id IS NOT NULL \
+             AND relation_id IS NOT NULL \
+             AND message IS NULL \
+             AND post_id IS NULL) \
+           OR \
+           (notif_type NOT IN ('project_home_requested', \
+                               'project_home_accepted', \
+                               'project_home_rejected', \
+                               'project_home_removed') \
+             AND project_id IS NULL \
+             AND community_id IS NULL \
+             AND relation_id IS NULL \
+             AND actor_user_id IS NULL \
+             AND message IS NOT NULL) \
+         )"
+      ; "ALTER TABLE notifications \
+         DROP CONSTRAINT notifications_notif_type_check"
+      ; "ALTER TABLE notifications \
+         ADD CONSTRAINT notifications_notif_type_check CHECK ( \
+           notif_type IN ('comment_reply', \
+                          'mention', \
+                          'mod_action', \
+                          'project_home_requested', \
+                          'project_home_accepted', \
+                          'project_home_rejected', \
+                          'project_home_removed') \
+         )"
+      ; "ALTER TABLE notifications DROP COLUMN connection_id"
+      ]
+
+  let q_later_up_statements =
+    List.map ddl
+      [ "ALTER TABLE notifications \
+         ADD COLUMN connection_id BIGINT \
+           CONSTRAINT notifications_connection_id_fkey \
+           REFERENCES community_connections(id) ON DELETE CASCADE"
+      ; "ALTER TABLE notifications \
+         DROP CONSTRAINT notifications_notif_type_check"
+      ; "ALTER TABLE notifications \
+         ADD CONSTRAINT notifications_notif_type_check CHECK ( \
+           notif_type IN ('comment_reply', \
+                          'mention', \
+                          'mod_action', \
+                          'project_home_requested', \
+                          'project_home_accepted', \
+                          'project_home_rejected', \
+                          'project_home_removed', \
+                          'community_connection_requested', \
+                          'community_connection_accepted', \
+                          'community_connection_rejected', \
+                          'community_connection_removed') \
+         )"
+      ; "ALTER TABLE notifications \
+         DROP CONSTRAINT notifications_project_home_shape_check"
+      ; "ALTER TABLE notifications \
+         ADD CONSTRAINT notifications_shape_check CHECK ( \
+           (notif_type IN ('project_home_requested', \
+                           'project_home_accepted', \
+                           'project_home_rejected', \
+                           'project_home_removed') \
+             AND project_id IS NOT NULL \
+             AND community_id IS NOT NULL \
+             AND relation_id IS NOT NULL \
+             AND connection_id IS NULL \
+             AND message IS NULL \
+             AND post_id IS NULL) \
+           OR \
+           (notif_type IN ('community_connection_requested', \
+                           'community_connection_accepted', \
+                           'community_connection_rejected', \
+                           'community_connection_removed') \
+             AND community_id IS NOT NULL \
+             AND connection_id IS NOT NULL \
+             AND project_id IS NULL \
+             AND relation_id IS NULL \
+             AND message IS NULL \
+             AND post_id IS NULL) \
+           OR \
+           (notif_type NOT IN ('project_home_requested', \
+                               'project_home_accepted', \
+                               'project_home_rejected', \
+                               'project_home_removed', \
+                               'community_connection_requested', \
+                               'community_connection_accepted', \
+                               'community_connection_rejected', \
+                               'community_connection_removed') \
+             AND project_id IS NULL \
+             AND community_id IS NULL \
+             AND relation_id IS NULL \
+             AND connection_id IS NULL \
+             AND actor_user_id IS NULL \
+             AND message IS NOT NULL) \
+         )"
+      ; "CREATE UNIQUE INDEX uq_notifications_recipient_kind_connection \
+         ON notifications (user_id, notif_type, connection_id) \
+         WHERE connection_id IS NOT NULL"
+      ; "CREATE INDEX idx_notifications_connection \
+         ON notifications (connection_id) WHERE connection_id IS NOT NULL"
+      ]
+
   (* === failure injection (installed and dropped per case) === *)
 
   let q_create_fail_fn =
@@ -50595,14 +50819,21 @@ module Phnt = struct
         let* rows = collect conn "constraints" q_constraints () in
         Alcotest.(check (list (triple string string bool)))
           "constraints present and validated"
+          (* This case pins the whole notifications table, not just the
+             columns this migration added, so the later
+             community-connection migration's own column, constraint, and
+             indexes are part of the expected shape. The single shape CHECK
+             is now named for what it enforces — all three row shapes — and
+             the project-home branch inside it is unchanged. *)
           [ ("notifications_actor_user_id_fkey", "f", true);
             ("notifications_community_id_fkey", "f", true);
+            ("notifications_connection_id_fkey", "f", true);
             ("notifications_notif_type_check", "c", true);
             ("notifications_pkey", "p", true);
             ("notifications_post_id_fkey", "f", true);
-            ("notifications_project_home_shape_check", "c", true);
             ("notifications_project_id_fkey", "f", true);
             ("notifications_relation_id_fkey", "f", true);
+            ("notifications_shape_check", "c", true);
             ("notifications_user_id_fkey", "f", true)
           ]
           rows;
@@ -50611,6 +50842,7 @@ module Phnt = struct
           "SET NULL actor, CASCADE recipient and subjects"
           [ ("notifications_actor_user_id_fkey", "n");
             ("notifications_community_id_fkey", "c");
+            ("notifications_connection_id_fkey", "c");
             ("notifications_post_id_fkey", "c");
             ("notifications_project_id_fkey", "c");
             ("notifications_relation_id_fkey", "c");
@@ -50619,12 +50851,16 @@ module Phnt = struct
           deltypes;
         let* defs = collect conn "index defs" q_indexdefs () in
         Alcotest.(check (list string))
-          "exactly the dedup index, the four FK indexes, and the primary key"
+          "exactly the two dedup indexes, the five FK indexes, and the \
+           primary key"
           [ "CREATE INDEX idx_notifications_actor ON public.notifications \
              USING btree (actor_user_id) WHERE (actor_user_id IS NOT NULL)"
           ; "CREATE INDEX idx_notifications_community ON \
              public.notifications USING btree (community_id) WHERE \
              (community_id IS NOT NULL)"
+          ; "CREATE INDEX idx_notifications_connection ON \
+             public.notifications USING btree (connection_id) WHERE \
+             (connection_id IS NOT NULL)"
           ; "CREATE INDEX idx_notifications_project ON public.notifications \
              USING btree (project_id) WHERE (project_id IS NOT NULL)"
           ; "CREATE INDEX idx_notifications_relation ON \
@@ -50632,6 +50868,10 @@ module Phnt = struct
              (relation_id IS NOT NULL)"
           ; "CREATE UNIQUE INDEX notifications_pkey ON public.notifications \
              USING btree (id)"
+          ; "CREATE UNIQUE INDEX \
+             uq_notifications_recipient_kind_connection ON \
+             public.notifications USING btree (user_id, notif_type, \
+             connection_id) WHERE (connection_id IS NOT NULL)"
           ; "CREATE UNIQUE INDEX uq_notifications_recipient_kind_relation \
              ON public.notifications USING btree (user_id, notif_type, \
              relation_id) WHERE (relation_id IS NOT NULL)"
@@ -50662,6 +50902,12 @@ module Phnt = struct
         let* () =
           Lwt.finalize
             (fun () ->
+              (* Unwind in reverse migration order: the later
+                 community-connection migration first, then this one. *)
+              let* () =
+                Lwt_list.iter_s (fun q -> exec conn "later down" q ())
+                  q_later_down_statements
+              in
               let* () =
                 Lwt_list.iter_s (fun q -> exec conn "down" q ())
                   q_down_statements
@@ -50673,9 +50919,13 @@ module Phnt = struct
               in
               let* n = find conn "present" q_extension_columns () in
               Alcotest.(check int) "up restores the four columns" 4 n;
+              let* () =
+                Lwt_list.iter_s (fun q -> exec conn "later up" q ())
+                  q_later_up_statements
+              in
               let* rows = collect conn "constraints" q_constraints () in
               Alcotest.(check int)
-                "up restores all nine constraints" 9 (List.length rows);
+                "up restores all ten constraints" 10 (List.length rows);
               Lwt.return_unit)
             (fun () ->
               let* _ = C.rollback () in
@@ -51449,7 +51699,9 @@ module Phnt = struct
           (fun (k, v) -> Dream.set_session_field req k v)
           session
       in
-      handler req
+      (* Exactly where production mounts it: inside the pool and the session
+         store, immediately outside the route handler. *)
+      Earde.Notification_badge.middleware handler req
     in
     pipeline (Dream.request ~method_:`GET ~target "")
 
@@ -51463,14 +51715,39 @@ module Phnt = struct
     let* body = Dream.body response in
     Lwt.return (response, body)
 
-  let unread_count_for ~url ~label user_id expected =
+  (* The unread count is observed exactly where a user sees it: on the top
+     bar of an ordinary authenticated page, rendered by the shared document
+     builder from the count the middleware resolved for that request. There
+     is no count endpoint to interrogate instead. *)
+  let badge_probe request =
+    Dream.html
+      (Earde.Components.launch_app_page ~request ~user:"phnt_probe"
+         ~page_class:"launch-feed" ~title:"probe" ~content:"" ())
+
+  let badge_for ~url ~label user_id expected =
     let* response =
       run_get ~url
         ~session:[ ("user_id", string_of_int user_id) ]
-        ~target:"/api/unread-notifs" Earde.Handlers.unread_notifs_api
+        ~target:"/feed" badge_probe
     in
     let* body = Dream.body response in
-    Alcotest.(check string) (label ^ ": unread count") expected body;
+    (match expected with
+    | None ->
+        Alcotest.(check bool)
+          (label ^ ": no badge element at all")
+          false
+          (contains body "notif-badge");
+        Alcotest.(check bool)
+          (label ^ ": bell still rendered")
+          true
+          (contains body "class='bell'")
+    | Some count ->
+        Alcotest.(check bool)
+          (label ^ ": badge shows " ^ count)
+          true
+          (contains body
+             (Printf.sprintf "<span id='notif-badge' class='bell__count'>%s</span>"
+                count)));
     Lwt.return_unit
 
   let check_contains label body needle =
@@ -51580,7 +51857,7 @@ module Phnt = struct
         let* () =
           exec conn "top mod" Phrv.q_insert_moderator (m1, cid, "top_mod")
         in
-        let* () = unread_count_for ~url ~label:"before" m1 "0" in
+        let* () = badge_for ~url ~label:"before" m1 None in
         let* _rid =
           request_ok "request" conn ~user:owner ~slug:"phnt-uiu"
             ~community:cid
@@ -51588,11 +51865,11 @@ module Phnt = struct
         (* Created unread, counted by the badge, invisible to others. *)
         let* unread = find conn "unread flag" q_all_unread project in
         Alcotest.(check bool) "created unread" true unread;
-        let* () = unread_count_for ~url ~label:"recipient" m1 "1" in
-        let* () = unread_count_for ~url ~label:"non-recipient" owner "0" in
+        let* () = badge_for ~url ~label:"recipient" m1 (Some "1") in
+        let* () = badge_for ~url ~label:"non-recipient" owner None in
         (* The page load persists the read state. *)
         let* _, _body = notifications_page_for ~url ~label:"page" m1 in
-        let* () = unread_count_for ~url ~label:"after page" m1 "0" in
+        let* () = badge_for ~url ~label:"after page" m1 None in
         let* unread = find conn "read persisted" q_all_unread project in
         Alcotest.(check bool) "no longer unread" false unread;
         Lwt.return_unit)
@@ -54482,7 +54759,7 @@ module Flat_share_script = struct
         Alcotest.(check int) "200" 200 status;
         Alcotest.(check int) "exactly one copyPostLink definition" 1
           (ps_count body "function copyPostLink");
-        Alcotest.(check int) "one notification fetch" 1
+        Alcotest.(check int) "no notification fetch (badge is server-rendered)" 0
           (ps_count body "/api/unread-notifs");
         Alcotest.(check int) "confirm modal present" 1
           (ps_count body "function confirmModal");
@@ -54711,12 +54988,29 @@ module New_post_private_authz = struct
 
   let router = Dream.router [ Dream.get "/new-post" Earde.Handlers.new_post_page ]
 
+  (* One sql_pool for the whole suite. Nothing ever closes a Dream.sql_pool,
+     and its pool lives inside the middleware closure, so reusing that one
+     value is what shares the pool — a fresh [Dream.sql_pool url] per request
+     leaks a connection each time, and the whole gated run sits close enough
+     to Postgres max_connections that those leaks decide whether it passes.
+     Each pipeline still gets its own session store, so nothing else is
+     shared between requests. *)
+  let shared_sql_pool : Dream.middleware option ref = ref None
+
+  let sql_pool url =
+    match !shared_sql_pool with
+    | Some middleware -> middleware
+    | None ->
+        let middleware = Dream.sql_pool ~size:2 url in
+        shared_sql_pool := Some middleware;
+        middleware
+
   (* One GET against the real pipeline: sql_pool + memory_sessions + router,
      with the session fields written under the same session the handler
      reads. *)
   let run ~url ?(session = []) target =
     let pipeline =
-      Dream.sql_pool url @@ Dream.memory_sessions @@ fun req ->
+      sql_pool url @@ Dream.memory_sessions @@ fun req ->
       let* () =
         Lwt_list.iter_s
           (fun (k, v) -> Dream.set_session_field req k v)
@@ -55757,7 +56051,7 @@ module Final_create_page = struct
         ps_must_not page "fonts.googleapis";
         ps_must_not page "shell.css";
         ps_must_not page "create.css";
-        Alcotest.(check int) "exactly one notification fetch" 1
+        Alcotest.(check int) "no notification fetch (badge is server-rendered)" 0
           (ps_count page "/api/unread-notifs");
         Alcotest.(check int) "exactly one behavior script" 1
           (ps_count page "function confirmModal");
@@ -56066,7 +56360,7 @@ module Final_create_page = struct
         Alcotest.(check bool) "real form" true (contains body form_marker);
         Alcotest.(check bool) "joined rail tile" true
           (contains body "href='/c/ncl-joined/ch/general'");
-        Alcotest.(check int) "one notification fetch" 1
+        Alcotest.(check int) "no notification fetch (badge is server-rendered)" 0
           (ps_count body "/api/unread-notifs");
         Alcotest.(check bool) "no shell.css" false (contains body "shell.css");
         Alcotest.(check bool) "no create.css" false (contains body "create.css");
@@ -56357,11 +56651,12 @@ module Admin_launch = struct
         (* Serif head; KPI monitoring moved to PostHog — no dashboard link. *)
         ps_must page "<h1 class='page__title'>Administration</h1>";
         ps_must_not page "earde-hq-dashboard";
-        (* Exactly one one-shot notification fetch, one badge, one shared
-           behavior script (one confirmModal definition). *)
-        Alcotest.(check int) "one notification fetch" 1
+        (* No count fetch and no badge: the badge is server-rendered from
+           the request's unread count, and this document is rendered without
+           one. One shared behavior script (one confirmModal definition). *)
+        Alcotest.(check int) "no notification fetch" 0
           (ps_count page "fetch('/api/unread-notifs')");
-        Alcotest.(check int) "one notif badge" 1
+        Alcotest.(check int) "no notif badge" 0
           (ps_count page "id='notif-badge'");
         Alcotest.(check int) "one confirmModal definition" 1
           (ps_count page "function confirmModal");
@@ -57151,11 +57446,12 @@ module Legacy_post_fallback = struct
         in
         Alcotest.(check int) "exactly one copyPostLink definition" 1
           (ps_count page "function copyPostLink");
-        Alcotest.(check int) "exactly one notification fetch" 1
+        Alcotest.(check int) "no notification fetch" 0
           (ps_count page "fetch('/api/unread-notifs')");
         Alcotest.(check int) "one confirm modal definition" 1
           (ps_count page "function confirmModal");
-        ps_must page "id='notif-badge'";
+        (* Rendered with no request, so no count and no badge element. *)
+        ps_must_not page "id='notif-badge'";
         ps_must page "<form action='/vote' method='POST' class='m-0 p-0 flex'>";
         ps_must page "<form action='/vote-comment' method='POST' class='m-0 p-0'>";
         ps_must page "name=\"dream.csrf\"";
@@ -57474,7 +57770,7 @@ module Legacy_post_fallback = struct
           run ~url ~session:(session_of fx.author "legpost_author") target
         in
         Alcotest.(check int) "member 200" 200 status2;
-        Alcotest.(check int) "member: exactly one notification fetch" 1
+        Alcotest.(check int) "member: no notification fetch" 0
           (ps_count body2 "fetch('/api/unread-notifs')");
         Alcotest.(check int) "member: one copyPostLink" 1
           (ps_count body2 "function copyPostLink");
@@ -57873,11 +58169,16 @@ module Legacy_census = struct
            copyPostLink can never fork. *)
         Alcotest.(check int) "one copyPostLink definition" 1
           (count_in components "function copyPostLink");
-        (* Exactly one notification fetch call in the whole component library,
-           so a member document can never fire two and an anonymous one can
-           never inherit it. *)
-        Alcotest.(check int) "one unread-notifs fetch call" 1
-          (count_in components "fetch('/api/unread-notifs')"))
+        (* No count fetch anywhere in the component library: the badge is
+           server-rendered. The three document builders that carry a top bar
+           each call the one shared renderer, so no builder can hard-code a
+           badge (or a zero) of its own. *)
+        Alcotest.(check int) "no unread-notifs fetch call" 0
+          (count_in components "unread-notifs");
+        Alcotest.(check int) "no hard-coded badge markup" 0
+          (count_in components "bell__count");
+        Alcotest.(check int) "three shared badge render calls" 3
+          (count_in components "Notification_badge.badge_html"))
 
   let suite =
     [ hq_route_case; dead_wrapper_case; deleted_css_case; surviving_css_case
@@ -58151,6 +58452,5708 @@ module Launch_cta = struct
   let suite =
     [ shape_case; no_external_asset_case; anonymous_case; chromeless_case
     ; bring_untouched_case; single_definition_case ]
+end
+
+(* ===================== community connections (issue #30) =====================
+   The mutual-connection storage/domain slice: the pure lifecycle domain, the
+   two new tables' constraints, and the transactional store with its
+   append-only audit trail. Pure cases first, then the database-gated ones. *)
+
+(* The pure domain: closed status vocabulary, the three legal transitions and
+   every illegal one, note canonicalization, the self-connection rule, and the
+   symmetry helpers an accepted connection is read through. DB-free. *)
+module Ccon = struct
+  module Cc = Earde.Community_connections
+
+  let error_str : Cc.error -> string = function
+    | Cc.Invalid_community_id -> "Invalid_community_id"
+    | Cc.Self_connection -> "Self_connection"
+    | Cc.Invalid_request_note -> "Invalid_request_note"
+    | Cc.Invalid_transition -> "Invalid_transition"
+
+  let status_str = Cc.string_of_status
+
+  let make ?note ?(requester = 11) ?(recipient = 22) () =
+    Cc.create_pending ~requester_community_id:requester
+      ~recipient_community_id:recipient ~request_note:note
+
+  let ok label = function
+    | Ok v -> v
+    | Error e -> Alcotest.failf "%s: unexpected %s" label (error_str e)
+
+  let pending ?note () = ok "pending fixture" (make ?note ())
+
+  let value_of_status status =
+    let p = pending () in
+    match status with
+    | Cc.Pending -> p
+    | Cc.Accepted -> ok "accept" (Cc.apply p Cc.Accept)
+    | Cc.Rejected -> ok "reject" (Cc.apply p Cc.Reject)
+    | Cc.Removed ->
+        ok "remove" (Cc.apply (ok "accept" (Cc.apply p Cc.Accept)) Cc.Remove)
+
+  let all_statuses = [ Cc.Pending; Cc.Accepted; Cc.Rejected; Cc.Removed ]
+  let all_actions = [ Cc.Accept; Cc.Reject; Cc.Remove ]
+
+  let action_str = function
+    | Cc.Accept -> "accept"
+    | Cc.Reject -> "reject"
+    | Cc.Remove -> "remove"
+
+  (* === status vocabulary === *)
+
+  let status_round_trip_case =
+    Alcotest.test_case "status: exact database spellings round-trip" `Quick
+      (fun () ->
+        Alcotest.(check (list string))
+          "serialized vocabulary"
+          [ "pending"; "accepted"; "rejected"; "removed" ]
+          (List.map status_str all_statuses);
+        List.iter
+          (fun s ->
+            match Cc.status_of_string (status_str s) with
+            | Some parsed ->
+                Alcotest.(check string)
+                  ("round-trip " ^ status_str s)
+                  (status_str s) (status_str parsed)
+            | None ->
+                Alcotest.failf "round-trip %s: rejected its own spelling"
+                  (status_str s))
+          all_statuses)
+
+  let status_drift_case =
+    Alcotest.test_case "status: unknown, padded and case-drifted values reject"
+      `Quick (fun () ->
+        List.iter
+          (fun raw ->
+            match Cc.status_of_string raw with
+            | None -> ()
+            | Some s ->
+                Alcotest.failf "%S accepted as %s" raw (status_str s))
+          [ ""; " "; "Pending"; "PENDING"; "pending "; " pending"; "\tpending"
+          ; "pending\n"; "pendinG"; "Accepted"; "ACCEPTED"; " accepted "
+          ; "Rejected"; "REJECTED"; "rejected\r"; "Removed"; "REMOVED"
+          ; "remove"; "removing"; "deleted"; "cancelled"; "expired"; "active"
+          ; "connected"; "mutual"; "approved"; "declined"; "null"; "0"; "1" ])
+
+  (* === transitions === *)
+
+  let legal_transitions_case =
+    Alcotest.test_case "transitions: exactly the three legal ones succeed"
+      `Quick (fun () ->
+        let check label from action expected =
+          match Cc.apply (value_of_status from) action with
+          | Ok next ->
+              Alcotest.(check string) label (status_str expected)
+                (status_str (Cc.status next))
+          | Error e -> Alcotest.failf "%s: unexpected %s" label (error_str e)
+        in
+        check "pending accepts" Cc.Pending Cc.Accept Cc.Accepted;
+        check "pending rejects" Cc.Pending Cc.Reject Cc.Rejected;
+        check "accepted removes" Cc.Accepted Cc.Remove Cc.Removed)
+
+  let illegal_transitions_case =
+    Alcotest.test_case "transitions: every other status/action pair refuses"
+      `Quick (fun () ->
+        let legal = function
+          | Cc.Pending, Cc.Accept | Cc.Pending, Cc.Reject
+          | Cc.Accepted, Cc.Remove ->
+              true
+          | _ -> false
+        in
+        List.iter
+          (fun from ->
+            List.iter
+              (fun action ->
+                let label =
+                  Printf.sprintf "%s + %s" (status_str from) (action_str action)
+                in
+                match (Cc.apply (value_of_status from) action, legal (from, action))
+                with
+                | Ok _, true -> ()
+                | Error Cc.Invalid_transition, false -> ()
+                | Ok next, false ->
+                    Alcotest.failf "%s: illegally reached %s" label
+                      (status_str (Cc.status next))
+                | Error e, true ->
+                    Alcotest.failf "%s: legal pair refused with %s" label
+                      (error_str e)
+                | Error e, false ->
+                    Alcotest.failf "%s: wrong error %s" label (error_str e))
+              all_actions)
+          all_statuses)
+
+  let terminal_case =
+    Alcotest.test_case "transitions: rejected and removed are terminal" `Quick
+      (fun () ->
+        List.iter
+          (fun terminal ->
+            List.iter
+              (fun action ->
+                match Cc.apply (value_of_status terminal) action with
+                | Error Cc.Invalid_transition -> ()
+                | Ok _ ->
+                    Alcotest.failf "%s reopened by %s" (status_str terminal)
+                      (action_str action)
+                | Error e ->
+                    Alcotest.failf "%s + %s: %s" (status_str terminal)
+                      (action_str action) (error_str e))
+              all_actions)
+          [ Cc.Rejected; Cc.Removed ])
+
+  let note_survives_transitions_case =
+    Alcotest.test_case "transitions: pair and note carry through unchanged"
+      `Quick (fun () ->
+        let value = pending ~note:"  keep me\r\nverbatim  " () in
+        let accepted = ok "accept" (Cc.apply value Cc.Accept) in
+        let removed = ok "remove" (Cc.apply accepted Cc.Remove) in
+        List.iter
+          (fun (label, v) ->
+            Alcotest.(check (option string))
+              (label ^ ": note")
+              (Some "keep me\nverbatim") (Cc.request_note v);
+            Alcotest.(check int)
+              (label ^ ": requester")
+              11
+              (Cc.requester_community_id v);
+            Alcotest.(check int)
+              (label ^ ": recipient")
+              22
+              (Cc.recipient_community_id v))
+          [ ("pending", value); ("accepted", accepted); ("removed", removed) ])
+
+  (* === the pair === *)
+
+  let self_connection_case =
+    Alcotest.test_case "pair: a community can never connect to itself" `Quick
+      (fun () ->
+        List.iter
+          (fun id ->
+            match make ~requester:id ~recipient:id () with
+            | Error Cc.Self_connection -> ()
+            | Error e ->
+                Alcotest.failf "self %d: wrong error %s" id (error_str e)
+            | Ok _ -> Alcotest.failf "self %d accepted" id)
+          [ 1; 7; 4242 ])
+
+  let invalid_community_id_case =
+    Alcotest.test_case "pair: non-positive community ids reject first" `Quick
+      (fun () ->
+        List.iter
+          (fun (requester, recipient) ->
+            match make ~requester ~recipient () with
+            | Error Cc.Invalid_community_id -> ()
+            | Error e ->
+                Alcotest.failf "(%d,%d): wrong error %s" requester recipient
+                  (error_str e)
+            | Ok _ -> Alcotest.failf "(%d,%d) accepted" requester recipient)
+          [ (0, 5); (5, 0); (-1, 5); (5, -1); (0, 0); (-3, -3); (min_int, 1) ])
+
+  let symmetry_case =
+    Alcotest.test_case "pair: symmetry helpers agree in both directions" `Quick
+      (fun () ->
+        let forward = ok "forward" (make ~requester:3 ~recipient:9 ()) in
+        let mirror = ok "mirror" (make ~requester:9 ~recipient:3 ()) in
+        let pair_str v =
+          let a, b = Cc.unordered_pair v in
+          Printf.sprintf "%d-%d" a b
+        in
+        Alcotest.(check string) "forward pair ascending" "3-9" (pair_str forward);
+        Alcotest.(check string) "mirror pair ascending" "3-9" (pair_str mirror);
+        List.iter
+          (fun (label, v) ->
+            Alcotest.(check bool) (label ^ ": involves 3") true
+              (Cc.involves v ~community_id:3);
+            Alcotest.(check bool) (label ^ ": involves 9") true
+              (Cc.involves v ~community_id:9);
+            Alcotest.(check bool) (label ^ ": ignores a stranger") false
+              (Cc.involves v ~community_id:4);
+            Alcotest.(check (option int)) (label ^ ": counterpart of 3")
+              (Some 9)
+              (Cc.counterpart v ~community_id:3);
+            Alcotest.(check (option int)) (label ^ ": counterpart of 9")
+              (Some 3)
+              (Cc.counterpart v ~community_id:9);
+            Alcotest.(check (option int)) (label ^ ": stranger has none") None
+              (Cc.counterpart v ~community_id:4))
+          [ ("forward", forward); ("mirror", mirror) ];
+        (* Direction survives only in the provenance accessors. *)
+        Alcotest.(check int) "forward requester" 3
+          (Cc.requester_community_id forward);
+        Alcotest.(check int) "forward recipient" 9
+          (Cc.recipient_community_id forward);
+        Alcotest.(check int) "mirror requester" 9
+          (Cc.requester_community_id mirror);
+        Alcotest.(check int) "mirror recipient" 3
+          (Cc.recipient_community_id mirror))
+
+  (* === note canonicalization === *)
+
+  let note_of label raw =
+    match make ~note:raw () with
+    | Ok v -> Cc.request_note v
+    | Error e -> Alcotest.failf "%s: unexpected %s" label (error_str e)
+
+  let note_canonicalization_case =
+    Alcotest.test_case "note: blank collapses, edges trim, line endings unify"
+      `Quick (fun () ->
+        Alcotest.(check (option string))
+          "absent stays absent" None
+          (match make () with
+          | Ok v -> Cc.request_note v
+          | Error e -> Alcotest.failf "absent: %s" (error_str e));
+        List.iter
+          (fun raw ->
+            Alcotest.(check (option string))
+              (Printf.sprintf "blank %S collapses" raw)
+              None (note_of "blank" raw))
+          [ ""; " "; "   "; "\t"; "\n"; "\r\n"; " \t\r\n\x0b\x0c " ];
+        Alcotest.(check (option string))
+          "outer whitespace trimmed" (Some "hello")
+          (note_of "trim" "  \t\n hello \n\t  ");
+        Alcotest.(check (option string))
+          "CRLF becomes LF" (Some "a\nb") (note_of "crlf" "a\r\nb");
+        Alcotest.(check (option string))
+          "lone CR becomes LF" (Some "a\nb") (note_of "cr" "a\rb");
+        Alcotest.(check (option string))
+          "internal spacing preserved byte-for-byte"
+          (Some "one  two\n\n\tthree — quatre ✓")
+          (note_of "inner" "\n one  two\n\n\tthree — quatre ✓  \n");
+        Alcotest.(check (option string))
+          "no markdown or HTML parsing"
+          (Some "<b>**x**</b> & <script>")
+          (note_of "markup" " <b>**x**</b> & <script> "))
+
+  let note_rejection_case =
+    Alcotest.test_case "note: control bytes and invalid UTF-8 reject" `Quick
+      (fun () ->
+        List.iter
+          (fun (label, raw) ->
+            match make ~note:raw () with
+            | Error Cc.Invalid_request_note -> ()
+            | Error e -> Alcotest.failf "%s: wrong error %s" label (error_str e)
+            | Ok _ -> Alcotest.failf "%s accepted" label)
+          [ ("NUL", "a\x00b"); ("SOH", "a\x01b"); ("ESC", "a\x1bb")
+          ; ("BEL", "a\x07b"); ("DEL", "a\x7fb"); ("vertical tab", "a\x0bb")
+          ; ("form feed", "a\x0cb"); ("lone continuation", "a\x80b")
+          ; ("truncated sequence", "a\xc3"); ("bare FF", "a\xffb")
+          ; ("surrogate", "a\xed\xa0\x80b"); ("overlong", "a\xc0\xafb") ];
+        (* Tab and LF are content, not control noise. *)
+        Alcotest.(check (option string))
+          "tab and LF survive inside" (Some "a\tb\nc")
+          (note_of "inner controls" "a\tb\nc"))
+
+  let note_length_case =
+    Alcotest.test_case "note: 2000 scalars pass, 2001 reject, nothing truncates"
+      `Quick (fun () ->
+        let repeat s n = String.concat "" (List.init n (fun _ -> s)) in
+        let ascii_max = repeat "x" 2000 in
+        Alcotest.(check (option string))
+          "2000 ASCII scalars accepted whole" (Some ascii_max)
+          (note_of "ascii max" ascii_max);
+        (* Counted per Unicode scalar, never per byte: 2000 two-byte scalars
+           are 4000 bytes and must still pass. *)
+        let wide_max = repeat "é" 2000 in
+        Alcotest.(check int) "wide fixture really is 4000 bytes" 4000
+          (String.length wide_max);
+        Alcotest.(check (option string))
+          "2000 wide scalars accepted whole" (Some wide_max)
+          (note_of "wide max" wide_max);
+        List.iter
+          (fun (label, raw) ->
+            match make ~note:raw () with
+            | Error Cc.Invalid_request_note -> ()
+            | Error e -> Alcotest.failf "%s: wrong error %s" label (error_str e)
+            | Ok v ->
+                Alcotest.failf "%s: silently kept %d bytes" label
+                  (match Cc.request_note v with
+                  | Some s -> String.length s
+                  | None -> 0))
+          [ ("2001 ASCII", repeat "x" 2001); ("2001 wide", repeat "é" 2001)
+          ; ("far over", repeat "x" 12000) ];
+        (* Trimming happens before counting, so padding cannot push a legal
+           note over the edge. *)
+        Alcotest.(check (option string))
+          "outer padding does not count" (Some ascii_max)
+          (note_of "padded max" ("   " ^ ascii_max ^ "\n\n")))
+
+  let note_precedence_case =
+    Alcotest.test_case "note: pair validation precedes note validation" `Quick
+      (fun () ->
+        match make ~requester:5 ~recipient:5 ~note:"a\x00b" () with
+        | Error Cc.Self_connection -> ()
+        | Error e -> Alcotest.failf "wrong error %s" (error_str e)
+        | Ok _ -> Alcotest.fail "accepted a self-connection")
+
+  let suite =
+    [ status_round_trip_case; status_drift_case; legal_transitions_case
+    ; illegal_transitions_case; terminal_case; note_survives_transitions_case
+    ; self_connection_case; invalid_community_id_case; symmetry_case
+    ; note_canonicalization_case; note_rejection_case; note_length_case
+    ; note_precedence_case ]
+end
+
+(* The two new tables' own constraints (migration 20260731120000): the shape
+   CHECKs, the unordered-pair partial unique index, the foreign-key deletion
+   behavior, and the append-only audit table. Raw rows throughout — the store
+   is deliberately not involved, because the database is the subject.
+   Database-gated on EARDE_TEST_DATABASE_URL. *)
+module Ccon_schema = struct
+  let ( let* ) = Lwt.bind
+
+  open Caqti_request.Infix
+
+  let or_fail = Pod_store.or_fail
+  let reject = Pod_schema.reject
+  let insert_user = Pod_store.insert_user
+  let exec = Pod_read.exec
+  let find = Pod_read.find
+  let collect = Pod_read.collect
+  let insert_community = Phcv.insert_community
+  let contains haystack needle = Cprj_schema.contains haystack ~needle
+
+  (* Audit events RESTRICT-protect both their connection and both communities,
+     so they go first; connections then fall away before the communities they
+     reference. *)
+  let q_cleanup =
+    List.map
+      (fun sql -> (Caqti_type.unit ->. Caqti_type.unit) sql)
+      [ "DELETE FROM community_connection_audit_events \
+         WHERE requester_community_id IN \
+                 (SELECT id FROM communities WHERE slug LIKE 'ccns-%') \
+            OR recipient_community_id IN \
+                 (SELECT id FROM communities WHERE slug LIKE 'ccns-%')"
+      ; "DELETE FROM community_connections \
+         WHERE requester_community_id IN \
+                 (SELECT id FROM communities WHERE slug LIKE 'ccns-%') \
+            OR recipient_community_id IN \
+                 (SELECT id FROM communities WHERE slug LIKE 'ccns-%')"
+      ; "DELETE FROM communities WHERE slug LIKE 'ccns-%'"
+      ; "DELETE FROM users WHERE username LIKE 'ccns_%'"
+      ]
+
+  let db_case name f =
+    Alcotest.test_case name `Quick (fun () ->
+        match Sys.getenv_opt "EARDE_TEST_DATABASE_URL" with
+        | None | Some "" -> Alcotest.skip ()
+        | Some url ->
+            Lwt_main.run
+              (let* conn = Caqti_lwt_unix.connect (Uri.of_string url) in
+               let* conn = or_fail "connect" conn in
+               let (module C : Caqti_lwt.CONNECTION) = conn in
+               let cleanup () =
+                 Lwt_list.iter_s
+                   (fun q ->
+                     let* r = C.exec q () in
+                     let* _ = or_fail "cleanup" r in
+                     Lwt.return_unit)
+                   q_cleanup
+               in
+               let* () = cleanup () in
+               Lwt.finalize
+                 (fun () -> f conn)
+                 (fun () ->
+                   Lwt.finalize cleanup (fun () -> C.disconnect ()))))
+
+  (* Raw row fixtures. Every interpolated fragment is either a fixture row id
+     produced in this file or a literal written here — no external or user
+     value reaches the string, and the statements exist only to put the
+     table's own constraints under test. *)
+  let stmt sql = (Caqti_type.unit ->. Caqti_type.unit) sql
+
+  let try_stmt conn sql =
+    let (module C : Caqti_lwt.CONNECTION) = conn in
+    C.exec (stmt sql) ()
+
+  let row_sql ~requester ~recipient ?(status = "'pending'") ?(note = "NULL")
+      ?(requested_by = "NULL") ?(reviewed_by = "NULL") ?(removed_by = "NULL")
+      ?(created = "NOW()") ?(updated = "NOW()") ?(reviewed = "NULL")
+      ?(removed = "NULL") () =
+    Printf.sprintf
+      "INSERT INTO community_connections \
+         (requester_community_id, recipient_community_id, status, \
+          request_note, requested_by_user_id, reviewed_by_user_id, \
+          removed_by_user_id, created_at, updated_at, reviewed_at, \
+          removed_at) \
+       VALUES (%d, %d, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
+      requester recipient status note requested_by reviewed_by removed_by
+      created updated reviewed removed
+
+  let accepts conn label sql =
+    let* r = try_stmt conn sql in
+    let* () = or_fail label r in
+    Lwt.return_unit
+
+  let refuses conn label sql =
+    let* r = try_stmt conn sql in
+    reject label r
+
+  let q_count_pair =
+    (Caqti_type.(t2 int int) ->! Caqti_type.int)
+    "SELECT COUNT(*) FROM community_connections \
+     WHERE LEAST(requester_community_id, recipient_community_id) \
+           = LEAST($1, $2) \
+       AND GREATEST(requester_community_id, recipient_community_id) \
+           = GREATEST($1, $2)"
+
+  let q_actors =
+    (Caqti_type.int64
+     ->! Caqti_type.(t3 (option int) (option int) (option int)))
+    "SELECT requested_by_user_id, reviewed_by_user_id, removed_by_user_id \
+     FROM community_connections WHERE id = $1"
+
+  let q_sole_id =
+    (Caqti_type.(t2 int int) ->! Caqti_type.int64)
+    "SELECT id FROM community_connections \
+     WHERE LEAST(requester_community_id, recipient_community_id) \
+           = LEAST($1, $2) \
+       AND GREATEST(requester_community_id, recipient_community_id) \
+           = GREATEST($1, $2) \
+     ORDER BY id LIMIT 1"
+
+  let q_absent_community_id =
+    (Caqti_type.unit ->! Caqti_type.int)
+    "SELECT COALESCE(MAX(id), 0) + 1000000 FROM communities"
+
+  let q_indexdefs =
+    (Caqti_type.string ->* Caqti_type.string)
+    "SELECT indexdef FROM pg_indexes \
+     WHERE schemaname = 'public' AND tablename = $1 ORDER BY indexname"
+
+  let q_fk_deltypes =
+    (Caqti_type.string ->* Caqti_type.(t2 string string))
+    "SELECT conname, confdeltype::text FROM pg_constraint \
+     WHERE conrelid = $1::regclass AND contype = 'f' ORDER BY conname"
+
+  let q_text_columns =
+    (Caqti_type.unit ->* Caqti_type.string)
+    "SELECT column_name FROM information_schema.columns \
+     WHERE table_schema = 'public' \
+       AND table_name = 'community_connection_audit_events' \
+       AND data_type NOT IN ('integer', 'bigint', \
+                             'timestamp with time zone') \
+     ORDER BY column_name"
+
+  let q_delete_user =
+    (Caqti_type.int ->. Caqti_type.unit) "DELETE FROM users WHERE id = $1"
+
+  let q_delete_community =
+    (Caqti_type.int ->. Caqti_type.unit)
+    "DELETE FROM communities WHERE id = $1"
+
+  let q_insert_audit =
+    (Caqti_type.(t2 (t2 string (option int)) (t3 int64 int int))
+     ->! Caqti_type.int64)
+    "INSERT INTO community_connection_audit_events \
+       (action, actor_user_id, connection_id, requester_community_id, \
+        recipient_community_id) \
+     VALUES ($1, $2, $3, $4, $5) RETURNING id"
+
+  let q_audit_actor =
+    (Caqti_type.int64 ->! Caqti_type.(option int))
+    "SELECT actor_user_id FROM community_connection_audit_events \
+     WHERE id = $1"
+
+  let q_audit_count =
+    (Caqti_type.int64 ->! Caqti_type.int)
+    "SELECT COUNT(*) FROM community_connection_audit_events \
+     WHERE connection_id = $1"
+
+  let two_communities conn tag =
+    let* a = insert_community conn ("ccns-" ^ tag ^ "-a") in
+    let* b = insert_community conn ("ccns-" ^ tag ^ "-b") in
+    Lwt.return (a, b)
+
+  (* === row shape === *)
+
+  let valid_shapes_case =
+    db_case "schema: each legal status shape is storable" (fun conn ->
+        let* a, b = two_communities conn "shapes" in
+        let* uid = insert_user conn "ccns_actor" in
+        let actor = string_of_int uid in
+        let* () =
+          accepts conn "pending" (row_sql ~requester:a ~recipient:b
+                                    ~requested_by:actor ())
+        in
+        (* The active slot is per unordered pair, so each further shape goes
+           on its own pair. *)
+        let* c = insert_community conn "ccns-shapes-c" in
+        let* () =
+          accepts conn "accepted"
+            (row_sql ~requester:a ~recipient:c ~status:"'accepted'"
+               ~requested_by:actor ~reviewed_by:actor ~reviewed:"NOW()" ())
+        in
+        let* d = insert_community conn "ccns-shapes-d" in
+        let* () =
+          accepts conn "rejected"
+            (row_sql ~requester:a ~recipient:d ~status:"'rejected'"
+               ~requested_by:actor ~reviewed_by:actor ~reviewed:"NOW()" ())
+        in
+        let* () =
+          accepts conn "removed"
+            (row_sql ~requester:b ~recipient:c ~status:"'removed'"
+               ~requested_by:actor ~reviewed_by:actor ~removed_by:actor
+               ~reviewed:"NOW()" ~removed:"NOW()" ())
+        in
+        let* n = find conn "pair count" q_count_pair (a, b) in
+        Alcotest.(check int) "one row for the first pair" 1 n;
+        Lwt.return_unit)
+
+  let self_connection_case =
+    db_case "schema: a community cannot connect to itself" (fun conn ->
+        let* a, _ = two_communities conn "self" in
+        refuses conn "self pair" (row_sql ~requester:a ~recipient:a ()))
+
+  let status_vocabulary_case =
+    db_case "schema: only the four canonical statuses are storable"
+      (fun conn ->
+        let* a, b = two_communities conn "vocab" in
+        Lwt_list.iter_s
+          (fun raw ->
+            refuses conn ("status " ^ raw)
+              (row_sql ~requester:a ~recipient:b
+                 ~status:(Printf.sprintf "'%s'" raw) ~reviewed:"NOW()" ()))
+          [ "Pending"; "PENDING"; "active"; "connected"; "cancelled"; "" ])
+
+  let note_length_case =
+    db_case "schema: request_note is capped at 2000 characters" (fun conn ->
+        let* a, b = two_communities conn "note" in
+        let* () =
+          accepts conn "2000 characters"
+            (row_sql ~requester:a ~recipient:b ~note:"repeat('x', 2000)" ())
+        in
+        let* c = insert_community conn "ccns-note-c" in
+        let* () =
+          refuses conn "2001 characters"
+            (row_sql ~requester:a ~recipient:c ~note:"repeat('x', 2001)" ())
+        in
+        (* Counted per character, not per byte, exactly like the domain. *)
+        refuses conn "2001 wide characters"
+          (row_sql ~requester:a ~recipient:c ~note:"repeat('é', 2001)" ()))
+
+  let timestamp_order_case =
+    db_case "schema: no timestamp may precede the one it follows" (fun conn ->
+        let* a, b = two_communities conn "clock" in
+        let* () =
+          refuses conn "updated before created"
+            (row_sql ~requester:a ~recipient:b
+               ~updated:"NOW() - INTERVAL '1 second'" ())
+        in
+        let* () =
+          refuses conn "reviewed before created"
+            (row_sql ~requester:a ~recipient:b ~status:"'accepted'"
+               ~reviewed:"NOW() - INTERVAL '1 second'" ())
+        in
+        let* () =
+          refuses conn "removed before created"
+            (row_sql ~requester:a ~recipient:b ~status:"'removed'"
+               ~reviewed:"NOW()" ~removed:"NOW() - INTERVAL '1 second'" ())
+        in
+        refuses conn "removed before reviewed"
+          (row_sql ~requester:a ~recipient:b ~status:"'removed'"
+             ~reviewed:"NOW() + INTERVAL '10 seconds'" ~removed:"NOW()" ()))
+
+  let pending_shape_case =
+    db_case "schema: a pending row carries no review or removal" (fun conn ->
+        let* a, b = two_communities conn "pshape" in
+        let* uid = insert_user conn "ccns_pshape" in
+        let actor = string_of_int uid in
+        let* () =
+          refuses conn "pending with reviewed_at"
+            (row_sql ~requester:a ~recipient:b ~reviewed:"NOW()" ())
+        in
+        let* () =
+          refuses conn "pending with removed_at"
+            (row_sql ~requester:a ~recipient:b ~removed:"NOW()" ())
+        in
+        let* () =
+          refuses conn "pending with a reviewer"
+            (row_sql ~requester:a ~recipient:b ~reviewed_by:actor ())
+        in
+        refuses conn "pending with a remover"
+          (row_sql ~requester:a ~recipient:b ~removed_by:actor ()))
+
+  let reviewed_shape_case =
+    db_case "schema: accepted and rejected rows are reviewed, never removed"
+      (fun conn ->
+        let* a, b = two_communities conn "rshape" in
+        let* uid = insert_user conn "ccns_rshape" in
+        let actor = string_of_int uid in
+        Lwt_list.iter_s
+          (fun status ->
+            let quoted = Printf.sprintf "'%s'" status in
+            let* () =
+              refuses conn (status ^ " without reviewed_at")
+                (row_sql ~requester:a ~recipient:b ~status:quoted ())
+            in
+            let* () =
+              refuses conn (status ^ " with removed_at")
+                (row_sql ~requester:a ~recipient:b ~status:quoted
+                   ~reviewed:"NOW()" ~removed:"NOW()" ())
+            in
+            refuses conn (status ^ " with a remover")
+              (row_sql ~requester:a ~recipient:b ~status:quoted
+                 ~reviewed:"NOW()" ~removed_by:actor ()))
+          [ "accepted"; "rejected" ])
+
+  let removed_shape_case =
+    db_case "schema: a removed row keeps the review that preceded it"
+      (fun conn ->
+        let* a, b = two_communities conn "xshape" in
+        let* () =
+          refuses conn "removed without removed_at"
+            (row_sql ~requester:a ~recipient:b ~status:"'removed'"
+               ~reviewed:"NOW()" ())
+        in
+        refuses conn "removed without reviewed_at"
+          (row_sql ~requester:a ~recipient:b ~status:"'removed'"
+             ~removed:"NOW()" ()))
+
+  let nullable_actors_case =
+    db_case "schema: every actor column is optional and survives deletion"
+      (fun conn ->
+        let* a, b = two_communities conn "actors" in
+        let* uid = insert_user conn "ccns_gone" in
+        let actor = string_of_int uid in
+        let* () =
+          accepts conn "all actors present"
+            (row_sql ~requester:a ~recipient:b ~status:"'removed'"
+               ~requested_by:actor ~reviewed_by:actor ~removed_by:actor
+               ~reviewed:"NOW()" ~removed:"NOW()" ())
+        in
+        let* id = find conn "row id" q_sole_id (a, b) in
+        let* () = exec conn "delete actor" q_delete_user uid in
+        let* requested, reviewed, removed = find conn "actors" q_actors id in
+        Alcotest.(check (option int)) "requester nulled" None requested;
+        Alcotest.(check (option int)) "reviewer nulled" None reviewed;
+        Alcotest.(check (option int)) "remover nulled" None removed;
+        let* n = find conn "row survives" q_count_pair (a, b) in
+        Alcotest.(check int) "the connection itself survives" 1 n;
+        (* Actor columns are NULL-able from the start, so a row can also be
+           written with no actor at all. *)
+        let* c = insert_community conn "ccns-actors-c" in
+        accepts conn "no actor at all" (row_sql ~requester:a ~recipient:c ()))
+
+  let missing_community_case =
+    db_case "schema: both sides must reference a real community" (fun conn ->
+        let* a, _ = two_communities conn "fk" in
+        let* absent = find conn "absent id" q_absent_community_id () in
+        let* () =
+          refuses conn "absent requester"
+            (row_sql ~requester:absent ~recipient:a ())
+        in
+        refuses conn "absent recipient"
+          (row_sql ~requester:a ~recipient:absent ()))
+
+  (* === the unordered active pair === *)
+
+  let one_active_pair_case =
+    db_case "schema: one active connection per unordered pair" (fun conn ->
+        let* a, b = two_communities conn "slot" in
+        let* () = accepts conn "first pending" (row_sql ~requester:a ~recipient:b ()) in
+        let* () =
+          refuses conn "second pending, same direction"
+            (row_sql ~requester:a ~recipient:b ())
+        in
+        let* () =
+          refuses conn "second pending, reversed direction"
+            (row_sql ~requester:b ~recipient:a ())
+        in
+        let* () =
+          refuses conn "accepted alongside pending"
+            (row_sql ~requester:a ~recipient:b ~status:"'accepted'"
+               ~reviewed:"NOW()" ())
+        in
+        refuses conn "accepted alongside pending, reversed"
+          (row_sql ~requester:b ~recipient:a ~status:"'accepted'"
+             ~reviewed:"NOW()" ()))
+
+  let history_frees_slot_case =
+    db_case "schema: rejected and removed history never occupies the slot"
+      (fun conn ->
+        let* a, b = two_communities conn "history" in
+        let* () =
+          accepts conn "rejected history"
+            (row_sql ~requester:a ~recipient:b ~status:"'rejected'"
+               ~reviewed:"NOW()" ())
+        in
+        let* () =
+          accepts conn "removed history, reversed direction"
+            (row_sql ~requester:b ~recipient:a ~status:"'removed'"
+               ~reviewed:"NOW()" ~removed:"NOW()" ())
+        in
+        let* () =
+          accepts conn "a second removed history row"
+            (row_sql ~requester:a ~recipient:b ~status:"'removed'"
+               ~reviewed:"NOW()" ~removed:"NOW()" ())
+        in
+        let* () =
+          accepts conn "a fresh request afterwards"
+            (row_sql ~requester:b ~recipient:a ())
+        in
+        let* n = find conn "history retained" q_count_pair (a, b) in
+        Alcotest.(check int) "all four rows kept" 4 n;
+        refuses conn "but only one active at a time"
+          (row_sql ~requester:a ~recipient:b ()))
+
+  let index_shape_case =
+    db_case "schema: the declared indexes exist with the intended shape"
+      (fun conn ->
+        let* defs = collect conn "indexes" q_indexdefs "community_connections" in
+        Alcotest.(check int) "one primary key plus four indexes" 5
+          (List.length defs);
+        let joined = String.concat "\n" defs in
+        let unique =
+          List.filter
+            (fun d ->
+              contains d "UNIQUE" && contains d "LEAST" && contains d "GREATEST")
+            defs
+        in
+        (match unique with
+        | [ d ] ->
+            Alcotest.(check bool) "active-pair index is partial" true
+              (contains d "WHERE" && contains d "pending"
+             && contains d "accepted")
+        | l ->
+            Alcotest.failf "expected one unordered-pair unique index, found %d"
+              (List.length l));
+        Alcotest.(check bool) "an incoming-queue index exists" true
+          (contains joined "recipient_community_id, status, created_at");
+        Alcotest.(check bool) "an outgoing-queue index exists" true
+          (contains joined "requester_community_id, status, created_at");
+        let* audit_defs =
+          collect conn "audit indexes" q_indexdefs
+            "community_connection_audit_events"
+        in
+        Alcotest.(check int) "one primary key plus four audit indexes" 5
+          (List.length audit_defs);
+        Lwt.return_unit)
+
+  let deletion_behavior_case =
+    db_case "schema: foreign keys cascade the pair and null the actors"
+      (fun conn ->
+        let* rows = collect conn "connection fks" q_fk_deltypes
+            "community_connections"
+        in
+        let of_kind kind =
+          List.filter (fun (_, d) -> d = kind) rows |> List.length
+        in
+        Alcotest.(check int) "both communities cascade" 2 (of_kind "c");
+        Alcotest.(check int) "all three actors are set null" 3 (of_kind "n");
+        Alcotest.(check int) "no other deletion behavior" 5 (List.length rows);
+        let* audit_rows =
+          collect conn "audit fks" q_fk_deltypes
+            "community_connection_audit_events"
+        in
+        let audit_of_kind kind =
+          List.filter (fun (_, d) -> d = kind) audit_rows |> List.length
+        in
+        Alcotest.(check int) "the audit actor is set null" 1
+          (audit_of_kind "n");
+        Alcotest.(check int) "every audit subject is protected" 3
+          (audit_of_kind "a");
+        Alcotest.(check int) "no other audit deletion behavior" 4
+          (List.length audit_rows);
+        Lwt.return_unit)
+
+  (* === the audit table === *)
+
+  let audit_vocabulary_case =
+    db_case "schema: the audit action vocabulary is closed" (fun conn ->
+        let* a, b = two_communities conn "audit" in
+        let* () = accepts conn "subject row" (row_sql ~requester:a ~recipient:b ()) in
+        let* id = find conn "row id" q_sole_id (a, b) in
+        let (module C : Caqti_lwt.CONNECTION) = conn in
+        let* () =
+          Lwt_list.iter_s
+            (fun action ->
+              let* r = C.find q_insert_audit ((action, None), (id, a, b)) in
+              let* _ = or_fail ("audit " ^ action) r in
+              Lwt.return_unit)
+            [ "community_connection_requested"; "community_connection_accepted"
+            ; "community_connection_rejected"; "community_connection_removed" ]
+        in
+        let* n = find conn "audit count" q_audit_count id in
+        Alcotest.(check int) "four events stored" 4 n;
+        Lwt_list.iter_s
+          (fun action ->
+            let* r = C.find q_insert_audit ((action, None), (id, a, b)) in
+            reject ("audit rejects " ^ action) r)
+          [ "connection_requested"; "community_connection_created"
+          ; "Community_Connection_Accepted"; "community_connection_removed " ])
+
+  let audit_privacy_case =
+    db_case "schema: the audit table stores no prose beyond its action"
+      (fun conn ->
+        let* columns = collect conn "text columns" q_text_columns () in
+        Alcotest.(check (list string))
+          "the only non-numeric column is the closed action" [ "action" ]
+          columns;
+        Lwt.return_unit)
+
+  let audit_survives_actor_case =
+    db_case "schema: audit events survive their actor's deletion" (fun conn ->
+        let* a, b = two_communities conn "aactor" in
+        let* uid = insert_user conn "ccns_aactor" in
+        let* () = accepts conn "subject row" (row_sql ~requester:a ~recipient:b ()) in
+        let* id = find conn "row id" q_sole_id (a, b) in
+        let (module C : Caqti_lwt.CONNECTION) = conn in
+        let* event =
+          C.find q_insert_audit
+            (("community_connection_requested", Some uid), (id, a, b))
+        in
+        let* event = or_fail "audit insert" event in
+        let* () = exec conn "delete actor" q_delete_user uid in
+        let* actor = find conn "actor" q_audit_actor event in
+        Alcotest.(check (option int)) "actor nulled, event kept" None actor;
+        let* n = find conn "still one event" q_audit_count id in
+        Alcotest.(check int) "the event survives" 1 n;
+        Lwt.return_unit)
+
+  let audit_blocks_deletion_case =
+    db_case "schema: audit history confronts a community deletion" (fun conn ->
+        let* a, b = two_communities conn "block" in
+        let* () = accepts conn "subject row" (row_sql ~requester:a ~recipient:b ()) in
+        let* id = find conn "row id" q_sole_id (a, b) in
+        let (module C : Caqti_lwt.CONNECTION) = conn in
+        let* event =
+          C.find q_insert_audit
+            (("community_connection_requested", None), (id, a, b))
+        in
+        let* _ = or_fail "audit insert" event in
+        (* The community→connection CASCADE cannot run silently past the
+           audit event that references both. *)
+        let* r = C.exec q_delete_community a in
+        let* () = reject "community deletion refused" r in
+        let* n = find conn "connection survives" q_count_pair (a, b) in
+        Alcotest.(check int) "nothing was cascaded away" 1 n;
+        (* Without audit history the cascade is free to run. *)
+        let* c = insert_community conn "ccns-block-c" in
+        let* d = insert_community conn "ccns-block-d" in
+        let* () = accepts conn "unaudited row" (row_sql ~requester:c ~recipient:d ()) in
+        let* () = exec conn "delete unaudited community" q_delete_community c in
+        let* n = find conn "cascade ran" q_count_pair (c, d) in
+        Alcotest.(check int) "the unaudited connection cascaded away" 0 n;
+        Lwt.return_unit)
+
+  let suite =
+    [ valid_shapes_case; self_connection_case; status_vocabulary_case
+    ; note_length_case; timestamp_order_case; pending_shape_case
+    ; reviewed_shape_case; removed_shape_case; nullable_actors_case
+    ; missing_community_case; one_active_pair_case; history_frees_slot_case
+    ; index_shape_case; deletion_behavior_case; audit_vocabulary_case
+    ; audit_privacy_case; audit_survives_actor_case; audit_blocks_deletion_case
+    ]
+end
+
+(* The transactional store and its read model: request, accept, reject and
+   remove, each writing exactly one audit event inside its own transaction;
+   the unordered-pair arbitration under real concurrency; the symmetric and
+   queue reads. Database-gated on EARDE_TEST_DATABASE_URL. *)
+module Ccon_store = struct
+  let ( let* ) = Lwt.bind
+
+  open Caqti_request.Infix
+
+  module Cc = Earde.Community_connections
+  module Store = Earde.Community_connections_store
+  module Read = Earde.Community_connections_read_model
+  module Audit = Earde.Community_connection_audit
+
+  let or_fail = Pod_store.or_fail
+  let insert_user = Pod_store.insert_user
+  let exec = Pod_read.exec
+  let find = Pod_read.find
+  let collect = Pod_read.collect
+  let insert_community = Phcv.insert_community
+  let status_str = Cc.string_of_status
+
+  let error_str : Store.error -> string = function
+    | Store.Invalid_user_id -> "Invalid_user_id"
+    | Store.Invalid_connection_id -> "Invalid_connection_id"
+    | Store.Invalid_community_id -> "Invalid_community_id"
+    | Store.Invalid_connection -> "Invalid_connection"
+    | Store.Community_unavailable -> "Community_unavailable"
+    | Store.Requester_ineligible -> "Requester_ineligible"
+    | Store.Recipient_ineligible -> "Recipient_ineligible"
+    | Store.Active_connection_exists -> "Active_connection_exists"
+    | Store.Review_unavailable -> "Review_unavailable"
+    | Store.Removal_unavailable -> "Removal_unavailable"
+    | Store.Inconsistent_data -> "Inconsistent_data"
+    | Store.Storage_error -> "Storage_error"
+
+  let read_error_str : Read.error -> string = function
+    | Read.Invalid_connection_id -> "Invalid_connection_id"
+    | Read.Invalid_community_id -> "Invalid_community_id"
+    | Read.Inconsistent_data -> "Inconsistent_data"
+    | Read.Storage_error -> "Storage_error"
+
+  let action_str : Audit.action -> string = Audit.string_of_action
+
+  (* Audit events RESTRICT-protect their connection and both communities, so
+     they go first; connections then fall away before their communities. *)
+  let q_cleanup =
+    List.map
+      (fun sql -> (Caqti_type.unit ->. Caqti_type.unit) sql)
+      [ "DROP TRIGGER IF EXISTS ccon_fail_audit \
+         ON community_connection_audit_events"
+      ; "DROP TRIGGER IF EXISTS ccon_fail_business ON community_connections"
+      ; "DROP FUNCTION IF EXISTS ccon_fail_fn()"
+      ; "DELETE FROM community_connection_audit_events \
+         WHERE requester_community_id IN \
+                 (SELECT id FROM communities WHERE slug LIKE 'ccon-%') \
+            OR recipient_community_id IN \
+                 (SELECT id FROM communities WHERE slug LIKE 'ccon-%')"
+      ; "DELETE FROM community_connections \
+         WHERE requester_community_id IN \
+                 (SELECT id FROM communities WHERE slug LIKE 'ccon-%') \
+            OR recipient_community_id IN \
+                 (SELECT id FROM communities WHERE slug LIKE 'ccon-%')"
+      ; "DELETE FROM communities WHERE slug LIKE 'ccon-%'"
+      ; "DELETE FROM users WHERE username LIKE 'ccon_%'"
+      ]
+
+  let db_case name f =
+    Alcotest.test_case name `Quick (fun () ->
+        match Sys.getenv_opt "EARDE_TEST_DATABASE_URL" with
+        | None | Some "" -> Alcotest.skip ()
+        | Some url ->
+            Lwt_main.run
+              (let* conn = Caqti_lwt_unix.connect (Uri.of_string url) in
+               let* conn = or_fail "connect" conn in
+               let (module C : Caqti_lwt.CONNECTION) = conn in
+               let cleanup () =
+                 Lwt_list.iter_s
+                   (fun q ->
+                     let* r = C.exec q () in
+                     let* _ = or_fail "cleanup" r in
+                     Lwt.return_unit)
+                   q_cleanup
+               in
+               let* () = cleanup () in
+               Lwt.finalize
+                 (fun () -> f conn)
+                 (fun () ->
+                   Lwt.finalize cleanup (fun () -> C.disconnect ()))))
+
+  (* === observation === *)
+
+  let q_row =
+    (Caqti_type.int64
+     ->! Caqti_type.(
+           t2
+             (t2 string (option string))
+             (t3 (option int) (option int) (option int))))
+    "SELECT status, request_note, requested_by_user_id, \
+            reviewed_by_user_id, removed_by_user_id \
+     FROM community_connections WHERE id = $1"
+
+  let q_stamps =
+    (Caqti_type.int64 ->! Caqti_type.(t3 bool bool bool))
+    "SELECT reviewed_at IS NOT NULL, removed_at IS NOT NULL, \
+            updated_at >= created_at \
+     FROM community_connections WHERE id = $1"
+
+  let q_count_pair =
+    (Caqti_type.(t2 int int) ->! Caqti_type.int)
+    "SELECT COUNT(*) FROM community_connections \
+     WHERE LEAST(requester_community_id, recipient_community_id) \
+           = LEAST($1, $2) \
+       AND GREATEST(requester_community_id, recipient_community_id) \
+           = GREATEST($1, $2)"
+
+  let q_count_active_pair =
+    (Caqti_type.(t2 int int) ->! Caqti_type.int)
+    "SELECT COUNT(*) FROM community_connections \
+     WHERE LEAST(requester_community_id, recipient_community_id) \
+           = LEAST($1, $2) \
+       AND GREATEST(requester_community_id, recipient_community_id) \
+           = GREATEST($1, $2) \
+       AND status IN ('pending', 'accepted')"
+
+  (* One tuple per event, in append (id) order. *)
+  let q_events =
+    (Caqti_type.int64
+     ->* Caqti_type.(t2 (t2 string (option int)) (t2 int int)))
+    "SELECT action, actor_user_id, requester_community_id, \
+            recipient_community_id \
+     FROM community_connection_audit_events \
+     WHERE connection_id = $1 ORDER BY id"
+
+  (* Everything ever recorded about one community, however the connection
+     row itself ended up — the count a rolled-back mutation must not move. *)
+  let q_events_for_community =
+    (Caqti_type.int ->! Caqti_type.int)
+    "SELECT COUNT(*) FROM community_connection_audit_events \
+     WHERE requester_community_id = $1 OR recipient_community_id = $1"
+
+  let q_delete_user =
+    (Caqti_type.int ->. Caqti_type.unit) "DELETE FROM users WHERE id = $1"
+
+  let q_absent_community_id =
+    (Caqti_type.unit ->! Caqti_type.int)
+    "SELECT COALESCE(MAX(id), 0) + 1000000 FROM communities"
+
+  let q_absent_connection_id =
+    (Caqti_type.unit ->! Caqti_type.int64)
+    "SELECT COALESCE(MAX(id), 0) + 1000000 FROM community_connections"
+
+  let event_t = Alcotest.(pair (pair string (option int)) (pair int int))
+
+  let check_events label conn ~connection expected =
+    let* rows = collect conn (label ^ ": events") q_events connection in
+    Alcotest.(check (list event_t)) (label ^ ": exact events") expected rows;
+    Lwt.return_unit
+
+  let check_event_count label conn ~community expected =
+    let* n = find conn (label ^ ": count") q_events_for_community community in
+    Alcotest.(check int) (label ^ ": community event count") expected n;
+    Lwt.return_unit
+
+  let check_row label conn id ~status ~note ~requested_by ~reviewed_by
+      ~removed_by =
+    let* (stored_status, stored_note),
+         (stored_requested, stored_reviewed, stored_removed) =
+      find conn (label ^ ": row") q_row id
+    in
+    Alcotest.(check string) (label ^ ": status") status stored_status;
+    Alcotest.(check (option string)) (label ^ ": note") note stored_note;
+    Alcotest.(check (option int)) (label ^ ": requester actor") requested_by
+      stored_requested;
+    Alcotest.(check (option int)) (label ^ ": reviewer") reviewed_by
+      stored_reviewed;
+    Alcotest.(check (option int)) (label ^ ": remover") removed_by
+      stored_removed;
+    Lwt.return_unit
+
+  (* === call helpers === *)
+
+  let pending_value ?note ~requester ~recipient () =
+    match
+      Cc.create_pending ~requester_community_id:requester
+        ~recipient_community_id:recipient ~request_note:note
+    with
+    | Ok v -> v
+    | Error _ -> Alcotest.fail "fixture: pure pending value refused"
+
+  let request conn ~actor ?note ~requester ~recipient () =
+    Store.request conn ~actor_user_id:actor
+      ~connection:(pending_value ?note ~requester ~recipient ())
+
+  let request_ok label conn ~actor ?note ~requester ~recipient () =
+    let* r = request conn ~actor ?note ~requester ~recipient () in
+    match r with
+    | Ok created -> Lwt.return (Store.created_connection_id created)
+    | Error e -> Alcotest.failf "%s: %s" label (error_str e)
+
+  let request_expect label expected conn ~actor ?note ~requester ~recipient ()
+      =
+    let* r = request conn ~actor ?note ~requester ~recipient () in
+    match r with
+    | Ok _ -> Alcotest.failf "%s: expected %s, got Ok" label (error_str expected)
+    | Error e ->
+        Alcotest.(check string) label (error_str expected) (error_str e);
+        Lwt.return_unit
+
+  let review conn ~reviewer ~connection ~recipient decision =
+    Store.review conn ~reviewer_user_id:reviewer ~connection_id:connection
+      ~recipient_community_id:recipient ~decision
+
+  let review_ok label conn ~reviewer ~connection ~recipient decision expected =
+    let* r = review conn ~reviewer ~connection ~recipient decision in
+    match r with
+    | Ok reviewed ->
+        Alcotest.(check string)
+          (label ^ ": resulting status")
+          (status_str expected)
+          (status_str (Store.reviewed_status reviewed));
+        Lwt.return reviewed
+    | Error e -> Alcotest.failf "%s: %s" label (error_str e)
+
+  let review_expect label expected conn ~reviewer ~connection ~recipient
+      decision =
+    let* r = review conn ~reviewer ~connection ~recipient decision in
+    match r with
+    | Ok _ -> Alcotest.failf "%s: expected %s, got Ok" label (error_str expected)
+    | Error e ->
+        Alcotest.(check string) label (error_str expected) (error_str e);
+        Lwt.return_unit
+
+  let remove conn ~actor ~connection ~acting =
+    Store.remove conn ~actor_user_id:actor ~connection_id:connection
+      ~acting_community_id:acting
+
+  let remove_ok label conn ~actor ~connection ~acting =
+    let* r = remove conn ~actor ~connection ~acting in
+    match r with
+    | Ok removed ->
+        Alcotest.(check string)
+          (label ^ ": resulting status")
+          (status_str Cc.Removed)
+          (status_str (Store.removed_status removed));
+        Lwt.return removed
+    | Error e -> Alcotest.failf "%s: %s" label (error_str e)
+
+  let remove_expect label expected conn ~actor ~connection ~acting =
+    let* r = remove conn ~actor ~connection ~acting in
+    match r with
+    | Ok _ -> Alcotest.failf "%s: expected %s, got Ok" label (error_str expected)
+    | Error e ->
+        Alcotest.(check string) label (error_str expected) (error_str e);
+        Lwt.return_unit
+
+  (* Two communities and one actor, the shape every case starts from. *)
+  let fixture conn tag =
+    let* actor = insert_user conn ("ccon_" ^ tag) in
+    let* a = insert_community conn ("ccon-" ^ tag ^ "-a") in
+    let* b = insert_community conn ("ccon-" ^ tag ^ "-b") in
+    Lwt.return (actor, a, b)
+
+  (* === request === *)
+
+  let request_case =
+    db_case "request: one pending row and one requested event" (fun conn ->
+        let* actor, a, b = fixture conn "req" in
+        let* id =
+          request_ok "request" conn ~actor ~note:"  let's connect\r\n  "
+            ~requester:a ~recipient:b ()
+        in
+        let* () =
+          check_row "request" conn id ~status:"pending"
+            ~note:(Some "let's connect") ~requested_by:(Some actor)
+            ~reviewed_by:None ~removed_by:None
+        in
+        let* reviewed_at, removed_at, coherent = find conn "stamps" q_stamps id in
+        Alcotest.(check bool) "no review time" false reviewed_at;
+        Alcotest.(check bool) "no removal time" false removed_at;
+        Alcotest.(check bool) "updated_at coherent" true coherent;
+        check_events "request" conn ~connection:id
+          [ (("community_connection_requested", Some actor), (a, b)) ])
+
+  let request_blank_note_case =
+    db_case "request: a blank note is stored as absent" (fun conn ->
+        let* actor, a, b = fixture conn "blank" in
+        let* id =
+          request_ok "request" conn ~actor ~note:"   \r\n\t " ~requester:a
+            ~recipient:b ()
+        in
+        check_row "blank" conn id ~status:"pending" ~note:None
+          ~requested_by:(Some actor) ~reviewed_by:None ~removed_by:None)
+
+  let request_validation_case =
+    db_case "request: invalid inputs are refused before any SQL" (fun conn ->
+        let* actor, a, b = fixture conn "reqval" in
+        let* () =
+          request_expect "zero actor" Store.Invalid_user_id conn ~actor:0
+            ~requester:a ~recipient:b ()
+        in
+        let* () =
+          request_expect "negative actor" Store.Invalid_user_id conn ~actor:(-4)
+            ~requester:a ~recipient:b ()
+        in
+        (* An already-transitioned pure value is never silently reset. *)
+        let accepted =
+          match Cc.apply (pending_value ~requester:a ~recipient:b ()) Cc.Accept with
+          | Ok v -> v
+          | Error _ -> Alcotest.fail "fixture: accept"
+        in
+        let* r = Store.request conn ~actor_user_id:actor ~connection:accepted in
+        (match r with
+        | Error Store.Invalid_connection -> ()
+        | Error e -> Alcotest.failf "accepted value: %s" (error_str e)
+        | Ok _ -> Alcotest.fail "accepted value was stored as a request");
+        let* n = find conn "no rows" q_count_pair (a, b) in
+        Alcotest.(check int) "nothing written" 0 n;
+        check_event_count "validation" conn ~community:a 0)
+
+  let request_missing_community_case =
+    db_case "request: a missing community on either side is one error"
+      (fun conn ->
+        let* actor, a, _ = fixture conn "gone" in
+        let* absent = find conn "absent id" q_absent_community_id () in
+        let* () =
+          request_expect "absent recipient" Store.Community_unavailable conn
+            ~actor ~requester:a ~recipient:absent ()
+        in
+        let* () =
+          request_expect "absent requester" Store.Community_unavailable conn
+            ~actor ~requester:absent ~recipient:a ()
+        in
+        check_event_count "missing" conn ~community:a 0)
+
+  let request_duplicate_case =
+    db_case "request: a same-direction duplicate loses and writes nothing"
+      (fun conn ->
+        let* actor, a, b = fixture conn "dup" in
+        let* id = request_ok "first" conn ~actor ~requester:a ~recipient:b () in
+        let* () =
+          request_expect "duplicate" Store.Active_connection_exists conn ~actor
+            ~requester:a ~recipient:b ()
+        in
+        let* n = find conn "row count" q_count_pair (a, b) in
+        Alcotest.(check int) "still exactly one row" 1 n;
+        check_events "duplicate" conn ~connection:id
+          [ (("community_connection_requested", Some actor), (a, b)) ])
+
+  let request_reversed_case =
+    db_case "request: the mirrored direction loses against a live request"
+      (fun conn ->
+        let* actor, a, b = fixture conn "mirror" in
+        let* id = request_ok "first" conn ~actor ~requester:a ~recipient:b () in
+        let* () =
+          request_expect "reversed" Store.Active_connection_exists conn ~actor
+            ~requester:b ~recipient:a ()
+        in
+        let* n = find conn "row count" q_count_pair (a, b) in
+        Alcotest.(check int) "still exactly one row" 1 n;
+        (* And equally against an accepted connection. *)
+        let* _ = review_ok "accept" conn ~reviewer:actor ~connection:id
+            ~recipient:b Store.Accept Cc.Accepted
+        in
+        let* () =
+          request_expect "reversed against accepted"
+            Store.Active_connection_exists conn ~actor ~requester:b ~recipient:a
+            ()
+        in
+        let* n = find conn "row count again" q_count_pair (a, b) in
+        Alcotest.(check int) "still exactly one row" 1 n;
+        check_event_count "mirror" conn ~community:a 2)
+
+  (* === review === *)
+
+  let accept_case =
+    db_case "accept: the row becomes accepted with one accepted event"
+      (fun conn ->
+        let* actor, a, b = fixture conn "acc" in
+        let* reviewer = insert_user conn "ccon_acc_mod" in
+        let* id =
+          request_ok "request" conn ~actor ~note:"hello" ~requester:a
+            ~recipient:b ()
+        in
+        let* reviewed =
+          review_ok "accept" conn ~reviewer ~connection:id ~recipient:b
+            Store.Accept Cc.Accepted
+        in
+        Alcotest.(check int) "requester crosses back" a
+          (Store.reviewed_requester_community_id reviewed);
+        Alcotest.(check int) "recipient crosses back" b
+          (Store.reviewed_recipient_community_id reviewed);
+        let* () =
+          check_row "accept" conn id ~status:"accepted" ~note:(Some "hello")
+            ~requested_by:(Some actor) ~reviewed_by:(Some reviewer)
+            ~removed_by:None
+        in
+        let* reviewed_at, removed_at, coherent = find conn "stamps" q_stamps id in
+        Alcotest.(check bool) "review time set" true reviewed_at;
+        Alcotest.(check bool) "no removal time" false removed_at;
+        Alcotest.(check bool) "updated_at coherent" true coherent;
+        check_events "accept" conn ~connection:id
+          [ (("community_connection_requested", Some actor), (a, b))
+          ; (("community_connection_accepted", Some reviewer), (a, b)) ])
+
+  let reject_case =
+    db_case "reject: the row becomes rejected with one rejected event"
+      (fun conn ->
+        let* actor, a, b = fixture conn "rej" in
+        let* reviewer = insert_user conn "ccon_rej_mod" in
+        let* id = request_ok "request" conn ~actor ~requester:a ~recipient:b () in
+        let* _ =
+          review_ok "reject" conn ~reviewer ~connection:id ~recipient:b
+            Store.Reject Cc.Rejected
+        in
+        let* () =
+          check_row "reject" conn id ~status:"rejected" ~note:None
+            ~requested_by:(Some actor) ~reviewed_by:(Some reviewer)
+            ~removed_by:None
+        in
+        let* reviewed_at, removed_at, _ = find conn "stamps" q_stamps id in
+        Alcotest.(check bool) "review time set" true reviewed_at;
+        Alcotest.(check bool) "no removal time" false removed_at;
+        check_events "reject" conn ~connection:id
+          [ (("community_connection_requested", Some actor), (a, b))
+          ; (("community_connection_rejected", Some reviewer), (a, b)) ])
+
+  let review_wrong_recipient_case =
+    db_case "review: the recipient is verified in the mutation boundary"
+      (fun conn ->
+        let* actor, a, b = fixture conn "wrongrec" in
+        let* c = insert_community conn "ccon-wrongrec-c" in
+        let* id = request_ok "request" conn ~actor ~requester:a ~recipient:b () in
+        let* () =
+          review_expect "another community's queue" Store.Review_unavailable
+            conn ~reviewer:actor ~connection:id ~recipient:c Store.Accept
+        in
+        let* () =
+          (* Not even the requesting community may review its own request
+             through the recipient boundary. *)
+          review_expect "the requester itself" Store.Review_unavailable conn
+            ~reviewer:actor ~connection:id ~recipient:a Store.Accept
+        in
+        let* () =
+          check_row "untouched" conn id ~status:"pending" ~note:None
+            ~requested_by:(Some actor) ~reviewed_by:None ~removed_by:None
+        in
+        check_events "no event" conn ~connection:id
+          [ (("community_connection_requested", Some actor), (a, b)) ])
+
+  let review_stale_case =
+    db_case "review: a reviewed row cannot be reviewed again" (fun conn ->
+        let* actor, a, b = fixture conn "stale" in
+        let* id = request_ok "request" conn ~actor ~requester:a ~recipient:b () in
+        let* _ =
+          review_ok "accept" conn ~reviewer:actor ~connection:id ~recipient:b
+            Store.Accept Cc.Accepted
+        in
+        let* () =
+          review_expect "second accept" Store.Review_unavailable conn
+            ~reviewer:actor ~connection:id ~recipient:b Store.Accept
+        in
+        let* () =
+          review_expect "late reject" Store.Review_unavailable conn
+            ~reviewer:actor ~connection:id ~recipient:b Store.Reject
+        in
+        let* absent = find conn "absent id" q_absent_connection_id () in
+        let* () =
+          review_expect "absent connection" Store.Review_unavailable conn
+            ~reviewer:actor ~connection:absent ~recipient:b Store.Accept
+        in
+        let* () =
+          check_row "still accepted" conn id ~status:"accepted" ~note:None
+            ~requested_by:(Some actor) ~reviewed_by:(Some actor)
+            ~removed_by:None
+        in
+        check_events "one review only" conn ~connection:id
+          [ (("community_connection_requested", Some actor), (a, b))
+          ; (("community_connection_accepted", Some actor), (a, b)) ])
+
+  let review_validation_case =
+    db_case "review: invalid inputs are refused before any SQL" (fun conn ->
+        let* actor, a, b = fixture conn "revval" in
+        let* id = request_ok "request" conn ~actor ~requester:a ~recipient:b () in
+        let* () =
+          review_expect "zero reviewer" Store.Invalid_user_id conn ~reviewer:0
+            ~connection:id ~recipient:b Store.Accept
+        in
+        let* () =
+          review_expect "zero connection" Store.Invalid_connection_id conn
+            ~reviewer:actor ~connection:0L ~recipient:b Store.Accept
+        in
+        let* () =
+          review_expect "negative connection" Store.Invalid_connection_id conn
+            ~reviewer:actor ~connection:(-9L) ~recipient:b Store.Accept
+        in
+        let* () =
+          review_expect "zero recipient" Store.Invalid_community_id conn
+            ~reviewer:actor ~connection:id ~recipient:0 Store.Accept
+        in
+        check_events "still just the request" conn ~connection:id
+          [ (("community_connection_requested", Some actor), (a, b)) ])
+
+  (* === removal === *)
+
+  let remove_from_either_side_case =
+    db_case "remove: either community may remove an accepted connection"
+      (fun conn ->
+        let* actor, a, b = fixture conn "rm" in
+        let* id = request_ok "request" conn ~actor ~requester:a ~recipient:b () in
+        let* _ =
+          review_ok "accept" conn ~reviewer:actor ~connection:id ~recipient:b
+            Store.Accept Cc.Accepted
+        in
+        let* remover = insert_user conn "ccon_rm_mod" in
+        let* removed =
+          remove_ok "remove from the requester side" conn ~actor:remover
+            ~connection:id ~acting:a
+        in
+        Alcotest.(check int) "requester crosses back" a
+          (Store.removed_requester_community_id removed);
+        Alcotest.(check int) "recipient crosses back" b
+          (Store.removed_recipient_community_id removed);
+        let* () =
+          check_row "removed" conn id ~status:"removed" ~note:None
+            ~requested_by:(Some actor) ~reviewed_by:(Some actor)
+            ~removed_by:(Some remover)
+        in
+        let* reviewed_at, removed_at, coherent = find conn "stamps" q_stamps id in
+        Alcotest.(check bool) "the review survives" true reviewed_at;
+        Alcotest.(check bool) "removal time set" true removed_at;
+        Alcotest.(check bool) "updated_at coherent" true coherent;
+        let* () =
+          check_events "remove" conn ~connection:id
+            [ (("community_connection_requested", Some actor), (a, b))
+            ; (("community_connection_accepted", Some actor), (a, b))
+            ; (("community_connection_removed", Some remover), (a, b)) ]
+        in
+        (* The other side can remove just as unilaterally. *)
+        let* second =
+          request_ok "second request" conn ~actor ~requester:a ~recipient:b ()
+        in
+        let* _ =
+          review_ok "accept again" conn ~reviewer:actor ~connection:second
+            ~recipient:b Store.Accept Cc.Accepted
+        in
+        let* _ =
+          remove_ok "remove from the recipient side" conn ~actor:remover
+            ~connection:second ~acting:b
+        in
+        check_row "removed again" conn second ~status:"removed" ~note:None
+          ~requested_by:(Some actor) ~reviewed_by:(Some actor)
+          ~removed_by:(Some remover))
+
+  let remove_stale_case =
+    db_case "remove: only an accepted row, and only from inside the pair"
+      (fun conn ->
+        let* actor, a, b = fixture conn "rmstale" in
+        let* stranger = insert_community conn "ccon-rmstale-c" in
+        let* id = request_ok "request" conn ~actor ~requester:a ~recipient:b () in
+        let* () =
+          remove_expect "a pending row" Store.Removal_unavailable conn
+            ~actor ~connection:id ~acting:a
+        in
+        let* _ =
+          review_ok "accept" conn ~reviewer:actor ~connection:id ~recipient:b
+            Store.Accept Cc.Accepted
+        in
+        let* () =
+          remove_expect "an outside community" Store.Removal_unavailable conn
+            ~actor ~connection:id ~acting:stranger
+        in
+        let* absent = find conn "absent id" q_absent_connection_id () in
+        let* () =
+          remove_expect "an absent connection" Store.Removal_unavailable conn
+            ~actor ~connection:absent ~acting:a
+        in
+        let* _ = remove_ok "first removal" conn ~actor ~connection:id ~acting:a in
+        let* () =
+          remove_expect "a second removal" Store.Removal_unavailable conn
+            ~actor ~connection:id ~acting:b
+        in
+        let* () =
+          remove_expect "a rejected row is not removable"
+            Store.Removal_unavailable conn ~actor ~connection:id ~acting:a
+        in
+        (* Exactly one removed event survives all of that. *)
+        check_events "one removal only" conn ~connection:id
+          [ (("community_connection_requested", Some actor), (a, b))
+          ; (("community_connection_accepted", Some actor), (a, b))
+          ; (("community_connection_removed", Some actor), (a, b)) ])
+
+  let remove_validation_case =
+    db_case "remove: invalid inputs are refused before any SQL" (fun conn ->
+        let* actor, a, b = fixture conn "rmval" in
+        let* id = request_ok "request" conn ~actor ~requester:a ~recipient:b () in
+        let* () =
+          remove_expect "zero actor" Store.Invalid_user_id conn ~actor:0
+            ~connection:id ~acting:a
+        in
+        let* () =
+          remove_expect "zero connection" Store.Invalid_connection_id conn
+            ~actor ~connection:0L ~acting:a
+        in
+        let* () =
+          remove_expect "zero community" Store.Invalid_community_id conn ~actor
+            ~connection:id ~acting:0
+        in
+        check_events "still just the request" conn ~connection:id
+          [ (("community_connection_requested", Some actor), (a, b)) ])
+
+  (* === history and a fresh start === *)
+
+  let fresh_request_after_history_case =
+    db_case "history: a rejected or removed pair accepts a fresh request"
+      (fun conn ->
+        let* actor, a, b = fixture conn "fresh" in
+        let* first = request_ok "first" conn ~actor ~requester:a ~recipient:b () in
+        let* _ =
+          review_ok "reject" conn ~reviewer:actor ~connection:first ~recipient:b
+            Store.Reject Cc.Rejected
+        in
+        (* A rejection frees the slot — and the other side may now ask. *)
+        let* second =
+          request_ok "after rejection, reversed" conn ~actor ~requester:b
+            ~recipient:a ()
+        in
+        let* _ =
+          review_ok "accept" conn ~reviewer:actor ~connection:second
+            ~recipient:a Store.Accept Cc.Accepted
+        in
+        let* _ = remove_ok "remove" conn ~actor ~connection:second ~acting:b in
+        let* third =
+          request_ok "after removal" conn ~actor ~requester:a ~recipient:b ()
+        in
+        let* total = find conn "history retained" q_count_pair (a, b) in
+        Alcotest.(check int) "all three rows kept" 3 total;
+        let* active = find conn "active" q_count_active_pair (a, b) in
+        Alcotest.(check int) "exactly one active" 1 active;
+        let* () =
+          check_row "the fresh request" conn third ~status:"pending" ~note:None
+            ~requested_by:(Some actor) ~reviewed_by:None ~removed_by:None
+        in
+        (* Each row keeps its own trail; nothing is reopened or reused. *)
+        let* () =
+          check_events "first" conn ~connection:first
+            [ (("community_connection_requested", Some actor), (a, b))
+            ; (("community_connection_rejected", Some actor), (a, b)) ]
+        in
+        check_events "third" conn ~connection:third
+          [ (("community_connection_requested", Some actor), (a, b)) ])
+
+  let actor_deletion_case =
+    db_case "history: deleting an actor keeps every row and nulls provenance"
+      (fun conn ->
+        let* actor, a, b = fixture conn "ghost" in
+        let* reviewer = insert_user conn "ccon_ghost_mod" in
+        let* id = request_ok "request" conn ~actor ~note:"kept" ~requester:a
+            ~recipient:b ()
+        in
+        let* _ =
+          review_ok "accept" conn ~reviewer ~connection:id ~recipient:b
+            Store.Accept Cc.Accepted
+        in
+        let* _ = remove_ok "remove" conn ~actor:reviewer ~connection:id ~acting:b in
+        let* () = exec conn "delete requester" q_delete_user actor in
+        let* () = exec conn "delete reviewer" q_delete_user reviewer in
+        let* () =
+          check_row "provenance nulled" conn id ~status:"removed"
+            ~note:(Some "kept") ~requested_by:None ~reviewed_by:None
+            ~removed_by:None
+        in
+        check_events "events kept, actors nulled" conn ~connection:id
+          [ (("community_connection_requested", None), (a, b))
+          ; (("community_connection_accepted", None), (a, b))
+          ; (("community_connection_removed", None), (a, b)) ])
+
+  (* === atomicity === *)
+
+  let ddl sql = (Caqti_type.unit ->. Caqti_type.unit) sql
+
+  let q_create_fail_fn =
+    ddl
+      "CREATE FUNCTION ccon_fail_fn() RETURNS trigger \
+       LANGUAGE plpgsql \
+       AS 'BEGIN RAISE EXCEPTION ''ccon fixture failure''; END'"
+
+  let q_drop_fail_fn = ddl "DROP FUNCTION IF EXISTS ccon_fail_fn()"
+
+  let q_poison_audit =
+    ddl
+      "CREATE TRIGGER ccon_fail_audit \
+       BEFORE INSERT ON community_connection_audit_events \
+       FOR EACH ROW EXECUTE FUNCTION ccon_fail_fn()"
+
+  let q_unpoison_audit =
+    ddl
+      "DROP TRIGGER IF EXISTS ccon_fail_audit \
+       ON community_connection_audit_events"
+
+  let q_poison_insert =
+    ddl
+      "CREATE TRIGGER ccon_fail_business \
+       AFTER INSERT ON community_connections \
+       FOR EACH ROW EXECUTE FUNCTION ccon_fail_fn()"
+
+  let q_poison_update =
+    ddl
+      "CREATE TRIGGER ccon_fail_business \
+       AFTER UPDATE ON community_connections \
+       FOR EACH ROW EXECUTE FUNCTION ccon_fail_fn()"
+
+  let q_unpoison_business =
+    ddl "DROP TRIGGER IF EXISTS ccon_fail_business ON community_connections"
+
+  let with_poison conn ~install ~remove f =
+    let* () = exec conn "create fail fn" q_create_fail_fn () in
+    Lwt.finalize
+      (fun () ->
+        let* () = exec conn "install poison trigger" install () in
+        Lwt.finalize f (fun () -> exec conn "drop poison trigger" remove ()))
+      (fun () -> exec conn "drop fail fn" q_drop_fail_fn ())
+
+  let audit_failure_rolls_back_case =
+    db_case "atomicity: a failed audit insert rolls the whole mutation back"
+      (fun conn ->
+        let* actor, a, b = fixture conn "auditfail" in
+        let* () =
+          with_poison conn ~install:q_poison_audit ~remove:q_unpoison_audit
+            (fun () ->
+              request_expect "request with audit poisoned" Store.Storage_error
+                conn ~actor ~requester:a ~recipient:b ())
+        in
+        let* n = find conn "no connection row" q_count_pair (a, b) in
+        Alcotest.(check int) "no connection committed" 0 n;
+        let* () = check_event_count "no events" conn ~community:a 0 in
+        (* And once the poison is gone the very same request commits. *)
+        let* id = request_ok "request afterwards" conn ~actor ~requester:a
+            ~recipient:b ()
+        in
+        check_events "committed together" conn ~connection:id
+          [ (("community_connection_requested", Some actor), (a, b)) ])
+
+  let mutation_failure_leaves_no_event_case =
+    db_case "atomicity: a failed mutation leaves no audit event behind"
+      (fun conn ->
+        let* actor, a, b = fixture conn "bizfail" in
+        let* () =
+          with_poison conn ~install:q_poison_insert ~remove:q_unpoison_business
+            (fun () ->
+              request_expect "request with the insert poisoned"
+                Store.Storage_error conn ~actor ~requester:a ~recipient:b ())
+        in
+        let* n = find conn "no connection row" q_count_pair (a, b) in
+        Alcotest.(check int) "no connection committed" 0 n;
+        let* () = check_event_count "no events" conn ~community:a 0 in
+        (* The same holds for the update-driven transitions. *)
+        let* id = request_ok "request" conn ~actor ~requester:a ~recipient:b () in
+        let* () =
+          with_poison conn ~install:q_poison_update ~remove:q_unpoison_business
+            (fun () ->
+              review_expect "accept with the update poisoned"
+                Store.Storage_error conn ~reviewer:actor ~connection:id
+                ~recipient:b Store.Accept)
+        in
+        let* () =
+          check_row "still pending" conn id ~status:"pending" ~note:None
+            ~requested_by:(Some actor) ~reviewed_by:None ~removed_by:None
+        in
+        check_events "only the request survives" conn ~connection:id
+          [ (("community_connection_requested", Some actor), (a, b)) ])
+
+  (* === concurrency === *)
+
+  let concurrent_same_direction_case =
+    db_case "concurrency: identical requests leave exactly one active row"
+      (fun conn ->
+        let* actor, a, b = fixture conn "race" in
+        Pod_store.with_second_connection (fun conn2 ->
+            let* r1, r2 =
+              Lwt.both
+                (request conn ~actor ~requester:a ~recipient:b ())
+                (request conn2 ~actor ~requester:a ~recipient:b ())
+            in
+            (match (r1, r2) with
+            | Ok _, Error Store.Active_connection_exists
+            | Error Store.Active_connection_exists, Ok _ ->
+                ()
+            | Ok _, Ok _ -> Alcotest.fail "both requests won"
+            | Error e, Error e' ->
+                Alcotest.failf "both failed (%s, %s)" (error_str e)
+                  (error_str e')
+            | Ok _, Error e | Error e, Ok _ ->
+                Alcotest.failf "unexpected loser error %s" (error_str e));
+            let* total = find conn "row count" q_count_pair (a, b) in
+            Alcotest.(check int) "exactly one row" 1 total;
+            let* events = find conn "events" q_events_for_community a in
+            Alcotest.(check int) "exactly one event" 1 events;
+            Lwt.return_unit))
+
+  let concurrent_opposite_direction_case =
+    db_case "concurrency: opposite-direction requests leave one active row"
+      (fun conn ->
+        let* actor, a, b = fixture conn "race2" in
+        Pod_store.with_second_connection (fun conn2 ->
+            let* r1, r2 =
+              Lwt.both
+                (request conn ~actor ~requester:a ~recipient:b ())
+                (request conn2 ~actor ~requester:b ~recipient:a ())
+            in
+            (match (r1, r2) with
+            | Ok _, Error Store.Active_connection_exists
+            | Error Store.Active_connection_exists, Ok _ ->
+                ()
+            | Ok _, Ok _ -> Alcotest.fail "both directions won"
+            | Error e, Error e' ->
+                Alcotest.failf "both failed (%s, %s)" (error_str e)
+                  (error_str e')
+            | Ok _, Error e | Error e, Ok _ ->
+                Alcotest.failf "unexpected loser error %s" (error_str e));
+            let* total = find conn "row count" q_count_pair (a, b) in
+            Alcotest.(check int) "exactly one row" 1 total;
+            (* Which direction won is deliberately unasserted. *)
+            let* active = find conn "active" q_count_active_pair (a, b) in
+            Alcotest.(check int) "exactly one active row" 1 active;
+            Lwt.return_unit))
+
+  let concurrent_review_case =
+    db_case "concurrency: only one review of a pending row commits" (fun conn ->
+        let* actor, a, b = fixture conn "race3" in
+        let* id = request_ok "request" conn ~actor ~requester:a ~recipient:b () in
+        Pod_store.with_second_connection (fun conn2 ->
+            let* r1, r2 =
+              Lwt.both
+                (review conn ~reviewer:actor ~connection:id ~recipient:b
+                   Store.Accept)
+                (review conn2 ~reviewer:actor ~connection:id ~recipient:b
+                   Store.Reject)
+            in
+            (match (r1, r2) with
+            | Ok _, Error Store.Review_unavailable
+            | Error Store.Review_unavailable, Ok _ ->
+                ()
+            | Ok _, Ok _ -> Alcotest.fail "both reviews won"
+            | Error e, Error e' ->
+                Alcotest.failf "both failed (%s, %s)" (error_str e)
+                  (error_str e')
+            | Ok _, Error e | Error e, Ok _ ->
+                Alcotest.failf "unexpected loser error %s" (error_str e));
+            let* events = collect conn "events" q_events id in
+            Alcotest.(check int) "the request plus exactly one review" 2
+              (List.length events);
+            Lwt.return_unit))
+
+  (* === reads === *)
+
+  let read_ok label = function
+    | Ok v -> Lwt.return v
+    | Error e -> Alcotest.failf "%s: %s" label (read_error_str e)
+
+  let read_load_case =
+    db_case "read: one connection loads with its whole durable shape"
+      (fun conn ->
+        let* actor, a, b = fixture conn "load" in
+        let* id =
+          request_ok "request" conn ~actor ~note:"why not" ~requester:a
+            ~recipient:b ()
+        in
+        let* loaded = Read.load conn ~connection_id:id in
+        let* loaded = read_ok "load" loaded in
+        (match loaded with
+        | None -> Alcotest.fail "the connection did not load"
+        | Some row ->
+            Alcotest.(check int64) "id" id row.Read.id;
+            Alcotest.(check int) "requester" a row.Read.requester_community_id;
+            Alcotest.(check int) "recipient" b row.Read.recipient_community_id;
+            Alcotest.(check string) "status" "pending"
+              (status_str row.Read.status);
+            Alcotest.(check (option string)) "note" (Some "why not")
+              row.Read.request_note;
+            Alcotest.(check (option int)) "requester actor" (Some actor)
+              row.Read.requested_by_user_id;
+            Alcotest.(check (option int)) "no reviewer" None
+              row.Read.reviewed_by_user_id;
+            Alcotest.(check (option int)) "no remover" None
+              row.Read.removed_by_user_id;
+            Alcotest.(check bool) "created_at present" true
+              (String.length row.Read.created_at > 0);
+            Alcotest.(check (option string)) "no review time" None
+              row.Read.reviewed_at;
+            Alcotest.(check (option string)) "no removal time" None
+              row.Read.removed_at);
+        let* absent = find conn "absent id" q_absent_connection_id () in
+        let* missing = Read.load conn ~connection_id:absent in
+        let* missing = read_ok "absent load" missing in
+        Alcotest.(check bool) "an absent id is simply absent" true
+          (missing = None);
+        let* invalid = Read.load conn ~connection_id:0L in
+        (match invalid with
+        | Error Read.Invalid_connection_id -> ()
+        | Error e -> Alcotest.failf "zero id: %s" (read_error_str e)
+        | Ok _ -> Alcotest.fail "zero id accepted");
+        Lwt.return_unit)
+
+  let read_active_pair_case =
+    db_case "read: the active pair reads the same from either order"
+      (fun conn ->
+        let* actor, a, b = fixture conn "pair" in
+        let* none_yet = Read.active_for_pair conn ~community_a:a ~community_b:b in
+        let* none_yet = read_ok "empty pair" none_yet in
+        Alcotest.(check bool) "no active connection yet" true (none_yet = None);
+        let* id = request_ok "request" conn ~actor ~requester:a ~recipient:b () in
+        let check label ~community_a ~community_b =
+          let* found = Read.active_for_pair conn ~community_a ~community_b in
+          let* found = read_ok label found in
+          match found with
+          | Some row ->
+              Alcotest.(check int64) (label ^ ": id") id row.Read.id;
+              Lwt.return_unit
+          | None -> Alcotest.failf "%s: nothing found" label
+        in
+        let* () = check "forward" ~community_a:a ~community_b:b in
+        let* () = check "reversed" ~community_a:b ~community_b:a in
+        (* A rejected row leaves the pair free, and the read says so. *)
+        let* _ =
+          review_ok "reject" conn ~reviewer:actor ~connection:id ~recipient:b
+            Store.Reject Cc.Rejected
+        in
+        let* after = Read.active_for_pair conn ~community_a:a ~community_b:b in
+        let* after = read_ok "after rejection" after in
+        Alcotest.(check bool) "history does not hold the slot" true
+          (after = None);
+        let* self = Read.active_for_pair conn ~community_a:a ~community_b:a in
+        (match self with
+        | Error Read.Invalid_community_id -> ()
+        | Error e -> Alcotest.failf "self pair: %s" (read_error_str e)
+        | Ok _ -> Alcotest.fail "a self pair was accepted");
+        Lwt.return_unit)
+
+  let read_symmetric_accepted_case =
+    db_case "read: an accepted connection lists from both sides" (fun conn ->
+        let* actor, a, b = fixture conn "sym" in
+        let* c = insert_community conn "ccon-sym-c" in
+        let* first = request_ok "a→b" conn ~actor ~requester:a ~recipient:b () in
+        let* _ =
+          review_ok "accept a→b" conn ~reviewer:actor ~connection:first
+            ~recipient:b Store.Accept Cc.Accepted
+        in
+        let* second = request_ok "c→a" conn ~actor ~requester:c ~recipient:a () in
+        let* _ =
+          review_ok "accept c→a" conn ~reviewer:actor ~connection:second
+            ~recipient:a Store.Accept Cc.Accepted
+        in
+        (* A pending and a removed row must not appear in accepted listings. *)
+        let* third = request_ok "b→c" conn ~actor ~requester:b ~recipient:c () in
+        ignore third;
+        let ids label rows =
+          let got = List.map (fun r -> r.Read.id) rows in
+          Alcotest.(check int) (label ^ ": count") (List.length rows)
+            (List.length got);
+          got
+        in
+        let* from_a = Read.list_accepted conn ~community_id:a in
+        let* from_a = read_ok "from a" from_a in
+        Alcotest.(check (list int64))
+          "a sees both of its accepted connections"
+          [ second; first ] (ids "a" from_a);
+        let* from_b = Read.list_accepted conn ~community_id:b in
+        let* from_b = read_ok "from b" from_b in
+        Alcotest.(check (list int64))
+          "b sees the same connection from the recipient side" [ first ]
+          (ids "b" from_b);
+        let* from_c = Read.list_accepted conn ~community_id:c in
+        let* from_c = read_ok "from c" from_c in
+        Alcotest.(check (list int64))
+          "c sees the one it requested" [ second ] (ids "c" from_c);
+        (* Removal takes it out of both listings at once. *)
+        let* _ = remove_ok "remove" conn ~actor ~connection:first ~acting:b in
+        let* from_a = Read.list_accepted conn ~community_id:a in
+        let* from_a = read_ok "from a after removal" from_a in
+        Alcotest.(check (list int64)) "a no longer sees it" [ second ]
+          (ids "a" from_a);
+        let* from_b = Read.list_accepted conn ~community_id:b in
+        let* from_b = read_ok "from b after removal" from_b in
+        Alcotest.(check (list int64)) "b no longer sees it either" []
+          (ids "b" from_b);
+        Lwt.return_unit)
+
+  let read_queues_case =
+    db_case "read: the incoming and outgoing queues are direction-aware"
+      (fun conn ->
+        let* actor, a, b = fixture conn "queue" in
+        let* c = insert_community conn "ccon-queue-c" in
+        let* incoming = request_ok "b→a" conn ~actor ~requester:b ~recipient:a () in
+        let* outgoing = request_ok "a→c" conn ~actor ~requester:a ~recipient:c () in
+        let ids rows = List.map (fun r -> r.Read.id) rows in
+        let* q_in = Read.list_incoming_pending conn ~community_id:a in
+        let* q_in = read_ok "incoming" q_in in
+        Alcotest.(check (list int64)) "a's review queue" [ incoming ] (ids q_in);
+        let* q_out = Read.list_outgoing_pending conn ~community_id:a in
+        let* q_out = read_ok "outgoing" q_out in
+        Alcotest.(check (list int64)) "a's awaiting queue" [ outgoing ]
+          (ids q_out);
+        (* Reviewing empties the queue it was in, and no other. *)
+        let* _ =
+          review_ok "accept" conn ~reviewer:actor ~connection:incoming
+            ~recipient:a Store.Accept Cc.Accepted
+        in
+        let* q_in = Read.list_incoming_pending conn ~community_id:a in
+        let* q_in = read_ok "incoming after review" q_in in
+        Alcotest.(check (list int64)) "the reviewed request left the queue" []
+          (ids q_in);
+        let* q_out = Read.list_outgoing_pending conn ~community_id:a in
+        let* q_out = read_ok "outgoing after review" q_out in
+        Alcotest.(check (list int64)) "the outgoing one is untouched"
+          [ outgoing ] (ids q_out);
+        let* invalid = Read.list_incoming_pending conn ~community_id:0 in
+        (match invalid with
+        | Error Read.Invalid_community_id -> ()
+        | Error e -> Alcotest.failf "zero community: %s" (read_error_str e)
+        | Ok _ -> Alcotest.fail "zero community accepted");
+        Lwt.return_unit)
+
+  let read_audit_case =
+    db_case "read: one connection's audit trail reads in append order"
+      (fun conn ->
+        let* actor, a, b = fixture conn "trail" in
+        let* id = request_ok "request" conn ~actor ~requester:a ~recipient:b () in
+        let* _ =
+          review_ok "accept" conn ~reviewer:actor ~connection:id ~recipient:b
+            Store.Accept Cc.Accepted
+        in
+        let* _ = remove_ok "remove" conn ~actor ~connection:id ~acting:a in
+        let* events = Read.list_audit_events conn ~connection_id:id in
+        let* events = read_ok "trail" events in
+        Alcotest.(check (list string))
+          "the three actions in order"
+          [ "community_connection_requested"; "community_connection_accepted"
+          ; "community_connection_removed" ]
+          (List.map (fun e -> action_str e.Read.event_action) events);
+        List.iter
+          (fun e ->
+            Alcotest.(check (option int)) "actor" (Some actor)
+              e.Read.event_actor_user_id;
+            Alcotest.(check int64) "connection" id e.Read.event_connection_id;
+            Alcotest.(check int) "requester" a
+              e.Read.event_requester_community_id;
+            Alcotest.(check int) "recipient" b
+              e.Read.event_recipient_community_id)
+          events;
+        let* absent = find conn "absent id" q_absent_connection_id () in
+        let* empty = Read.list_audit_events conn ~connection_id:absent in
+        let* empty = read_ok "absent trail" empty in
+        Alcotest.(check int) "an absent connection has no trail" 0
+          (List.length empty);
+        Lwt.return_unit)
+
+  let store_suite =
+    [ request_case; request_blank_note_case; request_validation_case
+    ; request_missing_community_case; request_duplicate_case
+    ; request_reversed_case; accept_case; reject_case
+    ; review_wrong_recipient_case; review_stale_case; review_validation_case
+    ; remove_from_either_side_case; remove_stale_case; remove_validation_case
+    ; fresh_request_after_history_case; actor_deletion_case ]
+
+  let atomicity_suite =
+    [ audit_failure_rolls_back_case; mutation_failure_leaves_no_event_case ]
+
+  let concurrency_suite =
+    [ concurrent_same_direction_case; concurrent_opposite_direction_case
+    ; concurrent_review_case ]
+
+  let read_suite =
+    [ read_load_case; read_active_pair_case; read_symmetric_accepted_case
+    ; read_queues_case; read_audit_case ]
+end
+
+(* Community connections, slice 2 — the pure eligibility rule and the
+   management/search/confirmation renderers. DB-free. *)
+module Ccon_ui = struct
+  module Cc = Earde.Community_connections
+  module P = Earde.Community_connections_pages
+
+  let contains haystack needle = Cprj_schema.contains haystack ~needle
+
+  let count_sub haystack needle =
+    let hl = String.length haystack and nl = String.length needle in
+    if nl = 0 || hl < nl then 0
+    else
+      let rec go i n =
+        if i > hl - nl then n
+        else if String.sub haystack i nl = needle then go (i + nl) (n + 1)
+        else go (i + 1) n
+      in
+      go 0 0
+
+  (* === the one eligibility rule === *)
+
+  let eligibility_case =
+    Alcotest.test_case
+      "eligibility: public + published + discoverable, and nothing else"
+      `Quick (fun () ->
+        let check label ~visibility ~onboarding_state ~discoverable expected =
+          Alcotest.(check bool) label expected
+            (Cc.connection_eligible ~visibility ~onboarding_state ~discoverable)
+        in
+        let vis = [ (Earde.Db.Community_public, "public")
+                  ; (Earde.Db.Community_private, "private") ] in
+        let states = [ (Earde.Db.Community_published, "published")
+                     ; (Earde.Db.Community_draft, "draft") ] in
+        List.iter
+          (fun (visibility, vname) ->
+            List.iter
+              (fun (onboarding_state, sname) ->
+                List.iter
+                  (fun discoverable ->
+                    let expected =
+                      visibility = Earde.Db.Community_public
+                      && onboarding_state = Earde.Db.Community_published
+                      && discoverable
+                    in
+                    check
+                      (Printf.sprintf "%s/%s/discoverable=%b" vname sname
+                         discoverable)
+                      ~visibility ~onboarding_state ~discoverable expected)
+                  [ true; false ])
+              states)
+          vis;
+        (* Exactly one combination qualifies out of the eight. *)
+        let qualifying =
+          List.concat_map
+            (fun (visibility, _) ->
+              List.concat_map
+                (fun (onboarding_state, _) ->
+                  List.filter
+                    (fun discoverable ->
+                      Cc.connection_eligible ~visibility ~onboarding_state
+                        ~discoverable)
+                    [ true; false ])
+                states)
+            vis
+        in
+        Alcotest.(check int) "one qualifying combination" 1
+          (List.length qualifying))
+
+  (* === page fixtures === *)
+
+  let community ?(eligible = true) () =
+    { P.name = "Ccon Source"; slug = "ccon-source"; eligible }
+
+  let counterpart ?(name = "OCaml") ?(slug = "ocaml") () =
+    { P.counterpart_name = name; counterpart_slug = slug }
+
+  let state ?(eligible = true) ?(accepted = []) ?(incoming = []) ?(outgoing = [])
+      () =
+    { P.community = community ~eligible (); accepted; incoming; outgoing }
+
+  let render_management ?(eligible = true) ?accepted ?incoming ?outgoing
+      ?feedback () =
+    P.management_page ~state:(state ~eligible ?accepted ?incoming ?outgoing ())
+      ~feedback ()
+
+  (* === management page === *)
+
+  let sections_case =
+    Alcotest.test_case "management: the three sections always render, with \
+                        symmetric connected-community copy" `Quick (fun () ->
+        let html =
+          render_management
+            ~accepted:
+              [ { P.accepted_id = "7"; accepted_with = counterpart () } ]
+            ~incoming:
+              [ { P.pending_id = "8";
+                  pending_with = counterpart ~name:"Reason" ~slug:"reason" ();
+                  pending_note = Some "we run a joint reading group" } ]
+            ~outgoing:
+              [ { P.pending_id = "9";
+                  pending_with = counterpart ~name:"Gleam" ~slug:"gleam" ();
+                  pending_note = None } ]
+            ()
+        in
+        List.iter
+          (fun needle -> Alcotest.(check bool) ("has " ^ needle) true
+              (contains html needle))
+          [ ">Connected communities</h2>"; ">Incoming requests</h2>"
+          ; ">Outgoing requests</h2>"; ">Connect a community</h2>"
+          ; ">OCaml</a>"; "/c/ocaml"; ">Reason</a>"; ">Gleam</a>"
+          ; "we run a joint reading group"; "Waiting for a reply" ];
+        (* Exact action paths, community-scoped and id-addressed. *)
+        List.iter
+          (fun needle -> Alcotest.(check bool) ("action " ^ needle) true
+              (contains html needle))
+          [ "action='/c/ccon-source/settings/connections/7/remove'"
+          ; "action='/c/ccon-source/settings/connections/8/accept'"
+          ; "action='/c/ccon-source/settings/connections/8/reject'" ];
+        (* An outgoing request is a state, not a control. *)
+        Alcotest.(check int) "no outgoing action" 0
+          (count_sub html "connections/9/");
+        Alcotest.(check int) "three forms in total" 3
+          (count_sub html "<form method='POST'"))
+
+  let empty_sections_case =
+    Alcotest.test_case "management: every empty section says so plainly"
+      `Quick (fun () ->
+        let html = render_management () in
+        List.iter
+          (fun needle -> Alcotest.(check bool) ("has " ^ needle) true
+              (contains html needle))
+          [ "No connected communities yet."; "No incoming requests."
+          ; "No outgoing requests." ];
+        Alcotest.(check int) "no forms at all" 0
+          (count_sub html "<form method='POST'"))
+
+  (* The action a moderator comes here to take leads; the three lists are the
+     record of what it produced. The order is fixed, so an empty page and a
+     busy one read the same way. *)
+  let section_order_case =
+    Alcotest.test_case
+      "management: Connect a community leads, and its CTA is the panel's \
+       primary action" `Quick (fun () ->
+        let index_of haystack needle =
+          let hl = String.length haystack and nl = String.length needle in
+          let rec go i =
+            if i > hl - nl then None
+            else if String.sub haystack i nl = needle then Some i
+            else go (i + 1)
+          in
+          go 0
+        in
+        let check_order label html =
+          let positions =
+            List.map
+              (fun heading ->
+                match index_of html heading with
+                | Some i -> i
+                | None -> Alcotest.failf "%s: %s missing" label heading)
+              [ ">Connect a community</h2>"; ">Connected communities</h2>"
+              ; ">Incoming requests</h2>"; ">Outgoing requests</h2>" ]
+          in
+          Alcotest.(check (list int))
+            (label ^ ": sections render in the required order")
+            (List.sort compare positions) positions
+        in
+        check_order "empty" (render_management ());
+        check_order "populated"
+          (render_management
+             ~accepted:
+               [ { P.accepted_id = "7"; accepted_with = counterpart () } ]
+             ~incoming:
+               [ { P.pending_id = "8"; pending_with = counterpart ();
+                   pending_note = None } ]
+             ~outgoing:
+               [ { P.pending_id = "9"; pending_with = counterpart ();
+                   pending_note = None } ]
+             ());
+        (* The CTA is the shared button control, an ordinary link, with its
+           label and destination unchanged. *)
+        let html = render_management () in
+        Alcotest.(check bool) "CTA on the shared primary button" true
+          (contains html
+             "<a class='btn btn--primary' \
+              href='/c/ccon-source/settings/connections/new'>Find a \
+              community</a>");
+        (* One control. The phrase also opens the explanatory copy above it,
+           so the anchor is what gets counted. *)
+        Alcotest.(check int) "exactly one CTA control" 1
+          (count_sub html "class='btn btn--primary'");
+        (* Nothing outside the anchor became clickable, and no script. *)
+        Alcotest.(check int) "no onclick anywhere" 0 (count_sub html "onclick");
+        Alcotest.(check int) "no script" 0 (count_sub html "<script"))
+
+  let note_escaping_case =
+    Alcotest.test_case "management: the private note is escaped, labelled, and \
+                        confined to pending rows" `Quick (fun () ->
+        let hostile = "<script>alert('x')</script> & \"quoted\"" in
+        let html =
+          render_management
+            ~accepted:
+              [ { P.accepted_id = "1"; accepted_with = counterpart () } ]
+            ~incoming:
+              [ { P.pending_id = "2"; pending_with = counterpart ();
+                  pending_note = Some hostile } ]
+            ()
+        in
+        Alcotest.(check bool) "no raw script tag" false
+          (contains html "<script>alert");
+        Alcotest.(check bool) "escaped instead" true
+          (contains html "&lt;script&gt;alert");
+        Alcotest.(check bool) "escaped ampersand" true (contains html "&amp;");
+        Alcotest.(check bool) "labelled private" true
+          (contains html "Private note");
+        (* One note block for one pending row; the accepted row carries
+           none. *)
+        Alcotest.(check int) "exactly one note block" 1
+          (count_sub html "class='ccn-note'"))
+
+  let no_people_case =
+    Alcotest.test_case "management: no usernames, no relationship labels, no \
+                        approval copy" `Quick (fun () ->
+        let html =
+          render_management
+            ~accepted:
+              [ { P.accepted_id = "1"; accepted_with = counterpart () } ]
+            ~incoming:
+              [ { P.pending_id = "2"; pending_with = counterpart ();
+                  pending_note = Some "note" } ]
+            ~outgoing:
+              [ { P.pending_id = "3"; pending_with = counterpart ();
+                  pending_note = None } ]
+            ()
+        in
+        List.iter
+          (fun needle ->
+            Alcotest.(check bool) ("absent: " ^ needle) false
+              (contains html needle))
+          [ "Accepted by"; "Requested by"; "Reviewed by"; "Removed by"
+          ; "Approved by"; "accepted by"; "requested by"
+            (* no relationship vocabulary of any kind *)
+          ; "relationship"; "Relationship"; "partner"; "Partner"; "parent"
+          ; "child"; "Tier"; "kind=" ])
+
+  let ineligible_case =
+    Alcotest.test_case "management: an ineligible community keeps reject and \
+                        remove, loses accept and connect" `Quick (fun () ->
+        let html =
+          render_management ~eligible:false
+            ~accepted:
+              [ { P.accepted_id = "1"; accepted_with = counterpart () } ]
+            ~incoming:
+              [ { P.pending_id = "2"; pending_with = counterpart ();
+                  pending_note = None } ]
+            ()
+        in
+        Alcotest.(check bool) "generic notice" true
+          (contains html "cannot create or accept new connections right now");
+        Alcotest.(check bool) "remove survives" true
+          (contains html "connections/1/remove");
+        Alcotest.(check bool) "reject survives" true
+          (contains html "connections/2/reject");
+        Alcotest.(check bool) "accept suppressed" false
+          (contains html "connections/2/accept");
+        Alcotest.(check bool) "accept explained, not disabled" true
+          (contains html "Accepting is unavailable");
+        Alcotest.(check bool) "search entry closed" false
+          (contains html "href='/c/ccon-source/settings/connections/new'");
+        (* The notice never names which of the three facts failed. *)
+        List.iter
+          (fun needle ->
+            Alcotest.(check bool) ("no reason: " ^ needle) false
+              (contains html needle))
+          [ "private"; "Private"; "draft"; "Draft"; "undiscoverable"
+          ; "not discoverable" ])
+
+  let hostile_ids_case =
+    Alcotest.test_case "management: a non-numeric id or unaddressable slug \
+                        renders no action" `Quick (fun () ->
+        let html =
+          render_management
+            ~accepted:
+              [ { P.accepted_id = "1/../9"; accepted_with = counterpart () }
+              ; { P.accepted_id = ""; accepted_with = counterpart () } ]
+            ~incoming:
+              [ { P.pending_id = "2 3"; pending_with = counterpart ();
+                  pending_note = None } ]
+            ()
+        in
+        Alcotest.(check int) "no forms" 0 (count_sub html "<form method='POST'");
+        Alcotest.(check bool) "no traversal in any path" false
+          (contains html "..");
+        (* A counterpart with a non-addressable slug still renders as text. *)
+        let html2 =
+          render_management
+            ~accepted:
+              [ { P.accepted_id = "5";
+                  accepted_with = counterpart ~slug:"bad/slug" () } ]
+            ()
+        in
+        Alcotest.(check bool) "identity still shown" true
+          (contains html2 "OCaml");
+        Alcotest.(check bool) "but not linked" false
+          (contains html2 "href='/c/bad/slug'"))
+
+  let feedback_case =
+    Alcotest.test_case "management: every feedback outcome is stable and \
+                        non-revealing" `Quick (fun () ->
+        List.iter
+          (fun (feedback, needle) ->
+            let html = render_management ~feedback ~eligible:true () in
+            Alcotest.(check bool) ("copy: " ^ needle) true
+              (contains html needle);
+            List.iter
+              (fun leak ->
+                Alcotest.(check bool) ("no leak " ^ leak) false
+                  (contains html leak))
+              [ "SQL"; "Caqti"; "constraint"; "community_connections"
+              ; "user_id"; "top_mod" ])
+          [ (P.Already_connected, "already connected")
+          ; (P.Review_unavailable, "no longer pending")
+          ; (P.Removal_unavailable, "no longer active")
+          ; (P.Target_unavailable, "not available to connect")
+          ; (P.Source_ineligible, "cannot create or accept new connections")
+          ; (P.Note_invalid, "2,000 characters")
+          ; (P.Stale_form, "open too long")
+          ; (P.Action_failed, "couldn't complete that action") ])
+
+  (* === search and confirmation === *)
+
+  let search_states_case =
+    Alcotest.test_case "search: an unsearched page and an empty result are \
+                        different copy, and neither states a count" `Quick
+      (fun () ->
+        let blank =
+          P.target_search_page ~community:(community ()) ~query:"" ~results:[]
+            ~searched:false ~feedback:None ()
+        in
+        Alcotest.(check bool) "prompt" true
+          (contains blank "Enter a name or address to search.");
+        let empty =
+          P.target_search_page ~community:(community ()) ~query:"zzz"
+            ~results:[] ~searched:true ~feedback:None ()
+        in
+        Alcotest.(check bool) "no match" true
+          (contains empty "No communities matched.");
+        let found =
+          P.target_search_page ~community:(community ()) ~query:"oc"
+            ~results:
+              [ { P.target_name = "OCaml"; target_slug = "ocaml" }
+              ; { P.target_name = "Reason"; target_slug = "reason" } ]
+            ~searched:true ~feedback:None ()
+        in
+        (* Results link into step two; no note field lives on a result row,
+           and no total, count, or "showing N of M" is rendered. *)
+        Alcotest.(check bool) "continue link" true
+          (contains found "target=ocaml");
+        Alcotest.(check int) "no textarea in results" 0
+          (count_sub found "<textarea");
+        List.iter
+          (fun needle ->
+            Alcotest.(check bool) ("no count: " ^ needle) false
+              (contains found needle))
+          [ "results)"; "2 communities"; "of 2"; "Showing"; "showing" ];
+        (* The eligibility rule is stated as a rule, never as a verdict on a
+           specific withheld community. *)
+        Alcotest.(check bool) "rule stated once" true
+          (contains found "public, published, discoverable"))
+
+  let search_escaping_case =
+    Alcotest.test_case "search: the query and every result identity are escaped"
+      `Quick (fun () ->
+        let html =
+          P.target_search_page ~community:(community ())
+            ~query:"\"><script>alert(1)</script>"
+            ~results:
+              [ { P.target_name = "<b>Bold</b>"; target_slug = "bold" } ]
+            ~searched:true ~feedback:None ()
+        in
+        Alcotest.(check bool) "no raw script" false
+          (contains html "<script>alert");
+        Alcotest.(check bool) "no raw bold" false (contains html "<b>Bold");
+        Alcotest.(check bool) "escaped name" true (contains html "&lt;b&gt;Bold"))
+
+  let confirm_case =
+    Alcotest.test_case "confirm: one target, one optional note, one submit"
+      `Quick (fun () ->
+        let html =
+          P.confirm_page ~community:(community ())
+            ~target:{ P.target_name = "OCaml"; target_slug = "ocaml" }
+            ~note:"draft <text>" ~feedback:None ()
+        in
+        Alcotest.(check bool) "posts to the request route" true
+          (contains html
+             "action='/c/ccon-source/settings/connections/request'");
+        Alcotest.(check int) "one hidden target" 1
+          (count_sub html "<input type='hidden' name='target'");
+        Alcotest.(check bool) "the exact target slug" true
+          (contains html "value='ocaml'");
+        Alcotest.(check int) "exactly one textarea" 1
+          (count_sub html "<textarea");
+        Alcotest.(check bool) "named note" true (contains html "name='note'");
+        Alcotest.(check bool) "capped at the domain limit" true
+          (contains html "maxlength='2000'");
+        Alcotest.(check bool) "note redisplayed, escaped" true
+          (contains html "draft &lt;text&gt;");
+        Alcotest.(check bool) "labelled private" true
+          (contains html "Private note (optional)");
+        (* An unaddressable target never becomes a form. *)
+        let bad =
+          P.confirm_page ~community:(community ())
+            ~target:{ P.target_name = "Bad"; target_slug = "a/b" }
+            ~note:"" ~feedback:None ()
+        in
+        Alcotest.(check int) "no form for an unaddressable target" 0
+          (count_sub bad "<form method='POST'"))
+
+  let csrf_field_case =
+    Alcotest.test_case "every mutation form carries the framework CSRF field"
+      `Quick (fun () ->
+        let captured = ref None in
+        let pipeline =
+          Dream.set_secret gck_secret @@ Dream.memory_sessions
+          @@ fun req ->
+          captured :=
+            Some
+              ( P.management_page ~request:req
+                  ~state:
+                    (state
+                       ~accepted:
+                         [ { P.accepted_id = "1";
+                             accepted_with = counterpart () } ]
+                       ~incoming:
+                         [ { P.pending_id = "2";
+                             pending_with = counterpart ();
+                             pending_note = None } ]
+                       ())
+                  ~feedback:None (),
+                P.confirm_page ~request:req ~community:(community ())
+                  ~target:{ P.target_name = "OCaml"; target_slug = "ocaml" }
+                  ~note:"" ~feedback:None () );
+          Dream.html ""
+        in
+        ignore
+          (Lwt_main.run
+             (pipeline
+                (Dream.request ~method_:`GET
+                   ~target:"/c/ccon-source/settings/connections" "")));
+        match !captured with
+        | None -> Alcotest.fail "renderer did not run"
+        | Some (management, confirm) ->
+            (* One token per form: three forms on the management page, one on
+               the confirmation page. *)
+            Alcotest.(check int) "management tokens" 3
+              (count_sub management "name=\"dream.csrf\"");
+            Alcotest.(check int) "confirm token" 1
+              (count_sub confirm "name=\"dream.csrf\""))
+
+  let noindex_case =
+    Alcotest.test_case "every connections document is noindex" `Quick
+      (fun () ->
+        List.iter
+          (fun html ->
+            Alcotest.(check bool) "noindex" true (contains html "noindex"))
+          [ render_management ()
+          ; P.target_search_page ~community:(community ()) ~query:""
+              ~results:[] ~searched:false ~feedback:None ()
+          ; P.confirm_page ~community:(community ())
+              ~target:{ P.target_name = "OCaml"; target_slug = "ocaml" }
+              ~note:"" ~feedback:None () ])
+
+  let suite =
+    [ eligibility_case; sections_case; empty_sections_case; section_order_case
+    ; note_escaping_case
+    ; no_people_case; ineligible_case; hostile_ids_case; feedback_case
+    ; search_states_case; search_escaping_case; confirm_case; csrf_field_case
+    ; noindex_case ]
+end
+
+(* Community connections, slice 2 — the real handlers over a real database:
+   the authorization matrix, subject binding, CSRF, eligibility enforcement,
+   target-search exclusions, and the rendered sections. Database-gated on
+   EARDE_TEST_DATABASE_URL. *)
+module Ccon_http = struct
+  let ( let* ) = Lwt.bind
+
+  open Caqti_request.Infix
+
+  module H = Earde.Community_connections_handlers
+  module Store = Earde.Community_connections_store
+  module Cc = Earde.Community_connections
+
+  let or_fail = Pod_store.or_fail
+  let insert_user = Pod_store.insert_user
+  let exec = Pod_read.exec
+  let find = Pod_read.find
+  let insert_community = Phcv.insert_community
+  let contains haystack needle = Cprj_schema.contains haystack ~needle
+  let status_of = Gh_start_handler.status_of
+  let must = Pch.must
+  let must_not = Pch.must_not
+
+  let base slug = Printf.sprintf "/c/%s/settings/connections" slug
+  let action ~slug ~id verb =
+    Printf.sprintf "%s/%Ld/%s" (base slug) id verb
+
+  (* --- Fixtures --- *)
+
+  let q_cleanup =
+    List.map
+      (fun sql -> (Caqti_type.unit ->. Caqti_type.unit) sql)
+      [ "DELETE FROM community_connection_audit_events \
+         WHERE requester_community_id IN \
+                 (SELECT id FROM communities WHERE slug LIKE 'ccnh-%') \
+            OR recipient_community_id IN \
+                 (SELECT id FROM communities WHERE slug LIKE 'ccnh-%')"
+      ; "DELETE FROM community_connections \
+         WHERE requester_community_id IN \
+                 (SELECT id FROM communities WHERE slug LIKE 'ccnh-%') \
+            OR recipient_community_id IN \
+                 (SELECT id FROM communities WHERE slug LIKE 'ccnh-%')"
+      ; "DELETE FROM communities WHERE slug LIKE 'ccnh-%'"
+      ; "DELETE FROM users WHERE username LIKE 'ccnh_%'"
+      ]
+
+  let db_case name f =
+    Alcotest.test_case name `Quick (fun () ->
+        match Sys.getenv_opt "EARDE_TEST_DATABASE_URL" with
+        | None | Some "" -> Alcotest.skip ()
+        | Some url ->
+            Lwt_main.run
+              (let* conn = Caqti_lwt_unix.connect (Uri.of_string url) in
+               let* conn = or_fail "connect" conn in
+               let (module C : Caqti_lwt.CONNECTION) = conn in
+               let cleanup () =
+                 Lwt_list.iter_s
+                   (fun q ->
+                     let* r = C.exec q () in
+                     let* _ = or_fail "cleanup" r in
+                     Lwt.return_unit)
+                   q_cleanup
+               in
+               let* () = cleanup () in
+               Lwt.finalize
+                 (fun () -> f ~url conn)
+                 (fun () ->
+                   Lwt.finalize cleanup (fun () -> C.disconnect ()))))
+
+  let add_role conn ~user ~community role =
+    exec conn "role fixture" Phrv.q_insert_moderator (user, community, role)
+  let add_top_mod conn ~user ~community = add_role conn ~user ~community "top_mod"
+  let add_member conn ~user ~community =
+    exec conn "member fixture" Phrv.q_insert_member (user, community)
+  let set_admin conn ~user flag =
+    exec conn "admin fixture" Phrv.q_set_admin (user, flag)
+
+  (* Lifecycle drift written directly, exactly as the durable columns
+     represent it — the same fixtures the choice-read-model suite uses. *)
+  let make_private conn cid = exec conn "private" Phcv.q_make_private cid
+  let make_unlisted conn cid = exec conn "unlisted" Phcv.q_make_unlisted cid
+  let make_draft conn cid = exec conn "draft" Phcv.q_make_draft_state cid
+
+  let q_status =
+    (Caqti_type.int64 ->! Caqti_type.string)
+    "SELECT status FROM community_connections WHERE id = $1"
+
+  let q_count_pair =
+    (Caqti_type.(t2 int int) ->! Caqti_type.int)
+    "SELECT COUNT(*) FROM community_connections \
+     WHERE LEAST(requester_community_id, recipient_community_id) \
+           = LEAST($1, $2) \
+       AND GREATEST(requester_community_id, recipient_community_id) \
+           = GREATEST($1, $2)"
+
+  let q_event_count =
+    (Caqti_type.int64 ->! Caqti_type.int)
+    "SELECT COUNT(*) FROM community_connection_audit_events \
+     WHERE connection_id = $1"
+
+  let check_status label conn id expected =
+    let* status = find conn (label ^ ": status") q_status id in
+    Alcotest.(check string) (label ^ ": status") expected status;
+    Lwt.return_unit
+
+  let check_events label conn id expected =
+    let* n = find conn (label ^ ": events") q_event_count id in
+    Alcotest.(check int) (label ^ ": audit events") expected n;
+    Lwt.return_unit
+
+  (* Durable fixtures go through the real store, exactly as production
+     writes them. *)
+  let request_direct conn ~actor ~requester ~recipient ?note () =
+    match
+      Cc.create_pending ~requester_community_id:requester
+        ~recipient_community_id:recipient ~request_note:note
+    with
+    | Error _ -> Alcotest.fail "fixture: pure pending value refused"
+    | Ok connection -> (
+        let* r = Store.request conn ~actor_user_id:actor ~connection in
+        match r with
+        | Ok created -> Lwt.return (Store.created_connection_id created)
+        | Error _ -> Alcotest.fail "fixture: request refused")
+
+  let accept_direct conn ~actor ~id ~recipient =
+    let* r =
+      Store.review conn ~reviewer_user_id:actor ~connection_id:id
+        ~recipient_community_id:recipient ~decision:Store.Accept
+    in
+    match r with
+    | Ok _ -> Lwt.return_unit
+    | Error _ -> Alcotest.fail "fixture: accept refused"
+
+  (* --- The real routed application, over the real pool --- *)
+
+  (* One sql_pool for the whole suite. Every case below builds one pipeline
+     per acting session, and nothing ever closes a Dream.sql_pool; since its
+     pool lives inside the middleware closure, reusing that one value is what
+     keeps those pipelines on a single connection instead of leaking one per
+     session until Postgres refuses. Sessions stay separate — each pipeline
+     still gets its own memory session store. *)
+  let shared_sql_pool : Dream.middleware option ref = ref None
+
+  let sql_pool url =
+    match !shared_sql_pool with
+    | Some middleware -> middleware
+    | None ->
+        let middleware = Dream.sql_pool ~size:2 url in
+        shared_sql_pool := Some middleware;
+        middleware
+
+  let app_pipeline ?session_user_id ?(session_admin = false) ~url () =
+    sql_pool url @@ Dream.set_secret gck_secret @@ Dream.memory_sessions
+    @@ (fun handler request ->
+         match session_user_id with
+         | None -> handler request
+         | Some uid ->
+             let* () =
+               Dream.set_session_field request "user_id" (string_of_int uid)
+             in
+             let* () =
+               if session_admin then
+                 Dream.set_session_field request "is_admin" "true"
+               else Lwt.return_unit
+             in
+             handler request)
+    @@ Dream.router
+         [ Dream.get "/mint" (fun req ->
+               Dream.respond
+                 (Dream.csrf_token req ^ "\n"
+                ^ Dream.csrf_token ~valid_for:(-60.) req));
+           Dream.get "/c/:slug/settings/connections"
+             H.make_connections_page_handler;
+           Dream.get "/c/:slug/settings/connections/new"
+             H.make_connections_search_handler;
+           Dream.post "/c/:slug/settings/connections/request"
+             H.make_connection_request_handler;
+           Dream.post "/c/:slug/settings/connections/:id/accept"
+             H.make_connection_accept_handler;
+           Dream.post "/c/:slug/settings/connections/:id/reject"
+             H.make_connection_reject_handler;
+           Dream.post "/c/:slug/settings/connections/:id/remove"
+             H.make_connection_removal_handler;
+         ]
+
+  let mint label pipeline =
+    let* response =
+      pipeline (Dream.request ~method_:`GET ~target:"/mint" "")
+    in
+    let cookie = Pch.session_cookie label response in
+    let* body = Dream.body response in
+    match String.split_on_char '\n' body with
+    | [ fresh; expired ] -> Lwt.return (cookie, fresh, expired)
+    | _ -> Alcotest.failf "%s: unexpected mint body" label
+
+  let get ?cookie ~target pipeline = Pch.do_get ?cookie ~target pipeline
+
+  let post ?(content_type = true) ~cookie ~target ~fields pipeline =
+    let headers =
+      (if content_type then
+         [ ("Content-Type", "application/x-www-form-urlencoded") ]
+       else [])
+      @ [ ("Cookie", cookie) ]
+    in
+    let* response =
+      pipeline
+        (Dream.request ~method_:`POST ~target ~headers (Pch.form_body fields))
+    in
+    let* body = Dream.body response in
+    Lwt.return (response, body)
+
+  (* One authorized session that has already opened the page, so both a
+     cookie and a live token exist for the follow-up POST. *)
+  let session ~url ~uid ?(admin = false) () =
+    app_pipeline ~session_user_id:uid ~session_admin:admin ~url ()
+
+  let acting label ~url ~uid ?(admin = false) () =
+    let pipeline = session ~url ~uid ~admin () in
+    let* cookie, token, expired = mint label pipeline in
+    Lwt.return (pipeline, cookie, token, expired)
+
+  (* === GET: authorization matrix === *)
+
+  let get_authz_case =
+    db_case "GET connections: exactly top_mod and durable admins; everyone \
+             else is one generic 404" (fun ~url conn ->
+        let* top = insert_user conn "ccnh_top" in
+        let* admin = insert_user conn "ccnh_admin" in
+        let* modu = insert_user conn "ccnh_mod" in
+        let* legacy = insert_user conn "ccnh_legacy" in
+        let* member = insert_user conn "ccnh_member" in
+        let* stranger = insert_user conn "ccnh_stranger" in
+        let* othertop = insert_user conn "ccnh_othertop" in
+        let* sonly = insert_user conn "ccnh_sonly" in
+        let* cid = insert_community ~name:"Ccnh Home" conn "ccnh-home" in
+        let* other = insert_community conn "ccnh-other" in
+        let* () = add_top_mod conn ~user:top ~community:cid in
+        let* () = set_admin conn ~user:admin true in
+        let* () = add_role conn ~user:modu ~community:cid "mod" in
+        let* () = add_role conn ~user:legacy ~community:cid "legacy_mod" in
+        let* () = add_member conn ~user:member ~community:cid in
+        let* () = add_top_mod conn ~user:othertop ~community:other in
+        let sees label uid ~admin =
+          let pipeline = session ~url ~uid ~admin () in
+          let* response, body = get ~target:(base "ccnh-home") pipeline in
+          Alcotest.(check int) (label ^ ": 200") 200 (status_of response);
+          must body ">Connected communities</h2>";
+          Lwt.return_unit
+        in
+        let denied label uid ~admin ~slug =
+          let pipeline = session ~url ~uid ~admin () in
+          let* response, body = get ~target:(base slug) pipeline in
+          Alcotest.(check int) (label ^ ": 404") 404 (status_of response);
+          must body "This page does not exist.";
+          must_not body "Connected communities";
+          Lwt.return_unit
+        in
+        let* () = sees "top mod" top ~admin:false in
+        (* The durable flag is what counts; the session flag only enables the
+           check. *)
+        let* () = sees "durable admin" admin ~admin:true in
+        (* Both halves are required: the session claim only enables the
+           durable check, and the durable flag only answers a claim. *)
+        let* () =
+          denied "durable admin without the session claim" admin ~admin:false
+            ~slug:"ccnh-home"
+        in
+        let* () = denied "ordinary mod" modu ~admin:false ~slug:"ccnh-home" in
+        let* () = denied "legacy mod" legacy ~admin:false ~slug:"ccnh-home" in
+        let* () = denied "member" member ~admin:false ~slug:"ccnh-home" in
+        let* () = denied "non-member" stranger ~admin:false ~slug:"ccnh-home" in
+        let* () =
+          denied "top mod of another community" othertop ~admin:false
+            ~slug:"ccnh-home"
+        in
+        let* () =
+          denied "session-only admin claim" sonly ~admin:true ~slug:"ccnh-home"
+        in
+        let* () = denied "missing community" top ~admin:false ~slug:"ccnh-absent" in
+        (* Anonymous callers never reach the read model at all. *)
+        let anon = app_pipeline ~url () in
+        let* response, _ = get ~target:(base "ccnh-home") anon in
+        Alcotest.(check int) "anonymous: 303" 303 (status_of response);
+        Alcotest.(check (option string)) "to /login" (Some "/login")
+          (Dream.header response "Location");
+        Lwt.return_unit)
+
+  (* === GET: the three sections over real rows === *)
+
+  let get_sections_case =
+    db_case "GET connections: accepted reads symmetrically, pending rows carry \
+             their private note, nothing names a person" (fun ~url conn ->
+        let* top = insert_user conn "ccnh_s_top" in
+        let* peer = insert_user conn "ccnh_s_peer" in
+        let* home = insert_community ~name:"Ccnh Sections" conn "ccnh-sec" in
+        let* friend = insert_community ~name:"Friend" conn "ccnh-sec-friend" in
+        let* asker = insert_community ~name:"Asker" conn "ccnh-sec-asker" in
+        let* wanted = insert_community ~name:"Wanted" conn "ccnh-sec-wanted" in
+        let* () = add_top_mod conn ~user:top ~community:home in
+        (* Accepted, requested by the OTHER side — it must still appear. *)
+        let* accepted_id =
+          request_direct conn ~actor:peer ~requester:friend ~recipient:home ()
+        in
+        let* () = accept_direct conn ~actor:top ~id:accepted_id ~recipient:home in
+        (* Incoming, with a hostile note. *)
+        let* incoming_id =
+          request_direct conn ~actor:peer ~requester:asker ~recipient:home
+            ~note:"<script>x</script> joint reading group" ()
+        in
+        (* Outgoing. *)
+        let* outgoing_id =
+          request_direct conn ~actor:top ~requester:home ~recipient:wanted
+            ~note:"we admire your work" ()
+        in
+        let pipeline = session ~url ~uid:top () in
+        let* response, body = get ~target:(base "ccnh-sec") pipeline in
+        Alcotest.(check int) "200" 200 (status_of response);
+        must body ">Friend</a>";
+        must body ">Asker</a>";
+        must body ">Wanted</a>";
+        must body (Printf.sprintf "connections/%Ld/remove" accepted_id);
+        must body (Printf.sprintf "connections/%Ld/accept" incoming_id);
+        must body (Printf.sprintf "connections/%Ld/reject" incoming_id);
+        (* An outgoing request carries no control. *)
+        must_not body (Printf.sprintf "connections/%Ld/" outgoing_id);
+        must body "Waiting for a reply";
+        (* The note is visible on this authorized page, escaped. *)
+        must body "joint reading group";
+        must_not body "<script>x</script>";
+        must body "&lt;script&gt;";
+        must body "we admire your work";
+        (* No person is named anywhere in the connections fragment. *)
+        let frag = ps_fragment body in
+        List.iter (fun n -> must_not frag n)
+          [ "ccnh_s_top"; "ccnh_s_peer"; "Accepted by"; "Requested by"
+          ; "Reviewed by"; "Removed by" ];
+        Lwt.return_unit)
+
+  (* === GET: target search exclusions === *)
+
+  let search_case =
+    db_case "GET search: only eligible, unconnected, other communities are \
+             offered" (fun ~url conn ->
+        let* top = insert_user conn "ccnh_q_top" in
+        let* peer = insert_user conn "ccnh_q_peer" in
+        let* home = insert_community ~name:"Ccnh Query" conn "ccnh-q-home" in
+        let* _good = insert_community ~name:"Ccnh Query Good" conn "ccnh-q-good" in
+        let* privc =
+          insert_community ~network:false ~name:"Ccnh Query Priv" conn
+            "ccnh-q-priv"
+        in
+        let* draft =
+          insert_community ~network:false ~name:"Ccnh Query Draft" conn
+            "ccnh-q-draft"
+        in
+        let* unlisted =
+          insert_community ~network:false ~name:"Ccnh Query Unlisted" conn
+            "ccnh-q-unlisted"
+        in
+        let* pending_target =
+          insert_community ~name:"Ccnh Query Pending" conn "ccnh-q-pending"
+        in
+        let* accepted_target =
+          insert_community ~name:"Ccnh Query Accepted" conn "ccnh-q-accepted"
+        in
+        let* rejected_target =
+          insert_community ~name:"Ccnh Query Rejected" conn "ccnh-q-rejected"
+        in
+        let* () = add_top_mod conn ~user:top ~community:home in
+        let* () = make_private conn privc in
+        let* () = make_draft conn draft in
+        let* () = make_unlisted conn unlisted in
+        let* _ =
+          request_direct conn ~actor:top ~requester:home
+            ~recipient:pending_target ()
+        in
+        let* acc =
+          request_direct conn ~actor:peer ~requester:accepted_target
+            ~recipient:home ()
+        in
+        let* () = accept_direct conn ~actor:top ~id:acc ~recipient:home in
+        let* rej =
+          request_direct conn ~actor:top ~requester:home
+            ~recipient:rejected_target ()
+        in
+        let* r =
+          Store.review conn ~reviewer_user_id:top ~connection_id:rej
+            ~recipient_community_id:rejected_target ~decision:Store.Reject
+        in
+        (match r with
+        | Ok _ -> ()
+        | Error _ -> Alcotest.fail "fixture: reject refused");
+        let pipeline = session ~url ~uid:top () in
+        let* response, body =
+          get ~target:(base "ccnh-q-home" ^ "/new?q=Ccnh+Query") pipeline
+        in
+        Alcotest.(check int) "200" 200 (status_of response);
+        (* Offered: eligible, unconnected, and the rejected-history one. *)
+        must body "target=ccnh-q-good";
+        must body "target=ccnh-q-rejected";
+        (* Withheld, and never even named. *)
+        (* Withheld communities are not named at all; the searching
+           community's own slug legitimately appears in its own form action
+           and back link, so only its offer is checked. *)
+        must_not body "target=ccnh-q-home";
+        List.iter
+          (fun slug ->
+            must_not body ("target=" ^ slug);
+            must_not body ("/c/" ^ slug))
+          [ "ccnh-q-priv"; "ccnh-q-draft"; "ccnh-q-unlisted"; "ccnh-q-pending"
+          ; "ccnh-q-accepted" ];
+        List.iter (fun n -> must_not body n)
+          [ "Ccnh Query Priv"; "Ccnh Query Draft"; "Ccnh Query Unlisted" ];
+        (* A blank query is the unsearched page; a matching-nothing query is
+           the empty one. Neither states a count. *)
+        let* _, blank = get ~target:(base "ccnh-q-home" ^ "/new") pipeline in
+        must blank "Enter a name or address to search.";
+        let* _, none =
+          get ~target:(base "ccnh-q-home" ^ "/new?q=zzzznothing") pipeline
+        in
+        must none "No communities matched.";
+        (* A wildcard cannot widen the pattern. *)
+        let* _, wild = get ~target:(base "ccnh-q-home" ^ "/new?q=%25") pipeline in
+        must wild "No communities matched.";
+        (* Step two only accepts a target the search would still offer. *)
+        let* _, confirm =
+          get ~target:(base "ccnh-q-home" ^ "/new?target=ccnh-q-good") pipeline
+        in
+        must confirm "name='target'";
+        must confirm "value='ccnh-q-good'";
+        must confirm "<textarea";
+        let* _, refused =
+          get ~target:(base "ccnh-q-home" ^ "/new?target=ccnh-q-priv") pipeline
+        in
+        must refused "not available to connect";
+        must_not refused "<textarea";
+        must_not refused "Ccnh Query Priv";
+        (* A pair that already has a live request is named as such — that is
+           this community's own state, visible on its own management page —
+           while a withheld community stays collapsed above. *)
+        let* _, active =
+          get ~target:(base "ccnh-q-home" ^ "/new?target=ccnh-q-pending")
+            pipeline
+        in
+        must active "already connected";
+        must_not active "<textarea";
+        (* And an unaddressable slug is refused without any oracle. *)
+        let* _, weird =
+          get ~target:(base "ccnh-q-home" ^ "/new?target=a%2Fb") pipeline
+        in
+        must weird "not available to connect";
+        Lwt.return_unit)
+
+  (* === POST request: authorization and eligibility === *)
+
+  let request_authz_case =
+    db_case "POST request: only the source community's top_mod or a durable \
+             admin may send one" (fun ~url conn ->
+        let* top = insert_user conn "ccnh_r_top" in
+        let* admin = insert_user conn "ccnh_r_admin" in
+        let* modu = insert_user conn "ccnh_r_mod" in
+        let* member = insert_user conn "ccnh_r_member" in
+        let* stranger = insert_user conn "ccnh_r_stranger" in
+        let* home = insert_community ~name:"Ccnh Req" conn "ccnh-r-home" in
+        let* target = insert_community ~name:"Ccnh Req Target" conn "ccnh-r-target" in
+        let* target2 =
+          insert_community ~name:"Ccnh Req Target Two" conn "ccnh-r-target2"
+        in
+        let* () = add_top_mod conn ~user:top ~community:home in
+        let* () = set_admin conn ~user:admin true in
+        let* () = add_role conn ~user:modu ~community:home "mod" in
+        let* () = add_member conn ~user:member ~community:home in
+        let send label uid ~admin ~target_slug =
+          let* pipeline, cookie, token, _ =
+            acting label ~url ~uid ~admin ()
+          in
+          post ~cookie
+            ~target:(base "ccnh-r-home" ^ "/request")
+            ~fields:
+              [ ("dream.csrf", token); ("target", target_slug);
+                ("note", "please connect") ]
+            pipeline
+        in
+        (* The two authorized identities each succeed once. *)
+        let* response, _ =
+          send "top mod" top ~admin:false ~target_slug:"ccnh-r-target"
+        in
+        Alcotest.(check int) "top mod: 303" 303 (status_of response);
+        Alcotest.(check (option string)) "back to the management page"
+          (Some (base "ccnh-r-home"))
+          (Dream.header response "Location");
+        let* n = find conn "pair" q_count_pair (home, target) in
+        Alcotest.(check int) "one pending row" 1 n;
+        let* response, _ =
+          send "durable admin" admin ~admin:true ~target_slug:"ccnh-r-target2"
+        in
+        Alcotest.(check int) "admin: 303" 303 (status_of response);
+        let* n = find conn "pair2" q_count_pair (home, target2) in
+        Alcotest.(check int) "admin's row" 1 n;
+        (* Everyone else is refused before any store call. *)
+        let refused label uid ~admin =
+          let* response, body = send label uid ~admin ~target_slug:"ccnh-r-target" in
+          Alcotest.(check int) (label ^ ": 404") 404 (status_of response);
+          must body "This page does not exist.";
+          Lwt.return_unit
+        in
+        let* () = refused "ordinary mod" modu ~admin:false in
+        let* () = refused "member" member ~admin:false in
+        let* () = refused "non-member" stranger ~admin:false in
+        let* () = refused "session-only admin" stranger ~admin:true in
+        (* And nothing new was written by any of them. *)
+        let* n = find conn "still one" q_count_pair (home, target) in
+        Alcotest.(check int) "no extra rows" 1 n;
+        (* A duplicate is a stable conflict, not a second row. *)
+        let* response, body =
+          send "duplicate" top ~admin:false ~target_slug:"ccnh-r-target"
+        in
+        Alcotest.(check int) "duplicate: 409" 409 (status_of response);
+        must body "already connected";
+        let* n = find conn "still one after duplicate" q_count_pair (home, target) in
+        Alcotest.(check int) "no extra rows" 1 n;
+        Lwt.return_unit)
+
+  let request_eligibility_case =
+    db_case "POST request: an ineligible source or target is refused at the \
+             transaction boundary" (fun ~url conn ->
+        let* top = insert_user conn "ccnh_e_top" in
+        let* home =
+          insert_community ~network:false ~name:"Ccnh Elig" conn "ccnh-e-home"
+        in
+        let* target =
+          insert_community ~network:false ~name:"Ccnh Elig Target" conn
+            "ccnh-e-target"
+        in
+        let* () = add_top_mod conn ~user:top ~community:home in
+        let send label ~target_slug =
+          let* pipeline, cookie, token, _ = acting label ~url ~uid:top () in
+          post ~cookie
+            ~target:(base "ccnh-e-home" ^ "/request")
+            ~fields:[ ("dream.csrf", token); ("target", target_slug) ]
+            pipeline
+        in
+        (* The target goes private after the page was rendered. *)
+        let* () = make_private conn target in
+        let* response, body = send "private target" ~target_slug:"ccnh-e-target" in
+        Alcotest.(check int) "409" 409 (status_of response);
+        must body "not available to connect";
+        (* The refusal never says why, and never that the community exists. *)
+        must_not body "private";
+        let* n = find conn "nothing written" q_count_pair (home, target) in
+        Alcotest.(check int) "no row" 0 n;
+        (* Now the source itself becomes ineligible. *)
+        let* () = exec conn "restore" Phcv.q_make_listed target in
+        let* () = make_unlisted conn home in
+        let* response, body = send "unlisted source" ~target_slug:"ccnh-e-target" in
+        Alcotest.(check int) "409" 409 (status_of response);
+        must body "cannot create or accept new connections";
+        let* n = find conn "still nothing" q_count_pair (home, target) in
+        Alcotest.(check int) "no row" 0 n;
+        (* Its management page still loads, and the search surface says no. *)
+        let pipeline = session ~url ~uid:top () in
+        let* response, page = get ~target:(base "ccnh-e-home") pipeline in
+        Alcotest.(check int) "management still 200" 200 (status_of response);
+        must page "cannot create or accept new connections";
+        let* response, _ = get ~target:(base "ccnh-e-home" ^ "/new") pipeline in
+        Alcotest.(check int) "search closed" 403 (status_of response);
+        Lwt.return_unit)
+
+  (* === POST accept/reject: subject binding === *)
+
+  let review_authz_case =
+    db_case "POST accept/reject: only the recipient community's authority, \
+             and only over its own connection" (fun ~url conn ->
+        let* rtop = insert_user conn "ccnh_v_rtop" in
+        let* stop = insert_user conn "ccnh_v_stop" in
+        let* xtop = insert_user conn "ccnh_v_xtop" in
+        let* admin = insert_user conn "ccnh_v_admin" in
+        let* source = insert_community ~name:"Ccnh Src" conn "ccnh-v-src" in
+        let* recipient = insert_community ~name:"Ccnh Rec" conn "ccnh-v-rec" in
+        let* outsider = insert_community ~name:"Ccnh Out" conn "ccnh-v-out" in
+        let* () = add_top_mod conn ~user:stop ~community:source in
+        let* () = add_top_mod conn ~user:rtop ~community:recipient in
+        let* () = add_top_mod conn ~user:xtop ~community:outsider in
+        let* () = set_admin conn ~user:admin true in
+        let* () = add_top_mod conn ~user:admin ~community:outsider in
+        let* id =
+          request_direct conn ~actor:stop ~requester:source ~recipient ()
+        in
+        let review label uid ~admin ~slug verb =
+          let* pipeline, cookie, token, _ = acting label ~url ~uid ~admin () in
+          post ~cookie
+            ~target:(Printf.sprintf "%s/%Ld/%s" (base slug) id verb)
+            ~fields:[ ("dream.csrf", token) ]
+            pipeline
+        in
+        (* The requesting side cannot review its own request, even though it
+           is a top_mod of a community in the pair. *)
+        let* response, body = review "requester side" stop ~admin:false ~slug:"ccnh-v-src" "accept" in
+        Alcotest.(check int) "404" 404 (status_of response);
+        must body "This page does not exist.";
+        let* () = check_status "untouched" conn id "pending" in
+        (* An unrelated community's top mod, addressing it through their own
+           route, cannot reach it either. *)
+        let* response, _ = review "outsider" xtop ~admin:false ~slug:"ccnh-v-out" "accept" in
+        Alcotest.(check int) "404" 404 (status_of response);
+        let* () = check_status "untouched" conn id "pending" in
+        (* A global admin operating from an unrelated community context is
+           refused too: authority does not remove the subject binding. *)
+        let* response, _ = review "admin, wrong context" admin ~admin:true ~slug:"ccnh-v-out" "accept" in
+        Alcotest.(check int) "404" 404 (status_of response);
+        let* () = check_status "untouched" conn id "pending" in
+        (* Only one audit event so far: the request. *)
+        let* () = check_events "no review yet" conn id 1 in
+        (* The recipient's top mod succeeds. *)
+        let* response, _ = review "recipient top mod" rtop ~admin:false ~slug:"ccnh-v-rec" "accept" in
+        Alcotest.(check int) "303" 303 (status_of response);
+        let* () = check_status "accepted" conn id "accepted" in
+        let* () = check_events "request + accept" conn id 2 in
+        (* A stale duplicate submission is a stable conflict, never a second
+           write. *)
+        let* response, body = review "duplicate" rtop ~admin:false ~slug:"ccnh-v-rec" "accept" in
+        Alcotest.(check int) "409" 409 (status_of response);
+        must body "no longer pending";
+        let* () = check_events "still two" conn id 2 in
+        let* response, body = review "late reject" rtop ~admin:false ~slug:"ccnh-v-rec" "reject" in
+        Alcotest.(check int) "409" 409 (status_of response);
+        must body "no longer pending";
+        let* () = check_events "still two" conn id 2 in
+        Lwt.return_unit)
+
+  let review_eligibility_case =
+    db_case "POST accept: blocked once either side loses eligibility; reject \
+             stays available" (fun ~url conn ->
+        let* stop = insert_user conn "ccnh_w_stop" in
+        let* rtop = insert_user conn "ccnh_w_rtop" in
+        let* source =
+          insert_community ~network:false ~name:"Ccnh WSrc" conn "ccnh-w-src"
+        in
+        let* recipient =
+          insert_community ~network:false ~name:"Ccnh WRec" conn "ccnh-w-rec"
+        in
+        let* () = add_top_mod conn ~user:stop ~community:source in
+        let* () = add_top_mod conn ~user:rtop ~community:recipient in
+        let* id = request_direct conn ~actor:stop ~requester:source ~recipient () in
+        let review label verb =
+          let* pipeline, cookie, token, _ = acting label ~url ~uid:rtop () in
+          post ~cookie ~target:(action ~slug:"ccnh-w-rec" ~id verb)
+            ~fields:[ ("dream.csrf", token) ]
+            pipeline
+        in
+        (* The requesting community goes private after the request. *)
+        let* () = make_private conn source in
+        let* response, body = review "accept, source private" "accept" in
+        Alcotest.(check int) "409" 409 (status_of response);
+        must body "not available to connect";
+        let* () = check_status "still pending" conn id "pending" in
+        (* Now the reviewing community loses eligibility too. *)
+        let* () = exec conn "restore source" Phcv.q_make_listed source in
+        let* () = make_unlisted conn recipient in
+        let* response, body = review "accept, recipient unlisted" "accept" in
+        Alcotest.(check int) "409" 409 (status_of response);
+        must body "cannot create or accept new connections";
+        let* () = check_status "still pending" conn id "pending" in
+        (* The page renders without an accept control but with reject. *)
+        let pipeline = session ~url ~uid:rtop () in
+        let* _, page = get ~target:(base "ccnh-w-rec") pipeline in
+        must page (Printf.sprintf "connections/%Ld/reject" id);
+        must_not page (Printf.sprintf "connections/%Ld/accept" id);
+        (* And rejection still closes it. *)
+        let* response, _ = review "reject while ineligible" "reject" in
+        Alcotest.(check int) "303" 303 (status_of response);
+        let* () = check_status "rejected" conn id "rejected" in
+        let* () = check_events "request + reject" conn id 2 in
+        Lwt.return_unit)
+
+  (* === POST remove === *)
+
+  let removal_case =
+    db_case "POST remove: either side may detach, an outsider may not, and \
+             eligibility is irrelevant" (fun ~url conn ->
+        let* stop = insert_user conn "ccnh_x_stop" in
+        let* rtop = insert_user conn "ccnh_x_rtop" in
+        let* xtop = insert_user conn "ccnh_x_xtop" in
+        let* source =
+          insert_community ~network:false ~name:"Ccnh XSrc" conn "ccnh-x-src"
+        in
+        let* recipient = insert_community ~name:"Ccnh XRec" conn "ccnh-x-rec" in
+        let* outsider = insert_community ~name:"Ccnh XOut" conn "ccnh-x-out" in
+        let* () = add_top_mod conn ~user:stop ~community:source in
+        let* () = add_top_mod conn ~user:rtop ~community:recipient in
+        let* () = add_top_mod conn ~user:xtop ~community:outsider in
+        let* first = request_direct conn ~actor:stop ~requester:source ~recipient () in
+        let* () = accept_direct conn ~actor:rtop ~id:first ~recipient in
+        let remove label uid ~slug ~id =
+          let* pipeline, cookie, token, _ = acting label ~url ~uid () in
+          post ~cookie ~target:(action ~slug ~id "remove")
+            ~fields:[ ("dream.csrf", token) ]
+            pipeline
+        in
+        (* An outsider addressing it through their own community is refused
+           before the store. *)
+        let* response, _ = remove "outsider" xtop ~slug:"ccnh-x-out" ~id:first in
+        Alcotest.(check int) "404" 404 (status_of response);
+        let* () = check_status "still accepted" conn first "accepted" in
+        (* The recipient side removes it. *)
+        let* response, _ = remove "recipient side" rtop ~slug:"ccnh-x-rec" ~id:first in
+        Alcotest.(check int) "303" 303 (status_of response);
+        let* () = check_status "removed" conn first "removed" in
+        let* () = check_events "three events" conn first 3 in
+        (* A stale duplicate removal is a stable conflict. *)
+        let* response, body = remove "duplicate" rtop ~slug:"ccnh-x-rec" ~id:first in
+        Alcotest.(check int) "409" 409 (status_of response);
+        must body "no longer active";
+        let* () = check_events "still three" conn first 3 in
+        (* A fresh connection, removed from the requesting side, while that
+           side is no longer eligible. *)
+        let* second = request_direct conn ~actor:stop ~requester:source ~recipient () in
+        let* () = accept_direct conn ~actor:rtop ~id:second ~recipient in
+        let* () = make_private conn source in
+        let* response, _ = remove "requester side, ineligible" stop ~slug:"ccnh-x-src" ~id:second in
+        Alcotest.(check int) "303" 303 (status_of response);
+        let* () = check_status "removed" conn second "removed" in
+        Lwt.return_unit)
+
+  (* === CSRF on every mutation === *)
+
+  let csrf_case =
+    db_case "every mutation requires the framework CSRF field" (fun ~url conn ->
+        let* stop = insert_user conn "ccnh_c_stop" in
+        let* rtop = insert_user conn "ccnh_c_rtop" in
+        let* source = insert_community ~name:"Ccnh CSrc" conn "ccnh-c-src" in
+        let* recipient = insert_community ~name:"Ccnh CRec" conn "ccnh-c-rec" in
+        let* free = insert_community ~name:"Ccnh CFree" conn "ccnh-c-free" in
+        let* () = add_top_mod conn ~user:stop ~community:source in
+        let* () = add_top_mod conn ~user:rtop ~community:recipient in
+        let* pending_id =
+          request_direct conn ~actor:stop ~requester:source ~recipient ()
+        in
+        let* accepted_id =
+          request_direct conn ~actor:stop ~requester:source ~recipient:free ()
+        in
+        let* () = accept_direct conn ~actor:stop ~id:accepted_id ~recipient:free in
+        let* pipeline, cookie, _token, expired = acting "mint" ~url ~uid:rtop () in
+        let* spipe, scookie, _stoken, sexpired = acting "mint2" ~url ~uid:stop () in
+        let refused label ~pipeline ~cookie ~target ~fields =
+          let* response, body = post ~cookie ~target ~fields pipeline in
+          Alcotest.(check int) (label ^ ": 403") 403 (status_of response);
+          (* The refusal re-renders the authorized page with a fresh token
+             rather than dead-ending. *)
+          must body "open too long";
+          Lwt.return_unit
+        in
+        let accept_target = action ~slug:"ccnh-c-rec" ~id:pending_id "accept" in
+        let reject_target = action ~slug:"ccnh-c-rec" ~id:pending_id "reject" in
+        let remove_target = action ~slug:"ccnh-c-src" ~id:accepted_id "remove" in
+        let request_target = base "ccnh-c-src" ^ "/request" in
+        let* () = refused "accept, no token" ~pipeline ~cookie ~target:accept_target ~fields:[] in
+        let* () =
+          refused "accept, junk token" ~pipeline ~cookie ~target:accept_target
+            ~fields:[ ("dream.csrf", "not-a-token") ]
+        in
+        let* () =
+          refused "accept, expired token" ~pipeline ~cookie ~target:accept_target
+            ~fields:[ ("dream.csrf", expired) ]
+        in
+        let* () = refused "reject, no token" ~pipeline ~cookie ~target:reject_target ~fields:[] in
+        let* () =
+          refused "remove, no token" ~pipeline:spipe ~cookie:scookie
+            ~target:remove_target ~fields:[]
+        in
+        let* () =
+          refused "request, expired token" ~pipeline:spipe ~cookie:scookie
+            ~target:request_target
+            ~fields:[ ("dream.csrf", sexpired); ("target", "ccnh-c-free") ]
+        in
+        (* Nothing moved. *)
+        let* () = check_status "still pending" conn pending_id "pending" in
+        let* () = check_status "still accepted" conn accepted_id "accepted" in
+        let* () = check_events "request only" conn pending_id 1 in
+        Lwt.return_unit)
+
+  (* === the settings entry point, and the surfaces it must not disturb === *)
+
+  let settings_community ~is_network : Earde.Db.community =
+    { id = 5150; slug = "ccnh-nav"; name = "Ccnh Nav"; description = None;
+      rules = None; avatar_url = None; banner_url = None; allow_downvotes = true;
+      sections_enabled = false; visibility = Earde.Db.Community_public;
+      indexable = true; is_network_community = is_network;
+      onboarding_state = Earde.Db.Community_published; discoverable = true }
+
+  let render_settings ~is_admin ~is_top_mod =
+    let captured = ref None in
+    let pipeline =
+      Dream.set_secret gck_secret @@ Dream.memory_sessions
+      @@ fun req ->
+      captured :=
+        Some
+          (Earde.Pages.community_settings_page ~is_admin ~is_top_mod
+             ~open_reports_count:0
+             ~community:(settings_community ~is_network:false)
+             ~mods:[] ~banned_users:[] ~members:[] ~sections:[] ~channels:[] req);
+      Dream.html ""
+    in
+    ignore
+      (Lwt_main.run
+         (pipeline (Dream.request ~method_:`GET ~target:"/c/ccnh-nav/settings" "")));
+    match !captured with
+    | Some html -> html
+    | None -> Alcotest.fail "settings renderer did not run"
+
+  let settings_nav_case =
+    Alcotest.test_case
+      "settings: the connections entry appears for top mods and admins only, \
+       beside the untouched project-home entry" `Quick (fun () ->
+        let link = "href='/c/ccnh-nav/settings/connections'" in
+        let top = render_settings ~is_admin:false ~is_top_mod:true in
+        Alcotest.(check bool) "top_mod sees it" true (contains top link);
+        Alcotest.(check bool) "exact label" true (contains top ">Connections</a>");
+        let admin = render_settings ~is_admin:true ~is_top_mod:false in
+        Alcotest.(check bool) "admin sees it" true (contains admin link);
+        let plain = render_settings ~is_admin:false ~is_top_mod:false in
+        Alcotest.(check bool) "ordinary mod does not" false (contains plain link);
+        (* The pre-existing entry is untouched on every one of them. *)
+        List.iter
+          (fun (label, html, expected) ->
+            Alcotest.(check bool)
+              (label ^ ": project-home entry unchanged")
+              expected
+              (contains html "href='/c/ccnh-nav/project-home-requests'"))
+          [ ("top mod", top, true); ("admin", admin, true)
+          ; ("ordinary mod", plain, false) ])
+
+  let suite =
+    [ get_authz_case; get_sections_case; search_case; request_authz_case
+    ; request_eligibility_case; review_authz_case; review_eligibility_case
+    ; removal_case; csrf_case; settings_nav_case ]
+end
+
+(* Community connections, slice 3 — transactional notifications.
+
+   The store's three mutations now write notification rows on the same
+   transaction as the guarded UPDATE and its audit event. These cases assert
+   the recipient rule (exact top_mod of one named community), the exclusions
+   (actor, ordinary and legacy moderators, global admins), deduplication, the
+   atomic outcome under forced failure and under concurrency, the durable row
+   shapes the CHECK constraint now has to keep unambiguous, and the read and
+   render path — including that neither the request note nor any username can
+   reach either. *)
+module Ccnt = struct
+  let ( let* ) = Lwt.bind
+
+  open Caqti_request.Infix
+
+  module Cc = Earde.Community_connections
+  module Store = Earde.Community_connections_store
+  module Notif = Earde.Community_connection_notifications
+
+  let or_fail = Pod_store.or_fail
+  let reject = Pod_schema.reject
+  let insert_user = Pod_store.insert_user
+  let exec = Pod_read.exec
+  let find = Pod_read.find
+  let collect = Pod_read.collect
+  let insert_community = Phcv.insert_community
+  let make_project = Phrq.make_project
+  let contains haystack needle = Cprj_schema.contains haystack ~needle
+  let status_of = Gh_start_handler.status_of
+  let error_str = Ccon_store.error_str
+
+  let add_role conn ~user ~community role =
+    exec conn "role fixture" Phrv.q_insert_moderator (user, community, role)
+
+  let add_top_mod conn ~user ~community = add_role conn ~user ~community "top_mod"
+
+  let add_member conn ~user ~community =
+    exec conn "member fixture" Phrv.q_insert_member (user, community)
+
+  let set_admin conn ~user flag =
+    exec conn "admin fixture" Phrv.q_set_admin (user, flag)
+
+  (* Failure-injection DDL is dropped first so a crashed case can never leave
+     a trigger behind. Then the dependency order: notifications (which
+     reference connections and communities), the connection audit trail (which
+     RESTRICT-protects both its connection and its communities), the
+     connections themselves, and only then the project-home fixtures the shape
+     cases need, the communities, the users, and the installations. *)
+  let q_cleanup =
+    List.map
+      (fun sql -> (Caqti_type.unit ->. Caqti_type.unit) sql)
+      [ "DROP TRIGGER IF EXISTS ccnt_fail_notif ON notifications"
+      ; "DROP FUNCTION IF EXISTS ccnt_fail_fn()"
+      ; "DELETE FROM notifications \
+         WHERE user_id IN (SELECT id FROM users WHERE username LIKE 'ccnt_%')"
+      ; "DELETE FROM notifications \
+         WHERE community_id IN \
+           (SELECT id FROM communities WHERE slug LIKE 'ccnt-%')"
+      ; "DELETE FROM community_connection_audit_events \
+         WHERE requester_community_id IN \
+                 (SELECT id FROM communities WHERE slug LIKE 'ccnt-%') \
+            OR recipient_community_id IN \
+                 (SELECT id FROM communities WHERE slug LIKE 'ccnt-%')"
+      ; "DELETE FROM community_connections \
+         WHERE requester_community_id IN \
+                 (SELECT id FROM communities WHERE slug LIKE 'ccnt-%') \
+            OR recipient_community_id IN \
+                 (SELECT id FROM communities WHERE slug LIKE 'ccnt-%')"
+      ; "DELETE FROM project_home_audit_events \
+         WHERE project_id IN \
+           (SELECT id FROM open_source_projects \
+            WHERE forge_namespace_id BETWEEN 964100001 AND 964100999)"
+      ; "DELETE FROM project_home_audit_events \
+         WHERE community_id IN \
+           (SELECT id FROM communities WHERE slug LIKE 'ccnt-%')"
+      ; "DELETE FROM open_source_projects \
+         WHERE forge_namespace_id BETWEEN 964100001 AND 964100999"
+      ; "DELETE FROM project_onboarding_drafts \
+         WHERE github_installation_record_id IN \
+           (SELECT id FROM github_installations \
+            WHERE github_installation_id BETWEEN 964000001 AND 964000999)"
+      ; "DELETE FROM communities WHERE slug LIKE 'ccnt-%'"
+      ; "DELETE FROM users WHERE username LIKE 'ccnt_%'"
+      ; "DELETE FROM github_installations \
+         WHERE github_installation_id BETWEEN 964000001 AND 964000999"
+      ]
+
+  let db_case name f =
+    Alcotest.test_case name `Quick (fun () ->
+        match Sys.getenv_opt "EARDE_TEST_DATABASE_URL" with
+        | None | Some "" -> Alcotest.skip ()
+        | Some url ->
+            Lwt_main.run
+              (let* conn = Caqti_lwt_unix.connect (Uri.of_string url) in
+               let* conn = or_fail "connect" conn in
+               let (module C : Caqti_lwt.CONNECTION) = conn in
+               let cleanup () =
+                 Lwt_list.iter_s
+                   (fun q ->
+                     let* r = C.exec q () in
+                     let* _ = or_fail "cleanup" r in
+                     Lwt.return_unit)
+                   q_cleanup
+               in
+               let* () = cleanup () in
+               Lwt.finalize
+                 (fun () -> f ~url conn)
+                 (fun () ->
+                   Lwt.finalize cleanup (fun () -> C.disconnect ()))))
+
+  (* === observation === *)
+
+  (* One tuple per notification of one connection, ordered by recipient so
+     expectations do not depend on insertion order. *)
+  let q_notifs =
+    (Caqti_type.int64
+     ->* Caqti_type.(t2 (t2 int string) (t2 (option int) int)))
+    "SELECT user_id, notif_type, actor_user_id, community_id \
+     FROM notifications WHERE connection_id = $1 \
+     ORDER BY user_id, notif_type"
+
+  let q_notif_count =
+    (Caqti_type.int64 ->! Caqti_type.int)
+    "SELECT COUNT(*) FROM notifications WHERE connection_id = $1"
+
+  (* Every stored byte of one connection's notifications, for the boolean
+     absence sweep over notes and usernames. *)
+  let q_notif_blob =
+    (Caqti_type.int64 ->! Caqti_type.string)
+    "SELECT COALESCE(string_agg(n::text, '|'), '<none>') \
+     FROM notifications n WHERE connection_id = $1"
+
+  (* Creation must never mark anything read. *)
+  let q_all_unread =
+    (Caqti_type.int64 ->! Caqti_type.bool)
+    "SELECT COALESCE(BOOL_AND(NOT is_read), TRUE) \
+     FROM notifications WHERE connection_id = $1"
+
+  let q_event_count =
+    (Caqti_type.int64 ->! Caqti_type.int)
+    "SELECT COUNT(*) FROM community_connection_audit_events \
+     WHERE connection_id = $1"
+
+  let q_pair_event_count =
+    (Caqti_type.int ->! Caqti_type.int)
+    "SELECT COUNT(*) FROM community_connection_audit_events \
+     WHERE requester_community_id = $1 OR recipient_community_id = $1"
+
+  let q_pair_notif_count =
+    (Caqti_type.int ->! Caqti_type.int)
+    "SELECT COUNT(*) FROM notifications WHERE community_id = $1"
+
+  let q_status =
+    (Caqti_type.int64 ->! Caqti_type.string)
+    "SELECT status FROM community_connections WHERE id = $1"
+
+  let notif_t = Alcotest.(pair (pair int string) (pair (option int) int))
+
+  let check_notifs label conn ~connection expected =
+    let* rows = collect conn (label ^ ": notifications") q_notifs connection in
+    Alcotest.(check (list notif_t))
+      (label ^ ": exact notifications") expected rows;
+    let* unread = find conn (label ^ ": unread") q_all_unread connection in
+    Alcotest.(check bool) (label ^ ": all rows unread") true unread;
+    Lwt.return_unit
+
+  let check_notif_count label conn ~connection expected =
+    let* n = find conn (label ^ ": count") q_notif_count connection in
+    Alcotest.(check int) (label ^ ": notification count") expected n;
+    Lwt.return_unit
+
+  let check_events label conn ~connection expected =
+    let* n = find conn (label ^ ": events") q_event_count connection in
+    Alcotest.(check int) (label ^ ": audit events") expected n;
+    Lwt.return_unit
+
+  let check_status label conn id expected =
+    let* status = find conn (label ^ ": status") q_status id in
+    Alcotest.(check string) (label ^ ": status") expected status;
+    Lwt.return_unit
+
+  (* === store call helpers, always through the real store === *)
+
+  let request conn ~actor ?note ~requester ~recipient () =
+    match
+      Cc.create_pending ~requester_community_id:requester
+        ~recipient_community_id:recipient ~request_note:note
+    with
+    | Error _ -> Alcotest.fail "fixture: pure pending value refused"
+    | Ok connection -> Store.request conn ~actor_user_id:actor ~connection
+
+  let request_ok label conn ~actor ?note ~requester ~recipient () =
+    let* r = request conn ~actor ?note ~requester ~recipient () in
+    match r with
+    | Ok created -> Lwt.return (Store.created_connection_id created)
+    | Error e -> Alcotest.failf "%s: %s" label (error_str e)
+
+  let request_expect label expected conn ~actor ?note ~requester ~recipient () =
+    let* r = request conn ~actor ?note ~requester ~recipient () in
+    match r with
+    | Ok _ -> Alcotest.failf "%s: expected %s, got Ok" label (error_str expected)
+    | Error e ->
+        Alcotest.(check string) label (error_str expected) (error_str e);
+        Lwt.return_unit
+
+  let review conn ~reviewer ~connection ~recipient decision =
+    Store.review conn ~reviewer_user_id:reviewer ~connection_id:connection
+      ~recipient_community_id:recipient ~decision
+
+  let review_ok label conn ~reviewer ~connection ~recipient decision =
+    let* r = review conn ~reviewer ~connection ~recipient decision in
+    match r with
+    | Ok _ -> Lwt.return_unit
+    | Error e -> Alcotest.failf "%s: %s" label (error_str e)
+
+  let review_expect label expected conn ~reviewer ~connection ~recipient
+      decision =
+    let* r = review conn ~reviewer ~connection ~recipient decision in
+    match r with
+    | Ok _ -> Alcotest.failf "%s: expected %s, got Ok" label (error_str expected)
+    | Error e ->
+        Alcotest.(check string) label (error_str expected) (error_str e);
+        Lwt.return_unit
+
+  let remove conn ~actor ~connection ~acting =
+    Store.remove conn ~actor_user_id:actor ~connection_id:connection
+      ~acting_community_id:acting
+
+  let remove_ok label conn ~actor ~connection ~acting =
+    let* r = remove conn ~actor ~connection ~acting in
+    match r with
+    | Ok _ -> Lwt.return_unit
+    | Error e -> Alcotest.failf "%s: %s" label (error_str e)
+
+  let remove_expect label expected conn ~actor ~connection ~acting =
+    let* r = remove conn ~actor ~connection ~acting in
+    match r with
+    | Ok _ -> Alcotest.failf "%s: expected %s, got Ok" label (error_str expected)
+    | Error e ->
+        Alcotest.(check string) label (error_str expected) (error_str e);
+        Lwt.return_unit
+
+  (* === recipients === *)
+
+  let request_recipients_case =
+    db_case "request: only the recipient community's exact top mods are \
+             notified" (fun ~url:_ conn ->
+        let* actor = insert_user conn "ccnt_rq_actor" in
+        let* atop = insert_user conn "ccnt_rq_atop" in
+        let* btop1 = insert_user conn "ccnt_rq_btop1" in
+        let* btop2 = insert_user conn "ccnt_rq_btop2" in
+        let* bmod = insert_user conn "ccnt_rq_bmod" in
+        let* blegacy = insert_user conn "ccnt_rq_blegacy" in
+        let* bmember = insert_user conn "ccnt_rq_bmember" in
+        let* admin = insert_user conn "ccnt_rq_admin" in
+        let* a = insert_community conn "ccnt-rq-a" in
+        let* b = insert_community conn "ccnt-rq-b" in
+        let* () = add_top_mod conn ~user:atop ~community:a in
+        let* () = add_top_mod conn ~user:btop1 ~community:b in
+        let* () = add_top_mod conn ~user:btop2 ~community:b in
+        let* () = add_role conn ~user:bmod ~community:b "mod" in
+        let* () = add_role conn ~user:blegacy ~community:b "legacy_mod" in
+        let* () = add_member conn ~user:bmember ~community:b in
+        let* () = set_admin conn ~user:admin true in
+        let* id =
+          request_ok "request" conn ~actor ~note:"private note" ~requester:a
+            ~recipient:b ()
+        in
+        (* The recipient community's two top mods, and nobody else: not the
+           requesting side's own top mod, not an ordinary or legacy moderator,
+           not a member, and never a broadcast to global admins. *)
+        let expected =
+          List.sort compare
+            [ ((btop1, "community_connection_requested"), (Some actor, b));
+              ((btop2, "community_connection_requested"), (Some actor, b)) ]
+        in
+        check_notifs "request" conn ~connection:id expected)
+
+  let review_recipients_case =
+    db_case "accept and reject: only the requesting community's top mods are \
+             notified" (fun ~url:_ conn ->
+        let* rtop = insert_user conn "ccnt_rv_rtop" in
+        let* atop1 = insert_user conn "ccnt_rv_atop1" in
+        let* atop2 = insert_user conn "ccnt_rv_atop2" in
+        let* amod = insert_user conn "ccnt_rv_amod" in
+        let* alegacy = insert_user conn "ccnt_rv_alegacy" in
+        let* a = insert_community conn "ccnt-rv-a" in
+        let* b = insert_community conn "ccnt-rv-b" in
+        let* c = insert_community conn "ccnt-rv-c" in
+        let* () = add_top_mod conn ~user:atop1 ~community:a in
+        let* () = add_top_mod conn ~user:atop2 ~community:a in
+        let* () = add_role conn ~user:amod ~community:a "mod" in
+        let* () = add_role conn ~user:alegacy ~community:a "legacy_mod" in
+        let* () = add_top_mod conn ~user:rtop ~community:b in
+        let* () = add_top_mod conn ~user:rtop ~community:c in
+        (* Accept. *)
+        let* accepted =
+          request_ok "request b" conn ~actor:atop1 ~requester:a ~recipient:b ()
+        in
+        let* () =
+          review_ok "accept" conn ~reviewer:rtop ~connection:accepted
+            ~recipient:b Store.Accept
+        in
+        let* () =
+          check_notifs "accept" conn ~connection:accepted
+            (List.sort compare
+               [ ((rtop, "community_connection_requested"), (Some atop1, b));
+                 ((atop1, "community_connection_accepted"), (Some rtop, a));
+                 ((atop2, "community_connection_accepted"), (Some rtop, a)) ])
+        in
+        (* The ordinary and legacy moderators of the requesting community are
+           absent from that exact list, as is the reviewing side itself beyond
+           the request row it was owed. Reject, on a second pair. *)
+        let* rejected =
+          request_ok "request c" conn ~actor:atop2 ~requester:a ~recipient:c ()
+        in
+        let* () =
+          review_ok "reject" conn ~reviewer:rtop ~connection:rejected
+            ~recipient:c Store.Reject
+        in
+        check_notifs "reject" conn ~connection:rejected
+          (List.sort compare
+             [ ((rtop, "community_connection_requested"), (Some atop2, c));
+               ((atop1, "community_connection_rejected"), (Some rtop, a));
+               ((atop2, "community_connection_rejected"), (Some rtop, a)) ]))
+
+  let removal_recipients_case =
+    db_case "remove: the opposite community's top mods are notified, from \
+             either side" (fun ~url:_ conn ->
+        let* atop = insert_user conn "ccnt_rm_atop" in
+        let* btop = insert_user conn "ccnt_rm_btop" in
+        let* a = insert_community conn "ccnt-rm-a" in
+        let* b = insert_community conn "ccnt-rm-b" in
+        let* c = insert_community conn "ccnt-rm-c" in
+        let* () = add_top_mod conn ~user:atop ~community:a in
+        let* () = add_top_mod conn ~user:btop ~community:b in
+        let* () = add_top_mod conn ~user:btop ~community:c in
+        (* Removed by the requester side: the recipient side hears about it. *)
+        let* first =
+          request_ok "request" conn ~actor:atop ~requester:a ~recipient:b ()
+        in
+        let* () =
+          review_ok "accept" conn ~reviewer:btop ~connection:first ~recipient:b
+            Store.Accept
+        in
+        let* () = remove_ok "remove from a" conn ~actor:atop ~connection:first
+            ~acting:a in
+        let* () =
+          check_notifs "removed by requester" conn ~connection:first
+            (List.sort compare
+               [ ((btop, "community_connection_requested"), (Some atop, b));
+                 ((atop, "community_connection_accepted"), (Some btop, a));
+                 ((btop, "community_connection_removed"), (Some atop, b)) ])
+        in
+        (* Removed by the recipient side: the requester side hears about it. *)
+        let* second =
+          request_ok "request 2" conn ~actor:atop ~requester:a ~recipient:c ()
+        in
+        let* () =
+          review_ok "accept 2" conn ~reviewer:btop ~connection:second
+            ~recipient:c Store.Accept
+        in
+        let* () =
+          remove_ok "remove from c" conn ~actor:btop ~connection:second
+            ~acting:c
+        in
+        check_notifs "removed by recipient" conn ~connection:second
+          (List.sort compare
+             [ ((btop, "community_connection_requested"), (Some atop, c));
+               ((atop, "community_connection_accepted"), (Some btop, a));
+               ((atop, "community_connection_removed"), (Some btop, a)) ]))
+
+  let actor_excluded_case =
+    db_case "the acting user is never notified, even holding top_mod on the \
+             notified side" (fun ~url:_ conn ->
+        let* both = insert_user conn "ccnt_ax_both" in
+        let* other = insert_user conn "ccnt_ax_other" in
+        let* a = insert_community conn "ccnt-ax-a" in
+        let* b = insert_community conn "ccnt-ax-b" in
+        (* The actor is top_mod of BOTH communities, so every recipient set
+           below would contain them if the exclusion were not unconditional. *)
+        let* () = add_top_mod conn ~user:both ~community:a in
+        let* () = add_top_mod conn ~user:both ~community:b in
+        let* () = add_top_mod conn ~user:other ~community:b in
+        let* id = request_ok "request" conn ~actor:both ~requester:a
+            ~recipient:b () in
+        let* () =
+          check_notifs "request excludes its actor" conn ~connection:id
+            [ ((other, "community_connection_requested"), (Some both, b)) ]
+        in
+        (* And on the review, whose recipient set is the actor's own other
+           community. *)
+        let* () =
+          review_ok "accept" conn ~reviewer:both ~connection:id ~recipient:b
+            Store.Accept
+        in
+        check_notifs "accept excludes its actor" conn ~connection:id
+          [ ((other, "community_connection_requested"), (Some both, b)) ])
+
+  let dedup_case =
+    db_case "recipients are deduplicated: one row per user per kind"
+      (fun ~url:_ conn ->
+        let* actor = insert_user conn "ccnt_dd_actor" in
+        let* dup = insert_user conn "ccnt_dd_dup" in
+        let* a = insert_community conn "ccnt-dd-a" in
+        let* b = insert_community conn "ccnt-dd-b" in
+        let* () = add_top_mod conn ~user:dup ~community:a in
+        let* () = add_top_mod conn ~user:dup ~community:b in
+        (* End to end: dup is top_mod on both sides, so both the request and
+           the review name them — once each, never twice for one kind. *)
+        let* id = request_ok "request" conn ~actor ~requester:a ~recipient:b ()
+        in
+        let* () =
+          review_ok "accept" conn ~reviewer:actor ~connection:id ~recipient:b
+            Store.Accept
+        in
+        let* () =
+          check_notifs "one row per kind" conn ~connection:id
+            (List.sort compare
+               [ ((dup, "community_connection_requested"), (Some actor, b));
+                 ((dup, "community_connection_accepted"), (Some actor, a)) ])
+        in
+        (* And directly: a caller-supplied list carrying the same id three
+           times, plus the actor, still yields exactly one row. The unique
+           index would refuse a second, so this proves the filter runs before
+           SQL rather than being rescued by it. *)
+        let* fresh = insert_user conn "ccnt_dd_fresh" in
+        let* c = insert_community conn "ccnt-dd-c" in
+        let* () = add_top_mod conn ~user:fresh ~community:c in
+        let* direct =
+          request_ok "second request" conn ~actor ~requester:a ~recipient:c ()
+        in
+        let* r =
+          Notif.insert_many conn ~kind:Notif.Connection_removed
+            ~actor_user_id:actor ~community_id:c ~connection_id:direct
+            ~recipient_user_ids:[ fresh; fresh; actor; fresh ]
+        in
+        (match r with
+        | Ok () -> ()
+        | Error _ -> Alcotest.fail "direct insert_many refused");
+        check_notifs "deduplicated directly" conn ~connection:direct
+          (List.sort compare
+             [ ((fresh, "community_connection_requested"), (Some actor, c));
+               ((fresh, "community_connection_removed"), (Some actor, c)) ]))
+
+  let zero_recipients_case =
+    db_case "a transition with no eligible recipient still commits"
+      (fun ~url:_ conn ->
+        let* actor = insert_user conn "ccnt_zr_actor" in
+        let* bmod = insert_user conn "ccnt_zr_bmod" in
+        let* a = insert_community conn "ccnt-zr-a" in
+        let* b = insert_community conn "ccnt-zr-b" in
+        (* b has an ordinary moderator and no top mod at all. *)
+        let* () = add_role conn ~user:bmod ~community:b "mod" in
+        let* id = request_ok "request" conn ~actor ~requester:a ~recipient:b ()
+        in
+        let* () = check_status "committed" conn id "pending" in
+        let* () = check_events "audit written" conn ~connection:id 1 in
+        let* () = check_notif_count "no notifications" conn ~connection:id 0 in
+        (* The same holds for a review and a removal. *)
+        let* () =
+          review_ok "accept" conn ~reviewer:bmod ~connection:id ~recipient:b
+            Store.Accept
+        in
+        let* () = check_status "accepted" conn id "accepted" in
+        let* () = check_events "second event" conn ~connection:id 2 in
+        let* () = check_notif_count "still none" conn ~connection:id 0 in
+        let* () = remove_ok "remove" conn ~actor ~connection:id ~acting:a in
+        let* () = check_events "third event" conn ~connection:id 3 in
+        check_notif_count "still none after removal" conn ~connection:id 0)
+
+  let stale_transition_case =
+    db_case "a stale duplicate accept, reject, or remove creates no \
+             notification" (fun ~url:_ conn ->
+        let* actor = insert_user conn "ccnt_st_actor" in
+        let* atop = insert_user conn "ccnt_st_atop" in
+        let* btop = insert_user conn "ccnt_st_btop" in
+        let* a = insert_community conn "ccnt-st-a" in
+        let* b = insert_community conn "ccnt-st-b" in
+        let* () = add_top_mod conn ~user:atop ~community:a in
+        let* () = add_top_mod conn ~user:btop ~community:b in
+        let* id = request_ok "request" conn ~actor ~requester:a ~recipient:b ()
+        in
+        let* () =
+          review_ok "accept" conn ~reviewer:btop ~connection:id ~recipient:b
+            Store.Accept
+        in
+        let* () = check_notif_count "one each so far" conn ~connection:id 2 in
+        (* Every stale replay: a second accept, a reject after acceptance. *)
+        let* () =
+          review_expect "second accept" Store.Review_unavailable conn
+            ~reviewer:btop ~connection:id ~recipient:b Store.Accept
+        in
+        let* () =
+          review_expect "reject after accept" Store.Review_unavailable conn
+            ~reviewer:btop ~connection:id ~recipient:b Store.Reject
+        in
+        let* () = check_events "still two events" conn ~connection:id 2 in
+        let* () = check_notif_count "still two" conn ~connection:id 2 in
+        (* And a second removal after the first committed. *)
+        let* () = remove_ok "remove" conn ~actor:atop ~connection:id ~acting:a in
+        let* () =
+          remove_expect "second remove" Store.Removal_unavailable conn
+            ~actor:atop ~connection:id ~acting:a
+        in
+        let* () =
+          remove_expect "remove from the other side" Store.Removal_unavailable
+            conn ~actor:btop ~connection:id ~acting:b
+        in
+        let* () = check_events "three events" conn ~connection:id 3 in
+        check_notifs "exactly one set per committed transition" conn
+          ~connection:id
+          (List.sort compare
+             [ ((btop, "community_connection_requested"), (Some actor, b));
+               ((atop, "community_connection_accepted"), (Some btop, a));
+               ((btop, "community_connection_removed"), (Some atop, b)) ]))
+
+  (* === atomicity === *)
+
+  let ddl sql = (Caqti_type.unit ->. Caqti_type.unit) sql
+
+  let q_create_fail_fn =
+    ddl
+      "CREATE FUNCTION ccnt_fail_fn() RETURNS trigger \
+       LANGUAGE plpgsql \
+       AS 'BEGIN RAISE EXCEPTION ''ccnt fixture failure''; END'"
+
+  let q_drop_fail_fn = ddl "DROP FUNCTION IF EXISTS ccnt_fail_fn()"
+
+  let q_poison_notif =
+    ddl
+      "CREATE TRIGGER ccnt_fail_notif BEFORE INSERT ON notifications \
+       FOR EACH ROW EXECUTE FUNCTION ccnt_fail_fn()"
+
+  let q_unpoison_notif =
+    ddl "DROP TRIGGER IF EXISTS ccnt_fail_notif ON notifications"
+
+  let with_poisoned_notifications conn f =
+    let* () = exec conn "create fail fn" q_create_fail_fn () in
+    Lwt.finalize
+      (fun () ->
+        let* () = exec conn "install poison" q_poison_notif () in
+        Lwt.finalize f (fun () -> exec conn "drop poison" q_unpoison_notif ()))
+      (fun () -> exec conn "drop fail fn" q_drop_fail_fn ())
+
+  let notification_failure_rolls_back_case =
+    db_case "atomicity: a failed notification insert rolls the mutation and \
+             its audit event back" (fun ~url:_ conn ->
+        let* actor = insert_user conn "ccnt_nf_actor" in
+        let* atop = insert_user conn "ccnt_nf_atop" in
+        let* btop = insert_user conn "ccnt_nf_btop" in
+        let* a = insert_community conn "ccnt-nf-a" in
+        let* b = insert_community conn "ccnt-nf-b" in
+        let* () = add_top_mod conn ~user:atop ~community:a in
+        let* () = add_top_mod conn ~user:btop ~community:b in
+        let* () =
+          with_poisoned_notifications conn (fun () ->
+              request_expect "request with notifications poisoned"
+                Store.Storage_error conn ~actor ~requester:a ~recipient:b ())
+        in
+        let* events = find conn "pair events" q_pair_event_count a in
+        Alcotest.(check int) "no audit event survived" 0 events;
+        let* notifs = find conn "pair notifs" q_pair_notif_count b in
+        Alcotest.(check int) "no notification survived" 0 notifs;
+        (* And once the poison is gone the same request commits all three. *)
+        let* id = request_ok "request afterwards" conn ~actor ~requester:a
+            ~recipient:b () in
+        let* () = check_events "one event" conn ~connection:id 1 in
+        let* () = check_notif_count "one notification" conn ~connection:id 1 in
+        (* The same atomicity on a review, whose mutation is an UPDATE. *)
+        let* () =
+          with_poisoned_notifications conn (fun () ->
+              review_expect "accept with notifications poisoned"
+                Store.Storage_error conn ~reviewer:btop ~connection:id
+                ~recipient:b Store.Accept)
+        in
+        let* () = check_status "still pending" conn id "pending" in
+        let* () = check_events "still one event" conn ~connection:id 1 in
+        check_notif_count "still one notification" conn ~connection:id 1)
+
+  let concurrent_review_case =
+    db_case "concurrency: the winning review commits exactly one audit event \
+             and one notification set" (fun ~url:_ conn ->
+        let* actor = insert_user conn "ccnt_cc_actor" in
+        let* atop = insert_user conn "ccnt_cc_atop" in
+        let* btop = insert_user conn "ccnt_cc_btop" in
+        let* a = insert_community conn "ccnt-cc-a" in
+        let* b = insert_community conn "ccnt-cc-b" in
+        let* () = add_top_mod conn ~user:atop ~community:a in
+        let* () = add_top_mod conn ~user:btop ~community:b in
+        let* id = request_ok "request" conn ~actor ~requester:a ~recipient:b ()
+        in
+        Pod_store.with_second_connection (fun conn2 ->
+            let* r1, r2 =
+              Lwt.both
+                (review conn ~reviewer:btop ~connection:id ~recipient:b
+                   Store.Accept)
+                (review conn2 ~reviewer:btop ~connection:id ~recipient:b
+                   Store.Accept)
+            in
+            (match (r1, r2) with
+            | Ok _, Error Store.Review_unavailable
+            | Error Store.Review_unavailable, Ok _ ->
+                ()
+            | Ok _, Ok _ -> Alcotest.fail "both reviews won"
+            | Error e, Error e' ->
+                Alcotest.failf "both failed (%s, %s)" (error_str e)
+                  (error_str e')
+            | Ok _, Error e | Error e, Ok _ ->
+                Alcotest.failf "unexpected loser error %s" (error_str e));
+            let* () = check_status "accepted once" conn id "accepted" in
+            let* () = check_events "two events total" conn ~connection:id 2 in
+            check_notifs "one set per committed transition" conn ~connection:id
+              (List.sort compare
+                 [ ((btop, "community_connection_requested"), (Some actor, b));
+                   ((atop, "community_connection_accepted"), (Some btop, a)) ])))
+
+  (* === durable shapes === *)
+
+  (* Every shape case writes through one of these, so the SQL of each case is
+     the whole statement being judged and nothing else. Parameters are always
+     $1 user, $2 community, $3 connection, $4 project, $5 relation. *)
+  let shape3 sql =
+    (Caqti_type.(t3 int int int64) ->. Caqti_type.unit) sql
+
+  let shape5 sql =
+    (Caqti_type.(t2 (t3 int int int64) (t2 int64 int64)) ->. Caqti_type.unit)
+      sql
+
+  let q_valid_connection_shape =
+    shape3
+      "INSERT INTO notifications \
+         (user_id, notif_type, actor_user_id, community_id, connection_id) \
+       VALUES ($1, 'community_connection_accepted', NULL, $2, $3)"
+
+  let q_valid_legacy_shape =
+    shape3
+      "INSERT INTO notifications (user_id, notif_type, message) \
+       SELECT $1, 'comment_reply', 'someone replied to your post.' \
+       WHERE $2 > 0 AND $3 > 0"
+
+  let q_valid_project_home_shape =
+    shape5
+      "INSERT INTO notifications \
+         (user_id, notif_type, actor_user_id, project_id, community_id, \
+          relation_id) \
+       SELECT $1, 'project_home_requested', NULL, $4, $2, $5 \
+       WHERE $3 > 0"
+
+  let q_connection_with_message =
+    shape3
+      "INSERT INTO notifications \
+         (user_id, notif_type, community_id, connection_id, message) \
+       VALUES ($1, 'community_connection_accepted', $2, $3, 'prose')"
+
+  let q_connection_with_post =
+    shape3
+      "INSERT INTO notifications \
+         (user_id, notif_type, community_id, connection_id, post_id) \
+       VALUES ($1, 'community_connection_accepted', $2, $3, 1)"
+
+  let q_connection_without_connection =
+    shape3
+      "INSERT INTO notifications (user_id, notif_type, community_id) \
+       SELECT $1, 'community_connection_accepted', $2 WHERE $3 > 0"
+
+  let q_connection_without_community =
+    shape3
+      "INSERT INTO notifications (user_id, notif_type, connection_id) \
+       SELECT $1, 'community_connection_accepted', $3 WHERE $2 > 0"
+
+  let q_connection_with_project =
+    shape5
+      "INSERT INTO notifications \
+         (user_id, notif_type, community_id, connection_id, project_id) \
+       SELECT $1, 'community_connection_accepted', $2, $3, $4 WHERE $5 > 0"
+
+  let q_connection_with_relation =
+    shape5
+      "INSERT INTO notifications \
+         (user_id, notif_type, community_id, connection_id, relation_id) \
+       SELECT $1, 'community_connection_accepted', $2, $3, $5 WHERE $4 > 0"
+
+  let q_project_home_with_connection =
+    shape5
+      "INSERT INTO notifications \
+         (user_id, notif_type, project_id, community_id, relation_id, \
+          connection_id) \
+       VALUES ($1, 'project_home_requested', $4, $2, $5, $3)"
+
+  let q_legacy_with_connection =
+    shape3
+      "INSERT INTO notifications \
+         (user_id, notif_type, message, community_id, connection_id) \
+       VALUES ($1, 'comment_reply', 'prose', $2, $3)"
+
+  let q_unknown_kind =
+    shape3
+      "INSERT INTO notifications (user_id, notif_type, community_id, \
+         connection_id) \
+       VALUES ($1, 'community_connection_archived', $2, $3)"
+
+  let shape_case =
+    db_case "schema: the three notification shapes are separately valid and \
+             every mixture is refused" (fun ~url:_ conn ->
+        let (module C : Caqti_lwt.CONNECTION) = conn in
+        let* owner = insert_user conn "ccnt_sh_owner" in
+        let* recipient = insert_user conn "ccnt_sh_recipient" in
+        let* a = insert_community conn "ccnt-sh-a" in
+        let* b = insert_community conn "ccnt-sh-b" in
+        let* home = insert_community conn "ccnt-sh-home" in
+        let* connection =
+          request_ok "connection" conn ~actor:owner ~requester:a ~recipient:b ()
+        in
+        (* A genuine project-home relation, so the project-home branch is
+           judged against real subject rows rather than invented ids. *)
+        let* _inst, project =
+          make_project conn ~user:owner ~ext_id:964000001L ~slug:"ccnt-sh-proj"
+        in
+        let* relation =
+          Phau.request_ok "home request" conn ~user:owner ~slug:"ccnt-sh-proj"
+            ~community:home
+        in
+        let five = ((recipient, a, connection), (project, relation)) in
+        (* Valid: all three shapes, each on its own terms. *)
+        let* () =
+          exec conn "connection shape" q_valid_connection_shape
+            (recipient, a, connection)
+        in
+        let* () =
+          exec conn "legacy shape" q_valid_legacy_shape (recipient, a, connection)
+        in
+        let* () =
+          exec conn "project-home shape" q_valid_project_home_shape
+            ((recipient, home, connection), (project, relation))
+        in
+        (* Invalid: every mixture of the three. *)
+        let* () =
+          Lwt_list.iter_s
+            (fun (label, q) ->
+              let* r = C.exec q (recipient, a, connection) in
+              reject label r)
+            [ ("connection kind carrying prose", q_connection_with_message)
+            ; ("connection kind carrying a post link", q_connection_with_post)
+            ; ("connection kind without its connection",
+               q_connection_without_connection)
+            ; ("connection kind without its community",
+               q_connection_without_community)
+            ; ("legacy kind carrying a connection", q_legacy_with_connection)
+            ; ("an unknown kind", q_unknown_kind) ]
+        in
+        Lwt_list.iter_s
+          (fun (label, q) ->
+            let* r = C.exec q five in
+            reject label r)
+          [ ("connection kind carrying a project", q_connection_with_project)
+          ; ("connection kind carrying a home relation",
+             q_connection_with_relation)
+          ; ("project-home kind carrying a connection",
+             q_project_home_with_connection) ])
+
+  (* === read model and rendering === *)
+
+  (* One sql_pool for the whole suite: see the sibling handler suites — the
+     pool lives in the middleware closure, so a fresh one per request would
+     leak a Postgres connection each time. *)
+  let shared_sql_pool : Dream.middleware option ref = ref None
+
+  let sql_pool url =
+    match !shared_sql_pool with
+    | Some middleware -> middleware
+    | None ->
+        let middleware = Dream.sql_pool ~size:2 url in
+        shared_sql_pool := Some middleware;
+        middleware
+
+  let notifications_page_for ~url ~label user_id =
+    let pipeline =
+      sql_pool url @@ Dream.memory_sessions @@ fun req ->
+      let* () =
+        Dream.set_session_field req "user_id" (string_of_int user_id)
+      in
+      Earde.Handlers.notifications_handler req
+    in
+    let* response =
+      pipeline (Dream.request ~method_:`GET ~target:"/notifications" "")
+    in
+    Alcotest.(check int) (label ^ ": 200") 200 (status_of response);
+    let* body = Dream.body response in
+    Lwt.return body
+
+  let notifications_of conn user_id =
+    let* r = Earde.Db.get_notifications conn user_id in
+    match r with
+    | Ok rows -> Lwt.return rows
+    | Error e -> Alcotest.failf "get_notifications: %s" e
+
+  let counterpart_case =
+    db_case "read model: the counterpart is derived from the stored context, \
+             from either direction" (fun ~url:_ conn ->
+        let* atop = insert_user conn "ccnt_cp_atop" in
+        let* btop = insert_user conn "ccnt_cp_btop" in
+        let* a = insert_community ~name:"Ccnt Alpha" conn "ccnt-cp-a" in
+        let* b = insert_community ~name:"Ccnt Beta" conn "ccnt-cp-b" in
+        let* () = add_top_mod conn ~user:atop ~community:a in
+        let* () = add_top_mod conn ~user:btop ~community:b in
+        let* id = request_ok "request" conn ~actor:atop ~requester:a
+            ~recipient:b () in
+        let* () =
+          review_ok "accept" conn ~reviewer:btop ~connection:id ~recipient:b
+            Store.Accept
+        in
+        (* b's top mod was notified about the request; their context is b, so
+           the counterpart must be a — the requesting side. *)
+        let* brows = notifications_of conn btop in
+        (match brows with
+        | [ n ] ->
+            Alcotest.(check string) "b: kind"
+              "community_connection_requested" n.Earde.Db.notif_type;
+            Alcotest.(check (option string)) "b: context" (Some "ccnt-cp-b")
+              n.Earde.Db.community_slug;
+            Alcotest.(check (option string)) "b: counterpart"
+              (Some "ccnt-cp-a") n.Earde.Db.counterpart_slug;
+            Alcotest.(check (option string)) "b: counterpart name"
+              (Some "Ccnt Alpha") n.Earde.Db.counterpart_name
+        | rows -> Alcotest.failf "b: %d rows" (List.length rows));
+        (* a's top mod was notified about the acceptance; their context is a,
+           so the same durable connection yields b as the counterpart. *)
+        let* arows = notifications_of conn atop in
+        (match arows with
+        | [ n ] ->
+            Alcotest.(check string) "a: kind" "community_connection_accepted"
+              n.Earde.Db.notif_type;
+            Alcotest.(check (option string)) "a: context" (Some "ccnt-cp-a")
+              n.Earde.Db.community_slug;
+            Alcotest.(check (option string)) "a: counterpart"
+              (Some "ccnt-cp-b") n.Earde.Db.counterpart_slug;
+            Alcotest.(check (option string)) "a: counterpart name"
+              (Some "Ccnt Beta") n.Earde.Db.counterpart_name
+        | rows -> Alcotest.failf "a: %d rows" (List.length rows));
+        Lwt.return_unit)
+
+  let render_case =
+    db_case "ui: each kind renders its stable copy and links to the \
+             recipient's own management context" (fun ~url conn ->
+        let* atop = insert_user conn "ccnt_ui_atop" in
+        let* btop = insert_user conn "ccnt_ui_btop" in
+        let* a = insert_community ~name:"Ccnt Requesting" conn "ccnt-ui-a" in
+        let* b = insert_community ~name:"Ccnt Reviewing" conn "ccnt-ui-b" in
+        let* c = insert_community ~name:"Ccnt Rejecting" conn "ccnt-ui-c" in
+        let* () = add_top_mod conn ~user:atop ~community:a in
+        let* () = add_top_mod conn ~user:btop ~community:b in
+        let* () = add_top_mod conn ~user:btop ~community:c in
+        (* a → b: requested, accepted, then removed by b. *)
+        let* accepted =
+          request_ok "request b" conn ~actor:atop ~requester:a ~recipient:b ()
+        in
+        let* () =
+          review_ok "accept" conn ~reviewer:btop ~connection:accepted
+            ~recipient:b Store.Accept
+        in
+        let* () =
+          remove_ok "remove" conn ~actor:btop ~connection:accepted ~acting:b
+        in
+        (* a → c: requested, then rejected. *)
+        let* rejected =
+          request_ok "request c" conn ~actor:atop ~requester:a ~recipient:c ()
+        in
+        let* () =
+          review_ok "reject" conn ~reviewer:btop ~connection:rejected
+            ~recipient:c Store.Reject
+        in
+        (* The requesting side sees accepted, rejected, and removed copy, each
+           pointing at its OWN community's connections page. *)
+        let* body = notifications_page_for ~url ~label:"requester" atop in
+        List.iter
+          (fun needle ->
+            Alcotest.(check bool)
+              ("requester sees: " ^ needle)
+              true (contains body needle))
+          [ "Ccnt Reviewing accepted your connection request."
+          ; "Ccnt Rejecting rejected your connection request."
+          ; "Ccnt Reviewing removed the community connection."
+          ; "href='/c/ccnt-ui-a/settings/connections'" ];
+        (* Never the other side's management context, and never a username. *)
+        List.iter
+          (fun needle ->
+            Alcotest.(check bool)
+              ("requester never sees: " ^ needle)
+              false (contains body needle))
+          [ "/c/ccnt-ui-b/settings/connections"
+          ; "/c/ccnt-ui-c/settings/connections"
+          ; "ccnt_ui_btop"; "ccnt_ui_atop" ];
+        (* The reviewing side sees the request copy, in its own context. *)
+        let* body = notifications_page_for ~url ~label:"reviewer" btop in
+        List.iter
+          (fun needle ->
+            Alcotest.(check bool)
+              ("reviewer sees: " ^ needle)
+              true (contains body needle))
+          [ "Ccnt Requesting wants to connect with your community."
+          ; "href='/c/ccnt-ui-b/settings/connections'"
+          ; "href='/c/ccnt-ui-c/settings/connections'" ];
+        Alcotest.(check bool) "reviewer never sees the requester's context"
+          false (contains body "/c/ccnt-ui-a/settings/connections");
+        Lwt.return_unit)
+
+  let privacy_case =
+    db_case "the request note and every username stay out of notification \
+             storage and rendered output" (fun ~url conn ->
+        let* atop = insert_user conn "ccnt_pv_atop" in
+        let* btop = insert_user conn "ccnt_pv_btop" in
+        let* a = insert_community ~name:"Ccnt Privacy A" conn "ccnt-pv-a" in
+        let* b = insert_community ~name:"Ccnt Privacy B" conn "ccnt-pv-b" in
+        let* () = add_top_mod conn ~user:atop ~community:a in
+        let* () = add_top_mod conn ~user:btop ~community:b in
+        let secret = "SECRETNOTEMARKER please connect with us" in
+        let* id =
+          request_ok "request" conn ~actor:atop ~note:secret ~requester:a
+            ~recipient:b ()
+        in
+        let* () =
+          review_ok "accept" conn ~reviewer:btop ~connection:id ~recipient:b
+            Store.Accept
+        in
+        (* Storage: every column of every notification row of this connection,
+           rendered as text, contains neither the note nor either username. *)
+        let* blob = find conn "blob" q_notif_blob id in
+        List.iter
+          (fun needle ->
+            Alcotest.(check bool)
+              ("stored blob free of: " ^ needle)
+              false (contains blob needle))
+          [ "SECRETNOTEMARKER"; "ccnt_pv_atop"; "ccnt_pv_btop" ];
+        (* Rendered output, on both sides. *)
+        let* body_a = notifications_page_for ~url ~label:"a" atop in
+        let* body_b = notifications_page_for ~url ~label:"b" btop in
+        List.iter
+          (fun (label, body) ->
+            List.iter
+              (fun needle ->
+                Alcotest.(check bool)
+                  (label ^ " free of: " ^ needle)
+                  false (contains body needle))
+              [ "SECRETNOTEMARKER"; "ccnt_pv_atop"; "ccnt_pv_btop" ])
+          [ ("requester page", body_a); ("recipient page", body_b) ];
+        Lwt.return_unit)
+
+  let recipient_suite =
+    [ request_recipients_case; review_recipients_case
+    ; removal_recipients_case; actor_excluded_case; dedup_case
+    ; zero_recipients_case ]
+
+  let transaction_suite =
+    [ stale_transition_case; notification_failure_rolls_back_case
+    ; concurrent_review_case ]
+
+  let schema_suite = [ shape_case ]
+
+  let ui_suite = [ counterpart_case; render_case; privacy_case ]
+end
+
+(* Community connections, slice 3 — the public "Connected communities" block.
+
+   Three layers, each judged on its own: the read model that decides public
+   visibility from current durable facts on both sides, the pure fragment that
+   renders identity and nothing else, and the real community route that
+   composes them — beside the authorized management surface, which keeps
+   showing the accepted history the public block hides. *)
+module Cccc = struct
+  let ( let* ) = Lwt.bind
+
+  open Caqti_request.Infix
+
+  module R = Earde.Community_connected_communities_read_model
+  module P = Earde.Community_connected_communities_pages
+  module Store = Earde.Community_connections_store
+  module Cc = Earde.Community_connections
+
+  let or_fail = Pod_store.or_fail
+  let insert_user = Pod_store.insert_user
+  let exec = Pod_read.exec
+  let insert_community = Phcv.insert_community
+  let contains haystack needle = Cprj_schema.contains haystack ~needle
+  let status_of = Gh_start_handler.status_of
+
+  let add_top_mod conn ~user ~community =
+    exec conn "role fixture" Phrv.q_insert_moderator (user, community, "top_mod")
+
+  (* The three lifecycle drifts the sibling suites use, written straight to
+     the durable columns. Each flips more than one column, because the
+     communities table's own CHECKs require the combinations to stay coherent
+     — what matters here is only that each leaves the community ineligible. *)
+  let make_private conn cid = exec conn "private" Phcv.q_make_private cid
+  let make_unlisted conn cid = exec conn "unlisted" Phcv.q_make_unlisted cid
+  let make_draft conn cid = exec conn "draft" Phcv.q_make_draft_state cid
+
+  (* communities_network_lifecycle_check allows a network community only two
+     coherent shapes — draft+private+hidden, or published+public with
+     indexable = discoverable — so a network community cannot be private
+     while published. Turning it legacy first is how the visibility fact is
+     exercised on its own. *)
+  let make_legacy conn cid = exec conn "legacy" Phcv.q_make_legacy cid
+
+  let make_legacy_private conn cid =
+    let* () = make_legacy conn cid in
+    make_private conn cid
+
+  (* One UPDATE, because the same CHECK refuses any intermediate state. *)
+  let q_restore_eligible =
+    (Caqti_type.int ->. Caqti_type.unit)
+    "UPDATE communities SET visibility = 'public', \
+     onboarding_state = 'published', is_network_community = TRUE, \
+     indexable = TRUE, discoverable = TRUE WHERE id = $1"
+
+  let restore conn cid = exec conn "restore eligibility" q_restore_eligible cid
+
+  (* ==================== the pure fragment ====================
+     No database, no request, no session. *)
+
+  let c name slug = ({ name; slug } : P.connected_community)
+
+  let render communities = P.connected_communities_section ~communities
+
+  let empty_case =
+    Alcotest.test_case "fragment: nothing publicly connected renders no card"
+      `Quick (fun () ->
+        Alcotest.(check string) "empty string, not an empty panel" ""
+          (render []);
+        (* And nothing that could read as a placeholder. *)
+        List.iter
+          (fun needle ->
+            Alcotest.(check bool)
+              ("absent: " ^ needle)
+              false
+              (contains (render []) needle))
+          [ "Connected communities"; "ccc-section"; "None"; "No " ])
+
+  let identity_case =
+    Alcotest.test_case "fragment: one heading, one name, one community link"
+      `Quick (fun () ->
+        let html = render [ c "Rust Users" "rust-users"; c "Ocaml" "ocaml" ] in
+        List.iter
+          (fun needle ->
+            Alcotest.(check bool) ("present: " ^ needle) true
+              (contains html needle))
+          [ ">Connected communities</h2>"
+          ; "href='/c/rust-users'"; ">Rust Users</a>"
+          ; "href='/c/ocaml'"; ">Ocaml</a>" ])
+
+  let escaping_case =
+    Alcotest.test_case "fragment: names are escaped and an unaddressable slug \
+                        renders no link" `Quick (fun () ->
+        let html =
+          render
+            [ c "<script>alert(1)</script>" "safe-slug"
+            ; c "Broken" "bad slug/with space" ]
+        in
+        Alcotest.(check bool) "no raw script tag" false
+          (contains html "<script>alert(1)</script>");
+        Alcotest.(check bool) "escaped instead" true
+          (contains html "&lt;script&gt;");
+        Alcotest.(check bool) "the addressable one links" true
+          (contains html "href='/c/safe-slug'");
+        Alcotest.(check bool) "the unaddressable one does not" false
+          (contains html "bad slug/with space");
+        Alcotest.(check bool) "but is still named" true
+          (contains html ">Broken</p>"))
+
+  let vocabulary_case =
+    Alcotest.test_case "fragment: no status, direction, note, actor, id, or \
+                        management action can appear" `Quick (fun () ->
+        let html = render [ c "Neighbour" "neighbour" ] in
+        List.iter
+          (fun needle ->
+            Alcotest.(check bool)
+              ("never rendered: " ^ needle)
+              false (contains html needle))
+          [ "pending"; "Pending"; "accepted"; "Accepted"; "rejected"
+          ; "removed"; "requested"; "Requester"; "requester"; "reviewer"
+          ; "Reviewed"; "note"; "Note"; "depends on"; "used by"
+          ; "related ecosystem"; "<form"; "Remove"; "settings/connections" ])
+
+  let fragment_suite =
+    [ empty_case; identity_case; escaping_case; vocabulary_case ]
+
+  (* ==================== the read model ==================== *)
+
+  let q_cleanup =
+    List.map
+      (fun sql -> (Caqti_type.unit ->. Caqti_type.unit) sql)
+      [ "DELETE FROM notifications \
+         WHERE community_id IN \
+           (SELECT id FROM communities WHERE slug LIKE 'cccc-%')"
+      ; "DELETE FROM notifications \
+         WHERE user_id IN (SELECT id FROM users WHERE username LIKE 'cccc_%')"
+      ; "DELETE FROM community_connection_audit_events \
+         WHERE requester_community_id IN \
+                 (SELECT id FROM communities WHERE slug LIKE 'cccc-%') \
+            OR recipient_community_id IN \
+                 (SELECT id FROM communities WHERE slug LIKE 'cccc-%')"
+      ; "DELETE FROM community_connections \
+         WHERE requester_community_id IN \
+                 (SELECT id FROM communities WHERE slug LIKE 'cccc-%') \
+            OR recipient_community_id IN \
+                 (SELECT id FROM communities WHERE slug LIKE 'cccc-%')"
+      ; "DELETE FROM communities WHERE slug LIKE 'cccc-%'"
+      ; "DELETE FROM users WHERE username LIKE 'cccc_%'"
+      ]
+
+  let db_case name f =
+    Alcotest.test_case name `Quick (fun () ->
+        match Sys.getenv_opt "EARDE_TEST_DATABASE_URL" with
+        | None | Some "" -> Alcotest.skip ()
+        | Some url ->
+            Lwt_main.run
+              (let* conn = Caqti_lwt_unix.connect (Uri.of_string url) in
+               let* conn = or_fail "connect" conn in
+               let (module C : Caqti_lwt.CONNECTION) = conn in
+               let cleanup () =
+                 Lwt_list.iter_s
+                   (fun q ->
+                     let* r = C.exec q () in
+                     let* _ = or_fail "cleanup" r in
+                     Lwt.return_unit)
+                   q_cleanup
+               in
+               let* () = cleanup () in
+               Lwt.finalize
+                 (fun () -> f ~url conn)
+                 (fun () ->
+                   Lwt.finalize cleanup (fun () -> C.disconnect ()))))
+
+  let error_str : R.error -> string = function
+    | R.Invalid_community_slug -> "Invalid_community_slug"
+    | R.Community_unavailable -> "Community_unavailable"
+    | R.Inconsistent_data -> "Inconsistent_data"
+    | R.Storage_error -> "Storage_error"
+
+  let load_ok label conn slug =
+    let* r = R.load_for_community conn ~community_slug:slug in
+    match r with
+    | Ok communities ->
+        Lwt.return (List.map R.community_slug communities)
+    | Error e -> Alcotest.failf "%s: %s" label (error_str e)
+
+  let load_expect label expected conn slug =
+    let* r = R.load_for_community conn ~community_slug:slug in
+    match r with
+    | Ok _ -> Alcotest.failf "%s: expected %s, got Ok" label (error_str expected)
+    | Error e ->
+        Alcotest.(check string) label (error_str expected) (error_str e);
+        Lwt.return_unit
+
+  (* Durable fixtures always go through the real store. *)
+  let connect conn ~actor ~requester ~recipient =
+    match
+      Cc.create_pending ~requester_community_id:requester
+        ~recipient_community_id:recipient ~request_note:None
+    with
+    | Error _ -> Alcotest.fail "fixture: pending value refused"
+    | Ok connection -> (
+        let* r = Store.request conn ~actor_user_id:actor ~connection in
+        match r with
+        | Error _ -> Alcotest.fail "fixture: request refused"
+        | Ok created -> Lwt.return (Store.created_connection_id created))
+
+  let accept conn ~actor ~id ~recipient =
+    let* r =
+      Store.review conn ~reviewer_user_id:actor ~connection_id:id
+        ~recipient_community_id:recipient ~decision:Store.Accept
+    in
+    match r with
+    | Ok _ -> Lwt.return_unit
+    | Error _ -> Alcotest.fail "fixture: accept refused"
+
+  let reject conn ~actor ~id ~recipient =
+    let* r =
+      Store.review conn ~reviewer_user_id:actor ~connection_id:id
+        ~recipient_community_id:recipient ~decision:Store.Reject
+    in
+    match r with
+    | Ok _ -> Lwt.return_unit
+    | Error _ -> Alcotest.fail "fixture: reject refused"
+
+  let symmetric_case =
+    db_case "read: one accepted connection is publicly visible from both \
+             sides" (fun ~url:_ conn ->
+        let* actor = insert_user conn "cccc_sym" in
+        let* a = insert_community ~name:"Cccc Alpha" conn "cccc-sym-a" in
+        let* b = insert_community ~name:"Cccc Beta" conn "cccc-sym-b" in
+        let* id = connect conn ~actor ~requester:a ~recipient:b in
+        let* () = accept conn ~actor ~id ~recipient:b in
+        let* from_a = load_ok "from a" conn "cccc-sym-a" in
+        Alcotest.(check (list string)) "a sees b" [ "cccc-sym-b" ] from_a;
+        let* from_b = load_ok "from b" conn "cccc-sym-b" in
+        Alcotest.(check (list string)) "b sees a" [ "cccc-sym-a" ] from_b;
+        Lwt.return_unit)
+
+  let non_accepted_case =
+    db_case "read: pending, rejected, and removed rows are never public"
+      (fun ~url:_ conn ->
+        let* actor = insert_user conn "cccc_ne" in
+        let* a = insert_community conn "cccc-ne-a" in
+        let* b = insert_community conn "cccc-ne-b" in
+        let* c = insert_community conn "cccc-ne-c" in
+        let* d = insert_community conn "cccc-ne-d" in
+        (* Pending. *)
+        let* _ = connect conn ~actor ~requester:a ~recipient:b in
+        (* Rejected. *)
+        let* rid = connect conn ~actor ~requester:a ~recipient:c in
+        let* () = reject conn ~actor ~id:rid ~recipient:c in
+        (* Accepted then removed. *)
+        let* did = connect conn ~actor ~requester:a ~recipient:d in
+        let* () = accept conn ~actor ~id:did ~recipient:d in
+        let* r =
+          Store.remove conn ~actor_user_id:actor ~connection_id:did
+            ~acting_community_id:a
+        in
+        (match r with
+        | Ok _ -> ()
+        | Error _ -> Alcotest.fail "fixture: removal refused");
+        let* from_a = load_ok "from a" conn "cccc-ne-a" in
+        Alcotest.(check (list string)) "nothing public" [] from_a;
+        (* And from each counterpart's own side. *)
+        let* () =
+          Lwt_list.iter_s
+            (fun slug ->
+              let* rows = load_ok ("from " ^ slug) conn slug in
+              Alcotest.(check (list string)) (slug ^ ": nothing public") []
+                rows;
+              Lwt.return_unit)
+            [ "cccc-ne-b"; "cccc-ne-c"; "cccc-ne-d" ]
+        in
+        Lwt.return_unit)
+
+  let viewer_eligibility_case =
+    db_case "read: an ineligible community publishes no connections at all"
+      (fun ~url:_ conn ->
+        let* actor = insert_user conn "cccc_ve" in
+        let* a = insert_community conn "cccc-ve-a" in
+        let* b = insert_community conn "cccc-ve-b" in
+        let* id = connect conn ~actor ~requester:a ~recipient:b in
+        let* () = accept conn ~actor ~id ~recipient:b in
+        let* visible = load_ok "eligible" conn "cccc-ve-a" in
+        Alcotest.(check (list string)) "visible while eligible"
+          [ "cccc-ve-b" ] visible;
+        (* Each of the three facts, one at a time; the counterpart never
+           changes, so only the viewer's own state is being judged. *)
+        let* () =
+          Lwt_list.iter_s
+            (fun (label, drift) ->
+              let* () = drift conn a in
+              let* rows = load_ok label conn "cccc-ve-a" in
+              Alcotest.(check (list string)) (label ^ ": hidden") [] rows;
+              (* The counterpart still shows nothing either: the row is not
+                 mutated, but a's own ineligibility hides it there too. *)
+              let* back = load_ok (label ^ " from b") conn "cccc-ve-b" in
+              Alcotest.(check (list string))
+                (label ^ ": counterpart excluded too") [] back;
+              restore conn a)
+            [ ("undiscoverable", make_unlisted)
+            ; ("private", make_legacy_private)
+            ; ("draft", make_draft) ]
+        in
+        (* Eligibility returning restores the very same accepted row. *)
+        let* restored = load_ok "restored" conn "cccc-ve-a" in
+        Alcotest.(check (list string)) "visible again" [ "cccc-ve-b" ]
+          restored;
+        Lwt.return_unit)
+
+  let counterpart_eligibility_case =
+    db_case "read: an ineligible counterpart is excluded without touching the \
+             connection" (fun ~url:_ conn ->
+        let* actor = insert_user conn "cccc_ce" in
+        let* a = insert_community conn "cccc-ce-a" in
+        let* b = insert_community ~name:"Cccc Stays" conn "cccc-ce-b" in
+        let* d = insert_community ~name:"Cccc Drifts" conn "cccc-ce-d" in
+        let* idb = connect conn ~actor ~requester:a ~recipient:b in
+        let* () = accept conn ~actor ~id:idb ~recipient:b in
+        let* idd = connect conn ~actor ~requester:a ~recipient:d in
+        let* () = accept conn ~actor ~id:idd ~recipient:d in
+        let* both = load_ok "both" conn "cccc-ce-a" in
+        (* lower(name) ASC: "Cccc Drifts" before "Cccc Stays". *)
+        Alcotest.(check (list string)) "both counterparts"
+          [ "cccc-ce-d"; "cccc-ce-b" ] both;
+        let* () = make_legacy_private conn d in
+        let* one = load_ok "one" conn "cccc-ce-a" in
+        Alcotest.(check (list string)) "only the eligible counterpart"
+          [ "cccc-ce-b" ] one;
+        (* The durable row is untouched: the authorized management read still
+           returns both accepted connections. *)
+        let* accepted =
+          Earde.Community_connections_read_model.list_accepted conn
+            ~community_id:a
+        in
+        (match accepted with
+        | Ok rows ->
+            Alcotest.(check int) "both accepted rows survive" 2
+              (List.length rows)
+        | Error _ -> Alcotest.fail "management read failed");
+        Lwt.return_unit)
+
+  let slug_case =
+    db_case "read: a missing community and a non-segment slug are distinct \
+             refusals" (fun ~url:_ conn ->
+        let* () =
+          Lwt_list.iter_s
+            (fun slug ->
+              load_expect ("invalid: " ^ slug) R.Invalid_community_slug conn
+                slug)
+            [ ""; "a/b"; "with space"; "tab\there" ]
+        in
+        load_expect "absent" R.Community_unavailable conn "cccc-nope")
+
+  let read_suite =
+    [ symmetric_case; non_accepted_case; viewer_eligibility_case
+    ; counterpart_eligibility_case; slug_case ]
+
+  (* ==================== the real community route ==================== *)
+
+  let gck_secret = "cccc-test-secret"
+
+  let shared_sql_pool : Dream.middleware option ref = ref None
+
+  let sql_pool url =
+    match !shared_sql_pool with
+    | Some middleware -> middleware
+    | None ->
+        let middleware = Dream.sql_pool ~size:2 url in
+        shared_sql_pool := Some middleware;
+        middleware
+
+  let pipeline ?session_user_id ~url () =
+    sql_pool url @@ Dream.set_secret gck_secret @@ Dream.memory_sessions
+    @@ (fun handler request ->
+         match session_user_id with
+         | None -> handler request
+         | Some uid ->
+             let* () =
+               Dream.set_session_field request "user_id" (string_of_int uid)
+             in
+             handler request)
+    @@ Dream.router
+         [ Dream.get "/c/:slug" Earde.Handlers.community_page_handler;
+           Dream.get "/c/:slug/network"
+             Earde.Handlers.community_network_handler;
+           Dream.get "/c/:slug/settings/connections"
+             Earde.Community_connections_handlers
+             .make_connections_page_handler ]
+
+  let get ?session_user_id ~url target =
+    let p = pipeline ?session_user_id ~url () in
+    let* response = p (Dream.request ~method_:`GET ~target "") in
+    let* body = Dream.body response in
+    Lwt.return (status_of response, body)
+
+  let integration_case =
+    db_case "route: the public block appears on both network pages, \
+             disappears with eligibility, and never replaces management"
+      (fun ~url conn ->
+        let* top = insert_user conn "cccc_rt_top" in
+        let* a = insert_community ~name:"Cccc Route Alpha" conn "cccc-rt-a" in
+        let* b = insert_community ~name:"Cccc Route Beta" conn "cccc-rt-b" in
+        let* () = add_top_mod conn ~user:top ~community:a in
+        let* id = connect conn ~actor:top ~requester:a ~recipient:b in
+        let* () = accept conn ~actor:top ~id ~recipient:b in
+        (* Anonymously, from either side. *)
+        let* status, body = get ~url "/c/cccc-rt-a/network" in
+        Alcotest.(check int) "a: 200" 200 status;
+        Alcotest.(check bool) "a: heading" true
+          (contains body ">Connected communities</h2>");
+        Alcotest.(check bool) "a: names b" true
+          (contains body ">Cccc Route Beta</a>");
+        Alcotest.(check bool) "a: links b" true
+          (contains body "href='/c/cccc-rt-b'");
+        let* _, body = get ~url "/c/cccc-rt-b/network" in
+        Alcotest.(check bool) "b: names a" true
+          (contains body ">Cccc Route Alpha</a>");
+        (* Neither page states anything about the connection itself. *)
+        List.iter
+          (fun needle ->
+            Alcotest.(check bool)
+              ("route never renders: " ^ needle)
+              false (contains body needle))
+          [ "cccc_rt_top"; "depends on"; "used by"; "related ecosystem" ];
+        (* The connect shortcut follows the sidebar's existing top-mod-or-admin
+           reading and nothing else — an ordinary visitor is never offered a
+           way into the management flow. *)
+        let* _, anon = get ~url "/c/cccc-rt-a/network" in
+        Alcotest.(check bool) "anonymous: no connect shortcut" false
+          (contains anon "settings/connections/new");
+        let* _, tm = get ~session_user_id:top ~url "/c/cccc-rt-a/network" in
+        Alcotest.(check bool) "top mod: connect shortcut" true
+          (contains tm "href='/c/cccc-rt-a/settings/connections/new'");
+        (* The community home carries the counted entry point instead: the
+           same publicly visible set, one link away, with no counterpart
+           named on it. *)
+        let* status, home = get ~url "/c/cccc-rt-a" in
+        Alcotest.(check int) "home: 200" 200 status;
+        Alcotest.(check bool) "home: no list" false
+          (contains home ">Connected communities</h2>");
+        Alcotest.(check bool) "home: no counterpart named" false
+          (contains home "Cccc Route Beta");
+        Alcotest.(check bool) "home: counted row" true
+          (contains home
+             "<span class='launch-net-label'>Connected communities</span><span \
+              class='launch-net-count'>1</span>");
+        Alcotest.(check bool) "home: links the network page" true
+          (contains home "href='/c/cccc-rt-a/network#communities'");
+        (* The counterpart goes private: the public block disappears from the
+           viewer's page and its count falls back to zero, while the durable
+           row and its management view stay. *)
+        let* () = make_unlisted conn b in
+        let* _, body = get ~url "/c/cccc-rt-a/network" in
+        Alcotest.(check bool) "a: block empty" true
+          (contains body "No connected communities yet.");
+        Alcotest.(check bool) "a: counterpart gone" false
+          (contains body ">Cccc Route Beta</a>");
+        let* _, home = get ~url "/c/cccc-rt-a" in
+        Alcotest.(check bool) "home: row stays at zero" true
+          (contains home
+             "<span class='launch-net-label'>Connected communities</span><span \
+              class='launch-net-count'>0</span>");
+        let* status, body =
+          get ~session_user_id:top ~url "/c/cccc-rt-a/settings/connections"
+        in
+        Alcotest.(check int) "management: 200" 200 status;
+        Alcotest.(check bool) "management still lists the accepted history"
+          true (contains body "href='/c/cccc-rt-b'");
+        Lwt.return_unit)
+
+  let route_suite = [ integration_case ]
+end
+
+(* The authenticated top bar's unread-notification badge, end to end.
+
+   Manual testing found the badge in three mutually inconsistent states on
+   the same account: absent, present showing "0", and present showing "1".
+   All three came from one arrangement: the badge was ALWAYS server-rendered
+   as a literal <span ...>0</span> carrying a `hidden` class, revealed by a
+   per-page fetch of /api/unread-notifs. Nothing hid it globally — every
+   launch page class had to repeat its own `#notif-badge.hidden` rule, so a
+   scope that forgot one (launch-community-connections) showed the hard-coded
+   zero — and the endpoint answered "0" when its query failed, which the
+   browser could not tell from a real zero.
+
+   Now there is one durable query, resolved once per request by
+   Notification_badge.middleware, and one renderer shared by every document
+   that draws a top bar. The element exists only when there is something to
+   show, so these cases assert absence as strictly as presence. *)
+module Nbdg = struct
+  let ( let* ) = Lwt.bind
+
+  open Caqti_request.Infix
+
+  let or_fail = Pod_store.or_fail
+  let insert_user = Pod_store.insert_user
+  let exec = Pod_read.exec
+  let find = Pod_read.find
+  let insert_community = Phcv.insert_community
+  let contains haystack needle = Cprj_schema.contains haystack ~needle
+  let status_of = Gh_start_handler.status_of
+
+  let add_top_mod conn ~user ~community =
+    exec conn "role fixture" Phrv.q_insert_moderator
+      (user, community, "top_mod")
+
+  let q_cleanup =
+    List.map
+      (fun sql -> (Caqti_type.unit ->. Caqti_type.unit) sql)
+      [ "DELETE FROM notifications \
+         WHERE user_id IN (SELECT id FROM users WHERE username LIKE 'nbdg_%')"
+      ; "DELETE FROM community_connection_audit_events \
+         WHERE requester_community_id IN \
+                 (SELECT id FROM communities WHERE slug LIKE 'nbdg-%') \
+            OR recipient_community_id IN \
+                 (SELECT id FROM communities WHERE slug LIKE 'nbdg-%')"
+      ; "DELETE FROM community_connections \
+         WHERE requester_community_id IN \
+                 (SELECT id FROM communities WHERE slug LIKE 'nbdg-%') \
+            OR recipient_community_id IN \
+                 (SELECT id FROM communities WHERE slug LIKE 'nbdg-%')"
+      ; "DELETE FROM communities WHERE slug LIKE 'nbdg-%'"
+      ; "DELETE FROM users WHERE username LIKE 'nbdg_%'"
+      ]
+
+  let db_case name f =
+    Alcotest.test_case name `Quick (fun () ->
+        match Sys.getenv_opt "EARDE_TEST_DATABASE_URL" with
+        | None | Some "" -> Alcotest.skip ()
+        | Some url ->
+            Lwt_main.run
+              (let* conn = Caqti_lwt_unix.connect (Uri.of_string url) in
+               let* conn = or_fail "connect" conn in
+               let (module C : Caqti_lwt.CONNECTION) = conn in
+               let cleanup () =
+                 Lwt_list.iter_s
+                   (fun q ->
+                     let* r = C.exec q () in
+                     let* _ = or_fail "cleanup" r in
+                     Lwt.return_unit)
+                   q_cleanup
+               in
+               let* () = cleanup () in
+               Lwt.finalize
+                 (fun () -> f ~url conn)
+                 (fun () ->
+                   Lwt.finalize cleanup (fun () -> C.disconnect ()))))
+
+  (* Ordinary prose notifications: the legacy row shape, which is all this
+     suite needs — the badge counts rows, not kinds. *)
+  let q_seed_notification =
+    (Caqti_type.(t2 int string) ->. Caqti_type.unit)
+    "INSERT INTO notifications (user_id, notif_type, message) \
+     VALUES ($1, 'mention', $2)"
+
+  let q_seed_many =
+    (Caqti_type.(t2 int int) ->. Caqti_type.unit)
+    "INSERT INTO notifications (user_id, notif_type, message) \
+     SELECT $1, 'mention', 'Nbdg bulk ' || g FROM generate_series(1, $2) AS g"
+
+  let q_unread =
+    (Caqti_type.int ->! Caqti_type.int)
+    "SELECT COUNT(*)::int FROM notifications \
+     WHERE user_id = $1 AND is_read = FALSE"
+
+  let seed conn user label =
+    exec conn "seed notification" q_seed_notification (user, label)
+
+  let unread conn label user expected =
+    let* n = find conn (label ^ ": unread") q_unread user in
+    Alcotest.(check int) (label ^ ": durable unread count") expected n;
+    Lwt.return_unit
+
+  (* --- The real routed application, over the real pool --- *)
+
+  let gck_secret = "nbdg-test-secret"
+
+  let shared_sql_pool : Dream.middleware option ref = ref None
+
+  let sql_pool url =
+    match !shared_sql_pool with
+    | Some middleware -> middleware
+    | None ->
+        let middleware = Dream.sql_pool ~size:2 url in
+        shared_sql_pool := Some middleware;
+        middleware
+
+  (* A document with a top bar and nothing else, so a case can observe the
+     badge without the page under it also needing the database. *)
+  let badge_probe request =
+    Dream.html
+      (Earde.Components.launch_app_page ~request ~user:"nbdg_probe"
+         ~page_class:"launch-feed" ~title:"probe" ~content:"" ())
+
+  let routes =
+    Dream.router
+      [ Dream.get "/probe" badge_probe
+      (* The same document behind the two shapes the middleware must skip: a
+         .json catch-up path (with and without its query string) and a
+         realtime-token refresh. The probe renders a badge whenever a count
+         was stashed, so a badge here means the query ran. *)
+      ; Dream.get "/probe.json" badge_probe
+      ; Dream.get "/probe/realtime-token" badge_probe
+      ; Dream.get "/static/probe" badge_probe
+      ; Dream.get "/c/:slug" Earde.Handlers.community_page_handler
+      ; Dream.get "/c/:slug/settings/connections"
+          Earde.Community_connections_handlers.make_connections_page_handler
+      ; Dream.get "/notifications" Earde.Handlers.notifications_handler
+      ]
+
+  let session_layer session handler request =
+    match session with
+    | None -> handler request
+    | Some (uid, username) ->
+        let* () =
+          Dream.set_session_field request "user_id" (string_of_int uid)
+        in
+        let* () = Dream.set_session_field request "username" username in
+        handler request
+
+  (* The badge middleware sits exactly where bin/main.ml mounts it: inside
+     the pool and the session store, immediately outside the router. *)
+  let pipeline ?session ~url () =
+    sql_pool url @@ Dream.set_secret gck_secret @@ Dream.memory_sessions
+    @@ session_layer session
+    @@ Earde.Notification_badge.middleware
+    @@ routes
+
+  let get ~pipeline target =
+    let* response = pipeline (Dream.request ~method_:`GET ~target "") in
+    let* body = Dream.body response in
+    Lwt.return (status_of response, body)
+
+  let badge_markup n =
+    Printf.sprintf "<span id='notif-badge' class='bell__count'>%s</span>" n
+
+  (* Absence is checked on the element and on its class, so neither a
+     hard-coded zero nor an empty badge can slip through. *)
+  let check_badge label body expected =
+    Alcotest.(check bool)
+      (label ^ ": the bell itself is unconditional")
+      true (contains body "class='bell'");
+    match expected with
+    | None ->
+        Alcotest.(check bool)
+          (label ^ ": no badge element") false (contains body "notif-badge");
+        Alcotest.(check bool)
+          (label ^ ": no badge class") false (contains body "bell__count")
+    | Some n ->
+        Alcotest.(check bool)
+          (label ^ ": badge reads " ^ n)
+          true
+          (contains body (badge_markup n))
+
+  (* --- 0. no production source can hard-code a badge ---------------------- *)
+
+  let sources_case =
+    Alcotest.test_case
+      "the badge markup exists in exactly one production source" `Quick
+      (fun () ->
+        (* dune test runs against _build, where the ppx leaves a .pp.ml
+           beside each preprocessed source; they are the same code twice. *)
+        let sources =
+          List.filter
+            (fun (path, _) -> not (Filename.check_suffix path ".pp.ml"))
+            Legacy_census.production_sources
+        in
+        let owners =
+          List.filter (fun (_, body) -> contains body "bell__count") sources
+          |> List.map fst
+        in
+        Alcotest.(check (list string))
+          "only Notification_badge renders the badge"
+          [ "lib/notification_badge.ml" ] owners;
+        List.iter
+          (fun (path, body) ->
+            List.iter
+              (fun needle ->
+                if contains body needle then
+                  Alcotest.failf "%s still contains %S" path needle)
+              [ "bell__count hidden"; "fetch('/api/unread-notifs')" ])
+          sources)
+
+  (* --- 1. zero renders nothing; one renders "1" -------------------------- *)
+
+  let zero_then_one_case =
+    db_case
+      "zero unread renders the bell with no badge and no zero; one unread \
+       renders 1" (fun ~url conn ->
+        let* user = insert_user conn "nbdg_zo" in
+        let* _cid = insert_community ~name:"Nbdg Zero" conn "nbdg-zero" in
+        let p = pipeline ~session:(user, "nbdg_zo") ~url () in
+        let* status, body = get ~pipeline:p "/c/nbdg-zero" in
+        Alcotest.(check int) "community page 200" 200 status;
+        check_badge "zero" body None;
+        let* () = seed conn user "Nbdg first" in
+        let* status, body = get ~pipeline:p "/c/nbdg-zero" in
+        Alcotest.(check int) "community page 200 again" 200 status;
+        check_badge "one" body (Some "1");
+        Lwt.return_unit)
+
+  (* --- 1b. only document requests pay for the count ----------------------- *)
+
+  (* The live-chat page re-reads messages.json after every burst and refreshes
+     its realtime token on a timer, so a count attached to those would ride the
+     chat polling loop instead of page loads. Each target below renders the
+     same probe document: a badge means the middleware counted, its absence
+     means it skipped. *)
+  let request_scope_case =
+    db_case
+      "only document requests incur the unread count; json, realtime-token \
+       and asset paths do not" (fun ~url conn ->
+        let* user = insert_user conn "nbdg_scope" in
+        let* () = seed conn user "Nbdg scope" in
+        let p = pipeline ~session:(user, "nbdg_scope") ~url () in
+        (* The control: an ordinary document does count. *)
+        let* status, body = get ~pipeline:p "/probe" in
+        Alcotest.(check int) "document 200" 200 status;
+        check_badge "document" body (Some "1");
+        let* () =
+          Lwt_list.iter_s
+            (fun (label, target) ->
+              let* status, body = get ~pipeline:p target in
+              Alcotest.(check int) (label ^ ": 200") 200 status;
+              check_badge label body None;
+              Lwt.return_unit)
+            [ ("catch-up json", "/probe.json")
+            ; ("catch-up json with query", "/probe.json?after_id=12")
+            ; ("realtime token", "/probe/realtime-token")
+            ; ("asset", "/static/probe")
+            ]
+        in
+        (* An anonymous document never counts either. *)
+        let anon = pipeline ~url () in
+        let* status, body = get ~pipeline:anon "/probe" in
+        Alcotest.(check int) "anonymous 200" 200 status;
+        check_badge "anonymous" body None;
+        Lwt.return_unit)
+
+  (* --- 2. one count, every page ------------------------------------------ *)
+
+  let parity_case =
+    db_case
+      "a positive count is identical on an ordinary community page and on \
+       the connections management page" (fun ~url conn ->
+        let* top = insert_user conn "nbdg_par" in
+        let* cid = insert_community ~name:"Nbdg Parity" conn "nbdg-par" in
+        let* () = add_top_mod conn ~user:top ~community:cid in
+        let* () = seed conn top "Nbdg a" in
+        let* () = seed conn top "Nbdg b" in
+        let* () = seed conn top "Nbdg c" in
+        let p = pipeline ~session:(top, "nbdg_par") ~url () in
+        let* home_status, home = get ~pipeline:p "/c/nbdg-par" in
+        Alcotest.(check int) "community home 200" 200 home_status;
+        let* mgmt_status, mgmt =
+          get ~pipeline:p "/c/nbdg-par/settings/connections"
+        in
+        Alcotest.(check int) "connections page 200" 200 mgmt_status;
+        check_badge "community home" home (Some "3");
+        check_badge "connections management" mgmt (Some "3");
+        (* Neither page renders a second, disagreeing badge. *)
+        Alcotest.(check int) "home: one badge" 1
+          (count_sub home "id='notif-badge'");
+        Alcotest.(check int) "connections: one badge" 1
+          (count_sub mgmt "id='notif-badge'");
+        Lwt.return_unit)
+
+  (* --- 3. read semantics ------------------------------------------------- *)
+
+  let read_semantics_case =
+    db_case
+      "unrelated pages never mark notifications read; the notifications page \
+       marks the whole mailbox read" (fun ~url conn ->
+        let* top = insert_user conn "nbdg_read" in
+        let* cid = insert_community ~name:"Nbdg Read" conn "nbdg-read" in
+        let* () = add_top_mod conn ~user:top ~community:cid in
+        let* () = seed conn top "Nbdg r1" in
+        let* () = seed conn top "Nbdg r2" in
+        let p = pipeline ~session:(top, "nbdg_read") ~url () in
+        (* Three ordinary authenticated pages, none of which is the
+           notification centre. *)
+        let* () =
+          Lwt_list.iter_s
+            (fun target ->
+              let* status, body = get ~pipeline:p target in
+              Alcotest.(check int) (target ^ ": 200") 200 status;
+              check_badge target body (Some "2");
+              unread conn target top 2)
+            [ "/c/nbdg-read"; "/c/nbdg-read/settings/connections"; "/probe" ]
+        in
+        (* The one established view action, and only it, persists read
+           state — for the whole mailbox, exactly as before. *)
+        let* status, _ = get ~pipeline:p "/notifications" in
+        Alcotest.(check int) "notifications 200" 200 status;
+        let* () = unread conn "after the notification centre" top 0 in
+        let* _status, body = get ~pipeline:p "/probe" in
+        check_badge "after the notification centre" body None;
+        Lwt.return_unit)
+
+  (* --- 4. a failed count is not a zero ----------------------------------- *)
+
+  let failure_case =
+    db_case "a failed count renders no badge, never a fabricated zero"
+      (fun ~url conn ->
+        let* user = insert_user conn "nbdg_fail" in
+        let* () = seed conn user "Nbdg f1" in
+        let* () = seed conn user "Nbdg f2" in
+        (* Healthy first, so the difference is the failure and nothing
+           else. *)
+        let ok = pipeline ~session:(user, "nbdg_fail") ~url () in
+        let* _status, body = get ~pipeline:ok "/probe" in
+        check_badge "healthy" body (Some "2");
+        (* A pool whose connections resolve no unqualified table names: the
+           count query fails for real. *)
+        let poisoned_url =
+          Uri.to_string
+            (Uri.add_query_param' (Uri.of_string url)
+               ("options", "-csearch_path=nbdg_void"))
+        in
+        let broken =
+          Dream.sql_pool ~size:1 poisoned_url
+          @@ Dream.set_secret gck_secret @@ Dream.memory_sessions
+          @@ session_layer (Some (user, "nbdg_fail"))
+          @@ Earde.Notification_badge.middleware
+          @@ routes
+        in
+        let* status, body = get ~pipeline:broken "/probe" in
+        (* The page itself still renders: the badge fails soft. *)
+        Alcotest.(check int) "page still 200" 200 status;
+        check_badge "failed count" body None;
+        (* And nothing about the failure reaches the document. *)
+        List.iter
+          (fun needle ->
+            Alcotest.(check bool)
+              ("failed count: no " ^ needle)
+              false (contains body needle))
+          [ "nbdg_void"; "search_path"; "Caqti"; "PostgreSQL"; "relation" ];
+        Lwt.return_unit)
+
+  (* --- 5. a large mailbox cannot widen the top bar ----------------------- *)
+
+  let cap_case =
+    db_case "a count past the display cap renders 99+" (fun ~url conn ->
+        let* user = insert_user conn "nbdg_cap" in
+        let* () = exec conn "bulk seed" q_seed_many (user, 150) in
+        let* () = unread conn "seeded" user 150 in
+        let p = pipeline ~session:(user, "nbdg_cap") ~url () in
+        let* _status, body = get ~pipeline:p "/probe" in
+        check_badge "capped" body (Some "99+");
+        Alcotest.(check bool) "the real count is not rendered" false
+          (contains body (badge_markup "150"));
+        Lwt.return_unit)
+
+  (* --- 6. a connection notification counts, and still links home --------- *)
+
+  let connection_notification_case =
+    db_case
+      "a community-connection notification is counted by the badge and links \
+       to the recipient's own management context" (fun ~url conn ->
+        let* requester_top = insert_user conn "nbdg_cn_req" in
+        let* recipient_top = insert_user conn "nbdg_cn_rec" in
+        let* a = insert_community ~name:"Nbdg Conn A" conn "nbdg-cn-a" in
+        let* b = insert_community ~name:"Nbdg Conn B" conn "nbdg-cn-b" in
+        let* () = add_top_mod conn ~user:requester_top ~community:a in
+        let* () = add_top_mod conn ~user:recipient_top ~community:b in
+        let* _id =
+          Ccon_http.request_direct conn ~actor:requester_top ~requester:a
+            ~recipient:b ()
+        in
+        (* The recipient's top mod: one unread, counted. The actor: none. *)
+        let recipient = pipeline ~session:(recipient_top, "nbdg_cn_rec") ~url () in
+        let* _status, body = get ~pipeline:recipient "/probe" in
+        check_badge "recipient" body (Some "1");
+        let actor = pipeline ~session:(requester_top, "nbdg_cn_req") ~url () in
+        let* _status, body = get ~pipeline:actor "/probe" in
+        check_badge "actor" body None;
+        (* And the notification still points at the recipient's own
+           connections page, not the requester's. *)
+        let* status, page = get ~pipeline:recipient "/notifications" in
+        Alcotest.(check int) "notifications 200" 200 status;
+        Alcotest.(check bool) "links to the recipient's management context"
+          true
+          (contains page "href='/c/nbdg-cn-b/settings/connections'");
+        Alcotest.(check bool) "not the requester's" false
+          (contains page "href='/c/nbdg-cn-a/settings/connections'");
+        Lwt.return_unit)
+
+  let suite =
+    [ sources_case; zero_then_one_case; request_scope_case; parity_case
+    ; read_semantics_case; failure_case; cap_case
+    ; connection_notification_case ]
+end
+
+(* Every community-shell launch surface is <body class='launch-X'> over the
+   SAME chrome: the dark rail, the community sidebar, the top bar's user
+   menu, and the desktop-only gate. None of that has a global rule —
+   earde.css scopes each one under its own page class — so a scope that ships
+   only its feature fragment renders all of the shared chrome unstyled.
+
+   That is precisely what shipped for launch-community-connections: the
+   management page had no main-column width or gutter (so it began against
+   the sidebar and ran to the viewport edge), no head band (so the context
+   band's two spans collapsed into one malformed "slug/c/slug" token), no
+   user menu and no mobile gate.
+
+   The page classes are read out of the production sources rather than
+   listed, so a new community-shell surface cannot escape the check. Source
+   and stylesheet census only — no database, no server. *)
+module Launch_scope_css = struct
+  let contains haystack needle = Cprj_schema.contains haystack ~needle
+
+  let css = Legacy_census.read "static/css/earde.css"
+
+  (* Page classes stamped on a document built by the community-shell doc
+     builders. The literal always sits within a few lines of the call, so the
+     window below is generous rather than exact. *)
+  let community_shell_classes =
+    let builders =
+      [ "Components.launch_community_page"
+      ; "Components.launch_community_surface_page" ]
+    in
+    let class_after source start =
+      let marker = "~page_class:\"" in
+      (* Search a bounded window, so an unrelated later call cannot be
+         mistaken for this one's argument. *)
+      let window_end = min (String.length source) (start + 400) in
+      let rec scan i =
+        if i + String.length marker > window_end then None
+        else if String.sub source i (String.length marker) = marker then
+          let v = i + String.length marker in
+          match String.index_from_opt source v '"' with
+          | Some j -> Some (String.sub source v (j - v))
+          | None -> None
+        else scan (i + 1)
+      in
+      scan start
+    in
+    let found = ref [] in
+    List.iter
+      (fun (_, source) ->
+        List.iter
+          (fun builder ->
+            let bl = String.length builder in
+            let rec scan i =
+              if i + bl > String.length source then ()
+              else if String.sub source i bl = builder then (
+                (match class_after source i with
+                | Some c when not (List.mem c !found) -> found := c :: !found
+                | _ -> ());
+                scan (i + bl))
+              else scan (i + 1)
+            in
+            scan 0)
+          builders)
+      Legacy_census.production_sources;
+    List.sort compare !found
+
+  let census_case =
+    Alcotest.test_case
+      "the community-shell page classes are discovered from the sources"
+      `Quick (fun () ->
+        (* A sanity floor: if the scan silently stopped matching, the rule
+           case below would pass vacuously. *)
+        Alcotest.(check bool)
+          "several community-shell surfaces found" true
+          (List.length community_shell_classes >= 10);
+        List.iter
+          (fun expected ->
+            Alcotest.(check bool)
+              (expected ^ " is a community-shell surface")
+              true
+              (List.mem expected community_shell_classes))
+          [ "launch-community-connections"; "launch-community-network"
+          ; "launch-community-overview"; "launch-community-settings"
+          ; "launch-project-home-review" ])
+
+  (* The shared half of a community-shell scope. Each of these is chrome the
+     document always emits and that only this scope can style. *)
+  let required page_class =
+    [ ("top-bar user menu", Printf.sprintf ".%s .launch-user__menu" page_class)
+    ; ("rail avatar", Printf.sprintf ".%s .launch-rail__img" page_class)
+    ; ("sidebar avatar", Printf.sprintf ".%s .launch-avatar-img" page_class)
+    ; ("sidebar identity", Printf.sprintf ".%s .launch-side-id" page_class)
+      (* The gate rule is sometimes shared by two sibling page classes in
+         one selector list, so only the selector itself is pinned. *)
+    ; ("desktop-only gate", Printf.sprintf "body.%s > .app" page_class)
+    ]
+
+  let shared_rules_case =
+    Alcotest.test_case
+      "every community-shell page class scopes the whole shared chrome"
+      `Quick (fun () ->
+        List.iter
+          (fun page_class ->
+            List.iter
+              (fun (label, needle) ->
+                if not (contains css needle) then
+                  Alcotest.failf
+                    "earde.css has no %s rule for %s (expected %S)" label
+                    page_class needle)
+              (required page_class))
+          community_shell_classes)
+
+  (* The badge is server-rendered and absent at zero, so the per-scope
+     reveal rule it used to need must be gone everywhere — a leftover copy
+     would be dead CSS pointing at a class the markup no longer carries. *)
+  let no_badge_reveal_case =
+    Alcotest.test_case "no scope still carries a badge reveal rule" `Quick
+      (fun () ->
+        List.iter
+          (fun needle ->
+            if contains css needle then
+              Alcotest.failf "earde.css still contains %S" needle)
+          [ "#notif-badge"; "bell__count hidden" ])
+
+  (* The public connected-communities block is a list, not a tile grid. It
+     borrowed the connected-projects panel's two-up track list, where each
+     cell is a multi-line project; a connected community is one line, so an
+     odd count left an orphan cell and the block read as tiles. Every scope
+     that renders the block must keep one community per full-width row, with
+     no count-dependent rule propping it up — including the Network page the
+     complete lists moved to. *)
+  let connected_communities_list_case =
+    Alcotest.test_case
+      "the public connected-communities block is a single-column list in \
+       every scope that renders it" `Quick (fun () ->
+        let scopes =
+          [ "launch-community-overview"; "launch-flat-community"
+          ; "launch-community-network" ]
+        in
+        List.iter
+          (fun scope ->
+            let list_rule =
+              Printf.sprintf ".%s .ccc-communities" scope
+            in
+            if not (contains css list_rule) then
+              Alcotest.failf "earde.css has no %s rule" list_rule;
+            List.iter
+              (fun (label, needle) ->
+                if contains css needle then
+                  Alcotest.failf "%s still has a %s rule (%S)" scope label
+                    needle)
+              [ ("two-column track", "grid-template-columns: 1fr 1fr;\n  background: var(--line)")
+              ; ( "odd-count span"
+                , Printf.sprintf ".%s .ccc-community:last-child" scope )
+              ])
+          scopes;
+        (* And the rows really are a plain column in each. *)
+        Alcotest.(check int) "one flex column per scope" (List.length scopes)
+          (count_sub css
+             ".ccc-communities {\n\
+             \  list-style: none; margin: 0; padding: 0;\n\
+             \  display: flex; flex-direction: column; gap: var(--bw);"))
+
+  let suite =
+    [ census_case; shared_rules_case; no_badge_reveal_case
+    ; connected_communities_list_case ]
+end
+
+(* The /c/:slug information architecture. Live chat and durable forum
+   structure are the two complementary ways to take part, so they sit as
+   equal siblings inside one community-spaces composition; the two connection
+   cards sit in one network group beneath it; governance stays in the
+   secondary column.
+
+   The grouping is built in the composition, not by CSS ordering, which is
+   what this pins: which wrapper each panel lands in, in which order, and
+   that a wrapper is never emitted around nothing. Renders the real page
+   under a secret + sessions pipeline (it emits a framework CSRF field); no
+   SQL is touched. *)
+module Comm_home_ia = struct
+  let contains haystack needle = Cprj_schema.contains haystack ~needle
+
+  let index_of html needle =
+    let n = String.length needle and h = String.length html in
+    let rec go i =
+      if i + n > h then None
+      else if String.sub html i n = needle then Some i
+      else go (i + 1)
+    in
+    go 0
+
+  let at html needle =
+    match index_of html needle with
+    | Some i -> i
+    | None -> Alcotest.failf "the document has no %S" needle
+
+  let community : Earde.Db.community =
+    { id = 7711; slug = "cmia";
+      name = "Cartographic Mapping Interest Assembly";
+      description = Some "Two ways to take part."; rules = None;
+      avatar_url = None; banner_url = None; allow_downvotes = true;
+      sections_enabled = true; visibility = Earde.Db.Community_public;
+      indexable = true; is_network_community = false;
+      onboarding_state = Earde.Db.Community_published; discoverable = true }
+
+  let section ?description ~name ~slug () : Earde.Db.community_section =
+    { section_id = 1; community_id = 7711; name; slug; description;
+      position = 0; default_sort = "hot"; is_introduction_section = false;
+      indexable = true }
+
+  let channel ~slug () : Earde.Db.channel =
+    { id = 1; community_id = 7711; slug; name = slug; topic = None;
+      position = 0; is_archived = false; created_at = "2026-07-31 10:00:00";
+      indexable = true }
+
+  let post ~title () : Earde.Db.post =
+    { id = 501; title; url = None; content = Some "Body."; community_id = 7711;
+      user_id = 9; username = "mapmaker"; community_slug = "cmia";
+      created_at = "2026-07-31 10:00:00"; score = 3; comment_count = 1;
+      allow_downvotes = true; image_url = None; section_name = None;
+      section_slug = None; community_sections_enabled = true;
+      author_local_karma = 0; author_local_post_count = 1;
+      author_local_comment_count = 0; author_first_active_at = None }
+
+  let render ?(projects = 0) ?(communities = 0) ?(top_mod = false)
+      ?(channels = []) ?(sections = []) ?(recent_posts = []) () =
+    let captured = ref None in
+    let pipeline =
+      Dream.set_secret gck_secret @@ Dream.memory_sessions
+      @@ fun req ->
+      captured :=
+        Some
+          (Earde.Pages.community_overview_page
+             ~connected_projects_count:projects
+             ~connected_communities_count:communities ~is_member:false
+             ~is_current_user_mod:false ~is_current_user_top_mod:top_mod
+             ~mod_usernames:[ "mapmaker" ] ~orphaned:(0, None)
+             ~rail_communities:[] ~channels ~recent_posts community
+             (List.map (fun s -> (s, 0, None)) sections)
+             req);
+      Dream.html ""
+    in
+    ignore
+      (Lwt_main.run
+         (pipeline (Dream.request ~method_:`GET ~target:"/c/cmia" "")));
+    match !captured with
+    | Some html -> html
+    | None -> Alcotest.fail "overview renderer did not run"
+
+  let one_channel = [ channel ~slug:"general" () ]
+  let one_section =
+    [ section ~name:"Field notes" ~slug:"field-notes"
+        ~description:"Observations from the ground." () ]
+
+  (* The panel label. "Knowledge sections" is the pre-reorganisation copy and
+     must be gone from this page — the kicker uppercases it, so the document
+     carries the sentence case and renders FORUM SECTIONS. *)
+  let label_case =
+    Alcotest.test_case "the sections panel is labelled Forum sections" `Quick
+      (fun () ->
+        let html = render ~channels:one_channel ~sections:one_section () in
+        Alcotest.(check int)
+          "exactly one Forum sections kicker" 1
+          (count_sub html "<span class='kicker'>Forum sections</span>");
+        if contains html "Knowledge sections" then
+          Alcotest.fail "the overview still says Knowledge sections")
+
+  (* Community spaces leads the main column, channels before sections. *)
+  let spaces_case =
+    Alcotest.test_case
+      "live channels and forum sections are siblings in one community-spaces \
+       group" `Quick (fun () ->
+        let html = render ~channels:one_channel ~sections:one_section () in
+        Alcotest.(check int) "one spaces group" 1
+          (count_sub html "<div class='launch-spaces'>");
+        let spaces = at html "<div class='launch-spaces'>" in
+        let channels = at html "<span class='kicker'>Live channels</span>" in
+        let sections = at html "<span class='kicker'>Forum sections</span>" in
+        Alcotest.(check bool) "channels lead the group" true
+          (spaces < channels && channels < sections);
+        (* And the group leads the main column. *)
+        Alcotest.(check bool) "spaces open the main stack" true
+          (at html "<div class='stack'>" < spaces))
+
+  (* One surface takes the column on its own; no wrapper is emitted around a
+     single panel, and none around nothing. *)
+  let lone_surface_case =
+    Alcotest.test_case "a lone space surface needs no group wrapper" `Quick
+      (fun () ->
+        (* Only forum sections: the channels panel is absent entirely. *)
+        let html = render ~sections:one_section () in
+        Alcotest.(check int) "no wrapper around one panel" 0
+          (count_sub html "<div class='launch-spaces'>");
+        Alcotest.(check int) "sections still render" 1
+          (count_sub html "<span class='kicker'>Forum sections</span>");
+        if contains html "<span class='kicker'>Live channels</span>" then
+          Alcotest.fail "an empty channels panel was rendered";
+        (* Only channels: the sections panel keeps its existing empty state,
+           so both surfaces are present and the group is emitted. *)
+        let html = render ~channels:one_channel () in
+        Alcotest.(check int) "both surfaces present" 1
+          (count_sub html "<div class='launch-spaces'>");
+        if not (contains html "No sections yet.") then
+          Alcotest.fail "the sections empty state was lost")
+
+  (* Recent knowledge follows community spaces and closes the main column. *)
+  let recent_case =
+    Alcotest.test_case "recent knowledge follows community spaces in the main \
+                        column" `Quick (fun () ->
+        let html =
+          render ~channels:one_channel ~sections:one_section
+            ~recent_posts:[ post ~title:"Contour intervals" () ] ()
+        in
+        let recent = at html "<span class='kicker'>Recent durable knowledge</span>" in
+        Alcotest.(check bool) "spaces first" true
+          (at html "<div class='launch-spaces'>" < recent);
+        Alcotest.(check bool) "still in the main column" true
+          (recent < at html "<div class='stack stack--sm'>"))
+
+  (* The full connection lists left the home for /c/:slug/network. Nothing of
+     either fragment may render here — not the sections, not the headings, not
+     the group wrapper that used to hold them. *)
+  let no_lists_case =
+    Alcotest.test_case "no connection list renders on the home" `Quick
+      (fun () ->
+        let html =
+          render ~channels:one_channel ~sections:one_section ~projects:3
+            ~communities:2 ()
+        in
+        List.iter
+          (fun needle ->
+            if contains html needle then
+              Alcotest.failf "the home still renders %S" needle)
+          [ "ccp-section"; "ccc-section"; "<h2 class='ccp-title'>"
+          ; "<h2 class='ccc-title'>"; "launch-network"
+          ; "Open-source projects that use this community as their Earde home."
+          ; "Communities this one is mutually connected with." ])
+
+  (* The compact entry point: two stable rows with their counts, both leading
+     to the public Network page, at the foot of the secondary column. *)
+  let network_panel_case =
+    Alcotest.test_case "the network panel closes the secondary column with two \
+                        counted links" `Quick (fun () ->
+        let html =
+          render ~channels:one_channel ~sections:one_section ~projects:1
+            ~communities:3 ()
+        in
+        Alcotest.(check int) "one network panel" 1
+          (count_sub html "<span class='kicker'>Network</span>");
+        let network = at html "<span class='kicker'>Network</span>" in
+        Alcotest.(check bool) "in the secondary column" true
+          (at html "<div class='stack stack--sm'>" < network);
+        Alcotest.(check bool) "after the moderation log" true
+          (at html "<span class='kicker'>Moderation log</span>" < network);
+        List.iter
+          (fun (label, count, anchor) ->
+            let row =
+              Printf.sprintf
+                "<a class='project-row launch-netrow' \
+                 href='/c/cmia/network#%s'><span \
+                 class='launch-net-label'>%s</span><span \
+                 class='launch-net-count'>%d</span><span \
+                 class='launch-net-go' aria-hidden='true'>&rarr;</span></a>"
+                anchor label count
+            in
+            if not (contains html row) then
+              Alcotest.failf "the network panel has no %s row" label)
+          [ ("Connected projects", 1, "projects")
+          ; ("Connected communities", 3, "communities") ];
+        (* Projects lead, communities follow. *)
+        Alcotest.(check bool) "projects row first" true
+          (at html "network#projects" < at html "network#communities"))
+
+  (* A zero count is a rendered row, not a hidden one: both are permanent
+     destinations, so the panel's shape never depends on the data. *)
+  let zero_counts_case =
+    Alcotest.test_case "zero counts still render both navigation rows" `Quick
+      (fun () ->
+        let html = render ~channels:one_channel ~sections:one_section () in
+        Alcotest.(check int) "network panel present" 1
+          (count_sub html "<span class='kicker'>Network</span>");
+        Alcotest.(check int) "two rows" 2
+          (count_sub html "<a class='project-row launch-netrow'");
+        Alcotest.(check int) "both at zero" 2
+          (count_sub html "<span class='launch-net-count'>0</span>"))
+
+  (* The connect shortcut is the sidebar's existing top-mod-or-admin gate and
+     points at the existing flow — no management control travels with it. *)
+  let connect_cta_case =
+    Alcotest.test_case "only a top mod is offered the connect shortcut" `Quick
+      (fun () ->
+        let ordinary = render ~channels:one_channel ~sections:one_section () in
+        if contains ordinary "settings/connections/new" then
+          Alcotest.fail "an ordinary viewer was offered the connect flow";
+        let top =
+          render ~channels:one_channel ~sections:one_section ~top_mod:true ()
+        in
+        Alcotest.(check int) "one shortcut" 1
+          (count_sub top "href='/c/cmia/settings/connections/new'");
+        if not (contains top ">Connect a community &rarr;</a>") then
+          Alcotest.fail "the connect shortcut has no label";
+        (* And nothing else from the management surface came with it. *)
+        List.iter
+          (fun needle ->
+            if contains top needle then
+              Alcotest.failf "the home network panel renders %S" needle)
+          [ "Incoming requests"; "Outgoing requests"; "ccn-form"
+          ; "connections/request"; "/accept"; "/reject" ])
+
+  (* Governance stays in the secondary column, subordinate to participation. *)
+  let governance_case =
+    Alcotest.test_case
+      "moderators and the moderation log stay in the secondary column" `Quick
+      (fun () ->
+        let html = render ~channels:one_channel ~sections:one_section () in
+        let secondary = at html "<div class='stack stack--sm'>" in
+        Alcotest.(check bool) "spaces are in the main column" true
+          (at html "<div class='launch-spaces'>" < secondary);
+        Alcotest.(check bool) "moderators are secondary" true
+          (secondary < at html "<span class='kicker'>Moderators</span>");
+        Alcotest.(check bool) "moderation log is secondary" true
+          (secondary < at html "<span class='kicker'>Moderation log</span>");
+        (* Live channels left the secondary column for good. *)
+        Alcotest.(check bool) "channels are no longer secondary" true
+          (at html "<span class='kicker'>Live channels</span>" < secondary))
+
+  let suite =
+    [ label_case; spaces_case; lone_surface_case; recent_case; no_lists_case
+    ; network_panel_case; zero_counts_case; connect_cta_case
+    ; governance_case ]
+end
+
+(* The public Network page (GET /c/:slug/network) — pure composition over the
+   two fragments the community page already used. What this pins is the
+   composition itself: both blocks always present and in order, each behind
+   its own anchor, a quiet empty state instead of a missing block, the
+   authorized shortcut and nothing else management-shaped, and no lifecycle,
+   note, or actor vocabulary anywhere. The fragments' own suites judge the
+   fragments; the read models' suites judge visibility. *)
+module Comm_network_page = struct
+  let contains haystack needle = Cprj_schema.contains haystack ~needle
+  let index_of = Comm_home_ia.index_of
+
+  let at html needle =
+    match index_of html needle with
+    | Some i -> i
+    | None -> Alcotest.failf "the document has no %S" needle
+
+  let community = Comm_home_ia.community
+
+  let render ?(projects_section = "") ?(communities_section = "")
+      ?(can_connect = false) () =
+    let captured = ref None in
+    let pipeline =
+      Dream.set_secret gck_secret @@ Dream.memory_sessions
+      @@ fun req ->
+      captured :=
+        Some
+          (Earde.Community_network_pages.community_network_page ~community
+             ~sidebar:"<aside class='sidebar'></aside>" ~projects_section
+             ~communities_section ~can_connect req);
+      Dream.html ""
+    in
+    ignore
+      (Lwt_main.run
+         (pipeline (Dream.request ~method_:`GET ~target:"/c/cmia/network" "")));
+    match !captured with
+    | Some html -> html
+    | None -> Alcotest.fail "network renderer did not run"
+
+  let projects = "<section class='ccp-section'><h2 class='ccp-title'>Connected projects</h2><ul class='ccp-projects'><li>Atlas</li></ul></section>"
+  let communities = "<section class='ccc-section'><h2 class='ccc-title'>Connected communities</h2><ul class='ccc-communities'><li>Neighbour</li></ul></section>"
+
+  let heading_case =
+    Alcotest.test_case "the page is titled Network and says what it holds"
+      `Quick (fun () ->
+        let html = render ~projects_section:projects () in
+        if not (contains html "<h1 class='chead__title'>Network</h1>") then
+          Alcotest.fail "no Network title";
+        if
+          not
+            (contains html
+               "Projects and communities connected to this community.")
+        then Alcotest.fail "no supporting copy";
+        if not (contains html "/c/cmia") then
+          Alcotest.fail "no community context")
+
+  let both_lists_case =
+    Alcotest.test_case "both complete lists render, projects first, each behind \
+                        its own anchor" `Quick (fun () ->
+        let html =
+          render ~projects_section:projects ~communities_section:communities ()
+        in
+        (* Spliced verbatim: the fragments are pinned by their own suites. *)
+        if not (contains html projects) then
+          Alcotest.fail "the projects fragment was altered";
+        if not (contains html communities) then
+          Alcotest.fail "the communities fragment was altered";
+        let p = at html "<div class='cnet-block' id='projects'>" in
+        let c = at html "<div class='cnet-block' id='communities'>" in
+        Alcotest.(check bool) "projects lead" true (p < c);
+        Alcotest.(check bool) "each block holds its own fragment" true
+          (p < at html "ccp-section" && at html "ccp-section" < c))
+
+  let empty_states_case =
+    Alcotest.test_case "an empty side keeps its block and says so quietly"
+      `Quick (fun () ->
+        let html = render ~communities_section:communities () in
+        (* The projects block is framed and headed, with one quiet line. *)
+        if not (contains html "<h2 class='ccp-title'>Connected projects</h2>")
+        then Alcotest.fail "the empty projects block lost its heading";
+        if not (contains html "No connected projects yet.") then
+          Alcotest.fail "no quiet empty copy";
+        if contains html "<ul class='ccp-projects'>" then
+          Alcotest.fail "an empty projects list was rendered";
+        (* And the populated side is untouched. *)
+        if not (contains html communities) then
+          Alcotest.fail "the populated block was disturbed";
+        (* Both empty: the page still renders, with both blocks. *)
+        let bare = render () in
+        Alcotest.(check int) "two blocks" 2
+          (count_sub bare "<div class='cnet-block'");
+        if not (contains bare "No connected communities yet.") then
+          Alcotest.fail "no quiet empty copy for communities")
+
+  let cta_case =
+    Alcotest.test_case "the connect shortcut renders only for an authorized \
+                        viewer" `Quick (fun () ->
+        let public = render ~projects_section:projects () in
+        if contains public "settings/connections" then
+          Alcotest.fail "an ordinary visitor was offered the management flow";
+        let authorized = render ~projects_section:projects ~can_connect:true () in
+        Alcotest.(check int) "one shortcut" 1
+          (count_sub authorized "href='/c/cmia/settings/connections/new'");
+        if not (contains authorized ">Connect a community</a>") then
+          Alcotest.fail "the shortcut has no label")
+
+  (* Nothing the management surface knows may appear here, for either viewer. *)
+  let vocabulary_case =
+    Alcotest.test_case "no lifecycle, note, actor, or management control can \
+                        appear" `Quick (fun () ->
+        List.iter
+          (fun can_connect ->
+            let html =
+              render ~projects_section:projects ~communities_section:communities
+                ~can_connect ()
+            in
+            List.iter
+              (fun needle ->
+                if contains html needle then
+                  Alcotest.failf "the network page renders %S (can_connect=%b)"
+                    needle can_connect)
+              [ "pending"; "Pending"; "rejected"; "Rejected"; "removed"
+              ; "Removed"; "Requested by"; "Reviewed by"; "requester"
+              ; "reviewer"; "request note"; "ccn-form"; "ccn-btn"
+              ; "connections/request"; "/accept"; "/reject" ])
+          [ false; true ])
+
+  let suite =
+    [ heading_case; both_lists_case; empty_states_case; cta_case
+    ; vocabulary_case ]
 end
 
 let () =
@@ -64725,4 +70728,29 @@ let () =
          full-label primary action still byte-identical. Pure renders plus a
          source/CSS census — DB-free. *)
     ; ("launch_connect_cta", Launch_cta.suite)
+      (* Mutual connections between communities (issue #30), storage/domain
+         slice: the pure lifecycle domain and note canonicalization are
+         DB-free; the two tables' constraints, the transactional store with
+         its one-audit-event-per-mutation rule, the unordered-pair
+         arbitration under real concurrency, and the symmetric/queue reads
+         are database-gated. *)
+    ; ("community_connections_domain", Ccon.suite)
+    ; ("community_connections_schema", Ccon_schema.suite)
+    ; ("community_connections_store", Ccon_store.store_suite)
+    ; ("community_connections_atomicity", Ccon_store.atomicity_suite)
+    ; ("community_connections_concurrency", Ccon_store.concurrency_suite)
+    ; ("community_connections_reads", Ccon_store.read_suite)
+    ; ("community_connections_ui", Ccon_ui.suite)
+    ; ("community_connections_http", Ccon_http.suite)
+    ; ("community_connection_notifications", Ccnt.recipient_suite)
+    ; ("community_connection_notification_txn", Ccnt.transaction_suite)
+    ; ("community_connection_notification_schema", Ccnt.schema_suite)
+    ; ("community_connection_notification_ui", Ccnt.ui_suite)
+    ; ("connected_communities_fragment", Cccc.fragment_suite)
+    ; ("connected_communities_reads", Cccc.read_suite)
+    ; ("connected_communities_route", Cccc.route_suite)
+    ; ("notification_badge", Nbdg.suite)
+    ; ("launch_scope_css", Launch_scope_css.suite)
+    ; ("community_home_ia", Comm_home_ia.suite)
+    ; ("community_network_page", Comm_network_page.suite)
     ]

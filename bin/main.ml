@@ -62,6 +62,12 @@ let () =
      cannot take last_active_at (moderator auto-demotion input) down with it. *)
   @@ Earde.Handlers.presence_middleware
   @@ Earde.Handlers.analytics_middleware
+  (* Inside sql_pool + sql_sessions, like presence: resolves the signed-in
+     user's unread-notification count once and stashes it on the request, so
+     every authenticated document renders its top-bar badge from the same
+     durable query instead of each page fetching its own answer. Best-effort
+     — a failed count leaves the field unset and the badge simply absent. *)
+  @@ Earde.Notification_badge.middleware
   (* Runs AFTER Dream.logger and analytics_middleware (both must see the
      redacted target) but BEFORE the router, so only the route handler gets
      the real sensitive query parameters back via Dream.query. No-op for
@@ -290,6 +296,41 @@ let () =
              ~mode:(Earde.Project_onboarding.mode_from_env ())
              ~load_config:Earde.Github_app_config.from_env
              request));
+    (* Community-connections management: the authorized surface where a
+       community's top moderators (or a durable global admin) see their
+       connected communities, review incoming requests, watch outgoing ones,
+       and send new ones. Every route is community-scoped under
+       /c/:slug/settings/connections — distinct longer paths than the
+       /c/:slug/settings GET and the Slice E/F settings POSTs, so nothing
+       shadows anything. The two GETs are informational and deliberately not
+       rate-limited, matching the other private settings GETs; the four
+       mutations share the sensitive-POST rate limit. Authorization is
+       decided in the read model's SQL and the subject binding inside the
+       store's guarded mutations — never by the route shape, and never by a
+       form field. *)
+    Dream.get "/c/:slug/settings/connections"
+      Earde.Community_connections_handlers.make_connections_page_handler;
+    Dream.get "/c/:slug/settings/connections/new"
+      Earde.Community_connections_handlers.make_connections_search_handler;
+    Dream.post "/c/:slug/settings/connections/request"
+      (Earde.Handlers.Rate_limit.middleware
+         Earde.Community_connections_handlers.make_connection_request_handler);
+    Dream.post "/c/:slug/settings/connections/:id/accept"
+      (Earde.Handlers.Rate_limit.middleware
+         Earde.Community_connections_handlers.make_connection_accept_handler);
+    Dream.post "/c/:slug/settings/connections/:id/reject"
+      (Earde.Handlers.Rate_limit.middleware
+         Earde.Community_connections_handlers.make_connection_reject_handler);
+    Dream.post "/c/:slug/settings/connections/:id/remove"
+      (Earde.Handlers.Rate_limit.middleware
+         Earde.Community_connections_handlers.make_connection_removal_handler);
+    (* Public Network page: the community's connected projects and connected
+       communities in full, which the community home now links to instead of
+       listing. A distinct literal segment from settings/modlog/reports and
+       from the /settings/connections management paths, so nothing shadows
+       anything. Read-only and deliberately public — its access decision is
+       the community's own can_view_community, exactly like /c/:slug. *)
+    Dream.get "/c/:slug/network" Earde.Handlers.community_network_handler;
     Dream.get "/c/:slug/modlog" Earde.Handlers.modlog_handler;
     (* Reports: singular GET form + plural POST create (Slice B) + plural GET mod queue
        (read-only). Distinct literal segments from settings/modlog/manage-mods, so no router
@@ -341,7 +382,6 @@ let () =
     Dream.get "/settings" Earde.Handlers.settings_page_handler;
     Dream.post "/settings" Earde.Handlers.update_profile_handler;
     Dream.get "/notifications" Earde.Handlers.notifications_handler;
-    Dream.get "/api/unread-notifs" Earde.Handlers.unread_notifs_api;
     Dream.post "/delete-account" Earde.Handlers.delete_account_handler;
     Dream.post "/delete-post" Earde.Handlers.delete_post_handler;
     Dream.post "/c/:slug/posts/:id/mod_delete" Earde.Handlers.mod_delete_post_handler;
