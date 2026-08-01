@@ -1054,14 +1054,17 @@ let connected_projects_error_page ?user request =
 
 (* A slug or community that no longer resolves reuses the route's existing generic
    unavailable response, byte-for-byte — a community that vanished between the route's own
-   lookup and this read must not become distinguishable from one that never existed. *)
+   lookup and this read must not become distinguishable from one that never existed.
+
+   The continuation receives the page models, not a rendered fragment: three surfaces now
+   read the same publicly visible set and need it differently — the community page renders
+   the full block, the community home shows only how many there are, and the Network page
+   renders the full block again. Rendering at the call site keeps that one read, and one
+   visibility rule, shared. *)
 let with_connected_projects db ?user request ~community_slug k =
   let module R = Community_connected_projects_read_model in
   match%lwt R.load_for_community db ~community_slug with
-  | Ok projects ->
-      k
-        (Community_connected_projects_pages.connected_projects_section
-           ~projects:(List.map connected_project_page_model projects))
+  | Ok projects -> k (List.map connected_project_page_model projects)
   | Error (R.Invalid_community_slug | R.Community_unavailable) ->
       community_not_found ?user request
   | Error (R.Inconsistent_data | R.Storage_error) ->
@@ -1081,12 +1084,10 @@ let with_connected_communities db ?user request ~community_slug k =
   match%lwt R.load_for_community db ~community_slug with
   | Ok communities ->
       k
-        (Community_connected_communities_pages.connected_communities_section
-           ~communities:
-             (List.map
-                (fun c : Community_connected_communities_pages.connected_community ->
-                  { name = R.community_name c; slug = R.community_slug c })
-                communities))
+        (List.map
+           (fun c : Community_connected_communities_pages.connected_community ->
+             { name = R.community_name c; slug = R.community_slug c })
+           communities)
   | Error (R.Invalid_community_slug | R.Community_unavailable) ->
       community_not_found ?user request
   | Error (R.Inconsistent_data | R.Storage_error) ->
@@ -1194,10 +1195,13 @@ let community_page_handler request =
              let is_top_mod = user_id > 0 && List.exists (fun (e: Db.moderator_entry) -> e.user_id = user_id && e.role = "top_mod") mods in
              (* Order: lookup → authorization → existing page data → connected projects →
                 connected communities → render. Never before the authorization decision
-                above. *)
-             with_connected_projects db ?user request ~community_slug:slug (fun connected_projects ->
-             with_connected_communities db ?user request ~community_slug:slug (fun connected_communities ->
-               Dream.html (Pages.community_overview_page ?user ~noindex:(community_noindex community) ~connected_projects ~connected_communities ~is_member:m ~is_current_user_mod:is_mod ~is_current_user_top_mod:is_top_mod ~mod_usernames ~orphaned ~rail_communities:user_communities ~channels ~recent_posts community section_stats request)))
+                above. The home shows only how many of each are publicly visible and
+                links to /c/:slug/network for the lists themselves, so it takes the
+                counts of exactly the sets that page renders — one read model, one
+                visibility rule, two presentations. *)
+             with_connected_projects db ?user request ~community_slug:slug (fun projects ->
+             with_connected_communities db ?user request ~community_slug:slug (fun communities ->
+               Dream.html (Pages.community_overview_page ?user ~noindex:(community_noindex community) ~connected_projects_count:(List.length projects) ~connected_communities_count:(List.length communities) ~is_member:m ~is_current_user_mod:is_mod ~is_current_user_top_mod:is_top_mod ~mod_usernames ~orphaned ~rail_communities:user_communities ~channels ~recent_posts community section_stats request)))
          | _ -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:"Failed to load community sections." ~alert_type:"error" ~return_url:"/" request))
     | Ok (Some community) ->
         let%lwt authorized = can_view_community db ~user_id ~is_admin community in
@@ -1220,11 +1224,96 @@ let community_page_handler request =
              let is_mod = user_id > 0 && List.exists (fun (e: Db.moderator_entry) -> e.user_id = user_id) mods in
              let is_top_mod = user_id > 0 && List.exists (fun (e: Db.moderator_entry) -> e.user_id = user_id && e.role = "top_mod") mods in
              (* Same order as the structured branch: both connected-* reads follow the
-                authorization decision and the existing feed load. *)
-             with_connected_projects db ?user request ~community_slug:slug (fun connected_projects ->
-             with_connected_communities db ?user request ~community_slug:slug (fun connected_communities ->
+                authorization decision and the existing feed load. The flat community
+                page keeps both full blocks in its side stack — the home reorganization
+                is the structured overview's. *)
+             with_connected_projects db ?user request ~community_slug:slug (fun projects ->
+             let connected_projects =
+               Community_connected_projects_pages.connected_projects_section ~projects
+             in
+             with_connected_communities db ?user request ~community_slug:slug (fun communities ->
+             let connected_communities =
+               Community_connected_communities_pages.connected_communities_section
+                 ~communities
+             in
                Dream.html (Pages.community_page ?user ~noindex:(community_noindex community) ~connected_projects ~connected_communities ~is_member:m ~is_current_user_mod:is_mod ~is_current_user_top_mod:is_top_mod ~mod_usernames ~admin_usernames ~banned_usernames ~user_communities ~moderated_communities v page sort_str community p request)))
          | _ -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:"Failed to load community data." ~alert_type:"error" ~return_url:"/" request))
+    | Ok None -> Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"Not Found" ~message:"This community does not exist." ~alert_type:"error" ~return_url:"/" request)
+    | Error err -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:("Database error: " ^ err) ~alert_type:"error" ~return_url:"/" request)
+  )
+
+(* === Public Network page: GET /c/:slug/network ===
+   The community's external network — the complete connected-projects and connected-
+   communities lists that used to occupy the community home's main column. The home now
+   carries only a compact entry point with the two counts, so this is where the lists
+   themselves live.
+
+   Same access discipline as the sibling public community routes and deliberately no new
+   one: the community is resolved, can_view_community decides, and only then is anything
+   else read. Both lists come from the same two helpers the community page uses, so the
+   eligibility and visibility rules are the read models' single copy — this route restates
+   none of them and can reveal nothing /c/:slug would not.
+
+   The Connect-a-community link is gated by the same top-mod-or-admin reading the community
+   sidebar already applies to that destination. It authorizes nothing: the connections
+   surface re-decides every request in SQL. *)
+let community_network_handler request =
+  let slug = Dream.param request "slug" in
+  let user = Dream.session_field request "username" in
+  let user_id = match Dream.session_field request "user_id" with
+    | Some id -> (try int_of_string id with _ -> 0) | None -> 0 in
+  let is_admin = Dream.session_field request "is_admin" = Some "true" in
+  Dream.sql request (fun db ->
+    match%lwt Db.get_community_by_slug db slug with
+    | Ok (Some community) ->
+        let%lwt authorized = can_view_community db ~user_id ~is_admin community in
+        if not authorized then community_not_found ?user request
+        else
+        (* Launch-chrome data, loaded only after the authorization decision above:
+           sections/channels feed the shared community sidebar and the viewer's joined
+           communities the global rail. Each degrades to an empty list rather than
+           blocking the page — none of it is load-bearing. *)
+        let%lwt sections =
+          if community.sections_enabled then
+            (match%lwt Db.get_sections_by_community db community.id with
+             | Ok secs -> Lwt.return secs | Error _ -> Lwt.return [])
+          else Lwt.return []
+        in
+        let%lwt channels =
+          match%lwt Db.get_channels_by_community db community.id with
+          | Ok cs -> Lwt.return cs | Error _ -> Lwt.return []
+        in
+        let%lwt rail_communities =
+          if user_id > 0 then
+            (match%lwt Db.get_user_communities db user_id with
+             | Ok cs -> Lwt.return cs | Error _ -> Lwt.return [])
+          else Lwt.return []
+        in
+        let%lwt mods_res = Db.get_community_mods_with_roles db community.id in
+        let mods = match mods_res with Ok ms -> ms | Error _ -> [] in
+        let is_mod =
+          user_id > 0 && List.exists (fun (e : Db.moderator_entry) -> e.user_id = user_id) mods in
+        let is_top_mod =
+          user_id > 0
+          && List.exists
+               (fun (e : Db.moderator_entry) -> e.user_id = user_id && e.role = "top_mod")
+               mods
+        in
+        let sidebar =
+          Pages.launch_knowledge_sidebar ~community ~channels ~sections
+            ~can_manage:(is_mod || is_admin) ()
+        in
+        with_connected_projects db ?user request ~community_slug:slug (fun projects ->
+        with_connected_communities db ?user request ~community_slug:slug (fun communities ->
+          Dream.html
+            (Community_network_pages.community_network_page ?user
+               ~noindex:(community_noindex community) ~rail_communities ~community ~sidebar
+               ~projects_section:
+                 (Community_connected_projects_pages.connected_projects_section ~projects)
+               ~communities_section:
+                 (Community_connected_communities_pages.connected_communities_section
+                    ~communities)
+               ~can_connect:(is_top_mod || is_admin) request)))
     | Ok None -> Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"Not Found" ~message:"This community does not exist." ~alert_type:"error" ~return_url:"/" request)
     | Error err -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:("Database error: " ^ err) ~alert_type:"error" ~return_url:"/" request)
   )

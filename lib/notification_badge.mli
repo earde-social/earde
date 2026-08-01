@@ -22,6 +22,12 @@
     and a failed count simply leaves nothing stashed. Only authenticated GETs
     for non-asset paths are counted.
 
+    Counted requests are exactly the authenticated GETs that can render a
+    document: assets and the two authenticated non-document GET routes (the
+    live-chat catch-up JSON and the realtime-token refresh, both of which the
+    chat page requests repeatedly while it is open) are excluded, so the count
+    stays attached to page loads and never to a polling loop.
+
     Must run inside [Dream.sql_pool] and [Dream.sql_sessions]. *)
 val middleware : Dream.middleware
 

@@ -2735,15 +2735,65 @@ ol, ul { margin: 0; padding: 0; list-style: none; }
   border-top: var(--bw) solid var(--line);
 }
 
-/* Knowledge-section rows. */
+/* ---- Community spaces + network groups ------------------------------------
+   Live chat and durable forum structure are the two ways to take part, so
+   they render as equal halves of one composition instead of stacking. The
+   wrapper is emitted by Pages only when both panels exist, so there is no
+   half-empty track to prop up with a count-dependent rule, and a lone surface
+   arrives without a wrapper and simply takes the column. `align-items: start`
+   matches .two-col: two honest card lengths, no stretched dead space. */
+.launch-community-overview .launch-spaces {
+  display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr);
+  gap: var(--sp-11); align-items: start;
+}
+/* Below the ladder's grid-tightening step the main column is too narrow to
+   halve, so the two surfaces stack — still equal siblings, one above the
+   other. (The scope's own gate hides the app entirely under 800px.) */
+@media (max-width: 1023px) {
+  .launch-community-overview .launch-spaces {
+    grid-template-columns: minmax(0,1fr);
+  }
+}
+/* ---- Network entry point (secondary column) --------------------------------
+   The full connection lists live at /c/:slug/network; the home carries two
+   navigation rows. They reuse the panel's own .project-row anatomy — same
+   hairline separation, same hover, same global :focus-visible ring — because
+   they are list links like every other row on this page, not a new control.
+   The count sits against the arrow so the two rows align whatever the label
+   length; the arrow is decorative (aria-hidden in the markup). */
+.launch-community-overview .launch-netrow { padding: 10px var(--sp-7); gap: var(--sp-5); }
+.launch-community-overview .launch-net-label {
+  flex: 1; min-width: 0; font-size: var(--fs-13); color: var(--ink);
+  overflow-wrap: anywhere;
+}
+.launch-community-overview .launch-net-count {
+  font-family: var(--mono); font-size: var(--fs-11-5); color: var(--muted);
+  flex: none;
+}
+.launch-community-overview .launch-net-go {
+  font-family: var(--mono); font-size: var(--fs-11-5); color: var(--muted);
+  flex: none;
+}
+.launch-community-overview .launch-netrow:hover .launch-net-go { color: var(--slate); }
+/* The authorized shortcut into the existing connect flow: a quiet link under
+   the rows, never a second primary action. */
+.launch-community-overview .launch-net-cta {
+  padding: var(--sp-6) var(--sp-7); border-top: var(--bw) solid var(--line);
+  font-size: var(--fs-11);
+}
+
+/* Forum-section rows. */
 .launch-community-overview .launch-secrow { padding: 11px var(--sp-7); }
 .launch-community-overview .launch-sec-sigil {
   font-family: var(--mono); color: var(--moss); width: 15px; text-align: center;
   flex: none;
 }
 .launch-community-overview .launch-sec-main { min-width: 0; flex: 1; display: block; }
+/* Half-width columns make an unbroken name long enough to escape the panel,
+   so names wrap; the one-line descriptions below keep their ellipsis. */
 .launch-community-overview .launch-sec-name {
   display: block; font-weight: 600; font-size: var(--fs-13-5); color: var(--ink);
+  overflow-wrap: anywhere;
 }
 .launch-community-overview .launch-sec-desc {
   display: block; font-size: var(--fs-11); color: var(--muted);
@@ -2774,6 +2824,7 @@ ol, ul { margin: 0; padding: 0; list-style: none; }
 .launch-community-overview .launch-chanrow { display: block; padding: 9px 14px; }
 .launch-community-overview .launch-chan-line {
   display: block; font-family: var(--mono); font-size: var(--fs-13); color: var(--ink);
+  overflow-wrap: anywhere;
 }
 .launch-community-overview .launch-chan-hash { color: var(--moss); }
 .launch-community-overview .launch-chan-topic {
@@ -2938,6 +2989,201 @@ ol, ul { margin: 0; padding: 0; list-style: none; }
   color: #fff; background: var(--moss); border-color: var(--moss);
 }
 .launch-community-overview #analytics-consent [data-analytics-error] {
+  color: var(--danger); font-size: var(--fs-11);
+}
+
+/* ==========================================================================
+   EARDE INTEGRATION — public community network page only
+   Scoped beneath body.launch-community-network: GET /c/:slug/network
+   (Community_network_pages.community_network_page), where the complete
+   connected-projects and connected-communities lists live now that the
+   community home carries only a compact entry point with their counts.
+
+   A launch scope is only complete when it carries BOTH halves — the shared
+   chrome/anatomy rules every launch surface repeats for its own page class,
+   and its feature skin — so the chrome half below is the sibling community
+   surfaces' recipe, re-scoped. The feature half is the same ccp-*/ccc-*
+   skinning the community home applies: the fragments are byte-pinned by their
+   own suites and spliced verbatim, so both surfaces must dress identical
+   markup, and repeating the rules per page class is this file's convention
+   (nothing here is global). The two blocks keep their home behavior: projects
+   in the 1px-gutter two-up grid, communities one per full-width row.
+   ========================================================================== */
+
+/* ---- Launch chrome ---------------------------------------------------------- */
+
+/* Top-bar user menu: pure-CSS <details>, real logout POST form inside. */
+.launch-community-network .launch-user { position: relative; }
+.launch-community-network .launch-user > summary { list-style: none; }
+.launch-community-network .launch-user > summary::-webkit-details-marker { display: none; }
+.launch-community-network .launch-user .avatar { background: var(--moss); }
+.launch-community-network .launch-user__menu {
+  position: absolute; right: 0; top: calc(100% + 6px); z-index: 40;
+  min-width: 168px; display: flex; flex-direction: column;
+  background: var(--surface); border: var(--bw) solid var(--line2);
+  border-radius: var(--r-3); padding: var(--sp-3);
+  box-shadow: var(--shadow-overlay);
+}
+.launch-community-network .launch-user__menu a,
+.launch-community-network .launch-user__menu button {
+  display: block; width: 100%; text-align: left; background: none; border: 0;
+  font-family: var(--mono); font-size: var(--fs-12); color: var(--ink);
+  padding: var(--sp-3) var(--sp-5); border-radius: var(--r-2); cursor: pointer;
+}
+.launch-community-network .launch-user__menu a:hover,
+.launch-community-network .launch-user__menu button:hover { background: var(--surface2); }
+.launch-community-network .launch-user__menu form {
+  margin: var(--sp-2) 0 0; padding-top: var(--sp-2);
+  border-top: var(--bw) solid var(--line);
+}
+
+/* Real community avatars fill their fixed tile (rail, sidebar head). */
+.launch-community-network .launch-rail__img,
+.launch-community-network .launch-avatar-img {
+  width: 100%; height: 100%; object-fit: cover; border-radius: inherit;
+  display: block;
+}
+
+.launch-community-network .launch-side-id { min-width: 0; display: block; }
+
+/* ---- Page anatomy ----------------------------------------------------------- */
+
+.launch-community-network .launch-chead-id { flex: 1; min-width: 0; }
+.launch-community-network .cnet-body { padding-top: 20px; }
+
+/* The authorized shortcut into the existing connect flow, under the intro:
+   compact, and never competing with the page's own content. */
+.launch-community-network .cnet-cta { margin-top: var(--sp-6); }
+
+/* ---- Connected projects (pinned ccp-* fragment, skinned in place) ---------- */
+
+.launch-community-network .ccp-section {
+  border: var(--bw) solid var(--line); border-radius: var(--r-3);
+  background: var(--surface); overflow: hidden;
+}
+.launch-community-network .ccp-title {
+  font-family: var(--mono); font-size: var(--fs-10-5); font-weight: 600;
+  letter-spacing: var(--ls-kicker); text-transform: uppercase; color: var(--muted);
+  margin: 0; padding: var(--sp-6) var(--sp-8) 2px;
+}
+.launch-community-network .ccp-sub {
+  font-family: var(--mono); font-size: var(--fs-10-5); color: var(--muted);
+  margin: 0; padding: 0 var(--sp-8) var(--sp-6);
+  border-bottom: var(--bw) solid var(--line);
+}
+.launch-community-network .ccp-projects {
+  list-style: none; margin: 0; padding: 0;
+  display: grid; grid-template-columns: 1fr 1fr; gap: var(--bw);
+  background: var(--line);
+}
+.launch-community-network .ccp-project {
+  background: var(--surface); padding: 11px var(--sp-7); min-width: 0;
+}
+/* An odd last cell spans the row so no bare gutter shows through. */
+.launch-community-network .ccp-project:last-child:nth-child(odd) { grid-column: 1 / -1; }
+.launch-community-network .ccp-identity p { margin: 0; }
+.launch-community-network .ccp-name {
+  margin: 0; font-family: var(--sans); font-weight: 600;
+  font-size: var(--fs-13-5); color: var(--ink); overflow-wrap: anywhere;
+}
+.launch-community-network .ccp-kind {
+  font-size: var(--fs-11); color: var(--muted); margin-top: var(--sp-1);
+}
+.launch-community-network .ccp-namespace,
+.launch-community-network .ccp-verification,
+.launch-community-network .ccp-connected {
+  font-family: var(--mono); font-size: var(--fs-10-5); color: var(--muted);
+  margin-top: var(--sp-1);
+}
+.launch-community-network .ccp-website {
+  font-size: var(--fs-11); margin-top: var(--sp-1);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.launch-community-network .ccp-website-link { color: var(--slate); }
+.launch-community-network .ccp-repos { list-style: none; margin: var(--sp-2) 0 0; padding: 0; }
+.launch-community-network .ccp-repo {
+  font-family: var(--mono); font-size: var(--fs-10-5); color: var(--muted);
+  overflow-wrap: anywhere;
+}
+.launch-community-network .ccp-repo-link { color: var(--slate); }
+.launch-community-network .ccp-repo-name { color: var(--muted); }
+.launch-community-network .ccp-marker {
+  font-family: var(--mono); font-size: var(--fs-9); color: var(--muted);
+  border: var(--bw) solid var(--line2); border-radius: var(--r-6); padding: 0 5px;
+}
+.launch-community-network .ccp-primary { color: var(--moss); border-color: var(--moss); }
+
+/* ---- Connected communities (ccc-* fragment, same panel grammar) ------------- */
+
+.launch-community-network .ccc-section {
+  border: var(--bw) solid var(--line); border-radius: var(--r-3);
+  background: var(--surface); overflow: hidden;
+}
+.launch-community-network .ccc-title {
+  font-family: var(--mono); font-size: var(--fs-10-5); font-weight: 600;
+  letter-spacing: var(--ls-kicker); text-transform: uppercase; color: var(--muted);
+  margin: 0; padding: var(--sp-6) var(--sp-8) 2px;
+}
+.launch-community-network .ccc-sub {
+  font-family: var(--mono); font-size: var(--fs-10-5); color: var(--muted);
+  margin: 0; padding: 0 var(--sp-8) var(--sp-6);
+  border-bottom: var(--bw) solid var(--line);
+}
+/* A plain column, never a track list: the gutter between rows is the rule,
+   and no count can produce a half-filled one. */
+.launch-community-network .ccc-communities {
+  list-style: none; margin: 0; padding: 0;
+  display: flex; flex-direction: column; gap: var(--bw);
+  background: var(--line);
+}
+.launch-community-network .ccc-community {
+  background: var(--surface); padding: 11px var(--sp-7); min-width: 0;
+}
+.launch-community-network .ccc-name {
+  display: block; margin: 0; font-family: var(--sans); font-weight: 600;
+  font-size: var(--fs-13-5); color: var(--ink); overflow-wrap: anywhere;
+}
+.launch-community-network a.ccc-name:hover { text-decoration: underline; }
+
+/* Quiet empty state: this page names both destinations whether or not either
+   holds anything, so an empty block keeps its frame and heading and says so
+   in one line. */
+.launch-community-network .ccp-empty,
+.launch-community-network .ccc-empty {
+  font-family: var(--mono); font-size: var(--fs-12); color: var(--muted);
+  margin: 0; padding: var(--sp-7) var(--sp-8);
+}
+
+/* ---- Gate + consent --------------------------------------------------------- */
+
+/* Desktop-only gate: hide this route's launch app under the shared
+   breakpoint; the gate panel itself is styled by mobile-gate.css. */
+@media (max-width: 800px) {
+  body.launch-community-network > .app { display: none !important; }
+}
+
+/* Analytics consent banner (markup shared with the legacy layout). */
+.launch-community-network #analytics-consent {
+  position: fixed; bottom: var(--sp-8); left: 50%; transform: translateX(-50%);
+  z-index: 50; width: calc(100% - 2rem); max-width: 28rem;
+  background: var(--surface); border: var(--bw) solid var(--line2);
+  border-radius: var(--r-3); padding: var(--sp-7) var(--sp-8);
+  box-shadow: var(--shadow-overlay);
+}
+.launch-community-network #analytics-consent p {
+  font-size: var(--fs-13); color: var(--muted); margin-bottom: var(--sp-5);
+}
+.launch-community-network #analytics-consent [data-analytics-accept],
+.launch-community-network #analytics-consent [data-analytics-refuse] {
+  font-family: var(--sans); font-weight: 600; font-size: var(--fs-12);
+  border: var(--bw) solid var(--line2); border-radius: var(--r-2);
+  padding: var(--sp-3) var(--sp-7); cursor: pointer;
+  background: var(--surface); color: var(--muted); margin-right: var(--sp-4);
+}
+.launch-community-network #analytics-consent [data-analytics-accept] {
+  color: #fff; background: var(--moss); border-color: var(--moss);
+}
+.launch-community-network #analytics-consent [data-analytics-error] {
   color: var(--danger); font-size: var(--fs-11);
 }
 

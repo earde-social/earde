@@ -32020,19 +32020,27 @@ module Ccph = struct
                    in
                    handler request)
           @@ Dream.router
-               [ Dream.get "/c/:slug" Earde.Handlers.community_page_handler ]
+               [ Dream.get "/c/:slug" Earde.Handlers.community_page_handler
+               ; Dream.get "/c/:slug/network"
+                   Earde.Handlers.community_network_handler ]
         in
         shared_pipeline := Some pipeline;
         pipeline
 
-  let visit ?session_user_id ?(session_admin = false) ~url ~slug () =
+  (* The complete list moved off the structured community home to the public
+     Network page, so [visit] follows it there by default: same read model,
+     same route-level authorization decision, one page further along. The
+     surfaces that still carry the section inline — the flat community's own
+     side stack — pass [~path:""] explicitly. *)
+  let visit ?session_user_id ?(session_admin = false) ?(path = "/network") ~url
+      ~slug () =
     let pipeline = pipeline_for ~url in
     shared_identity :=
       (match session_user_id with
        | None -> None
        | Some uid -> Some (uid, session_admin));
     let* response =
-      pipeline (Dream.request ~method_:`GET ~target:("/c/" ^ slug) "")
+      pipeline (Dream.request ~method_:`GET ~target:("/c/" ^ slug ^ path) "")
     in
     let* body = Dream.body response in
     Lwt.return (response, body)
@@ -32053,6 +32061,29 @@ module Ccph = struct
       (contains body section_marker);
     Alcotest.(check bool) (label ^ ": no heading") false
       (contains body "Connected projects")
+
+  (* The community home carries no list either way now: only the compact
+     Network panel, whose row is labelled "Connected projects" — so absence is
+     judged on the fragment's own markup, never on that label. *)
+  let check_no_list label body =
+    Alcotest.(check bool) (label ^ ": no fragment") false
+      (contains body section_marker);
+    Alcotest.(check bool) (label ^ ": no fragment heading") false
+      (contains body "<h2 class='ccp-title'>");
+    Alcotest.(check bool) (label ^ ": no supporting copy") false
+      (contains body
+         "Open-source projects that use this community as their Earde home.")
+
+  (* The Network page names both destinations whether or not either holds
+     anything, so nothing connected is a quiet line inside the block rather
+     than a missing block — the opposite of the community page's contract. *)
+  let check_empty_section label body =
+    Alcotest.(check bool) (label ^ ": block still framed") true
+      (contains body section_marker);
+    Alcotest.(check bool) (label ^ ": quiet empty line") true
+      (contains body "No connected projects yet.");
+    Alcotest.(check bool) (label ^ ": no project list") false
+      (contains body "<ul class='ccp-projects'>")
 
   (* Nothing in this feature may imply endorsement or officiality. *)
   let check_no_officiality label body =
@@ -32178,15 +32209,25 @@ module Ccph = struct
   (* === cases === *)
 
   let empty_case =
-    db_case "community page: a public community with no accepted project home \
-             renders no section at all" (fun ~url conn ->
+    db_case "network page: a public community with no accepted project home \
+             keeps the block and says so quietly; the home carries neither"
+      (fun ~url conn ->
         let* _cid = insert_community conn "ccph-empty" in
         let* response, body = visit ~url ~slug:"ccph-empty" () in
         check_ok "anonymous" response;
-        check_no_section "anonymous" body;
-        (* The community page itself is unchanged. *)
+        check_empty_section "anonymous" body;
+        (* The page itself renders around it. *)
         Alcotest.(check bool) "community still renders" true
           (contains body "ccph-empty");
+        (* The community home has no list at all any more — only the compact
+           entry point with its count. *)
+        let* home_response, home_body =
+          visit ~path:"" ~url ~slug:"ccph-empty" ()
+        in
+        check_ok "home" home_response;
+        check_no_list "home" home_body;
+        Alcotest.(check bool) "home links the network page" true
+          (contains home_body "href='/c/ccph-empty/network#projects'");
         Lwt.return_unit)
 
   let anonymous_case =
@@ -32222,6 +32263,43 @@ module Ccph = struct
           (contains body "/projects/ccph-alpha/setup");
         check_no_officiality "anonymous" body;
         check_no_credentials "anonymous" response body;
+        Lwt.return_unit)
+
+  (* The home's compact entry point, over the same durable relation: the count
+     is the size of exactly the list the Network page renders, and no part of
+     that list reaches the home. *)
+  let home_entry_point_case =
+    db_case "community home: the connected projects are one counted link to \
+             the network page, never a list" (fun ~url conn ->
+        let* owner = insert_user conn "ccph_hep_owner" in
+        let* moderator = insert_user conn "ccph_hep_mod" in
+        let* _project =
+          make_project conn ~user:owner ~ext_id:947000005L ~slug:"ccph-hep"
+            ~name:"Ccph Entry Point" ~website:"https://ccph-hep.example/"
+        in
+        let* cid = insert_community conn "ccph-hep" in
+        let* () = add_top_mod conn ~user:moderator ~community:cid in
+        let* () =
+          accept_reviewed "hep" conn ~owner ~reviewer:moderator
+            ~slug:"ccph-hep" ~cid ~community_slug:"ccph-hep"
+        in
+        let* response, body = visit ~path:"" ~url ~slug:"ccph-hep" () in
+        check_ok "home" response;
+        check_no_list "home" body;
+        Alcotest.(check bool) "no project identity on the home" false
+          (contains body "Ccph Entry Point");
+        Alcotest.(check bool) "counted row" true
+          (contains body
+             "<span class='launch-net-label'>Connected projects</span><span \
+              class='launch-net-count'>1</span>");
+        Alcotest.(check bool) "row links the network page" true
+          (contains body "href='/c/ccph-hep/network#projects'");
+        (* And the list itself is one click away, complete. *)
+        let* net_response, net_body = visit ~url ~slug:"ccph-hep" () in
+        check_ok "network" net_response;
+        check_has_section "network" net_body;
+        Alcotest.(check bool) "project identity on the network page" true
+          (contains net_body "Ccph Entry Point");
         Lwt.return_unit)
 
   let ordering_case =
@@ -32292,7 +32370,7 @@ module Ccph = struct
         let* () = exec conn "removed row" q_insert_removed (removed, cid) in
         let* response, body = visit ~url ~slug:"ccph-ex" () in
         check_ok "closed states" response;
-        check_no_section "only closed states" body;
+        check_empty_section "only closed states" body;
         List.iter
           (fun needle ->
             Alcotest.(check bool) ("absent: " ^ needle) false
@@ -32355,8 +32433,8 @@ module Ccph = struct
         Lwt.return_unit)
 
   let legacy_branch_case =
-    db_case "community page: the simple-feed branch renders the section too"
-      (fun ~url conn ->
+    db_case "community page: the simple-feed branch still renders the section \
+             inline, and its network page renders it too" (fun ~url conn ->
         let* owner = insert_user conn "ccph_leg_owner" in
         let* moderator = insert_user conn "ccph_leg_mod" in
         let* _project =
@@ -32370,11 +32448,15 @@ module Ccph = struct
             ~cid ~community_slug:"ccph-leg"
         in
         let* () = exec conn "simple feed" q_legacy_community cid in
-        let* response, body = visit ~url ~slug:"ccph-leg" () in
+        let* response, body = visit ~path:"" ~url ~slug:"ccph-leg" () in
         check_ok "simple feed" response;
         check_has_section "simple feed" body;
         Alcotest.(check bool) "project listed" true
           (contains body "Ccph Legacy");
+        (* The Network page exists for a flat community as well. *)
+        let* net_response, net_body = visit ~url ~slug:"ccph-leg" () in
+        check_ok "simple feed network" net_response;
+        check_has_section "simple feed network" net_body;
         Lwt.return_unit)
 
   let unlisted_case =
@@ -32542,10 +32624,10 @@ module Ccph = struct
           (fun () -> exec conn "restore relations" q_show_relations ()))
 
   let suite =
-    [ empty_case; anonymous_case; ordering_case; excluded_case;
-      drifted_verification_case; provisioned_case; legacy_branch_case;
-      unlisted_case; private_case; draft_case; missing_case;
-      inconsistency_case; storage_failure_case ]
+    [ empty_case; anonymous_case; home_entry_point_case; ordering_case;
+      excluded_case; drifted_verification_case; provisioned_case;
+      legacy_branch_case; unlisted_case; private_case; draft_case;
+      missing_case; inconsistency_case; storage_failure_case ]
 end
 
 (* ===== Accepted project-home removal (Project_home_removal_store) =====
@@ -34996,6 +35078,8 @@ module Phrh = struct
                [ Dream.get "/mint" (fun req ->
                      Dream.respond (Dream.csrf_token req));
                  Dream.get "/c/:slug" Earde.Handlers.community_page_handler;
+                 Dream.get "/c/:slug/network"
+                   Earde.Handlers.community_network_handler;
                  Dream.get "/c/:slug/settings"
                    Earde.Handlers.community_settings_handler;
                  Dream.get "/projects/:slug/request-home" (fun req ->
@@ -35312,15 +35396,23 @@ module Phrh = struct
           (contains after_body "phrh-cproj/remove-home");
         Alcotest.(check bool) "empty-state copy" true
           (contains after_body "No connected projects.");
-        (* The public community page also drops it. *)
+        (* The public Network page — where the list lives — also drops it, and
+           the community home's count falls back to zero. *)
         let* public_response, public_body =
-          do_get ~cookie ~url ~target:"/c/phrh-chome" ()
+          do_get ~cookie ~url ~target:"/c/phrh-chome/network" ()
         in
-        Alcotest.(check int) "public page 200" 200 (status_of public_response);
-        Alcotest.(check bool) "no connected-projects section" false
-          (contains public_body "<section class='ccp-section'>");
+        Alcotest.(check int) "network page 200" 200 (status_of public_response);
+        Alcotest.(check bool) "no project list" false
+          (contains public_body "<ul class='ccp-projects'>");
+        Alcotest.(check bool) "quiet empty state instead" true
+          (contains public_body "No connected projects yet.");
         Alcotest.(check bool) "project absent from the public page" false
           (contains public_body "Phrh Cproj");
+        let* _, home_body = do_get ~cookie ~url ~target:"/c/phrh-chome" () in
+        Alcotest.(check bool) "home count back to zero" true
+          (contains home_body
+             "<span class='launch-net-label'>Connected projects</span><span \
+              class='launch-net-count'>0</span>");
         check_untouched "community side" conn ~project ~community:cid before)
 
   (* === settings-surface authorization and content === *)
@@ -35448,13 +35540,18 @@ module Phrh = struct
         let* () = denied "ordinary member" member in
         let* stranger = insert_user conn "phrh_sstranger" in
         let* () = denied "unrelated user" stranger in
-        (* The public community page never carries removal controls. *)
+        (* The public surfaces never carry removal controls. The list itself
+           lives on the community's Network page now; the home only counts
+           it. *)
         as_anonymous ();
         let* _, public_body = do_get ~url ~target:"/c/phrh-shome" () in
         Alcotest.(check bool) "public page: no controls" false
           (contains public_body "remove-home");
-        Alcotest.(check bool) "public page: still lists the projects" true
-          (contains public_body "Phrh Accepted");
+        let* _, network_body = do_get ~url ~target:"/c/phrh-shome/network" () in
+        Alcotest.(check bool) "network page: no controls" false
+          (contains network_body "remove-home");
+        Alcotest.(check bool) "network page: still lists the projects" true
+          (contains network_body "Phrh Accepted");
         Lwt.return_unit)
 
   let settings_labels_case =
@@ -62988,6 +63085,8 @@ module Cccc = struct
              handler request)
     @@ Dream.router
          [ Dream.get "/c/:slug" Earde.Handlers.community_page_handler;
+           Dream.get "/c/:slug/network"
+             Earde.Handlers.community_network_handler;
            Dream.get "/c/:slug/settings/connections"
              Earde.Community_connections_handlers
              .make_connections_page_handler ]
@@ -62999,7 +63098,7 @@ module Cccc = struct
     Lwt.return (status_of response, body)
 
   let integration_case =
-    db_case "route: the public block appears on both community homes, \
+    db_case "route: the public block appears on both network pages, \
              disappears with eligibility, and never replaces management"
       (fun ~url conn ->
         let* top = insert_user conn "cccc_rt_top" in
@@ -63009,7 +63108,7 @@ module Cccc = struct
         let* id = connect conn ~actor:top ~requester:a ~recipient:b in
         let* () = accept conn ~actor:top ~id ~recipient:b in
         (* Anonymously, from either side. *)
-        let* status, body = get ~url "/c/cccc-rt-a" in
+        let* status, body = get ~url "/c/cccc-rt-a/network" in
         Alcotest.(check int) "a: 200" 200 status;
         Alcotest.(check bool) "a: heading" true
           (contains body ">Connected communities</h2>");
@@ -63017,7 +63116,7 @@ module Cccc = struct
           (contains body ">Cccc Route Beta</a>");
         Alcotest.(check bool) "a: links b" true
           (contains body "href='/c/cccc-rt-b'");
-        let* _, body = get ~url "/c/cccc-rt-b" in
+        let* _, body = get ~url "/c/cccc-rt-b/network" in
         Alcotest.(check bool) "b: names a" true
           (contains body ">Cccc Route Alpha</a>");
         (* Neither page states anything about the connection itself. *)
@@ -63027,12 +63126,44 @@ module Cccc = struct
               ("route never renders: " ^ needle)
               false (contains body needle))
           [ "cccc_rt_top"; "depends on"; "used by"; "related ecosystem" ];
+        (* The connect shortcut follows the sidebar's existing top-mod-or-admin
+           reading and nothing else — an ordinary visitor is never offered a
+           way into the management flow. *)
+        let* _, anon = get ~url "/c/cccc-rt-a/network" in
+        Alcotest.(check bool) "anonymous: no connect shortcut" false
+          (contains anon "settings/connections/new");
+        let* _, tm = get ~session_user_id:top ~url "/c/cccc-rt-a/network" in
+        Alcotest.(check bool) "top mod: connect shortcut" true
+          (contains tm "href='/c/cccc-rt-a/settings/connections/new'");
+        (* The community home carries the counted entry point instead: the
+           same publicly visible set, one link away, with no counterpart
+           named on it. *)
+        let* status, home = get ~url "/c/cccc-rt-a" in
+        Alcotest.(check int) "home: 200" 200 status;
+        Alcotest.(check bool) "home: no list" false
+          (contains home ">Connected communities</h2>");
+        Alcotest.(check bool) "home: no counterpart named" false
+          (contains home "Cccc Route Beta");
+        Alcotest.(check bool) "home: counted row" true
+          (contains home
+             "<span class='launch-net-label'>Connected communities</span><span \
+              class='launch-net-count'>1</span>");
+        Alcotest.(check bool) "home: links the network page" true
+          (contains home "href='/c/cccc-rt-a/network#communities'");
         (* The counterpart goes private: the public block disappears from the
-           viewer's page, while the durable row and its management view stay. *)
+           viewer's page and its count falls back to zero, while the durable
+           row and its management view stay. *)
         let* () = make_unlisted conn b in
-        let* _, body = get ~url "/c/cccc-rt-a" in
-        Alcotest.(check bool) "a: block gone" false
-          (contains body ">Connected communities</h2>");
+        let* _, body = get ~url "/c/cccc-rt-a/network" in
+        Alcotest.(check bool) "a: block empty" true
+          (contains body "No connected communities yet.");
+        Alcotest.(check bool) "a: counterpart gone" false
+          (contains body ">Cccc Route Beta</a>");
+        let* _, home = get ~url "/c/cccc-rt-a" in
+        Alcotest.(check bool) "home: row stays at zero" true
+          (contains home
+             "<span class='launch-net-label'>Connected communities</span><span \
+              class='launch-net-count'>0</span>");
         let* status, body =
           get ~session_user_id:top ~url "/c/cccc-rt-a/settings/connections"
         in
@@ -63168,6 +63299,13 @@ module Nbdg = struct
   let routes =
     Dream.router
       [ Dream.get "/probe" badge_probe
+      (* The same document behind the two shapes the middleware must skip: a
+         .json catch-up path (with and without its query string) and a
+         realtime-token refresh. The probe renders a badge whenever a count
+         was stashed, so a badge here means the query ran. *)
+      ; Dream.get "/probe.json" badge_probe
+      ; Dream.get "/probe/realtime-token" badge_probe
+      ; Dream.get "/static/probe" badge_probe
       ; Dream.get "/c/:slug" Earde.Handlers.community_page_handler
       ; Dream.get "/c/:slug/settings/connections"
           Earde.Community_connections_handlers.make_connections_page_handler
@@ -63263,6 +63401,44 @@ module Nbdg = struct
         let* status, body = get ~pipeline:p "/c/nbdg-zero" in
         Alcotest.(check int) "community page 200 again" 200 status;
         check_badge "one" body (Some "1");
+        Lwt.return_unit)
+
+  (* --- 1b. only document requests pay for the count ----------------------- *)
+
+  (* The live-chat page re-reads messages.json after every burst and refreshes
+     its realtime token on a timer, so a count attached to those would ride the
+     chat polling loop instead of page loads. Each target below renders the
+     same probe document: a badge means the middleware counted, its absence
+     means it skipped. *)
+  let request_scope_case =
+    db_case
+      "only document requests incur the unread count; json, realtime-token \
+       and asset paths do not" (fun ~url conn ->
+        let* user = insert_user conn "nbdg_scope" in
+        let* () = seed conn user "Nbdg scope" in
+        let p = pipeline ~session:(user, "nbdg_scope") ~url () in
+        (* The control: an ordinary document does count. *)
+        let* status, body = get ~pipeline:p "/probe" in
+        Alcotest.(check int) "document 200" 200 status;
+        check_badge "document" body (Some "1");
+        let* () =
+          Lwt_list.iter_s
+            (fun (label, target) ->
+              let* status, body = get ~pipeline:p target in
+              Alcotest.(check int) (label ^ ": 200") 200 status;
+              check_badge label body None;
+              Lwt.return_unit)
+            [ ("catch-up json", "/probe.json")
+            ; ("catch-up json with query", "/probe.json?after_id=12")
+            ; ("realtime token", "/probe/realtime-token")
+            ; ("asset", "/static/probe")
+            ]
+        in
+        (* An anonymous document never counts either. *)
+        let anon = pipeline ~url () in
+        let* status, body = get ~pipeline:anon "/probe" in
+        Alcotest.(check int) "anonymous 200" 200 status;
+        check_badge "anonymous" body None;
         Lwt.return_unit)
 
   (* --- 2. one count, every page ------------------------------------------ *)
@@ -63414,8 +63590,9 @@ module Nbdg = struct
         Lwt.return_unit)
 
   let suite =
-    [ sources_case; zero_then_one_case; parity_case; read_semantics_case
-    ; failure_case; cap_case; connection_notification_case ]
+    [ sources_case; zero_then_one_case; request_scope_case; parity_case
+    ; read_semantics_case; failure_case; cap_case
+    ; connection_notification_case ]
 end
 
 (* Every community-shell launch surface is <body class='launch-X'> over the
@@ -63497,8 +63674,9 @@ module Launch_scope_css = struct
               (expected ^ " is a community-shell surface")
               true
               (List.mem expected community_shell_classes))
-          [ "launch-community-connections"; "launch-community-overview"
-          ; "launch-community-settings"; "launch-project-home-review" ])
+          [ "launch-community-connections"; "launch-community-network"
+          ; "launch-community-overview"; "launch-community-settings"
+          ; "launch-project-home-review" ])
 
   (* The shared half of a community-shell scope. Each of these is chrome the
      document always emits and that only this scope can style. *)
@@ -63542,13 +63720,18 @@ module Launch_scope_css = struct
   (* The public connected-communities block is a list, not a tile grid. It
      borrowed the connected-projects panel's two-up track list, where each
      cell is a multi-line project; a connected community is one line, so an
-     odd count left an orphan cell and the block read as tiles. Both
-     community-home scopes must keep one community per full-width row, with
-     no count-dependent rule propping it up. *)
+     odd count left an orphan cell and the block read as tiles. Every scope
+     that renders the block must keep one community per full-width row, with
+     no count-dependent rule propping it up — including the Network page the
+     complete lists moved to. *)
   let connected_communities_list_case =
     Alcotest.test_case
       "the public connected-communities block is a single-column list in \
-       every community-home scope" `Quick (fun () ->
+       every scope that renders it" `Quick (fun () ->
+        let scopes =
+          [ "launch-community-overview"; "launch-flat-community"
+          ; "launch-community-network" ]
+        in
         List.iter
           (fun scope ->
             let list_rule =
@@ -63565,9 +63748,9 @@ module Launch_scope_css = struct
               ; ( "odd-count span"
                 , Printf.sprintf ".%s .ccc-community:last-child" scope )
               ])
-          [ "launch-community-overview"; "launch-flat-community" ];
-        (* And the rows really are a plain column in both. *)
-        Alcotest.(check int) "one flex column per scope" 2
+          scopes;
+        (* And the rows really are a plain column in each. *)
+        Alcotest.(check int) "one flex column per scope" (List.length scopes)
           (count_sub css
              ".ccc-communities {\n\
              \  list-style: none; margin: 0; padding: 0;\n\
@@ -63576,6 +63759,401 @@ module Launch_scope_css = struct
   let suite =
     [ census_case; shared_rules_case; no_badge_reveal_case
     ; connected_communities_list_case ]
+end
+
+(* The /c/:slug information architecture. Live chat and durable forum
+   structure are the two complementary ways to take part, so they sit as
+   equal siblings inside one community-spaces composition; the two connection
+   cards sit in one network group beneath it; governance stays in the
+   secondary column.
+
+   The grouping is built in the composition, not by CSS ordering, which is
+   what this pins: which wrapper each panel lands in, in which order, and
+   that a wrapper is never emitted around nothing. Renders the real page
+   under a secret + sessions pipeline (it emits a framework CSRF field); no
+   SQL is touched. *)
+module Comm_home_ia = struct
+  let contains haystack needle = Cprj_schema.contains haystack ~needle
+
+  let index_of html needle =
+    let n = String.length needle and h = String.length html in
+    let rec go i =
+      if i + n > h then None
+      else if String.sub html i n = needle then Some i
+      else go (i + 1)
+    in
+    go 0
+
+  let at html needle =
+    match index_of html needle with
+    | Some i -> i
+    | None -> Alcotest.failf "the document has no %S" needle
+
+  let community : Earde.Db.community =
+    { id = 7711; slug = "cmia";
+      name = "Cartographic Mapping Interest Assembly";
+      description = Some "Two ways to take part."; rules = None;
+      avatar_url = None; banner_url = None; allow_downvotes = true;
+      sections_enabled = true; visibility = Earde.Db.Community_public;
+      indexable = true; is_network_community = false;
+      onboarding_state = Earde.Db.Community_published; discoverable = true }
+
+  let section ?description ~name ~slug () : Earde.Db.community_section =
+    { section_id = 1; community_id = 7711; name; slug; description;
+      position = 0; default_sort = "hot"; is_introduction_section = false;
+      indexable = true }
+
+  let channel ~slug () : Earde.Db.channel =
+    { id = 1; community_id = 7711; slug; name = slug; topic = None;
+      position = 0; is_archived = false; created_at = "2026-07-31 10:00:00";
+      indexable = true }
+
+  let post ~title () : Earde.Db.post =
+    { id = 501; title; url = None; content = Some "Body."; community_id = 7711;
+      user_id = 9; username = "mapmaker"; community_slug = "cmia";
+      created_at = "2026-07-31 10:00:00"; score = 3; comment_count = 1;
+      allow_downvotes = true; image_url = None; section_name = None;
+      section_slug = None; community_sections_enabled = true;
+      author_local_karma = 0; author_local_post_count = 1;
+      author_local_comment_count = 0; author_first_active_at = None }
+
+  let render ?(projects = 0) ?(communities = 0) ?(top_mod = false)
+      ?(channels = []) ?(sections = []) ?(recent_posts = []) () =
+    let captured = ref None in
+    let pipeline =
+      Dream.set_secret gck_secret @@ Dream.memory_sessions
+      @@ fun req ->
+      captured :=
+        Some
+          (Earde.Pages.community_overview_page
+             ~connected_projects_count:projects
+             ~connected_communities_count:communities ~is_member:false
+             ~is_current_user_mod:false ~is_current_user_top_mod:top_mod
+             ~mod_usernames:[ "mapmaker" ] ~orphaned:(0, None)
+             ~rail_communities:[] ~channels ~recent_posts community
+             (List.map (fun s -> (s, 0, None)) sections)
+             req);
+      Dream.html ""
+    in
+    ignore
+      (Lwt_main.run
+         (pipeline (Dream.request ~method_:`GET ~target:"/c/cmia" "")));
+    match !captured with
+    | Some html -> html
+    | None -> Alcotest.fail "overview renderer did not run"
+
+  let one_channel = [ channel ~slug:"general" () ]
+  let one_section =
+    [ section ~name:"Field notes" ~slug:"field-notes"
+        ~description:"Observations from the ground." () ]
+
+  (* The panel label. "Knowledge sections" is the pre-reorganisation copy and
+     must be gone from this page — the kicker uppercases it, so the document
+     carries the sentence case and renders FORUM SECTIONS. *)
+  let label_case =
+    Alcotest.test_case "the sections panel is labelled Forum sections" `Quick
+      (fun () ->
+        let html = render ~channels:one_channel ~sections:one_section () in
+        Alcotest.(check int)
+          "exactly one Forum sections kicker" 1
+          (count_sub html "<span class='kicker'>Forum sections</span>");
+        if contains html "Knowledge sections" then
+          Alcotest.fail "the overview still says Knowledge sections")
+
+  (* Community spaces leads the main column, channels before sections. *)
+  let spaces_case =
+    Alcotest.test_case
+      "live channels and forum sections are siblings in one community-spaces \
+       group" `Quick (fun () ->
+        let html = render ~channels:one_channel ~sections:one_section () in
+        Alcotest.(check int) "one spaces group" 1
+          (count_sub html "<div class='launch-spaces'>");
+        let spaces = at html "<div class='launch-spaces'>" in
+        let channels = at html "<span class='kicker'>Live channels</span>" in
+        let sections = at html "<span class='kicker'>Forum sections</span>" in
+        Alcotest.(check bool) "channels lead the group" true
+          (spaces < channels && channels < sections);
+        (* And the group leads the main column. *)
+        Alcotest.(check bool) "spaces open the main stack" true
+          (at html "<div class='stack'>" < spaces))
+
+  (* One surface takes the column on its own; no wrapper is emitted around a
+     single panel, and none around nothing. *)
+  let lone_surface_case =
+    Alcotest.test_case "a lone space surface needs no group wrapper" `Quick
+      (fun () ->
+        (* Only forum sections: the channels panel is absent entirely. *)
+        let html = render ~sections:one_section () in
+        Alcotest.(check int) "no wrapper around one panel" 0
+          (count_sub html "<div class='launch-spaces'>");
+        Alcotest.(check int) "sections still render" 1
+          (count_sub html "<span class='kicker'>Forum sections</span>");
+        if contains html "<span class='kicker'>Live channels</span>" then
+          Alcotest.fail "an empty channels panel was rendered";
+        (* Only channels: the sections panel keeps its existing empty state,
+           so both surfaces are present and the group is emitted. *)
+        let html = render ~channels:one_channel () in
+        Alcotest.(check int) "both surfaces present" 1
+          (count_sub html "<div class='launch-spaces'>");
+        if not (contains html "No sections yet.") then
+          Alcotest.fail "the sections empty state was lost")
+
+  (* Recent knowledge follows community spaces and closes the main column. *)
+  let recent_case =
+    Alcotest.test_case "recent knowledge follows community spaces in the main \
+                        column" `Quick (fun () ->
+        let html =
+          render ~channels:one_channel ~sections:one_section
+            ~recent_posts:[ post ~title:"Contour intervals" () ] ()
+        in
+        let recent = at html "<span class='kicker'>Recent durable knowledge</span>" in
+        Alcotest.(check bool) "spaces first" true
+          (at html "<div class='launch-spaces'>" < recent);
+        Alcotest.(check bool) "still in the main column" true
+          (recent < at html "<div class='stack stack--sm'>"))
+
+  (* The full connection lists left the home for /c/:slug/network. Nothing of
+     either fragment may render here — not the sections, not the headings, not
+     the group wrapper that used to hold them. *)
+  let no_lists_case =
+    Alcotest.test_case "no connection list renders on the home" `Quick
+      (fun () ->
+        let html =
+          render ~channels:one_channel ~sections:one_section ~projects:3
+            ~communities:2 ()
+        in
+        List.iter
+          (fun needle ->
+            if contains html needle then
+              Alcotest.failf "the home still renders %S" needle)
+          [ "ccp-section"; "ccc-section"; "<h2 class='ccp-title'>"
+          ; "<h2 class='ccc-title'>"; "launch-network"
+          ; "Open-source projects that use this community as their Earde home."
+          ; "Communities this one is mutually connected with." ])
+
+  (* The compact entry point: two stable rows with their counts, both leading
+     to the public Network page, at the foot of the secondary column. *)
+  let network_panel_case =
+    Alcotest.test_case "the network panel closes the secondary column with two \
+                        counted links" `Quick (fun () ->
+        let html =
+          render ~channels:one_channel ~sections:one_section ~projects:1
+            ~communities:3 ()
+        in
+        Alcotest.(check int) "one network panel" 1
+          (count_sub html "<span class='kicker'>Network</span>");
+        let network = at html "<span class='kicker'>Network</span>" in
+        Alcotest.(check bool) "in the secondary column" true
+          (at html "<div class='stack stack--sm'>" < network);
+        Alcotest.(check bool) "after the moderation log" true
+          (at html "<span class='kicker'>Moderation log</span>" < network);
+        List.iter
+          (fun (label, count, anchor) ->
+            let row =
+              Printf.sprintf
+                "<a class='project-row launch-netrow' \
+                 href='/c/cmia/network#%s'><span \
+                 class='launch-net-label'>%s</span><span \
+                 class='launch-net-count'>%d</span><span \
+                 class='launch-net-go' aria-hidden='true'>&rarr;</span></a>"
+                anchor label count
+            in
+            if not (contains html row) then
+              Alcotest.failf "the network panel has no %s row" label)
+          [ ("Connected projects", 1, "projects")
+          ; ("Connected communities", 3, "communities") ];
+        (* Projects lead, communities follow. *)
+        Alcotest.(check bool) "projects row first" true
+          (at html "network#projects" < at html "network#communities"))
+
+  (* A zero count is a rendered row, not a hidden one: both are permanent
+     destinations, so the panel's shape never depends on the data. *)
+  let zero_counts_case =
+    Alcotest.test_case "zero counts still render both navigation rows" `Quick
+      (fun () ->
+        let html = render ~channels:one_channel ~sections:one_section () in
+        Alcotest.(check int) "network panel present" 1
+          (count_sub html "<span class='kicker'>Network</span>");
+        Alcotest.(check int) "two rows" 2
+          (count_sub html "<a class='project-row launch-netrow'");
+        Alcotest.(check int) "both at zero" 2
+          (count_sub html "<span class='launch-net-count'>0</span>"))
+
+  (* The connect shortcut is the sidebar's existing top-mod-or-admin gate and
+     points at the existing flow — no management control travels with it. *)
+  let connect_cta_case =
+    Alcotest.test_case "only a top mod is offered the connect shortcut" `Quick
+      (fun () ->
+        let ordinary = render ~channels:one_channel ~sections:one_section () in
+        if contains ordinary "settings/connections/new" then
+          Alcotest.fail "an ordinary viewer was offered the connect flow";
+        let top =
+          render ~channels:one_channel ~sections:one_section ~top_mod:true ()
+        in
+        Alcotest.(check int) "one shortcut" 1
+          (count_sub top "href='/c/cmia/settings/connections/new'");
+        if not (contains top ">Connect a community &rarr;</a>") then
+          Alcotest.fail "the connect shortcut has no label";
+        (* And nothing else from the management surface came with it. *)
+        List.iter
+          (fun needle ->
+            if contains top needle then
+              Alcotest.failf "the home network panel renders %S" needle)
+          [ "Incoming requests"; "Outgoing requests"; "ccn-form"
+          ; "connections/request"; "/accept"; "/reject" ])
+
+  (* Governance stays in the secondary column, subordinate to participation. *)
+  let governance_case =
+    Alcotest.test_case
+      "moderators and the moderation log stay in the secondary column" `Quick
+      (fun () ->
+        let html = render ~channels:one_channel ~sections:one_section () in
+        let secondary = at html "<div class='stack stack--sm'>" in
+        Alcotest.(check bool) "spaces are in the main column" true
+          (at html "<div class='launch-spaces'>" < secondary);
+        Alcotest.(check bool) "moderators are secondary" true
+          (secondary < at html "<span class='kicker'>Moderators</span>");
+        Alcotest.(check bool) "moderation log is secondary" true
+          (secondary < at html "<span class='kicker'>Moderation log</span>");
+        (* Live channels left the secondary column for good. *)
+        Alcotest.(check bool) "channels are no longer secondary" true
+          (at html "<span class='kicker'>Live channels</span>" < secondary))
+
+  let suite =
+    [ label_case; spaces_case; lone_surface_case; recent_case; no_lists_case
+    ; network_panel_case; zero_counts_case; connect_cta_case
+    ; governance_case ]
+end
+
+(* The public Network page (GET /c/:slug/network) — pure composition over the
+   two fragments the community page already used. What this pins is the
+   composition itself: both blocks always present and in order, each behind
+   its own anchor, a quiet empty state instead of a missing block, the
+   authorized shortcut and nothing else management-shaped, and no lifecycle,
+   note, or actor vocabulary anywhere. The fragments' own suites judge the
+   fragments; the read models' suites judge visibility. *)
+module Comm_network_page = struct
+  let contains haystack needle = Cprj_schema.contains haystack ~needle
+  let index_of = Comm_home_ia.index_of
+
+  let at html needle =
+    match index_of html needle with
+    | Some i -> i
+    | None -> Alcotest.failf "the document has no %S" needle
+
+  let community = Comm_home_ia.community
+
+  let render ?(projects_section = "") ?(communities_section = "")
+      ?(can_connect = false) () =
+    let captured = ref None in
+    let pipeline =
+      Dream.set_secret gck_secret @@ Dream.memory_sessions
+      @@ fun req ->
+      captured :=
+        Some
+          (Earde.Community_network_pages.community_network_page ~community
+             ~sidebar:"<aside class='sidebar'></aside>" ~projects_section
+             ~communities_section ~can_connect req);
+      Dream.html ""
+    in
+    ignore
+      (Lwt_main.run
+         (pipeline (Dream.request ~method_:`GET ~target:"/c/cmia/network" "")));
+    match !captured with
+    | Some html -> html
+    | None -> Alcotest.fail "network renderer did not run"
+
+  let projects = "<section class='ccp-section'><h2 class='ccp-title'>Connected projects</h2><ul class='ccp-projects'><li>Atlas</li></ul></section>"
+  let communities = "<section class='ccc-section'><h2 class='ccc-title'>Connected communities</h2><ul class='ccc-communities'><li>Neighbour</li></ul></section>"
+
+  let heading_case =
+    Alcotest.test_case "the page is titled Network and says what it holds"
+      `Quick (fun () ->
+        let html = render ~projects_section:projects () in
+        if not (contains html "<h1 class='chead__title'>Network</h1>") then
+          Alcotest.fail "no Network title";
+        if
+          not
+            (contains html
+               "Projects and communities connected to this community.")
+        then Alcotest.fail "no supporting copy";
+        if not (contains html "/c/cmia") then
+          Alcotest.fail "no community context")
+
+  let both_lists_case =
+    Alcotest.test_case "both complete lists render, projects first, each behind \
+                        its own anchor" `Quick (fun () ->
+        let html =
+          render ~projects_section:projects ~communities_section:communities ()
+        in
+        (* Spliced verbatim: the fragments are pinned by their own suites. *)
+        if not (contains html projects) then
+          Alcotest.fail "the projects fragment was altered";
+        if not (contains html communities) then
+          Alcotest.fail "the communities fragment was altered";
+        let p = at html "<div class='cnet-block' id='projects'>" in
+        let c = at html "<div class='cnet-block' id='communities'>" in
+        Alcotest.(check bool) "projects lead" true (p < c);
+        Alcotest.(check bool) "each block holds its own fragment" true
+          (p < at html "ccp-section" && at html "ccp-section" < c))
+
+  let empty_states_case =
+    Alcotest.test_case "an empty side keeps its block and says so quietly"
+      `Quick (fun () ->
+        let html = render ~communities_section:communities () in
+        (* The projects block is framed and headed, with one quiet line. *)
+        if not (contains html "<h2 class='ccp-title'>Connected projects</h2>")
+        then Alcotest.fail "the empty projects block lost its heading";
+        if not (contains html "No connected projects yet.") then
+          Alcotest.fail "no quiet empty copy";
+        if contains html "<ul class='ccp-projects'>" then
+          Alcotest.fail "an empty projects list was rendered";
+        (* And the populated side is untouched. *)
+        if not (contains html communities) then
+          Alcotest.fail "the populated block was disturbed";
+        (* Both empty: the page still renders, with both blocks. *)
+        let bare = render () in
+        Alcotest.(check int) "two blocks" 2
+          (count_sub bare "<div class='cnet-block'");
+        if not (contains bare "No connected communities yet.") then
+          Alcotest.fail "no quiet empty copy for communities")
+
+  let cta_case =
+    Alcotest.test_case "the connect shortcut renders only for an authorized \
+                        viewer" `Quick (fun () ->
+        let public = render ~projects_section:projects () in
+        if contains public "settings/connections" then
+          Alcotest.fail "an ordinary visitor was offered the management flow";
+        let authorized = render ~projects_section:projects ~can_connect:true () in
+        Alcotest.(check int) "one shortcut" 1
+          (count_sub authorized "href='/c/cmia/settings/connections/new'");
+        if not (contains authorized ">Connect a community</a>") then
+          Alcotest.fail "the shortcut has no label")
+
+  (* Nothing the management surface knows may appear here, for either viewer. *)
+  let vocabulary_case =
+    Alcotest.test_case "no lifecycle, note, actor, or management control can \
+                        appear" `Quick (fun () ->
+        List.iter
+          (fun can_connect ->
+            let html =
+              render ~projects_section:projects ~communities_section:communities
+                ~can_connect ()
+            in
+            List.iter
+              (fun needle ->
+                if contains html needle then
+                  Alcotest.failf "the network page renders %S (can_connect=%b)"
+                    needle can_connect)
+              [ "pending"; "Pending"; "rejected"; "Rejected"; "removed"
+              ; "Removed"; "Requested by"; "Reviewed by"; "requester"
+              ; "reviewer"; "request note"; "ccn-form"; "ccn-btn"
+              ; "connections/request"; "/accept"; "/reject" ])
+          [ false; true ])
+
+  let suite =
+    [ heading_case; both_lists_case; empty_states_case; cta_case
+    ; vocabulary_case ]
 end
 
 let () =
@@ -70173,4 +70751,6 @@ let () =
     ; ("connected_communities_route", Cccc.route_suite)
     ; ("notification_badge", Nbdg.suite)
     ; ("launch_scope_css", Launch_scope_css.suite)
+    ; ("community_home_ia", Comm_home_ia.suite)
+    ; ("community_network_page", Comm_network_page.suite)
     ]

@@ -26,3 +26,12 @@ val connected_communities_section : communities:connected_community list -> stri
     placeholder, and no "none yet" copy: a community with nothing publicly
     connected shows nothing at all. The supplied order is preserved exactly;
     nothing is re-sorted here. *)
+
+val empty_communities_section : string
+(** The same block with a quiet "No connected communities yet." line in place
+    of the list, for the dedicated Network page — which names both
+    destinations whether or not either holds anything. Shares the heading
+    constant with {!connected_communities_section}, so the two surfaces cannot
+    drift apart; states no lifecycle, actor, or note, exactly like the
+    populated block. Not for the community page, whose contract stays "nothing
+    connected, nothing rendered". *)

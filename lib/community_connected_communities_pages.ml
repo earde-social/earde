@@ -48,3 +48,14 @@ let connected_communities_section ~communities =
         "<section class='ccc-section'>%s<ul class='ccc-communities'>%s</ul></section>"
         heading_html
         (String.concat "" (List.map community_html communities))
+
+(* The counterpart of the projects module's empty section, for the Network
+   page, which names both destinations even when one holds nothing. Same
+   heading constant as the populated block, so the copy has one source. The
+   community page's own contract is unchanged: nothing connected, nothing
+   rendered. *)
+let empty_communities_section =
+  Printf.sprintf
+    "<section class='ccc-section'>%s<p class='ccc-empty'>No connected \
+     communities yet.</p></section>"
+    heading_html

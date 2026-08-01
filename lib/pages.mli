@@ -37,7 +37,11 @@ type thread_source_view =
     Shell-styled comments/composer; mod/admin/ban dialogs preserve post_page behavior verbatim.
     Preserves the optimistic-vote DOM contract and all comment/vote/mod/delete routes & CSRF. *)
 val thread_shell_page : ?user:string -> ?noindex:bool -> is_member:bool -> is_current_user_mod:bool -> mod_usernames:string list -> admin_usernames:string list -> banned_usernames:string list -> rail_communities:Db.community list -> channels:Db.channel list -> sections:Db.community_section list -> community:Db.community -> ?thread_source:thread_source_view -> user_post_votes:(int * int) list -> user_comment_votes:(int * int) list -> post:Db.post -> comments:Db.comment list -> Dream.request -> string
-val community_overview_page : ?user:string -> ?noindex:bool -> ?connected_projects:string -> ?connected_communities:string -> is_member:bool -> is_current_user_mod:bool -> is_current_user_top_mod:bool -> mod_usernames:string list -> orphaned:(int * string option) -> rail_communities:Db.community list -> channels:Db.channel list -> recent_posts:Db.post list -> Db.community -> (Db.community_section * int * string option) list -> Dream.request -> string
+(** [connected_projects_count] and [connected_communities_count] are how many records the
+    two public connected-* read models returned for this community — the sizes of exactly
+    the lists [/c/:slug/network] renders. The home carries the compact Network entry point
+    only: the lists themselves live on that page, and a zero count still renders its row. *)
+val community_overview_page : ?user:string -> ?noindex:bool -> ?connected_projects_count:int -> ?connected_communities_count:int -> is_member:bool -> is_current_user_mod:bool -> is_current_user_top_mod:bool -> mod_usernames:string list -> orphaned:(int * string option) -> rail_communities:Db.community list -> channels:Db.channel list -> recent_posts:Db.post list -> Db.community -> (Db.community_section * int * string option) list -> Dream.request -> string
 (** [connected_projects] is the pre-rendered "Connected projects" management fragment for the
     top-mod/admin settings surface (empty for every other viewer, which also removes the panel
     and its navigation entry). *)

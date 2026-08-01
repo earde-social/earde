@@ -2131,8 +2131,10 @@ let thread_shell_page ?user ?(noindex=false) ~is_member ~is_current_user_mod ~mo
    no created_at, because Db.community carries neither. SSR-only: every link/form works with JS
    off. Public presentation only — management (downvotes, mods, sections, bans) lives in
    /c/:slug/settings; the only management affordance here is the gated "Edit community" link. *)
-(* [connected_projects]: see community_page — the same pre-rendered fragment, supplied by the
-   same /c/:slug route after its existing authorization, and "" when there is nothing to show. *)
+(* [connected_projects_count]/[connected_communities_count]: how many records the two public
+   read models returned for this community, counted by the same /c/:slug route after its
+   existing authorization from exactly the sets /c/:slug/network renders. Counts, not
+   fragments — this page names the two destinations and their sizes; the lists live there. *)
 (* /c/:slug (structured) — the community overview, now on the Cartographic
    Civic launch chrome (Components.launch_community_page: earde.css only, no
    no legacy per-page CSS, no Tailwind). Every form, destination, and
@@ -2140,8 +2142,15 @@ let thread_shell_page ?user ?(noindex=false) ~is_member ~is_current_user_mod ~mo
    POSTs keep their exact fields, the settings and review links keep their
    existing mod/top-mod gates, and the pre-rendered ccp-* connected-projects
    fragment is spliced in verbatim (its markup is pinned by the fragment
-   suites) and restyled purely by the route-scoped CSS. *)
-let community_overview_page ?user ?(noindex=false) ?(connected_projects="") ?(connected_communities="") ~is_member ~is_current_user_mod ~is_current_user_top_mod
+   suites) and restyled purely by the route-scoped CSS.
+   The main column is what happens inside the community: community spaces
+   (live channels beside forum sections), then recent knowledge. The
+   community's external network is not activity, so the full connection lists
+   moved to /c/:slug/network and only a compact entry point with their two
+   counts remains, at the foot of the subordinate column. That grouping is
+   built here, in the composition, so the CSS never has to reorder or fill
+   cards by position. *)
+let community_overview_page ?user ?(noindex=false) ?(connected_projects_count=0) ?(connected_communities_count=0) ~is_member ~is_current_user_mod ~is_current_user_top_mod
     ~mod_usernames ~orphaned ~(rail_communities : community list)
     ~(channels : channel list) ~(recent_posts : post list)
     (community : community) (section_stats : (community_section * int * string option) list) request =
@@ -2360,7 +2369,7 @@ let community_overview_page ?user ?(noindex=false) ?(connected_projects="") ?(co
       primary_cta membership_btn settings_btn
   in
 
-  (* --- knowledge sections: flat panel rows over real per-section counts. --- *)
+  (* --- forum sections: flat panel rows over real per-section counts. --- *)
   let render_section ((s : community_section), post_count, _last_activity) =
     Printf.sprintf
       "<a class='project-row launch-secrow' href='/c/%s/s/%s'><span class='launch-sec-sigil'>&sect;</span><span class='launch-sec-main'><span class='launch-sec-name'>%s</span>%s</span><span class='launch-sec-count'>%d</span></a>"
@@ -2380,7 +2389,7 @@ let community_overview_page ?user ?(noindex=false) ?(connected_projects="") ?(co
   let sections_inner = String.concat "" (List.map render_section section_stats) ^ uncategorized_row in
   let sections_panel =
     Printf.sprintf
-      "<section class='panel'><div class='section-head'><span class='kicker'>Knowledge sections</span><span class='count-pill'>%d</span></div>%s</section>"
+      "<section class='panel'><div class='section-head'><span class='kicker'>Forum sections</span><span class='count-pill'>%d</span></div>%s</section>"
       section_count
       (if sections_inner = "" then "<div class='empty--inline'>No sections yet.</div>" else sections_inner)
   in
@@ -2469,16 +2478,67 @@ let community_overview_page ?user ?(noindex=false) ?(connected_projects="") ?(co
     | _ -> ""
   in
 
+  (* Compact network entry point. Two stable navigation rows — a zero count is
+     rendered, never hidden, because the destination exists either way and a
+     row that disappears at zero would make the panel's shape depend on data.
+     Each row is one anchor, so the whole row is the link with no JavaScript
+     and no nested interactive elements; the arrow is decoration and is hidden
+     from assistive technology. Both rows lead to the same public page, at the
+     block they name. *)
+  let network_row ~anchor ~label ~count =
+    Printf.sprintf
+      "<a class='project-row launch-netrow' href='/c/%s/network#%s'><span class='launch-net-label'>%s</span><span class='launch-net-count'>%d</span><span class='launch-net-go' aria-hidden='true'>&rarr;</span></a>"
+      slug anchor label count
+  in
+  (* Same top-mod-or-admin gate the sidebar applies to this exact destination,
+     and the same non-authorization: the connections surface re-decides in SQL.
+     Management itself — requests, notes, review, removal — stays there; this
+     is only a way in. *)
+  let network_cta =
+    if is_current_user_top_mod || is_admin then
+      Printf.sprintf
+        "<div class='panel__body launch-net-cta'><a class='btn--link mono' href='/c/%s/settings/connections/new'>Connect a community &rarr;</a></div>"
+        slug
+    else ""
+  in
+  let network_panel =
+    Printf.sprintf
+      "<section class='panel'><div class='section-head'><span class='kicker'>Network</span></div>%s%s%s</section>"
+      (network_row ~anchor:"projects" ~label:"Connected projects"
+         ~count:connected_projects_count)
+      (network_row ~anchor:"communities" ~label:"Connected communities"
+         ~count:connected_communities_count)
+      network_cta
+  in
+
+  (* Group sibling panels under one wrapper. Absent panels never leave a frame
+     behind: no surface at all means no container, and a lone surface stands on
+     its own rather than inside a one-child group — which is also why the CSS
+     needs no count-dependent rule to fill a half-empty track. *)
+  let group cls panels =
+    match List.filter (fun p -> p <> "") panels with
+    | [] -> ""
+    | [ only ] -> only
+    | present ->
+        Printf.sprintf "<div class='%s'>%s</div>" cls (String.concat "" present)
+  in
+  (* Community spaces: live chat and durable forum structure are the two ways to
+     take part here, so they are one composition of equal siblings — channels
+     left, sections right — rather than two panels that happened to land in
+     different columns. *)
+  let spaces_block = group "launch-spaces" [ channels_panel; sections_panel ] in
+
   (* The overview's right column is page content inside the main scroller
      (two-col), not the shell's `.aside` pane — exactly the reference's
-     anatomy. The pre-rendered ccp-* fragment leads the left column and is
-     spliced verbatim. *)
+     anatomy. It holds what is subordinate to activity inside the community:
+     its own rules, then governance (moderators + the public moderation log),
+     and last the way out to its external network. *)
   let content =
     Printf.sprintf
-      "<div class='scroll'>%s%s<div class='container launch-overview-body'><div class='two-col'><div class='stack'>%s%s%s%s</div><div class='stack stack--sm'>%s%s%s%s</div></div></div></div>"
+      "<div class='scroll'>%s%s<div class='container launch-overview-body'><div class='two-col'><div class='stack'>%s%s</div><div class='stack stack--sm'>%s%s%s%s</div></div></div></div>"
       banner_html chead
-      connected_projects connected_communities sections_panel recent_panel
-      channels_panel mods_panel rules_panel modlog_panel
+      spaces_block recent_panel
+      rules_panel mods_panel modlog_panel network_panel
   in
   Components.launch_community_page ?user ~noindex ~request ~rail_communities
     ~community ~sidebar ~page_class:"launch-community-overview" ~title:community.name ~content ()

@@ -39,6 +39,15 @@ val search_handler : Dream.handler
 val new_community_page : Dream.handler
 val create_community_handler : Dream.handler
 val community_page_handler : Dream.handler
+
+(** GET /c/:slug/network — the public Network page: the community's complete
+    connected-projects and connected-communities lists, which the community
+    home links to instead of carrying. Same view authorization as /c/:slug
+    (resolve, then [can_view_community]) and the same two read models, so it
+    exposes nothing that page would not; the compact Connect-a-community link
+    follows the sidebar's existing top-mod-or-admin reading and authorizes
+    nothing. No mutation, no management state. *)
+val community_network_handler : Dream.handler
 val community_section_handler : Dream.handler
 val community_channel_handler : Dream.handler
 val channel_messages_json_handler : Dream.handler

@@ -16,14 +16,37 @@
 let unread_field : int Dream.field =
   Dream.new_field ~name:"earde.unread_notifications" ()
 
-(* Asset requests render no document, so counting for them would be a pure
-   extra round trip; the same is true of every non-GET, whose response is a
-   redirect or a re-render the following GET will count for itself. *)
-let counted_path path =
+(* Only a request that renders a document can render a badge. Everything else
+   would pay for the count and throw it away, so it is excluded structurally:
+   assets by prefix, and the two authenticated non-document GET routes by
+   suffix. The latter matter more than they look — the live-chat page re-reads
+   messages.json after every burst of messages and refreshes its realtime
+   token on a timer, so counting there would attach an unread-count query to
+   the chat polling loop rather than to page loads. Every non-GET is likewise
+   uncounted: its response is a redirect or a re-render the following GET
+   counts for itself.
+
+   The query string is dropped first — messages.json arrives as
+   ".../messages.json?after_id=N" — so the suffix test sees the route path. *)
+let counted_path target =
+  let path =
+    match String.index_opt target '?' with
+    | Some i -> String.sub target 0 i
+    | None -> (
+        match String.index_opt target '#' with
+        | Some i -> String.sub target 0 i
+        | None -> target)
+  in
   let has_prefix p =
     String.length path >= String.length p && String.sub path 0 (String.length p) = p
   in
-  not (has_prefix "/static/" || has_prefix "/css/" || has_prefix "/js/")
+  let has_suffix s =
+    let n = String.length s and l = String.length path in
+    l >= n && String.sub path (l - n) n = s
+  in
+  not
+    (has_prefix "/static/" || has_prefix "/css/" || has_prefix "/js/"
+   || has_suffix ".json" || has_suffix "/realtime-token")
 
 let middleware inner_handler request =
   let%lwt () =

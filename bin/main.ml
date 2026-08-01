@@ -324,6 +324,13 @@ let () =
     Dream.post "/c/:slug/settings/connections/:id/remove"
       (Earde.Handlers.Rate_limit.middleware
          Earde.Community_connections_handlers.make_connection_removal_handler);
+    (* Public Network page: the community's connected projects and connected
+       communities in full, which the community home now links to instead of
+       listing. A distinct literal segment from settings/modlog/reports and
+       from the /settings/connections management paths, so nothing shadows
+       anything. Read-only and deliberately public — its access decision is
+       the community's own can_view_community, exactly like /c/:slug. *)
+    Dream.get "/c/:slug/network" Earde.Handlers.community_network_handler;
     Dream.get "/c/:slug/modlog" Earde.Handlers.modlog_handler;
     (* Reports: singular GET form + plural POST create (Slice B) + plural GET mod queue
        (read-only). Distinct literal segments from settings/modlog/manage-mods, so no router

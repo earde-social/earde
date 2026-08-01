@@ -227,3 +227,15 @@ let connected_projects_section ~projects =
       Printf.sprintf
         "<section class='ccp-section'>%s<ul class='ccp-projects'>%s</ul></section>"
         heading_html (projects_html projects)
+
+(* The dedicated Network page names both destinations whether or not either
+   holds anything, so it needs a section that survives an empty list. The
+   heading is the same one [connected_projects_section] emits, from the same
+   constant, so the two surfaces cannot drift into different copy. The
+   community page keeps its own contract: there, nothing connected still
+   means no block at all. *)
+let empty_projects_section =
+  Printf.sprintf
+    "<section class='ccp-section'>%s<p class='ccp-empty'>No connected \
+     projects yet.</p></section>"
+    heading_html
