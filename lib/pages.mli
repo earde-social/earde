@@ -53,6 +53,16 @@ type shared_thread_page_context = {
   stc_section : (string * string) option;
 }
 
+(** The closed post-creation notices the composer's redirect can land on the
+    canonical origin thread: sharing requested, or thread created but the
+    sharing request could not be sent. Fixed copy only — the page can render
+    no other text for them, no failure cause, and no destination name. The
+    handler resolves the value from its own closed query vocabulary and only
+    for the origin rendering; an unknown query value maps to nothing. *)
+type thread_creation_notice =
+  | Creation_share_requested
+  | Creation_share_failed
+
 (** Canonical thread view inside the persistent shell (/c/:slug/t/:post_id-:post_slug).
     Shell-styled comments/composer; mod/admin/ban dialogs preserve post_page behavior verbatim.
     Preserves the optimistic-vote DOM contract and all comment/vote/mod/delete routes & CSRF.
@@ -68,7 +78,7 @@ type shared_thread_page_context = {
     moderator-facing arguments ([is_current_user_mod], [mod_usernames],
     [banned_usernames]) are ALWAYS the canonical origin community's:
     destination standing grants no canonical-content controls. *)
-val thread_shell_page : ?user:string -> ?noindex:bool -> ?can_share:bool -> ?can_comment:bool -> ?shared_context:shared_thread_page_context -> is_member:bool -> is_current_user_mod:bool -> mod_usernames:string list -> admin_usernames:string list -> banned_usernames:string list -> rail_communities:Db.community list -> channels:Db.channel list -> sections:Db.community_section list -> community:Db.community -> ?thread_source:thread_source_view -> user_post_votes:(int * int) list -> user_comment_votes:(int * int) list -> post:Db.post -> comments:Db.comment list -> Dream.request -> string
+val thread_shell_page : ?user:string -> ?noindex:bool -> ?can_share:bool -> ?can_comment:bool -> ?creation_notice:thread_creation_notice -> ?shared_context:shared_thread_page_context -> is_member:bool -> is_current_user_mod:bool -> mod_usernames:string list -> admin_usernames:string list -> banned_usernames:string list -> rail_communities:Db.community list -> channels:Db.channel list -> sections:Db.community_section list -> community:Db.community -> ?thread_source:thread_source_view -> user_post_votes:(int * int) list -> user_comment_votes:(int * int) list -> post:Db.post -> comments:Db.comment list -> Dream.request -> string
 (** [connected_projects_count] and [connected_communities_count] are how many records the
     two public connected-* read models returned for this community — the sizes of exactly
     the lists [/c/:slug/network] renders. The home carries the compact Network entry point
@@ -117,7 +127,14 @@ val manage_mods_page : ?user:string -> ?rail_communities:Db.community list -> is
     (id, visibility) analytics pair exactly as before. *)
 val choose_community_page : ?user:string -> ?request:Dream.request -> ?rail_communities:Db.community list -> Db.community list -> string
 val join_to_post_page : ?user:string -> ?rail_communities:Db.community list -> Db.community -> Dream.request -> string
-val new_post_form : ?user:string -> ?preselected_section_id:int -> ?rail_communities:Db.community list -> Db.community_section list -> Db.community -> Dream.request -> string
+val new_post_form : ?user:string -> ?preselected_section_id:int -> ?rail_communities:Db.community list -> ?share_candidates:(string * string) list -> Db.community_section list -> Db.community -> Dream.request -> string
+(** [share_candidates] are [(slug, name)] pairs of eligible connected
+    destination communities, already server-resolved by the handler. When
+    non-empty the form gains the optional "Share with a connected community"
+    select (blank = "Do not share") and the private request-note field; when
+    empty the form is byte-identical to the pre-slice-4 composer. The markup
+    grants nothing: POST /posts re-resolves the posted slug and the
+    placement store revalidates everything under its own locks. *)
 
 (** SSR report form (no JS). [target_title] is shown as a trimmed, escaped context excerpt;
     [return_url] is the Cancel target. The handler re-validates everything — this only renders.

@@ -147,37 +147,57 @@ let authorize_share_query =
           OR ($3 AND EXISTS (SELECT 1 FROM users ua2 \
                              WHERE ua2.id = $2 AND ua2.is_admin)))"
 
-(* Connectable destinations for one post. The eligibility predicate is
-   spelled in SQL so the LIMIT applies after exclusion — an ineligible or
-   already-holding community can never consume a result slot and so can
-   never be inferred from a short list — and every returned row is
-   re-checked in OCaml through the one pure predicate, which stays the
-   authority. Ordered by normalized name, then id, for a stable page. *)
+(* Connectable destinations, one SQL body for both shapes. The eligibility
+   predicate is spelled in SQL so the LIMIT applies after exclusion — an
+   ineligible or already-holding community can never consume a result slot
+   and so can never be inferred from a short list — and every returned row
+   is re-checked in OCaml through the one pure predicate, which stays the
+   authority. Ordered by normalized name, then id, for a stable page. The
+   two instantiations differ only in the placement-exclusion clause and the
+   LIMIT parameter position, so the accepted-connection eligibility rule has
+   exactly one spelling. *)
+let candidate_sql ~exclusion ~limit_param =
+  Printf.sprintf
+    "SELECT c.id, c.slug, c.name, c.visibility, c.onboarding_state, \
+            c.discoverable \
+     FROM communities c \
+     WHERE c.id <> $1 \
+       AND c.visibility = 'public' \
+       AND c.onboarding_state = 'published' \
+       AND c.discoverable \
+       AND EXISTS ( \
+             SELECT 1 FROM community_connections cc \
+             WHERE cc.status = 'accepted' \
+               AND LEAST(cc.requester_community_id, \
+                         cc.recipient_community_id) = LEAST(c.id, $1) \
+               AND GREATEST(cc.requester_community_id, \
+                            cc.recipient_community_id) = GREATEST(c.id, $1)) \
+       %s \
+     ORDER BY LOWER(c.name) ASC, c.id ASC \
+     LIMIT %s"
+    exclusion limit_param
+
+let candidate_row_type =
+  Caqti_type.(t2 (t2 (t2 int string) (t2 string string)) (t2 string bool))
+
 let candidates_query =
   let open Caqti_request.Infix in
-  (Caqti_type.(t3 int int int)
-   ->* Caqti_type.(
-         t2 (t2 (t2 int string) (t2 string string)) (t2 string bool)))
-  "SELECT c.id, c.slug, c.name, c.visibility, c.onboarding_state, \
-          c.discoverable \
-   FROM communities c \
-   WHERE c.id <> $1 \
-     AND c.visibility = 'public' \
-     AND c.onboarding_state = 'published' \
-     AND c.discoverable \
-     AND EXISTS ( \
-           SELECT 1 FROM community_connections cc \
-           WHERE cc.status = 'accepted' \
-             AND LEAST(cc.requester_community_id, \
-                       cc.recipient_community_id) = LEAST(c.id, $1) \
-             AND GREATEST(cc.requester_community_id, \
-                          cc.recipient_community_id) = GREATEST(c.id, $1)) \
-     AND NOT EXISTS ( \
-           SELECT 1 FROM shared_thread_placements sp \
-           WHERE sp.post_id = $2 AND sp.destination_community_id = c.id \
-             AND sp.status IN ('pending', 'accepted')) \
-   ORDER BY LOWER(c.name) ASC, c.id ASC \
-   LIMIT $3"
+  (Caqti_type.(t3 int int int) ->* candidate_row_type)
+    (candidate_sql
+       ~exclusion:
+         "AND NOT EXISTS ( \
+            SELECT 1 FROM shared_thread_placements sp \
+            WHERE sp.post_id = $2 AND sp.destination_community_id = c.id \
+              AND sp.status IN ('pending', 'accepted'))"
+       ~limit_param:"$3")
+
+(* The composer shape: the post does not exist yet, so there is no active
+   placement to exclude — only the origin itself, the connection, and
+   current eligibility. *)
+let connected_destinations_query =
+  let open Caqti_request.Infix in
+  (Caqti_type.(t2 int int) ->* candidate_row_type)
+    (candidate_sql ~exclusion:"" ~limit_param:"$2")
 
 (* The thread's live placements, oldest first. requested_by_user_id crosses
    only long enough to compute the two viewer-relative facts; it never
@@ -207,6 +227,18 @@ let eligible_of_raw ~visibility_raw ~onboarding_raw ~discoverable =
   | Some visibility, Ok onboarding_state ->
       Some (Cc.connection_eligible ~visibility ~onboarding_state ~discoverable)
   | None, _ | _, Error _ -> None
+
+(* The SQL predicate bounded the page; the pure predicate decides whether
+   each surviving row is really eligible. A row that disagrees can only mean
+   an off-enum durable value. *)
+let decode_candidate ~origin_id
+    (((id, slug), (name, visibility_raw)), (onboarding_raw, discoverable)) =
+  match eligible_of_raw ~visibility_raw ~onboarding_raw ~discoverable with
+  | Some true
+    when id > 0 && id <> origin_id && addressable_slug slug && nonblank name
+         && control_safe name ->
+      Some { candidate_id = id; candidate_name = name; candidate_slug = slug }
+  | Some _ | None -> None
 
 (* The stored note must round-trip byte-exactly through the pure
    canonicalizer: a durable note the canonicalizer would change is
@@ -302,27 +334,6 @@ let load_share_view (module C : Caqti_lwt.CONNECTION) ~user_id
           >>= function
           | Error _ as e -> Lwt.return e
           | Ok placement_rows -> (
-              (* The SQL predicate bounded the page; the pure predicate
-                 decides whether each surviving row is really eligible. A
-                 row that disagrees can only mean an off-enum durable
-                 value. *)
-              let decode_candidate
-                  ( ((id, slug), (name, visibility_raw)),
-                    (onboarding_raw, discoverable) ) =
-                match
-                  eligible_of_raw ~visibility_raw ~onboarding_raw ~discoverable
-                with
-                | Some true
-                  when id > 0 && id <> origin_id && addressable_slug slug
-                       && nonblank name && control_safe name ->
-                    Some
-                      {
-                        candidate_id = id;
-                        candidate_name = name;
-                        candidate_slug = slug;
-                      }
-                | Some _ | None -> None
-              in
               let decode_placement
                   ( ((id, status_raw), (requested_by, note)),
                     (destination_id, destination_slug, destination_name) ) =
@@ -357,7 +368,7 @@ let load_share_view (module C : Caqti_lwt.CONNECTION) ~user_id
                 | Some _ | None -> None
               in
               match
-                ( collect_all decode_candidate candidate_rows,
+                ( collect_all (decode_candidate ~origin_id) candidate_rows,
                   collect_all decode_placement placement_rows )
               with
               | Some candidates, Some placements ->
@@ -375,3 +386,24 @@ let load_share_view (module C : Caqti_lwt.CONNECTION) ~user_id
                             view_placements = placements;
                           }))
               | _ -> Lwt.return (Error Inconsistent_data))))
+
+let connected_destinations (module C : Caqti_lwt.CONNECTION)
+    ~origin_community_id =
+  (* The id comes from a record the caller already loaded and authorized, so
+     a non-positive value can only be a programming slip; no community can
+     match it, and the honest answer is the empty list rather than a new
+     error variant handlers would have to route. *)
+  if origin_community_id <= 0 then Lwt.return (Ok [])
+  else
+    collect
+      (module C)
+      connected_destinations_query
+      (origin_community_id, max_candidate_destinations)
+    >>= function
+    | Error _ as e -> Lwt.return e
+    | Ok rows -> (
+        match
+          collect_all (decode_candidate ~origin_id:origin_community_id) rows
+        with
+        | Some candidates -> Lwt.return (Ok candidates)
+        | None -> Lwt.return (Error Inconsistent_data))

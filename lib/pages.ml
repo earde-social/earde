@@ -1519,6 +1519,17 @@ type shared_thread_page_context = {
   stc_section : (string * string) option;
 }
 
+(* The closed post-creation notices (slice 4): the composer's PRG lands on
+   the canonical origin thread with ?shared=..., the handler maps the query
+   value onto this variant, and anything else renders nothing. Fixed copy
+   only — no query-supplied text, no failure cause, no destination name:
+   which private or unavailable condition sank a request must not surface
+   here. Deliberately origin-only: the handler never resolves a value for a
+   destination-context rendering. *)
+type thread_creation_notice =
+  | Creation_share_requested
+  | Creation_share_failed
+
 (* /c/:slug/t/:post_id-:post_slug — the canonical thread view, now on the Cartographic Civic
    launch chrome (Components.launch_community_surface_page: earde.css only).
    Replaces the legacy warm-card post_page for normal threads (post_page stays only as the
@@ -1531,6 +1542,7 @@ type shared_thread_page_context = {
    carrying the exact legacy Tailwind colour classes the shared vote JS toggles — mapped to
    launch accents in earde.css) is preserved exactly. *)
 let thread_shell_page ?user ?(noindex=false) ?(can_share=false) ?(can_comment=false)
+    ?(creation_notice : thread_creation_notice option)
     ?(shared_context : shared_thread_page_context option) ~is_member ~is_current_user_mod ~mod_usernames ~admin_usernames
     ~banned_usernames ~(rail_communities : community list) ~(channels : channel list)
     ~(sections : community_section list) ~(community : community)
@@ -2108,6 +2120,17 @@ let thread_shell_page ?user ?(noindex=false) ?(can_share=false) ?(can_comment=fa
     crumb
     (if back_link = "" then "" else Printf.sprintf "<div class='th-back'>%s</div>" back_link)
     th_tabs in
+  (* Fixed-copy creation notice under the topbar. The failed variant links
+     the existing Share page (server-built local path) so the author can try
+     again without a composer re-render — never a resubmission of the form. *)
+  let creation_notice_html = match creation_notice with
+    | None -> ""
+    | Some Creation_share_requested ->
+        "<div class='notice notice--success'>Thread created and sharing requested. It appears in the other community only after its moderators approve the request.</div>"
+    | Some Creation_share_failed ->
+        Printf.sprintf
+          "<div class='notice notice--warn'>Thread created, but the sharing request could not be sent. You can try again from the thread's <a href='%s/share'>Share page</a>.</div>"
+          local_thread_path in
   let post_block = Printf.sprintf "
     <article class='th-main'>
         <div class='th-head'>
@@ -2133,7 +2156,7 @@ let thread_shell_page ?user ?(noindex=false) ?(can_share=false) ?(can_comment=fa
      (no cs-main-body) and earde.css makes it flex:1 + overflow-y:auto, so the thread scrolls inside
      the viewport-locked app shell (same containment as feed/section/chat) — the topbar and the
      rail/sidebar/right rail stay fixed; only this pane scrolls. *)
-  let main = Printf.sprintf "<div class='thread-shell-main'>%s%s%s</div>" topbar post_block discussion in
+  let main = Printf.sprintf "<div class='thread-shell-main'>%s%s%s%s</div>" topbar creation_notice_html post_block discussion in
 
   (* --- right rail: real data only. The Section rows are the LOCAL context:
      destination section under a destination shell, origin section at home. --- *)
@@ -3864,7 +3887,9 @@ let start_thread_form ?user ?error ?(rail_communities = [])
     ~title:("Start thread — #" ^ channel.name)
     ~content:(crumb ^ Printf.sprintf "<div class='create-shell'>%s</div>" content) ()
 
-let new_post_form ?user ?preselected_section_id ?(rail_communities = []) (sections : community_section list) (community : community) request =
+let new_post_form ?user ?preselected_section_id ?(rail_communities = [])
+    ?(share_candidates : (string * string) list = [])
+    (sections : community_section list) (community : community) request =
   let csrf_token = Dream.csrf_tag request in
   let section_dropdown =
     if sections = [] then ""
@@ -3885,6 +3910,38 @@ let new_post_form ?user ?preselected_section_id ?(rail_communities = []) (sectio
                     %s
                 </select>
             </div>" options
+    end
+  in
+  (* Optional Shared thread area (slice 4). Rendered only when at least one
+     eligible connected destination exists — the candidates are the handler's
+     server-resolved list and this markup decides nothing: POST /posts
+     re-resolves the slug and the placement store revalidates connection,
+     eligibility, and uniqueness under its own locks. The note is readable by
+     its requester and by the authorized managers on either side of the
+     request (not automatically by the thread author) and must never surface
+     publicly, so the copy marks it private here at the point of entry. *)
+  let share_area =
+    if share_candidates = [] then ""
+    else begin
+      let options = String.concat "\n" (List.map (fun (slug, name) ->
+        Printf.sprintf "<option value='%s'>%s</option>"
+          (Components.html_escape slug) (Components.html_escape name)
+      ) share_candidates) in
+      Printf.sprintf "
+            <div class='create-field'>
+                <label class='create-label' for='share-destination'>Share with a connected community <span class='create-label-opt'>(optional)</span></label>
+                <select name='share_destination' id='share-destination' class='create-select'>
+                    <option value='' selected>Do not share</option>
+                    %s
+                </select>
+                <p class='create-hint'>Your thread is published in /c/%s immediately either way; it appears in the community you pick only after that community's moderators approve the request.</p>
+            </div>
+
+            <div class='create-field'>
+                <label class='create-label' for='share-note'>Private request note <span class='create-label-opt'>(optional)</span></label>
+                <textarea name='share_note' id='share-note' maxlength='2000' class='create-textarea' style='min-height:80px;' placeholder='A short note for the reviewing moderators (optional).'></textarea>
+                <p class='create-hint'>Visible only to the requester and authorized moderators. Never shown on the thread, in feeds, or in notifications. Up to 2,000 characters.</p>
+            </div>" options (Components.html_escape community.slug)
     end
   in
   let content = Printf.sprintf "
@@ -3921,6 +3978,7 @@ let new_post_form ?user ?preselected_section_id ?(rail_communities = []) (sectio
                 <label class='create-label'>Text <span class='create-label-opt'>(optional)</span></label>
                 <textarea name='content' class='create-textarea' style='min-height:140px;' placeholder='Share your thoughts...'></textarea>
             </div>
+            %s
 
             <div class='create-actions'>
                 <button type='submit' class='create-btn create-btn--block'>Submit post</button>
@@ -3932,6 +3990,7 @@ let new_post_form ?user ?preselected_section_id ?(rail_communities = []) (sectio
     csrf_token
     community.id
     section_dropdown
+    share_area
   in
   Components.launch_app_page ?user ~request ~rail_communities
     ~analytics_community:(community.id, community.visibility)

@@ -81,6 +81,16 @@ val post_content_tombstoned : string option -> bool
     comment under. A tombstoned thread is not shareable and not acceptable.
     [None] (a link post) is not a tombstone. *)
 
+val canonical_request_note :
+  string option -> (string option, error) result
+(** Exactly the note canonicalization {!create_pending} performs — CRLF/CR
+    to LF, ASCII outer-trim, empty collapses to [None], then the UTF-8 /
+    control-byte / 2,000-scalar rules — exposed so a caller that must judge
+    a note before any placement subject exists (deterministic form
+    validation in the thread composer) cannot drift from the one domain
+    rule. Returns the canonical value or [Error Invalid_request_note];
+    proves nothing about any post, community, or connection. *)
+
 val create_pending :
   post_id:int ->
   origin_community_id:int ->

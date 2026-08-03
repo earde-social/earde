@@ -2985,7 +2985,28 @@ let new_post_page request =
                            | _ -> Lwt.return None)
                     in
                     let%lwt rail_communities = load_rail db in
-                    Dream.html (Pages.new_post_form ?user ?preselected_section_id:preselected_section_id_opt ~rail_communities sections community request)
+                    (* Optional shared-thread destinations (slice 4): the
+                       eligible connected communities for THIS server-resolved
+                       origin. Best-effort like the rail — a read failure
+                       renders the plain composer rather than blocking post
+                       creation; the list grants nothing (POST /posts
+                       re-resolves the slug and the placement store
+                       revalidates under its own locks). *)
+                    let%lwt share_candidates =
+                      match%lwt
+                        Shared_thread_placement_read_model.connected_destinations
+                          db ~origin_community_id:community.id
+                      with
+                      | Ok cs ->
+                          Lwt.return
+                            (List.map
+                               (fun c ->
+                                 ( Shared_thread_placement_read_model.candidate_slug c,
+                                   Shared_thread_placement_read_model.candidate_name c ))
+                               cs)
+                      | Error _ -> Lwt.return []
+                    in
+                    Dream.html (Pages.new_post_form ?user ?preselected_section_id:preselected_section_id_opt ~rail_communities ~share_candidates sections community request)
                 | Ok false ->
                     let%lwt rail_communities = load_rail db in
                     Dream.html (Pages.join_to_post_page ?user ~rail_communities community request)
@@ -3037,6 +3058,23 @@ let create_post_handler request =
           let section_id_str = get_field "section_id" in
           (* File bytes: empty string when no file is selected (browser sends empty part). *)
           let image_bytes = get_field "image" in
+          (* Optional shared-thread fields (slice 4). A blank select is the
+             normal share-free path; a selected slug is only re-resolved
+             server-side AFTER the post exists, because the canonical post
+             must never depend on any destination condition. The note alone
+             is judged now — deterministic user-input validation through the
+             one domain canonicalizer — so a hopeless note fails before a
+             post exists. A note without a destination is ignored. *)
+          let share_destination =
+            match String.trim (get_field "share_destination") with
+            | "" -> None
+            | slug -> Some slug in
+          let share_note_result =
+            match share_destination with
+            | None -> Ok None
+            | Some _ ->
+                Shared_thread_placements.canonical_request_note
+                  (Some (get_field "share_note")) in
 
           if title = "" then
             Dream.html (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Validation Error" ~message:"Post title cannot be empty." ~alert_type:"error" ~return_url:"/" request)
@@ -3044,6 +3082,8 @@ let create_post_handler request =
             Dream.html (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Validation Error" ~message:"Post title cannot exceed 300 characters." ~alert_type:"error" ~return_url:"/" request)
           else if image_bytes <> "" && String.length image_bytes > 5 * 1024 * 1024 then
             Dream.html (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Validation Error" ~message:"Image exceeds the 5 MB limit." ~alert_type:"error" ~return_url:"/" request)
+          else if Result.is_error share_note_result then
+            Dream.html (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Validation Error" ~message:"The private request note is too long or contains characters that cannot be stored. Notes can hold up to 2,000 characters." ~alert_type:"error" ~return_url:"/" request)
           else
 
           let community_id = try int_of_string community_id_str with _ -> 0 in
@@ -3082,8 +3122,13 @@ let create_post_handler request =
                   | _ ->
                       (* Server-side section validation: section_id must belong to this community.
                          Prevents posting to a section from a different community via crafted form. *)
+                      (* Loaded once: section validation here and, on the
+                         sharing path, the canonical redirect target after
+                         creation. The Error/Ok None outcomes keep their
+                         exact pre-slice-4 behavior. *)
+                      let%lwt community_record = Db.get_community_by_id db community_id in
                       let%lwt section_result =
-                        match%lwt Db.get_community_by_id db community_id with
+                        match community_record with
                         | Error e -> Lwt.return (Error e)
                         | Ok None -> Lwt.return (Ok None)
                         | Ok (Some comm) ->
@@ -3115,20 +3160,25 @@ let create_post_handler request =
                               let text = title ^ " " ^ (Option.value ~default:"" content) in
                               (* Closed derived flags only — never the title,
                                  body, or URL themselves. *)
-                              record (fun () ->
-                                  Analytics.capture_if_consented request
-                                    ~distinct_id:(Analytics.distinct_id_of_user_id user_id)
-                                    (Analytics.Forum_thread_created
-                                       {
-                                         user_id;
-                                         community_id;
-                                         section_id;
-                                         post_id = new_post_id;
-                                         content_length =
-                                           String.length (Option.value ~default:"" content);
-                                         has_link = url <> None;
-                                         has_mention = extract_mentions text <> [];
-                                       }));
+                              (* Named once: the sharing branch below must
+                                 compose with this capture, because record
+                                 holds a single pending slot and a second
+                                 record call would silently replace it. *)
+                              let capture_creation () =
+                                Analytics.capture_if_consented request
+                                  ~distinct_id:(Analytics.distinct_id_of_user_id user_id)
+                                  (Analytics.Forum_thread_created
+                                     {
+                                       user_id;
+                                       community_id;
+                                       section_id;
+                                       post_id = new_post_id;
+                                       content_length =
+                                         String.length (Option.value ~default:"" content);
+                                       has_link = url <> None;
+                                       has_mention = extract_mentions text <> [];
+                                     }) in
+                              record capture_creation;
                               let%lwt () = Lwt_list.iter_s (fun uname ->
                                 match%lwt Db.get_user_by_username db uname with
                                 | Ok (Some mentioned) when mentioned.id <> user_id ->
@@ -3137,9 +3187,68 @@ let create_post_handler request =
                                     Lwt.return_unit
                                 | _ -> Lwt.return_unit
                               ) (extract_mentions text) in
+                              (match share_destination with
+                              | None ->
                               (* Redirect to the new post rather than "/" so the author
                                  immediately sees their submission with its canonical URL. *)
-                              Dream.redirect request ("/p/" ^ string_of_int new_post_id)
+                                  Dream.redirect request ("/p/" ^ string_of_int new_post_id)
+                              | Some destination_slug ->
+                                  (* The canonical post is committed and every normal side
+                                     effect above has already run; nothing below may undo
+                                     any of it. The slug is re-resolved server-side and the
+                                     placement store revalidates connection, eligibility,
+                                     tombstone state and uniqueness under its own locks —
+                                     its transaction stays atomic (placement + audit +
+                                     notifications, or nothing). Every failure — tampered
+                                     or vanished destination, lost connection, eligibility
+                                     drift, store error — collapses into the one fixed
+                                     partial-success notice: which condition failed never
+                                     surfaces, and no raw error crosses. *)
+                                  let share_note =
+                                    match share_note_result with Ok n -> n | Error _ -> None in
+                                  let%lwt requested =
+                                    match%lwt
+                                      Shared_thread_placement_read_model.resolve_destination
+                                        db ~slug:destination_slug
+                                    with
+                                    | Ok (Some destination_community_id) -> (
+                                        match%lwt
+                                          Shared_thread_placement_store.request db
+                                            ~actor_user_id:user_id ~post_id:new_post_id
+                                            ~destination_community_id
+                                            ~request_note:share_note
+                                        with
+                                        | Ok _ ->
+                                            (* Convention: captured only for the committed
+                                               request; a failed attempt produces nothing.
+                                               Origin id + post id only — never the
+                                               destination or the private note. Composed
+                                               with the creation capture: record holds one
+                                               slot, and the normal creation event must
+                                               keep firing unchanged. *)
+                                            record (fun () ->
+                                                capture_creation ();
+                                                Analytics.capture_if_consented request
+                                                  ~distinct_id:(Analytics.distinct_id_of_user_id user_id)
+                                                  (Analytics.Shared_thread_request_submitted
+                                                     { user_id; community_id; post_id = new_post_id }));
+                                            Lwt.return true
+                                        | Error _ -> Lwt.return false)
+                                    | Ok None | Error _ -> Lwt.return false
+                                  in
+                                  let notice = if requested then "requested" else "failed" in
+                                  (* PRG onto the canonical origin thread — never a composer
+                                     re-render, which would invite a duplicate submission.
+                                     The path comes from the server-loaded community record;
+                                     the pathological missing-record case falls back to the
+                                     legacy /p/:id redirect (the notice is lost, the thread
+                                     is not). *)
+                                  (match community_record with
+                                  | Ok (Some comm) ->
+                                      Dream.redirect request
+                                        (Components.canonical_thread_path comm.Db.slug new_post_id title
+                                         ^ "?shared=" ^ notice)
+                                  | _ -> Dream.redirect request ("/p/" ^ string_of_int new_post_id)))
                           | Error err -> Dream.html (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Error" ~message:("Error: " ^ err) ~alert_type:"error" ~return_url:"/" request))))
               | Ok false ->
                   Dream.html (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Not a Member" ~message:"You must join this community before you can post in it." ~alert_type:"error" ~return_url:"/" request)
@@ -3473,11 +3582,21 @@ let view_thread_handler request =
               | Ok can -> Lwt.return can
               | Error _ -> Lwt.return false
           in
+          (* Closed creation-notice vocabulary (slice 4): only the two values
+             the composer's own redirect writes render anything; every other
+             ?shared= value is ignored. Resolved here, on the ORIGIN
+             rendering only — the destination-context branch above never
+             reads the parameter, so no destination page can display a
+             creation outcome. *)
+          let creation_notice = match Dream.query request "shared" with
+            | Some "requested" -> Some Pages.Creation_share_requested
+            | Some "failed" -> Some Pages.Creation_share_failed
+            | _ -> None in
           match comments_result, is_member_result with
           | Ok comments, Ok is_member ->
               let is_mod = match is_mod_res with Ok b -> b | _ -> false in
               let mod_usernames = match mods_res with Ok ms -> List.map (fun (u : Db.user) -> u.username) ms | _ -> [] in
-              Dream.html (Pages.thread_shell_page ?user:user_sess ~noindex ~can_share ~can_comment ~is_member ~is_current_user_mod:is_mod
+              Dream.html (Pages.thread_shell_page ?user:user_sess ~noindex ~can_share ~can_comment ?creation_notice ~is_member ~is_current_user_mod:is_mod
                 ~mod_usernames ~admin_usernames ~banned_usernames ~rail_communities ~channels ~sections
                 ~community:community_for_page ?thread_source ~user_post_votes ~user_comment_votes ~post ~comments request)
           | _ -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user:user_sess ~title:"Error" ~message:"Failed to load thread data. Please try again later." ~alert_type:"error" ~return_url:("/c/" ^ community_slug) request)

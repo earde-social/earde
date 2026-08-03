@@ -160,6 +160,12 @@ let validate_note = function
           then Error Invalid_request_note
           else Ok (Some text))
 
+(* Exported under the public name so callers that must judge a note before
+   any placement subject exists (the thread composer, which validates the
+   optional note before creating the post) run exactly this canonicalizer
+   and no second copy of it. *)
+let canonical_request_note = validate_note
+
 let create_pending ~post_id ~origin_community_id ~destination_community_id
     ~request_note =
   if post_id <= 0 then Error Invalid_post_id

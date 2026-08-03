@@ -137,6 +137,21 @@ val resolve_destination : (module Caqti_lwt.CONNECTION) ->
     store's collapsed errors are what cross back to the caller — this
     lookup reveals nothing an answered request would not. *)
 
+val connected_destinations : (module Caqti_lwt.CONNECTION) ->
+  origin_community_id:int ->
+  (candidate list, error) result Lwt.t
+(** The composer-shaped candidate list: communities a brand-new thread in
+    [origin_community_id] could be requested into right now — connected to
+    the origin by an accepted mutual connection, currently satisfying
+    {!Community_connections.connection_eligible}, and not the origin itself.
+    The same SQL body, OCaml re-check, ordering, and
+    {!max_candidate_destinations} bound as {!view_candidates}, minus the
+    active-placement exclusion: the post does not exist yet, so there is
+    nothing to exclude. This list decides nothing — the store revalidates
+    everything under its own locks on POST. The caller must already have
+    authorized the viewer for the origin community; this read adds no
+    authorization of its own, and a non-positive id answers [Ok []]. *)
+
 val load_share_view : (module Caqti_lwt.CONNECTION) ->
   user_id:int ->
   session_global_admin:bool ->
