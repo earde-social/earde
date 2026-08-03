@@ -65969,6 +65969,31 @@ module Stp_store = struct
           ~note:None ~requested_by:(Some actor) ~reviewed_by:(Some actor)
           ~removed_by:None ~withdrawn_by:None)
 
+  let accept_precedence_case =
+    db_case
+      "accept: the locked post answers before the connection gate"
+      (fun conn ->
+        (* The connection lock is acquired ahead of the post lock (the
+           single shared lock order), but its absence is judged after the
+           locked post has answered: a thread both tombstoned and
+           disconnected refuses as Post_tombstoned, never as
+           No_accepted_connection. *)
+        let* actor, _o, d, post, connection = fixture conn "prec" in
+        let* id = request_ok "request" conn ~actor ~post ~destination:d () in
+        let* () = tombstone conn post "[removed by admin]" in
+        let* () = disconnect conn ~actor ~connection ~acting:d in
+        let* () =
+          review_expect "tombstoned and disconnected" Store.Post_tombstoned
+            conn ~reviewer:actor ~placement:id ~destination:d
+            (Store.Accept None)
+        in
+        let* () =
+          check_row "untouched" conn id ~status:"pending" ~section:None
+            ~note:None ~requested_by:(Some actor) ~reviewed_by:None
+            ~removed_by:None ~withdrawn_by:None
+        in
+        check_event_count "only the request" conn ~post 1)
+
   let review_boundary_case =
     db_case "review: the destination is verified in the mutation boundary"
       (fun conn ->
@@ -66473,7 +66498,7 @@ module Stp_store = struct
   let review_suite =
     [ accept_into_section_case; accept_flat_case
     ; accept_section_boundary_case; accept_revalidation_case
-    ; review_boundary_case; review_stale_case ]
+    ; accept_precedence_case; review_boundary_case; review_stale_case ]
 
   let withdraw_suite =
     [ withdraw_case; withdraw_survives_drift_case; withdraw_stale_case ]

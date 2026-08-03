@@ -731,15 +731,34 @@ let review (module C : Caqti_lwt.CONNECTION) ~reviewer_user_id ~placement_id
                      held locks. Rejecting deliberately requires none of
                      that and stays available on a disconnected, ineligible,
                      or tombstoned pair, so stale work can always be
-                     closed. *)
+                     closed.
+
+                     The connection lock is taken here, before the post
+                     lock, to keep the single shared lock order; a missing
+                     row locks nothing, so its absence is judged only in
+                     the accept gates below, after the locked post has
+                     answered — the refusal precedence is unchanged. *)
+                  let with_connection_locked k =
+                    match decision with
+                    | Reject -> k ~connection:None
+                    | Accept _ -> (
+                        C.find_opt lock_accepted_connection_query
+                          (origin, destination)
+                        >>= function
+                        | Error _ -> rollback_to Storage_error
+                        | Ok found -> k ~connection:found)
+                  in
+                  with_connection_locked (fun ~connection ->
                   let with_accept_gates k =
                     match decision with
                     | Reject -> k ~section:None
-                    | Accept section ->
-                        with_locked_accepted_connection
-                          (module C)
-                          ~rollback_to ~origin ~destination
-                          (fun () ->
+                    | Accept section -> (
+                        match connection with
+                        | None -> rollback_to No_accepted_connection
+                        | Some connection_id
+                          when not (positive connection_id) ->
+                            rollback_to Inconsistent_data
+                        | Some _ ->
                             if not destination_eligible then
                               (* The reviewing community is answered first —
                                  that is the one its own moderators are
@@ -904,7 +923,7 @@ let review (module C : Caqti_lwt.CONNECTION) ~reviewer_user_id ~placement_id
                                                                section;
                                                            })))
                                     | Ok (_ :: _ :: _) ->
-                                        rollback_to Inconsistent_data))))))
+                                        rollback_to Inconsistent_data)))))))
 
 (* === withdraw === *)
 
