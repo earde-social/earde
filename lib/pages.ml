@@ -453,7 +453,7 @@ let launch_flat_community_sidebar ~(community : community) ~can_manage () =
      modlog and the top-mod/admin downvote toggle keep their gates and routes;
    - the pre-rendered ccp-* connected-projects fragment is spliced verbatim
      (its markup is pinned by the fragment suites) and restyled by CSS only. *)
-let community_page ?user ?(noindex=false) ?(connected_projects="") ?(connected_communities="") ~is_member ~is_current_user_mod ~is_current_user_top_mod ~mod_usernames ~admin_usernames ~banned_usernames ~user_communities ~moderated_communities user_votes current_page sort_mode (community : community) (posts : post list) request =
+let community_page ?user ?(noindex=false) ?(connected_projects="") ?(connected_communities="") ~is_member ~is_current_user_mod ~is_current_user_top_mod ~mod_usernames ~admin_usernames ~banned_usernames ~user_communities ~moderated_communities user_votes current_page sort_mode (community : community) (posts : feed_item list) request =
   let csrf_token = Dream.csrf_tag request in
   let is_admin = Dream.session_field request "is_admin" = Some "true" in
   let esc = Components.html_escape in
@@ -464,9 +464,14 @@ let community_page ?user ?(noindex=false) ?(connected_projects="") ?(connected_c
   ignore (moderated_communities : community list);
   let has_next = List.length posts = 20 in
 
+  (* Own rows render byte-identically; a shared row carries THIS community's
+     slug as its destination context so its links stay local and its
+     provenance/section chips come from the placement, not the origin. *)
   let posts_html =
     if posts = [] then "<div class='bg-gray-50 p-12 text-center rounded-xl border border-dashed border-[#D0C9BC] text-gray-500'>No posts yet. Be the first to share something!</div>"
-    else String.concat "\n" (List.map (Components.render_post ~is_current_user_mod ~mod_usernames ~admin_usernames ~banned_usernames request user_votes) posts)
+    else String.concat "\n" (List.map (fun (item : feed_item) ->
+      let shared = Option.map (fun ctx -> (community.slug, ctx)) item.fi_shared in
+      Components.render_post ~is_current_user_mod ~mod_usernames ~admin_usernames ~banned_usernames ?shared request user_votes item.fi_post) posts)
   in
 
   let base_url = Printf.sprintf "/c/%s" slug in
@@ -800,7 +805,7 @@ let community_section_shell_page ?user ?(noindex=false) ?thread_count ?last_acti
     ~banned_usernames ~(rail_communities : community list) ~(channels : channel list)
     ~(sections : community_section list)
     ~(section : community_section) ~user_votes ~current_page ~sort_mode
-    ~(community : community) ~(posts : post list) request =
+    ~(community : community) ~(posts : feed_item list) request =
   let esc = Components.html_escape in
   (* base_url drives the sort tabs, the New-thread link, and pagination — all stay on the section URL. *)
   let base_url = Printf.sprintf "/c/%s/s/%s" (esc community.slug) (esc section.slug) in
@@ -860,9 +865,14 @@ let community_section_shell_page ?user ?(noindex=false) ?thread_count ?last_acti
     ftabs
   in
 
+  (* Own rows are byte-identical to before; shared rows carry this
+     community's slug as their destination link context and their compact
+     "Shared from" provenance line. *)
   let posts_html =
     if posts = [] then "<div class='cs-empty'>No threads here yet — start the first one.</div>"
-    else String.concat "\n" (List.map (Components.render_forum_row ~is_current_user_mod ~mod_usernames ~admin_usernames ~banned_usernames request user_votes) posts)
+    else String.concat "\n" (List.map (fun (item : feed_item) ->
+      let shared = Option.map (fun ctx -> (community.slug, ctx)) item.fi_shared in
+      Components.render_forum_row ~is_current_user_mod ~mod_usernames ~admin_usernames ~banned_usernames ?shared request user_votes item.fi_post) posts)
   in
 
   let has_next = List.length posts = 20 in
@@ -1494,6 +1504,21 @@ type thread_source_view =
   | Ts_private
   | Ts_visible of (string * string) option * Db.thread_source_msg list
 
+(* An accepted DESTINATION-context rendering of the canonical thread,
+   resolved and authorized by the handler (accepted placement, destination
+   binding, origin currently public, viewer admitted by the destination's
+   existing can_view_community rule). The page then renders the same
+   canonical post and comments under the destination shell: [stc_section]
+   is the placement's own destination section — the effective local section
+   context (None = the destination's flat/uncategorized context) — and
+   [stc_origin_name] feeds the visible "Shared from" provenance label. The
+   origin may be named and linked because this context only exists while
+   the origin community is public. *)
+type shared_thread_page_context = {
+  stc_origin_name : string;
+  stc_section : (string * string) option;
+}
+
 (* /c/:slug/t/:post_id-:post_slug — the canonical thread view, now on the Cartographic Civic
    launch chrome (Components.launch_community_surface_page: earde.css only).
    Replaces the legacy warm-card post_page for normal threads (post_page stays only as the
@@ -1505,7 +1530,8 @@ type thread_source_view =
    The optimistic-vote DOM contract (cs-vote = [upvote form, score span, downvote form], buttons
    carrying the exact legacy Tailwind colour classes the shared vote JS toggles — mapped to
    launch accents in earde.css) is preserved exactly. *)
-let thread_shell_page ?user ?(noindex=false) ?(can_share=false) ~is_member ~is_current_user_mod ~mod_usernames ~admin_usernames
+let thread_shell_page ?user ?(noindex=false) ?(can_share=false) ?(can_comment=false)
+    ?(shared_context : shared_thread_page_context option) ~is_member ~is_current_user_mod ~mod_usernames ~admin_usernames
     ~banned_usernames ~(rail_communities : community list) ~(channels : channel list)
     ~(sections : community_section list) ~(community : community)
     ?(thread_source : thread_source_view option)
@@ -1515,23 +1541,50 @@ let thread_shell_page ?user ?(noindex=false) ?(can_share=false) ~is_member ~is_c
   let current_user = Dream.session_field request "username" in
   let is_admin = Dream.session_field request "is_admin" = Some "true" in
 
-  (* Launch community sidebar (pass-8/9 grammar): the post's own (parent) section is active.
+  (* The effective LOCAL section context: on a destination-context rendering
+     it is the placement's own destination section; otherwise the post's
+     origin section. None renders the surrounding community's flat /
+     sectionless context — exactly the existing sectionless behavior. *)
+  let local_section = match shared_context with
+    | Some sc -> sc.stc_section
+    | None ->
+        (match post.section_name, post.section_slug with
+         | Some sn, Some ss -> Some (sn, ss)
+         | _ -> None) in
+  (* The thread path in THIS page's community context: the canonical origin
+     URL on the origin page, the destination-context URL under a
+     destination shell. Server-built from the displayed community and the
+     canonical post — never a stored or submitted URL. *)
+  let local_thread_path =
+    Components.canonical_thread_path community.slug post.id post.title in
+  (* The closed, server-validated context field a destination-context
+     composer carries so a successful comment can return here: it names the
+     displayed community only, and the POST handler re-resolves and
+     re-authorizes it — it grants nothing by itself. Absent on the origin
+     page, whose forms stay byte-identical. *)
+  let context_field = match shared_context with
+    | Some _ ->
+        Printf.sprintf "<input type='hidden' name='context_community' value='%s'>"
+          (esc community.slug)
+    | None -> "" in
+
+  (* Launch community sidebar (pass-8/9 grammar): the LOCAL section is active.
      Settings gate mirrors the overview: render-time visibility only, handler re-checks. *)
   let sidebar =
     launch_knowledge_sidebar ~community ~channels ~sections
-      ?active_section_slug:post.section_slug
+      ?active_section_slug:(Option.map snd local_section)
       ~can_manage:(is_current_user_mod || is_admin) ()
   in
 
-  (* Breadcrumb + back-to-section (only when the post actually belongs to a section). *)
-  let section_crumb = match post.section_name, post.section_slug with
-    | Some sn, Some ss -> Printf.sprintf " / <a href='/c/%s/s/%s'>§ %s</a>" (esc community.slug) (esc ss) (esc sn)
-    | _ -> "" in
+  (* Breadcrumb + back-to-section (only when the thread has a LOCAL section here). *)
+  let section_crumb = match local_section with
+    | Some (sn, ss) -> Printf.sprintf " / <a href='/c/%s/s/%s'>§ %s</a>" (esc community.slug) (esc ss) (esc sn)
+    | None -> "" in
   let crumb = Printf.sprintf "<div class='fh-crumb'><a href='/c/%s'>/c/%s</a>%s / <b>thread</b></div>"
     (esc community.slug) (esc community.slug) section_crumb in
-  let back_link = match post.section_name, post.section_slug with
-    | Some sn, Some ss -> Printf.sprintf "<a class='btn sm' href='/c/%s/s/%s'>&larr; %s</a>" (esc community.slug) (esc ss) (esc sn)
-    | _ -> "" in
+  let back_link = match local_section with
+    | Some (sn, ss) -> Printf.sprintf "<a class='btn sm' href='/c/%s/s/%s'>&larr; %s</a>" (esc community.slug) (esc ss) (esc sn)
+    | None -> "" in
 
   (* --- post vote column: reuses the proven cs-vote contract from render_forum_row --- *)
   let current_vote = Option.value ~default:0 (List.assoc_opt post.id user_post_votes) in
@@ -1715,9 +1768,18 @@ let thread_shell_page ?user ?(noindex=false) ?(can_share=false) ~is_member ~is_c
         | Some d -> Printf.sprintf "<a class='ft-domain' href='%s' target='_blank' rel='noopener'>%s &#8599;</a>" (Components.safe_url u) (esc d)
         | None -> "")
     | None -> "" in
-  let meta = Printf.sprintf "<div class='th-meta'>%s<span>by %s</span><span>%s</span><span>%d comments</span></div>"
+  (* Destination-context provenance: the one visible compact label. The
+     origin may be linked because this context requires a currently public
+     origin. Nothing else about the placement (actors, notes, ids, lifecycle
+     wording) ever reaches this page. *)
+  let shared_from_label = match shared_context with
+    | Some sc ->
+        Printf.sprintf "<span class='sth-shared-from'>&#8644; Shared from <a href='/c/%s'>%s</a></span>"
+          (esc post.community_slug) (esc sc.stc_origin_name)
+    | None -> "" in
+  let meta = Printf.sprintf "<div class='th-meta'>%s<span>by %s</span><span>%s</span><span>%d comments</span>%s</div>"
     domain_html (Components.render_author ~mod_usernames ~admin_usernames post.username)
-    (esc (Components.time_ago post.created_at)) post.comment_count in
+    (esc (Components.time_ago post.created_at)) post.comment_count shared_from_label in
   (* Post mod/owner actions get their own compact row under the meta — no far-right float. *)
   let post_actions_row =
     if post_mod_controls = "" then "" else Printf.sprintf "<div class='th-actions'>%s</div>" post_mod_controls in
@@ -1738,10 +1800,14 @@ let thread_shell_page ?user ?(noindex=false) ?(can_share=false) ~is_member ~is_c
     | Some (Ts_visible (None, [])) -> ""
     | Some (Ts_visible (channel_opt, msgs)) ->
         let summary = Start_thread.summarize_source msgs in
+        (* Channel links use the POST's own community slug — the source
+           channel lives beside the canonical post, so the link is correct
+           under a destination shell too (identical bytes on the origin
+           page, where the two slugs are equal). *)
         let from_html = match channel_opt with
           | Some (cslug, cname) ->
               Printf.sprintf "Promoted from <a href='/c/%s/ch/%s'>#%s</a>"
-                (esc community.slug) (esc cslug) (esc cname)
+                (esc post.community_slug) (esc cslug) (esc cname)
           | None -> "Promoted from chat" in
         let plural n = if n = 1 then "" else "s" in
         let meta_bits =
@@ -1761,7 +1827,7 @@ let thread_shell_page ?user ?(noindex=false) ?(can_share=false) ~is_member ~is_c
             let chat_link = match channel_opt with
               | Some (cslug, _) ->
                   Printf.sprintf "<a class='th-src-jump' href='/c/%s/ch/%s?source_thread=%d#msg-%Ld'>view in chat</a>"
-                    (esc community.slug) (esc cslug) post.id m.sm_id
+                    (esc post.community_slug) (esc cslug) post.id m.sm_id
               | None -> "" in
             Printf.sprintf
               "<div class='th-src-msg'><div class='th-src-msg-meta'><span class='th-src-author'>%s</span>%s<span class='th-src-time'>%s</span>%s</div><div class='th-src-text'>%s</div></div>"
@@ -1771,7 +1837,7 @@ let thread_shell_page ?user ?(noindex=false) ?(can_share=false) ~is_member ~is_c
           | Some (cslug, _) ->
               Printf.sprintf
                 "<div class='th-src-foot'><a href='/c/%s/ch/%s?source_thread=%d'>View original conversation &rarr;</a></div>"
-                (esc community.slug) (esc cslug) post.id
+                (esc post.community_slug) (esc cslug) post.id
           | None -> "" in
         Printf.sprintf
           "<div class='th-src'>\
@@ -1794,19 +1860,32 @@ let thread_shell_page ?user ?(noindex=false) ?(can_share=false) ~is_member ~is_c
       | None -> "" in
     img ^ txt ^ link in
 
-  (* --- comment composer (shell-styled) --- *)
+  (* --- comment composer (shell-styled) ---
+     Gated by the one SQL participation capability the handler computed
+     (origin membership, or membership in a currently readable accepted
+     destination — minus tombstone and every ban), the same capability
+     POST /comments enforces, so this render gate can never grant what the
+     server refuses. A member who cannot currently comment (banned, or a
+     tombstoned thread) gets neither a composer nor a misleading Join
+     button; a logged-in non-member of a public community keeps the Join
+     path — joining THIS displayed community is a real participation path
+     in both contexts. *)
   let composer =
-    if is_member then
-      Printf.sprintf "<form class='ct-composer' action='/comments' method='POST'>%s<input type='hidden' name='post_id' value='%d'><textarea name='content' required rows='3' placeholder='Add to the thread&#8230;'></textarea><div class='ct-composer-actions'><button type='submit' class='btn sm primary'>Reply</button></div></form>" csrf_token post.id
+    if can_comment then
+      Printf.sprintf "<form class='ct-composer' action='/comments' method='POST'>%s<input type='hidden' name='post_id' value='%d'>%s<textarea name='content' required rows='3' placeholder='Add to the thread&#8230;'></textarea><div class='ct-composer-actions'><button type='submit' class='btn sm primary'>Reply</button></div></form>" csrf_token post.id context_field
     else match current_user with
+      | Some _ when is_member ->
+          (* A current member without the capability: no composer, and no
+             join CTA that could not help. *)
+          ""
       (* Private community: viewer is an authorized non-member (mod/admin); no self-join button. *)
       | Some _ when community.visibility = Db.Community_private ->
           Printf.sprintf "<div class='ct-join'><span>Only members of <a href='/c/%s'>/c/%s</a> can reply.</span></div>"
             (esc community.slug) (esc community.slug)
       | Some _ ->
           Printf.sprintf "<div class='ct-join'><span>You must be a member of <a href='/c/%s'>/c/%s</a> to reply.</span><form action='/join' method='POST' class='inline'>%s<input type='hidden' name='community_id' value='%d'><input type='hidden' name='redirect_to' value='%s'><button type='submit' class='btn sm primary'>Join /c/%s</button></form></div>"
-            (esc community.slug) (esc community.slug) csrf_token post.community_id
-            (Components.canonical_thread_path post.community_slug post.id post.title) (esc community.slug)
+            (esc community.slug) (esc community.slug) csrf_token community.id
+            local_thread_path (esc community.slug)
       | None ->
           "<div class='ct-join'><span><a href='/login'>Log in</a> to join the discussion.</span></div>" in
 
@@ -1831,11 +1910,13 @@ let thread_shell_page ?user ?(noindex=false) ?(can_share=false) ~is_member ~is_c
         | None -> "<a href='/login' class='text-gray-400 hover:text-[#69C3D2]'>&#9660;</a>" in
       let cvote_pill = Printf.sprintf "<div class='cs-vote'>%s<span class='cs-vote-score'>%d</span>%s</div>" upvote_html c.score downvote_html in
 
-      let reply_button = if is_member then
+      (* Same participation capability as the top composer — reply controls
+         must never render for a viewer the POST would refuse. *)
+      let reply_button = if can_comment then
           Printf.sprintf "<button type='button' class='ct-act' onclick=\"document.getElementById('reply-form-%d').classList.toggle('hidden')\">&#8624; reply</button>" c.id
         else "" in
-      let reply_form = if is_member then
-          Printf.sprintf "<form id='reply-form-%d' class='ct-composer ct-reply hidden' action='/comments' method='POST'>%s<input type='hidden' name='post_id' value='%d'><input type='hidden' name='parent_id' value='%d'><textarea name='content' required rows='2' placeholder='Write a reply&#8230;'></textarea><div class='ct-composer-actions'><button type='button' class='btn sm' onclick=\"document.getElementById('reply-form-%d').classList.toggle('hidden')\">Cancel</button><button type='submit' class='btn sm primary'>Reply</button></div></form>" c.id csrf_token post.id c.id c.id
+      let reply_form = if can_comment then
+          Printf.sprintf "<form id='reply-form-%d' class='ct-composer ct-reply hidden' action='/comments' method='POST'>%s<input type='hidden' name='post_id' value='%d'><input type='hidden' name='parent_id' value='%d'>%s<textarea name='content' required rows='2' placeholder='Write a reply&#8230;'></textarea><div class='ct-composer-actions'><button type='button' class='btn sm' onclick=\"document.getElementById('reply-form-%d').classList.toggle('hidden')\">Cancel</button><button type='submit' class='btn sm primary'>Reply</button></div></form>" c.id csrf_token post.id c.id context_field c.id
         else "" in
 
       let is_comment_deleted =
@@ -2054,13 +2135,14 @@ let thread_shell_page ?user ?(noindex=false) ?(can_share=false) ~is_member ~is_c
      rail/sidebar/right rail stay fixed; only this pane scrolls. *)
   let main = Printf.sprintf "<div class='thread-shell-main'>%s%s%s</div>" topbar post_block discussion in
 
-  (* --- right rail: real data only --- *)
-  let section_row = match post.section_name, post.section_slug with
-    | Some sn, Some ss -> Printf.sprintf "<tr><td>Section</td><td class='num'><a href='/c/%s/s/%s'>%s</a></td></tr>" (esc community.slug) (esc ss) (esc sn)
-    | _ -> "<tr><td>Section</td><td class='num'>&mdash;</td></tr>" in
-  let back_cta = match post.section_name, post.section_slug with
-    | Some sn, Some ss -> Printf.sprintf "<div class='ca-cta'><a class='btn sm block' href='/c/%s/s/%s'>&larr; Back to %s</a></div>" (esc community.slug) (esc ss) (esc sn)
-    | _ -> "" in
+  (* --- right rail: real data only. The Section rows are the LOCAL context:
+     destination section under a destination shell, origin section at home. --- *)
+  let section_row = match local_section with
+    | Some (sn, ss) -> Printf.sprintf "<tr><td>Section</td><td class='num'><a href='/c/%s/s/%s'>%s</a></td></tr>" (esc community.slug) (esc ss) (esc sn)
+    | None -> "<tr><td>Section</td><td class='num'>&mdash;</td></tr>" in
+  let back_cta = match local_section with
+    | Some (sn, ss) -> Printf.sprintf "<div class='ca-cta'><a class='btn sm block' href='/c/%s/s/%s'>&larr; Back to %s</a></div>" (esc community.slug) (esc ss) (esc sn)
+    | None -> "" in
   let stats_block = Printf.sprintf "
     <div class='ca-block'>
         <div class='ca-label'>Thread &middot; indexed</div>
@@ -2162,7 +2244,7 @@ let thread_shell_page ?user ?(noindex=false) ?(can_share=false) ~is_member ~is_c
    cards by position. *)
 let community_overview_page ?user ?(noindex=false) ?(connected_projects_count=0) ?(connected_communities_count=0) ~is_member ~is_current_user_mod ~is_current_user_top_mod
     ~mod_usernames ~orphaned ~(rail_communities : community list)
-    ~(channels : channel list) ~(recent_posts : post list)
+    ~(channels : channel list) ~(recent_posts : feed_item list)
     (community : community) (section_stats : (community_section * int * string option) list) request =
   let csrf_token = Dream.csrf_tag request in
   let is_admin = Dream.session_field request "is_admin" = Some "true" in
@@ -2404,18 +2486,37 @@ let community_overview_page ?user ?(noindex=false) ?(connected_projects_count=0)
       (if sections_inner = "" then "<div class='empty--inline'>No sections yet.</div>" else sections_inner)
   in
 
-  (* --- recent durable knowledge: real newest posts, linking to the real /p/:id route. --- *)
+  (* --- recent durable knowledge: real newest rows from the same
+     destination-aware community feed query the durable-thread surfaces use
+     (no second Recent-only placement query), combined ordering and the
+     five-item limit applied by that query. Own rows keep the /p/:id link
+     byte-for-byte; a shared row links into THIS community's thread context,
+     shows the placement's destination section, and carries the compact
+     "Shared from" provenance. --- *)
   let recent_panel =
     if recent_posts = [] then ""
     else
-      let rows = String.concat "" (List.map (fun (p : post) ->
+      let rows = String.concat "" (List.map (fun (item : feed_item) ->
+        let p = item.fi_post in
+        let href = match item.fi_shared with
+          | Some _ -> Components.canonical_thread_path community.slug p.id p.title
+          | None -> Printf.sprintf "/p/%d" p.id in
+        let section_name = match item.fi_shared with
+          | Some ctx -> ctx.fs_section_name
+          | None -> p.section_name in
+        let shared_note = match item.fi_shared with
+          | Some ctx ->
+              Printf.sprintf "<span class='sth-shared-from'>&#8644; Shared from %s</span>"
+                (esc ctx.fs_origin_name)
+          | None -> "" in
         Printf.sprintf
-          "<a class='project-row launch-postrow' href='/p/%d'>%s<span class='launch-post-title'>%s</span><span class='launch-post-foot'>&#9650; %d &middot; by %s &middot; %s &middot; &#128172; %d</span></a>"
-          p.id
-          (match p.section_name with
+          "<a class='project-row launch-postrow' href='%s'>%s<span class='launch-post-title'>%s</span><span class='launch-post-foot'>&#9650; %d &middot; by %s &middot; %s &middot; &#128172; %d%s</span></a>"
+          (esc href)
+          (match section_name with
            | Some n when n <> "" -> Printf.sprintf "<span class='launch-post-meta'><span class='launch-post-sec'>&sect; %s</span></span>" (esc n)
            | _ -> "")
-          (esc p.title) p.score (esc p.username) (Components.time_ago p.created_at) p.comment_count)
+          (esc p.title) p.score (esc p.username) (Components.time_ago p.created_at) p.comment_count
+          (if shared_note = "" then "" else " &middot; " ^ shared_note))
         recent_posts) in
       Printf.sprintf
         "<section class='panel'><div class='section-head'><span class='kicker'>Recent durable knowledge</span></div>%s</section>"

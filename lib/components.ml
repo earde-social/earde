@@ -1355,117 +1355,6 @@ let post_admin_actions ?(is_current_user_mod=false) ?(admin_usernames=[]) ?(bann
   in
   action_btn ^ ban_btn
 
-let render_post ?(is_current_user_mod=false) ?(mod_usernames=[]) ?(admin_usernames=[]) ?(banned_usernames=[]) request user_votes (post : post) =
-  let csrf_token = Dream.csrf_tag request in
-  let content_preview = Option.value ~default:"" post.content in
-  let link_part = match post.url with | Some u -> Printf.sprintf "<a href='%s' class='text-xs text-[#C94C4C] hover:underline' target='_blank'>%s ↗</a>" (safe_url u) (html_escape u) | None -> "" in
-
-  let current_vote = Option.value ~default:0 (List.assoc_opt post.id user_votes) in
-
-  let up_color = if current_vote = 1 then "text-orange-500" else "text-gray-400 hover:text-orange-500" in
-  let down_color = if current_vote = -1 then "text-[#69C3D2]" else "text-gray-400 hover:text-[#69C3D2]" in
-  let up_action = if current_vote = 1 then 0 else 1 in
-  let down_action = if current_vote = -1 then 0 else -1 in
-
-  let current_user = Dream.session_field request "username" in
-  (* Mod/admin action markup (own-post Delete, Mod/Admin Remove, Mod/Admin Ban) is built by
-     the shared post_admin_actions helper so search results reuse the exact same forms. *)
-  let admin_actions =
-    post_admin_actions ~is_current_user_mod ~admin_usernames ~banned_usernames ~csrf_token request post
-  in
-
-  let upvote_html = match current_user with
-    | Some _ -> Printf.sprintf "<form action='/vote' method='POST' class='m-0 p-0'>%s<input type='hidden' name='post_id' value='%d'><input type='hidden' name='direction' value='%d'><button type='submit' class='%s font-bold text-sm leading-none'>▲</button></form>" csrf_token post.id up_action up_color
-    | None -> "<a href='/login' class='text-gray-400 hover:text-orange-500 font-bold text-sm leading-none'>▲</a>"
-  in
-  let downvote_html =
-    if not post.allow_downvotes then ""
-    else match current_user with
-    | Some _ -> Printf.sprintf "<form action='/vote' method='POST' class='m-0 p-0'>%s<input type='hidden' name='post_id' value='%d'><input type='hidden' name='direction' value='%d'><button type='submit' class='%s font-bold text-sm leading-none'>▼</button></form>" csrf_token post.id down_action down_color
-    | None -> "<a href='/login' class='text-gray-400 hover:text-[#69C3D2] font-bold text-sm leading-none'>▼</a>"
-  in
-
-  (* Image thumbnail: capped at 320 px wide in the card — full resolution served from
-     static/uploads/; no second resize needed because the file is already ≤1920x1080. *)
-  let image_html = match post.image_url with
-    | None -> ""
-    | Some img -> Printf.sprintf "<a href='/p/%d' class='block mt-2 mb-1'><img src='%s' alt='Post image' class='w-full max-h-[512px] object-contain bg-stone-900 rounded-lg border border-[#E0D9CC]'></a>"
-        post.id (html_escape img)
-  in
-  Printf.sprintf "
-  <div onclick=\"if(!event.target.closest('a, button, form')) window.location='/p/%d'\" class='cursor-pointer border-b border-[#E8E2D9] py-4 flex gap-4 hover:bg-[#F0EBE0] transition-colors'>
-
-      <div class='flex flex-col items-center pt-0.5 w-7 shrink-0 cursor-default' onclick=\"event.stopPropagation()\">
-          %s
-          <span class='font-semibold text-gray-600 text-xs my-0.5'>%d</span>
-          %s
-      </div>
-
-      <div class='flex-1 min-w-0'>
-          <div class='flex flex-wrap items-center gap-x-1.5 text-xs text-gray-500 mb-1'>
-              <a href='/c/%s' class='font-semibold text-gray-700 hover:text-[#C94C4C] transition relative z-10'>/c/%s</a>
-              %s
-              <span class='text-gray-300'>•</span>
-              <span>by</span>
-              <span class='relative z-10'>%s</span>
-              <span class='text-gray-300'>•</span>
-              <span>%s</span>
-              <span class='relative z-10'>%s</span>
-          </div>
-
-          <h3 class='text-base font-semibold text-gray-900 leading-snug mb-1'>
-              <a href='/p/%d' class='ph-mask hover:text-[#C94C4C] transition break-words'>%s</a>
-          </h3>
-
-          <div class='relative z-10 text-xs'>%s</div>
-          %s
-          <p class='ph-mask text-sm text-gray-600 mt-2 break-words line-clamp-6'>%s</p>
-
-          <div class='flex items-center mt-2 text-xs text-gray-400'>
-              <a href='/p/%d' class='hover:text-[#C94C4C] flex items-center gap-1 transition relative z-10'>
-                  <span>💬</span><span>%d comments</span>
-              </a>
-              <button type='button' onclick='copyPostLink(\"/p/%d\", this)' class='text-xs font-medium text-gray-500 hover:text-gray-900 flex items-center transition-colors cursor-pointer ml-4'>🔗 Share</button>
-          </div>
-      </div>
-  </div>"
-  post.id
-  upvote_html post.score downvote_html
-  (html_escape post.community_slug) (html_escape post.community_slug)
-  (match post.section_name, post.section_slug with
-   | Some sn, Some ss ->
-       Printf.sprintf "<span class='text-gray-300'>›</span><a href='/c/%s/s/%s' class='font-medium text-[#C94C4C] hover:underline transition relative z-10'>%s</a>"
-         (html_escape post.community_slug) (html_escape ss) (html_escape sn)
-   | _ when post.community_sections_enabled ->
-       Printf.sprintf "<span class='text-gray-300'>›</span><a href='/c/%s/s/uncategorized' class='font-medium text-[#C94C4C] hover:underline transition relative z-10'>Uncategorized</a>"
-         (html_escape post.community_slug)
-   | _ -> "")
-  (render_author ~mod_usernames ~admin_usernames post.username) (time_ago post.created_at) admin_actions
-  post.id (html_escape post.title) link_part image_html (html_escape content_preview) post.id post.comment_count post.id
-
-(* Compact host for a link post's domain chip: strip scheme + a leading www. and cut at the
-   first path/query/fragment. None when it doesn't look like an http(s) URL, so the row shows
-   no chip rather than a misleading fragment. Display goes through html_escape; the href uses
-   safe_url. Hand-rolled (no Uri dep on the hot render path) — only needs host extraction. *)
-let extract_domain url =
-  let u = String.trim url in
-  let strip_prefix p s =
-    let lp = String.length p in
-    if String.length s >= lp && String.lowercase_ascii (String.sub s 0 lp) = p
-    then Some (String.sub s lp (String.length s - lp)) else None
-  in
-  match (match strip_prefix "https://" u with Some r -> Some r | None -> strip_prefix "http://" u) with
-  | None -> None
-  | Some rest ->
-      let host_end =
-        match List.filter_map (fun c -> String.index_opt rest c) ['/'; '?'; '#'] with
-        | [] -> String.length rest
-        | l -> List.fold_left min (String.length rest) l
-      in
-      let host = String.sub rest 0 host_end in
-      let host = match strip_prefix "www." host with Some h -> h | None -> host in
-      if host = "" then None else Some host
-
 (* URL slug from a thread title — descriptive only. post_id is the authoritative key in
    /c/:slug/t/:post_id-:post_slug, so a stale or missing slug still resolves (the handler 301s
    to canonical). Same shape as Db's section/community slugify: lowercase, any run of
@@ -1495,6 +1384,166 @@ let canonical_thread_path community_slug post_id title =
   let s = slugify title in
   if s = "" then Printf.sprintf "/c/%s/t/%d" community_slug post_id
   else Printf.sprintf "/c/%s/t/%d-%s" community_slug post_id s
+
+(* Destination rendering context for one accepted shared-thread placement
+   feed row: the destination community's slug (every internal link must stay
+   in the destination context — never eject the reader to the origin URL)
+   plus the joined provenance and destination-section fields. [None] is the
+   community's own post and renders byte-identically to before. The origin
+   name may be linked because the feed queries only return a shared row
+   while the origin community is currently public. *)
+type feed_shared = string * Db.feed_shared_context
+
+let shared_from_html (post : post) (ctx : Db.feed_shared_context) =
+  Printf.sprintf
+    "<span class='sth-shared-from'>&#8644; Shared from <a href='/c/%s'>%s</a></span>"
+    (html_escape post.community_slug) (html_escape ctx.fs_origin_name)
+
+let render_post ?(is_current_user_mod=false) ?(mod_usernames=[]) ?(admin_usernames=[]) ?(banned_usernames=[]) ?(shared : feed_shared option) request user_votes (post : post) =
+  let csrf_token = Dream.csrf_tag request in
+  let content_preview = Option.value ~default:"" post.content in
+  let link_part = match post.url with | Some u -> Printf.sprintf "<a href='%s' class='text-xs text-[#C94C4C] hover:underline' target='_blank'>%s ↗</a>" (safe_url u) (html_escape u) | None -> "" in
+  (* Shared rows link into the DESTINATION thread context (server-built from
+     the destination slug and canonical post data — no stored URL); the
+     community's own rows keep the legacy /p/:id links byte-for-byte. *)
+  let thread_target = match shared with
+    | Some (destination_slug, _) ->
+        canonical_thread_path destination_slug post.id post.title
+    | None -> Printf.sprintf "/p/%d" post.id in
+
+  let current_vote = Option.value ~default:0 (List.assoc_opt post.id user_votes) in
+
+  let up_color = if current_vote = 1 then "text-orange-500" else "text-gray-400 hover:text-orange-500" in
+  let down_color = if current_vote = -1 then "text-[#69C3D2]" else "text-gray-400 hover:text-[#69C3D2]" in
+  let up_action = if current_vote = 1 then 0 else 1 in
+  let down_action = if current_vote = -1 then 0 else -1 in
+
+  let current_user = Dream.session_field request "username" in
+  (* Mod/admin action markup (own-post Delete, Mod/Admin Remove, Mod/Admin Ban) is built by
+     the shared post_admin_actions helper so search results reuse the exact same forms.
+     On a SHARED row the destination's moderator standing grants nothing over canonical
+     content, so the mod arm is dropped (and with it the destination-scoped ban list,
+     which pairs with the wrong community): only the author's own delete and the global
+     admin's origin-scoped controls remain. *)
+  let admin_actions =
+    match shared with
+    | None ->
+        post_admin_actions ~is_current_user_mod ~admin_usernames ~banned_usernames ~csrf_token request post
+    | Some _ ->
+        post_admin_actions ~is_current_user_mod:false ~admin_usernames ~banned_usernames:[] ~csrf_token request post
+  in
+
+  let upvote_html = match current_user with
+    | Some _ -> Printf.sprintf "<form action='/vote' method='POST' class='m-0 p-0'>%s<input type='hidden' name='post_id' value='%d'><input type='hidden' name='direction' value='%d'><button type='submit' class='%s font-bold text-sm leading-none'>▲</button></form>" csrf_token post.id up_action up_color
+    | None -> "<a href='/login' class='text-gray-400 hover:text-orange-500 font-bold text-sm leading-none'>▲</a>"
+  in
+  let downvote_html =
+    if not post.allow_downvotes then ""
+    else match current_user with
+    | Some _ -> Printf.sprintf "<form action='/vote' method='POST' class='m-0 p-0'>%s<input type='hidden' name='post_id' value='%d'><input type='hidden' name='direction' value='%d'><button type='submit' class='%s font-bold text-sm leading-none'>▼</button></form>" csrf_token post.id down_action down_color
+    | None -> "<a href='/login' class='text-gray-400 hover:text-[#69C3D2] font-bold text-sm leading-none'>▼</a>"
+  in
+
+  (* Image thumbnail: capped at 320 px wide in the card — full resolution served from
+     static/uploads/; no second resize needed because the file is already ≤1920x1080. *)
+  let image_html = match post.image_url with
+    | None -> ""
+    | Some img -> Printf.sprintf "<a href='%s' class='block mt-2 mb-1'><img src='%s' alt='Post image' class='w-full max-h-[512px] object-contain bg-stone-900 rounded-lg border border-[#E0D9CC]'></a>"
+        (html_escape thread_target) (html_escape img)
+  in
+  (* Meta head: the community's own rows keep the /c/:slug chip and their
+     origin-section chip byte-for-byte. A shared row instead leads with the
+     "Shared from <origin>" provenance and shows the placement's DESTINATION
+     section — the effective local context — never the origin's. *)
+  let context_chip = match shared with
+    | None ->
+        Printf.sprintf "<a href='/c/%s' class='font-semibold text-gray-700 hover:text-[#C94C4C] transition relative z-10'>/c/%s</a>"
+          (html_escape post.community_slug) (html_escape post.community_slug)
+    | Some (_, ctx) -> shared_from_html post ctx
+  in
+  let section_chip = match shared with
+    | None ->
+        (match post.section_name, post.section_slug with
+         | Some sn, Some ss ->
+             Printf.sprintf "<span class='text-gray-300'>›</span><a href='/c/%s/s/%s' class='font-medium text-[#C94C4C] hover:underline transition relative z-10'>%s</a>"
+               (html_escape post.community_slug) (html_escape ss) (html_escape sn)
+         | _ when post.community_sections_enabled ->
+             Printf.sprintf "<span class='text-gray-300'>›</span><a href='/c/%s/s/uncategorized' class='font-medium text-[#C94C4C] hover:underline transition relative z-10'>Uncategorized</a>"
+               (html_escape post.community_slug)
+         | _ -> "")
+    | Some (destination_slug, ctx) ->
+        (match ctx.fs_section_name, ctx.fs_section_slug with
+         | Some sn, Some ss ->
+             Printf.sprintf "<span class='text-gray-300'>›</span><a href='/c/%s/s/%s' class='font-medium text-[#C94C4C] hover:underline transition relative z-10'>%s</a>"
+               (html_escape destination_slug) (html_escape ss) (html_escape sn)
+         | _ -> "")
+  in
+  Printf.sprintf "
+  <div onclick=\"if(!event.target.closest('a, button, form')) window.location='%s'\" class='cursor-pointer border-b border-[#E8E2D9] py-4 flex gap-4 hover:bg-[#F0EBE0] transition-colors'>
+
+      <div class='flex flex-col items-center pt-0.5 w-7 shrink-0 cursor-default' onclick=\"event.stopPropagation()\">
+          %s
+          <span class='font-semibold text-gray-600 text-xs my-0.5'>%d</span>
+          %s
+      </div>
+
+      <div class='flex-1 min-w-0'>
+          <div class='flex flex-wrap items-center gap-x-1.5 text-xs text-gray-500 mb-1'>
+              %s
+              %s
+              <span class='text-gray-300'>•</span>
+              <span>by</span>
+              <span class='relative z-10'>%s</span>
+              <span class='text-gray-300'>•</span>
+              <span>%s</span>
+              <span class='relative z-10'>%s</span>
+          </div>
+
+          <h3 class='text-base font-semibold text-gray-900 leading-snug mb-1'>
+              <a href='%s' class='ph-mask hover:text-[#C94C4C] transition break-words'>%s</a>
+          </h3>
+
+          <div class='relative z-10 text-xs'>%s</div>
+          %s
+          <p class='ph-mask text-sm text-gray-600 mt-2 break-words line-clamp-6'>%s</p>
+
+          <div class='flex items-center mt-2 text-xs text-gray-400'>
+              <a href='%s' class='hover:text-[#C94C4C] flex items-center gap-1 transition relative z-10'>
+                  <span>💬</span><span>%d comments</span>
+              </a>
+              <button type='button' onclick='copyPostLink(\"%s\", this)' class='text-xs font-medium text-gray-500 hover:text-gray-900 flex items-center transition-colors cursor-pointer ml-4'>🔗 Share</button>
+          </div>
+      </div>
+  </div>"
+  (html_escape thread_target)
+  upvote_html post.score downvote_html
+  context_chip
+  section_chip
+  (render_author ~mod_usernames ~admin_usernames post.username) (time_ago post.created_at) admin_actions
+  (html_escape thread_target) (html_escape post.title) link_part image_html (html_escape content_preview) (html_escape thread_target) post.comment_count (html_escape thread_target)
+
+(* Compact host for a link post's domain chip: strip scheme + a leading www. and cut at the
+   first path/query/fragment. None when it doesn't look like an http(s) URL, so the row shows
+   no chip rather than a misleading fragment. Display goes through html_escape; the href uses
+   safe_url. Hand-rolled (no Uri dep on the hot render path) — only needs host extraction. *)
+let extract_domain url =
+  let u = String.trim url in
+  let strip_prefix p s =
+    let lp = String.length p in
+    if String.length s >= lp && String.lowercase_ascii (String.sub s 0 lp) = p
+    then Some (String.sub s lp (String.length s - lp)) else None
+  in
+  match (match strip_prefix "https://" u with Some r -> Some r | None -> strip_prefix "http://" u) with
+  | None -> None
+  | Some rest ->
+      let host_end =
+        match List.filter_map (fun c -> String.index_opt rest c) ['/'; '?'; '#'] with
+        | [] -> String.length rest
+        | l -> List.fold_left min (String.length rest) l
+      in
+      let host = String.sub rest 0 host_end in
+      let host = match strip_prefix "www." host with Some h -> h | None -> host in
+      if host = "" then None else Some host
 
 (* The section row's ⋯ menu reuses the EXACT moderation UI render_post builds — identical routes,
    CSRF, dialog ids and Rule A/B/C permission logic — so the forum feed can't drift from the
@@ -1660,7 +1709,7 @@ let mod_action_controls ~is_current_user_mod ~admin_usernames ~banned_usernames 
    the upvote form, the score <span>, and the downvote form, with the same Tailwind colour classes
    the JS toggles. The body is intentionally lighter than the card: strong title, an optional
    single-line preview, a compact monospace meta row, and moderation tucked into a ⋯ menu. *)
-let render_forum_row ?(is_current_user_mod=false) ?(mod_usernames=[]) ?(admin_usernames=[]) ?(banned_usernames=[]) ?(show_context=false) request user_votes (post : post) =
+let render_forum_row ?(is_current_user_mod=false) ?(mod_usernames=[]) ?(admin_usernames=[]) ?(banned_usernames=[]) ?(show_context=false) ?(shared : feed_shared option) request user_votes (post : post) =
   let csrf_token = Dream.csrf_tag request in
   let current_user = Dream.session_field request "username" in
   let current_vote = Option.value ~default:0 (List.assoc_opt post.id user_votes) in
@@ -1691,18 +1740,35 @@ let render_forum_row ?(is_current_user_mod=false) ?(mod_usernames=[]) ?(admin_us
     | Some c when String.trim c <> "" -> Printf.sprintf "<div class='ft-preview'>%s</div>" (html_escape c)
     | _ -> ""
   in
-  (* ⋯ menu rendered only when the viewer actually has an action (keeps the feed clean, not admin-y). *)
-  let mod_controls = mod_action_controls ~is_current_user_mod ~admin_usernames ~banned_usernames request post in
+  (* ⋯ menu rendered only when the viewer actually has an action (keeps the feed clean, not admin-y).
+     On a SHARED row the destination's moderator standing grants nothing over canonical content:
+     the mod arm is dropped (with its destination-scoped ban list, which pairs with the wrong
+     community) — only own-post delete and global-admin origin-scoped controls survive. *)
+  let mod_controls =
+    match shared with
+    | None -> mod_action_controls ~is_current_user_mod ~admin_usernames ~banned_usernames request post
+    | Some _ -> mod_action_controls ~is_current_user_mod:false ~admin_usernames ~banned_usernames:[] request post
+  in
   let mod_menu =
     if mod_controls = "" then ""
     else Printf.sprintf "<details class='cs-row-mod'><summary>⋯</summary><div class='cs-row-mod-menu'>%s</div></details>" mod_controls
   in
-  (* Internal links point at the canonical thread URL, not legacy /p/:id (which now 301s here). *)
-  let thread_href = canonical_thread_path post.community_slug post.id post.title in
+  (* Internal links point at the canonical thread URL, not legacy /p/:id (which now 301s here).
+     A shared row links into the DESTINATION thread context instead — the reader stays in the
+     community they are browsing; the path is server-built from the destination slug and the
+     canonical post, never a stored URL. *)
+  let thread_href = match shared with
+    | Some (destination_slug, _) -> canonical_thread_path destination_slug post.id post.title
+    | None -> canonical_thread_path post.community_slug post.id post.title
+  in
   (* show_context is set by the global Feed, where rows span communities/sections, so each row
      names its own origin: "§ Section · /c/slug". Section pages leave it off — the page header
-     already supplies that context — so those views stay byte-for-byte unchanged. *)
+     already supplies that context — so those views stay byte-for-byte unchanged. A shared row
+     instead always carries its one compact provenance line. *)
   let context_html =
+    match shared with
+    | Some (_, ctx) -> Printf.sprintf "<div class='ft-ctx'>%s</div>" (shared_from_html post ctx)
+    | None ->
     if not show_context then ""
     else
       let section_html = match post.section_name, post.section_slug with

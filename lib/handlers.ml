@@ -3254,11 +3254,130 @@ let view_thread_handler request =
     | Ok None -> Dream.respond ~status:`Not_Found (Pages.msg_page ?user:user_sess ~title:"Not Found" ~message:"This thread does not exist or has been deleted." ~alert_type:"error" ~return_url:("/c/" ^ community_slug) request)
     | Error err -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user:user_sess ~title:"Error" ~message:("Database error: " ^ err) ~alert_type:"error" ~return_url:"/" request)
     | Ok (Some post) ->
+        let viewer_id = match user_id_opt with Some s -> (try int_of_string s with _ -> 0) | None -> 0 in
+        let is_admin = Dream.session_field request "is_admin" = Some "true" in
+        (* Shared Threads: a route slug that is NOT the post's own community
+           may be an accepted destination context. One bounded read-model
+           point query answers the placement facts (accepted, bound to this
+           slug, origin currently public); the viewer's access to the
+           destination is then the community's one EXISTING
+           can_view_community rule over the loaded record — no third read
+           rule. Every failure — no placement, an inactive placement, a
+           private origin, an inaccessible private destination, a read
+           error — takes the same fall-through into the pre-existing path
+           below, whose observables (canonical 301 for viewers who may read
+           the origin thread, one generic 404 otherwise) are identical for
+           all of them, so no placement state can be inferred. *)
+        let%lwt destination_context =
+          if community_slug = post.community_slug then Lwt.return None
+          else
+            match%lwt
+              Shared_thread_reading.resolve_destination_context db
+                ~post_id:post.id ~destination_slug:community_slug
+            with
+            | Ok (Some ctx) -> (
+                match%lwt
+                  Db.get_community_by_id db
+                    ctx.Shared_thread_reading.destination_community_id
+                with
+                | Ok (Some destination) ->
+                    let%lwt viewable =
+                      can_view_community db ~user_id:viewer_id ~is_admin destination
+                    in
+                    Lwt.return (if viewable then Some (ctx, destination) else None)
+                | _ -> Lwt.return None)
+            | Ok None | Error _ -> Lwt.return None
+        in
+        (match destination_context with
+        | Some (ctx, destination) ->
+            (* One destination URL per thread: a wrong/missing descriptive
+               slug 301s within the destination context, mirroring the
+               canonical redirect. Server-built path — never a stored URL. *)
+            let destination_path =
+              Components.canonical_thread_path destination.Db.slug post.id post.title in
+            let current_path = "/c/" ^ community_slug ^ "/t/" ^ thread_param in
+            if current_path <> destination_path then
+              Dream.redirect ~status:`Moved_Permanently request destination_path
+            else begin
+              let%lwt comments_result = Db.get_comments db post.id in
+              (* Membership here is the DESTINATION's (it feeds the join
+                 CTA), but every canonical-content moderation input — the
+                 mod flag, the moderator badges, the ban list — stays
+                 ORIGIN-scoped: destination standing grants no canonical
+                 controls, so a destination top mod reads as a plain
+                 viewer. *)
+              let%lwt is_member_result = match user_id_opt with
+                | Some uid -> Db.is_member db (int_of_string uid) destination.Db.id
+                | None -> Lwt.return (Ok false) in
+              let%lwt user_post_votes = get_current_user_votes db request in
+              let%lwt user_comment_votes = get_current_user_comment_votes db request in
+              let%lwt is_mod_res = match user_id_opt with
+                | Some uid -> Db.is_moderator db (int_of_string uid) post.community_id
+                | None -> Lwt.return_ok false in
+              let%lwt mods_res = Db.get_community_moderators db post.community_id in
+              let%lwt admin_usernames_res = Db.get_admin_usernames db in
+              let admin_usernames = match admin_usernames_res with Ok l -> l | Error _ -> [] in
+              let%lwt banned_res = Db.community_get_banned_users db post.community_id in
+              let banned_usernames = match banned_res with Ok bs -> List.map (fun (u : Db.user) -> u.username) bs | _ -> [] in
+              let%lwt rail_communities = match user_id_opt with
+                | Some uid -> (match%lwt Db.get_user_communities db (int_of_string uid) with Ok cs -> Lwt.return cs | Error _ -> Lwt.return [])
+                | None -> Lwt.return [] in
+              (* The destination shell's own navigation data. *)
+              let%lwt channels = match%lwt Db.get_channels_by_community db destination.Db.id with Ok cs -> Lwt.return cs | Error _ -> Lwt.return [] in
+              let%lwt sections = match%lwt Db.get_sections_with_stats db destination.Db.id with
+                | Ok stats -> Lwt.return (List.map (fun ((s : Db.community_section), _, _) -> s) stats)
+                | Error _ -> Lwt.return [] in
+              (* Promoted-conversation provenance, viewer-scoped exactly as
+                 on the origin page. The source community IS the post's own
+                 (promotion never crosses communities), which this context
+                 guarantees is public — so the same rule admits it here. *)
+              let%lwt thread_source =
+                match%lwt Db.get_thread_source db post.id with
+                | Error _ | Ok (None, []) -> Lwt.return None
+                | Ok (channel_opt, msgs) ->
+                    (match channel_opt with
+                     | None -> Lwt.return (Some (Pages.Ts_visible (None, msgs)))
+                     | Some (cslug, cname, src_community_id) ->
+                         if src_community_id = post.community_id then
+                           Lwt.return (Some (Pages.Ts_visible (Some (cslug, cname), msgs)))
+                         else
+                           (match%lwt Db.get_community_by_id db src_community_id with
+                            | Ok (Some src_community) ->
+                                let%lwt src_ok = can_view_community db ~user_id:viewer_id ~is_admin src_community in
+                                Lwt.return (Some (if src_ok then Pages.Ts_visible (Some (cslug, cname), msgs) else Pages.Ts_private))
+                            | _ -> Lwt.return (Some Pages.Ts_private))) in
+              (* The one comment-participation capability — the same SQL the
+                 POST enforces. A failed probe hides the composer, never
+                 errors the page. *)
+              let%lwt can_comment =
+                if viewer_id <= 0 then Lwt.return false
+                else
+                  match%lwt Shared_thread_reading.viewer_may_comment db ~user_id:viewer_id ~post_id:post.id with
+                  | Ok can -> Lwt.return can
+                  | Error _ -> Lwt.return false
+              in
+              let shared_context : Pages.shared_thread_page_context =
+                { stc_origin_name = ctx.Shared_thread_reading.origin_community_name;
+                  stc_section = ctx.Shared_thread_reading.destination_section } in
+              match comments_result, is_member_result with
+              | Ok comments, Ok is_member ->
+                  let is_mod = match is_mod_res with Ok b -> b | _ -> false in
+                  let mod_usernames = match mods_res with Ok ms -> List.map (fun (u : Db.user) -> u.username) ms | _ -> [] in
+                  (* noindex always: the canonical <link> points at the
+                     immutable origin URL and this page must never compete
+                     with it in search engines (it stays followable — no
+                     nofollow). No Share entry point here: the first MVP
+                     permits requests only from the origin page. *)
+                  Dream.html (Pages.thread_shell_page ?user:user_sess ~noindex:true ~can_share:false ~can_comment
+                    ~shared_context ~is_member ~is_current_user_mod:is_mod
+                    ~mod_usernames ~admin_usernames ~banned_usernames ~rail_communities ~channels ~sections
+                    ~community:destination ?thread_source ~user_post_votes ~user_comment_votes ~post ~comments request)
+              | _ -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user:user_sess ~title:"Error" ~message:"Failed to load thread data. Please try again later." ~alert_type:"error" ~return_url:("/c/" ^ community_slug) request)
+            end
+        | None ->
         (* Slice C: gate BEFORE the canonical 301 below — redirecting leaks the private
            community's slug + thread title in the Location header. Resolve visibility from the
            post's community_id and deny with the SAME 404 as a missing thread. Fail closed. *)
-        let viewer_id = match user_id_opt with Some s -> (try int_of_string s with _ -> 0) | None -> 0 in
-        let is_admin = Dream.session_field request "is_admin" = Some "true" in
         let%lwt gate_ok =
           match%lwt Db.get_community_by_id db post.community_id with
           | Ok (Some community) -> can_view_community db ~user_id:viewer_id ~is_admin community
@@ -3343,15 +3462,26 @@ let view_thread_handler request =
               | Ok can -> Lwt.return can
               | Error _ -> Lwt.return false
           in
+          (* Composer gate: the one SQL participation capability POST
+             /comments enforces (origin membership, or membership in a
+             currently readable accepted destination — minus tombstone and
+             every ban). A failed probe hides the composer, never errors. *)
+          let%lwt can_comment =
+            if viewer_id <= 0 then Lwt.return false
+            else
+              match%lwt Shared_thread_reading.viewer_may_comment db ~user_id:viewer_id ~post_id:post.id with
+              | Ok can -> Lwt.return can
+              | Error _ -> Lwt.return false
+          in
           match comments_result, is_member_result with
           | Ok comments, Ok is_member ->
               let is_mod = match is_mod_res with Ok b -> b | _ -> false in
               let mod_usernames = match mods_res with Ok ms -> List.map (fun (u : Db.user) -> u.username) ms | _ -> [] in
-              Dream.html (Pages.thread_shell_page ?user:user_sess ~noindex ~can_share ~is_member ~is_current_user_mod:is_mod
+              Dream.html (Pages.thread_shell_page ?user:user_sess ~noindex ~can_share ~can_comment ~is_member ~is_current_user_mod:is_mod
                 ~mod_usernames ~admin_usernames ~banned_usernames ~rail_communities ~channels ~sections
                 ~community:community_for_page ?thread_source ~user_post_votes ~user_comment_votes ~post ~comments request)
           | _ -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user:user_sess ~title:"Error" ~message:"Failed to load thread data. Please try again later." ~alert_type:"error" ~return_url:("/c/" ^ community_slug) request)
-        end
+        end)
   )
 
 let delete_post_handler request =
@@ -3974,6 +4104,26 @@ let create_comment_handler request =
                 | Ok true ->
                     Dream.respond ~status:`Forbidden (Pages.msg_page ~user:username ~title:"Banned from Community" ~message:"You are banned from commenting in this community." ~alert_type:"error" ~return_url:("/p/" ^ string_of_int post_id) request)
                 | _ ->
+                    (* Shared Threads: the server-side participation rule.
+                       One SQL capability (the same one that gates the
+                       composer) requires a CURRENT path onto the canonical
+                       discussion — origin membership, or membership in an
+                       accepted destination whose placement is currently
+                       readable, with no ban there. This closes the old
+                       gap where a manual POST needed no membership at all:
+                       no hidden field, route, or composer sighting grants
+                       anything — every qualifying community is derived
+                       from the post and its placements. The specific
+                       global-ban / tombstone / origin-ban responses above
+                       keep their exact observable behavior; this gate only
+                       adds the membership requirement after them. Fails
+                       closed on a storage error. *)
+                    (match%lwt Shared_thread_reading.viewer_may_comment db ~user_id ~post_id with
+                    | Error Shared_thread_reading.Storage_error ->
+                        Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ~user:username ~title:"Error" ~message:"Something went wrong on our side. Please try again." ~alert_type:"error" ~return_url:("/p/" ^ string_of_int post_id) request)
+                    | Ok false ->
+                        Dream.respond ~status:`Forbidden (Pages.msg_page ~user:username ~title:"Membership required" ~message:"Only current members of a community this thread belongs to can comment." ~alert_type:"error" ~return_url:("/p/" ^ string_of_int post_id) request)
+                    | Ok true ->
                     (match%lwt Db.create_comment db content post_id user_id parent_id_opt with
                     | Ok comment_id ->
                         (* comment_id is the real inserted id from the step-3
@@ -4014,8 +4164,36 @@ let create_comment_handler request =
                               Lwt.return_unit
                           | _ -> Lwt.return_unit
                         ) (extract_mentions content) in
-                        Dream.redirect request ("/p/" ^ string_of_int post_id)
-                    | Error err -> Dream.html (Pages.msg_page ~user:username ~title:"Error" ~message:("Database error: " ^ err) ~alert_type:"error" ~return_url:("/p/" ^ string_of_int post_id) request)))
+                        (* Redirect: preserve the DESTINATION context when a
+                           destination-context composer posted this comment
+                           AND that context is still readable by this
+                           viewer. The closed context_community field only
+                           names a community — the server re-resolves the
+                           placement and re-authorizes through the
+                           destination's existing access rule, and the
+                           Location is rebuilt from the SERVER-loaded
+                           community record and canonical post, never from
+                           the submitted value. Anything stale, forged, or
+                           unreadable falls back to the existing canonical
+                           /p/:id redirect. *)
+                        let%lwt redirect_target =
+                          match List.assoc_opt "context_community" form_data with
+                          | Some slug when slug <> "" && slug <> post.community_slug -> (
+                              match%lwt Shared_thread_reading.resolve_destination_context db ~post_id ~destination_slug:slug with
+                              | Ok (Some ctx) -> (
+                                  match%lwt Db.get_community_by_id db ctx.Shared_thread_reading.destination_community_id with
+                                  | Ok (Some destination) ->
+                                      let is_admin = Dream.session_field request "is_admin" = Some "true" in
+                                      let%lwt viewable = can_view_community db ~user_id ~is_admin destination in
+                                      if viewable then
+                                        Lwt.return (Components.canonical_thread_path destination.Db.slug post_id post.title)
+                                      else Lwt.return ("/p/" ^ string_of_int post_id)
+                                  | _ -> Lwt.return ("/p/" ^ string_of_int post_id))
+                              | _ -> Lwt.return ("/p/" ^ string_of_int post_id))
+                          | _ -> Lwt.return ("/p/" ^ string_of_int post_id)
+                        in
+                        Dream.redirect request redirect_target
+                    | Error err -> Dream.html (Pages.msg_page ~user:username ~title:"Error" ~message:("Database error: " ^ err) ~alert_type:"error" ~return_url:("/p/" ^ string_of_int post_id) request))))
             | Ok None -> Dream.html (Pages.msg_page ~user:username ~title:"Post Not Found" ~message:"The post you tried to comment on could not be found." ~alert_type:"error" ~return_url:"/" request)
             | Error err -> Dream.html (Pages.msg_page ~user:username ~title:"Error" ~message:("Database error: " ^ err) ~alert_type:"error" ~return_url:"/" request)
           ))

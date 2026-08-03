@@ -14,8 +14,13 @@ val reset_password_page : token:string -> ?error:string -> Dream.request -> stri
     viewer's joined communities for the dark rail, loaded by the handler only
     AFTER the global-admin gate; defaults to [] so pure renders need no DB. *)
 val new_community_form : ?user:string -> ?rail_communities:Db.community list -> Dream.request -> string
-val community_page : ?user:string -> ?noindex:bool -> ?connected_projects:string -> ?connected_communities:string -> is_member:bool -> is_current_user_mod:bool -> is_current_user_top_mod:bool -> mod_usernames:string list -> admin_usernames:string list -> banned_usernames:string list -> user_communities:Db.community list -> moderated_communities:Db.community list -> (int * int) list -> int -> string -> Db.community -> Db.post list -> Dream.request -> string
-val community_section_shell_page : ?user:string -> ?noindex:bool -> ?thread_count:int -> ?last_activity:string -> is_current_user_mod:bool -> mod_usernames:string list -> admin_usernames:string list -> banned_usernames:string list -> rail_communities:Db.community list -> channels:Db.channel list -> sections:Db.community_section list -> section:Db.community_section -> user_votes:(int * int) list -> current_page:int -> sort_mode:string -> community:Db.community -> posts:Db.post list -> Dream.request -> string
+(** The community-scoped feeds now take [Db.feed_item] rows: the community's
+    own posts render byte-identically ([fi_shared = None]), while an accepted
+    shared-thread placement row links into THIS community's thread context
+    and carries its compact "Shared from" provenance and the placement's
+    destination section. *)
+val community_page : ?user:string -> ?noindex:bool -> ?connected_projects:string -> ?connected_communities:string -> is_member:bool -> is_current_user_mod:bool -> is_current_user_top_mod:bool -> mod_usernames:string list -> admin_usernames:string list -> banned_usernames:string list -> user_communities:Db.community list -> moderated_communities:Db.community list -> (int * int) list -> int -> string -> Db.community -> Db.feed_item list -> Dream.request -> string
+val community_section_shell_page : ?user:string -> ?noindex:bool -> ?thread_count:int -> ?last_activity:string -> is_current_user_mod:bool -> mod_usernames:string list -> admin_usernames:string list -> banned_usernames:string list -> rail_communities:Db.community list -> channels:Db.channel list -> sections:Db.community_section list -> section:Db.community_section -> user_votes:(int * int) list -> current_page:int -> sort_mode:string -> community:Db.community -> posts:Db.feed_item list -> Dream.request -> string
 
 (** [/feed] — global Feed surface. [scope] is "following" | "all"; logged-out callers must pass
     [~scope:"all"] [~is_logged_in:false] (no toggle, no personalized feed). [sort_mode] is the
@@ -33,15 +38,42 @@ val community_channel_shell_page : ?user:string -> ?realtime_token:string -> ?no
 type thread_source_view =
   | Ts_private
   | Ts_visible of (string * string) option * Db.thread_source_msg list
+
+(** An accepted DESTINATION-context rendering of a canonical thread, fully
+    resolved and authorized by the handler (accepted placement, destination
+    binding, currently-public origin, viewer admitted by the destination's
+    existing access rule). [stc_section] is the placement's own destination
+    section — the effective local section context; [None] renders the
+    destination's flat/uncategorized context. [stc_origin_name] feeds the
+    visible "Shared from" label (safe to name and link: the context only
+    exists while the origin is public). Nothing else about the placement —
+    actors, notes, ids, lifecycle vocabulary — reaches the page. *)
+type shared_thread_page_context = {
+  stc_origin_name : string;
+  stc_section : (string * string) option;
+}
+
 (** Canonical thread view inside the persistent shell (/c/:slug/t/:post_id-:post_slug).
     Shell-styled comments/composer; mod/admin/ban dialogs preserve post_page behavior verbatim.
-    Preserves the optimistic-vote DOM contract and all comment/vote/mod/delete routes & CSRF. *)
-val thread_shell_page : ?user:string -> ?noindex:bool -> ?can_share:bool -> is_member:bool -> is_current_user_mod:bool -> mod_usernames:string list -> admin_usernames:string list -> banned_usernames:string list -> rail_communities:Db.community list -> channels:Db.channel list -> sections:Db.community_section list -> community:Db.community -> ?thread_source:thread_source_view -> user_post_votes:(int * int) list -> user_comment_votes:(int * int) list -> post:Db.post -> comments:Db.comment list -> Dream.request -> string
+    Preserves the optimistic-vote DOM contract and all comment/vote/mod/delete routes & CSRF.
+    [can_comment] is the handler's one SQL participation capability
+    ({!Shared_thread_reading.viewer_may_comment}) and gates the composer and
+    reply controls — the POST enforces the same rule, so this render gate can
+    never grant what the server refuses. [shared_context] switches the page
+    into a destination-context rendering: destination shell, destination
+    section context, "Shared from" provenance, a hidden server-revalidated
+    [context_community] field on the comment forms — while the canonical
+    [<link rel=canonical>] keeps pointing at the immutable origin URL
+    (callers must also pass [~noindex:true] for destination contexts). The
+    moderator-facing arguments ([is_current_user_mod], [mod_usernames],
+    [banned_usernames]) are ALWAYS the canonical origin community's:
+    destination standing grants no canonical-content controls. *)
+val thread_shell_page : ?user:string -> ?noindex:bool -> ?can_share:bool -> ?can_comment:bool -> ?shared_context:shared_thread_page_context -> is_member:bool -> is_current_user_mod:bool -> mod_usernames:string list -> admin_usernames:string list -> banned_usernames:string list -> rail_communities:Db.community list -> channels:Db.channel list -> sections:Db.community_section list -> community:Db.community -> ?thread_source:thread_source_view -> user_post_votes:(int * int) list -> user_comment_votes:(int * int) list -> post:Db.post -> comments:Db.comment list -> Dream.request -> string
 (** [connected_projects_count] and [connected_communities_count] are how many records the
     two public connected-* read models returned for this community — the sizes of exactly
     the lists [/c/:slug/network] renders. The home carries the compact Network entry point
     only: the lists themselves live on that page, and a zero count still renders its row. *)
-val community_overview_page : ?user:string -> ?noindex:bool -> ?connected_projects_count:int -> ?connected_communities_count:int -> is_member:bool -> is_current_user_mod:bool -> is_current_user_top_mod:bool -> mod_usernames:string list -> orphaned:(int * string option) -> rail_communities:Db.community list -> channels:Db.channel list -> recent_posts:Db.post list -> Db.community -> (Db.community_section * int * string option) list -> Dream.request -> string
+val community_overview_page : ?user:string -> ?noindex:bool -> ?connected_projects_count:int -> ?connected_communities_count:int -> is_member:bool -> is_current_user_mod:bool -> is_current_user_top_mod:bool -> mod_usernames:string list -> orphaned:(int * string option) -> rail_communities:Db.community list -> channels:Db.channel list -> recent_posts:Db.feed_item list -> Db.community -> (Db.community_section * int * string option) list -> Dream.request -> string
 (** [connected_projects] is the pre-rendered "Connected projects" management fragment for the
     top-mod/admin settings surface (empty for every other viewer, which also removes the panel
     and its navigation entry). *)

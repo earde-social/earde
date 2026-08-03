@@ -9602,3 +9602,14 @@ body.launch-message-page .create-shell .phrv-actions .phrv-accept button {
 .launch-community-connections #analytics-consent [data-analytics-error] {
   color: var(--danger); font-size: var(--fs-11);
 }
+
+/* === Shared Threads: destination-context provenance ===
+   The compact "⇄ Shared from <origin>" chip on destination feed rows, the
+   Recent-durable-knowledge rows, and the destination-context thread page.
+   Long origin/thread names must wrap safely, never overflow the row. */
+.sth-shared-from {
+  font-size: var(--fs-11); color: var(--muted);
+  overflow-wrap: anywhere; min-width: 0;
+}
+.sth-shared-from a { color: var(--moss); font-weight: 700; }
+.sth-shared-from a:hover { color: var(--ink); }

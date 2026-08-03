@@ -406,6 +406,38 @@ let post_row_type =
 let map_post_row ((id, title, url, content), (community_id, user_id, username, community_slug), (created_at, score, comment_count, allow_downvotes), (image_url, section_name, section_slug, community_sections_enabled), (author_local_karma, author_local_post_count, author_local_comment_count, author_first_active_at)) =
   { id; title; url; content; community_id; user_id; username; community_slug; created_at; score; comment_count; allow_downvotes; image_url; section_name; section_slug; community_sections_enabled; author_local_karma; author_local_post_count; author_local_comment_count; author_first_active_at }
 
+(* A community-scoped feed row wraps the canonical post rather than extending
+   it: [post] keeps its immutable origin identity (community_slug and the
+   section_* fields are always the origin's), and everything a destination
+   surface must render differently rides in [fi_shared]. One renderer can
+   therefore never read a single field as the origin while another reads it
+   as the destination. [fi_shared = None] is the community's own post, and
+   the row renders byte-identically to the pre-shared-threads feed. *)
+type feed_shared_context = {
+  fs_origin_name : string;
+  fs_section_name : string option;
+  fs_section_slug : string option;
+}
+
+type feed_item = {
+  fi_post : post;
+  fi_shared : feed_shared_context option;
+}
+
+let feed_item_row_type =
+  let open Caqti_type in
+  t2 post_row_type (t4 bool (option string) (option string) (option string))
+
+let map_feed_item_row (post_row, (via_placement, origin_name, ds_name, ds_slug)) =
+  { fi_post = map_post_row post_row;
+    fi_shared =
+      (if via_placement then
+         (* origin_name is a.name on the placement arm and therefore never
+            NULL in practice; the default only guards a corrupt row. *)
+         Some { fs_origin_name = Option.value origin_name ~default:"";
+                fs_section_name = ds_name; fs_section_slug = ds_slug }
+       else None) }
+
 (* 14-column community row: t4(t4, t4, t3, t3) stays within Caqti's per-tuple arity limit.
    visibility and onboarding_state arrive as raw TEXT and decode through their closed variants. *)
 let community_row_type =
@@ -855,75 +887,148 @@ module Post = struct
       | Error err -> Lwt.return (Error (Caqti_error.show err))
     )
 
-  let get_posts_by_community (module C : Caqti_lwt.CONNECTION) community_id (sort_mode : sort_mode) limit offset =
-    (* Same HN gravity formula as get_all_posts; same type-driven injection safety. *)
-    let order_clause = match sort_mode with
-      | Newest -> "ORDER BY p.created_at DESC"
-      | Top    -> "ORDER BY score DESC, p.created_at DESC"
-      | Hot    -> "ORDER BY (COALESCE(SUM(v.direction), 0) + 1.0) / POWER(EXTRACT(EPOCH FROM (NOW() - p.created_at))/3600.0 + 2.0, 1.5) DESC"
-      | Active -> "ORDER BY p.last_activity_at DESC"
-    in
-    let query_str = Printf.sprintf
-      "SELECT p.id, p.title, p.url, p.content, p.community_id, p.user_id, u.username, a.slug, p.created_at::text,
-              COALESCE(SUM(v.direction), 0) as score,
-              (SELECT COUNT(*) FROM comments c WHERE c.post_id = p.id) as comment_count,
-              a.allow_downvotes, p.image_url, cs.name, cs.slug, a.sections_enabled,
-              COALESCE(MAX(cus.local_karma), 0), COALESCE(MAX(cus.local_post_count), 0),
-              COALESCE(MAX(cus.local_comment_count), 0), MAX(cus.first_active_at)::text
-       FROM posts p
+  (* === Destination-aware community feeds (Shared Threads read side) ===
+     Each community-scoped feed is ONE bounded statement: a UNION ALL of the
+     community's own canonical posts and the canonical posts holding an
+     accepted shared-thread placement into it, with the sort mode and
+     LIMIT/OFFSET applied by the outer query to the combined set — never to
+     each arm separately, and never merged in OCaml. The two arms are
+     structurally disjoint (a placement's destination can never equal the
+     post's own community — the schema CHECK), so no canonical post renders
+     twice within one destination.
+
+     The placement arm deliberately requires ONLY: accepted status, the
+     destination binding, and a currently PUBLIC origin community.
+     Connection state, discoverability, and onboarding eligibility gate
+     request and acceptance in the store, not continued rendering —
+     disconnecting does not silently erase an accepted shared discussion,
+     while an origin turning private immediately stops the discussion
+     leaking through its destinations. Destination-side privacy is the
+     route's own can_view_community gate, exactly as for the community's own
+     posts.
+
+     Sort keys (created_at / score / HN hot rank / last_activity_at) are the
+     canonical post's, computed per arm and ordered by the outer query, so a
+     shared row competes in the destination feed exactly as at home. Each
+     arm keeps its own index (posts.community_id; the destination+status
+     placement index) — no unbounded placement scan. *)
+  let feed_sort_clause (sort_mode : sort_mode) = match sort_mode with
+    | Newest -> "ORDER BY f.sort_created DESC"
+    | Top    -> "ORDER BY f.score DESC, f.sort_created DESC"
+    | Hot    -> "ORDER BY f.sort_hot DESC"
+    | Active -> "ORDER BY f.sort_activity DESC"
+
+  (* One arm of a combined feed. The select list is identical in both arms
+     (UNION ALL discipline); only the FROM head, the arm's own WHERE
+     conditions, the shared-context columns, and the GROUP BY tail differ.
+     The post's section_* columns are always the ORIGIN section (cs joins
+     p.section_id) — the destination section travels separately as
+     shared_section_*, so no field means two different communities. *)
+  let feed_arm ~from_head ~where_clause ~shared_cols ~group_by_extra =
+    Printf.sprintf
+      "SELECT p.id AS id, p.title AS title, p.url AS url, p.content AS content,
+              p.community_id AS community_id, p.user_id AS user_id,
+              u.username AS username, a.slug AS community_slug,
+              p.created_at::text AS created_at_text,
+              COALESCE(SUM(v.direction), 0) AS score,
+              (SELECT COUNT(*) FROM comments c WHERE c.post_id = p.id) AS comment_count,
+              a.allow_downvotes AS allow_downvotes, p.image_url AS image_url,
+              cs.name AS section_name, cs.slug AS section_slug,
+              a.sections_enabled AS sections_enabled,
+              COALESCE(MAX(cus.local_karma), 0) AS author_local_karma,
+              COALESCE(MAX(cus.local_post_count), 0) AS author_local_post_count,
+              COALESCE(MAX(cus.local_comment_count), 0) AS author_local_comment_count,
+              MAX(cus.first_active_at)::text AS author_first_active,
+              %s,
+              p.created_at AS sort_created, p.last_activity_at AS sort_activity,
+              (COALESCE(SUM(v.direction), 0) + 1.0) / POWER(EXTRACT(EPOCH FROM (NOW() - p.created_at))/3600.0 + 2.0, 1.5) AS sort_hot
+       FROM %s
        JOIN users u ON p.user_id = u.id
        JOIN communities a ON p.community_id = a.id
        LEFT JOIN post_votes v ON p.id = v.post_id
        LEFT JOIN community_sections cs ON cs.id = p.section_id
        LEFT JOIN community_user_stats cus ON cus.user_id = p.user_id AND cus.community_id = p.community_id
-       WHERE p.community_id = $1
-       GROUP BY p.id, u.username, a.slug, a.allow_downvotes, cs.name, cs.slug, a.sections_enabled
+       WHERE %s
+       GROUP BY p.id, u.username, a.slug, a.allow_downvotes, cs.name, cs.slug, a.sections_enabled%s"
+      shared_cols from_head where_clause group_by_extra
+
+  let own_arm ~where_clause =
+    feed_arm ~from_head:"posts p" ~where_clause
+      ~shared_cols:
+        "FALSE AS via_placement, NULL::text AS shared_origin_name,
+         NULL::text AS shared_section_name, NULL::text AS shared_section_slug"
+      ~group_by_extra:""
+
+  let placement_arm ~where_clause =
+    feed_arm
+      ~from_head:
+        "shared_thread_placements stp
+         JOIN posts p ON p.id = stp.post_id
+         LEFT JOIN community_sections ds ON ds.id = stp.destination_section_id"
+      ~where_clause:
+        ("stp.status = 'accepted' AND a.visibility = 'public' AND " ^ where_clause)
+      ~shared_cols:
+        "TRUE AS via_placement, a.name AS shared_origin_name,
+         ds.name AS shared_section_name, ds.slug AS shared_section_slug"
+      ~group_by_extra:", a.name, ds.name, ds.slug"
+
+  let combined_feed_query_str ~own_where ~placement_where ~limit_param
+      ~offset_param sort_mode =
+    Printf.sprintf
+      "SELECT id, title, url, content, community_id, user_id, username, community_slug,
+              created_at_text, score, comment_count, allow_downvotes, image_url,
+              section_name, section_slug, sections_enabled,
+              author_local_karma, author_local_post_count, author_local_comment_count,
+              author_first_active, via_placement, shared_origin_name,
+              shared_section_name, shared_section_slug
+       FROM (%s
+             UNION ALL
+             %s) f
        %s
-       LIMIT $2 OFFSET $3" order_clause
+       LIMIT %s OFFSET %s"
+      (own_arm ~where_clause:own_where)
+      (placement_arm ~where_clause:placement_where)
+      (feed_sort_clause sort_mode) limit_param offset_param
+
+  let get_posts_by_community (module C : Caqti_lwt.CONNECTION) community_id (sort_mode : sort_mode) limit offset =
+    (* Same HN gravity formula as get_all_posts; the sort_mode variant keeps
+       every dynamic fragment a hardcoded literal (type-driven injection
+       safety). *)
+    let query_str =
+      combined_feed_query_str
+        ~own_where:"p.community_id = $1"
+        ~placement_where:"stp.destination_community_id = $1"
+        ~limit_param:"$2" ~offset_param:"$3" sort_mode
     in
     let query =
       let open Caqti_request.Infix in
-      (Caqti_type.(t3 int int int) ->* post_row_type) query_str
+      (Caqti_type.(t3 int int int) ->* feed_item_row_type) query_str
     in
     C.collect_list query (community_id, limit, offset)
     >>= function
-    | Ok rows -> Lwt.return (Ok (List.map map_post_row rows))
+    | Ok rows -> Lwt.return (Ok (List.map map_feed_item_row rows))
     | Error err -> Lwt.return (Error (Caqti_error.show err))
 
-  (* Section feed: same HN gravity as get_posts_by_community but scoped to one section.
-     section_id FK enforces community ownership in SQL — no extra join needed. *)
+  (* Section feed: the community's own posts in the section, plus canonical
+     posts whose accepted placement was accepted INTO this destination
+     section. section_id FK enforces community ownership of the own arm in
+     SQL; the placement arm binds both the destination community and the
+     destination section explicitly. *)
   let get_posts_by_section (module C : Caqti_lwt.CONNECTION) community_id section_id (sort_mode : sort_mode) limit offset =
-    let order_clause = match sort_mode with
-      | Newest -> "ORDER BY p.created_at DESC"
-      | Top    -> "ORDER BY score DESC, p.created_at DESC"
-      | Hot    -> "ORDER BY (COALESCE(SUM(v.direction), 0) + 1.0) / POWER(EXTRACT(EPOCH FROM (NOW() - p.created_at))/3600.0 + 2.0, 1.5) DESC"
-      | Active -> "ORDER BY p.last_activity_at DESC"
-    in
-    let query_str = Printf.sprintf
-      "SELECT p.id, p.title, p.url, p.content, p.community_id, p.user_id, u.username, a.slug, p.created_at::text,
-              COALESCE(SUM(v.direction), 0) as score,
-              (SELECT COUNT(*) FROM comments c WHERE c.post_id = p.id) as comment_count,
-              a.allow_downvotes, p.image_url, cs.name, cs.slug, a.sections_enabled,
-              COALESCE(MAX(cus.local_karma), 0), COALESCE(MAX(cus.local_post_count), 0),
-              COALESCE(MAX(cus.local_comment_count), 0), MAX(cus.first_active_at)::text
-       FROM posts p
-       JOIN users u ON p.user_id = u.id
-       JOIN communities a ON p.community_id = a.id
-       LEFT JOIN post_votes v ON p.id = v.post_id
-       LEFT JOIN community_sections cs ON cs.id = p.section_id
-       LEFT JOIN community_user_stats cus ON cus.user_id = p.user_id AND cus.community_id = p.community_id
-       WHERE p.community_id = $1 AND p.section_id = $2
-       GROUP BY p.id, u.username, a.slug, a.allow_downvotes, cs.name, cs.slug, a.sections_enabled
-       %s
-       LIMIT $3 OFFSET $4" order_clause
+    let query_str =
+      combined_feed_query_str
+        ~own_where:"p.community_id = $1 AND p.section_id = $2"
+        ~placement_where:
+          "stp.destination_community_id = $1 AND stp.destination_section_id = $2"
+        ~limit_param:"$3" ~offset_param:"$4" sort_mode
     in
     let query =
       let open Caqti_request.Infix in
-      (Caqti_type.(t4 int int int int) ->* post_row_type) query_str
+      (Caqti_type.(t4 int int int int) ->* feed_item_row_type) query_str
     in
     C.collect_list query (community_id, section_id, limit, offset)
     >>= function
-    | Ok rows -> Lwt.return (Ok (List.map map_post_row rows))
+    | Ok rows -> Lwt.return (Ok (List.map map_feed_item_row rows))
     | Error err -> Lwt.return (Error (Caqti_error.show err))
 
   let get_posts_by_user_query =
@@ -1449,17 +1554,37 @@ module Section = struct
   let map_stats_row ((section_id, community_id, name, slug), (description, position, default_sort, is_introduction_section), (indexable, post_count, last_activity)) =
     ({ section_id; community_id; name; slug; description; position; default_sort; is_introduction_section; indexable }, post_count, last_activity)
 
+  (* Section statistics count what the section feed renders: the section's
+     own posts plus accepted shared-thread placements into it (public origin
+     only — a private origin's placements vanish from the feed, so they must
+     vanish from the counts too). Scalar subqueries per section row replace
+     the old single LEFT JOIN because the two sources would cross-multiply
+     under one GROUP BY; the statement count is unchanged (one per page).
+     GREATEST ignores NULL arms, so an empty side never masks the other. *)
   let get_stats_query =
     let open Caqti_request.Infix in
     (Caqti_type.int ->* stats_row_type)
     "SELECT cs.id, cs.community_id, cs.name, cs.slug, cs.description, cs.position, cs.default_sort, cs.is_introduction_section,
             cs.indexable,
-            COUNT(p.id)::int AS post_count,
-            MAX(p.last_activity_at)::text AS last_activity
+            ((SELECT COUNT(*) FROM posts p WHERE p.section_id = cs.id)
+             + (SELECT COUNT(*) FROM shared_thread_placements stp
+                  JOIN communities oc ON oc.id = stp.origin_community_id
+                 WHERE stp.destination_section_id = cs.id
+                   AND stp.destination_community_id = cs.community_id
+                   AND stp.status = 'accepted'
+                   AND oc.visibility = 'public'))::int AS post_count,
+            GREATEST(
+              (SELECT MAX(p.last_activity_at) FROM posts p WHERE p.section_id = cs.id),
+              (SELECT MAX(sp.last_activity_at)
+                 FROM shared_thread_placements stp
+                 JOIN posts sp ON sp.id = stp.post_id
+                 JOIN communities oc ON oc.id = stp.origin_community_id
+                WHERE stp.destination_section_id = cs.id
+                  AND stp.destination_community_id = cs.community_id
+                  AND stp.status = 'accepted'
+                  AND oc.visibility = 'public'))::text AS last_activity
      FROM community_sections cs
-     LEFT JOIN posts p ON p.section_id = cs.id
      WHERE cs.community_id = $1
-     GROUP BY cs.id
      ORDER BY cs.is_introduction_section DESC, cs.position ASC, cs.name ASC"
 
   let get_sections_with_stats (module C : Caqti_lwt.CONNECTION) community_id =
@@ -1468,49 +1593,58 @@ module Section = struct
     | Ok rows -> Lwt.return (Ok (List.map map_stats_row rows))
     | Error err -> Lwt.return (Error (Caqti_error.show err))
 
-  (* Orphaned posts: section_id IS NULL in a structured community, left behind by deleted sections.
-     NULL::text casts avoid a pointless LEFT JOIN since section_id IS NULL always. *)
+  (* Orphaned/uncategorized statistics: the community's own sectionless posts
+     plus accepted NULL-section placements (public origin only), matching
+     get_orphaned_posts row for row — the count also gates the virtual
+     Uncategorized page's 404. *)
   let orphaned_count_query =
     let open Caqti_request.Infix in
     (Caqti_type.int ->! Caqti_type.(t2 int (option string)))
-    "SELECT COUNT(p.id)::int, MAX(p.last_activity_at)::text FROM posts p WHERE p.community_id = $1 AND p.section_id IS NULL"
+    "SELECT ((SELECT COUNT(*) FROM posts p WHERE p.community_id = $1 AND p.section_id IS NULL)
+             + (SELECT COUNT(*) FROM shared_thread_placements stp
+                  JOIN communities oc ON oc.id = stp.origin_community_id
+                 WHERE stp.destination_community_id = $1
+                   AND stp.destination_section_id IS NULL
+                   AND stp.status = 'accepted'
+                   AND oc.visibility = 'public'))::int,
+            GREATEST(
+              (SELECT MAX(p.last_activity_at) FROM posts p WHERE p.community_id = $1 AND p.section_id IS NULL),
+              (SELECT MAX(sp.last_activity_at)
+                 FROM shared_thread_placements stp
+                 JOIN posts sp ON sp.id = stp.post_id
+                 JOIN communities oc ON oc.id = stp.origin_community_id
+                WHERE stp.destination_community_id = $1
+                  AND stp.destination_section_id IS NULL
+                  AND stp.status = 'accepted'
+                  AND oc.visibility = 'public'))::text"
 
   let get_orphaned_count_and_activity (module C : Caqti_lwt.CONNECTION) community_id =
     C.find orphaned_count_query community_id >>= function
     | Ok (count, last_activity) -> Lwt.return (Ok (count, last_activity))
     | Error err -> Lwt.return (Error (Caqti_error.show err))
 
+  (* Uncategorized/orphaned feed: the community's own sectionless posts, plus
+     accepted placements whose destination_section_id IS NULL — sectionless
+     (flat) destinations and placements released by a destination-section
+     deletion (ON DELETE SET NULL) alike. Shares Post.combined_feed_query_str
+     so ordering, pagination, and the placement arm's public-origin rule are
+     the one copy. The own arm's origin-section columns come back NULL
+     naturally (p.section_id IS NULL), matching the old NULL::text shape. *)
   let get_orphaned_posts (module C : Caqti_lwt.CONNECTION) community_id (sort_mode : sort_mode) limit offset =
-    let order_clause = match sort_mode with
-      | Newest -> "ORDER BY p.created_at DESC"
-      | Top    -> "ORDER BY score DESC, p.created_at DESC"
-      | Hot    -> "ORDER BY (COALESCE(SUM(v.direction), 0) + 1.0) / POWER(EXTRACT(EPOCH FROM (NOW() - p.created_at))/3600.0 + 2.0, 1.5) DESC"
-      | Active -> "ORDER BY p.last_activity_at DESC"
-    in
-    let query_str = Printf.sprintf
-      "SELECT p.id, p.title, p.url, p.content, p.community_id, p.user_id, u.username, a.slug, p.created_at::text,
-              COALESCE(SUM(v.direction), 0) as score,
-              (SELECT COUNT(*) FROM comments c WHERE c.post_id = p.id) as comment_count,
-              a.allow_downvotes, p.image_url, NULL::text AS section_name, NULL::text AS section_slug, a.sections_enabled,
-              COALESCE(MAX(cus.local_karma), 0), COALESCE(MAX(cus.local_post_count), 0),
-              COALESCE(MAX(cus.local_comment_count), 0), MAX(cus.first_active_at)::text
-       FROM posts p
-       JOIN users u ON p.user_id = u.id
-       JOIN communities a ON p.community_id = a.id
-       LEFT JOIN post_votes v ON p.id = v.post_id
-       LEFT JOIN community_user_stats cus ON cus.user_id = p.user_id AND cus.community_id = p.community_id
-       WHERE p.community_id = $1 AND p.section_id IS NULL
-       GROUP BY p.id, u.username, a.slug, a.allow_downvotes, a.sections_enabled
-       %s
-       LIMIT $2 OFFSET $3" order_clause
+    let query_str =
+      Post.combined_feed_query_str
+        ~own_where:"p.community_id = $1 AND p.section_id IS NULL"
+        ~placement_where:
+          "stp.destination_community_id = $1 AND stp.destination_section_id IS NULL"
+        ~limit_param:"$2" ~offset_param:"$3" sort_mode
     in
     let query =
       let open Caqti_request.Infix in
-      (Caqti_type.(t3 int int int) ->* post_row_type) query_str
+      (Caqti_type.(t3 int int int) ->* feed_item_row_type) query_str
     in
     C.collect_list query (community_id, limit, offset)
     >>= function
-    | Ok rows -> Lwt.return (Ok (List.map map_post_row rows))
+    | Ok rows -> Lwt.return (Ok (List.map map_feed_item_row rows))
     | Error err -> Lwt.return (Error (Caqti_error.show err))
 end
 
