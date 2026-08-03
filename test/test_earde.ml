@@ -50471,6 +50471,176 @@ module Phnt = struct
          ON notifications (connection_id) WHERE connection_id IS NOT NULL"
       ]
 
+  (* The shared-thread placement migration sits on top of the
+     community-connection one and replaces the shape CHECK again, so the
+     stack now unwinds through its notification statements first and
+     restores them last. Byte-for-byte that migration's notifications
+     portion. *)
+  let q_latest_down_statements =
+    List.map ddl
+      [ "DELETE FROM notifications \
+         WHERE notif_type IN ('shared_thread_requested', \
+                              'shared_thread_accepted', \
+                              'shared_thread_rejected', \
+                              'shared_thread_removed', \
+                              'shared_thread_withdrawn')"
+      ; "DROP INDEX idx_notifications_shared_thread_placement"
+      ; "DROP INDEX uq_notifications_recipient_kind_placement"
+      ; "ALTER TABLE notifications DROP CONSTRAINT notifications_shape_check"
+      ; "ALTER TABLE notifications \
+         ADD CONSTRAINT notifications_shape_check CHECK ( \
+           (notif_type IN ('project_home_requested', \
+                           'project_home_accepted', \
+                           'project_home_rejected', \
+                           'project_home_removed') \
+             AND project_id IS NOT NULL \
+             AND community_id IS NOT NULL \
+             AND relation_id IS NOT NULL \
+             AND connection_id IS NULL \
+             AND message IS NULL \
+             AND post_id IS NULL) \
+           OR \
+           (notif_type IN ('community_connection_requested', \
+                           'community_connection_accepted', \
+                           'community_connection_rejected', \
+                           'community_connection_removed') \
+             AND community_id IS NOT NULL \
+             AND connection_id IS NOT NULL \
+             AND project_id IS NULL \
+             AND relation_id IS NULL \
+             AND message IS NULL \
+             AND post_id IS NULL) \
+           OR \
+           (notif_type NOT IN ('project_home_requested', \
+                               'project_home_accepted', \
+                               'project_home_rejected', \
+                               'project_home_removed', \
+                               'community_connection_requested', \
+                               'community_connection_accepted', \
+                               'community_connection_rejected', \
+                               'community_connection_removed') \
+             AND project_id IS NULL \
+             AND community_id IS NULL \
+             AND relation_id IS NULL \
+             AND connection_id IS NULL \
+             AND actor_user_id IS NULL \
+             AND message IS NOT NULL) \
+         )"
+      ; "ALTER TABLE notifications \
+         DROP CONSTRAINT notifications_notif_type_check"
+      ; "ALTER TABLE notifications \
+         ADD CONSTRAINT notifications_notif_type_check CHECK ( \
+           notif_type IN ('comment_reply', \
+                          'mention', \
+                          'mod_action', \
+                          'project_home_requested', \
+                          'project_home_accepted', \
+                          'project_home_rejected', \
+                          'project_home_removed', \
+                          'community_connection_requested', \
+                          'community_connection_accepted', \
+                          'community_connection_rejected', \
+                          'community_connection_removed') \
+         )"
+      ; "ALTER TABLE notifications DROP COLUMN shared_thread_placement_id"
+      ]
+
+  let q_latest_up_statements =
+    List.map ddl
+      [ "ALTER TABLE notifications \
+         ADD COLUMN shared_thread_placement_id BIGINT \
+           CONSTRAINT notifications_shared_thread_placement_id_fkey \
+           REFERENCES shared_thread_placements(id) ON DELETE CASCADE"
+      ; "ALTER TABLE notifications \
+         DROP CONSTRAINT notifications_notif_type_check"
+      ; "ALTER TABLE notifications \
+         ADD CONSTRAINT notifications_notif_type_check CHECK ( \
+           notif_type IN ('comment_reply', \
+                          'mention', \
+                          'mod_action', \
+                          'project_home_requested', \
+                          'project_home_accepted', \
+                          'project_home_rejected', \
+                          'project_home_removed', \
+                          'community_connection_requested', \
+                          'community_connection_accepted', \
+                          'community_connection_rejected', \
+                          'community_connection_removed', \
+                          'shared_thread_requested', \
+                          'shared_thread_accepted', \
+                          'shared_thread_rejected', \
+                          'shared_thread_removed', \
+                          'shared_thread_withdrawn') \
+         )"
+      ; "ALTER TABLE notifications DROP CONSTRAINT notifications_shape_check"
+      ; "ALTER TABLE notifications \
+         ADD CONSTRAINT notifications_shape_check CHECK ( \
+           (notif_type IN ('project_home_requested', \
+                           'project_home_accepted', \
+                           'project_home_rejected', \
+                           'project_home_removed') \
+             AND project_id IS NOT NULL \
+             AND community_id IS NOT NULL \
+             AND relation_id IS NOT NULL \
+             AND connection_id IS NULL \
+             AND shared_thread_placement_id IS NULL \
+             AND message IS NULL \
+             AND post_id IS NULL) \
+           OR \
+           (notif_type IN ('community_connection_requested', \
+                           'community_connection_accepted', \
+                           'community_connection_rejected', \
+                           'community_connection_removed') \
+             AND community_id IS NOT NULL \
+             AND connection_id IS NOT NULL \
+             AND project_id IS NULL \
+             AND relation_id IS NULL \
+             AND shared_thread_placement_id IS NULL \
+             AND message IS NULL \
+             AND post_id IS NULL) \
+           OR \
+           (notif_type IN ('shared_thread_requested', \
+                           'shared_thread_accepted', \
+                           'shared_thread_rejected', \
+                           'shared_thread_removed', \
+                           'shared_thread_withdrawn') \
+             AND community_id IS NOT NULL \
+             AND shared_thread_placement_id IS NOT NULL \
+             AND project_id IS NULL \
+             AND relation_id IS NULL \
+             AND connection_id IS NULL \
+             AND message IS NULL \
+             AND post_id IS NULL) \
+           OR \
+           (notif_type NOT IN ('project_home_requested', \
+                               'project_home_accepted', \
+                               'project_home_rejected', \
+                               'project_home_removed', \
+                               'community_connection_requested', \
+                               'community_connection_accepted', \
+                               'community_connection_rejected', \
+                               'community_connection_removed', \
+                               'shared_thread_requested', \
+                               'shared_thread_accepted', \
+                               'shared_thread_rejected', \
+                               'shared_thread_removed', \
+                               'shared_thread_withdrawn') \
+             AND project_id IS NULL \
+             AND community_id IS NULL \
+             AND relation_id IS NULL \
+             AND connection_id IS NULL \
+             AND shared_thread_placement_id IS NULL \
+             AND actor_user_id IS NULL \
+             AND message IS NOT NULL) \
+         )"
+      ; "CREATE UNIQUE INDEX uq_notifications_recipient_kind_placement \
+         ON notifications (user_id, notif_type, shared_thread_placement_id) \
+         WHERE shared_thread_placement_id IS NOT NULL"
+      ; "CREATE INDEX idx_notifications_shared_thread_placement \
+         ON notifications (shared_thread_placement_id) \
+         WHERE shared_thread_placement_id IS NOT NULL"
+      ]
+
   (* === failure injection (installed and dropped per case) === *)
 
   let q_create_fail_fn =
@@ -50821,10 +50991,11 @@ module Phnt = struct
           "constraints present and validated"
           (* This case pins the whole notifications table, not just the
              columns this migration added, so the later
-             community-connection migration's own column, constraint, and
-             indexes are part of the expected shape. The single shape CHECK
-             is now named for what it enforces — all three row shapes — and
-             the project-home branch inside it is unchanged. *)
+             community-connection and shared-thread-placement migrations'
+             own columns, constraints, and indexes are part of the
+             expected shape. The single shape CHECK is now named for what
+             it enforces — all four row shapes — and the project-home
+             branch inside it is unchanged. *)
           [ ("notifications_actor_user_id_fkey", "f", true);
             ("notifications_community_id_fkey", "f", true);
             ("notifications_connection_id_fkey", "f", true);
@@ -50834,6 +51005,7 @@ module Phnt = struct
             ("notifications_project_id_fkey", "f", true);
             ("notifications_relation_id_fkey", "f", true);
             ("notifications_shape_check", "c", true);
+            ("notifications_shared_thread_placement_id_fkey", "f", true);
             ("notifications_user_id_fkey", "f", true)
           ]
           rows;
@@ -50846,12 +51018,13 @@ module Phnt = struct
             ("notifications_post_id_fkey", "c");
             ("notifications_project_id_fkey", "c");
             ("notifications_relation_id_fkey", "c");
+            ("notifications_shared_thread_placement_id_fkey", "c");
             ("notifications_user_id_fkey", "c")
           ]
           deltypes;
         let* defs = collect conn "index defs" q_indexdefs () in
         Alcotest.(check (list string))
-          "exactly the two dedup indexes, the five FK indexes, and the \
+          "exactly the three dedup indexes, the six FK indexes, and the \
            primary key"
           [ "CREATE INDEX idx_notifications_actor ON public.notifications \
              USING btree (actor_user_id) WHERE (actor_user_id IS NOT NULL)"
@@ -50866,12 +51039,19 @@ module Phnt = struct
           ; "CREATE INDEX idx_notifications_relation ON \
              public.notifications USING btree (relation_id) WHERE \
              (relation_id IS NOT NULL)"
+          ; "CREATE INDEX idx_notifications_shared_thread_placement ON \
+             public.notifications USING btree (shared_thread_placement_id) \
+             WHERE (shared_thread_placement_id IS NOT NULL)"
           ; "CREATE UNIQUE INDEX notifications_pkey ON public.notifications \
              USING btree (id)"
           ; "CREATE UNIQUE INDEX \
              uq_notifications_recipient_kind_connection ON \
              public.notifications USING btree (user_id, notif_type, \
              connection_id) WHERE (connection_id IS NOT NULL)"
+          ; "CREATE UNIQUE INDEX uq_notifications_recipient_kind_placement \
+             ON public.notifications USING btree (user_id, notif_type, \
+             shared_thread_placement_id) WHERE (shared_thread_placement_id \
+             IS NOT NULL)"
           ; "CREATE UNIQUE INDEX uq_notifications_recipient_kind_relation \
              ON public.notifications USING btree (user_id, notif_type, \
              relation_id) WHERE (relation_id IS NOT NULL)"
@@ -50902,8 +51082,13 @@ module Phnt = struct
         let* () =
           Lwt.finalize
             (fun () ->
-              (* Unwind in reverse migration order: the later
-                 community-connection migration first, then this one. *)
+              (* Unwind in reverse migration order: the latest
+                 shared-thread-placement migration first, then the
+                 community-connection one, then this one. *)
+              let* () =
+                Lwt_list.iter_s (fun q -> exec conn "latest down" q ())
+                  q_latest_down_statements
+              in
               let* () =
                 Lwt_list.iter_s (fun q -> exec conn "later down" q ())
                   q_later_down_statements
@@ -50923,9 +51108,13 @@ module Phnt = struct
                 Lwt_list.iter_s (fun q -> exec conn "later up" q ())
                   q_later_up_statements
               in
+              let* () =
+                Lwt_list.iter_s (fun q -> exec conn "latest up" q ())
+                  q_latest_up_statements
+              in
               let* rows = collect conn "constraints" q_constraints () in
               Alcotest.(check int)
-                "up restores all ten constraints" 10 (List.length rows);
+                "up restores all eleven constraints" 11 (List.length rows);
               Lwt.return_unit)
             (fun () ->
               let* _ = C.rollback () in
@@ -64156,6 +64345,2373 @@ module Comm_network_page = struct
     ; vocabulary_case ]
 end
 
+(* ===================== shared threads, slice 1 =====================
+   The shared-thread placement storage/domain foundation: the pure
+   placement lifecycle domain, the placement and audit tables'
+   constraints, and the transactional store with its append-only audit
+   trail and structured notifications. Pure cases first, then the
+   database-gated ones. Fixtures live in the stp-% slug / stp_% username
+   namespace so cleanup is targeted and idempotent; no external-id range
+   is needed because no GitHub fixtures take part. *)
+
+(* The pure domain: closed status vocabulary, the four legal transitions
+   and every illegal one, note canonicalization, the same-community rule,
+   the tombstone rule, and the accessors. DB-free. *)
+module Stpd = struct
+  module P = Earde.Shared_thread_placements
+
+  let error_str : P.error -> string = function
+    | P.Invalid_post_id -> "Invalid_post_id"
+    | P.Invalid_community_id -> "Invalid_community_id"
+    | P.Same_community -> "Same_community"
+    | P.Invalid_request_note -> "Invalid_request_note"
+    | P.Invalid_transition -> "Invalid_transition"
+
+  let status_str = P.string_of_status
+
+  let make ?note ?(post = 7) ?(origin = 11) ?(destination = 22) () =
+    P.create_pending ~post_id:post ~origin_community_id:origin
+      ~destination_community_id:destination ~request_note:note
+
+  let ok label = function
+    | Ok v -> v
+    | Error e -> Alcotest.failf "%s: unexpected %s" label (error_str e)
+
+  let pending ?note () = ok "pending fixture" (make ?note ())
+
+  let all_statuses =
+    [ P.Pending; P.Accepted; P.Rejected; P.Removed; P.Withdrawn ]
+
+  let all_actions = [ P.Accept; P.Reject; P.Withdraw; P.Remove ]
+
+  let action_str = function
+    | P.Accept -> "accept"
+    | P.Reject -> "reject"
+    | P.Withdraw -> "withdraw"
+    | P.Remove -> "remove"
+
+  let value_of_status = function
+    | P.Pending -> pending ()
+    | P.Accepted -> ok "accept" (P.apply (pending ()) P.Accept)
+    | P.Rejected -> ok "reject" (P.apply (pending ()) P.Reject)
+    | P.Withdrawn -> ok "withdraw" (P.apply (pending ()) P.Withdraw)
+    | P.Removed ->
+        ok "remove"
+          (P.apply (ok "accept" (P.apply (pending ()) P.Accept)) P.Remove)
+
+  let status_round_trip_case =
+    Alcotest.test_case "status: exact database spellings round-trip" `Quick
+      (fun () ->
+        Alcotest.(check (list string))
+          "serialized vocabulary"
+          [ "pending"; "accepted"; "rejected"; "removed"; "withdrawn" ]
+          (List.map status_str all_statuses);
+        List.iter
+          (fun s ->
+            match P.status_of_string (status_str s) with
+            | Some parsed ->
+                Alcotest.(check string)
+                  ("round-trip " ^ status_str s)
+                  (status_str s) (status_str parsed)
+            | None ->
+                Alcotest.failf "round-trip %s: rejected its own spelling"
+                  (status_str s))
+          all_statuses)
+
+  let unknown_status_case =
+    Alcotest.test_case "status: unknown database strings fail closed" `Quick
+      (fun () ->
+        List.iter
+          (fun raw ->
+            match P.status_of_string raw with
+            | None -> ()
+            | Some s ->
+                Alcotest.failf "decoded %S as %s" raw (status_str s))
+          [ "Pending"; "PENDING"; "active"; "cancelled"; "withdraw"
+          ; "deleted"; " pending"; "pending "; "" ])
+
+  let transition_matrix_case =
+    Alcotest.test_case
+      "lifecycle: exactly four transitions are legal, all others refuse"
+      `Quick (fun () ->
+        let legal = function
+          | P.Pending, P.Accept -> Some P.Accepted
+          | P.Pending, P.Reject -> Some P.Rejected
+          | P.Pending, P.Withdraw -> Some P.Withdrawn
+          | P.Accepted, P.Remove -> Some P.Removed
+          | _ -> None
+        in
+        List.iter
+          (fun status ->
+            List.iter
+              (fun action ->
+                let value = value_of_status status in
+                let label =
+                  Printf.sprintf "%s + %s" (status_str status)
+                    (action_str action)
+                in
+                match (P.apply value action, legal (status, action)) with
+                | Ok next, Some expected ->
+                    Alcotest.(check string)
+                      label (status_str expected)
+                      (status_str (P.status next))
+                | Error P.Invalid_transition, None -> ()
+                | Ok next, None ->
+                    Alcotest.failf "%s: unexpectedly reached %s" label
+                      (status_str (P.status next))
+                | Error e, Some _ ->
+                    Alcotest.failf "%s: unexpected %s" label (error_str e)
+                | Error e, None ->
+                    Alcotest.failf "%s: wrong error %s" label (error_str e))
+              all_actions)
+          all_statuses)
+
+  let withdrawn_distinct_case =
+    Alcotest.test_case
+      "lifecycle: withdrawn is a distinct terminal, never removed" `Quick
+      (fun () ->
+        let withdrawn = value_of_status P.Withdrawn in
+        Alcotest.(check string)
+          "spelling" "withdrawn"
+          (status_str (P.status withdrawn));
+        Alcotest.(check bool)
+          "distinct from removed" false
+          (status_str (P.status withdrawn)
+          = status_str (P.status (value_of_status P.Removed)));
+        (* A pending value cannot be removed, and a withdrawn one cannot be
+           reviewed or removed. *)
+        (match P.apply (pending ()) P.Remove with
+        | Error P.Invalid_transition -> ()
+        | Ok _ -> Alcotest.fail "pending + remove was allowed"
+        | Error e -> Alcotest.failf "pending + remove: %s" (error_str e));
+        List.iter
+          (fun action ->
+            match P.apply withdrawn action with
+            | Error P.Invalid_transition -> ()
+            | Ok _ ->
+                Alcotest.failf "withdrawn + %s was allowed"
+                  (action_str action)
+            | Error e ->
+                Alcotest.failf "withdrawn + %s: %s" (action_str action)
+                  (error_str e))
+          all_actions)
+
+  let create_errors_case =
+    Alcotest.test_case "create: id validation and the same-community rule"
+      `Quick (fun () ->
+        let expect label expected result =
+          match result with
+          | Ok _ -> Alcotest.failf "%s: unexpectedly accepted" label
+          | Error e ->
+              Alcotest.(check string) label (error_str expected)
+                (error_str e)
+        in
+        expect "zero post" P.Invalid_post_id (make ~post:0 ());
+        expect "negative post" P.Invalid_post_id (make ~post:(-3) ());
+        expect "zero origin" P.Invalid_community_id (make ~origin:0 ());
+        expect "zero destination" P.Invalid_community_id
+          (make ~destination:0 ());
+        expect "same community" P.Same_community
+          (make ~origin:9 ~destination:9 ());
+        let v = pending () in
+        Alcotest.(check int) "post accessor" 7 (P.post_id v);
+        Alcotest.(check int) "origin accessor" 11 (P.origin_community_id v);
+        Alcotest.(check int) "destination accessor" 22
+          (P.destination_community_id v);
+        Alcotest.(check bool) "involves origin" true
+          (P.involves v ~community_id:11);
+        Alcotest.(check bool) "involves destination" true
+          (P.involves v ~community_id:22);
+        Alcotest.(check bool) "involves stranger" false
+          (P.involves v ~community_id:33))
+
+  let note_canonicalization_case =
+    Alcotest.test_case "note: canonicalization and blank collapse" `Quick
+      (fun () ->
+        let note_of result =
+          P.request_note (ok "note fixture" result)
+        in
+        Alcotest.(check (option string))
+          "absent stays absent" None
+          (note_of (make ()));
+        Alcotest.(check (option string))
+          "blank collapses" None
+          (note_of (make ~note:"  \r\n\t " ()));
+        Alcotest.(check (option string))
+          "CRLF and trim" (Some "please\nshare")
+          (note_of (make ~note:"  please\r\nshare\r " ()));
+        Alcotest.(check (option string))
+          "tabs survive" (Some "a\tb")
+          (note_of (make ~note:"a\tb" ())))
+
+  let note_limit_case =
+    Alcotest.test_case "note: the 2000-scalar cap counts scalars, not bytes"
+      `Quick (fun () ->
+        let ascii_max = String.make 2000 'a' in
+        (match make ~note:ascii_max () with
+        | Ok v ->
+            Alcotest.(check (option string))
+              "2000 ASCII fits" (Some ascii_max) (P.request_note v)
+        | Error e -> Alcotest.failf "2000 ASCII: %s" (error_str e));
+        (match make ~note:(String.make 2001 'a') () with
+        | Error P.Invalid_request_note -> ()
+        | Ok _ -> Alcotest.fail "2001 ASCII was accepted"
+        | Error e -> Alcotest.failf "2001 ASCII: %s" (error_str e));
+        let two_byte = String.concat "" (List.init 2000 (fun _ -> "\xc3\xa9")) in
+        (match make ~note:two_byte () with
+        | Ok _ -> ()
+        | Error e -> Alcotest.failf "2000 two-byte scalars: %s" (error_str e));
+        (match make ~note:(two_byte ^ "\xc3\xa9") () with
+        | Error P.Invalid_request_note -> ()
+        | Ok _ -> Alcotest.fail "2001 scalars were accepted"
+        | Error e -> Alcotest.failf "2001 scalars: %s" (error_str e));
+        (match make ~note:"nul\x00byte" () with
+        | Error P.Invalid_request_note -> ()
+        | Ok _ -> Alcotest.fail "a NUL byte was accepted"
+        | Error e -> Alcotest.failf "NUL byte: %s" (error_str e));
+        match make ~note:"broken \xff utf8" () with
+        | Error P.Invalid_request_note -> ()
+        | Ok _ -> Alcotest.fail "invalid UTF-8 was accepted"
+        | Error e -> Alcotest.failf "invalid UTF-8: %s" (error_str e))
+
+  let tombstone_case =
+    Alcotest.test_case
+      "tombstone: exactly the three deletion labels, and nothing else"
+      `Quick (fun () ->
+        List.iter
+          (fun label ->
+            Alcotest.(check bool) label true
+              (P.post_content_tombstoned (Some label)))
+          [ "[deleted]"; "[removed by admin]"; "[removed by moderator]" ];
+        List.iter
+          (fun (label, content) ->
+            Alcotest.(check bool) label false
+              (P.post_content_tombstoned content))
+          [ ("a link post", None); ("ordinary text", Some "hello")
+          ; ("prefixed", Some " [deleted]"); ("cased", Some "[Deleted]")
+          ; ("empty", Some "") ])
+
+  let suite =
+    [ status_round_trip_case; unknown_status_case; transition_matrix_case
+    ; withdrawn_distinct_case; create_errors_case
+    ; note_canonicalization_case; note_limit_case; tombstone_case ]
+end
+
+(* The two new tables' durable constraints: lifecycle shapes, the
+   active-(post, destination) partial uniqueness, deletion behavior, the
+   audit vocabulary and its subject protection, and the notification
+   shape branch with its deduplication. Database-gated on
+   EARDE_TEST_DATABASE_URL. *)
+module Stp_schema = struct
+  let ( let* ) = Lwt.bind
+
+  open Caqti_request.Infix
+
+  let or_fail = Pod_store.or_fail
+  let reject = Pod_schema.reject
+  let insert_user = Pod_store.insert_user
+  let exec = Pod_read.exec
+  let find = Pod_read.find
+  let collect = Pod_read.collect
+
+  (* Legacy (non-network) communities: the network lifecycle CHECK ties a
+     network community's visibility flags to its onboarding state, and
+     these cases drift the flags freely. connection_eligible is
+     deliberately blind to is_network_community, so nothing is lost. *)
+  let insert_community conn slug =
+    Phcv.insert_community ~network:false conn slug
+
+  (* Audit events protect their placement, post, and both communities with
+     no-action FKs, so they go first; placements next (they also cascade
+     from posts, but only once the audit rows are gone); then posts before
+     the users and communities they reference. Notifications cascade from
+     their subjects but are deleted explicitly so recipient-side fixture
+     users can always be dropped. *)
+  let q_cleanup =
+    List.map
+      (fun sql -> (Caqti_type.unit ->. Caqti_type.unit) sql)
+      [ "DELETE FROM notifications \
+         WHERE user_id IN (SELECT id FROM users WHERE username LIKE 'stps_%')"
+      ; "DELETE FROM notifications \
+         WHERE community_id IN \
+           (SELECT id FROM communities WHERE slug LIKE 'stps-%')"
+      ; "DELETE FROM shared_thread_placement_audit_events \
+         WHERE origin_community_id IN \
+                 (SELECT id FROM communities WHERE slug LIKE 'stps-%') \
+            OR destination_community_id IN \
+                 (SELECT id FROM communities WHERE slug LIKE 'stps-%')"
+      ; "DELETE FROM shared_thread_placements \
+         WHERE origin_community_id IN \
+                 (SELECT id FROM communities WHERE slug LIKE 'stps-%') \
+            OR destination_community_id IN \
+                 (SELECT id FROM communities WHERE slug LIKE 'stps-%')"
+      ; "DELETE FROM posts \
+         WHERE community_id IN \
+           (SELECT id FROM communities WHERE slug LIKE 'stps-%')"
+      ; "DELETE FROM community_sections \
+         WHERE community_id IN \
+           (SELECT id FROM communities WHERE slug LIKE 'stps-%')"
+      ; "DELETE FROM communities WHERE slug LIKE 'stps-%'"
+      ; "DELETE FROM users WHERE username LIKE 'stps_%'"
+      ]
+
+  let db_case name f =
+    Alcotest.test_case name `Quick (fun () ->
+        match Sys.getenv_opt "EARDE_TEST_DATABASE_URL" with
+        | None | Some "" -> Alcotest.skip ()
+        | Some url ->
+            Lwt_main.run
+              (let* conn = Caqti_lwt_unix.connect (Uri.of_string url) in
+               let* conn = or_fail "connect" conn in
+               let (module C : Caqti_lwt.CONNECTION) = conn in
+               let cleanup () =
+                 Lwt_list.iter_s
+                   (fun q ->
+                     let* r = C.exec q () in
+                     let* _ = or_fail "cleanup" r in
+                     Lwt.return_unit)
+                   q_cleanup
+               in
+               let* () = cleanup () in
+               Lwt.finalize
+                 (fun () -> f conn)
+                 (fun () ->
+                   Lwt.finalize cleanup (fun () -> C.disconnect ()))))
+
+  (* Raw row fixtures. Every interpolated fragment is either a fixture row
+     id produced in this file or a literal written here — no external or
+     user value reaches the string, and the statements exist only to put
+     the table's own constraints under test. *)
+  let stmt sql = (Caqti_type.unit ->. Caqti_type.unit) sql
+
+  let try_stmt conn sql =
+    let (module C : Caqti_lwt.CONNECTION) = conn in
+    C.exec (stmt sql) ()
+
+  let accepts conn label sql =
+    let* r = try_stmt conn sql in
+    let* () = or_fail label r in
+    Lwt.return_unit
+
+  let refuses conn label sql =
+    let* r = try_stmt conn sql in
+    reject label r
+
+  let row_sql ~post ~origin ~destination ?(status = "'pending'")
+      ?(section = "NULL") ?(note = "NULL") ?(requested_by = "NULL")
+      ?(reviewed_by = "NULL") ?(removed_by = "NULL") ?(withdrawn_by = "NULL")
+      ?(created = "NOW()") ?(updated = "NOW()") ?(reviewed = "NULL")
+      ?(removed = "NULL") ?(withdrawn = "NULL") () =
+    Printf.sprintf
+      "INSERT INTO shared_thread_placements \
+         (post_id, origin_community_id, destination_community_id, \
+          destination_section_id, status, request_note, \
+          requested_by_user_id, reviewed_by_user_id, removed_by_user_id, \
+          withdrawn_by_user_id, created_at, updated_at, reviewed_at, \
+          removed_at, withdrawn_at) \
+       VALUES (%d, %d, %d, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
+      post origin destination section status note requested_by reviewed_by
+      removed_by withdrawn_by created updated reviewed removed withdrawn
+
+  let q_insert_post =
+    (Caqti_type.(t3 int int (option int)) ->! Caqti_type.int)
+    "INSERT INTO posts (title, content, community_id, user_id, section_id) \
+     VALUES ('stp thread', 'stp body', $1, $2, $3) RETURNING id"
+
+  let insert_post ?section conn ~community ~author =
+    find conn "post fixture" q_insert_post (community, author, section)
+
+  let q_insert_section =
+    (Caqti_type.(t2 int string) ->! Caqti_type.int)
+    "INSERT INTO community_sections (community_id, name, slug) \
+     VALUES ($1, $2, $2) RETURNING id"
+
+  let q_delete_section =
+    (Caqti_type.int ->. Caqti_type.unit)
+    "DELETE FROM community_sections WHERE id = $1"
+
+  let q_delete_user =
+    (Caqti_type.int ->. Caqti_type.unit) "DELETE FROM users WHERE id = $1"
+
+  let q_count_pair =
+    (Caqti_type.(t2 int int) ->! Caqti_type.int)
+    "SELECT COUNT(*) FROM shared_thread_placements \
+     WHERE post_id = $1 AND destination_community_id = $2"
+
+  let q_sole_id =
+    (Caqti_type.(t2 int int) ->! Caqti_type.int64)
+    "SELECT id FROM shared_thread_placements \
+     WHERE post_id = $1 AND destination_community_id = $2 \
+     ORDER BY id LIMIT 1"
+
+  let q_actors =
+    (Caqti_type.int64
+     ->! Caqti_type.(t4 (option int) (option int) (option int) (option int)))
+    "SELECT requested_by_user_id, reviewed_by_user_id, removed_by_user_id, \
+            withdrawn_by_user_id \
+     FROM shared_thread_placements WHERE id = $1"
+
+  let q_section_status =
+    (Caqti_type.int64 ->! Caqti_type.(t2 (option int) string))
+    "SELECT destination_section_id, status \
+     FROM shared_thread_placements WHERE id = $1"
+
+  let q_indexdefs =
+    (Caqti_type.string ->* Caqti_type.string)
+    "SELECT indexdef FROM pg_indexes \
+     WHERE schemaname = 'public' AND tablename = $1 ORDER BY indexname"
+
+  let q_insert_audit =
+    (Caqti_type.(t2 (t3 string (option int) int64) (t3 int int int))
+     ->! Caqti_type.int64)
+    "INSERT INTO shared_thread_placement_audit_events \
+       (action, actor_user_id, placement_id, post_id, \
+        origin_community_id, destination_community_id) \
+     VALUES ($1, $2, $3, $4, $5, $6) RETURNING id"
+
+  let q_audit_actor =
+    (Caqti_type.int64 ->! Caqti_type.(option int))
+    "SELECT actor_user_id FROM shared_thread_placement_audit_events \
+     WHERE id = $1"
+
+  let q_insert_stp_notif =
+    (Caqti_type.(t2 (t2 int string) (t2 int int64)) ->! Caqti_type.int)
+    "INSERT INTO notifications \
+       (user_id, notif_type, community_id, shared_thread_placement_id) \
+     VALUES ($1, $2, $3, $4) RETURNING id"
+
+  let base conn tag =
+    let* author = insert_user conn ("stps_" ^ tag) in
+    let* o = insert_community conn ("stps-" ^ tag ^ "-o") in
+    let* d = insert_community conn ("stps-" ^ tag ^ "-d") in
+    let* post = insert_post conn ~community:o ~author in
+    Lwt.return (author, o, d, post)
+
+  (* === row shape === *)
+
+  let valid_shapes_case =
+    db_case "schema: each legal status shape is storable" (fun conn ->
+        let* author, o, d, post = base conn "shapes" in
+        let actor = string_of_int author in
+        let* () =
+          accepts conn "pending"
+            (row_sql ~post ~origin:o ~destination:d ~requested_by:actor ())
+        in
+        (* The active slot is per (post, destination), so the accepted
+           shape goes to its own destination; the historical shapes share
+           the first pair freely. *)
+        let* e = insert_community conn "stps-shapes-e" in
+        let* section = find conn "section" q_insert_section (e, "gen") in
+        let* () =
+          accepts conn "accepted with section"
+            (row_sql ~post ~origin:o ~destination:e ~status:"'accepted'"
+               ~section:(string_of_int section) ~requested_by:actor
+               ~reviewed_by:actor ~reviewed:"NOW()" ())
+        in
+        let* () =
+          accepts conn "rejected"
+            (row_sql ~post ~origin:o ~destination:d ~status:"'rejected'"
+               ~requested_by:actor ~reviewed_by:actor ~reviewed:"NOW()" ())
+        in
+        let* () =
+          accepts conn "removed"
+            (row_sql ~post ~origin:o ~destination:d ~status:"'removed'"
+               ~requested_by:actor ~reviewed_by:actor ~removed_by:actor
+               ~reviewed:"NOW()" ~removed:"NOW()" ())
+        in
+        let* () =
+          accepts conn "withdrawn"
+            (row_sql ~post ~origin:o ~destination:d ~status:"'withdrawn'"
+               ~requested_by:actor ~withdrawn_by:actor ~withdrawn:"NOW()" ())
+        in
+        let* n = find conn "pair count" q_count_pair (post, d) in
+        Alcotest.(check int) "four rows on the shared pair" 4 n;
+        Lwt.return_unit)
+
+  let same_community_case =
+    db_case "schema: origin and destination cannot be equal" (fun conn ->
+        let* _, o, _, post = base conn "self" in
+        refuses conn "self pair"
+          (row_sql ~post ~origin:o ~destination:o ()))
+
+  let status_vocabulary_case =
+    db_case "schema: only the five canonical statuses are storable"
+      (fun conn ->
+        let* _, o, d, post = base conn "vocab" in
+        Lwt_list.iter_s
+          (fun raw ->
+            refuses conn ("status " ^ raw)
+              (row_sql ~post ~origin:o ~destination:d
+                 ~status:(Printf.sprintf "'%s'" raw) ~reviewed:"NOW()"
+                 ~withdrawn:"NOW()" ()))
+          [ "Pending"; "PENDING"; "active"; "cancelled"; "withdraw"; "" ])
+
+  let lifecycle_shape_case =
+    db_case "schema: every incoherent lifecycle shape is refused" (fun conn ->
+        let* _, o, d, post = base conn "badshape" in
+        let* section = find conn "section" q_insert_section (d, "gen") in
+        let section = string_of_int section in
+        Lwt_list.iter_s
+          (fun (label, sql) -> refuses conn label sql)
+          [ ( "pending with a review time"
+            , row_sql ~post ~origin:o ~destination:d ~reviewed:"NOW()" () )
+          ; ( "pending with a section"
+            , row_sql ~post ~origin:o ~destination:d ~section () )
+          ; ( "pending with a withdrawal time"
+            , row_sql ~post ~origin:o ~destination:d ~withdrawn:"NOW()" () )
+          ; ( "accepted without a review time"
+            , row_sql ~post ~origin:o ~destination:d ~status:"'accepted'" ()
+            )
+          ; ( "accepted with a withdrawal time"
+            , row_sql ~post ~origin:o ~destination:d ~status:"'accepted'"
+                ~reviewed:"NOW()" ~withdrawn:"NOW()" () )
+          ; ( "rejected with a section"
+            , row_sql ~post ~origin:o ~destination:d ~status:"'rejected'"
+                ~reviewed:"NOW()" ~section () )
+          ; ( "removed without a review time"
+            , row_sql ~post ~origin:o ~destination:d ~status:"'removed'"
+                ~removed:"NOW()" () )
+          ; ( "removed without a removal time"
+            , row_sql ~post ~origin:o ~destination:d ~status:"'removed'"
+                ~reviewed:"NOW()" () )
+          ; ( "removed with a withdrawal time"
+            , row_sql ~post ~origin:o ~destination:d ~status:"'removed'"
+                ~reviewed:"NOW()" ~removed:"NOW()" ~withdrawn:"NOW()" () )
+          ; ( "withdrawn with a review time"
+            , row_sql ~post ~origin:o ~destination:d ~status:"'withdrawn'"
+                ~withdrawn:"NOW()" ~reviewed:"NOW()" () )
+          ; ( "withdrawn with a section"
+            , row_sql ~post ~origin:o ~destination:d ~status:"'withdrawn'"
+                ~withdrawn:"NOW()" ~section () )
+          ; ( "withdrawn without a withdrawal time"
+            , row_sql ~post ~origin:o ~destination:d ~status:"'withdrawn'" ()
+            )
+          ])
+
+  let timestamp_order_case =
+    db_case "schema: timestamps cannot precede their causes" (fun conn ->
+        let* _, o, d, post = base conn "clock" in
+        Lwt_list.iter_s
+          (fun (label, sql) -> refuses conn label sql)
+          [ ( "review before creation"
+            , row_sql ~post ~origin:o ~destination:d ~status:"'accepted'"
+                ~reviewed:"NOW() - INTERVAL '1 hour'" () )
+          ; ( "removal before review"
+            , row_sql ~post ~origin:o ~destination:d ~status:"'removed'"
+                ~created:"NOW() - INTERVAL '2 hour'"
+                ~updated:"NOW() - INTERVAL '2 hour'" ~reviewed:"NOW()"
+                ~removed:"NOW() - INTERVAL '1 hour'" () )
+          ; ( "withdrawal before creation"
+            , row_sql ~post ~origin:o ~destination:d ~status:"'withdrawn'"
+                ~withdrawn:"NOW() - INTERVAL '1 hour'" () )
+          ; ( "update before creation"
+            , row_sql ~post ~origin:o ~destination:d
+                ~updated:"NOW() - INTERVAL '1 hour'" () )
+          ])
+
+  let note_length_case =
+    db_case "schema: request_note is capped at 2000 characters" (fun conn ->
+        let* _, o, d, post = base conn "note" in
+        let* () =
+          accepts conn "2000 fits"
+            (row_sql ~post ~origin:o ~destination:d
+               ~note:("'" ^ String.make 2000 'a' ^ "'") ())
+        in
+        let* e = insert_community conn "stps-note-e" in
+        refuses conn "2001 refused"
+          (row_sql ~post ~origin:o ~destination:e
+             ~note:("'" ^ String.make 2001 'a' ^ "'") ()))
+
+  let one_active_case =
+    db_case "schema: at most one active placement per post and destination"
+      (fun conn ->
+        let* author, o, d, post = base conn "active" in
+        let* () =
+          accepts conn "first pending" (row_sql ~post ~origin:o ~destination:d ())
+        in
+        let* () =
+          refuses conn "second pending"
+            (row_sql ~post ~origin:o ~destination:d ())
+        in
+        (* An accepted row occupies the slot exactly like a pending one. *)
+        let* e = insert_community conn "stps-active-e" in
+        let* () =
+          accepts conn "accepted elsewhere"
+            (row_sql ~post ~origin:o ~destination:e ~status:"'accepted'"
+               ~reviewed:"NOW()" ())
+        in
+        let* () =
+          refuses conn "pending beside accepted"
+            (row_sql ~post ~origin:o ~destination:e ())
+        in
+        (* Distinct destinations and distinct posts each get their own
+           slot. *)
+        let* f = insert_community conn "stps-active-f" in
+        let* () =
+          accepts conn "third destination"
+            (row_sql ~post ~origin:o ~destination:f ())
+        in
+        let* post2 = insert_post conn ~community:o ~author in
+        let* () =
+          accepts conn "second post, same destination"
+            (row_sql ~post:post2 ~origin:o ~destination:d ())
+        in
+        let* n = find conn "pair count" q_count_pair (post, d) in
+        Alcotest.(check int) "one row for the contested pair" 1 n;
+        Lwt.return_unit)
+
+  let history_frees_slot_case =
+    db_case "schema: every terminal state frees the active slot" (fun conn ->
+        let* _, o, d, post = base conn "hist" in
+        let* () =
+          accepts conn "rejected history"
+            (row_sql ~post ~origin:o ~destination:d ~status:"'rejected'"
+               ~reviewed:"NOW()" ())
+        in
+        let* () =
+          accepts conn "removed history"
+            (row_sql ~post ~origin:o ~destination:d ~status:"'removed'"
+               ~reviewed:"NOW()" ~removed:"NOW()" ())
+        in
+        let* () =
+          accepts conn "withdrawn history"
+            (row_sql ~post ~origin:o ~destination:d ~status:"'withdrawn'"
+               ~withdrawn:"NOW()" ())
+        in
+        let* () =
+          accepts conn "fresh pending beside the whole history"
+            (row_sql ~post ~origin:o ~destination:d ())
+        in
+        let* n = find conn "pair count" q_count_pair (post, d) in
+        Alcotest.(check int) "history retained beside the fresh row" 4 n;
+        Lwt.return_unit)
+
+  let actor_deletion_case =
+    db_case "schema: deleting an actor keeps the row and nulls provenance"
+      (fun conn ->
+        let* _, o, d, post = base conn "ghost" in
+        (* A dedicated actor who authored nothing, so the user row can be
+           deleted (posts block their author's deletion). *)
+        let* actor = insert_user conn "stps_ghost_actor" in
+        let a = string_of_int actor in
+        let* () =
+          accepts conn "removed row"
+            (row_sql ~post ~origin:o ~destination:d ~status:"'removed'"
+               ~requested_by:a ~reviewed_by:a ~removed_by:a
+               ~reviewed:"NOW()" ~removed:"NOW()" ())
+        in
+        let* () =
+          accepts conn "withdrawn row"
+            (row_sql ~post ~origin:o ~destination:d ~status:"'withdrawn'"
+               ~requested_by:a ~withdrawn_by:a ~withdrawn:"NOW()" ())
+        in
+        let* () = exec conn "delete actor" q_delete_user actor in
+        let* id = find conn "removed id" q_sole_id (post, d) in
+        let* requested, reviewed, removed, withdrawn =
+          find conn "actors" q_actors id
+        in
+        Alcotest.(check (option int)) "requester nulled" None requested;
+        Alcotest.(check (option int)) "reviewer nulled" None reviewed;
+        Alcotest.(check (option int)) "remover nulled" None removed;
+        Alcotest.(check (option int)) "withdrawer nulled" None withdrawn;
+        let* n = find conn "rows kept" q_count_pair (post, d) in
+        Alcotest.(check int) "both rows survive" 2 n;
+        Lwt.return_unit)
+
+  let section_set_null_case =
+    db_case "schema: deleting a destination section releases the placement"
+      (fun conn ->
+        let* _, o, d, post = base conn "setnull" in
+        let* section = find conn "section" q_insert_section (d, "gen") in
+        let* () =
+          accepts conn "accepted into the section"
+            (row_sql ~post ~origin:o ~destination:d ~status:"'accepted'"
+               ~section:(string_of_int section) ~reviewed:"NOW()" ())
+        in
+        let* () = exec conn "delete section" q_delete_section section in
+        let* id = find conn "placement id" q_sole_id (post, d) in
+        let* stored_section, status =
+          find conn "after deletion" q_section_status id
+        in
+        Alcotest.(check (option int)) "section released" None stored_section;
+        Alcotest.(check string) "acceptance survives" "accepted" status;
+        Lwt.return_unit)
+
+  let index_shape_case =
+    db_case "schema: the active partial unique index exists as declared"
+      (fun conn ->
+        let* defs =
+          collect conn "indexdefs" q_indexdefs "shared_thread_placements"
+        in
+        let uniq =
+          List.filter
+            (fun d ->
+              Cprj_schema.contains d
+                ~needle:"shared_thread_placements_one_active_destination_idx")
+            defs
+        in
+        match uniq with
+        | [ def ] ->
+            List.iter
+              (fun needle ->
+                if not (Cprj_schema.contains def ~needle) then
+                  Alcotest.failf "index definition lacks %S: %s" needle def)
+              [ "UNIQUE"; "post_id"; "destination_community_id"; "pending"
+              ; "accepted" ];
+            Lwt.return_unit
+        | _ -> Alcotest.fail "the active partial unique index is missing")
+
+  (* === audit === *)
+
+  let audit_vocabulary_case =
+    db_case "schema: the audit action vocabulary is closed" (fun conn ->
+        let* author, o, d, post = base conn "audvoc" in
+        let* () =
+          accepts conn "placement"
+            (row_sql ~post ~origin:o ~destination:d ())
+        in
+        let* placement = find conn "placement id" q_sole_id (post, d) in
+        let* () =
+          Lwt_list.iter_s
+            (fun action ->
+              let* _ =
+                find conn ("audit " ^ action) q_insert_audit
+                  ((action, Some author, placement), (post, o, d))
+              in
+              Lwt.return_unit)
+            [ "shared_thread_requested"; "shared_thread_accepted"
+            ; "shared_thread_rejected"; "shared_thread_removed"
+            ; "shared_thread_withdrawn" ]
+        in
+        refuses conn "off-vocabulary action"
+          (Printf.sprintf
+             "INSERT INTO shared_thread_placement_audit_events \
+                (action, placement_id, post_id, origin_community_id, \
+                 destination_community_id) \
+              VALUES ('shared_thread_created', %Ld, %d, %d, %d)"
+             placement post o d))
+
+  let audit_protects_subjects_case =
+    db_case "schema: audit events survive actors and block subject deletion"
+      (fun conn ->
+        let* _, o, d, post = base conn "audlock" in
+        let* actor = insert_user conn "stps_audlock_actor" in
+        let* () =
+          accepts conn "placement" (row_sql ~post ~origin:o ~destination:d ())
+        in
+        let* placement = find conn "placement id" q_sole_id (post, d) in
+        let* event =
+          find conn "event" q_insert_audit
+            (("shared_thread_requested", Some actor, placement), (post, o, d))
+        in
+        (* Subjects are protected while the event exists... *)
+        let* () =
+          refuses conn "placement deletion blocked"
+            (Printf.sprintf
+               "DELETE FROM shared_thread_placements WHERE id = %Ld" placement)
+        in
+        let* () =
+          refuses conn "post deletion blocked"
+            (Printf.sprintf "DELETE FROM posts WHERE id = %d" post)
+        in
+        let* () =
+          refuses conn "community deletion blocked"
+            (Printf.sprintf "DELETE FROM communities WHERE id = %d" d)
+        in
+        (* ...while a deleted actor only nulls provenance. *)
+        let* () = exec conn "delete actor" q_delete_user actor in
+        let* stored = find conn "actor" q_audit_actor event in
+        Alcotest.(check (option int)) "actor nulled, event kept" None stored;
+        Lwt.return_unit)
+
+  (* === notifications === *)
+
+  let notif_shape_case =
+    db_case "schema: the shared-thread notification branch is exclusive"
+      (fun conn ->
+        let* author, o, d, post = base conn "nshape" in
+        let* () =
+          accepts conn "placement" (row_sql ~post ~origin:o ~destination:d ())
+        in
+        let* placement = find conn "placement id" q_sole_id (post, d) in
+        let* _ =
+          find conn "valid structured row" q_insert_stp_notif
+            ((author, "shared_thread_requested"), (d, placement))
+        in
+        Lwt_list.iter_s
+          (fun (label, sql) -> refuses conn label sql)
+          [ ( "prose on a structured kind"
+            , Printf.sprintf
+                "INSERT INTO notifications \
+                   (user_id, notif_type, community_id, \
+                    shared_thread_placement_id, message) \
+                 VALUES (%d, 'shared_thread_accepted', %d, %Ld, 'hello')"
+                author d placement )
+          ; ( "post link on a structured kind"
+            , Printf.sprintf
+                "INSERT INTO notifications \
+                   (user_id, notif_type, community_id, \
+                    shared_thread_placement_id, post_id) \
+                 VALUES (%d, 'shared_thread_accepted', %d, %Ld, %d)"
+                author d placement post )
+          ; ( "structured kind without a community"
+            , Printf.sprintf
+                "INSERT INTO notifications \
+                   (user_id, notif_type, shared_thread_placement_id) \
+                 VALUES (%d, 'shared_thread_rejected', %Ld)"
+                author placement )
+          ; ( "structured kind without a placement"
+            , Printf.sprintf
+                "INSERT INTO notifications \
+                   (user_id, notif_type, community_id) \
+                 VALUES (%d, 'shared_thread_rejected', %d)"
+                author d )
+          ; ( "legacy kind with a placement"
+            , Printf.sprintf
+                "INSERT INTO notifications \
+                   (user_id, notif_type, message, \
+                    shared_thread_placement_id) \
+                 VALUES (%d, 'mention', 'hi', %Ld)"
+                author placement )
+          ])
+
+  let notif_dedup_case =
+    db_case "schema: one notification per recipient, kind, and placement"
+      (fun conn ->
+        let* author, o, d, post = base conn "ndedup" in
+        let* other = insert_user conn "stps_ndedup_other" in
+        let* () =
+          accepts conn "placement" (row_sql ~post ~origin:o ~destination:d ())
+        in
+        let* placement = find conn "placement id" q_sole_id (post, d) in
+        let* _ =
+          find conn "first" q_insert_stp_notif
+            ((author, "shared_thread_requested"), (d, placement))
+        in
+        let* () =
+          refuses conn "replayed duplicate"
+            (Printf.sprintf
+               "INSERT INTO notifications \
+                  (user_id, notif_type, community_id, \
+                   shared_thread_placement_id) \
+                VALUES (%d, 'shared_thread_requested', %d, %Ld)"
+               author d placement)
+        in
+        (* A different kind and a different recipient both coexist. *)
+        let* _ =
+          find conn "same placement, next kind" q_insert_stp_notif
+            ((author, "shared_thread_withdrawn"), (d, placement))
+        in
+        let* _ =
+          find conn "same kind, other recipient" q_insert_stp_notif
+            ((other, "shared_thread_requested"), (d, placement))
+        in
+        Lwt.return_unit)
+
+  let suite =
+    [ valid_shapes_case; same_community_case; status_vocabulary_case
+    ; lifecycle_shape_case; timestamp_order_case; note_length_case
+    ; one_active_case; history_frees_slot_case; actor_deletion_case
+    ; section_set_null_case; index_shape_case; audit_vocabulary_case
+    ; audit_protects_subjects_case; notif_shape_case; notif_dedup_case ]
+end
+
+(* The transactional store: request, accept, reject, withdraw, remove —
+   each writing exactly one audit event and its notifications inside its
+   own transaction; origin derivation from the post; connection,
+   eligibility, tombstone, and section validation on the creating paths
+   only; the active-(post, destination) arbitration under real
+   concurrency; and rollback injection. Database-gated on
+   EARDE_TEST_DATABASE_URL. *)
+module Stp_store = struct
+  let ( let* ) = Lwt.bind
+
+  open Caqti_request.Infix
+
+  module P = Earde.Shared_thread_placements
+  module Store = Earde.Shared_thread_placement_store
+  module Cc = Earde.Community_connections
+  module Ccs = Earde.Community_connections_store
+
+  let or_fail = Pod_store.or_fail
+  let insert_user = Pod_store.insert_user
+  let exec = Pod_read.exec
+  let find = Pod_read.find
+  let collect = Pod_read.collect
+  let status_str = P.string_of_status
+
+  (* Legacy (non-network) communities, as in the schema suite: eligibility
+     drift cases flip visibility and onboarding freely, which the network
+     lifecycle CHECK would otherwise refuse. *)
+  let insert_community conn slug =
+    Phcv.insert_community ~network:false conn slug
+
+  let error_str : Store.error -> string = function
+    | Store.Invalid_user_id -> "Invalid_user_id"
+    | Store.Invalid_placement_id -> "Invalid_placement_id"
+    | Store.Invalid_post_id -> "Invalid_post_id"
+    | Store.Invalid_community_id -> "Invalid_community_id"
+    | Store.Invalid_request_note -> "Invalid_request_note"
+    | Store.Same_community -> "Same_community"
+    | Store.Community_unavailable -> "Community_unavailable"
+    | Store.Post_unavailable -> "Post_unavailable"
+    | Store.Post_tombstoned -> "Post_tombstoned"
+    | Store.No_accepted_connection -> "No_accepted_connection"
+    | Store.Origin_ineligible -> "Origin_ineligible"
+    | Store.Destination_ineligible -> "Destination_ineligible"
+    | Store.Active_placement_exists -> "Active_placement_exists"
+    | Store.Invalid_destination_section -> "Invalid_destination_section"
+    | Store.Review_unavailable -> "Review_unavailable"
+    | Store.Withdrawal_unavailable -> "Withdrawal_unavailable"
+    | Store.Removal_unavailable -> "Removal_unavailable"
+    | Store.Inconsistent_data -> "Inconsistent_data"
+    | Store.Storage_error -> "Storage_error"
+
+  (* Failure-injection DDL is dropped first so a crashed case can never
+     leave a trigger behind. Then the dependency order: notifications,
+     the placement audit trail (which protects placements, posts, and
+     communities), the placements, the connection fixtures' audit trail
+     and rows, then posts before the users and communities they
+     reference. *)
+  let q_cleanup =
+    List.map
+      (fun sql -> (Caqti_type.unit ->. Caqti_type.unit) sql)
+      [ "DROP TRIGGER IF EXISTS stp_fail_audit \
+         ON shared_thread_placement_audit_events"
+      ; "DROP TRIGGER IF EXISTS stp_fail_business ON shared_thread_placements"
+      ; "DROP TRIGGER IF EXISTS stp_fail_notif ON notifications"
+      ; "DROP FUNCTION IF EXISTS stp_fail_fn()"
+      ; "DELETE FROM notifications \
+         WHERE user_id IN (SELECT id FROM users WHERE username LIKE 'stp_%')"
+      ; "DELETE FROM notifications \
+         WHERE community_id IN \
+           (SELECT id FROM communities WHERE slug LIKE 'stp-%')"
+      ; "DELETE FROM shared_thread_placement_audit_events \
+         WHERE origin_community_id IN \
+                 (SELECT id FROM communities WHERE slug LIKE 'stp-%') \
+            OR destination_community_id IN \
+                 (SELECT id FROM communities WHERE slug LIKE 'stp-%')"
+      ; "DELETE FROM shared_thread_placements \
+         WHERE origin_community_id IN \
+                 (SELECT id FROM communities WHERE slug LIKE 'stp-%') \
+            OR destination_community_id IN \
+                 (SELECT id FROM communities WHERE slug LIKE 'stp-%')"
+      ; "DELETE FROM community_connection_audit_events \
+         WHERE requester_community_id IN \
+                 (SELECT id FROM communities WHERE slug LIKE 'stp-%') \
+            OR recipient_community_id IN \
+                 (SELECT id FROM communities WHERE slug LIKE 'stp-%')"
+      ; "DELETE FROM community_connections \
+         WHERE requester_community_id IN \
+                 (SELECT id FROM communities WHERE slug LIKE 'stp-%') \
+            OR recipient_community_id IN \
+                 (SELECT id FROM communities WHERE slug LIKE 'stp-%')"
+      ; "DELETE FROM posts \
+         WHERE community_id IN \
+           (SELECT id FROM communities WHERE slug LIKE 'stp-%')"
+      ; "DELETE FROM community_sections \
+         WHERE community_id IN \
+           (SELECT id FROM communities WHERE slug LIKE 'stp-%')"
+      ; "DELETE FROM communities WHERE slug LIKE 'stp-%'"
+      ; "DELETE FROM users WHERE username LIKE 'stp_%'"
+      ]
+
+  let db_case name f =
+    Alcotest.test_case name `Quick (fun () ->
+        match Sys.getenv_opt "EARDE_TEST_DATABASE_URL" with
+        | None | Some "" -> Alcotest.skip ()
+        | Some url ->
+            Lwt_main.run
+              (let* conn = Caqti_lwt_unix.connect (Uri.of_string url) in
+               let* conn = or_fail "connect" conn in
+               let (module C : Caqti_lwt.CONNECTION) = conn in
+               let cleanup () =
+                 Lwt_list.iter_s
+                   (fun q ->
+                     let* r = C.exec q () in
+                     let* _ = or_fail "cleanup" r in
+                     Lwt.return_unit)
+                   q_cleanup
+               in
+               let* () = cleanup () in
+               Lwt.finalize
+                 (fun () -> f conn)
+                 (fun () ->
+                   Lwt.finalize cleanup (fun () -> C.disconnect ()))))
+
+  (* === fixtures === *)
+
+  let q_insert_post =
+    (Caqti_type.(t3 int int (option int)) ->! Caqti_type.int)
+    "INSERT INTO posts (title, content, community_id, user_id, section_id) \
+     VALUES ('stp thread', 'stp body', $1, $2, $3) RETURNING id"
+
+  let insert_post ?section conn ~community ~author =
+    find conn "post fixture" q_insert_post (community, author, section)
+
+  let q_tombstone =
+    (Caqti_type.(t2 int string) ->. Caqti_type.unit)
+    "UPDATE posts SET content = $2 WHERE id = $1"
+
+  let tombstone conn post label = exec conn "tombstone" q_tombstone (post, label)
+
+  let q_set_sections =
+    (Caqti_type.(t2 int bool) ->. Caqti_type.unit)
+    "UPDATE communities SET sections_enabled = $2 WHERE id = $1"
+
+  let q_insert_section =
+    (Caqti_type.(t2 int string) ->! Caqti_type.int)
+    "INSERT INTO community_sections (community_id, name, slug) \
+     VALUES ($1, $2, $2) RETURNING id"
+
+  let q_delete_section =
+    (Caqti_type.int ->. Caqti_type.unit)
+    "DELETE FROM community_sections WHERE id = $1"
+
+  let q_make_eligible =
+    (Caqti_type.int ->. Caqti_type.unit)
+    "UPDATE communities SET visibility = 'public', \
+     onboarding_state = 'published', indexable = TRUE, discoverable = TRUE \
+     WHERE id = $1"
+
+  let q_insert_comment =
+    (Caqti_type.(t2 int int) ->! Caqti_type.int)
+    "INSERT INTO comments (content, post_id, user_id) \
+     VALUES ('kept', $1, $2) RETURNING id"
+
+  (* Accepted community connection through the real connections store, so
+     the standing this feature rides on is exactly the durable one. *)
+  let connect conn ~actor a b =
+    let value =
+      match
+        Cc.create_pending ~requester_community_id:a
+          ~recipient_community_id:b ~request_note:None
+      with
+      | Ok v -> v
+      | Error _ -> Alcotest.fail "fixture: connection value refused"
+    in
+    let* requested = Ccs.request conn ~actor_user_id:actor ~connection:value in
+    let connection =
+      match requested with
+      | Ok created -> Ccs.created_connection_id created
+      | Error e ->
+          Alcotest.failf "fixture: connection request %s"
+            (Ccon_store.error_str e)
+    in
+    let* reviewed =
+      Ccs.review conn ~reviewer_user_id:actor ~connection_id:connection
+        ~recipient_community_id:b ~decision:Ccs.Accept
+    in
+    match reviewed with
+    | Ok _ -> Lwt.return connection
+    | Error e ->
+        Alcotest.failf "fixture: connection accept %s" (Ccon_store.error_str e)
+
+  let disconnect conn ~actor ~connection ~acting =
+    let* removed =
+      Ccs.remove conn ~actor_user_id:actor ~connection_id:connection
+        ~acting_community_id:acting
+    in
+    match removed with
+    | Ok _ -> Lwt.return_unit
+    | Error e ->
+        Alcotest.failf "fixture: disconnect %s" (Ccon_store.error_str e)
+
+  (* One actor, a connected origin/destination pair with a flat (sections
+     disabled) destination, and one canonical post — the shape every case
+     starts from. *)
+  let fixture conn tag =
+    let* actor = insert_user conn ("stp_" ^ tag) in
+    let* o = insert_community conn ("stp-" ^ tag ^ "-o") in
+    let* d = insert_community conn ("stp-" ^ tag ^ "-d") in
+    let* () = exec conn "flat destination" q_set_sections (d, false) in
+    let* connection = connect conn ~actor o d in
+    let* post = insert_post conn ~community:o ~author:actor in
+    Lwt.return (actor, o, d, post, connection)
+
+  (* === observation === *)
+
+  let q_row =
+    (Caqti_type.int64
+     ->! Caqti_type.(
+           t2
+             (t2 (t2 string (option int)) (t2 (option string) (option int)))
+             (t3 (option int) (option int) (option int))))
+    "SELECT status, destination_section_id, request_note, \
+            requested_by_user_id, reviewed_by_user_id, removed_by_user_id, \
+            withdrawn_by_user_id \
+     FROM shared_thread_placements WHERE id = $1"
+
+  let check_row label conn id ~status ~section ~note ~requested_by
+      ~reviewed_by ~removed_by ~withdrawn_by =
+    let* ( ((stored_status, stored_section), (stored_note, stored_requested)),
+           (stored_reviewed, stored_removed, stored_withdrawn) ) =
+      find conn (label ^ ": row") q_row id
+    in
+    Alcotest.(check string) (label ^ ": status") status stored_status;
+    Alcotest.(check (option int)) (label ^ ": section") section stored_section;
+    Alcotest.(check (option string)) (label ^ ": note") note stored_note;
+    Alcotest.(check (option int)) (label ^ ": requester") requested_by
+      stored_requested;
+    Alcotest.(check (option int)) (label ^ ": reviewer") reviewed_by
+      stored_reviewed;
+    Alcotest.(check (option int)) (label ^ ": remover") removed_by
+      stored_removed;
+    Alcotest.(check (option int)) (label ^ ": withdrawer") withdrawn_by
+      stored_withdrawn;
+    Lwt.return_unit
+
+  let q_origin_of =
+    (Caqti_type.int64 ->! Caqti_type.int)
+    "SELECT origin_community_id FROM shared_thread_placements WHERE id = $1"
+
+  let q_stamps =
+    (Caqti_type.int64 ->! Caqti_type.(t4 bool bool bool bool))
+    "SELECT reviewed_at IS NOT NULL, removed_at IS NOT NULL, \
+            withdrawn_at IS NOT NULL, updated_at >= created_at \
+     FROM shared_thread_placements WHERE id = $1"
+
+  let q_count_pair =
+    (Caqti_type.(t2 int int) ->! Caqti_type.int)
+    "SELECT COUNT(*) FROM shared_thread_placements \
+     WHERE post_id = $1 AND destination_community_id = $2"
+
+  let q_count_active_pair =
+    (Caqti_type.(t2 int int) ->! Caqti_type.int)
+    "SELECT COUNT(*) FROM shared_thread_placements \
+     WHERE post_id = $1 AND destination_community_id = $2 \
+       AND status IN ('pending', 'accepted')"
+
+  (* One tuple per event, in append (id) order. *)
+  let q_events =
+    (Caqti_type.int64
+     ->* Caqti_type.(t2 (t2 string (option int)) (t3 int int int)))
+    "SELECT action, actor_user_id, post_id, origin_community_id, \
+            destination_community_id \
+     FROM shared_thread_placement_audit_events \
+     WHERE placement_id = $1 ORDER BY id"
+
+  (* Everything ever recorded about one post, however the placement rows
+     themselves ended up — the count a rolled-back mutation must not
+     move. *)
+  let q_events_for_post =
+    (Caqti_type.int ->! Caqti_type.int)
+    "SELECT COUNT(*) FROM shared_thread_placement_audit_events \
+     WHERE post_id = $1"
+
+  let q_notifs_for_post =
+    (Caqti_type.int ->! Caqti_type.int)
+    "SELECT COUNT(*) FROM notifications n \
+     WHERE n.shared_thread_placement_id IN \
+       (SELECT id FROM shared_thread_placements WHERE post_id = $1)"
+
+  let q_post_row =
+    (Caqti_type.int ->! Caqti_type.(t2 string (option string)))
+    "SELECT title, content FROM posts WHERE id = $1"
+
+  let q_comment_count =
+    (Caqti_type.int ->! Caqti_type.int)
+    "SELECT COUNT(*) FROM comments WHERE post_id = $1"
+
+  let q_absent_post =
+    (Caqti_type.unit ->! Caqti_type.int)
+    "SELECT COALESCE(MAX(id), 0) + 1000000 FROM posts"
+
+  let q_absent_community =
+    (Caqti_type.unit ->! Caqti_type.int)
+    "SELECT COALESCE(MAX(id), 0) + 1000000 FROM communities"
+
+  let q_absent_placement =
+    (Caqti_type.unit ->! Caqti_type.int64)
+    "SELECT COALESCE(MAX(id), 0) + 1000000 FROM shared_thread_placements"
+
+  let event_t = Alcotest.(pair (pair string (option int)) (triple int int int))
+
+  let check_events label conn ~placement expected =
+    let* rows = collect conn (label ^ ": events") q_events placement in
+    Alcotest.(check (list event_t)) (label ^ ": exact events") expected rows;
+    Lwt.return_unit
+
+  let check_event_count label conn ~post expected =
+    let* n = find conn (label ^ ": count") q_events_for_post post in
+    Alcotest.(check int) (label ^ ": post event count") expected n;
+    Lwt.return_unit
+
+  (* === call helpers === *)
+
+  let request conn ~actor ?note ~post ~destination () =
+    Store.request conn ~actor_user_id:actor ~post_id:post
+      ~destination_community_id:destination ~request_note:note
+
+  let request_ok label conn ~actor ?note ~post ~destination () =
+    let* r = request conn ~actor ?note ~post ~destination () in
+    match r with
+    | Ok created -> Lwt.return (Store.created_placement_id created)
+    | Error e -> Alcotest.failf "%s: %s" label (error_str e)
+
+  let request_expect label expected conn ~actor ?note ~post ~destination () =
+    let* r = request conn ~actor ?note ~post ~destination () in
+    match r with
+    | Ok _ -> Alcotest.failf "%s: expected %s, got Ok" label (error_str expected)
+    | Error e ->
+        Alcotest.(check string) label (error_str expected) (error_str e);
+        Lwt.return_unit
+
+  let review conn ~reviewer ~placement ~destination decision =
+    Store.review conn ~reviewer_user_id:reviewer ~placement_id:placement
+      ~destination_community_id:destination ~decision
+
+  let review_ok label conn ~reviewer ~placement ~destination decision expected
+      =
+    let* r = review conn ~reviewer ~placement ~destination decision in
+    match r with
+    | Ok reviewed ->
+        Alcotest.(check string)
+          (label ^ ": resulting status")
+          (status_str expected)
+          (status_str (Store.reviewed_status reviewed));
+        Lwt.return reviewed
+    | Error e -> Alcotest.failf "%s: %s" label (error_str e)
+
+  let review_expect label expected conn ~reviewer ~placement ~destination
+      decision =
+    let* r = review conn ~reviewer ~placement ~destination decision in
+    match r with
+    | Ok _ -> Alcotest.failf "%s: expected %s, got Ok" label (error_str expected)
+    | Error e ->
+        Alcotest.(check string) label (error_str expected) (error_str e);
+        Lwt.return_unit
+
+  let withdraw conn ~actor ~placement ~origin =
+    Store.withdraw conn ~actor_user_id:actor ~placement_id:placement
+      ~origin_community_id:origin
+
+  let withdraw_ok label conn ~actor ~placement ~origin =
+    let* r = withdraw conn ~actor ~placement ~origin in
+    match r with
+    | Ok withdrawn -> Lwt.return withdrawn
+    | Error e -> Alcotest.failf "%s: %s" label (error_str e)
+
+  let withdraw_expect label expected conn ~actor ~placement ~origin =
+    let* r = withdraw conn ~actor ~placement ~origin in
+    match r with
+    | Ok _ -> Alcotest.failf "%s: expected %s, got Ok" label (error_str expected)
+    | Error e ->
+        Alcotest.(check string) label (error_str expected) (error_str e);
+        Lwt.return_unit
+
+  let remove conn ~actor ~placement ~acting =
+    Store.remove conn ~actor_user_id:actor ~placement_id:placement
+      ~acting_community_id:acting
+
+  let remove_ok label conn ~actor ~placement ~acting =
+    let* r = remove conn ~actor ~placement ~acting in
+    match r with
+    | Ok removed -> Lwt.return removed
+    | Error e -> Alcotest.failf "%s: %s" label (error_str e)
+
+  let remove_expect label expected conn ~actor ~placement ~acting =
+    let* r = remove conn ~actor ~placement ~acting in
+    match r with
+    | Ok _ -> Alcotest.failf "%s: expected %s, got Ok" label (error_str expected)
+    | Error e ->
+        Alcotest.(check string) label (error_str expected) (error_str e);
+        Lwt.return_unit
+
+  (* === request === *)
+
+  let request_case =
+    db_case "request: one pending row, derived origin, one requested event"
+      (fun conn ->
+        let* actor, o, d, post, _ = fixture conn "req" in
+        let* id =
+          request_ok "request" conn ~actor ~note:"  worth sharing\r\n  "
+            ~post ~destination:d ()
+        in
+        let* () =
+          check_row "request" conn id ~status:"pending" ~section:None
+            ~note:(Some "worth sharing") ~requested_by:(Some actor)
+            ~reviewed_by:None ~removed_by:None ~withdrawn_by:None
+        in
+        (* The origin is the post's own community — the API offers no way
+           to claim another one, and the stored copy proves the
+           derivation. *)
+        let* origin = find conn "origin" q_origin_of id in
+        Alcotest.(check int) "origin derived from the post" o origin;
+        let* reviewed, removed, withdrawn, coherent =
+          find conn "stamps" q_stamps id
+        in
+        Alcotest.(check bool) "no review time" false reviewed;
+        Alcotest.(check bool) "no removal time" false removed;
+        Alcotest.(check bool) "no withdrawal time" false withdrawn;
+        Alcotest.(check bool) "updated_at coherent" true coherent;
+        check_events "request" conn ~placement:id
+          [ (("shared_thread_requested", Some actor), (post, o, d)) ])
+
+  let request_blank_note_case =
+    db_case "request: a blank note is stored as absent" (fun conn ->
+        let* actor, _, d, post, _ = fixture conn "blank" in
+        let* id =
+          request_ok "request" conn ~actor ~note:"   \r\n\t " ~post
+            ~destination:d ()
+        in
+        check_row "blank" conn id ~status:"pending" ~section:None ~note:None
+          ~requested_by:(Some actor) ~reviewed_by:None ~removed_by:None
+          ~withdrawn_by:None)
+
+  let request_validation_case =
+    db_case "request: invalid inputs are refused before any SQL" (fun conn ->
+        let* actor, _, d, post, _ = fixture conn "reqval" in
+        let* () =
+          request_expect "zero actor" Store.Invalid_user_id conn ~actor:0
+            ~post ~destination:d ()
+        in
+        let* () =
+          request_expect "zero post" Store.Invalid_post_id conn ~actor
+            ~post:0 ~destination:d ()
+        in
+        let* () =
+          request_expect "zero destination" Store.Invalid_community_id conn
+            ~actor ~post ~destination:0 ()
+        in
+        let* () =
+          request_expect "invalid note" Store.Invalid_request_note conn
+            ~actor ~note:"nul\x00" ~post ~destination:d ()
+        in
+        let* n = find conn "no rows" q_count_pair (post, d) in
+        Alcotest.(check int) "nothing written" 0 n;
+        check_event_count "validation" conn ~post 0)
+
+  let request_missing_subjects_case =
+    db_case "request: a missing post or destination is one closed error"
+      (fun conn ->
+        let* actor, o, d, post, _ = fixture conn "gone" in
+        let* absent_post = find conn "absent post" q_absent_post () in
+        let* () =
+          request_expect "absent post" Store.Post_unavailable conn ~actor
+            ~post:absent_post ~destination:d ()
+        in
+        let* absent_community = find conn "absent community" q_absent_community () in
+        let* () =
+          request_expect "absent destination" Store.Community_unavailable conn
+            ~actor ~post ~destination:absent_community ()
+        in
+        let* () =
+          request_expect "origin as destination" Store.Same_community conn
+            ~actor ~post ~destination:o ()
+        in
+        check_event_count "missing" conn ~post 0)
+
+  let request_connection_case =
+    db_case "request: only an accepted connection carries a placement"
+      (fun conn ->
+        let* actor, o, _, post, _ = fixture conn "conn" in
+        (* No connection at all. *)
+        let* stranger = insert_community conn "stp-conn-stranger" in
+        let* () =
+          request_expect "no connection" Store.No_accepted_connection conn
+            ~actor ~post ~destination:stranger ()
+        in
+        (* A still-pending connection is not an accepted one. *)
+        let* pending_target = insert_community conn "stp-conn-pending" in
+        let value =
+          match
+            Cc.create_pending ~requester_community_id:o
+              ~recipient_community_id:pending_target ~request_note:None
+          with
+          | Ok v -> v
+          | Error _ -> Alcotest.fail "fixture: pending connection value"
+        in
+        let* requested =
+          Ccs.request conn ~actor_user_id:actor ~connection:value
+        in
+        let* () =
+          match requested with
+          | Ok _ -> Lwt.return_unit
+          | Error e ->
+              Alcotest.failf "fixture: pending connection %s"
+                (Ccon_store.error_str e)
+        in
+        let* () =
+          request_expect "pending connection" Store.No_accepted_connection
+            conn ~actor ~post ~destination:pending_target ()
+        in
+        (* A removed connection no longer carries placements either. *)
+        let* removed_target = insert_community conn "stp-conn-removed" in
+        let* connection = connect conn ~actor o removed_target in
+        let* () =
+          disconnect conn ~actor ~connection ~acting:o
+        in
+        let* () =
+          request_expect "removed connection" Store.No_accepted_connection
+            conn ~actor ~post ~destination:removed_target ()
+        in
+        check_event_count "connection" conn ~post 0)
+
+  let request_eligibility_case =
+    db_case "request: both sides are revalidated under the held locks"
+      (fun conn ->
+        let* actor, o, d, post, _ = fixture conn "elig" in
+        let* () = exec conn "origin private" Phcv.q_make_private o in
+        let* () =
+          request_expect "private origin" Store.Origin_ineligible conn ~actor
+            ~post ~destination:d ()
+        in
+        let* () = exec conn "restore origin" q_make_eligible o in
+        let* () = exec conn "destination draft" Phcv.q_make_draft_state d in
+        let* () =
+          request_expect "draft destination" Store.Destination_ineligible
+            conn ~actor ~post ~destination:d ()
+        in
+        let* () = exec conn "restore destination" q_make_eligible d in
+        let* _ = request_ok "eligible again" conn ~actor ~post ~destination:d () in
+        check_event_count "eligibility" conn ~post 1)
+
+  let request_tombstone_case =
+    db_case "request: a tombstoned canonical thread is not shareable"
+      (fun conn ->
+        let* actor, _, d, post, _ = fixture conn "tomb" in
+        let* () = tombstone conn post "[removed by moderator]" in
+        let* () =
+          request_expect "moderator tombstone" Store.Post_tombstoned conn
+            ~actor ~post ~destination:d ()
+        in
+        let* () = tombstone conn post "[deleted]" in
+        let* () =
+          request_expect "author tombstone" Store.Post_tombstoned conn ~actor
+            ~post ~destination:d ()
+        in
+        check_event_count "tombstone" conn ~post 0)
+
+  let request_duplicate_case =
+    db_case "request: a duplicate loses against pending and accepted alike"
+      (fun conn ->
+        let* actor, o, d, post, _ = fixture conn "dup" in
+        let* id = request_ok "first" conn ~actor ~post ~destination:d () in
+        let* () =
+          request_expect "duplicate against pending"
+            Store.Active_placement_exists conn ~actor ~post ~destination:d ()
+        in
+        let* _ =
+          review_ok "accept" conn ~reviewer:actor ~placement:id ~destination:d
+            (Store.Accept None) P.Accepted
+        in
+        let* () =
+          request_expect "duplicate against accepted"
+            Store.Active_placement_exists conn ~actor ~post ~destination:d ()
+        in
+        let* n = find conn "row count" q_count_pair (post, d) in
+        Alcotest.(check int) "still exactly one row" 1 n;
+        check_events "duplicate" conn ~placement:id
+          [ (("shared_thread_requested", Some actor), (post, o, d))
+          ; (("shared_thread_accepted", Some actor), (post, o, d)) ])
+
+  let request_multiple_destinations_case =
+    db_case "request: one thread reaches several destinations as rows"
+      (fun conn ->
+        let* actor, o, d, post, _ = fixture conn "multi" in
+        let* e = insert_community conn "stp-multi-e" in
+        let* _ = connect conn ~actor o e in
+        let* first = request_ok "to d" conn ~actor ~post ~destination:d () in
+        let* second = request_ok "to e" conn ~actor ~post ~destination:e () in
+        Alcotest.(check bool) "distinct rows" false (first = second);
+        let* nd = find conn "d count" q_count_pair (post, d) in
+        let* ne = find conn "e count" q_count_pair (post, e) in
+        Alcotest.(check int) "one row toward d" 1 nd;
+        Alcotest.(check int) "one row toward e" 1 ne;
+        check_event_count "multi" conn ~post 2)
+
+  (* === review === *)
+
+  let accept_into_section_case =
+    db_case "accept: a sectioned destination accepts into its own section"
+      (fun conn ->
+        let* actor, o, d, post, _ = fixture conn "accsec" in
+        let* () = exec conn "sectioned destination" q_set_sections (d, true) in
+        let* section = find conn "section" q_insert_section (d, "general") in
+        let* reviewer = insert_user conn "stp_accsec_mod" in
+        let* id = request_ok "request" conn ~actor ~post ~destination:d () in
+        let* reviewed =
+          review_ok "accept" conn ~reviewer ~placement:id ~destination:d
+            (Store.Accept (Some section)) P.Accepted
+        in
+        Alcotest.(check int) "post crosses back" post
+          (Store.reviewed_post_id reviewed);
+        Alcotest.(check int) "origin crosses back" o
+          (Store.reviewed_origin_community_id reviewed);
+        Alcotest.(check int) "destination crosses back" d
+          (Store.reviewed_destination_community_id reviewed);
+        Alcotest.(check (option int)) "section crosses back" (Some section)
+          (Store.reviewed_destination_section_id reviewed);
+        let* () =
+          check_row "accept" conn id ~status:"accepted"
+            ~section:(Some section) ~note:None ~requested_by:(Some actor)
+            ~reviewed_by:(Some reviewer) ~removed_by:None ~withdrawn_by:None
+        in
+        check_events "accept" conn ~placement:id
+          [ (("shared_thread_requested", Some actor), (post, o, d))
+          ; (("shared_thread_accepted", Some reviewer), (post, o, d)) ])
+
+  let accept_flat_case =
+    db_case "accept: a flat destination accepts with no section" (fun conn ->
+        let* actor, _, d, post, _ = fixture conn "accflat" in
+        let* id = request_ok "request" conn ~actor ~post ~destination:d () in
+        (* A section supplied to a flat destination is refused, not
+           silently dropped. *)
+        let* () =
+          review_expect "section on a flat destination"
+            Store.Invalid_destination_section conn ~reviewer:actor
+            ~placement:id ~destination:d (Store.Accept (Some 12345))
+        in
+        let* reviewed =
+          review_ok "flat accept" conn ~reviewer:actor ~placement:id
+            ~destination:d (Store.Accept None) P.Accepted
+        in
+        Alcotest.(check (option int)) "no section" None
+          (Store.reviewed_destination_section_id reviewed);
+        check_row "flat accept" conn id ~status:"accepted" ~section:None
+          ~note:None ~requested_by:(Some actor) ~reviewed_by:(Some actor)
+          ~removed_by:None ~withdrawn_by:None)
+
+  let accept_section_boundary_case =
+    db_case "accept: the section must be a live section of the destination"
+      (fun conn ->
+        let* actor, o, d, post, _ = fixture conn "secbound" in
+        let* () = exec conn "sectioned destination" q_set_sections (d, true) in
+        let* foreign = find conn "origin section" q_insert_section (o, "own") in
+        let* stale = find conn "stale section" q_insert_section (d, "old") in
+        let* () = exec conn "delete stale" q_delete_section stale in
+        let* id = request_ok "request" conn ~actor ~post ~destination:d () in
+        let* () =
+          review_expect "no section chosen" Store.Invalid_destination_section
+            conn ~reviewer:actor ~placement:id ~destination:d
+            (Store.Accept None)
+        in
+        let* () =
+          review_expect "another community's section"
+            Store.Invalid_destination_section conn ~reviewer:actor
+            ~placement:id ~destination:d (Store.Accept (Some foreign))
+        in
+        let* () =
+          review_expect "a deleted section"
+            Store.Invalid_destination_section conn ~reviewer:actor
+            ~placement:id ~destination:d (Store.Accept (Some stale))
+        in
+        let* () =
+          review_expect "a non-positive section"
+            Store.Invalid_destination_section conn ~reviewer:actor
+            ~placement:id ~destination:d (Store.Accept (Some 0))
+        in
+        let* () =
+          check_row "untouched" conn id ~status:"pending" ~section:None
+            ~note:None ~requested_by:(Some actor) ~reviewed_by:None
+            ~removed_by:None ~withdrawn_by:None
+        in
+        check_event_count "section boundary" conn ~post 1)
+
+  let accept_revalidation_case =
+    db_case
+      "accept: connection, eligibility, and content are revalidated; \
+       reject is not gated"
+      (fun conn ->
+        (* Connection removed before acceptance. *)
+        let* actor, o, d, post, connection = fixture conn "reval" in
+        let* id = request_ok "request" conn ~actor ~post ~destination:d () in
+        let* () = disconnect conn ~actor ~connection ~acting:d in
+        let* () =
+          review_expect "accept after disconnect"
+            Store.No_accepted_connection conn ~reviewer:actor ~placement:id
+            ~destination:d (Store.Accept None)
+        in
+        (* Eligibility lost before acceptance. *)
+        let* connection = connect conn ~actor o d in
+        let* () = exec conn "destination private" Phcv.q_make_private d in
+        let* () =
+          review_expect "accept while destination ineligible"
+            Store.Destination_ineligible conn ~reviewer:actor ~placement:id
+            ~destination:d (Store.Accept None)
+        in
+        let* () = exec conn "restore destination" q_make_eligible d in
+        let* () = exec conn "origin private" Phcv.q_make_private o in
+        let* () =
+          review_expect "accept while origin ineligible"
+            Store.Origin_ineligible conn ~reviewer:actor ~placement:id
+            ~destination:d (Store.Accept None)
+        in
+        let* () = exec conn "restore origin" q_make_eligible o in
+        (* Content tombstoned before acceptance. *)
+        let* () = tombstone conn post "[removed by admin]" in
+        let* () =
+          review_expect "accept a tombstoned thread" Store.Post_tombstoned
+            conn ~reviewer:actor ~placement:id ~destination:d
+            (Store.Accept None)
+        in
+        (* And after ALL of that — disconnect again, break eligibility,
+           keep the tombstone — rejection still closes the request. *)
+        let* () = disconnect conn ~actor ~connection ~acting:o in
+        let* () = exec conn "destination private again" Phcv.q_make_private d in
+        let* _ =
+          review_ok "reject the stale request" conn ~reviewer:actor
+            ~placement:id ~destination:d Store.Reject P.Rejected
+        in
+        check_row "rejected" conn id ~status:"rejected" ~section:None
+          ~note:None ~requested_by:(Some actor) ~reviewed_by:(Some actor)
+          ~removed_by:None ~withdrawn_by:None)
+
+  let review_boundary_case =
+    db_case "review: the destination is verified in the mutation boundary"
+      (fun conn ->
+        let* actor, o, d, post, _ = fixture conn "revbound" in
+        let* c = insert_community conn "stp-revbound-c" in
+        let* id = request_ok "request" conn ~actor ~post ~destination:d () in
+        let* () =
+          review_expect "another community's queue" Store.Review_unavailable
+            conn ~reviewer:actor ~placement:id ~destination:c
+            (Store.Accept None)
+        in
+        let* () =
+          (* Not even the origin may review its own request through the
+             destination boundary. *)
+          review_expect "the origin itself" Store.Review_unavailable conn
+            ~reviewer:actor ~placement:id ~destination:o (Store.Accept None)
+        in
+        let* () =
+          check_row "untouched" conn id ~status:"pending" ~section:None
+            ~note:None ~requested_by:(Some actor) ~reviewed_by:None
+            ~removed_by:None ~withdrawn_by:None
+        in
+        check_events "no event" conn ~placement:id
+          [ (("shared_thread_requested", Some actor), (post, o, d)) ])
+
+  let review_stale_case =
+    db_case "review: a settled row cannot be reviewed again" (fun conn ->
+        let* actor, o, d, post, _ = fixture conn "revstale" in
+        let* id = request_ok "request" conn ~actor ~post ~destination:d () in
+        let* _ =
+          review_ok "accept" conn ~reviewer:actor ~placement:id ~destination:d
+            (Store.Accept None) P.Accepted
+        in
+        let* () =
+          review_expect "second accept" Store.Review_unavailable conn
+            ~reviewer:actor ~placement:id ~destination:d (Store.Accept None)
+        in
+        let* () =
+          review_expect "late reject" Store.Review_unavailable conn
+            ~reviewer:actor ~placement:id ~destination:d Store.Reject
+        in
+        let* absent = find conn "absent id" q_absent_placement () in
+        let* () =
+          review_expect "absent placement" Store.Review_unavailable conn
+            ~reviewer:actor ~placement:absent ~destination:d
+            (Store.Accept None)
+        in
+        let* () =
+          review_expect "zero reviewer" Store.Invalid_user_id conn
+            ~reviewer:0 ~placement:id ~destination:d (Store.Accept None)
+        in
+        check_events "one review only" conn ~placement:id
+          [ (("shared_thread_requested", Some actor), (post, o, d))
+          ; (("shared_thread_accepted", Some actor), (post, o, d)) ])
+
+  (* === withdraw === *)
+
+  let withdraw_case =
+    db_case "withdraw: pending becomes withdrawn and frees the slot"
+      (fun conn ->
+        let* actor, o, d, post, _ = fixture conn "wd" in
+        let* id =
+          request_ok "request" conn ~actor ~note:"kept" ~post ~destination:d ()
+        in
+        let* withdrawn = withdraw_ok "withdraw" conn ~actor ~placement:id ~origin:o in
+        Alcotest.(check int) "post crosses back" post
+          (Store.withdrawn_post_id withdrawn);
+        Alcotest.(check int) "origin crosses back" o
+          (Store.withdrawn_origin_community_id withdrawn);
+        Alcotest.(check int) "destination crosses back" d
+          (Store.withdrawn_destination_community_id withdrawn);
+        let* () =
+          check_row "withdrawn" conn id ~status:"withdrawn" ~section:None
+            ~note:(Some "kept") ~requested_by:(Some actor) ~reviewed_by:None
+            ~removed_by:None ~withdrawn_by:(Some actor)
+        in
+        let* reviewed, removed, withdrawn_at, coherent =
+          find conn "stamps" q_stamps id
+        in
+        Alcotest.(check bool) "no review time" false reviewed;
+        Alcotest.(check bool) "no removal time" false removed;
+        Alcotest.(check bool) "withdrawal time set" true withdrawn_at;
+        Alcotest.(check bool) "updated_at coherent" true coherent;
+        let* () =
+          check_events "withdraw" conn ~placement:id
+            [ (("shared_thread_requested", Some actor), (post, o, d))
+            ; (("shared_thread_withdrawn", Some actor), (post, o, d)) ]
+        in
+        (* The slot is free: a fresh request is a new row. *)
+        let* fresh = request_ok "fresh request" conn ~actor ~post ~destination:d () in
+        Alcotest.(check bool) "a new row, not a reopened one" false
+          (fresh = id);
+        let* total = find conn "history" q_count_pair (post, d) in
+        Alcotest.(check int) "history retained" 2 total;
+        let* active = find conn "active" q_count_active_pair (post, d) in
+        Alcotest.(check int) "exactly one active" 1 active;
+        Lwt.return_unit)
+
+  let withdraw_survives_drift_case =
+    db_case
+      "withdraw: still possible after disconnect, ineligibility, and \
+       tombstoning"
+      (fun conn ->
+        let* actor, o, d, post, connection = fixture conn "wddrift" in
+        let* id = request_ok "request" conn ~actor ~post ~destination:d () in
+        let* () = disconnect conn ~actor ~connection ~acting:o in
+        let* () = exec conn "origin private" Phcv.q_make_private o in
+        let* () = exec conn "destination draft" Phcv.q_make_draft_state d in
+        let* () = tombstone conn post "[deleted]" in
+        let* _ = withdraw_ok "withdraw the stale request" conn ~actor
+            ~placement:id ~origin:o
+        in
+        check_row "withdrawn" conn id ~status:"withdrawn" ~section:None
+          ~note:None ~requested_by:(Some actor) ~reviewed_by:None
+          ~removed_by:None ~withdrawn_by:(Some actor))
+
+  let withdraw_stale_case =
+    db_case "withdraw: only a pending row, and only through the origin"
+      (fun conn ->
+        let* actor, o, d, post, _ = fixture conn "wdstale" in
+        let* id = request_ok "request" conn ~actor ~post ~destination:d () in
+        let* () =
+          (* The destination cannot withdraw the origin's request. *)
+          withdraw_expect "the destination boundary"
+            Store.Withdrawal_unavailable conn ~actor ~placement:id ~origin:d
+        in
+        let* _ = withdraw_ok "withdraw" conn ~actor ~placement:id ~origin:o in
+        let* () =
+          withdraw_expect "a second withdrawal" Store.Withdrawal_unavailable
+            conn ~actor ~placement:id ~origin:o
+        in
+        (* An accepted row is not withdrawable — that is removal's job. *)
+        let* second = request_ok "fresh request" conn ~actor ~post ~destination:d () in
+        let* _ =
+          review_ok "accept" conn ~reviewer:actor ~placement:second
+            ~destination:d (Store.Accept None) P.Accepted
+        in
+        let* () =
+          withdraw_expect "an accepted row" Store.Withdrawal_unavailable conn
+            ~actor ~placement:second ~origin:o
+        in
+        let* absent = find conn "absent id" q_absent_placement () in
+        let* () =
+          withdraw_expect "an absent placement" Store.Withdrawal_unavailable
+            conn ~actor ~placement:absent ~origin:o
+        in
+        let* () =
+          withdraw_expect "zero actor" Store.Invalid_user_id conn ~actor:0
+            ~placement:second ~origin:o
+        in
+        check_event_count "stale withdrawals" conn ~post 4)
+
+  (* === remove === *)
+
+  let remove_case =
+    db_case "remove: either side detaches an accepted placement" (fun conn ->
+        let* actor, o, d, post, _ = fixture conn "rm" in
+        let* id = request_ok "request" conn ~actor ~post ~destination:d () in
+        let* _ =
+          review_ok "accept" conn ~reviewer:actor ~placement:id ~destination:d
+            (Store.Accept None) P.Accepted
+        in
+        let* remover = insert_user conn "stp_rm_actor" in
+        let* removed = remove_ok "remove from the origin side" conn
+            ~actor:remover ~placement:id ~acting:o
+        in
+        Alcotest.(check int) "post crosses back" post
+          (Store.removed_post_id removed);
+        Alcotest.(check int) "origin crosses back" o
+          (Store.removed_origin_community_id removed);
+        Alcotest.(check int) "destination crosses back" d
+          (Store.removed_destination_community_id removed);
+        let* () =
+          check_row "removed" conn id ~status:"removed" ~section:None
+            ~note:None ~requested_by:(Some actor) ~reviewed_by:(Some actor)
+            ~removed_by:(Some remover) ~withdrawn_by:None
+        in
+        let* reviewed, removed_at, withdrawn, coherent =
+          find conn "stamps" q_stamps id
+        in
+        Alcotest.(check bool) "the review survives" true reviewed;
+        Alcotest.(check bool) "removal time set" true removed_at;
+        Alcotest.(check bool) "no withdrawal time" false withdrawn;
+        Alcotest.(check bool) "updated_at coherent" true coherent;
+        let* () =
+          check_events "remove" conn ~placement:id
+            [ (("shared_thread_requested", Some actor), (post, o, d))
+            ; (("shared_thread_accepted", Some actor), (post, o, d))
+            ; (("shared_thread_removed", Some remover), (post, o, d)) ]
+        in
+        (* The destination detaches just as unilaterally. *)
+        let* second = request_ok "second request" conn ~actor ~post ~destination:d () in
+        let* _ =
+          review_ok "accept again" conn ~reviewer:actor ~placement:second
+            ~destination:d (Store.Accept None) P.Accepted
+        in
+        let* _ = remove_ok "remove from the destination side" conn
+            ~actor:remover ~placement:second ~acting:d
+        in
+        check_row "removed again" conn second ~status:"removed" ~section:None
+          ~note:None ~requested_by:(Some actor) ~reviewed_by:(Some actor)
+          ~removed_by:(Some remover) ~withdrawn_by:None)
+
+  let remove_survives_drift_case =
+    db_case
+      "remove: still possible after disconnect, ineligibility, \
+       tombstoning, and section deletion"
+      (fun conn ->
+        let* actor, o, d, post, connection = fixture conn "rmdrift" in
+        let* () = exec conn "sectioned destination" q_set_sections (d, true) in
+        let* section = find conn "section" q_insert_section (d, "gen") in
+        let* id = request_ok "request" conn ~actor ~post ~destination:d () in
+        let* _ =
+          review_ok "accept" conn ~reviewer:actor ~placement:id ~destination:d
+            (Store.Accept (Some section)) P.Accepted
+        in
+        let* () = disconnect conn ~actor ~connection ~acting:d in
+        let* () = exec conn "origin private" Phcv.q_make_private o in
+        let* () = tombstone conn post "[removed by moderator]" in
+        let* () = exec conn "delete section" q_delete_section section in
+        let* _ = remove_ok "remove the stale placement" conn ~actor
+            ~placement:id ~acting:d
+        in
+        (* The accepted section was already released by the deletion; the
+           removal keeps that history as-is. *)
+        check_row "removed" conn id ~status:"removed" ~section:None
+          ~note:None ~requested_by:(Some actor) ~reviewed_by:(Some actor)
+          ~removed_by:(Some actor) ~withdrawn_by:None)
+
+  let remove_scope_case =
+    db_case "remove: only the selected placement changes" (fun conn ->
+        let* actor, o, d, post, _ = fixture conn "rmscope" in
+        let* e = insert_community conn "stp-rmscope-e" in
+        let* () = exec conn "flat e" q_set_sections (e, false) in
+        let* _ = connect conn ~actor o e in
+        let* commenter = insert_user conn "stp_rmscope_commenter" in
+        let* _ = find conn "comment" q_insert_comment (post, commenter) in
+        let* first = request_ok "to d" conn ~actor ~post ~destination:d () in
+        let* second = request_ok "to e" conn ~actor ~post ~destination:e () in
+        let* _ =
+          review_ok "accept d" conn ~reviewer:actor ~placement:first
+            ~destination:d (Store.Accept None) P.Accepted
+        in
+        let* _ =
+          review_ok "accept e" conn ~reviewer:actor ~placement:second
+            ~destination:e (Store.Accept None) P.Accepted
+        in
+        let* _ = remove_ok "remove d" conn ~actor ~placement:first ~acting:d in
+        (* The sibling placement, the canonical post, and its comments are
+           untouched. *)
+        let* () =
+          check_row "sibling untouched" conn second ~status:"accepted"
+            ~section:None ~note:None ~requested_by:(Some actor)
+            ~reviewed_by:(Some actor) ~removed_by:None ~withdrawn_by:None
+        in
+        let* title, content = find conn "post" q_post_row post in
+        Alcotest.(check string) "title kept" "stp thread" title;
+        Alcotest.(check (option string)) "content kept" (Some "stp body")
+          content;
+        let* comments = find conn "comments" q_comment_count post in
+        Alcotest.(check int) "comments kept" 1 comments;
+        Lwt.return_unit)
+
+  let remove_stale_case =
+    db_case "remove: only an accepted row, and only from inside the pair"
+      (fun conn ->
+        let* actor, o, d, post, _ = fixture conn "rmstale" in
+        let* stranger = insert_community conn "stp-rmstale-c" in
+        let* id = request_ok "request" conn ~actor ~post ~destination:d () in
+        let* () =
+          remove_expect "a pending row" Store.Removal_unavailable conn ~actor
+            ~placement:id ~acting:o
+        in
+        let* _ =
+          review_ok "accept" conn ~reviewer:actor ~placement:id ~destination:d
+            (Store.Accept None) P.Accepted
+        in
+        let* () =
+          remove_expect "an outside community" Store.Removal_unavailable conn
+            ~actor ~placement:id ~acting:stranger
+        in
+        let* absent = find conn "absent id" q_absent_placement () in
+        let* () =
+          remove_expect "an absent placement" Store.Removal_unavailable conn
+            ~actor ~placement:absent ~acting:o
+        in
+        let* _ = remove_ok "first removal" conn ~actor ~placement:id ~acting:o in
+        let* () =
+          remove_expect "a second removal" Store.Removal_unavailable conn
+            ~actor ~placement:id ~acting:d
+        in
+        (* Exactly one removed event survives all of that. *)
+        check_events "one removal only" conn ~placement:id
+          [ (("shared_thread_requested", Some actor), (post, o, d))
+          ; (("shared_thread_accepted", Some actor), (post, o, d))
+          ; (("shared_thread_removed", Some actor), (post, o, d)) ])
+
+  (* === atomicity === *)
+
+  let ddl sql = (Caqti_type.unit ->. Caqti_type.unit) sql
+
+  let q_create_fail_fn =
+    ddl
+      "CREATE FUNCTION stp_fail_fn() RETURNS trigger \
+       LANGUAGE plpgsql \
+       AS 'BEGIN RAISE EXCEPTION ''stp fixture failure''; END'"
+
+  let q_drop_fail_fn = ddl "DROP FUNCTION IF EXISTS stp_fail_fn()"
+
+  let q_poison_audit =
+    ddl
+      "CREATE TRIGGER stp_fail_audit \
+       BEFORE INSERT ON shared_thread_placement_audit_events \
+       FOR EACH ROW EXECUTE FUNCTION stp_fail_fn()"
+
+  let q_unpoison_audit =
+    ddl
+      "DROP TRIGGER IF EXISTS stp_fail_audit \
+       ON shared_thread_placement_audit_events"
+
+  let q_poison_insert =
+    ddl
+      "CREATE TRIGGER stp_fail_business \
+       AFTER INSERT ON shared_thread_placements \
+       FOR EACH ROW EXECUTE FUNCTION stp_fail_fn()"
+
+  let q_poison_update =
+    ddl
+      "CREATE TRIGGER stp_fail_business \
+       AFTER UPDATE ON shared_thread_placements \
+       FOR EACH ROW EXECUTE FUNCTION stp_fail_fn()"
+
+  let q_unpoison_business =
+    ddl "DROP TRIGGER IF EXISTS stp_fail_business ON shared_thread_placements"
+
+  let q_poison_notif =
+    ddl
+      "CREATE TRIGGER stp_fail_notif \
+       BEFORE INSERT ON notifications \
+       FOR EACH ROW EXECUTE FUNCTION stp_fail_fn()"
+
+  let q_unpoison_notif =
+    ddl "DROP TRIGGER IF EXISTS stp_fail_notif ON notifications"
+
+  let with_poison conn ~install ~remove f =
+    let* () = exec conn "create fail fn" q_create_fail_fn () in
+    Lwt.finalize
+      (fun () ->
+        let* () = exec conn "install poison trigger" install () in
+        Lwt.finalize f (fun () -> exec conn "drop poison trigger" remove ()))
+      (fun () -> exec conn "drop fail fn" q_drop_fail_fn ())
+
+  let audit_failure_rolls_back_case =
+    db_case "atomicity: a failed audit insert rolls the whole mutation back"
+      (fun conn ->
+        let* actor, o, d, post, _ = fixture conn "auditfail" in
+        let* () =
+          with_poison conn ~install:q_poison_audit ~remove:q_unpoison_audit
+            (fun () ->
+              request_expect "request with audit poisoned" Store.Storage_error
+                conn ~actor ~post ~destination:d ())
+        in
+        let* n = find conn "no placement row" q_count_pair (post, d) in
+        Alcotest.(check int) "no placement committed" 0 n;
+        let* () = check_event_count "no events" conn ~post 0 in
+        let* notifs = find conn "no notifications" q_notifs_for_post post in
+        Alcotest.(check int) "no notifications committed" 0 notifs;
+        (* And once the poison is gone the very same request commits. *)
+        let* id = request_ok "request afterwards" conn ~actor ~post
+            ~destination:d ()
+        in
+        check_events "committed together" conn ~placement:id
+          [ (("shared_thread_requested", Some actor), (post, o, d)) ])
+
+  let mutation_failure_leaves_no_event_case =
+    db_case "atomicity: a failed mutation leaves no event or notification"
+      (fun conn ->
+        let* actor, o, d, post, _ = fixture conn "bizfail" in
+        let* () =
+          with_poison conn ~install:q_poison_insert ~remove:q_unpoison_business
+            (fun () ->
+              request_expect "request with the insert poisoned"
+                Store.Storage_error conn ~actor ~post ~destination:d ())
+        in
+        let* n = find conn "no placement row" q_count_pair (post, d) in
+        Alcotest.(check int) "no placement committed" 0 n;
+        let* () = check_event_count "no events" conn ~post 0 in
+        (* The same holds for the update-driven transitions. *)
+        let* id = request_ok "request" conn ~actor ~post ~destination:d () in
+        let* () =
+          with_poison conn ~install:q_poison_update ~remove:q_unpoison_business
+            (fun () ->
+              review_expect "accept with the update poisoned"
+                Store.Storage_error conn ~reviewer:actor ~placement:id
+                ~destination:d (Store.Accept None))
+        in
+        let* () =
+          check_row "still pending" conn id ~status:"pending" ~section:None
+            ~note:None ~requested_by:(Some actor) ~reviewed_by:None
+            ~removed_by:None ~withdrawn_by:None
+        in
+        check_events "only the request survives" conn ~placement:id
+          [ (("shared_thread_requested", Some actor), (post, o, d)) ])
+
+  let notification_failure_rolls_back_case =
+    db_case
+      "atomicity: a failed notification insert rolls mutation and audit back"
+      (fun conn ->
+        let* actor, o, d, post, _ = fixture conn "notiffail" in
+        (* A destination top moderator, so the request path really attempts
+           a notification insert. *)
+        let* tm = insert_user conn "stp_notiffail_tm" in
+        let* () =
+          exec conn "top mod" Phrv.q_insert_moderator (tm, d, "top_mod")
+        in
+        let* () =
+          with_poison conn ~install:q_poison_notif ~remove:q_unpoison_notif
+            (fun () ->
+              request_expect "request with notifications poisoned"
+                Store.Storage_error conn ~actor ~post ~destination:d ())
+        in
+        let* n = find conn "no placement row" q_count_pair (post, d) in
+        Alcotest.(check int) "no placement committed" 0 n;
+        let* () = check_event_count "no events" conn ~post 0 in
+        let* notifs = find conn "no notifications" q_notifs_for_post post in
+        Alcotest.(check int) "no notifications committed" 0 notifs;
+        (* Afterwards the same request commits whole: row, event, and the
+           top moderator's notification. *)
+        let* id = request_ok "request afterwards" conn ~actor ~post
+            ~destination:d ()
+        in
+        let* () =
+          check_events "committed together" conn ~placement:id
+            [ (("shared_thread_requested", Some actor), (post, o, d)) ]
+        in
+        let* notifs = find conn "one notification" q_notifs_for_post post in
+        Alcotest.(check int) "exactly one notification" 1 notifs;
+        Lwt.return_unit)
+
+  (* === concurrency === *)
+
+  let concurrent_request_case =
+    db_case "concurrency: identical requests leave exactly one active row"
+      (fun conn ->
+        let* actor, _, d, post, _ = fixture conn "race" in
+        Pod_store.with_second_connection (fun conn2 ->
+            let* r1, r2 =
+              Lwt.both
+                (request conn ~actor ~post ~destination:d ())
+                (request conn2 ~actor ~post ~destination:d ())
+            in
+            (match (r1, r2) with
+            | Ok _, Error Store.Active_placement_exists
+            | Error Store.Active_placement_exists, Ok _ ->
+                ()
+            | Ok _, Ok _ -> Alcotest.fail "both requests won"
+            | Error e, Error e' ->
+                Alcotest.failf "both failed (%s, %s)" (error_str e)
+                  (error_str e')
+            | Ok _, Error e | Error e, Ok _ ->
+                Alcotest.failf "unexpected loser error %s" (error_str e));
+            let* total = find conn "row count" q_count_pair (post, d) in
+            Alcotest.(check int) "exactly one row" 1 total;
+            let* events = find conn "events" q_events_for_post post in
+            Alcotest.(check int) "exactly one event" 1 events;
+            Lwt.return_unit))
+
+  let concurrent_review_case =
+    db_case "concurrency: only one review of a pending row commits"
+      (fun conn ->
+        let* actor, _, d, post, _ = fixture conn "race2" in
+        let* id = request_ok "request" conn ~actor ~post ~destination:d () in
+        Pod_store.with_second_connection (fun conn2 ->
+            let* r1, r2 =
+              Lwt.both
+                (review conn ~reviewer:actor ~placement:id ~destination:d
+                   (Store.Accept None))
+                (review conn2 ~reviewer:actor ~placement:id ~destination:d
+                   Store.Reject)
+            in
+            (match (r1, r2) with
+            | Ok _, Error Store.Review_unavailable
+            | Error Store.Review_unavailable, Ok _ ->
+                ()
+            | Ok _, Ok _ -> Alcotest.fail "both reviews won"
+            | Error e, Error e' ->
+                Alcotest.failf "both failed (%s, %s)" (error_str e)
+                  (error_str e')
+            | Ok _, Error e | Error e, Ok _ ->
+                Alcotest.failf "unexpected loser error %s" (error_str e));
+            let* events = find conn "events" q_events_for_post post in
+            Alcotest.(check int) "the request plus exactly one review" 2
+              events;
+            Lwt.return_unit))
+
+  let request_suite =
+    [ request_case; request_blank_note_case; request_validation_case
+    ; request_missing_subjects_case; request_connection_case
+    ; request_eligibility_case; request_tombstone_case
+    ; request_duplicate_case; request_multiple_destinations_case ]
+
+  let review_suite =
+    [ accept_into_section_case; accept_flat_case
+    ; accept_section_boundary_case; accept_revalidation_case
+    ; review_boundary_case; review_stale_case ]
+
+  let withdraw_suite =
+    [ withdraw_case; withdraw_survives_drift_case; withdraw_stale_case ]
+
+  let remove_suite =
+    [ remove_case; remove_survives_drift_case; remove_scope_case
+    ; remove_stale_case ]
+
+  let atomicity_suite =
+    [ audit_failure_rolls_back_case; mutation_failure_leaves_no_event_case
+    ; notification_failure_rolls_back_case ]
+
+  let concurrency_suite = [ concurrent_request_case; concurrent_review_case ]
+end
+
+(* The structured notification recipient policy: exact top_mod resolution
+   per side, the requester/author pair on review outcomes, the
+   deduplicated two-sided union on removal, actor exclusion, per-side
+   community context, and the absence of prose. Database-gated on
+   EARDE_TEST_DATABASE_URL. *)
+module Stp_notif = struct
+  let ( let* ) = Lwt.bind
+
+  open Caqti_request.Infix
+
+  module P = Earde.Shared_thread_placements
+  module Store = Earde.Shared_thread_placement_store
+
+  let find = Pod_read.find
+  let collect = Pod_read.collect
+  let exec = Pod_read.exec
+  let insert_user = Pod_store.insert_user
+  let contains haystack needle = Cprj_schema.contains haystack ~needle
+
+  let db_case = Stp_store.db_case
+  let fixture = Stp_store.fixture
+  let insert_post = Stp_store.insert_post
+  let request_ok = Stp_store.request_ok
+  let review_ok = Stp_store.review_ok
+  let withdraw_ok = Stp_store.withdraw_ok
+  let remove_ok = Stp_store.remove_ok
+
+  let add_role conn ~user ~community role =
+    exec conn "role fixture" Phrv.q_insert_moderator (user, community, role)
+
+  let add_top_mod conn ~user ~community =
+    add_role conn ~user ~community "top_mod"
+
+  (* One tuple per notification of one placement, ordered by recipient so
+     expectations do not depend on insertion order. *)
+  let q_notifs =
+    (Caqti_type.int64
+     ->* Caqti_type.(t2 (t2 int string) (t2 (option int) int)))
+    "SELECT user_id, notif_type, actor_user_id, community_id \
+     FROM notifications WHERE shared_thread_placement_id = $1 \
+     ORDER BY user_id, notif_type"
+
+  let q_notif_count =
+    (Caqti_type.int64 ->! Caqti_type.int)
+    "SELECT COUNT(*) FROM notifications \
+     WHERE shared_thread_placement_id = $1"
+
+  (* Every stored byte of one placement's notifications, for the boolean
+     absence sweep over notes and usernames. *)
+  let q_notif_blob =
+    (Caqti_type.int64 ->! Caqti_type.string)
+    "SELECT COALESCE(string_agg(n::text, '|'), '<none>') \
+     FROM notifications n WHERE shared_thread_placement_id = $1"
+
+  (* Creation must never mark anything read. *)
+  let q_all_unread =
+    (Caqti_type.int64 ->! Caqti_type.bool)
+    "SELECT COALESCE(BOOL_AND(NOT is_read), TRUE) \
+     FROM notifications WHERE shared_thread_placement_id = $1"
+
+  let notif_t = Alcotest.(pair (pair int string) (pair (option int) int))
+
+  let sorted expected =
+    List.sort
+      (fun ((a, ka), _) ((b, kb), _) -> compare (a, ka) (b, kb))
+      expected
+
+  let check_notifs label conn ~placement expected =
+    let* rows = collect conn (label ^ ": notifications") q_notifs placement in
+    Alcotest.(check (list notif_t))
+      (label ^ ": exact notifications") (sorted expected) rows;
+    let* unread = find conn (label ^ ": unread") q_all_unread placement in
+    Alcotest.(check bool) (label ^ ": all rows unread") true unread;
+    Lwt.return_unit
+
+  let requested_recipients_case =
+    db_case "requested: destination exact top_mods only, in their context"
+      (fun conn ->
+        let* actor, o, d, post, _ = fixture conn "nreq" in
+        let* tm1 = insert_user conn "stp_nreq_tm1" in
+        let* tm2 = insert_user conn "stp_nreq_tm2" in
+        let* ordinary = insert_user conn "stp_nreq_mod" in
+        let* legacy = insert_user conn "stp_nreq_legacy" in
+        let* origin_tm = insert_user conn "stp_nreq_origin_tm" in
+        let* () = add_top_mod conn ~user:tm1 ~community:d in
+        let* () = add_top_mod conn ~user:tm2 ~community:d in
+        let* () = add_role conn ~user:ordinary ~community:d "mod" in
+        let* () = add_role conn ~user:legacy ~community:d "legacy_mod" in
+        let* () = add_top_mod conn ~user:origin_tm ~community:o in
+        let* id = request_ok "request" conn ~actor ~post ~destination:d () in
+        check_notifs "requested" conn ~placement:id
+          [ ((tm1, "shared_thread_requested"), (Some actor, d))
+          ; ((tm2, "shared_thread_requested"), (Some actor, d)) ])
+
+  let requested_actor_excluded_case =
+    db_case "requested: the acting top_mod is never notified" (fun conn ->
+        let* actor, _, d, post, _ = fixture conn "nself" in
+        let* other = insert_user conn "stp_nself_other" in
+        let* () = add_top_mod conn ~user:actor ~community:d in
+        let* () = add_top_mod conn ~user:other ~community:d in
+        let* id = request_ok "request" conn ~actor ~post ~destination:d () in
+        check_notifs "actor excluded" conn ~placement:id
+          [ ((other, "shared_thread_requested"), (Some actor, d)) ])
+
+  let zero_recipients_case =
+    db_case "requested: zero recipients never fails the transition"
+      (fun conn ->
+        let* actor, _, d, post, _ = fixture conn "nzero" in
+        let* id = request_ok "request" conn ~actor ~post ~destination:d () in
+        let* n = find conn "count" q_notif_count id in
+        Alcotest.(check int) "no notifications, request committed" 0 n;
+        Lwt.return_unit)
+
+  let review_recipients_case =
+    db_case "review: requester and author both hear the outcome, in origin \
+             context"
+      (fun conn ->
+        let* actor, o, d, _, _ = fixture conn "nrev" in
+        let* author = insert_user conn "stp_nrev_author" in
+        let* post = insert_post conn ~community:o ~author in
+        let* reviewer = insert_user conn "stp_nrev_reviewer" in
+        let* id = request_ok "request" conn ~actor ~post ~destination:d () in
+        let* _ =
+          review_ok "accept" conn ~reviewer ~placement:id ~destination:d
+            (Store.Accept None) P.Accepted
+        in
+        check_notifs "accepted" conn ~placement:id
+          [ ((actor, "shared_thread_accepted"), (Some reviewer, o))
+          ; ((author, "shared_thread_accepted"), (Some reviewer, o)) ])
+
+  let review_dedup_case =
+    db_case "review: a requesting author collapses to one notification"
+      (fun conn ->
+        let* actor, o, d, post, _ = fixture conn "ndedup2" in
+        (* The fixture's actor authored the post and requests the share. *)
+        let* reviewer = insert_user conn "stp_ndedup2_reviewer" in
+        let* id = request_ok "request" conn ~actor ~post ~destination:d () in
+        let* _ =
+          review_ok "reject" conn ~reviewer ~placement:id ~destination:d
+            Store.Reject P.Rejected
+        in
+        check_notifs "one rejected notification" conn ~placement:id
+          [ ((actor, "shared_thread_rejected"), (Some reviewer, o)) ])
+
+  let reviewer_is_requester_case =
+    db_case "review: a reviewing requester is excluded, the author remains"
+      (fun conn ->
+        let* actor, o, d, _, _ = fixture conn "nrevself" in
+        let* author = insert_user conn "stp_nrevself_author" in
+        let* post = insert_post conn ~community:o ~author in
+        let* id = request_ok "request" conn ~actor ~post ~destination:d () in
+        let* _ =
+          review_ok "accept by the requester" conn ~reviewer:actor
+            ~placement:id ~destination:d (Store.Accept None) P.Accepted
+        in
+        check_notifs "self-review" conn ~placement:id
+          [ ((author, "shared_thread_accepted"), (Some actor, o)) ])
+
+  let withdrawn_recipients_case =
+    db_case "withdrawn: destination top_mods hear it, minus the actor"
+      (fun conn ->
+        let* actor, o, d, post, _ = fixture conn "nwd" in
+        let* tm = insert_user conn "stp_nwd_tm" in
+        let* () = add_top_mod conn ~user:tm ~community:d in
+        let* id = request_ok "request" conn ~actor ~post ~destination:d () in
+        let* _ = withdraw_ok "withdraw" conn ~actor ~placement:id ~origin:o in
+        check_notifs "withdrawn" conn ~placement:id
+          [ ((tm, "shared_thread_requested"), (Some actor, d))
+          ; ((tm, "shared_thread_withdrawn"), (Some actor, d)) ])
+
+  let removed_union_case =
+    db_case "removed: both sides' top_mods, requester, and author — \
+             deduplicated, actor excluded, per-side context"
+      (fun conn ->
+        let* actor, o, d, _, _ = fixture conn "nrm" in
+        let* author = insert_user conn "stp_nrm_author" in
+        let* post = insert_post conn ~community:o ~author in
+        let* origin_tm = insert_user conn "stp_nrm_otm" in
+        let* dest_tm = insert_user conn "stp_nrm_dtm" in
+        let* both_tm = insert_user conn "stp_nrm_btm" in
+        let* remover = insert_user conn "stp_nrm_remover" in
+        let* () = add_top_mod conn ~user:origin_tm ~community:o in
+        let* () = add_top_mod conn ~user:dest_tm ~community:d in
+        let* () = add_top_mod conn ~user:both_tm ~community:o in
+        let* () = add_top_mod conn ~user:both_tm ~community:d in
+        let* id = request_ok "request" conn ~actor ~post ~destination:d () in
+        let* _ =
+          review_ok "accept" conn ~reviewer:remover ~placement:id
+            ~destination:d (Store.Accept None) P.Accepted
+        in
+        let* _ = remove_ok "remove" conn ~actor:remover ~placement:id ~acting:o in
+        let removed = "shared_thread_removed" in
+        let* rows = collect conn "rows" q_notifs id in
+        let removed_rows =
+          List.filter (fun ((_, kind), _) -> kind = removed) rows
+        in
+        Alcotest.(check (list notif_t))
+          "exact removal recipients"
+          (List.sort compare
+             [ ((origin_tm, removed), (Some remover, o))
+               (* A top moderator of both sides is notified once, in
+                  origin context. *)
+             ; ((both_tm, removed), (Some remover, o))
+             ; ((actor, removed), (Some remover, o))
+             ; ((author, removed), (Some remover, o))
+             ; ((dest_tm, removed), (Some remover, d)) ])
+          removed_rows;
+        Lwt.return_unit)
+
+  let privacy_case =
+    db_case "privacy: no note, name, or prose is stored on any row"
+      (fun conn ->
+        let* actor, _, d, post, _ = fixture conn "priv" in
+        let* tm = insert_user conn "stp_priv_tm" in
+        let* () = add_top_mod conn ~user:tm ~community:d in
+        let* id =
+          request_ok "request" conn ~actor
+            ~note:"SECRETNOTE do not surface" ~post ~destination:d ()
+        in
+        let* blob = find conn "blob" q_notif_blob id in
+        List.iter
+          (fun needle ->
+            if contains blob needle then
+              Alcotest.failf "notifications carry %S" needle)
+          [ "SECRETNOTE"; "stp_priv"; "stp thread"; "stp body" ];
+        Lwt.return_unit)
+
+  let suite =
+    [ requested_recipients_case; requested_actor_excluded_case
+    ; zero_recipients_case; review_recipients_case; review_dedup_case
+    ; reviewer_is_requester_case; withdrawn_recipients_case
+    ; removed_union_case; privacy_case ]
+end
+
 let () =
   Alcotest.run "earde"
     [ ( "smoke"
@@ -70753,4 +73309,19 @@ let () =
     ; ("launch_scope_css", Launch_scope_css.suite)
     ; ("community_home_ia", Comm_home_ia.suite)
     ; ("community_network_page", Comm_network_page.suite)
+      (* Shared threads, slice 1 (storage/domain foundation): the pure
+         placement lifecycle and note canonicalization are DB-free; the
+         placement and audit tables' constraints, the transactional store
+         with its one-audit-event-per-mutation rule and structured
+         notifications, the active-(post, destination) arbitration under
+         real concurrency, and the recipient policy are database-gated. *)
+    ; ("shared_thread_placements_domain", Stpd.suite)
+    ; ("shared_thread_placements_schema", Stp_schema.suite)
+    ; ("shared_thread_placement_store_request", Stp_store.request_suite)
+    ; ("shared_thread_placement_store_review", Stp_store.review_suite)
+    ; ("shared_thread_placement_store_withdraw", Stp_store.withdraw_suite)
+    ; ("shared_thread_placement_store_remove", Stp_store.remove_suite)
+    ; ("shared_thread_placement_atomicity", Stp_store.atomicity_suite)
+    ; ("shared_thread_placement_concurrency", Stp_store.concurrency_suite)
+    ; ("shared_thread_notifications", Stp_notif.suite)
     ]

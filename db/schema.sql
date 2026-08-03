@@ -566,8 +566,9 @@ CREATE TABLE public.notifications (
     community_id integer,
     relation_id bigint,
     connection_id bigint,
-    CONSTRAINT notifications_notif_type_check CHECK (((notif_type)::text = ANY ((ARRAY['comment_reply'::character varying, 'mention'::character varying, 'mod_action'::character varying, 'project_home_requested'::character varying, 'project_home_accepted'::character varying, 'project_home_rejected'::character varying, 'project_home_removed'::character varying, 'community_connection_requested'::character varying, 'community_connection_accepted'::character varying, 'community_connection_rejected'::character varying, 'community_connection_removed'::character varying])::text[]))),
-    CONSTRAINT notifications_shape_check CHECK (((((notif_type)::text = ANY ((ARRAY['project_home_requested'::character varying, 'project_home_accepted'::character varying, 'project_home_rejected'::character varying, 'project_home_removed'::character varying])::text[])) AND (project_id IS NOT NULL) AND (community_id IS NOT NULL) AND (relation_id IS NOT NULL) AND (connection_id IS NULL) AND (message IS NULL) AND (post_id IS NULL)) OR (((notif_type)::text = ANY ((ARRAY['community_connection_requested'::character varying, 'community_connection_accepted'::character varying, 'community_connection_rejected'::character varying, 'community_connection_removed'::character varying])::text[])) AND (community_id IS NOT NULL) AND (connection_id IS NOT NULL) AND (project_id IS NULL) AND (relation_id IS NULL) AND (message IS NULL) AND (post_id IS NULL)) OR (((notif_type)::text <> ALL ((ARRAY['project_home_requested'::character varying, 'project_home_accepted'::character varying, 'project_home_rejected'::character varying, 'project_home_removed'::character varying, 'community_connection_requested'::character varying, 'community_connection_accepted'::character varying, 'community_connection_rejected'::character varying, 'community_connection_removed'::character varying])::text[])) AND (project_id IS NULL) AND (community_id IS NULL) AND (relation_id IS NULL) AND (connection_id IS NULL) AND (actor_user_id IS NULL) AND (message IS NOT NULL))))
+    shared_thread_placement_id bigint,
+    CONSTRAINT notifications_notif_type_check CHECK (((notif_type)::text = ANY ((ARRAY['comment_reply'::character varying, 'mention'::character varying, 'mod_action'::character varying, 'project_home_requested'::character varying, 'project_home_accepted'::character varying, 'project_home_rejected'::character varying, 'project_home_removed'::character varying, 'community_connection_requested'::character varying, 'community_connection_accepted'::character varying, 'community_connection_rejected'::character varying, 'community_connection_removed'::character varying, 'shared_thread_requested'::character varying, 'shared_thread_accepted'::character varying, 'shared_thread_rejected'::character varying, 'shared_thread_removed'::character varying, 'shared_thread_withdrawn'::character varying])::text[]))),
+    CONSTRAINT notifications_shape_check CHECK (((((notif_type)::text = ANY ((ARRAY['project_home_requested'::character varying, 'project_home_accepted'::character varying, 'project_home_rejected'::character varying, 'project_home_removed'::character varying])::text[])) AND (project_id IS NOT NULL) AND (community_id IS NOT NULL) AND (relation_id IS NOT NULL) AND (connection_id IS NULL) AND (shared_thread_placement_id IS NULL) AND (message IS NULL) AND (post_id IS NULL)) OR (((notif_type)::text = ANY ((ARRAY['community_connection_requested'::character varying, 'community_connection_accepted'::character varying, 'community_connection_rejected'::character varying, 'community_connection_removed'::character varying])::text[])) AND (community_id IS NOT NULL) AND (connection_id IS NOT NULL) AND (project_id IS NULL) AND (relation_id IS NULL) AND (shared_thread_placement_id IS NULL) AND (message IS NULL) AND (post_id IS NULL)) OR (((notif_type)::text = ANY ((ARRAY['shared_thread_requested'::character varying, 'shared_thread_accepted'::character varying, 'shared_thread_rejected'::character varying, 'shared_thread_removed'::character varying, 'shared_thread_withdrawn'::character varying])::text[])) AND (community_id IS NOT NULL) AND (shared_thread_placement_id IS NOT NULL) AND (project_id IS NULL) AND (relation_id IS NULL) AND (connection_id IS NULL) AND (message IS NULL) AND (post_id IS NULL)) OR (((notif_type)::text <> ALL ((ARRAY['project_home_requested'::character varying, 'project_home_accepted'::character varying, 'project_home_rejected'::character varying, 'project_home_removed'::character varying, 'community_connection_requested'::character varying, 'community_connection_accepted'::character varying, 'community_connection_rejected'::character varying, 'community_connection_removed'::character varying, 'shared_thread_requested'::character varying, 'shared_thread_accepted'::character varying, 'shared_thread_rejected'::character varying, 'shared_thread_removed'::character varying, 'shared_thread_withdrawn'::character varying])::text[])) AND (project_id IS NULL) AND (community_id IS NULL) AND (relation_id IS NULL) AND (connection_id IS NULL) AND (shared_thread_placement_id IS NULL) AND (actor_user_id IS NULL) AND (message IS NOT NULL))))
 );
 
 
@@ -1124,6 +1125,94 @@ CREATE TABLE public.schema_migrations (
 
 
 --
+-- Name: shared_thread_placement_audit_events; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.shared_thread_placement_audit_events (
+    id bigint NOT NULL,
+    action text NOT NULL,
+    actor_user_id integer,
+    placement_id bigint NOT NULL,
+    post_id integer NOT NULL,
+    origin_community_id integer NOT NULL,
+    destination_community_id integer NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT shared_thread_placement_audit_events_action_check CHECK ((action = ANY (ARRAY['shared_thread_requested'::text, 'shared_thread_accepted'::text, 'shared_thread_rejected'::text, 'shared_thread_removed'::text, 'shared_thread_withdrawn'::text])))
+);
+
+
+--
+-- Name: shared_thread_placement_audit_events_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.shared_thread_placement_audit_events_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: shared_thread_placement_audit_events_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.shared_thread_placement_audit_events_id_seq OWNED BY public.shared_thread_placement_audit_events.id;
+
+
+--
+-- Name: shared_thread_placements; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.shared_thread_placements (
+    id bigint NOT NULL,
+    post_id integer NOT NULL,
+    origin_community_id integer NOT NULL,
+    destination_community_id integer NOT NULL,
+    destination_section_id integer,
+    status text NOT NULL,
+    requested_by_user_id integer,
+    reviewed_by_user_id integer,
+    removed_by_user_id integer,
+    withdrawn_by_user_id integer,
+    request_note text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    reviewed_at timestamp with time zone,
+    removed_at timestamp with time zone,
+    withdrawn_at timestamp with time zone,
+    CONSTRAINT shared_thread_placements_distinct_communities_check CHECK ((destination_community_id <> origin_community_id)),
+    CONSTRAINT shared_thread_placements_removed_after_created_check CHECK (((removed_at IS NULL) OR (removed_at >= created_at))),
+    CONSTRAINT shared_thread_placements_removed_after_reviewed_check CHECK (((removed_at IS NULL) OR (reviewed_at IS NULL) OR (removed_at >= reviewed_at))),
+    CONSTRAINT shared_thread_placements_request_note_check CHECK (((request_note IS NULL) OR (char_length(request_note) <= 2000))),
+    CONSTRAINT shared_thread_placements_reviewed_after_created_check CHECK (((reviewed_at IS NULL) OR (reviewed_at >= created_at))),
+    CONSTRAINT shared_thread_placements_status_check CHECK ((status = ANY (ARRAY['pending'::text, 'accepted'::text, 'rejected'::text, 'removed'::text, 'withdrawn'::text]))),
+    CONSTRAINT shared_thread_placements_status_shape_check CHECK ((((status = 'pending'::text) AND (reviewed_at IS NULL) AND (removed_at IS NULL) AND (withdrawn_at IS NULL) AND (reviewed_by_user_id IS NULL) AND (removed_by_user_id IS NULL) AND (withdrawn_by_user_id IS NULL) AND (destination_section_id IS NULL)) OR ((status = 'accepted'::text) AND (reviewed_at IS NOT NULL) AND (removed_at IS NULL) AND (withdrawn_at IS NULL) AND (removed_by_user_id IS NULL) AND (withdrawn_by_user_id IS NULL)) OR ((status = 'rejected'::text) AND (reviewed_at IS NOT NULL) AND (removed_at IS NULL) AND (withdrawn_at IS NULL) AND (removed_by_user_id IS NULL) AND (withdrawn_by_user_id IS NULL) AND (destination_section_id IS NULL)) OR ((status = 'removed'::text) AND (reviewed_at IS NOT NULL) AND (removed_at IS NOT NULL) AND (withdrawn_at IS NULL) AND (withdrawn_by_user_id IS NULL)) OR ((status = 'withdrawn'::text) AND (withdrawn_at IS NOT NULL) AND (reviewed_at IS NULL) AND (removed_at IS NULL) AND (reviewed_by_user_id IS NULL) AND (removed_by_user_id IS NULL) AND (destination_section_id IS NULL)))),
+    CONSTRAINT shared_thread_placements_updated_after_created_check CHECK ((updated_at >= created_at)),
+    CONSTRAINT shared_thread_placements_withdrawn_after_created_check CHECK (((withdrawn_at IS NULL) OR (withdrawn_at >= created_at)))
+);
+
+
+--
+-- Name: shared_thread_placements_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.shared_thread_placements_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: shared_thread_placements_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.shared_thread_placements_id_seq OWNED BY public.shared_thread_placements.id;
+
+
+--
 -- Name: thread_source_messages; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -1348,6 +1437,20 @@ ALTER TABLE ONLY public.project_repositories ALTER COLUMN id SET DEFAULT nextval
 --
 
 ALTER TABLE ONLY public.reports ALTER COLUMN id SET DEFAULT nextval('public.reports_id_seq'::regclass);
+
+
+--
+-- Name: shared_thread_placement_audit_events id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.shared_thread_placement_audit_events ALTER COLUMN id SET DEFAULT nextval('public.shared_thread_placement_audit_events_id_seq'::regclass);
+
+
+--
+-- Name: shared_thread_placements id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.shared_thread_placements ALTER COLUMN id SET DEFAULT nextval('public.shared_thread_placements_id_seq'::regclass);
 
 
 --
@@ -1766,6 +1869,22 @@ ALTER TABLE ONLY public.schema_migrations
 
 
 --
+-- Name: shared_thread_placement_audit_events shared_thread_placement_audit_events_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.shared_thread_placement_audit_events
+    ADD CONSTRAINT shared_thread_placement_audit_events_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: shared_thread_placements shared_thread_placements_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.shared_thread_placements
+    ADD CONSTRAINT shared_thread_placements_pkey PRIMARY KEY (id);
+
+
+--
 -- Name: thread_source_messages thread_source_messages_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -1952,6 +2071,13 @@ CREATE INDEX idx_notifications_relation ON public.notifications USING btree (rel
 
 
 --
+-- Name: idx_notifications_shared_thread_placement; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_notifications_shared_thread_placement ON public.notifications USING btree (shared_thread_placement_id) WHERE (shared_thread_placement_id IS NOT NULL);
+
+
+--
 -- Name: idx_open_source_projects_namespace; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -2071,6 +2197,76 @@ CREATE INDEX idx_reports_community_status ON public.reports USING btree (communi
 
 
 --
+-- Name: idx_shared_thread_placement_audit_events_actor; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_shared_thread_placement_audit_events_actor ON public.shared_thread_placement_audit_events USING btree (actor_user_id, created_at DESC);
+
+
+--
+-- Name: idx_shared_thread_placement_audit_events_destination; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_shared_thread_placement_audit_events_destination ON public.shared_thread_placement_audit_events USING btree (destination_community_id, created_at DESC);
+
+
+--
+-- Name: idx_shared_thread_placement_audit_events_origin; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_shared_thread_placement_audit_events_origin ON public.shared_thread_placement_audit_events USING btree (origin_community_id, created_at DESC);
+
+
+--
+-- Name: idx_shared_thread_placement_audit_events_placement; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_shared_thread_placement_audit_events_placement ON public.shared_thread_placement_audit_events USING btree (placement_id, created_at DESC);
+
+
+--
+-- Name: idx_shared_thread_placement_audit_events_post; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_shared_thread_placement_audit_events_post ON public.shared_thread_placement_audit_events USING btree (post_id, created_at DESC);
+
+
+--
+-- Name: idx_shared_thread_placements_destination_section; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_shared_thread_placements_destination_section ON public.shared_thread_placements USING btree (destination_section_id) WHERE (destination_section_id IS NOT NULL);
+
+
+--
+-- Name: idx_shared_thread_placements_destination_status; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_shared_thread_placements_destination_status ON public.shared_thread_placements USING btree (destination_community_id, status, created_at);
+
+
+--
+-- Name: idx_shared_thread_placements_origin_status; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_shared_thread_placements_origin_status ON public.shared_thread_placements USING btree (origin_community_id, status, created_at);
+
+
+--
+-- Name: idx_shared_thread_placements_post; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_shared_thread_placements_post ON public.shared_thread_placements USING btree (post_id, status);
+
+
+--
+-- Name: shared_thread_placements_one_active_destination_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX shared_thread_placements_one_active_destination_idx ON public.shared_thread_placements USING btree (post_id, destination_community_id) WHERE (status = ANY (ARRAY['pending'::text, 'accepted'::text]));
+
+
+--
 -- Name: uniq_open_source_projects_source_draft; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -2117,6 +2313,13 @@ CREATE UNIQUE INDEX uniq_thread_source_seed_message ON public.thread_source_mess
 --
 
 CREATE UNIQUE INDEX uq_notifications_recipient_kind_connection ON public.notifications USING btree (user_id, notif_type, connection_id) WHERE (connection_id IS NOT NULL);
+
+
+--
+-- Name: uq_notifications_recipient_kind_placement; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX uq_notifications_recipient_kind_placement ON public.notifications USING btree (user_id, notif_type, shared_thread_placement_id) WHERE (shared_thread_placement_id IS NOT NULL);
 
 
 --
@@ -2447,6 +2650,14 @@ ALTER TABLE ONLY public.notifications
 
 
 --
+-- Name: notifications notifications_shared_thread_placement_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.notifications
+    ADD CONSTRAINT notifications_shared_thread_placement_id_fkey FOREIGN KEY (shared_thread_placement_id) REFERENCES public.shared_thread_placements(id) ON DELETE CASCADE;
+
+
+--
 -- Name: notifications notifications_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -2647,6 +2858,110 @@ ALTER TABLE ONLY public.reports
 
 
 --
+-- Name: shared_thread_placement_audit_events shared_thread_placement_audit_eve_destination_community_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.shared_thread_placement_audit_events
+    ADD CONSTRAINT shared_thread_placement_audit_eve_destination_community_id_fkey FOREIGN KEY (destination_community_id) REFERENCES public.communities(id);
+
+
+--
+-- Name: shared_thread_placement_audit_events shared_thread_placement_audit_events_actor_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.shared_thread_placement_audit_events
+    ADD CONSTRAINT shared_thread_placement_audit_events_actor_user_id_fkey FOREIGN KEY (actor_user_id) REFERENCES public.users(id) ON DELETE SET NULL;
+
+
+--
+-- Name: shared_thread_placement_audit_events shared_thread_placement_audit_events_origin_community_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.shared_thread_placement_audit_events
+    ADD CONSTRAINT shared_thread_placement_audit_events_origin_community_id_fkey FOREIGN KEY (origin_community_id) REFERENCES public.communities(id);
+
+
+--
+-- Name: shared_thread_placement_audit_events shared_thread_placement_audit_events_placement_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.shared_thread_placement_audit_events
+    ADD CONSTRAINT shared_thread_placement_audit_events_placement_id_fkey FOREIGN KEY (placement_id) REFERENCES public.shared_thread_placements(id);
+
+
+--
+-- Name: shared_thread_placement_audit_events shared_thread_placement_audit_events_post_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.shared_thread_placement_audit_events
+    ADD CONSTRAINT shared_thread_placement_audit_events_post_id_fkey FOREIGN KEY (post_id) REFERENCES public.posts(id);
+
+
+--
+-- Name: shared_thread_placements shared_thread_placements_destination_community_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.shared_thread_placements
+    ADD CONSTRAINT shared_thread_placements_destination_community_id_fkey FOREIGN KEY (destination_community_id) REFERENCES public.communities(id) ON DELETE CASCADE;
+
+
+--
+-- Name: shared_thread_placements shared_thread_placements_destination_section_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.shared_thread_placements
+    ADD CONSTRAINT shared_thread_placements_destination_section_id_fkey FOREIGN KEY (destination_section_id) REFERENCES public.community_sections(id) ON DELETE SET NULL;
+
+
+--
+-- Name: shared_thread_placements shared_thread_placements_origin_community_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.shared_thread_placements
+    ADD CONSTRAINT shared_thread_placements_origin_community_id_fkey FOREIGN KEY (origin_community_id) REFERENCES public.communities(id) ON DELETE CASCADE;
+
+
+--
+-- Name: shared_thread_placements shared_thread_placements_post_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.shared_thread_placements
+    ADD CONSTRAINT shared_thread_placements_post_id_fkey FOREIGN KEY (post_id) REFERENCES public.posts(id) ON DELETE CASCADE;
+
+
+--
+-- Name: shared_thread_placements shared_thread_placements_removed_by_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.shared_thread_placements
+    ADD CONSTRAINT shared_thread_placements_removed_by_user_id_fkey FOREIGN KEY (removed_by_user_id) REFERENCES public.users(id) ON DELETE SET NULL;
+
+
+--
+-- Name: shared_thread_placements shared_thread_placements_requested_by_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.shared_thread_placements
+    ADD CONSTRAINT shared_thread_placements_requested_by_user_id_fkey FOREIGN KEY (requested_by_user_id) REFERENCES public.users(id) ON DELETE SET NULL;
+
+
+--
+-- Name: shared_thread_placements shared_thread_placements_reviewed_by_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.shared_thread_placements
+    ADD CONSTRAINT shared_thread_placements_reviewed_by_user_id_fkey FOREIGN KEY (reviewed_by_user_id) REFERENCES public.users(id) ON DELETE SET NULL;
+
+
+--
+-- Name: shared_thread_placements shared_thread_placements_withdrawn_by_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.shared_thread_placements
+    ADD CONSTRAINT shared_thread_placements_withdrawn_by_user_id_fkey FOREIGN KEY (withdrawn_by_user_id) REFERENCES public.users(id) ON DELETE SET NULL;
+
+
+--
 -- Name: thread_source_messages thread_source_messages_message_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -2701,4 +3016,5 @@ INSERT INTO public.schema_migrations (version) VALUES
     ('20260727120000'),
     ('20260727130000'),
     ('20260731120000'),
-    ('20260731130000');
+    ('20260731130000'),
+    ('20260803120000');
