@@ -1802,12 +1802,16 @@ module Step6_events = struct
 
   let comment_case =
     db_case "forum_comment_created carries the real RETURNING comment id"
-      (fun ~url _conn c ->
+      (fun ~url conn c ->
         let (module C : Caqti_lwt.CONNECTION) = c in
         let* uid = C.find q_insert_user ("step6_commenter", "x") in
         let* uid = or_fail "user" uid in
         let* cid = C.find q_insert_community ("step6-comm", false, "public") in
         let* cid = or_fail "community" cid in
+        (* Commenting now requires a current participation path (origin
+           membership here) — the Shared Threads server-side rule. *)
+        let* r = Earde.Db.join_community conn uid cid in
+        let* () = or_fail_s "membership" r in
         let* pid = C.find q_insert_post (cid, uid) in
         let* pid = or_fail "post" pid in
         let session =
@@ -50471,6 +50475,176 @@ module Phnt = struct
          ON notifications (connection_id) WHERE connection_id IS NOT NULL"
       ]
 
+  (* The shared-thread placement migration sits on top of the
+     community-connection one and replaces the shape CHECK again, so the
+     stack now unwinds through its notification statements first and
+     restores them last. Byte-for-byte that migration's notifications
+     portion. *)
+  let q_latest_down_statements =
+    List.map ddl
+      [ "DELETE FROM notifications \
+         WHERE notif_type IN ('shared_thread_requested', \
+                              'shared_thread_accepted', \
+                              'shared_thread_rejected', \
+                              'shared_thread_removed', \
+                              'shared_thread_withdrawn')"
+      ; "DROP INDEX idx_notifications_shared_thread_placement"
+      ; "DROP INDEX uq_notifications_recipient_kind_placement"
+      ; "ALTER TABLE notifications DROP CONSTRAINT notifications_shape_check"
+      ; "ALTER TABLE notifications \
+         ADD CONSTRAINT notifications_shape_check CHECK ( \
+           (notif_type IN ('project_home_requested', \
+                           'project_home_accepted', \
+                           'project_home_rejected', \
+                           'project_home_removed') \
+             AND project_id IS NOT NULL \
+             AND community_id IS NOT NULL \
+             AND relation_id IS NOT NULL \
+             AND connection_id IS NULL \
+             AND message IS NULL \
+             AND post_id IS NULL) \
+           OR \
+           (notif_type IN ('community_connection_requested', \
+                           'community_connection_accepted', \
+                           'community_connection_rejected', \
+                           'community_connection_removed') \
+             AND community_id IS NOT NULL \
+             AND connection_id IS NOT NULL \
+             AND project_id IS NULL \
+             AND relation_id IS NULL \
+             AND message IS NULL \
+             AND post_id IS NULL) \
+           OR \
+           (notif_type NOT IN ('project_home_requested', \
+                               'project_home_accepted', \
+                               'project_home_rejected', \
+                               'project_home_removed', \
+                               'community_connection_requested', \
+                               'community_connection_accepted', \
+                               'community_connection_rejected', \
+                               'community_connection_removed') \
+             AND project_id IS NULL \
+             AND community_id IS NULL \
+             AND relation_id IS NULL \
+             AND connection_id IS NULL \
+             AND actor_user_id IS NULL \
+             AND message IS NOT NULL) \
+         )"
+      ; "ALTER TABLE notifications \
+         DROP CONSTRAINT notifications_notif_type_check"
+      ; "ALTER TABLE notifications \
+         ADD CONSTRAINT notifications_notif_type_check CHECK ( \
+           notif_type IN ('comment_reply', \
+                          'mention', \
+                          'mod_action', \
+                          'project_home_requested', \
+                          'project_home_accepted', \
+                          'project_home_rejected', \
+                          'project_home_removed', \
+                          'community_connection_requested', \
+                          'community_connection_accepted', \
+                          'community_connection_rejected', \
+                          'community_connection_removed') \
+         )"
+      ; "ALTER TABLE notifications DROP COLUMN shared_thread_placement_id"
+      ]
+
+  let q_latest_up_statements =
+    List.map ddl
+      [ "ALTER TABLE notifications \
+         ADD COLUMN shared_thread_placement_id BIGINT \
+           CONSTRAINT notifications_shared_thread_placement_id_fkey \
+           REFERENCES shared_thread_placements(id) ON DELETE CASCADE"
+      ; "ALTER TABLE notifications \
+         DROP CONSTRAINT notifications_notif_type_check"
+      ; "ALTER TABLE notifications \
+         ADD CONSTRAINT notifications_notif_type_check CHECK ( \
+           notif_type IN ('comment_reply', \
+                          'mention', \
+                          'mod_action', \
+                          'project_home_requested', \
+                          'project_home_accepted', \
+                          'project_home_rejected', \
+                          'project_home_removed', \
+                          'community_connection_requested', \
+                          'community_connection_accepted', \
+                          'community_connection_rejected', \
+                          'community_connection_removed', \
+                          'shared_thread_requested', \
+                          'shared_thread_accepted', \
+                          'shared_thread_rejected', \
+                          'shared_thread_removed', \
+                          'shared_thread_withdrawn') \
+         )"
+      ; "ALTER TABLE notifications DROP CONSTRAINT notifications_shape_check"
+      ; "ALTER TABLE notifications \
+         ADD CONSTRAINT notifications_shape_check CHECK ( \
+           (notif_type IN ('project_home_requested', \
+                           'project_home_accepted', \
+                           'project_home_rejected', \
+                           'project_home_removed') \
+             AND project_id IS NOT NULL \
+             AND community_id IS NOT NULL \
+             AND relation_id IS NOT NULL \
+             AND connection_id IS NULL \
+             AND shared_thread_placement_id IS NULL \
+             AND message IS NULL \
+             AND post_id IS NULL) \
+           OR \
+           (notif_type IN ('community_connection_requested', \
+                           'community_connection_accepted', \
+                           'community_connection_rejected', \
+                           'community_connection_removed') \
+             AND community_id IS NOT NULL \
+             AND connection_id IS NOT NULL \
+             AND project_id IS NULL \
+             AND relation_id IS NULL \
+             AND shared_thread_placement_id IS NULL \
+             AND message IS NULL \
+             AND post_id IS NULL) \
+           OR \
+           (notif_type IN ('shared_thread_requested', \
+                           'shared_thread_accepted', \
+                           'shared_thread_rejected', \
+                           'shared_thread_removed', \
+                           'shared_thread_withdrawn') \
+             AND community_id IS NOT NULL \
+             AND shared_thread_placement_id IS NOT NULL \
+             AND project_id IS NULL \
+             AND relation_id IS NULL \
+             AND connection_id IS NULL \
+             AND message IS NULL \
+             AND post_id IS NULL) \
+           OR \
+           (notif_type NOT IN ('project_home_requested', \
+                               'project_home_accepted', \
+                               'project_home_rejected', \
+                               'project_home_removed', \
+                               'community_connection_requested', \
+                               'community_connection_accepted', \
+                               'community_connection_rejected', \
+                               'community_connection_removed', \
+                               'shared_thread_requested', \
+                               'shared_thread_accepted', \
+                               'shared_thread_rejected', \
+                               'shared_thread_removed', \
+                               'shared_thread_withdrawn') \
+             AND project_id IS NULL \
+             AND community_id IS NULL \
+             AND relation_id IS NULL \
+             AND connection_id IS NULL \
+             AND shared_thread_placement_id IS NULL \
+             AND actor_user_id IS NULL \
+             AND message IS NOT NULL) \
+         )"
+      ; "CREATE UNIQUE INDEX uq_notifications_recipient_kind_placement \
+         ON notifications (user_id, notif_type, shared_thread_placement_id) \
+         WHERE shared_thread_placement_id IS NOT NULL"
+      ; "CREATE INDEX idx_notifications_shared_thread_placement \
+         ON notifications (shared_thread_placement_id) \
+         WHERE shared_thread_placement_id IS NOT NULL"
+      ]
+
   (* === failure injection (installed and dropped per case) === *)
 
   let q_create_fail_fn =
@@ -50821,10 +50995,11 @@ module Phnt = struct
           "constraints present and validated"
           (* This case pins the whole notifications table, not just the
              columns this migration added, so the later
-             community-connection migration's own column, constraint, and
-             indexes are part of the expected shape. The single shape CHECK
-             is now named for what it enforces — all three row shapes — and
-             the project-home branch inside it is unchanged. *)
+             community-connection and shared-thread-placement migrations'
+             own columns, constraints, and indexes are part of the
+             expected shape. The single shape CHECK is now named for what
+             it enforces — all four row shapes — and the project-home
+             branch inside it is unchanged. *)
           [ ("notifications_actor_user_id_fkey", "f", true);
             ("notifications_community_id_fkey", "f", true);
             ("notifications_connection_id_fkey", "f", true);
@@ -50834,6 +51009,7 @@ module Phnt = struct
             ("notifications_project_id_fkey", "f", true);
             ("notifications_relation_id_fkey", "f", true);
             ("notifications_shape_check", "c", true);
+            ("notifications_shared_thread_placement_id_fkey", "f", true);
             ("notifications_user_id_fkey", "f", true)
           ]
           rows;
@@ -50846,12 +51022,13 @@ module Phnt = struct
             ("notifications_post_id_fkey", "c");
             ("notifications_project_id_fkey", "c");
             ("notifications_relation_id_fkey", "c");
+            ("notifications_shared_thread_placement_id_fkey", "c");
             ("notifications_user_id_fkey", "c")
           ]
           deltypes;
         let* defs = collect conn "index defs" q_indexdefs () in
         Alcotest.(check (list string))
-          "exactly the two dedup indexes, the five FK indexes, and the \
+          "exactly the three dedup indexes, the six FK indexes, and the \
            primary key"
           [ "CREATE INDEX idx_notifications_actor ON public.notifications \
              USING btree (actor_user_id) WHERE (actor_user_id IS NOT NULL)"
@@ -50866,12 +51043,19 @@ module Phnt = struct
           ; "CREATE INDEX idx_notifications_relation ON \
              public.notifications USING btree (relation_id) WHERE \
              (relation_id IS NOT NULL)"
+          ; "CREATE INDEX idx_notifications_shared_thread_placement ON \
+             public.notifications USING btree (shared_thread_placement_id) \
+             WHERE (shared_thread_placement_id IS NOT NULL)"
           ; "CREATE UNIQUE INDEX notifications_pkey ON public.notifications \
              USING btree (id)"
           ; "CREATE UNIQUE INDEX \
              uq_notifications_recipient_kind_connection ON \
              public.notifications USING btree (user_id, notif_type, \
              connection_id) WHERE (connection_id IS NOT NULL)"
+          ; "CREATE UNIQUE INDEX uq_notifications_recipient_kind_placement \
+             ON public.notifications USING btree (user_id, notif_type, \
+             shared_thread_placement_id) WHERE (shared_thread_placement_id \
+             IS NOT NULL)"
           ; "CREATE UNIQUE INDEX uq_notifications_recipient_kind_relation \
              ON public.notifications USING btree (user_id, notif_type, \
              relation_id) WHERE (relation_id IS NOT NULL)"
@@ -50902,8 +51086,13 @@ module Phnt = struct
         let* () =
           Lwt.finalize
             (fun () ->
-              (* Unwind in reverse migration order: the later
-                 community-connection migration first, then this one. *)
+              (* Unwind in reverse migration order: the latest
+                 shared-thread-placement migration first, then the
+                 community-connection one, then this one. *)
+              let* () =
+                Lwt_list.iter_s (fun q -> exec conn "latest down" q ())
+                  q_latest_down_statements
+              in
               let* () =
                 Lwt_list.iter_s (fun q -> exec conn "later down" q ())
                   q_later_down_statements
@@ -50923,9 +51112,13 @@ module Phnt = struct
                 Lwt_list.iter_s (fun q -> exec conn "later up" q ())
                   q_later_up_statements
               in
+              let* () =
+                Lwt_list.iter_s (fun q -> exec conn "latest up" q ())
+                  q_latest_up_statements
+              in
               let* rows = collect conn "constraints" q_constraints () in
               Alcotest.(check int)
-                "up restores all ten constraints" 10 (List.length rows);
+                "up restores all eleven constraints" 11 (List.length rows);
               Lwt.return_unit)
             (fun () ->
               let* _ = C.rollback () in
@@ -54692,10 +54885,15 @@ module Flat_share_script = struct
                     in
                     (match posts with
                      | Ok posts ->
+                         (* The probe pins the community's OWN rows: a
+                            fi_shared = None item must splice byte-identically
+                            through the plain render_post call. *)
                          Dream.respond
                            (String.concat "\n"
                               (List.map
-                                 (Earde.Components.render_post req [])
+                                 (fun (item : Earde.Db.feed_item) ->
+                                   Earde.Components.render_post req []
+                                     item.Earde.Db.fi_post)
                                  posts))
                      | Error _ -> Dream.respond ~status:`Internal_Server_Error "")
                 | _ -> Dream.respond ~status:`Not_Found ""))
@@ -62532,7 +62730,7 @@ module Ccnt = struct
     Lwt.return body
 
   let notifications_of conn user_id =
-    let* r = Earde.Db.get_notifications conn user_id in
+    let* r = Earde.Db.get_notifications conn ~session_admin:false user_id in
     match r with
     | Ok rows -> Lwt.return rows
     | Error e -> Alcotest.failf "get_notifications: %s" e
@@ -63904,7 +64102,9 @@ module Comm_home_ia = struct
                         column" `Quick (fun () ->
         let html =
           render ~channels:one_channel ~sections:one_section
-            ~recent_posts:[ post ~title:"Contour intervals" () ] ()
+            ~recent_posts:
+              [ { Earde.Db.fi_post = post ~title:"Contour intervals" ();
+                  fi_shared = None } ] ()
         in
         let recent = at html "<span class='kicker'>Recent durable knowledge</span>" in
         Alcotest.(check bool) "spaces first" true
@@ -64154,6 +64354,6717 @@ module Comm_network_page = struct
   let suite =
     [ heading_case; both_lists_case; empty_states_case; cta_case
     ; vocabulary_case ]
+end
+
+(* ===================== shared threads, slice 1 =====================
+   The shared-thread placement storage/domain foundation: the pure
+   placement lifecycle domain, the placement and audit tables'
+   constraints, and the transactional store with its append-only audit
+   trail and structured notifications. Pure cases first, then the
+   database-gated ones. Fixtures live in the stp-% slug / stp_% username
+   namespace so cleanup is targeted and idempotent; no external-id range
+   is needed because no GitHub fixtures take part. *)
+
+(* The pure domain: closed status vocabulary, the four legal transitions
+   and every illegal one, note canonicalization, the same-community rule,
+   the tombstone rule, and the accessors. DB-free. *)
+module Stpd = struct
+  module P = Earde.Shared_thread_placements
+
+  let error_str : P.error -> string = function
+    | P.Invalid_post_id -> "Invalid_post_id"
+    | P.Invalid_community_id -> "Invalid_community_id"
+    | P.Same_community -> "Same_community"
+    | P.Invalid_request_note -> "Invalid_request_note"
+    | P.Invalid_transition -> "Invalid_transition"
+
+  let status_str = P.string_of_status
+
+  let make ?note ?(post = 7) ?(origin = 11) ?(destination = 22) () =
+    P.create_pending ~post_id:post ~origin_community_id:origin
+      ~destination_community_id:destination ~request_note:note
+
+  let ok label = function
+    | Ok v -> v
+    | Error e -> Alcotest.failf "%s: unexpected %s" label (error_str e)
+
+  let pending ?note () = ok "pending fixture" (make ?note ())
+
+  let all_statuses =
+    [ P.Pending; P.Accepted; P.Rejected; P.Removed; P.Withdrawn ]
+
+  let all_actions = [ P.Accept; P.Reject; P.Withdraw; P.Remove ]
+
+  let action_str = function
+    | P.Accept -> "accept"
+    | P.Reject -> "reject"
+    | P.Withdraw -> "withdraw"
+    | P.Remove -> "remove"
+
+  let value_of_status = function
+    | P.Pending -> pending ()
+    | P.Accepted -> ok "accept" (P.apply (pending ()) P.Accept)
+    | P.Rejected -> ok "reject" (P.apply (pending ()) P.Reject)
+    | P.Withdrawn -> ok "withdraw" (P.apply (pending ()) P.Withdraw)
+    | P.Removed ->
+        ok "remove"
+          (P.apply (ok "accept" (P.apply (pending ()) P.Accept)) P.Remove)
+
+  let status_round_trip_case =
+    Alcotest.test_case "status: exact database spellings round-trip" `Quick
+      (fun () ->
+        Alcotest.(check (list string))
+          "serialized vocabulary"
+          [ "pending"; "accepted"; "rejected"; "removed"; "withdrawn" ]
+          (List.map status_str all_statuses);
+        List.iter
+          (fun s ->
+            match P.status_of_string (status_str s) with
+            | Some parsed ->
+                Alcotest.(check string)
+                  ("round-trip " ^ status_str s)
+                  (status_str s) (status_str parsed)
+            | None ->
+                Alcotest.failf "round-trip %s: rejected its own spelling"
+                  (status_str s))
+          all_statuses)
+
+  let unknown_status_case =
+    Alcotest.test_case "status: unknown database strings fail closed" `Quick
+      (fun () ->
+        List.iter
+          (fun raw ->
+            match P.status_of_string raw with
+            | None -> ()
+            | Some s ->
+                Alcotest.failf "decoded %S as %s" raw (status_str s))
+          [ "Pending"; "PENDING"; "active"; "cancelled"; "withdraw"
+          ; "deleted"; " pending"; "pending "; "" ])
+
+  let transition_matrix_case =
+    Alcotest.test_case
+      "lifecycle: exactly four transitions are legal, all others refuse"
+      `Quick (fun () ->
+        let legal = function
+          | P.Pending, P.Accept -> Some P.Accepted
+          | P.Pending, P.Reject -> Some P.Rejected
+          | P.Pending, P.Withdraw -> Some P.Withdrawn
+          | P.Accepted, P.Remove -> Some P.Removed
+          | _ -> None
+        in
+        List.iter
+          (fun status ->
+            List.iter
+              (fun action ->
+                let value = value_of_status status in
+                let label =
+                  Printf.sprintf "%s + %s" (status_str status)
+                    (action_str action)
+                in
+                match (P.apply value action, legal (status, action)) with
+                | Ok next, Some expected ->
+                    Alcotest.(check string)
+                      label (status_str expected)
+                      (status_str (P.status next))
+                | Error P.Invalid_transition, None -> ()
+                | Ok next, None ->
+                    Alcotest.failf "%s: unexpectedly reached %s" label
+                      (status_str (P.status next))
+                | Error e, Some _ ->
+                    Alcotest.failf "%s: unexpected %s" label (error_str e)
+                | Error e, None ->
+                    Alcotest.failf "%s: wrong error %s" label (error_str e))
+              all_actions)
+          all_statuses)
+
+  let withdrawn_distinct_case =
+    Alcotest.test_case
+      "lifecycle: withdrawn is a distinct terminal, never removed" `Quick
+      (fun () ->
+        let withdrawn = value_of_status P.Withdrawn in
+        Alcotest.(check string)
+          "spelling" "withdrawn"
+          (status_str (P.status withdrawn));
+        Alcotest.(check bool)
+          "distinct from removed" false
+          (status_str (P.status withdrawn)
+          = status_str (P.status (value_of_status P.Removed)));
+        (* A pending value cannot be removed, and a withdrawn one cannot be
+           reviewed or removed. *)
+        (match P.apply (pending ()) P.Remove with
+        | Error P.Invalid_transition -> ()
+        | Ok _ -> Alcotest.fail "pending + remove was allowed"
+        | Error e -> Alcotest.failf "pending + remove: %s" (error_str e));
+        List.iter
+          (fun action ->
+            match P.apply withdrawn action with
+            | Error P.Invalid_transition -> ()
+            | Ok _ ->
+                Alcotest.failf "withdrawn + %s was allowed"
+                  (action_str action)
+            | Error e ->
+                Alcotest.failf "withdrawn + %s: %s" (action_str action)
+                  (error_str e))
+          all_actions)
+
+  let create_errors_case =
+    Alcotest.test_case "create: id validation and the same-community rule"
+      `Quick (fun () ->
+        let expect label expected result =
+          match result with
+          | Ok _ -> Alcotest.failf "%s: unexpectedly accepted" label
+          | Error e ->
+              Alcotest.(check string) label (error_str expected)
+                (error_str e)
+        in
+        expect "zero post" P.Invalid_post_id (make ~post:0 ());
+        expect "negative post" P.Invalid_post_id (make ~post:(-3) ());
+        expect "zero origin" P.Invalid_community_id (make ~origin:0 ());
+        expect "zero destination" P.Invalid_community_id
+          (make ~destination:0 ());
+        expect "same community" P.Same_community
+          (make ~origin:9 ~destination:9 ());
+        let v = pending () in
+        Alcotest.(check int) "post accessor" 7 (P.post_id v);
+        Alcotest.(check int) "origin accessor" 11 (P.origin_community_id v);
+        Alcotest.(check int) "destination accessor" 22
+          (P.destination_community_id v);
+        Alcotest.(check bool) "involves origin" true
+          (P.involves v ~community_id:11);
+        Alcotest.(check bool) "involves destination" true
+          (P.involves v ~community_id:22);
+        Alcotest.(check bool) "involves stranger" false
+          (P.involves v ~community_id:33))
+
+  let note_canonicalization_case =
+    Alcotest.test_case "note: canonicalization and blank collapse" `Quick
+      (fun () ->
+        let note_of result =
+          P.request_note (ok "note fixture" result)
+        in
+        Alcotest.(check (option string))
+          "absent stays absent" None
+          (note_of (make ()));
+        Alcotest.(check (option string))
+          "blank collapses" None
+          (note_of (make ~note:"  \r\n\t " ()));
+        Alcotest.(check (option string))
+          "CRLF and trim" (Some "please\nshare")
+          (note_of (make ~note:"  please\r\nshare\r " ()));
+        Alcotest.(check (option string))
+          "tabs survive" (Some "a\tb")
+          (note_of (make ~note:"a\tb" ())))
+
+  let note_limit_case =
+    Alcotest.test_case "note: the 2000-scalar cap counts scalars, not bytes"
+      `Quick (fun () ->
+        let ascii_max = String.make 2000 'a' in
+        (match make ~note:ascii_max () with
+        | Ok v ->
+            Alcotest.(check (option string))
+              "2000 ASCII fits" (Some ascii_max) (P.request_note v)
+        | Error e -> Alcotest.failf "2000 ASCII: %s" (error_str e));
+        (match make ~note:(String.make 2001 'a') () with
+        | Error P.Invalid_request_note -> ()
+        | Ok _ -> Alcotest.fail "2001 ASCII was accepted"
+        | Error e -> Alcotest.failf "2001 ASCII: %s" (error_str e));
+        let two_byte = String.concat "" (List.init 2000 (fun _ -> "\xc3\xa9")) in
+        (match make ~note:two_byte () with
+        | Ok _ -> ()
+        | Error e -> Alcotest.failf "2000 two-byte scalars: %s" (error_str e));
+        (match make ~note:(two_byte ^ "\xc3\xa9") () with
+        | Error P.Invalid_request_note -> ()
+        | Ok _ -> Alcotest.fail "2001 scalars were accepted"
+        | Error e -> Alcotest.failf "2001 scalars: %s" (error_str e));
+        (match make ~note:"nul\x00byte" () with
+        | Error P.Invalid_request_note -> ()
+        | Ok _ -> Alcotest.fail "a NUL byte was accepted"
+        | Error e -> Alcotest.failf "NUL byte: %s" (error_str e));
+        match make ~note:"broken \xff utf8" () with
+        | Error P.Invalid_request_note -> ()
+        | Ok _ -> Alcotest.fail "invalid UTF-8 was accepted"
+        | Error e -> Alcotest.failf "invalid UTF-8: %s" (error_str e))
+
+  let tombstone_case =
+    Alcotest.test_case
+      "tombstone: exactly the three deletion labels, and nothing else"
+      `Quick (fun () ->
+        List.iter
+          (fun label ->
+            Alcotest.(check bool) label true
+              (P.post_content_tombstoned (Some label)))
+          [ "[deleted]"; "[removed by admin]"; "[removed by moderator]" ];
+        List.iter
+          (fun (label, content) ->
+            Alcotest.(check bool) label false
+              (P.post_content_tombstoned content))
+          [ ("a link post", None); ("ordinary text", Some "hello")
+          ; ("prefixed", Some " [deleted]"); ("cased", Some "[Deleted]")
+          ; ("empty", Some "") ])
+
+  let suite =
+    [ status_round_trip_case; unknown_status_case; transition_matrix_case
+    ; withdrawn_distinct_case; create_errors_case
+    ; note_canonicalization_case; note_limit_case; tombstone_case ]
+end
+
+(* The two new tables' durable constraints: lifecycle shapes, the
+   active-(post, destination) partial uniqueness, deletion behavior, the
+   audit vocabulary and its subject protection, and the notification
+   shape branch with its deduplication. Database-gated on
+   EARDE_TEST_DATABASE_URL. *)
+module Stp_schema = struct
+  let ( let* ) = Lwt.bind
+
+  open Caqti_request.Infix
+
+  let or_fail = Pod_store.or_fail
+  let reject = Pod_schema.reject
+  let insert_user = Pod_store.insert_user
+  let exec = Pod_read.exec
+  let find = Pod_read.find
+  let collect = Pod_read.collect
+
+  (* Legacy (non-network) communities: the network lifecycle CHECK ties a
+     network community's visibility flags to its onboarding state, and
+     these cases drift the flags freely. connection_eligible is
+     deliberately blind to is_network_community, so nothing is lost. *)
+  let insert_community conn slug =
+    Phcv.insert_community ~network:false conn slug
+
+  (* Audit events protect their placement, post, and both communities with
+     no-action FKs, so they go first; placements next (they also cascade
+     from posts, but only once the audit rows are gone); then posts before
+     the users and communities they reference. Notifications cascade from
+     their subjects but are deleted explicitly so recipient-side fixture
+     users can always be dropped. *)
+  let q_cleanup =
+    List.map
+      (fun sql -> (Caqti_type.unit ->. Caqti_type.unit) sql)
+      [ "DELETE FROM notifications \
+         WHERE user_id IN (SELECT id FROM users WHERE username LIKE 'stps_%')"
+      ; "DELETE FROM notifications \
+         WHERE community_id IN \
+           (SELECT id FROM communities WHERE slug LIKE 'stps-%')"
+      ; "DELETE FROM shared_thread_placement_audit_events \
+         WHERE origin_community_id IN \
+                 (SELECT id FROM communities WHERE slug LIKE 'stps-%') \
+            OR destination_community_id IN \
+                 (SELECT id FROM communities WHERE slug LIKE 'stps-%')"
+      ; "DELETE FROM shared_thread_placements \
+         WHERE origin_community_id IN \
+                 (SELECT id FROM communities WHERE slug LIKE 'stps-%') \
+            OR destination_community_id IN \
+                 (SELECT id FROM communities WHERE slug LIKE 'stps-%')"
+      ; "DELETE FROM posts \
+         WHERE community_id IN \
+           (SELECT id FROM communities WHERE slug LIKE 'stps-%')"
+      ; "DELETE FROM community_sections \
+         WHERE community_id IN \
+           (SELECT id FROM communities WHERE slug LIKE 'stps-%')"
+      ; "DELETE FROM communities WHERE slug LIKE 'stps-%'"
+      ; "DELETE FROM users WHERE username LIKE 'stps_%'"
+      ]
+
+  let db_case name f =
+    Alcotest.test_case name `Quick (fun () ->
+        match Sys.getenv_opt "EARDE_TEST_DATABASE_URL" with
+        | None | Some "" -> Alcotest.skip ()
+        | Some url ->
+            Lwt_main.run
+              (let* conn = Caqti_lwt_unix.connect (Uri.of_string url) in
+               let* conn = or_fail "connect" conn in
+               let (module C : Caqti_lwt.CONNECTION) = conn in
+               let cleanup () =
+                 Lwt_list.iter_s
+                   (fun q ->
+                     let* r = C.exec q () in
+                     let* _ = or_fail "cleanup" r in
+                     Lwt.return_unit)
+                   q_cleanup
+               in
+               let* () = cleanup () in
+               Lwt.finalize
+                 (fun () -> f conn)
+                 (fun () ->
+                   Lwt.finalize cleanup (fun () -> C.disconnect ()))))
+
+  (* Raw row fixtures. Every interpolated fragment is either a fixture row
+     id produced in this file or a literal written here — no external or
+     user value reaches the string, and the statements exist only to put
+     the table's own constraints under test. *)
+  let stmt sql = (Caqti_type.unit ->. Caqti_type.unit) sql
+
+  let try_stmt conn sql =
+    let (module C : Caqti_lwt.CONNECTION) = conn in
+    C.exec (stmt sql) ()
+
+  let accepts conn label sql =
+    let* r = try_stmt conn sql in
+    let* () = or_fail label r in
+    Lwt.return_unit
+
+  let refuses conn label sql =
+    let* r = try_stmt conn sql in
+    reject label r
+
+  let row_sql ~post ~origin ~destination ?(status = "'pending'")
+      ?(section = "NULL") ?(note = "NULL") ?(requested_by = "NULL")
+      ?(reviewed_by = "NULL") ?(removed_by = "NULL") ?(withdrawn_by = "NULL")
+      ?(created = "NOW()") ?(updated = "NOW()") ?(reviewed = "NULL")
+      ?(removed = "NULL") ?(withdrawn = "NULL") () =
+    Printf.sprintf
+      "INSERT INTO shared_thread_placements \
+         (post_id, origin_community_id, destination_community_id, \
+          destination_section_id, status, request_note, \
+          requested_by_user_id, reviewed_by_user_id, removed_by_user_id, \
+          withdrawn_by_user_id, created_at, updated_at, reviewed_at, \
+          removed_at, withdrawn_at) \
+       VALUES (%d, %d, %d, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
+      post origin destination section status note requested_by reviewed_by
+      removed_by withdrawn_by created updated reviewed removed withdrawn
+
+  let q_insert_post =
+    (Caqti_type.(t3 int int (option int)) ->! Caqti_type.int)
+    "INSERT INTO posts (title, content, community_id, user_id, section_id) \
+     VALUES ('stp thread', 'stp body', $1, $2, $3) RETURNING id"
+
+  let insert_post ?section conn ~community ~author =
+    find conn "post fixture" q_insert_post (community, author, section)
+
+  let q_insert_section =
+    (Caqti_type.(t2 int string) ->! Caqti_type.int)
+    "INSERT INTO community_sections (community_id, name, slug) \
+     VALUES ($1, $2, $2) RETURNING id"
+
+  let q_delete_section =
+    (Caqti_type.int ->. Caqti_type.unit)
+    "DELETE FROM community_sections WHERE id = $1"
+
+  let q_delete_user =
+    (Caqti_type.int ->. Caqti_type.unit) "DELETE FROM users WHERE id = $1"
+
+  let q_count_pair =
+    (Caqti_type.(t2 int int) ->! Caqti_type.int)
+    "SELECT COUNT(*) FROM shared_thread_placements \
+     WHERE post_id = $1 AND destination_community_id = $2"
+
+  let q_sole_id =
+    (Caqti_type.(t2 int int) ->! Caqti_type.int64)
+    "SELECT id FROM shared_thread_placements \
+     WHERE post_id = $1 AND destination_community_id = $2 \
+     ORDER BY id LIMIT 1"
+
+  let q_actors =
+    (Caqti_type.int64
+     ->! Caqti_type.(t4 (option int) (option int) (option int) (option int)))
+    "SELECT requested_by_user_id, reviewed_by_user_id, removed_by_user_id, \
+            withdrawn_by_user_id \
+     FROM shared_thread_placements WHERE id = $1"
+
+  let q_section_status =
+    (Caqti_type.int64 ->! Caqti_type.(t2 (option int) string))
+    "SELECT destination_section_id, status \
+     FROM shared_thread_placements WHERE id = $1"
+
+  let q_indexdefs =
+    (Caqti_type.string ->* Caqti_type.string)
+    "SELECT indexdef FROM pg_indexes \
+     WHERE schemaname = 'public' AND tablename = $1 ORDER BY indexname"
+
+  let q_insert_audit =
+    (Caqti_type.(t2 (t3 string (option int) int64) (t3 int int int))
+     ->! Caqti_type.int64)
+    "INSERT INTO shared_thread_placement_audit_events \
+       (action, actor_user_id, placement_id, post_id, \
+        origin_community_id, destination_community_id) \
+     VALUES ($1, $2, $3, $4, $5, $6) RETURNING id"
+
+  let q_audit_actor =
+    (Caqti_type.int64 ->! Caqti_type.(option int))
+    "SELECT actor_user_id FROM shared_thread_placement_audit_events \
+     WHERE id = $1"
+
+  let q_insert_stp_notif =
+    (Caqti_type.(t2 (t2 int string) (t2 int int64)) ->! Caqti_type.int)
+    "INSERT INTO notifications \
+       (user_id, notif_type, community_id, shared_thread_placement_id) \
+     VALUES ($1, $2, $3, $4) RETURNING id"
+
+  let base conn tag =
+    let* author = insert_user conn ("stps_" ^ tag) in
+    let* o = insert_community conn ("stps-" ^ tag ^ "-o") in
+    let* d = insert_community conn ("stps-" ^ tag ^ "-d") in
+    let* post = insert_post conn ~community:o ~author in
+    Lwt.return (author, o, d, post)
+
+  (* === row shape === *)
+
+  let valid_shapes_case =
+    db_case "schema: each legal status shape is storable" (fun conn ->
+        let* author, o, d, post = base conn "shapes" in
+        let actor = string_of_int author in
+        let* () =
+          accepts conn "pending"
+            (row_sql ~post ~origin:o ~destination:d ~requested_by:actor ())
+        in
+        (* The active slot is per (post, destination), so the accepted
+           shape goes to its own destination; the historical shapes share
+           the first pair freely. *)
+        let* e = insert_community conn "stps-shapes-e" in
+        let* section = find conn "section" q_insert_section (e, "gen") in
+        let* () =
+          accepts conn "accepted with section"
+            (row_sql ~post ~origin:o ~destination:e ~status:"'accepted'"
+               ~section:(string_of_int section) ~requested_by:actor
+               ~reviewed_by:actor ~reviewed:"NOW()" ())
+        in
+        let* () =
+          accepts conn "rejected"
+            (row_sql ~post ~origin:o ~destination:d ~status:"'rejected'"
+               ~requested_by:actor ~reviewed_by:actor ~reviewed:"NOW()" ())
+        in
+        let* () =
+          accepts conn "removed"
+            (row_sql ~post ~origin:o ~destination:d ~status:"'removed'"
+               ~requested_by:actor ~reviewed_by:actor ~removed_by:actor
+               ~reviewed:"NOW()" ~removed:"NOW()" ())
+        in
+        let* () =
+          accepts conn "withdrawn"
+            (row_sql ~post ~origin:o ~destination:d ~status:"'withdrawn'"
+               ~requested_by:actor ~withdrawn_by:actor ~withdrawn:"NOW()" ())
+        in
+        let* n = find conn "pair count" q_count_pair (post, d) in
+        Alcotest.(check int) "four rows on the shared pair" 4 n;
+        Lwt.return_unit)
+
+  let same_community_case =
+    db_case "schema: origin and destination cannot be equal" (fun conn ->
+        let* _, o, _, post = base conn "self" in
+        refuses conn "self pair"
+          (row_sql ~post ~origin:o ~destination:o ()))
+
+  let status_vocabulary_case =
+    db_case "schema: only the five canonical statuses are storable"
+      (fun conn ->
+        let* _, o, d, post = base conn "vocab" in
+        Lwt_list.iter_s
+          (fun raw ->
+            refuses conn ("status " ^ raw)
+              (row_sql ~post ~origin:o ~destination:d
+                 ~status:(Printf.sprintf "'%s'" raw) ~reviewed:"NOW()"
+                 ~withdrawn:"NOW()" ()))
+          [ "Pending"; "PENDING"; "active"; "cancelled"; "withdraw"; "" ])
+
+  let lifecycle_shape_case =
+    db_case "schema: every incoherent lifecycle shape is refused" (fun conn ->
+        let* _, o, d, post = base conn "badshape" in
+        let* section = find conn "section" q_insert_section (d, "gen") in
+        let section = string_of_int section in
+        Lwt_list.iter_s
+          (fun (label, sql) -> refuses conn label sql)
+          [ ( "pending with a review time"
+            , row_sql ~post ~origin:o ~destination:d ~reviewed:"NOW()" () )
+          ; ( "pending with a section"
+            , row_sql ~post ~origin:o ~destination:d ~section () )
+          ; ( "pending with a withdrawal time"
+            , row_sql ~post ~origin:o ~destination:d ~withdrawn:"NOW()" () )
+          ; ( "accepted without a review time"
+            , row_sql ~post ~origin:o ~destination:d ~status:"'accepted'" ()
+            )
+          ; ( "accepted with a withdrawal time"
+            , row_sql ~post ~origin:o ~destination:d ~status:"'accepted'"
+                ~reviewed:"NOW()" ~withdrawn:"NOW()" () )
+          ; ( "rejected with a section"
+            , row_sql ~post ~origin:o ~destination:d ~status:"'rejected'"
+                ~reviewed:"NOW()" ~section () )
+          ; ( "removed without a review time"
+            , row_sql ~post ~origin:o ~destination:d ~status:"'removed'"
+                ~removed:"NOW()" () )
+          ; ( "removed without a removal time"
+            , row_sql ~post ~origin:o ~destination:d ~status:"'removed'"
+                ~reviewed:"NOW()" () )
+          ; ( "removed with a withdrawal time"
+            , row_sql ~post ~origin:o ~destination:d ~status:"'removed'"
+                ~reviewed:"NOW()" ~removed:"NOW()" ~withdrawn:"NOW()" () )
+          ; ( "withdrawn with a review time"
+            , row_sql ~post ~origin:o ~destination:d ~status:"'withdrawn'"
+                ~withdrawn:"NOW()" ~reviewed:"NOW()" () )
+          ; ( "withdrawn with a section"
+            , row_sql ~post ~origin:o ~destination:d ~status:"'withdrawn'"
+                ~withdrawn:"NOW()" ~section () )
+          ; ( "withdrawn without a withdrawal time"
+            , row_sql ~post ~origin:o ~destination:d ~status:"'withdrawn'" ()
+            )
+          ])
+
+  let timestamp_order_case =
+    db_case "schema: timestamps cannot precede their causes" (fun conn ->
+        let* _, o, d, post = base conn "clock" in
+        Lwt_list.iter_s
+          (fun (label, sql) -> refuses conn label sql)
+          [ ( "review before creation"
+            , row_sql ~post ~origin:o ~destination:d ~status:"'accepted'"
+                ~reviewed:"NOW() - INTERVAL '1 hour'" () )
+          ; ( "removal before review"
+            , row_sql ~post ~origin:o ~destination:d ~status:"'removed'"
+                ~created:"NOW() - INTERVAL '2 hour'"
+                ~updated:"NOW() - INTERVAL '2 hour'" ~reviewed:"NOW()"
+                ~removed:"NOW() - INTERVAL '1 hour'" () )
+          ; ( "withdrawal before creation"
+            , row_sql ~post ~origin:o ~destination:d ~status:"'withdrawn'"
+                ~withdrawn:"NOW() - INTERVAL '1 hour'" () )
+          ; ( "update before creation"
+            , row_sql ~post ~origin:o ~destination:d
+                ~updated:"NOW() - INTERVAL '1 hour'" () )
+          ])
+
+  let note_length_case =
+    db_case "schema: request_note is capped at 2000 characters" (fun conn ->
+        let* _, o, d, post = base conn "note" in
+        let* () =
+          accepts conn "2000 fits"
+            (row_sql ~post ~origin:o ~destination:d
+               ~note:("'" ^ String.make 2000 'a' ^ "'") ())
+        in
+        let* e = insert_community conn "stps-note-e" in
+        refuses conn "2001 refused"
+          (row_sql ~post ~origin:o ~destination:e
+             ~note:("'" ^ String.make 2001 'a' ^ "'") ()))
+
+  let one_active_case =
+    db_case "schema: at most one active placement per post and destination"
+      (fun conn ->
+        let* author, o, d, post = base conn "active" in
+        let* () =
+          accepts conn "first pending" (row_sql ~post ~origin:o ~destination:d ())
+        in
+        let* () =
+          refuses conn "second pending"
+            (row_sql ~post ~origin:o ~destination:d ())
+        in
+        (* An accepted row occupies the slot exactly like a pending one. *)
+        let* e = insert_community conn "stps-active-e" in
+        let* () =
+          accepts conn "accepted elsewhere"
+            (row_sql ~post ~origin:o ~destination:e ~status:"'accepted'"
+               ~reviewed:"NOW()" ())
+        in
+        let* () =
+          refuses conn "pending beside accepted"
+            (row_sql ~post ~origin:o ~destination:e ())
+        in
+        (* Distinct destinations and distinct posts each get their own
+           slot. *)
+        let* f = insert_community conn "stps-active-f" in
+        let* () =
+          accepts conn "third destination"
+            (row_sql ~post ~origin:o ~destination:f ())
+        in
+        let* post2 = insert_post conn ~community:o ~author in
+        let* () =
+          accepts conn "second post, same destination"
+            (row_sql ~post:post2 ~origin:o ~destination:d ())
+        in
+        let* n = find conn "pair count" q_count_pair (post, d) in
+        Alcotest.(check int) "one row for the contested pair" 1 n;
+        Lwt.return_unit)
+
+  let history_frees_slot_case =
+    db_case "schema: every terminal state frees the active slot" (fun conn ->
+        let* _, o, d, post = base conn "hist" in
+        let* () =
+          accepts conn "rejected history"
+            (row_sql ~post ~origin:o ~destination:d ~status:"'rejected'"
+               ~reviewed:"NOW()" ())
+        in
+        let* () =
+          accepts conn "removed history"
+            (row_sql ~post ~origin:o ~destination:d ~status:"'removed'"
+               ~reviewed:"NOW()" ~removed:"NOW()" ())
+        in
+        let* () =
+          accepts conn "withdrawn history"
+            (row_sql ~post ~origin:o ~destination:d ~status:"'withdrawn'"
+               ~withdrawn:"NOW()" ())
+        in
+        let* () =
+          accepts conn "fresh pending beside the whole history"
+            (row_sql ~post ~origin:o ~destination:d ())
+        in
+        let* n = find conn "pair count" q_count_pair (post, d) in
+        Alcotest.(check int) "history retained beside the fresh row" 4 n;
+        Lwt.return_unit)
+
+  let actor_deletion_case =
+    db_case "schema: deleting an actor keeps the row and nulls provenance"
+      (fun conn ->
+        let* _, o, d, post = base conn "ghost" in
+        (* A dedicated actor who authored nothing, so the user row can be
+           deleted (posts block their author's deletion). *)
+        let* actor = insert_user conn "stps_ghost_actor" in
+        let a = string_of_int actor in
+        let* () =
+          accepts conn "removed row"
+            (row_sql ~post ~origin:o ~destination:d ~status:"'removed'"
+               ~requested_by:a ~reviewed_by:a ~removed_by:a
+               ~reviewed:"NOW()" ~removed:"NOW()" ())
+        in
+        let* () =
+          accepts conn "withdrawn row"
+            (row_sql ~post ~origin:o ~destination:d ~status:"'withdrawn'"
+               ~requested_by:a ~withdrawn_by:a ~withdrawn:"NOW()" ())
+        in
+        let* () = exec conn "delete actor" q_delete_user actor in
+        let* id = find conn "removed id" q_sole_id (post, d) in
+        let* requested, reviewed, removed, withdrawn =
+          find conn "actors" q_actors id
+        in
+        Alcotest.(check (option int)) "requester nulled" None requested;
+        Alcotest.(check (option int)) "reviewer nulled" None reviewed;
+        Alcotest.(check (option int)) "remover nulled" None removed;
+        Alcotest.(check (option int)) "withdrawer nulled" None withdrawn;
+        let* n = find conn "rows kept" q_count_pair (post, d) in
+        Alcotest.(check int) "both rows survive" 2 n;
+        Lwt.return_unit)
+
+  let section_set_null_case =
+    db_case "schema: deleting a destination section releases the placement"
+      (fun conn ->
+        let* _, o, d, post = base conn "setnull" in
+        let* section = find conn "section" q_insert_section (d, "gen") in
+        let* () =
+          accepts conn "accepted into the section"
+            (row_sql ~post ~origin:o ~destination:d ~status:"'accepted'"
+               ~section:(string_of_int section) ~reviewed:"NOW()" ())
+        in
+        let* () = exec conn "delete section" q_delete_section section in
+        let* id = find conn "placement id" q_sole_id (post, d) in
+        let* stored_section, status =
+          find conn "after deletion" q_section_status id
+        in
+        Alcotest.(check (option int)) "section released" None stored_section;
+        Alcotest.(check string) "acceptance survives" "accepted" status;
+        Lwt.return_unit)
+
+  let index_shape_case =
+    db_case "schema: the active partial unique index exists as declared"
+      (fun conn ->
+        let* defs =
+          collect conn "indexdefs" q_indexdefs "shared_thread_placements"
+        in
+        let uniq =
+          List.filter
+            (fun d ->
+              Cprj_schema.contains d
+                ~needle:"shared_thread_placements_one_active_destination_idx")
+            defs
+        in
+        match uniq with
+        | [ def ] ->
+            List.iter
+              (fun needle ->
+                if not (Cprj_schema.contains def ~needle) then
+                  Alcotest.failf "index definition lacks %S: %s" needle def)
+              [ "UNIQUE"; "post_id"; "destination_community_id"; "pending"
+              ; "accepted" ];
+            Lwt.return_unit
+        | _ -> Alcotest.fail "the active partial unique index is missing")
+
+  (* === audit === *)
+
+  let audit_vocabulary_case =
+    db_case "schema: the audit action vocabulary is closed" (fun conn ->
+        let* author, o, d, post = base conn "audvoc" in
+        let* () =
+          accepts conn "placement"
+            (row_sql ~post ~origin:o ~destination:d ())
+        in
+        let* placement = find conn "placement id" q_sole_id (post, d) in
+        let* () =
+          Lwt_list.iter_s
+            (fun action ->
+              let* _ =
+                find conn ("audit " ^ action) q_insert_audit
+                  ((action, Some author, placement), (post, o, d))
+              in
+              Lwt.return_unit)
+            [ "shared_thread_requested"; "shared_thread_accepted"
+            ; "shared_thread_rejected"; "shared_thread_removed"
+            ; "shared_thread_withdrawn" ]
+        in
+        refuses conn "off-vocabulary action"
+          (Printf.sprintf
+             "INSERT INTO shared_thread_placement_audit_events \
+                (action, placement_id, post_id, origin_community_id, \
+                 destination_community_id) \
+              VALUES ('shared_thread_created', %Ld, %d, %d, %d)"
+             placement post o d))
+
+  let audit_protects_subjects_case =
+    db_case "schema: audit events survive actors and block subject deletion"
+      (fun conn ->
+        let* _, o, d, post = base conn "audlock" in
+        let* actor = insert_user conn "stps_audlock_actor" in
+        let* () =
+          accepts conn "placement" (row_sql ~post ~origin:o ~destination:d ())
+        in
+        let* placement = find conn "placement id" q_sole_id (post, d) in
+        let* event =
+          find conn "event" q_insert_audit
+            (("shared_thread_requested", Some actor, placement), (post, o, d))
+        in
+        (* Subjects are protected while the event exists... *)
+        let* () =
+          refuses conn "placement deletion blocked"
+            (Printf.sprintf
+               "DELETE FROM shared_thread_placements WHERE id = %Ld" placement)
+        in
+        let* () =
+          refuses conn "post deletion blocked"
+            (Printf.sprintf "DELETE FROM posts WHERE id = %d" post)
+        in
+        let* () =
+          refuses conn "community deletion blocked"
+            (Printf.sprintf "DELETE FROM communities WHERE id = %d" d)
+        in
+        (* ...while a deleted actor only nulls provenance. *)
+        let* () = exec conn "delete actor" q_delete_user actor in
+        let* stored = find conn "actor" q_audit_actor event in
+        Alcotest.(check (option int)) "actor nulled, event kept" None stored;
+        Lwt.return_unit)
+
+  (* === notifications === *)
+
+  let notif_shape_case =
+    db_case "schema: the shared-thread notification branch is exclusive"
+      (fun conn ->
+        let* author, o, d, post = base conn "nshape" in
+        let* () =
+          accepts conn "placement" (row_sql ~post ~origin:o ~destination:d ())
+        in
+        let* placement = find conn "placement id" q_sole_id (post, d) in
+        let* _ =
+          find conn "valid structured row" q_insert_stp_notif
+            ((author, "shared_thread_requested"), (d, placement))
+        in
+        Lwt_list.iter_s
+          (fun (label, sql) -> refuses conn label sql)
+          [ ( "prose on a structured kind"
+            , Printf.sprintf
+                "INSERT INTO notifications \
+                   (user_id, notif_type, community_id, \
+                    shared_thread_placement_id, message) \
+                 VALUES (%d, 'shared_thread_accepted', %d, %Ld, 'hello')"
+                author d placement )
+          ; ( "post link on a structured kind"
+            , Printf.sprintf
+                "INSERT INTO notifications \
+                   (user_id, notif_type, community_id, \
+                    shared_thread_placement_id, post_id) \
+                 VALUES (%d, 'shared_thread_accepted', %d, %Ld, %d)"
+                author d placement post )
+          ; ( "structured kind without a community"
+            , Printf.sprintf
+                "INSERT INTO notifications \
+                   (user_id, notif_type, shared_thread_placement_id) \
+                 VALUES (%d, 'shared_thread_rejected', %Ld)"
+                author placement )
+          ; ( "structured kind without a placement"
+            , Printf.sprintf
+                "INSERT INTO notifications \
+                   (user_id, notif_type, community_id) \
+                 VALUES (%d, 'shared_thread_rejected', %d)"
+                author d )
+          ; ( "legacy kind with a placement"
+            , Printf.sprintf
+                "INSERT INTO notifications \
+                   (user_id, notif_type, message, \
+                    shared_thread_placement_id) \
+                 VALUES (%d, 'mention', 'hi', %Ld)"
+                author placement )
+          ])
+
+  let notif_dedup_case =
+    db_case "schema: one notification per recipient, kind, and placement"
+      (fun conn ->
+        let* author, o, d, post = base conn "ndedup" in
+        let* other = insert_user conn "stps_ndedup_other" in
+        let* () =
+          accepts conn "placement" (row_sql ~post ~origin:o ~destination:d ())
+        in
+        let* placement = find conn "placement id" q_sole_id (post, d) in
+        let* _ =
+          find conn "first" q_insert_stp_notif
+            ((author, "shared_thread_requested"), (d, placement))
+        in
+        let* () =
+          refuses conn "replayed duplicate"
+            (Printf.sprintf
+               "INSERT INTO notifications \
+                  (user_id, notif_type, community_id, \
+                   shared_thread_placement_id) \
+                VALUES (%d, 'shared_thread_requested', %d, %Ld)"
+               author d placement)
+        in
+        (* A different kind and a different recipient both coexist. *)
+        let* _ =
+          find conn "same placement, next kind" q_insert_stp_notif
+            ((author, "shared_thread_withdrawn"), (d, placement))
+        in
+        let* _ =
+          find conn "same kind, other recipient" q_insert_stp_notif
+            ((other, "shared_thread_requested"), (d, placement))
+        in
+        Lwt.return_unit)
+
+  let suite =
+    [ valid_shapes_case; same_community_case; status_vocabulary_case
+    ; lifecycle_shape_case; timestamp_order_case; note_length_case
+    ; one_active_case; history_frees_slot_case; actor_deletion_case
+    ; section_set_null_case; index_shape_case; audit_vocabulary_case
+    ; audit_protects_subjects_case; notif_shape_case; notif_dedup_case ]
+end
+
+(* The transactional store: request, accept, reject, withdraw, remove —
+   each writing exactly one audit event and its notifications inside its
+   own transaction; origin derivation from the post; connection,
+   eligibility, tombstone, and section validation on the creating paths
+   only; the active-(post, destination) arbitration under real
+   concurrency; and rollback injection. Database-gated on
+   EARDE_TEST_DATABASE_URL. *)
+module Stp_store = struct
+  let ( let* ) = Lwt.bind
+
+  open Caqti_request.Infix
+
+  module P = Earde.Shared_thread_placements
+  module Store = Earde.Shared_thread_placement_store
+  module Cc = Earde.Community_connections
+  module Ccs = Earde.Community_connections_store
+
+  let or_fail = Pod_store.or_fail
+  let insert_user = Pod_store.insert_user
+  let exec = Pod_read.exec
+  let find = Pod_read.find
+  let collect = Pod_read.collect
+  let status_str = P.string_of_status
+
+  (* Legacy (non-network) communities, as in the schema suite: eligibility
+     drift cases flip visibility and onboarding freely, which the network
+     lifecycle CHECK would otherwise refuse. *)
+  let insert_community conn slug =
+    Phcv.insert_community ~network:false conn slug
+
+  let error_str : Store.error -> string = function
+    | Store.Invalid_user_id -> "Invalid_user_id"
+    | Store.Invalid_placement_id -> "Invalid_placement_id"
+    | Store.Invalid_post_id -> "Invalid_post_id"
+    | Store.Invalid_community_id -> "Invalid_community_id"
+    | Store.Invalid_request_note -> "Invalid_request_note"
+    | Store.Same_community -> "Same_community"
+    | Store.Community_unavailable -> "Community_unavailable"
+    | Store.Post_unavailable -> "Post_unavailable"
+    | Store.Post_tombstoned -> "Post_tombstoned"
+    | Store.No_accepted_connection -> "No_accepted_connection"
+    | Store.Origin_ineligible -> "Origin_ineligible"
+    | Store.Destination_ineligible -> "Destination_ineligible"
+    | Store.Active_placement_exists -> "Active_placement_exists"
+    | Store.Invalid_destination_section -> "Invalid_destination_section"
+    | Store.Review_unavailable -> "Review_unavailable"
+    | Store.Withdrawal_unavailable -> "Withdrawal_unavailable"
+    | Store.Removal_unavailable -> "Removal_unavailable"
+    | Store.Inconsistent_data -> "Inconsistent_data"
+    | Store.Storage_error -> "Storage_error"
+
+  (* Failure-injection DDL is dropped first so a crashed case can never
+     leave a trigger behind. Then the dependency order: notifications,
+     the placement audit trail (which protects placements, posts, and
+     communities), the placements, the connection fixtures' audit trail
+     and rows, then posts before the users and communities they
+     reference. *)
+  let q_cleanup =
+    List.map
+      (fun sql -> (Caqti_type.unit ->. Caqti_type.unit) sql)
+      [ "DROP TRIGGER IF EXISTS stp_fail_audit \
+         ON shared_thread_placement_audit_events"
+      ; "DROP TRIGGER IF EXISTS stp_fail_business ON shared_thread_placements"
+      ; "DROP TRIGGER IF EXISTS stp_fail_notif ON notifications"
+      ; "DROP FUNCTION IF EXISTS stp_fail_fn()"
+      ; "DELETE FROM notifications \
+         WHERE user_id IN (SELECT id FROM users WHERE username LIKE 'stp_%')"
+      ; "DELETE FROM notifications \
+         WHERE community_id IN \
+           (SELECT id FROM communities WHERE slug LIKE 'stp-%')"
+      ; "DELETE FROM shared_thread_placement_audit_events \
+         WHERE origin_community_id IN \
+                 (SELECT id FROM communities WHERE slug LIKE 'stp-%') \
+            OR destination_community_id IN \
+                 (SELECT id FROM communities WHERE slug LIKE 'stp-%')"
+      ; "DELETE FROM shared_thread_placements \
+         WHERE origin_community_id IN \
+                 (SELECT id FROM communities WHERE slug LIKE 'stp-%') \
+            OR destination_community_id IN \
+                 (SELECT id FROM communities WHERE slug LIKE 'stp-%')"
+      ; "DELETE FROM community_connection_audit_events \
+         WHERE requester_community_id IN \
+                 (SELECT id FROM communities WHERE slug LIKE 'stp-%') \
+            OR recipient_community_id IN \
+                 (SELECT id FROM communities WHERE slug LIKE 'stp-%')"
+      ; "DELETE FROM community_connections \
+         WHERE requester_community_id IN \
+                 (SELECT id FROM communities WHERE slug LIKE 'stp-%') \
+            OR recipient_community_id IN \
+                 (SELECT id FROM communities WHERE slug LIKE 'stp-%')"
+      ; "DELETE FROM posts \
+         WHERE community_id IN \
+           (SELECT id FROM communities WHERE slug LIKE 'stp-%')"
+      ; "DELETE FROM community_sections \
+         WHERE community_id IN \
+           (SELECT id FROM communities WHERE slug LIKE 'stp-%')"
+      ; "DELETE FROM communities WHERE slug LIKE 'stp-%'"
+      ; "DELETE FROM users WHERE username LIKE 'stp_%'"
+      ]
+
+  let db_case name f =
+    Alcotest.test_case name `Quick (fun () ->
+        match Sys.getenv_opt "EARDE_TEST_DATABASE_URL" with
+        | None | Some "" -> Alcotest.skip ()
+        | Some url ->
+            Lwt_main.run
+              (let* conn = Caqti_lwt_unix.connect (Uri.of_string url) in
+               let* conn = or_fail "connect" conn in
+               let (module C : Caqti_lwt.CONNECTION) = conn in
+               let cleanup () =
+                 Lwt_list.iter_s
+                   (fun q ->
+                     let* r = C.exec q () in
+                     let* _ = or_fail "cleanup" r in
+                     Lwt.return_unit)
+                   q_cleanup
+               in
+               let* () = cleanup () in
+               Lwt.finalize
+                 (fun () -> f conn)
+                 (fun () ->
+                   Lwt.finalize cleanup (fun () -> C.disconnect ()))))
+
+  (* === fixtures === *)
+
+  let q_insert_post =
+    (Caqti_type.(t3 int int (option int)) ->! Caqti_type.int)
+    "INSERT INTO posts (title, content, community_id, user_id, section_id) \
+     VALUES ('stp thread', 'stp body', $1, $2, $3) RETURNING id"
+
+  let insert_post ?section conn ~community ~author =
+    find conn "post fixture" q_insert_post (community, author, section)
+
+  let q_tombstone =
+    (Caqti_type.(t2 int string) ->. Caqti_type.unit)
+    "UPDATE posts SET content = $2 WHERE id = $1"
+
+  let tombstone conn post label = exec conn "tombstone" q_tombstone (post, label)
+
+  let q_set_sections =
+    (Caqti_type.(t2 int bool) ->. Caqti_type.unit)
+    "UPDATE communities SET sections_enabled = $2 WHERE id = $1"
+
+  let q_insert_section =
+    (Caqti_type.(t2 int string) ->! Caqti_type.int)
+    "INSERT INTO community_sections (community_id, name, slug) \
+     VALUES ($1, $2, $2) RETURNING id"
+
+  let q_delete_section =
+    (Caqti_type.int ->. Caqti_type.unit)
+    "DELETE FROM community_sections WHERE id = $1"
+
+  let q_make_eligible =
+    (Caqti_type.int ->. Caqti_type.unit)
+    "UPDATE communities SET visibility = 'public', \
+     onboarding_state = 'published', indexable = TRUE, discoverable = TRUE \
+     WHERE id = $1"
+
+  let q_insert_comment =
+    (Caqti_type.(t2 int int) ->! Caqti_type.int)
+    "INSERT INTO comments (content, post_id, user_id) \
+     VALUES ('kept', $1, $2) RETURNING id"
+
+  (* Accepted community connection through the real connections store, so
+     the standing this feature rides on is exactly the durable one. *)
+  let connect conn ~actor a b =
+    let value =
+      match
+        Cc.create_pending ~requester_community_id:a
+          ~recipient_community_id:b ~request_note:None
+      with
+      | Ok v -> v
+      | Error _ -> Alcotest.fail "fixture: connection value refused"
+    in
+    let* requested = Ccs.request conn ~actor_user_id:actor ~connection:value in
+    let connection =
+      match requested with
+      | Ok created -> Ccs.created_connection_id created
+      | Error e ->
+          Alcotest.failf "fixture: connection request %s"
+            (Ccon_store.error_str e)
+    in
+    let* reviewed =
+      Ccs.review conn ~reviewer_user_id:actor ~connection_id:connection
+        ~recipient_community_id:b ~decision:Ccs.Accept
+    in
+    match reviewed with
+    | Ok _ -> Lwt.return connection
+    | Error e ->
+        Alcotest.failf "fixture: connection accept %s" (Ccon_store.error_str e)
+
+  let disconnect conn ~actor ~connection ~acting =
+    let* removed =
+      Ccs.remove conn ~actor_user_id:actor ~connection_id:connection
+        ~acting_community_id:acting
+    in
+    match removed with
+    | Ok _ -> Lwt.return_unit
+    | Error e ->
+        Alcotest.failf "fixture: disconnect %s" (Ccon_store.error_str e)
+
+  (* One actor, a connected origin/destination pair with a flat (sections
+     disabled) destination, and one canonical post — the shape every case
+     starts from. *)
+  let fixture conn tag =
+    let* actor = insert_user conn ("stp_" ^ tag) in
+    let* o = insert_community conn ("stp-" ^ tag ^ "-o") in
+    let* d = insert_community conn ("stp-" ^ tag ^ "-d") in
+    let* () = exec conn "flat destination" q_set_sections (d, false) in
+    let* connection = connect conn ~actor o d in
+    let* post = insert_post conn ~community:o ~author:actor in
+    Lwt.return (actor, o, d, post, connection)
+
+  (* === observation === *)
+
+  let q_row =
+    (Caqti_type.int64
+     ->! Caqti_type.(
+           t2
+             (t2 (t2 string (option int)) (t2 (option string) (option int)))
+             (t3 (option int) (option int) (option int))))
+    "SELECT status, destination_section_id, request_note, \
+            requested_by_user_id, reviewed_by_user_id, removed_by_user_id, \
+            withdrawn_by_user_id \
+     FROM shared_thread_placements WHERE id = $1"
+
+  let check_row label conn id ~status ~section ~note ~requested_by
+      ~reviewed_by ~removed_by ~withdrawn_by =
+    let* ( ((stored_status, stored_section), (stored_note, stored_requested)),
+           (stored_reviewed, stored_removed, stored_withdrawn) ) =
+      find conn (label ^ ": row") q_row id
+    in
+    Alcotest.(check string) (label ^ ": status") status stored_status;
+    Alcotest.(check (option int)) (label ^ ": section") section stored_section;
+    Alcotest.(check (option string)) (label ^ ": note") note stored_note;
+    Alcotest.(check (option int)) (label ^ ": requester") requested_by
+      stored_requested;
+    Alcotest.(check (option int)) (label ^ ": reviewer") reviewed_by
+      stored_reviewed;
+    Alcotest.(check (option int)) (label ^ ": remover") removed_by
+      stored_removed;
+    Alcotest.(check (option int)) (label ^ ": withdrawer") withdrawn_by
+      stored_withdrawn;
+    Lwt.return_unit
+
+  let q_origin_of =
+    (Caqti_type.int64 ->! Caqti_type.int)
+    "SELECT origin_community_id FROM shared_thread_placements WHERE id = $1"
+
+  let q_stamps =
+    (Caqti_type.int64 ->! Caqti_type.(t4 bool bool bool bool))
+    "SELECT reviewed_at IS NOT NULL, removed_at IS NOT NULL, \
+            withdrawn_at IS NOT NULL, updated_at >= created_at \
+     FROM shared_thread_placements WHERE id = $1"
+
+  let q_count_pair =
+    (Caqti_type.(t2 int int) ->! Caqti_type.int)
+    "SELECT COUNT(*) FROM shared_thread_placements \
+     WHERE post_id = $1 AND destination_community_id = $2"
+
+  let q_count_active_pair =
+    (Caqti_type.(t2 int int) ->! Caqti_type.int)
+    "SELECT COUNT(*) FROM shared_thread_placements \
+     WHERE post_id = $1 AND destination_community_id = $2 \
+       AND status IN ('pending', 'accepted')"
+
+  (* One tuple per event, in append (id) order. *)
+  let q_events =
+    (Caqti_type.int64
+     ->* Caqti_type.(t2 (t2 string (option int)) (t3 int int int)))
+    "SELECT action, actor_user_id, post_id, origin_community_id, \
+            destination_community_id \
+     FROM shared_thread_placement_audit_events \
+     WHERE placement_id = $1 ORDER BY id"
+
+  (* Everything ever recorded about one post, however the placement rows
+     themselves ended up — the count a rolled-back mutation must not
+     move. *)
+  let q_events_for_post =
+    (Caqti_type.int ->! Caqti_type.int)
+    "SELECT COUNT(*) FROM shared_thread_placement_audit_events \
+     WHERE post_id = $1"
+
+  let q_notifs_for_post =
+    (Caqti_type.int ->! Caqti_type.int)
+    "SELECT COUNT(*) FROM notifications n \
+     WHERE n.shared_thread_placement_id IN \
+       (SELECT id FROM shared_thread_placements WHERE post_id = $1)"
+
+  let q_post_row =
+    (Caqti_type.int ->! Caqti_type.(t2 string (option string)))
+    "SELECT title, content FROM posts WHERE id = $1"
+
+  let q_comment_count =
+    (Caqti_type.int ->! Caqti_type.int)
+    "SELECT COUNT(*) FROM comments WHERE post_id = $1"
+
+  let q_absent_post =
+    (Caqti_type.unit ->! Caqti_type.int)
+    "SELECT COALESCE(MAX(id), 0) + 1000000 FROM posts"
+
+  let q_absent_community =
+    (Caqti_type.unit ->! Caqti_type.int)
+    "SELECT COALESCE(MAX(id), 0) + 1000000 FROM communities"
+
+  let q_absent_placement =
+    (Caqti_type.unit ->! Caqti_type.int64)
+    "SELECT COALESCE(MAX(id), 0) + 1000000 FROM shared_thread_placements"
+
+  let event_t = Alcotest.(pair (pair string (option int)) (triple int int int))
+
+  let check_events label conn ~placement expected =
+    let* rows = collect conn (label ^ ": events") q_events placement in
+    Alcotest.(check (list event_t)) (label ^ ": exact events") expected rows;
+    Lwt.return_unit
+
+  let check_event_count label conn ~post expected =
+    let* n = find conn (label ^ ": count") q_events_for_post post in
+    Alcotest.(check int) (label ^ ": post event count") expected n;
+    Lwt.return_unit
+
+  (* === call helpers === *)
+
+  let request conn ~actor ?note ~post ~destination () =
+    Store.request conn ~actor_user_id:actor ~post_id:post
+      ~destination_community_id:destination ~request_note:note
+
+  let request_ok label conn ~actor ?note ~post ~destination () =
+    let* r = request conn ~actor ?note ~post ~destination () in
+    match r with
+    | Ok created -> Lwt.return (Store.created_placement_id created)
+    | Error e -> Alcotest.failf "%s: %s" label (error_str e)
+
+  let request_expect label expected conn ~actor ?note ~post ~destination () =
+    let* r = request conn ~actor ?note ~post ~destination () in
+    match r with
+    | Ok _ -> Alcotest.failf "%s: expected %s, got Ok" label (error_str expected)
+    | Error e ->
+        Alcotest.(check string) label (error_str expected) (error_str e);
+        Lwt.return_unit
+
+  let review conn ~reviewer ~placement ~destination decision =
+    Store.review conn ~reviewer_user_id:reviewer ~placement_id:placement
+      ~destination_community_id:destination ~decision
+
+  let review_ok label conn ~reviewer ~placement ~destination decision expected
+      =
+    let* r = review conn ~reviewer ~placement ~destination decision in
+    match r with
+    | Ok reviewed ->
+        Alcotest.(check string)
+          (label ^ ": resulting status")
+          (status_str expected)
+          (status_str (Store.reviewed_status reviewed));
+        Lwt.return reviewed
+    | Error e -> Alcotest.failf "%s: %s" label (error_str e)
+
+  let review_expect label expected conn ~reviewer ~placement ~destination
+      decision =
+    let* r = review conn ~reviewer ~placement ~destination decision in
+    match r with
+    | Ok _ -> Alcotest.failf "%s: expected %s, got Ok" label (error_str expected)
+    | Error e ->
+        Alcotest.(check string) label (error_str expected) (error_str e);
+        Lwt.return_unit
+
+  let withdraw conn ~actor ~placement ~origin =
+    Store.withdraw conn ~actor_user_id:actor ~placement_id:placement
+      ~origin_community_id:origin
+
+  let withdraw_ok label conn ~actor ~placement ~origin =
+    let* r = withdraw conn ~actor ~placement ~origin in
+    match r with
+    | Ok withdrawn -> Lwt.return withdrawn
+    | Error e -> Alcotest.failf "%s: %s" label (error_str e)
+
+  let withdraw_expect label expected conn ~actor ~placement ~origin =
+    let* r = withdraw conn ~actor ~placement ~origin in
+    match r with
+    | Ok _ -> Alcotest.failf "%s: expected %s, got Ok" label (error_str expected)
+    | Error e ->
+        Alcotest.(check string) label (error_str expected) (error_str e);
+        Lwt.return_unit
+
+  let remove conn ~actor ~placement ~acting =
+    Store.remove conn ~actor_user_id:actor ~placement_id:placement
+      ~acting_community_id:acting
+
+  let remove_ok label conn ~actor ~placement ~acting =
+    let* r = remove conn ~actor ~placement ~acting in
+    match r with
+    | Ok removed -> Lwt.return removed
+    | Error e -> Alcotest.failf "%s: %s" label (error_str e)
+
+  let remove_expect label expected conn ~actor ~placement ~acting =
+    let* r = remove conn ~actor ~placement ~acting in
+    match r with
+    | Ok _ -> Alcotest.failf "%s: expected %s, got Ok" label (error_str expected)
+    | Error e ->
+        Alcotest.(check string) label (error_str expected) (error_str e);
+        Lwt.return_unit
+
+  (* === request === *)
+
+  let request_case =
+    db_case "request: one pending row, derived origin, one requested event"
+      (fun conn ->
+        let* actor, o, d, post, _ = fixture conn "req" in
+        let* id =
+          request_ok "request" conn ~actor ~note:"  worth sharing\r\n  "
+            ~post ~destination:d ()
+        in
+        let* () =
+          check_row "request" conn id ~status:"pending" ~section:None
+            ~note:(Some "worth sharing") ~requested_by:(Some actor)
+            ~reviewed_by:None ~removed_by:None ~withdrawn_by:None
+        in
+        (* The origin is the post's own community — the API offers no way
+           to claim another one, and the stored copy proves the
+           derivation. *)
+        let* origin = find conn "origin" q_origin_of id in
+        Alcotest.(check int) "origin derived from the post" o origin;
+        let* reviewed, removed, withdrawn, coherent =
+          find conn "stamps" q_stamps id
+        in
+        Alcotest.(check bool) "no review time" false reviewed;
+        Alcotest.(check bool) "no removal time" false removed;
+        Alcotest.(check bool) "no withdrawal time" false withdrawn;
+        Alcotest.(check bool) "updated_at coherent" true coherent;
+        check_events "request" conn ~placement:id
+          [ (("shared_thread_requested", Some actor), (post, o, d)) ])
+
+  let request_blank_note_case =
+    db_case "request: a blank note is stored as absent" (fun conn ->
+        let* actor, _, d, post, _ = fixture conn "blank" in
+        let* id =
+          request_ok "request" conn ~actor ~note:"   \r\n\t " ~post
+            ~destination:d ()
+        in
+        check_row "blank" conn id ~status:"pending" ~section:None ~note:None
+          ~requested_by:(Some actor) ~reviewed_by:None ~removed_by:None
+          ~withdrawn_by:None)
+
+  let request_validation_case =
+    db_case "request: invalid inputs are refused before any SQL" (fun conn ->
+        let* actor, _, d, post, _ = fixture conn "reqval" in
+        let* () =
+          request_expect "zero actor" Store.Invalid_user_id conn ~actor:0
+            ~post ~destination:d ()
+        in
+        let* () =
+          request_expect "zero post" Store.Invalid_post_id conn ~actor
+            ~post:0 ~destination:d ()
+        in
+        let* () =
+          request_expect "zero destination" Store.Invalid_community_id conn
+            ~actor ~post ~destination:0 ()
+        in
+        let* () =
+          request_expect "invalid note" Store.Invalid_request_note conn
+            ~actor ~note:"nul\x00" ~post ~destination:d ()
+        in
+        let* n = find conn "no rows" q_count_pair (post, d) in
+        Alcotest.(check int) "nothing written" 0 n;
+        check_event_count "validation" conn ~post 0)
+
+  let request_missing_subjects_case =
+    db_case "request: a missing post or destination is one closed error"
+      (fun conn ->
+        let* actor, o, d, post, _ = fixture conn "gone" in
+        let* absent_post = find conn "absent post" q_absent_post () in
+        let* () =
+          request_expect "absent post" Store.Post_unavailable conn ~actor
+            ~post:absent_post ~destination:d ()
+        in
+        let* absent_community = find conn "absent community" q_absent_community () in
+        let* () =
+          request_expect "absent destination" Store.Community_unavailable conn
+            ~actor ~post ~destination:absent_community ()
+        in
+        let* () =
+          request_expect "origin as destination" Store.Same_community conn
+            ~actor ~post ~destination:o ()
+        in
+        check_event_count "missing" conn ~post 0)
+
+  let request_connection_case =
+    db_case "request: only an accepted connection carries a placement"
+      (fun conn ->
+        let* actor, o, _, post, _ = fixture conn "conn" in
+        (* No connection at all. *)
+        let* stranger = insert_community conn "stp-conn-stranger" in
+        let* () =
+          request_expect "no connection" Store.No_accepted_connection conn
+            ~actor ~post ~destination:stranger ()
+        in
+        (* A still-pending connection is not an accepted one. *)
+        let* pending_target = insert_community conn "stp-conn-pending" in
+        let value =
+          match
+            Cc.create_pending ~requester_community_id:o
+              ~recipient_community_id:pending_target ~request_note:None
+          with
+          | Ok v -> v
+          | Error _ -> Alcotest.fail "fixture: pending connection value"
+        in
+        let* requested =
+          Ccs.request conn ~actor_user_id:actor ~connection:value
+        in
+        let* () =
+          match requested with
+          | Ok _ -> Lwt.return_unit
+          | Error e ->
+              Alcotest.failf "fixture: pending connection %s"
+                (Ccon_store.error_str e)
+        in
+        let* () =
+          request_expect "pending connection" Store.No_accepted_connection
+            conn ~actor ~post ~destination:pending_target ()
+        in
+        (* A removed connection no longer carries placements either. *)
+        let* removed_target = insert_community conn "stp-conn-removed" in
+        let* connection = connect conn ~actor o removed_target in
+        let* () =
+          disconnect conn ~actor ~connection ~acting:o
+        in
+        let* () =
+          request_expect "removed connection" Store.No_accepted_connection
+            conn ~actor ~post ~destination:removed_target ()
+        in
+        check_event_count "connection" conn ~post 0)
+
+  let request_eligibility_case =
+    db_case "request: both sides are revalidated under the held locks"
+      (fun conn ->
+        let* actor, o, d, post, _ = fixture conn "elig" in
+        let* () = exec conn "origin private" Phcv.q_make_private o in
+        let* () =
+          request_expect "private origin" Store.Origin_ineligible conn ~actor
+            ~post ~destination:d ()
+        in
+        let* () = exec conn "restore origin" q_make_eligible o in
+        let* () = exec conn "destination draft" Phcv.q_make_draft_state d in
+        let* () =
+          request_expect "draft destination" Store.Destination_ineligible
+            conn ~actor ~post ~destination:d ()
+        in
+        let* () = exec conn "restore destination" q_make_eligible d in
+        let* _ = request_ok "eligible again" conn ~actor ~post ~destination:d () in
+        check_event_count "eligibility" conn ~post 1)
+
+  let request_tombstone_case =
+    db_case "request: a tombstoned canonical thread is not shareable"
+      (fun conn ->
+        let* actor, _, d, post, _ = fixture conn "tomb" in
+        let* () = tombstone conn post "[removed by moderator]" in
+        let* () =
+          request_expect "moderator tombstone" Store.Post_tombstoned conn
+            ~actor ~post ~destination:d ()
+        in
+        let* () = tombstone conn post "[deleted]" in
+        let* () =
+          request_expect "author tombstone" Store.Post_tombstoned conn ~actor
+            ~post ~destination:d ()
+        in
+        check_event_count "tombstone" conn ~post 0)
+
+  let request_duplicate_case =
+    db_case "request: a duplicate loses against pending and accepted alike"
+      (fun conn ->
+        let* actor, o, d, post, _ = fixture conn "dup" in
+        let* id = request_ok "first" conn ~actor ~post ~destination:d () in
+        let* () =
+          request_expect "duplicate against pending"
+            Store.Active_placement_exists conn ~actor ~post ~destination:d ()
+        in
+        let* _ =
+          review_ok "accept" conn ~reviewer:actor ~placement:id ~destination:d
+            (Store.Accept None) P.Accepted
+        in
+        let* () =
+          request_expect "duplicate against accepted"
+            Store.Active_placement_exists conn ~actor ~post ~destination:d ()
+        in
+        let* n = find conn "row count" q_count_pair (post, d) in
+        Alcotest.(check int) "still exactly one row" 1 n;
+        check_events "duplicate" conn ~placement:id
+          [ (("shared_thread_requested", Some actor), (post, o, d))
+          ; (("shared_thread_accepted", Some actor), (post, o, d)) ])
+
+  let request_multiple_destinations_case =
+    db_case "request: one thread reaches several destinations as rows"
+      (fun conn ->
+        let* actor, o, d, post, _ = fixture conn "multi" in
+        let* e = insert_community conn "stp-multi-e" in
+        let* _ = connect conn ~actor o e in
+        let* first = request_ok "to d" conn ~actor ~post ~destination:d () in
+        let* second = request_ok "to e" conn ~actor ~post ~destination:e () in
+        Alcotest.(check bool) "distinct rows" false (first = second);
+        let* nd = find conn "d count" q_count_pair (post, d) in
+        let* ne = find conn "e count" q_count_pair (post, e) in
+        Alcotest.(check int) "one row toward d" 1 nd;
+        Alcotest.(check int) "one row toward e" 1 ne;
+        check_event_count "multi" conn ~post 2)
+
+  (* === review === *)
+
+  let accept_into_section_case =
+    db_case "accept: a sectioned destination accepts into its own section"
+      (fun conn ->
+        let* actor, o, d, post, _ = fixture conn "accsec" in
+        let* () = exec conn "sectioned destination" q_set_sections (d, true) in
+        let* section = find conn "section" q_insert_section (d, "general") in
+        let* reviewer = insert_user conn "stp_accsec_mod" in
+        let* id = request_ok "request" conn ~actor ~post ~destination:d () in
+        let* reviewed =
+          review_ok "accept" conn ~reviewer ~placement:id ~destination:d
+            (Store.Accept (Some section)) P.Accepted
+        in
+        Alcotest.(check int) "post crosses back" post
+          (Store.reviewed_post_id reviewed);
+        Alcotest.(check int) "origin crosses back" o
+          (Store.reviewed_origin_community_id reviewed);
+        Alcotest.(check int) "destination crosses back" d
+          (Store.reviewed_destination_community_id reviewed);
+        Alcotest.(check (option int)) "section crosses back" (Some section)
+          (Store.reviewed_destination_section_id reviewed);
+        let* () =
+          check_row "accept" conn id ~status:"accepted"
+            ~section:(Some section) ~note:None ~requested_by:(Some actor)
+            ~reviewed_by:(Some reviewer) ~removed_by:None ~withdrawn_by:None
+        in
+        check_events "accept" conn ~placement:id
+          [ (("shared_thread_requested", Some actor), (post, o, d))
+          ; (("shared_thread_accepted", Some reviewer), (post, o, d)) ])
+
+  let accept_flat_case =
+    db_case "accept: a flat destination accepts with no section" (fun conn ->
+        let* actor, _, d, post, _ = fixture conn "accflat" in
+        let* id = request_ok "request" conn ~actor ~post ~destination:d () in
+        (* A section supplied to a flat destination is refused, not
+           silently dropped. *)
+        let* () =
+          review_expect "section on a flat destination"
+            Store.Invalid_destination_section conn ~reviewer:actor
+            ~placement:id ~destination:d (Store.Accept (Some 12345))
+        in
+        let* reviewed =
+          review_ok "flat accept" conn ~reviewer:actor ~placement:id
+            ~destination:d (Store.Accept None) P.Accepted
+        in
+        Alcotest.(check (option int)) "no section" None
+          (Store.reviewed_destination_section_id reviewed);
+        check_row "flat accept" conn id ~status:"accepted" ~section:None
+          ~note:None ~requested_by:(Some actor) ~reviewed_by:(Some actor)
+          ~removed_by:None ~withdrawn_by:None)
+
+  let accept_section_boundary_case =
+    db_case "accept: the section must be a live section of the destination"
+      (fun conn ->
+        let* actor, o, d, post, _ = fixture conn "secbound" in
+        let* () = exec conn "sectioned destination" q_set_sections (d, true) in
+        let* foreign = find conn "origin section" q_insert_section (o, "own") in
+        let* stale = find conn "stale section" q_insert_section (d, "old") in
+        let* () = exec conn "delete stale" q_delete_section stale in
+        let* id = request_ok "request" conn ~actor ~post ~destination:d () in
+        let* () =
+          review_expect "no section chosen" Store.Invalid_destination_section
+            conn ~reviewer:actor ~placement:id ~destination:d
+            (Store.Accept None)
+        in
+        let* () =
+          review_expect "another community's section"
+            Store.Invalid_destination_section conn ~reviewer:actor
+            ~placement:id ~destination:d (Store.Accept (Some foreign))
+        in
+        let* () =
+          review_expect "a deleted section"
+            Store.Invalid_destination_section conn ~reviewer:actor
+            ~placement:id ~destination:d (Store.Accept (Some stale))
+        in
+        let* () =
+          review_expect "a non-positive section"
+            Store.Invalid_destination_section conn ~reviewer:actor
+            ~placement:id ~destination:d (Store.Accept (Some 0))
+        in
+        let* () =
+          check_row "untouched" conn id ~status:"pending" ~section:None
+            ~note:None ~requested_by:(Some actor) ~reviewed_by:None
+            ~removed_by:None ~withdrawn_by:None
+        in
+        check_event_count "section boundary" conn ~post 1)
+
+  let accept_revalidation_case =
+    db_case
+      "accept: connection, eligibility, and content are revalidated; \
+       reject is not gated"
+      (fun conn ->
+        (* Connection removed before acceptance. *)
+        let* actor, o, d, post, connection = fixture conn "reval" in
+        let* id = request_ok "request" conn ~actor ~post ~destination:d () in
+        let* () = disconnect conn ~actor ~connection ~acting:d in
+        let* () =
+          review_expect "accept after disconnect"
+            Store.No_accepted_connection conn ~reviewer:actor ~placement:id
+            ~destination:d (Store.Accept None)
+        in
+        (* Eligibility lost before acceptance. *)
+        let* connection = connect conn ~actor o d in
+        let* () = exec conn "destination private" Phcv.q_make_private d in
+        let* () =
+          review_expect "accept while destination ineligible"
+            Store.Destination_ineligible conn ~reviewer:actor ~placement:id
+            ~destination:d (Store.Accept None)
+        in
+        let* () = exec conn "restore destination" q_make_eligible d in
+        let* () = exec conn "origin private" Phcv.q_make_private o in
+        let* () =
+          review_expect "accept while origin ineligible"
+            Store.Origin_ineligible conn ~reviewer:actor ~placement:id
+            ~destination:d (Store.Accept None)
+        in
+        let* () = exec conn "restore origin" q_make_eligible o in
+        (* Content tombstoned before acceptance. *)
+        let* () = tombstone conn post "[removed by admin]" in
+        let* () =
+          review_expect "accept a tombstoned thread" Store.Post_tombstoned
+            conn ~reviewer:actor ~placement:id ~destination:d
+            (Store.Accept None)
+        in
+        (* And after ALL of that — disconnect again, break eligibility,
+           keep the tombstone — rejection still closes the request. *)
+        let* () = disconnect conn ~actor ~connection ~acting:o in
+        let* () = exec conn "destination private again" Phcv.q_make_private d in
+        let* _ =
+          review_ok "reject the stale request" conn ~reviewer:actor
+            ~placement:id ~destination:d Store.Reject P.Rejected
+        in
+        check_row "rejected" conn id ~status:"rejected" ~section:None
+          ~note:None ~requested_by:(Some actor) ~reviewed_by:(Some actor)
+          ~removed_by:None ~withdrawn_by:None)
+
+  let accept_precedence_case =
+    db_case
+      "accept: the locked post answers before the connection gate"
+      (fun conn ->
+        (* The connection lock is acquired ahead of the post lock (the
+           single shared lock order), but its absence is judged after the
+           locked post has answered: a thread both tombstoned and
+           disconnected refuses as Post_tombstoned, never as
+           No_accepted_connection. *)
+        let* actor, _o, d, post, connection = fixture conn "prec" in
+        let* id = request_ok "request" conn ~actor ~post ~destination:d () in
+        let* () = tombstone conn post "[removed by admin]" in
+        let* () = disconnect conn ~actor ~connection ~acting:d in
+        let* () =
+          review_expect "tombstoned and disconnected" Store.Post_tombstoned
+            conn ~reviewer:actor ~placement:id ~destination:d
+            (Store.Accept None)
+        in
+        let* () =
+          check_row "untouched" conn id ~status:"pending" ~section:None
+            ~note:None ~requested_by:(Some actor) ~reviewed_by:None
+            ~removed_by:None ~withdrawn_by:None
+        in
+        check_event_count "only the request" conn ~post 1)
+
+  let review_boundary_case =
+    db_case "review: the destination is verified in the mutation boundary"
+      (fun conn ->
+        let* actor, o, d, post, _ = fixture conn "revbound" in
+        let* c = insert_community conn "stp-revbound-c" in
+        let* id = request_ok "request" conn ~actor ~post ~destination:d () in
+        let* () =
+          review_expect "another community's queue" Store.Review_unavailable
+            conn ~reviewer:actor ~placement:id ~destination:c
+            (Store.Accept None)
+        in
+        let* () =
+          (* Not even the origin may review its own request through the
+             destination boundary. *)
+          review_expect "the origin itself" Store.Review_unavailable conn
+            ~reviewer:actor ~placement:id ~destination:o (Store.Accept None)
+        in
+        let* () =
+          check_row "untouched" conn id ~status:"pending" ~section:None
+            ~note:None ~requested_by:(Some actor) ~reviewed_by:None
+            ~removed_by:None ~withdrawn_by:None
+        in
+        check_events "no event" conn ~placement:id
+          [ (("shared_thread_requested", Some actor), (post, o, d)) ])
+
+  let review_stale_case =
+    db_case "review: a settled row cannot be reviewed again" (fun conn ->
+        let* actor, o, d, post, _ = fixture conn "revstale" in
+        let* id = request_ok "request" conn ~actor ~post ~destination:d () in
+        let* _ =
+          review_ok "accept" conn ~reviewer:actor ~placement:id ~destination:d
+            (Store.Accept None) P.Accepted
+        in
+        let* () =
+          review_expect "second accept" Store.Review_unavailable conn
+            ~reviewer:actor ~placement:id ~destination:d (Store.Accept None)
+        in
+        let* () =
+          review_expect "late reject" Store.Review_unavailable conn
+            ~reviewer:actor ~placement:id ~destination:d Store.Reject
+        in
+        let* absent = find conn "absent id" q_absent_placement () in
+        let* () =
+          review_expect "absent placement" Store.Review_unavailable conn
+            ~reviewer:actor ~placement:absent ~destination:d
+            (Store.Accept None)
+        in
+        let* () =
+          review_expect "zero reviewer" Store.Invalid_user_id conn
+            ~reviewer:0 ~placement:id ~destination:d (Store.Accept None)
+        in
+        check_events "one review only" conn ~placement:id
+          [ (("shared_thread_requested", Some actor), (post, o, d))
+          ; (("shared_thread_accepted", Some actor), (post, o, d)) ])
+
+  (* === withdraw === *)
+
+  let withdraw_case =
+    db_case "withdraw: pending becomes withdrawn and frees the slot"
+      (fun conn ->
+        let* actor, o, d, post, _ = fixture conn "wd" in
+        let* id =
+          request_ok "request" conn ~actor ~note:"kept" ~post ~destination:d ()
+        in
+        let* withdrawn = withdraw_ok "withdraw" conn ~actor ~placement:id ~origin:o in
+        Alcotest.(check int) "post crosses back" post
+          (Store.withdrawn_post_id withdrawn);
+        Alcotest.(check int) "origin crosses back" o
+          (Store.withdrawn_origin_community_id withdrawn);
+        Alcotest.(check int) "destination crosses back" d
+          (Store.withdrawn_destination_community_id withdrawn);
+        let* () =
+          check_row "withdrawn" conn id ~status:"withdrawn" ~section:None
+            ~note:(Some "kept") ~requested_by:(Some actor) ~reviewed_by:None
+            ~removed_by:None ~withdrawn_by:(Some actor)
+        in
+        let* reviewed, removed, withdrawn_at, coherent =
+          find conn "stamps" q_stamps id
+        in
+        Alcotest.(check bool) "no review time" false reviewed;
+        Alcotest.(check bool) "no removal time" false removed;
+        Alcotest.(check bool) "withdrawal time set" true withdrawn_at;
+        Alcotest.(check bool) "updated_at coherent" true coherent;
+        let* () =
+          check_events "withdraw" conn ~placement:id
+            [ (("shared_thread_requested", Some actor), (post, o, d))
+            ; (("shared_thread_withdrawn", Some actor), (post, o, d)) ]
+        in
+        (* The slot is free: a fresh request is a new row. *)
+        let* fresh = request_ok "fresh request" conn ~actor ~post ~destination:d () in
+        Alcotest.(check bool) "a new row, not a reopened one" false
+          (fresh = id);
+        let* total = find conn "history" q_count_pair (post, d) in
+        Alcotest.(check int) "history retained" 2 total;
+        let* active = find conn "active" q_count_active_pair (post, d) in
+        Alcotest.(check int) "exactly one active" 1 active;
+        Lwt.return_unit)
+
+  let withdraw_survives_drift_case =
+    db_case
+      "withdraw: still possible after disconnect, ineligibility, and \
+       tombstoning"
+      (fun conn ->
+        let* actor, o, d, post, connection = fixture conn "wddrift" in
+        let* id = request_ok "request" conn ~actor ~post ~destination:d () in
+        let* () = disconnect conn ~actor ~connection ~acting:o in
+        let* () = exec conn "origin private" Phcv.q_make_private o in
+        let* () = exec conn "destination draft" Phcv.q_make_draft_state d in
+        let* () = tombstone conn post "[deleted]" in
+        let* _ = withdraw_ok "withdraw the stale request" conn ~actor
+            ~placement:id ~origin:o
+        in
+        check_row "withdrawn" conn id ~status:"withdrawn" ~section:None
+          ~note:None ~requested_by:(Some actor) ~reviewed_by:None
+          ~removed_by:None ~withdrawn_by:(Some actor))
+
+  let withdraw_stale_case =
+    db_case "withdraw: only a pending row, and only through the origin"
+      (fun conn ->
+        let* actor, o, d, post, _ = fixture conn "wdstale" in
+        let* id = request_ok "request" conn ~actor ~post ~destination:d () in
+        let* () =
+          (* The destination cannot withdraw the origin's request. *)
+          withdraw_expect "the destination boundary"
+            Store.Withdrawal_unavailable conn ~actor ~placement:id ~origin:d
+        in
+        let* _ = withdraw_ok "withdraw" conn ~actor ~placement:id ~origin:o in
+        let* () =
+          withdraw_expect "a second withdrawal" Store.Withdrawal_unavailable
+            conn ~actor ~placement:id ~origin:o
+        in
+        (* An accepted row is not withdrawable — that is removal's job. *)
+        let* second = request_ok "fresh request" conn ~actor ~post ~destination:d () in
+        let* _ =
+          review_ok "accept" conn ~reviewer:actor ~placement:second
+            ~destination:d (Store.Accept None) P.Accepted
+        in
+        let* () =
+          withdraw_expect "an accepted row" Store.Withdrawal_unavailable conn
+            ~actor ~placement:second ~origin:o
+        in
+        let* absent = find conn "absent id" q_absent_placement () in
+        let* () =
+          withdraw_expect "an absent placement" Store.Withdrawal_unavailable
+            conn ~actor ~placement:absent ~origin:o
+        in
+        let* () =
+          withdraw_expect "zero actor" Store.Invalid_user_id conn ~actor:0
+            ~placement:second ~origin:o
+        in
+        check_event_count "stale withdrawals" conn ~post 4)
+
+  (* === remove === *)
+
+  let remove_case =
+    db_case "remove: either side detaches an accepted placement" (fun conn ->
+        let* actor, o, d, post, _ = fixture conn "rm" in
+        let* id = request_ok "request" conn ~actor ~post ~destination:d () in
+        let* _ =
+          review_ok "accept" conn ~reviewer:actor ~placement:id ~destination:d
+            (Store.Accept None) P.Accepted
+        in
+        let* remover = insert_user conn "stp_rm_actor" in
+        let* removed = remove_ok "remove from the origin side" conn
+            ~actor:remover ~placement:id ~acting:o
+        in
+        Alcotest.(check int) "post crosses back" post
+          (Store.removed_post_id removed);
+        Alcotest.(check int) "origin crosses back" o
+          (Store.removed_origin_community_id removed);
+        Alcotest.(check int) "destination crosses back" d
+          (Store.removed_destination_community_id removed);
+        let* () =
+          check_row "removed" conn id ~status:"removed" ~section:None
+            ~note:None ~requested_by:(Some actor) ~reviewed_by:(Some actor)
+            ~removed_by:(Some remover) ~withdrawn_by:None
+        in
+        let* reviewed, removed_at, withdrawn, coherent =
+          find conn "stamps" q_stamps id
+        in
+        Alcotest.(check bool) "the review survives" true reviewed;
+        Alcotest.(check bool) "removal time set" true removed_at;
+        Alcotest.(check bool) "no withdrawal time" false withdrawn;
+        Alcotest.(check bool) "updated_at coherent" true coherent;
+        let* () =
+          check_events "remove" conn ~placement:id
+            [ (("shared_thread_requested", Some actor), (post, o, d))
+            ; (("shared_thread_accepted", Some actor), (post, o, d))
+            ; (("shared_thread_removed", Some remover), (post, o, d)) ]
+        in
+        (* The destination detaches just as unilaterally. *)
+        let* second = request_ok "second request" conn ~actor ~post ~destination:d () in
+        let* _ =
+          review_ok "accept again" conn ~reviewer:actor ~placement:second
+            ~destination:d (Store.Accept None) P.Accepted
+        in
+        let* _ = remove_ok "remove from the destination side" conn
+            ~actor:remover ~placement:second ~acting:d
+        in
+        check_row "removed again" conn second ~status:"removed" ~section:None
+          ~note:None ~requested_by:(Some actor) ~reviewed_by:(Some actor)
+          ~removed_by:(Some remover) ~withdrawn_by:None)
+
+  let remove_survives_drift_case =
+    db_case
+      "remove: still possible after disconnect, ineligibility, \
+       tombstoning, and section deletion"
+      (fun conn ->
+        let* actor, o, d, post, connection = fixture conn "rmdrift" in
+        let* () = exec conn "sectioned destination" q_set_sections (d, true) in
+        let* section = find conn "section" q_insert_section (d, "gen") in
+        let* id = request_ok "request" conn ~actor ~post ~destination:d () in
+        let* _ =
+          review_ok "accept" conn ~reviewer:actor ~placement:id ~destination:d
+            (Store.Accept (Some section)) P.Accepted
+        in
+        let* () = disconnect conn ~actor ~connection ~acting:d in
+        let* () = exec conn "origin private" Phcv.q_make_private o in
+        let* () = tombstone conn post "[removed by moderator]" in
+        let* () = exec conn "delete section" q_delete_section section in
+        let* _ = remove_ok "remove the stale placement" conn ~actor
+            ~placement:id ~acting:d
+        in
+        (* The accepted section was already released by the deletion; the
+           removal keeps that history as-is. *)
+        check_row "removed" conn id ~status:"removed" ~section:None
+          ~note:None ~requested_by:(Some actor) ~reviewed_by:(Some actor)
+          ~removed_by:(Some actor) ~withdrawn_by:None)
+
+  let remove_scope_case =
+    db_case "remove: only the selected placement changes" (fun conn ->
+        let* actor, o, d, post, _ = fixture conn "rmscope" in
+        let* e = insert_community conn "stp-rmscope-e" in
+        let* () = exec conn "flat e" q_set_sections (e, false) in
+        let* _ = connect conn ~actor o e in
+        let* commenter = insert_user conn "stp_rmscope_commenter" in
+        let* _ = find conn "comment" q_insert_comment (post, commenter) in
+        let* first = request_ok "to d" conn ~actor ~post ~destination:d () in
+        let* second = request_ok "to e" conn ~actor ~post ~destination:e () in
+        let* _ =
+          review_ok "accept d" conn ~reviewer:actor ~placement:first
+            ~destination:d (Store.Accept None) P.Accepted
+        in
+        let* _ =
+          review_ok "accept e" conn ~reviewer:actor ~placement:second
+            ~destination:e (Store.Accept None) P.Accepted
+        in
+        let* _ = remove_ok "remove d" conn ~actor ~placement:first ~acting:d in
+        (* The sibling placement, the canonical post, and its comments are
+           untouched. *)
+        let* () =
+          check_row "sibling untouched" conn second ~status:"accepted"
+            ~section:None ~note:None ~requested_by:(Some actor)
+            ~reviewed_by:(Some actor) ~removed_by:None ~withdrawn_by:None
+        in
+        let* title, content = find conn "post" q_post_row post in
+        Alcotest.(check string) "title kept" "stp thread" title;
+        Alcotest.(check (option string)) "content kept" (Some "stp body")
+          content;
+        let* comments = find conn "comments" q_comment_count post in
+        Alcotest.(check int) "comments kept" 1 comments;
+        Lwt.return_unit)
+
+  let remove_stale_case =
+    db_case "remove: only an accepted row, and only from inside the pair"
+      (fun conn ->
+        let* actor, o, d, post, _ = fixture conn "rmstale" in
+        let* stranger = insert_community conn "stp-rmstale-c" in
+        let* id = request_ok "request" conn ~actor ~post ~destination:d () in
+        let* () =
+          remove_expect "a pending row" Store.Removal_unavailable conn ~actor
+            ~placement:id ~acting:o
+        in
+        let* _ =
+          review_ok "accept" conn ~reviewer:actor ~placement:id ~destination:d
+            (Store.Accept None) P.Accepted
+        in
+        let* () =
+          remove_expect "an outside community" Store.Removal_unavailable conn
+            ~actor ~placement:id ~acting:stranger
+        in
+        let* absent = find conn "absent id" q_absent_placement () in
+        let* () =
+          remove_expect "an absent placement" Store.Removal_unavailable conn
+            ~actor ~placement:absent ~acting:o
+        in
+        let* _ = remove_ok "first removal" conn ~actor ~placement:id ~acting:o in
+        let* () =
+          remove_expect "a second removal" Store.Removal_unavailable conn
+            ~actor ~placement:id ~acting:d
+        in
+        (* Exactly one removed event survives all of that. *)
+        check_events "one removal only" conn ~placement:id
+          [ (("shared_thread_requested", Some actor), (post, o, d))
+          ; (("shared_thread_accepted", Some actor), (post, o, d))
+          ; (("shared_thread_removed", Some actor), (post, o, d)) ])
+
+  (* === atomicity === *)
+
+  let ddl sql = (Caqti_type.unit ->. Caqti_type.unit) sql
+
+  let q_create_fail_fn =
+    ddl
+      "CREATE FUNCTION stp_fail_fn() RETURNS trigger \
+       LANGUAGE plpgsql \
+       AS 'BEGIN RAISE EXCEPTION ''stp fixture failure''; END'"
+
+  let q_drop_fail_fn = ddl "DROP FUNCTION IF EXISTS stp_fail_fn()"
+
+  let q_poison_audit =
+    ddl
+      "CREATE TRIGGER stp_fail_audit \
+       BEFORE INSERT ON shared_thread_placement_audit_events \
+       FOR EACH ROW EXECUTE FUNCTION stp_fail_fn()"
+
+  let q_unpoison_audit =
+    ddl
+      "DROP TRIGGER IF EXISTS stp_fail_audit \
+       ON shared_thread_placement_audit_events"
+
+  let q_poison_insert =
+    ddl
+      "CREATE TRIGGER stp_fail_business \
+       AFTER INSERT ON shared_thread_placements \
+       FOR EACH ROW EXECUTE FUNCTION stp_fail_fn()"
+
+  let q_poison_update =
+    ddl
+      "CREATE TRIGGER stp_fail_business \
+       AFTER UPDATE ON shared_thread_placements \
+       FOR EACH ROW EXECUTE FUNCTION stp_fail_fn()"
+
+  let q_unpoison_business =
+    ddl "DROP TRIGGER IF EXISTS stp_fail_business ON shared_thread_placements"
+
+  let q_poison_notif =
+    ddl
+      "CREATE TRIGGER stp_fail_notif \
+       BEFORE INSERT ON notifications \
+       FOR EACH ROW EXECUTE FUNCTION stp_fail_fn()"
+
+  let q_unpoison_notif =
+    ddl "DROP TRIGGER IF EXISTS stp_fail_notif ON notifications"
+
+  let with_poison conn ~install ~remove f =
+    let* () = exec conn "create fail fn" q_create_fail_fn () in
+    Lwt.finalize
+      (fun () ->
+        let* () = exec conn "install poison trigger" install () in
+        Lwt.finalize f (fun () -> exec conn "drop poison trigger" remove ()))
+      (fun () -> exec conn "drop fail fn" q_drop_fail_fn ())
+
+  let audit_failure_rolls_back_case =
+    db_case "atomicity: a failed audit insert rolls the whole mutation back"
+      (fun conn ->
+        let* actor, o, d, post, _ = fixture conn "auditfail" in
+        let* () =
+          with_poison conn ~install:q_poison_audit ~remove:q_unpoison_audit
+            (fun () ->
+              request_expect "request with audit poisoned" Store.Storage_error
+                conn ~actor ~post ~destination:d ())
+        in
+        let* n = find conn "no placement row" q_count_pair (post, d) in
+        Alcotest.(check int) "no placement committed" 0 n;
+        let* () = check_event_count "no events" conn ~post 0 in
+        let* notifs = find conn "no notifications" q_notifs_for_post post in
+        Alcotest.(check int) "no notifications committed" 0 notifs;
+        (* And once the poison is gone the very same request commits. *)
+        let* id = request_ok "request afterwards" conn ~actor ~post
+            ~destination:d ()
+        in
+        check_events "committed together" conn ~placement:id
+          [ (("shared_thread_requested", Some actor), (post, o, d)) ])
+
+  let mutation_failure_leaves_no_event_case =
+    db_case "atomicity: a failed mutation leaves no event or notification"
+      (fun conn ->
+        let* actor, o, d, post, _ = fixture conn "bizfail" in
+        let* () =
+          with_poison conn ~install:q_poison_insert ~remove:q_unpoison_business
+            (fun () ->
+              request_expect "request with the insert poisoned"
+                Store.Storage_error conn ~actor ~post ~destination:d ())
+        in
+        let* n = find conn "no placement row" q_count_pair (post, d) in
+        Alcotest.(check int) "no placement committed" 0 n;
+        let* () = check_event_count "no events" conn ~post 0 in
+        (* The same holds for the update-driven transitions. *)
+        let* id = request_ok "request" conn ~actor ~post ~destination:d () in
+        let* () =
+          with_poison conn ~install:q_poison_update ~remove:q_unpoison_business
+            (fun () ->
+              review_expect "accept with the update poisoned"
+                Store.Storage_error conn ~reviewer:actor ~placement:id
+                ~destination:d (Store.Accept None))
+        in
+        let* () =
+          check_row "still pending" conn id ~status:"pending" ~section:None
+            ~note:None ~requested_by:(Some actor) ~reviewed_by:None
+            ~removed_by:None ~withdrawn_by:None
+        in
+        check_events "only the request survives" conn ~placement:id
+          [ (("shared_thread_requested", Some actor), (post, o, d)) ])
+
+  let notification_failure_rolls_back_case =
+    db_case
+      "atomicity: a failed notification insert rolls mutation and audit back"
+      (fun conn ->
+        let* actor, o, d, post, _ = fixture conn "notiffail" in
+        (* A destination top moderator, so the request path really attempts
+           a notification insert. *)
+        let* tm = insert_user conn "stp_notiffail_tm" in
+        let* () =
+          exec conn "top mod" Phrv.q_insert_moderator (tm, d, "top_mod")
+        in
+        let* () =
+          with_poison conn ~install:q_poison_notif ~remove:q_unpoison_notif
+            (fun () ->
+              request_expect "request with notifications poisoned"
+                Store.Storage_error conn ~actor ~post ~destination:d ())
+        in
+        let* n = find conn "no placement row" q_count_pair (post, d) in
+        Alcotest.(check int) "no placement committed" 0 n;
+        let* () = check_event_count "no events" conn ~post 0 in
+        let* notifs = find conn "no notifications" q_notifs_for_post post in
+        Alcotest.(check int) "no notifications committed" 0 notifs;
+        (* Afterwards the same request commits whole: row, event, and the
+           top moderator's notification. *)
+        let* id = request_ok "request afterwards" conn ~actor ~post
+            ~destination:d ()
+        in
+        let* () =
+          check_events "committed together" conn ~placement:id
+            [ (("shared_thread_requested", Some actor), (post, o, d)) ]
+        in
+        let* notifs = find conn "one notification" q_notifs_for_post post in
+        Alcotest.(check int) "exactly one notification" 1 notifs;
+        Lwt.return_unit)
+
+  (* === concurrency === *)
+
+  let concurrent_request_case =
+    db_case "concurrency: identical requests leave exactly one active row"
+      (fun conn ->
+        let* actor, _, d, post, _ = fixture conn "race" in
+        Pod_store.with_second_connection (fun conn2 ->
+            let* r1, r2 =
+              Lwt.both
+                (request conn ~actor ~post ~destination:d ())
+                (request conn2 ~actor ~post ~destination:d ())
+            in
+            (match (r1, r2) with
+            | Ok _, Error Store.Active_placement_exists
+            | Error Store.Active_placement_exists, Ok _ ->
+                ()
+            | Ok _, Ok _ -> Alcotest.fail "both requests won"
+            | Error e, Error e' ->
+                Alcotest.failf "both failed (%s, %s)" (error_str e)
+                  (error_str e')
+            | Ok _, Error e | Error e, Ok _ ->
+                Alcotest.failf "unexpected loser error %s" (error_str e));
+            let* total = find conn "row count" q_count_pair (post, d) in
+            Alcotest.(check int) "exactly one row" 1 total;
+            let* events = find conn "events" q_events_for_post post in
+            Alcotest.(check int) "exactly one event" 1 events;
+            Lwt.return_unit))
+
+  let concurrent_review_case =
+    db_case "concurrency: only one review of a pending row commits"
+      (fun conn ->
+        let* actor, _, d, post, _ = fixture conn "race2" in
+        let* id = request_ok "request" conn ~actor ~post ~destination:d () in
+        Pod_store.with_second_connection (fun conn2 ->
+            let* r1, r2 =
+              Lwt.both
+                (review conn ~reviewer:actor ~placement:id ~destination:d
+                   (Store.Accept None))
+                (review conn2 ~reviewer:actor ~placement:id ~destination:d
+                   Store.Reject)
+            in
+            (match (r1, r2) with
+            | Ok _, Error Store.Review_unavailable
+            | Error Store.Review_unavailable, Ok _ ->
+                ()
+            | Ok _, Ok _ -> Alcotest.fail "both reviews won"
+            | Error e, Error e' ->
+                Alcotest.failf "both failed (%s, %s)" (error_str e)
+                  (error_str e')
+            | Ok _, Error e | Error e, Ok _ ->
+                Alcotest.failf "unexpected loser error %s" (error_str e));
+            let* events = find conn "events" q_events_for_post post in
+            Alcotest.(check int) "the request plus exactly one review" 2
+              events;
+            Lwt.return_unit))
+
+  let request_suite =
+    [ request_case; request_blank_note_case; request_validation_case
+    ; request_missing_subjects_case; request_connection_case
+    ; request_eligibility_case; request_tombstone_case
+    ; request_duplicate_case; request_multiple_destinations_case ]
+
+  let review_suite =
+    [ accept_into_section_case; accept_flat_case
+    ; accept_section_boundary_case; accept_revalidation_case
+    ; accept_precedence_case; review_boundary_case; review_stale_case ]
+
+  let withdraw_suite =
+    [ withdraw_case; withdraw_survives_drift_case; withdraw_stale_case ]
+
+  let remove_suite =
+    [ remove_case; remove_survives_drift_case; remove_scope_case
+    ; remove_stale_case ]
+
+  let atomicity_suite =
+    [ audit_failure_rolls_back_case; mutation_failure_leaves_no_event_case
+    ; notification_failure_rolls_back_case ]
+
+  let concurrency_suite = [ concurrent_request_case; concurrent_review_case ]
+end
+
+(* The structured notification recipient policy: exact top_mod resolution
+   per side, the requester/author pair on review outcomes, the
+   deduplicated two-sided union on removal, actor exclusion, per-side
+   community context, and the absence of prose. Database-gated on
+   EARDE_TEST_DATABASE_URL. *)
+module Stp_notif = struct
+  let ( let* ) = Lwt.bind
+
+  open Caqti_request.Infix
+
+  module P = Earde.Shared_thread_placements
+  module Store = Earde.Shared_thread_placement_store
+
+  let find = Pod_read.find
+  let collect = Pod_read.collect
+  let exec = Pod_read.exec
+  let insert_user = Pod_store.insert_user
+  let contains haystack needle = Cprj_schema.contains haystack ~needle
+
+  let db_case = Stp_store.db_case
+  let fixture = Stp_store.fixture
+  let insert_post = Stp_store.insert_post
+  let request_ok = Stp_store.request_ok
+  let review_ok = Stp_store.review_ok
+  let withdraw_ok = Stp_store.withdraw_ok
+  let remove_ok = Stp_store.remove_ok
+
+  let add_role conn ~user ~community role =
+    exec conn "role fixture" Phrv.q_insert_moderator (user, community, role)
+
+  let add_top_mod conn ~user ~community =
+    add_role conn ~user ~community "top_mod"
+
+  (* One tuple per notification of one placement, ordered by recipient so
+     expectations do not depend on insertion order. *)
+  let q_notifs =
+    (Caqti_type.int64
+     ->* Caqti_type.(t2 (t2 int string) (t2 (option int) int)))
+    "SELECT user_id, notif_type, actor_user_id, community_id \
+     FROM notifications WHERE shared_thread_placement_id = $1 \
+     ORDER BY user_id, notif_type"
+
+  let q_notif_count =
+    (Caqti_type.int64 ->! Caqti_type.int)
+    "SELECT COUNT(*) FROM notifications \
+     WHERE shared_thread_placement_id = $1"
+
+  (* Every stored byte of one placement's notifications, for the boolean
+     absence sweep over notes and usernames. *)
+  let q_notif_blob =
+    (Caqti_type.int64 ->! Caqti_type.string)
+    "SELECT COALESCE(string_agg(n::text, '|'), '<none>') \
+     FROM notifications n WHERE shared_thread_placement_id = $1"
+
+  (* Creation must never mark anything read. *)
+  let q_all_unread =
+    (Caqti_type.int64 ->! Caqti_type.bool)
+    "SELECT COALESCE(BOOL_AND(NOT is_read), TRUE) \
+     FROM notifications WHERE shared_thread_placement_id = $1"
+
+  let notif_t = Alcotest.(pair (pair int string) (pair (option int) int))
+
+  let sorted expected =
+    List.sort
+      (fun ((a, ka), _) ((b, kb), _) -> compare (a, ka) (b, kb))
+      expected
+
+  let check_notifs label conn ~placement expected =
+    let* rows = collect conn (label ^ ": notifications") q_notifs placement in
+    Alcotest.(check (list notif_t))
+      (label ^ ": exact notifications") (sorted expected) rows;
+    let* unread = find conn (label ^ ": unread") q_all_unread placement in
+    Alcotest.(check bool) (label ^ ": all rows unread") true unread;
+    Lwt.return_unit
+
+  let requested_recipients_case =
+    db_case "requested: destination exact top_mods only, in their context"
+      (fun conn ->
+        let* actor, o, d, post, _ = fixture conn "nreq" in
+        let* tm1 = insert_user conn "stp_nreq_tm1" in
+        let* tm2 = insert_user conn "stp_nreq_tm2" in
+        let* ordinary = insert_user conn "stp_nreq_mod" in
+        let* legacy = insert_user conn "stp_nreq_legacy" in
+        let* origin_tm = insert_user conn "stp_nreq_origin_tm" in
+        let* () = add_top_mod conn ~user:tm1 ~community:d in
+        let* () = add_top_mod conn ~user:tm2 ~community:d in
+        let* () = add_role conn ~user:ordinary ~community:d "mod" in
+        let* () = add_role conn ~user:legacy ~community:d "legacy_mod" in
+        let* () = add_top_mod conn ~user:origin_tm ~community:o in
+        let* id = request_ok "request" conn ~actor ~post ~destination:d () in
+        check_notifs "requested" conn ~placement:id
+          [ ((tm1, "shared_thread_requested"), (Some actor, d))
+          ; ((tm2, "shared_thread_requested"), (Some actor, d)) ])
+
+  let requested_actor_excluded_case =
+    db_case "requested: the acting top_mod is never notified" (fun conn ->
+        let* actor, _, d, post, _ = fixture conn "nself" in
+        let* other = insert_user conn "stp_nself_other" in
+        let* () = add_top_mod conn ~user:actor ~community:d in
+        let* () = add_top_mod conn ~user:other ~community:d in
+        let* id = request_ok "request" conn ~actor ~post ~destination:d () in
+        check_notifs "actor excluded" conn ~placement:id
+          [ ((other, "shared_thread_requested"), (Some actor, d)) ])
+
+  let zero_recipients_case =
+    db_case "requested: zero recipients never fails the transition"
+      (fun conn ->
+        let* actor, _, d, post, _ = fixture conn "nzero" in
+        let* id = request_ok "request" conn ~actor ~post ~destination:d () in
+        let* n = find conn "count" q_notif_count id in
+        Alcotest.(check int) "no notifications, request committed" 0 n;
+        Lwt.return_unit)
+
+  let review_recipients_case =
+    db_case "review: requester and author both hear the outcome, in origin \
+             context"
+      (fun conn ->
+        let* actor, o, d, _, _ = fixture conn "nrev" in
+        let* author = insert_user conn "stp_nrev_author" in
+        let* post = insert_post conn ~community:o ~author in
+        let* reviewer = insert_user conn "stp_nrev_reviewer" in
+        let* id = request_ok "request" conn ~actor ~post ~destination:d () in
+        let* _ =
+          review_ok "accept" conn ~reviewer ~placement:id ~destination:d
+            (Store.Accept None) P.Accepted
+        in
+        check_notifs "accepted" conn ~placement:id
+          [ ((actor, "shared_thread_accepted"), (Some reviewer, o))
+          ; ((author, "shared_thread_accepted"), (Some reviewer, o)) ])
+
+  let review_dedup_case =
+    db_case "review: a requesting author collapses to one notification"
+      (fun conn ->
+        let* actor, o, d, post, _ = fixture conn "ndedup2" in
+        (* The fixture's actor authored the post and requests the share. *)
+        let* reviewer = insert_user conn "stp_ndedup2_reviewer" in
+        let* id = request_ok "request" conn ~actor ~post ~destination:d () in
+        let* _ =
+          review_ok "reject" conn ~reviewer ~placement:id ~destination:d
+            Store.Reject P.Rejected
+        in
+        check_notifs "one rejected notification" conn ~placement:id
+          [ ((actor, "shared_thread_rejected"), (Some reviewer, o)) ])
+
+  let reviewer_is_requester_case =
+    db_case "review: a reviewing requester is excluded, the author remains"
+      (fun conn ->
+        let* actor, o, d, _, _ = fixture conn "nrevself" in
+        let* author = insert_user conn "stp_nrevself_author" in
+        let* post = insert_post conn ~community:o ~author in
+        let* id = request_ok "request" conn ~actor ~post ~destination:d () in
+        let* _ =
+          review_ok "accept by the requester" conn ~reviewer:actor
+            ~placement:id ~destination:d (Store.Accept None) P.Accepted
+        in
+        check_notifs "self-review" conn ~placement:id
+          [ ((author, "shared_thread_accepted"), (Some actor, o)) ])
+
+  let withdrawn_recipients_case =
+    db_case "withdrawn: destination top_mods hear it, minus the actor"
+      (fun conn ->
+        let* actor, o, d, post, _ = fixture conn "nwd" in
+        let* tm = insert_user conn "stp_nwd_tm" in
+        let* () = add_top_mod conn ~user:tm ~community:d in
+        let* id = request_ok "request" conn ~actor ~post ~destination:d () in
+        let* _ = withdraw_ok "withdraw" conn ~actor ~placement:id ~origin:o in
+        check_notifs "withdrawn" conn ~placement:id
+          [ ((tm, "shared_thread_requested"), (Some actor, d))
+          ; ((tm, "shared_thread_withdrawn"), (Some actor, d)) ])
+
+  let removed_union_case =
+    db_case "removed: both sides' top_mods, requester, and author — \
+             deduplicated, actor excluded, per-side context"
+      (fun conn ->
+        let* actor, o, d, _, _ = fixture conn "nrm" in
+        let* author = insert_user conn "stp_nrm_author" in
+        let* post = insert_post conn ~community:o ~author in
+        let* origin_tm = insert_user conn "stp_nrm_otm" in
+        let* dest_tm = insert_user conn "stp_nrm_dtm" in
+        let* both_tm = insert_user conn "stp_nrm_btm" in
+        let* remover = insert_user conn "stp_nrm_remover" in
+        let* () = add_top_mod conn ~user:origin_tm ~community:o in
+        let* () = add_top_mod conn ~user:dest_tm ~community:d in
+        let* () = add_top_mod conn ~user:both_tm ~community:o in
+        let* () = add_top_mod conn ~user:both_tm ~community:d in
+        let* id = request_ok "request" conn ~actor ~post ~destination:d () in
+        let* _ =
+          review_ok "accept" conn ~reviewer:remover ~placement:id
+            ~destination:d (Store.Accept None) P.Accepted
+        in
+        let* _ = remove_ok "remove" conn ~actor:remover ~placement:id ~acting:o in
+        let removed = "shared_thread_removed" in
+        let* rows = collect conn "rows" q_notifs id in
+        let removed_rows =
+          List.filter (fun ((_, kind), _) -> kind = removed) rows
+        in
+        Alcotest.(check (list notif_t))
+          "exact removal recipients"
+          (List.sort compare
+             [ ((origin_tm, removed), (Some remover, o))
+               (* A top moderator of both sides is notified once, in
+                  origin context. *)
+             ; ((both_tm, removed), (Some remover, o))
+             ; ((actor, removed), (Some remover, o))
+             ; ((author, removed), (Some remover, o))
+             ; ((dest_tm, removed), (Some remover, d)) ])
+          removed_rows;
+        Lwt.return_unit)
+
+  let privacy_case =
+    db_case "privacy: no note, name, or prose is stored on any row"
+      (fun conn ->
+        let* actor, _, d, post, _ = fixture conn "priv" in
+        let* tm = insert_user conn "stp_priv_tm" in
+        let* () = add_top_mod conn ~user:tm ~community:d in
+        let* id =
+          request_ok "request" conn ~actor
+            ~note:"SECRETNOTE do not surface" ~post ~destination:d ()
+        in
+        let* blob = find conn "blob" q_notif_blob id in
+        List.iter
+          (fun needle ->
+            if contains blob needle then
+              Alcotest.failf "notifications carry %S" needle)
+          [ "SECRETNOTE"; "stp_priv"; "stp thread"; "stp body" ];
+        Lwt.return_unit)
+
+  let suite =
+    [ requested_recipients_case; requested_actor_excluded_case
+    ; zero_recipients_case; review_recipients_case; review_dedup_case
+    ; reviewer_is_requester_case; withdrawn_recipients_case
+    ; removed_union_case; privacy_case ]
+end
+
+(* ===================================================================== *)
+(* === Shared threads HTTP slice (Slice 2): pure page suites =========== *)
+(* ===================================================================== *)
+
+(* DB-free rendering checks for the two shared-threads surfaces: the pure
+   page module is called directly with fabricated view models (no request,
+   so no CSRF field and no live forms are required), and every assertion is
+   a substring over the returned document. The HTTP module below covers the
+   same surfaces end-to-end over real rows. *)
+module Sth_ui = struct
+  module Pg = Earde.Shared_thread_placement_pages
+
+  let contains haystack needle = Cprj_schema.contains haystack ~needle
+
+  let case name f = Alcotest.test_case name `Quick f
+
+  let must body needle =
+    if not (contains body needle) then
+      Alcotest.failf "missing fragment %S" needle
+
+  let must_not body needle =
+    if contains body needle then Alcotest.failf "forbidden fragment %S" needle
+
+  let candidate ?(name = "Sth Ui Dest") ?(slug = "sth-ui-dest") () =
+    { Pg.candidate_name = name; candidate_slug = slug }
+
+  let placement ?(id = "7") ?(name = "Sth Ui Dest") ?(slug = "sth-ui-dest")
+      ?(pending = true) ?(withdraw = false) ?(remove = false) ?note () =
+    {
+      Pg.share_placement_id = id;
+      share_destination_name = name;
+      share_destination_slug = slug;
+      share_pending = pending;
+      share_can_withdraw = withdraw;
+      share_can_remove = remove;
+      share_note = note;
+    }
+
+  let share_state ?(candidates = []) ?(placements = [])
+      ?(manage_connections = false) () =
+    {
+      Pg.share_thread_title = "Sth Ui Thread";
+      share_origin_name = "Sth Ui Origin";
+      share_origin_slug = "sth-ui-origin";
+      share_thread_path = "/c/sth-ui-origin/t/12-sth-ui-thread";
+      share_candidates = candidates;
+      share_placements = placements;
+      share_manage_connections = manage_connections;
+    }
+
+  let pending_entry ?(id = "9") ?(title = "Sth Ui Incoming")
+      ?(cname = "Sth Ui Other") ?(cslug = "sth-ui-other") ?note () =
+    {
+      Pg.pending_id = id;
+      pending_title = title;
+      pending_thread_path = "/c/" ^ cslug ^ "/t/31-x";
+      pending_counterpart_name = cname;
+      pending_counterpart_slug = cslug;
+      pending_note = note;
+      pending_requested_at = "2026-08-03 10:00:00";
+    }
+
+  let accepted_entry ?(id = "11") ?(title = "Sth Ui Accepted")
+      ?(cname = "Sth Ui Other") ?(cslug = "sth-ui-other") ?section () =
+    {
+      Pg.accepted_id = id;
+      accepted_title = title;
+      accepted_thread_path = "/c/" ^ cslug ^ "/t/32-y";
+      accepted_counterpart_name = cname;
+      accepted_counterpart_slug = cslug;
+      accepted_section = section;
+      accepted_at = "2026-08-03 11:00:00";
+    }
+
+  let management_state ?(eligible = true) ?(sections_enabled = false)
+      ?(section_options = []) ?(incoming = []) ?(outgoing = [])
+      ?(shared_into = []) ?(shared_from = []) () =
+    {
+      Pg.community_name = "Sth Ui Home";
+      community_slug = "sth-ui-home";
+      community_eligible = eligible;
+      sections_enabled;
+      section_options;
+      incoming;
+      outgoing;
+      shared_into;
+      shared_from;
+    }
+
+  let share ?(state = share_state ()) ?notice ?feedback () =
+    Pg.share_page ~state ~notice ~feedback ()
+
+  let manage ?(state = management_state ()) ?notice ?feedback () =
+    Pg.management_page ~state ~notice ~feedback ()
+
+  (* The rendered create-shell fragment, so chrome (which legitimately
+     carries scripts elsewhere) never hides a violation inside the panel —
+     and page-level assertions cannot pass off chrome content as ours. *)
+  let fragment html =
+    match ps_index_of html "<div class='create-shell'>" 0 with
+    | None -> Alcotest.fail "create shell missing from page"
+    | Some s -> (
+        match ps_index_of html "</main>" s with
+        | None -> String.sub html s (String.length html - s)
+        | Some e -> String.sub html s (e - s))
+
+  let sections_order_case =
+    case "management page: the four sections in the required order" (fun () ->
+        let body = fragment (manage ()) in
+        let idx label =
+          match ps_index_of body label 0 with
+          | Some i -> i
+          | None -> Alcotest.failf "section %S missing" label
+        in
+        let incoming = idx ">Incoming requests</h2>" in
+        let outgoing = idx ">Outgoing requests</h2>" in
+        let into = idx ">Shared into this community</h2>" in
+        let from = idx ">Shared from this community</h2>" in
+        Alcotest.(check bool) "incoming before outgoing" true (incoming < outgoing);
+        Alcotest.(check bool) "outgoing before shared-into" true (outgoing < into);
+        Alcotest.(check bool) "shared-into before shared-from" true (into < from);
+        (* And all four empty states, since the state was empty. *)
+        must body "No incoming requests.";
+        must body "No outgoing requests.";
+        must body "Nothing is shared into this community.";
+        must body "Nothing is shared from this community.")
+
+  let no_script_case =
+    case "both pages emit no JavaScript and no inline handlers" (fun () ->
+        let sectioned =
+          management_state ~sections_enabled:true
+            ~section_options:
+              [ { Pg.section_id = "3"; section_name = "General" } ]
+            ~incoming:[ pending_entry ~note:"a note" () ]
+            ~outgoing:[ pending_entry ~id:"10" () ]
+            ~shared_into:[ accepted_entry ~section:"General" () ]
+            ~shared_from:[ accepted_entry ~id:"12" () ]
+            ()
+        in
+        let busy_share =
+          share
+            ~state:
+              (share_state
+                 ~candidates:[ candidate () ]
+                 ~placements:
+                   [ placement ~withdraw:true ();
+                     placement ~id:"8" ~pending:false ~remove:true ();
+                   ]
+                 ~manage_connections:true ())
+            ()
+        in
+        List.iter
+          (fun body ->
+            let body = fragment body in
+            must_not body "<script";
+            must_not body "onclick";
+            must_not body "javascript:")
+          [ busy_share; manage ~state:sectioned () ])
+
+  let share_form_case =
+    case "share page: destination select, note field, and the action" (fun () ->
+        let body =
+          fragment
+            (share
+               ~state:
+                 (share_state
+                    ~candidates:
+                      [ candidate ~name:"Alpha" ~slug:"sth-ui-alpha" ();
+                        candidate ~name:"beta" ~slug:"sth-ui-beta" ();
+                      ]
+                    ())
+               ())
+        in
+        must body "action='/c/sth-ui-origin/t/12-sth-ui-thread/share'";
+        must body "name='destination'";
+        must body "<option value='sth-ui-alpha'>Alpha</option>";
+        must body "<option value='sth-ui-beta'>beta</option>";
+        must body "name='note'";
+        must body "Request sharing";
+        must body "maxlength='2000'";
+        (* The one canonical discussion, never a copy. *)
+        must body "The discussion stays in one place";
+        must_not body "copy";
+        must_not body "mirror")
+
+  let share_empty_case =
+    case "share page: quiet empty state, no select, gated connections link"
+      (fun () ->
+        let plain = fragment (share ()) in
+        must plain "No connected community can receive this thread right now.";
+        must_not plain "<select";
+        must_not plain "Request sharing";
+        must_not plain "/settings/connections";
+        let manager =
+          fragment (share ~state:(share_state ~manage_connections:true ()) ())
+        in
+        must manager "href='/c/sth-ui-origin/settings/connections'")
+
+  let share_controls_case =
+    case "share page: status copy and per-row control gates" (fun () ->
+        let body =
+          fragment
+            (share
+               ~state:
+                 (share_state
+                    ~placements:
+                      [ placement ~id:"7" ~withdraw:false ();
+                        placement ~id:"8" ~withdraw:true ();
+                        placement ~id:"9" ~pending:false ~remove:false ();
+                        placement ~id:"10" ~pending:false ~remove:true ();
+                      ]
+                    ())
+               ())
+        in
+        must body "Awaiting approval";
+        must body ">Shared<";
+        must body "/c/sth-ui-origin/settings/shared-threads/8/withdraw";
+        must_not body "/c/sth-ui-origin/settings/shared-threads/7/withdraw";
+        must body "/c/sth-ui-origin/settings/shared-threads/10/remove";
+        must_not body "/c/sth-ui-origin/settings/shared-threads/9/remove";
+        must body "Withdraw request";
+        must body "Stop sharing";
+        (* Never internal vocabulary or ids as debug text. *)
+        must_not body "pending<";
+        must_not body "placement";
+        must_not body "transition")
+
+  let note_case =
+    case "both pages: the private note renders only when supplied, labelled \
+          and escaped" (fun () ->
+        let marker = "SthUiNote <b>bold</b> & 'quoted'" in
+        let with_note =
+          fragment
+            (share
+               ~state:
+                 (share_state ~placements:[ placement ~note:marker () ] ())
+               ())
+        in
+        must with_note "Private note";
+        must with_note "SthUiNote &lt;b&gt;bold&lt;/b&gt; &amp; &#39;quoted&#39;";
+        must_not with_note "<b>bold</b>";
+        let without =
+          fragment
+            (share ~state:(share_state ~placements:[ placement () ] ()) ())
+        in
+        must_not without "Private note";
+        let mgmt =
+          fragment
+            (manage
+               ~state:
+                 (management_state ~incoming:[ pending_entry ~note:marker () ]
+                    ())
+               ())
+        in
+        must mgmt "SthUiNote &lt;b&gt;bold&lt;/b&gt; &amp; &#39;quoted&#39;")
+
+  let escaping_case =
+    case "hostile titles and names stay inert on both pages" (fun () ->
+        let title = "Sth <script>alert(1)</script> title" in
+        let name = "Sth <img src=x onerror=alert(2)> name" in
+        let body =
+          fragment
+            (manage
+               ~state:
+                 (management_state
+                    ~incoming:
+                      [ pending_entry ~title ~cname:name () ]
+                    ())
+               ())
+        in
+        must body "Sth &lt;script&gt;alert(1)&lt;/script&gt; title";
+        must body "Sth &lt;img src=x onerror=alert(2)&gt; name";
+        must_not body "<script>alert(1)</script>";
+        must_not body "<img src=x")
+
+  let selector_case =
+    case "management page: one section selector per accept form, flat pages \
+          none, ineligible pages an unavailable notice" (fun () ->
+        let sectioned =
+          fragment
+            (manage
+               ~state:
+                 (management_state ~sections_enabled:true
+                    ~section_options:
+                      [ { Pg.section_id = "3"; section_name = "General" };
+                        { Pg.section_id = "4"; section_name = "Help" };
+                      ]
+                    ~incoming:[ pending_entry () ]
+                    ())
+               ())
+        in
+        must sectioned "name='section'";
+        must sectioned "<option value='3'>General</option>";
+        must sectioned "<option value='4'>Help</option>";
+        must sectioned "Choose a section";
+        let flat =
+          fragment
+            (manage
+               ~state:(management_state ~incoming:[ pending_entry () ] ())
+               ())
+        in
+        must flat "Accept";
+        must_not flat "name='section'";
+        let ineligible =
+          fragment
+            (manage
+               ~state:
+                 (management_state ~eligible:false
+                    ~incoming:[ pending_entry () ]
+                    ())
+               ())
+        in
+        must ineligible "cannot accept newly shared threads right now";
+        must_not ineligible ">Accept</button>";
+        (* Rejection stays available on an ineligible community. *)
+        must ineligible ">Reject</button>")
+
+  let section_label_case =
+    case "accepted rows: section name or the flat label" (fun () ->
+        let body =
+          fragment
+            (manage
+               ~state:
+                 (management_state
+                    ~shared_into:[ accepted_entry ~section:"General" () ]
+                    ~shared_from:[ accepted_entry ~id:"12" () ]
+                    ())
+               ())
+        in
+        must body "Section: General";
+        must body "Uncategorized")
+
+  let notice_case =
+    case "each closed notice renders its copy; feedback renders alongside"
+      (fun () ->
+        List.iter
+          (fun (notice, needle) ->
+            must (fragment (manage ~notice ())) needle)
+          [ (Pg.Request_accepted, "now shared into this community");
+            (Pg.Request_rejected, "The request was declined");
+            (Pg.Request_withdrawn, "sharing request was withdrawn");
+            (Pg.Placement_removed, "no longer shared");
+          ];
+        must
+          (fragment (share ~notice:Pg.Request_sent ()))
+          "Sharing request sent";
+        must
+          (fragment (share ~feedback:Pg.Already_shared ()))
+          "already shared with that community";
+        must
+          (fragment (manage ~feedback:Pg.Stale_form ()))
+          "open too long")
+
+  let degraded_case =
+    case "a non-addressable slug or a non-decimal id drops the actionable \
+          form, never the row" (fun () ->
+        let body =
+          fragment
+            (share
+               ~state:
+                 (share_state
+                    ~placements:
+                      [ placement ~id:"7'; DROP" ~withdraw:true ();
+                        placement ~id:"8" ~slug:"evil/../slug" ~withdraw:true
+                          ();
+                      ]
+                    ())
+               ())
+        in
+        must body "Awaiting approval";
+        must_not body "7'; DROP/withdraw";
+        must_not body "evil/../slug/withdraw")
+
+  let suite =
+    [ sections_order_case; no_script_case; share_form_case; share_empty_case
+    ; share_controls_case; note_case; escaping_case; selector_case
+    ; section_label_case; notice_case; degraded_case ]
+end
+
+(* End-to-end coverage of the shared-threads HTTP slice over the real
+   routed application: the per-thread Share page, the community management
+   page, and the five mutations, each against real durable rows, the real
+   Slice 1 store, and the real notification renderer. The harness is the
+   Ccon_http one: a full middleware pipeline (one shared sql_pool, secret,
+   memory sessions, a login-injecting middleware, the production route
+   shapes) invoked directly on synthesized requests — no socket, no
+   Dream.run. /mint hands each acting session a fresh and a deliberately
+   expired CSRF token. *)
+module Sth_http = struct
+  let ( let* ) = Lwt.bind
+
+  open Caqti_request.Infix
+
+  module H = Earde.Shared_thread_placement_handlers
+  module Store = Earde.Shared_thread_placement_store
+
+  let or_fail = Pod_store.or_fail
+  let insert_user = Pod_store.insert_user
+  let exec = Pod_read.exec
+  let find = Pod_read.find
+
+  let insert_community ?name conn slug =
+    Phcv.insert_community ?name ~network:false conn slug
+
+  let status_of = Gh_start_handler.status_of
+  let must = Pch.must
+  let must_not = Pch.must_not
+
+  (* Durable authorization fixtures reused from the sibling suites: the
+     real rows the read models and the store read. *)
+  let add_top_mod conn ~user ~community =
+    exec conn "top_mod fixture" Phrv.q_insert_moderator
+      (user, community, "top_mod")
+
+  let add_role conn ~user ~community role =
+    exec conn "role fixture" Phrv.q_insert_moderator (user, community, role)
+
+  let add_member conn ~user ~community =
+    exec conn "member fixture" Phrv.q_insert_member (user, community)
+
+  let set_admin conn ~user flag =
+    exec conn "admin fixture" Phrv.q_set_admin (user, flag)
+
+  let q_remove_member =
+    (Caqti_type.(t2 int int) ->. Caqti_type.unit)
+    "DELETE FROM community_members WHERE user_id = $1 AND community_id = $2"
+
+  let q_ban_global =
+    (Caqti_type.int ->. Caqti_type.unit)
+    "UPDATE users SET is_banned = TRUE WHERE id = $1"
+
+  let q_ban_community =
+    (Caqti_type.(t2 int int) ->. Caqti_type.unit)
+    "INSERT INTO community_bans (user_id, community_id) VALUES ($1, $2)"
+
+  let q_insert_post =
+    (Caqti_type.(t2 string (t2 int int)) ->! Caqti_type.int)
+    "INSERT INTO posts (title, content, community_id, user_id) \
+     VALUES ($1, 'sth body', $2, $3) RETURNING id"
+
+  let q_status =
+    (Caqti_type.int64 ->! Caqti_type.string)
+    "SELECT status FROM shared_thread_placements WHERE id = $1"
+
+  let q_section_of =
+    (Caqti_type.int64 ->! Caqti_type.(option int))
+    "SELECT destination_section_id FROM shared_thread_placements WHERE id = $1"
+
+  let q_count_for_post =
+    (Caqti_type.int ->! Caqti_type.int)
+    "SELECT COUNT(*) FROM shared_thread_placements WHERE post_id = $1"
+
+  let q_unread_kinds =
+    (Caqti_type.int ->! Caqti_type.int)
+    "SELECT COUNT(*) FROM notifications \
+     WHERE user_id = $1 AND is_read = FALSE \
+       AND notif_type LIKE 'shared_thread_%'"
+
+  (* Dependency order, exactly as the store suite: notifications, the
+     placement audit trail (which RESTRICT-protects its subjects), the
+     placements, the connection fixtures' trail and rows, then posts before
+     the users and communities they reference. Bans, memberships, and
+     moderator rows cascade from their parents. *)
+  let q_cleanup =
+    List.map
+      (fun sql -> (Caqti_type.unit ->. Caqti_type.unit) sql)
+      [ "DELETE FROM notifications \
+         WHERE user_id IN (SELECT id FROM users WHERE username LIKE 'sth_%')"
+      ; "DELETE FROM notifications \
+         WHERE community_id IN \
+           (SELECT id FROM communities WHERE slug LIKE 'sth-%')"
+      ; "DELETE FROM shared_thread_placement_audit_events \
+         WHERE origin_community_id IN \
+                 (SELECT id FROM communities WHERE slug LIKE 'sth-%') \
+            OR destination_community_id IN \
+                 (SELECT id FROM communities WHERE slug LIKE 'sth-%')"
+      ; "DELETE FROM shared_thread_placements \
+         WHERE origin_community_id IN \
+                 (SELECT id FROM communities WHERE slug LIKE 'sth-%') \
+            OR destination_community_id IN \
+                 (SELECT id FROM communities WHERE slug LIKE 'sth-%')"
+      ; "DELETE FROM community_connection_audit_events \
+         WHERE requester_community_id IN \
+                 (SELECT id FROM communities WHERE slug LIKE 'sth-%') \
+            OR recipient_community_id IN \
+                 (SELECT id FROM communities WHERE slug LIKE 'sth-%')"
+      ; "DELETE FROM community_connections \
+         WHERE requester_community_id IN \
+                 (SELECT id FROM communities WHERE slug LIKE 'sth-%') \
+            OR recipient_community_id IN \
+                 (SELECT id FROM communities WHERE slug LIKE 'sth-%')"
+      ; "DELETE FROM posts \
+         WHERE community_id IN \
+           (SELECT id FROM communities WHERE slug LIKE 'sth-%')"
+      ; "DELETE FROM community_sections \
+         WHERE community_id IN \
+           (SELECT id FROM communities WHERE slug LIKE 'sth-%')"
+      ; "DELETE FROM communities WHERE slug LIKE 'sth-%'"
+      ; "DELETE FROM users WHERE username LIKE 'sth_%'"
+      ]
+
+  let db_case name f =
+    Alcotest.test_case name `Quick (fun () ->
+        match Sys.getenv_opt "EARDE_TEST_DATABASE_URL" with
+        | None | Some "" -> Alcotest.skip ()
+        | Some url ->
+            Lwt_main.run
+              (let* conn = Caqti_lwt_unix.connect (Uri.of_string url) in
+               let* conn = or_fail "connect" conn in
+               let (module C : Caqti_lwt.CONNECTION) = conn in
+               let cleanup () =
+                 Lwt_list.iter_s
+                   (fun q ->
+                     let* r = C.exec q () in
+                     let* _ = or_fail "cleanup" r in
+                     Lwt.return_unit)
+                   q_cleanup
+               in
+               let* () = cleanup () in
+               Lwt.finalize
+                 (fun () -> f ~url conn)
+                 (fun () ->
+                   Lwt.finalize cleanup (fun () -> C.disconnect ()))))
+
+  (* --- The real routed application, over the real pool --- *)
+
+  (* One sql_pool for the whole suite (pools are never closed; see
+     Ccon_http). *)
+  let shared_sql_pool : Dream.middleware option ref = ref None
+
+  let sql_pool url =
+    match !shared_sql_pool with
+    | Some middleware -> middleware
+    | None ->
+        let middleware = Dream.sql_pool ~size:2 url in
+        shared_sql_pool := Some middleware;
+        middleware
+
+  let app_pipeline ?session_user_id ?session_username ?(session_admin = false)
+      ~url () =
+    sql_pool url @@ Dream.set_secret gck_secret @@ Dream.memory_sessions
+    @@ (fun handler request ->
+         match session_user_id with
+         | None -> handler request
+         | Some uid ->
+             let* () =
+               Dream.set_session_field request "user_id" (string_of_int uid)
+             in
+             (* Real logins always set the username beside the id; cases
+                that assert username-gated chrome (composer join CTA,
+                report links, mod controls) opt in explicitly so every
+                pre-existing case keeps its exact bytes. *)
+             let* () =
+               match session_username with
+               | Some name -> Dream.set_session_field request "username" name
+               | None -> Lwt.return_unit
+             in
+             let* () =
+               if session_admin then
+                 Dream.set_session_field request "is_admin" "true"
+               else Lwt.return_unit
+             in
+             handler request)
+    @@ Dream.router
+         [ Dream.get "/mint" (fun req ->
+               Dream.respond
+                 (Dream.csrf_token req ^ "\n"
+                ^ Dream.csrf_token ~valid_for:(-60.) req));
+           Dream.get "/c/:slug/t/:thread/share" H.make_share_page_handler;
+           Dream.post "/c/:slug/t/:thread/share" H.make_share_request_handler;
+           Dream.get "/c/:slug/settings/shared-threads"
+             H.make_management_page_handler;
+           Dream.post "/c/:slug/settings/shared-threads/:placement_id/accept"
+             H.make_accept_handler;
+           Dream.post "/c/:slug/settings/shared-threads/:placement_id/reject"
+             H.make_reject_handler;
+           Dream.post
+             "/c/:slug/settings/shared-threads/:placement_id/withdraw"
+             H.make_withdrawal_handler;
+           Dream.post "/c/:slug/settings/shared-threads/:placement_id/remove"
+             H.make_removal_handler;
+           (* The surrounding surfaces the slice touches or must leave
+              untouched: the canonical thread page (entry point), the
+              legacy post redirect, the community/section feeds (boundary),
+              the settings index (navigation), and the notification
+              center. *)
+           Dream.get "/c/:slug/t/:thread" Earde.Handlers.view_thread_handler;
+           Dream.get "/p/:id" Earde.Handlers.view_post_handler;
+           Dream.get "/c/:slug" Earde.Handlers.community_page_handler;
+           Dream.get "/c/:slug/s/:section_slug"
+             Earde.Handlers.community_section_handler;
+           Dream.get "/c/:slug/settings"
+             Earde.Handlers.community_settings_handler;
+           Dream.get "/notifications" Earde.Handlers.notifications_handler;
+           (* Slice 3 read-side surfaces: the comment write path, the
+              origin-scoped moderation mutations the destination context
+              must NOT unlock, and the deferred discovery surfaces the
+              slice must leave untouched. *)
+           Dream.post "/comments" Earde.Handlers.create_comment_handler;
+           Dream.post "/c/:slug/posts/:id/mod_delete"
+             Earde.Handlers.mod_delete_post_handler;
+           Dream.post "/c/:slug/comments/:id/mod_delete"
+             Earde.Handlers.mod_delete_comment_handler;
+           Dream.get "/feed" Earde.Handlers.feed_handler;
+           Dream.get "/search" Earde.Handlers.search_handler;
+           Dream.get "/u/:username" Earde.Handlers.view_profile_handler;
+           (* Slice 4: the real durable-thread composer pair. *)
+           Dream.get "/new-post" Earde.Handlers.new_post_page;
+           Dream.post "/posts" Earde.Handlers.create_post_handler;
+         ]
+
+  let mint label pipeline =
+    let* response =
+      pipeline (Dream.request ~method_:`GET ~target:"/mint" "")
+    in
+    let cookie = Pch.session_cookie label response in
+    let* body = Dream.body response in
+    match String.split_on_char '\n' body with
+    | [ fresh; expired ] -> Lwt.return (cookie, fresh, expired)
+    | _ -> Alcotest.failf "%s: unexpected mint body" label
+
+  let get ?cookie ~target pipeline = Pch.do_get ?cookie ~target pipeline
+
+  let send_post ~cookie ~target ~fields pipeline =
+    let headers =
+      [ ("Content-Type", "application/x-www-form-urlencoded");
+        ("Cookie", cookie);
+      ]
+    in
+    let* response =
+      pipeline
+        (Dream.request ~method_:`POST ~target ~headers (Pch.form_body fields))
+    in
+    let* body = Dream.body response in
+    Lwt.return (response, body)
+
+  (* The composer posts multipart/form-data (file upload); Dream.multipart
+     verifies the dream.csrf part exactly like Dream.form. consent joins the
+     Cookie header only in the analytics-observation cases. *)
+  let send_multipart ~cookie ?(consent = false) ~target ~fields pipeline =
+    let cookie =
+      if consent then cookie ^ "; " ^ An.consent_cookie_name ^ "=granted"
+      else cookie
+    in
+    let headers =
+      [ ( "Content-Type",
+          "multipart/form-data; boundary=" ^ Step6_events.multipart_boundary );
+        ("Cookie", cookie);
+      ]
+    in
+    let* response =
+      pipeline
+        (Dream.request ~method_:`POST ~target ~headers
+           (Step6_events.multipart_body fields))
+    in
+    let* body = Dream.body response in
+    Lwt.return (response, body)
+
+  let session ~url ~uid ?username ?(admin = false) () =
+    app_pipeline ~session_user_id:uid ?session_username:username
+      ~session_admin:admin ~url ()
+
+  let acting label ~url ~uid ?(admin = false) () =
+    let pipeline = session ~url ~uid ~admin () in
+    let* cookie, token, expired = mint label pipeline in
+    Lwt.return (pipeline, cookie, token, expired)
+
+  (* --- Paths --- *)
+
+  let share_path ~slug ~post = Printf.sprintf "/c/%s/t/%d/share" slug post
+  let mgmt_path slug = Printf.sprintf "/c/%s/settings/shared-threads" slug
+
+  let action_path ~slug ~id verb =
+    Printf.sprintf "%s/%Ld/%s" (mgmt_path slug) id verb
+
+  (* --- Fixtures --- *)
+
+  (* One author (member of the origin), a top moderator on each side, a
+     connected origin/destination pair with a flat destination, and one
+     canonical post by the author. *)
+  let fixture conn tag =
+    let* author = insert_user conn ("sth_" ^ tag ^ "_author") in
+    let* otop = insert_user conn ("sth_" ^ tag ^ "_otop") in
+    let* dtop = insert_user conn ("sth_" ^ tag ^ "_dtop") in
+    let* o =
+      insert_community ~name:("Sth " ^ tag ^ " Origin") conn
+        ("sth-" ^ tag ^ "-o")
+    in
+    let* d =
+      insert_community ~name:("Sth " ^ tag ^ " Dest") conn
+        ("sth-" ^ tag ^ "-d")
+    in
+    let* () = exec conn "flat destination" Stp_store.q_set_sections (d, false) in
+    let* () = add_member conn ~user:author ~community:o in
+    let* () = add_top_mod conn ~user:otop ~community:o in
+    let* () = add_top_mod conn ~user:dtop ~community:d in
+    let* connection = Stp_store.connect conn ~actor:otop o d in
+    let* post =
+      find conn "post fixture" q_insert_post
+        ("Sth " ^ tag ^ " thread", (o, author))
+    in
+    Lwt.return (author, otop, dtop, o, d, post, connection)
+
+  let seed_request conn ~actor ?note ~post ~destination () =
+    let* r =
+      Store.request conn ~actor_user_id:actor ~post_id:post
+        ~destination_community_id:destination ~request_note:note
+    in
+    match r with
+    | Ok created -> Lwt.return (Store.created_placement_id created)
+    | Error e -> Alcotest.failf "seed request: %s" (Stp_store.error_str e)
+
+  let seed_accept conn ~reviewer ?section ~placement ~destination () =
+    let* r =
+      Store.review conn ~reviewer_user_id:reviewer ~placement_id:placement
+        ~destination_community_id:destination
+        ~decision:(Store.Accept section)
+    in
+    match r with
+    | Ok _ -> Lwt.return_unit
+    | Error e -> Alcotest.failf "seed accept: %s" (Stp_store.error_str e)
+
+  let check_status label conn id expected =
+    let* status = find conn (label ^ ": status") q_status id in
+    Alcotest.(check string) (label ^ ": status") expected status;
+    Lwt.return_unit
+
+  let check_location label expected response =
+    Alcotest.(check int) (label ^ ": 303") 303 (status_of response);
+    Alcotest.(check (option string)) (label ^ ": Location") (Some expected)
+      (Dream.header response "Location")
+
+  (* === GET /c/:slug/t/:thread/share === *)
+
+  let get_share_authz_case =
+    db_case "GET share: exactly the author-while-member, origin top_mod, and \
+             durable admins; everyone else and every broken subject is one \
+             generic 404" (fun ~url conn ->
+        let* author, otop, _dtop, _o, d, post, _ = fixture conn "ga" in
+        let* admin = insert_user conn "sth_ga_admin" in
+        let* () = set_admin conn ~user:admin true in
+        let* modu = insert_user conn "sth_ga_mod" in
+        let* legacy = insert_user conn "sth_ga_legacy" in
+        let* member = insert_user conn "sth_ga_member" in
+        let* stranger = insert_user conn "sth_ga_stranger" in
+        let* sonly = insert_user conn "sth_ga_sonly" in
+        let* o_id =
+          find conn "origin id"
+            ((Caqti_type.string ->! Caqti_type.int)
+               "SELECT id FROM communities WHERE slug = $1")
+            "sth-ga-o"
+        in
+        let* () = add_role conn ~user:modu ~community:o_id "mod" in
+        let* () = add_role conn ~user:legacy ~community:o_id "legacy_mod" in
+        let* () = add_member conn ~user:member ~community:o_id in
+        let target = share_path ~slug:"sth-ga-o" ~post in
+        let sees label uid ~admin =
+          let pipeline = session ~url ~uid ~admin () in
+          let* response, body = get ~target pipeline in
+          Alcotest.(check int) (label ^ ": 200") 200 (status_of response);
+          must body ">Share thread</h1>";
+          Lwt.return_unit
+        in
+        let denied label uid ~admin ~target =
+          let pipeline = session ~url ~uid ~admin () in
+          let* response, body = get ~target pipeline in
+          Alcotest.(check int) (label ^ ": 404") 404 (status_of response);
+          must body "This page does not exist.";
+          must_not body "Share thread</h1>";
+          Lwt.return_unit
+        in
+        let* () = sees "author while member" author ~admin:false in
+        let* () = sees "origin top mod" otop ~admin:false in
+        let* () = sees "durable admin" admin ~admin:true in
+        let* () = denied "durable admin without claim" admin ~admin:false ~target in
+        let* () = denied "session-only admin claim" sonly ~admin:true ~target in
+        let* () = denied "ordinary mod" modu ~admin:false ~target in
+        let* () = denied "legacy mod" legacy ~admin:false ~target in
+        let* () = denied "plain member" member ~admin:false ~target in
+        let* () = denied "stranger" stranger ~admin:false ~target in
+        (* Author paths that must have lapsed. *)
+        let* () = exec conn "leave" q_remove_member (author, o_id) in
+        let* () = denied "author after leaving" author ~admin:false ~target in
+        let* () = add_member conn ~user:author ~community:o_id in
+        let* () = exec conn "cban" q_ban_community (author, o_id) in
+        let* () = denied "community-banned author" author ~admin:false ~target in
+        let* () =
+          exec conn "unban"
+            ((Caqti_type.(t2 int int) ->. Caqti_type.unit)
+               "DELETE FROM community_bans WHERE user_id = $1 AND \
+                community_id = $2")
+            (author, o_id)
+        in
+        let* () = exec conn "gban" q_ban_global author in
+        let* () = denied "globally banned author" author ~admin:false ~target in
+        let* () =
+          exec conn "gunban"
+            ((Caqti_type.int ->. Caqti_type.unit)
+               "UPDATE users SET is_banned = FALSE WHERE id = $1")
+            author
+        in
+        (* Subject binding and collapse. *)
+        let* () =
+          denied "wrong community slug" author ~admin:false
+            ~target:(share_path ~slug:"sth-ga-d" ~post)
+        in
+        ignore d;
+        let* () =
+          denied "missing thread" author ~admin:false
+            ~target:(share_path ~slug:"sth-ga-o" ~post:(post + 999999))
+        in
+        let* () =
+          denied "malformed thread segment" author ~admin:false
+            ~target:"/c/sth-ga-o/t/not-a-thread/share"
+        in
+        let* () = exec conn "tombstone" Stp_store.q_tombstone (post, "[deleted]") in
+        let* () = denied "tombstoned thread" author ~admin:false ~target in
+        (* Anonymous callers never reach the read model at all. *)
+        let anon = app_pipeline ~url () in
+        let* response, _ = get ~target anon in
+        Alcotest.(check int) "anonymous: 303" 303 (status_of response);
+        Alcotest.(check (option string)) "to /login" (Some "/login")
+          (Dream.header response "Location");
+        Lwt.return_unit)
+
+  let get_share_candidates_case =
+    db_case "GET share: the destination picker offers exactly the eligible, \
+             connected, placement-free communities, in normalized order"
+      (fun ~url conn ->
+        let* author, otop, _dtop, o, _d, post, _ = fixture conn "gc" in
+        (* d is connected and eligible: expected. A second connected,
+           eligible community with a lowercase name checks normalized
+           ordering against d's capital name. *)
+        let* d2 =
+          insert_community ~name:"a lowercase dest" conn "sth-gc-d2"
+        in
+        let* _ = Stp_store.connect conn ~actor:otop o d2 in
+        (* Connected but currently ineligible, in each of the three ways. *)
+        let* priv = insert_community ~name:"Sth gc Priv" conn "sth-gc-priv" in
+        let* _ = Stp_store.connect conn ~actor:otop o priv in
+        let* () = exec conn "privatize" Phcv.q_make_private priv in
+        let* draft = insert_community ~name:"Sth gc Draft" conn "sth-gc-draft" in
+        let* _ = Stp_store.connect conn ~actor:otop o draft in
+        let* () = exec conn "draft" Phcv.q_make_draft_state draft in
+        let* dark = insert_community ~name:"Sth gc Dark" conn "sth-gc-dark" in
+        let* _ = Stp_store.connect conn ~actor:otop o dark in
+        let* () = exec conn "undiscoverable" Phcv.q_make_unlisted dark in
+        (* Eligible but not connected. *)
+        let* loose = insert_community ~name:"Sth gc Loose" conn "sth-gc-loose" in
+        ignore loose;
+        (* Connected with an active placement: excluded from the picker,
+           present in the placements list. A terminal history frees the
+           slot again. *)
+        let* d3 = insert_community ~name:"Sth gc Held" conn "sth-gc-d3" in
+        let* _ = Stp_store.connect conn ~actor:otop o d3 in
+        let* held = seed_request conn ~actor:author ~post ~destination:d3 () in
+        ignore held;
+        let* d4 = insert_community ~name:"Sth gc Freed" conn "sth-gc-d4" in
+        let* _ = Stp_store.connect conn ~actor:otop o d4 in
+        let* freed = seed_request conn ~actor:author ~post ~destination:d4 () in
+        let* r =
+          Store.withdraw conn ~actor_user_id:author ~placement_id:freed
+            ~origin_community_id:o
+        in
+        let* () =
+          match r with
+          | Ok _ -> Lwt.return_unit
+          | Error e -> Alcotest.failf "fixture withdraw: %s" (Stp_store.error_str e)
+        in
+        let pipeline = session ~url ~uid:author () in
+        let* response, body =
+          get ~target:(share_path ~slug:"sth-gc-o" ~post) pipeline
+        in
+        Alcotest.(check int) "page 200" 200 (status_of response);
+        must body "<option value='sth-gc-d'>";
+        must body "<option value='sth-gc-d2'>";
+        must body "<option value='sth-gc-d4'>";
+        must_not body "<option value='sth-gc-priv'>";
+        must_not body "<option value='sth-gc-draft'>";
+        must_not body "<option value='sth-gc-dark'>";
+        must_not body "<option value='sth-gc-loose'>";
+        must_not body "<option value='sth-gc-d3'>";
+        (* Ineligible names never leak into the panel at all. *)
+        must_not body "Sth gc Priv";
+        must_not body "Sth gc Draft";
+        (* LOWER(name) ordering: "a lowercase dest" precedes "Sth gc Dest". *)
+        (match
+           ( ps_index_of body "<option value='sth-gc-d2'>" 0,
+             ps_index_of body "<option value='sth-gc-d'>" 0 )
+         with
+        | Some a, Some b ->
+            Alcotest.(check bool) "normalized order" true (a < b)
+        | _ -> Alcotest.fail "options missing for order check");
+        (* The held destination shows as a current placement instead. *)
+        must body "Sth gc Held";
+        must body "Awaiting approval";
+        Lwt.return_unit)
+
+  let get_share_controls_case =
+    db_case "GET share: withdraw/remove controls and the private note follow \
+             the viewer, not the login" (fun ~url conn ->
+        let* author, otop, dtop, o, d, post, _ = fixture conn "gs" in
+        (* The author's own pending request, with a distinctive note. *)
+        let* mine =
+          seed_request conn ~actor:author
+            ~note:"STH_NOTE_GS_AUTHOR" ~post ~destination:d ()
+        in
+        (* A moderator-sent accepted placement of a second thread. *)
+        let* post2 =
+          find conn "post2" q_insert_post ("Sth gs second", (o, author))
+        in
+        let* theirs =
+          seed_request conn ~actor:otop ~note:"STH_NOTE_GS_TOP" ~post:post2
+            ~destination:d ()
+        in
+        let* () =
+          seed_accept conn ~reviewer:dtop ~placement:theirs ~destination:d ()
+        in
+        let author_pipe = session ~url ~uid:author () in
+        let* _, body = get ~target:(share_path ~slug:"sth-gs-o" ~post) author_pipe in
+        (* The author sees their own note and their own withdraw control. *)
+        must body "STH_NOTE_GS_AUTHOR";
+        must body
+          (Printf.sprintf "/c/sth-gs-o/settings/shared-threads/%Ld/withdraw" mine);
+        (* But no remove control anywhere: the author is not an origin
+           manager. *)
+        must_not body "Stop sharing";
+        let* _, body2 =
+          get ~target:(share_path ~slug:"sth-gs-o" ~post:post2) author_pipe
+        in
+        (* On the moderator's request the author has no withdraw control
+           and cannot read the moderator's note. *)
+        must_not body2 "STH_NOTE_GS_TOP";
+        must_not body2 "/withdraw";
+        must body2 ">Shared<";
+        let top_pipe = session ~url ~uid:otop () in
+        let* _, body3 =
+          get ~target:(share_path ~slug:"sth-gs-o" ~post) top_pipe
+        in
+        (* The origin manager reads the pending note and manages both. *)
+        must body3 "STH_NOTE_GS_AUTHOR";
+        must body3
+          (Printf.sprintf "/c/sth-gs-o/settings/shared-threads/%Ld/withdraw" mine);
+        let* _, body4 =
+          get ~target:(share_path ~slug:"sth-gs-o" ~post:post2) top_pipe
+        in
+        must body4 "Stop sharing";
+        Lwt.return_unit)
+
+  let thread_entry_case =
+    db_case "thread page: the compact Share action renders exactly for \
+             viewers the share read model admits" (fun ~url conn ->
+        let* author, otop, _dtop, o, _d, post, _ = fixture conn "te" in
+        let* member = insert_user conn "sth_te_member" in
+        let* () = add_member conn ~user:member ~community:o in
+        let thread_target =
+          Earde.Components.canonical_thread_path "sth-te-o" post
+            "Sth te thread"
+        in
+        let marker = "Share with a community" in
+        let body_for uid =
+          let pipeline =
+            match uid with
+            | None -> app_pipeline ~url ()
+            | Some uid -> session ~url ~uid ()
+          in
+          let* response, body = get ~target:thread_target pipeline in
+          Alcotest.(check int) "thread 200" 200 (status_of response);
+          Lwt.return body
+        in
+        let* body = body_for (Some author) in
+        must body marker;
+        must body (thread_target ^ "/share");
+        let* body = body_for (Some otop) in
+        must body marker;
+        (* A mere login — even a member — never shows the action. *)
+        let* body = body_for (Some member) in
+        must_not body marker;
+        let* body = body_for None in
+        must_not body marker;
+        (* A tombstoned thread hides it from everyone. *)
+        let* () = exec conn "tombstone" Stp_store.q_tombstone (post, "[deleted]") in
+        let* body = body_for (Some author) in
+        must_not body marker;
+        Lwt.return_unit)
+
+  let settings_nav_case =
+    db_case "settings index: Shared threads appears exactly for top mods and \
+             admins" (fun ~url conn ->
+        let* _author, otop, _dtop, o, _d, _post, _ = fixture conn "nv" in
+        let* modu = insert_user conn "sth_nv_mod" in
+        let* () = add_role conn ~user:modu ~community:o "mod" in
+        let link = "/c/sth-nv-o/settings/shared-threads" in
+        let top_pipe = session ~url ~uid:otop () in
+        let* response, body = get ~target:"/c/sth-nv-o/settings" top_pipe in
+        Alcotest.(check int) "settings 200" 200 (status_of response);
+        must body link;
+        must body ">Shared threads</a>";
+        let mod_pipe = session ~url ~uid:modu () in
+        let* _, body = get ~target:"/c/sth-nv-o/settings" mod_pipe in
+        must_not body link;
+        Lwt.return_unit)
+
+  (* === POST /c/:slug/t/:thread/share === *)
+
+  let post_share_flow_case =
+    db_case "POST share: each authorized identity creates one pending \
+             placement, with the PRG notice, the audit event, and the \
+             destination notification" (fun ~url conn ->
+        let* author, otop, dtop, o, _d, post, _ = fixture conn "pf" in
+        let* admin = insert_user conn "sth_pf_admin" in
+        let* () = set_admin conn ~user:admin true in
+        let* d2 = insert_community ~name:"Sth pf D2" conn "sth-pf-d2" in
+        let* _ = Stp_store.connect conn ~actor:otop o d2 in
+        let* d3 = insert_community ~name:"Sth pf D3" conn "sth-pf-d3" in
+        let* _ = Stp_store.connect conn ~actor:otop o d3 in
+        let target = share_path ~slug:"sth-pf-o" ~post in
+        let expected_redirect =
+          Earde.Components.canonical_thread_path "sth-pf-o" post
+            "Sth pf thread"
+          ^ "/share?done=requested"
+        in
+        let send label uid ~admin ~destination ~note =
+          let* pipeline, cookie, token, _ = acting label ~url ~uid ~admin () in
+          let* response, body =
+            send_post ~cookie ~target
+              ~fields:
+                [ ("dream.csrf", token); ("destination", destination);
+                  ("note", note) ]
+              pipeline
+          in
+          Lwt.return (pipeline, cookie, response, body)
+        in
+        let* pipeline, cookie, response, _ =
+          send "author" author ~admin:false ~destination:"sth-pf-d"
+            ~note:"STH_NOTE_PF_ONE"
+        in
+        check_location "author request" expected_redirect response;
+        (* Following the redirect renders the restrained notice and the new
+           pending row. *)
+        let* response, body =
+          get ~cookie ~target:expected_redirect pipeline
+        in
+        Alcotest.(check int) "share after PRG: 200" 200 (status_of response);
+        must body "Sharing request sent.";
+        must body "Awaiting approval";
+        let* n = find conn "rows" q_count_for_post post in
+        Alcotest.(check int) "one placement" 1 n;
+        let* events = find conn "events" Stp_store.q_events_for_post post in
+        Alcotest.(check int) "one audit event" 1 events;
+        let* unread = find conn "dtop unread" q_unread_kinds dtop in
+        Alcotest.(check int) "destination top mod notified" 1 unread;
+        (* The other two authorized identities, to fresh destinations. *)
+        let* _, _, response, _ =
+          send "origin top mod" otop ~admin:false ~destination:"sth-pf-d2"
+            ~note:""
+        in
+        check_location "top mod request" expected_redirect response;
+        let* _, _, response, _ =
+          send "durable admin" admin ~admin:true ~destination:"sth-pf-d3"
+            ~note:""
+        in
+        check_location "admin request" expected_redirect response;
+        let* n = find conn "rows" q_count_for_post post in
+        Alcotest.(check int) "three placements" 3 n;
+        Lwt.return_unit)
+
+  let post_share_denied_case =
+    db_case "POST share: every unauthorized identity is a 404 and writes \
+             nothing; anonymous goes to login" (fun ~url conn ->
+        let* _author, _otop, _dtop, o, _d, post, _ = fixture conn "pd" in
+        let* modu = insert_user conn "sth_pd_mod" in
+        let* () = add_role conn ~user:modu ~community:o "mod" in
+        let* legacy = insert_user conn "sth_pd_legacy" in
+        let* () = add_role conn ~user:legacy ~community:o "legacy_mod" in
+        let* member = insert_user conn "sth_pd_member" in
+        let* () = add_member conn ~user:member ~community:o in
+        let* stranger = insert_user conn "sth_pd_stranger" in
+        let target = share_path ~slug:"sth-pd-o" ~post in
+        let refused label uid ~admin =
+          let* pipeline, cookie, token, _ = acting label ~url ~uid ~admin () in
+          let* response, body =
+            send_post ~cookie ~target
+              ~fields:
+                [ ("dream.csrf", token); ("destination", "sth-pd-d");
+                  ("note", "") ]
+              pipeline
+          in
+          Alcotest.(check int) (label ^ ": 404") 404 (status_of response);
+          must body "This page does not exist.";
+          Lwt.return_unit
+        in
+        let* () = refused "ordinary mod" modu ~admin:false in
+        let* () = refused "legacy mod" legacy ~admin:false in
+        let* () = refused "plain member" member ~admin:false in
+        let* () = refused "stranger" stranger ~admin:false in
+        let* () = refused "session-only admin" stranger ~admin:true in
+        let anon = app_pipeline ~url () in
+        let* response =
+          anon
+            (Dream.request ~method_:`POST ~target
+               ~headers:
+                 [ ("Content-Type", "application/x-www-form-urlencoded") ]
+               (Pch.form_body [ ("destination", "sth-pd-d") ]))
+        in
+        Alcotest.(check int) "anonymous: 303" 303 (status_of response);
+        Alcotest.(check (option string)) "to /login" (Some "/login")
+          (Dream.header response "Location");
+        let* n = find conn "rows" q_count_for_post post in
+        Alcotest.(check int) "nothing written" 0 n;
+        let* events = find conn "events" Stp_store.q_events_for_post post in
+        Alcotest.(check int) "no audit" 0 events;
+        Lwt.return_unit)
+
+  let post_share_validation_case =
+    db_case "POST share: field shape, the empty choice, the oversized note, \
+             and destination tampering are each refused without a write"
+      (fun ~url conn ->
+        let* author, _otop, _dtop, _o, _d, post, _ = fixture conn "pv" in
+        let* outsider =
+          insert_community ~name:"Sth pv Outside" conn "sth-pv-out"
+        in
+        ignore outsider;
+        let target = share_path ~slug:"sth-pv-o" ~post in
+        let* pipeline, cookie, token, _ = acting "author" ~url ~uid:author () in
+        let send fields = send_post ~cookie ~target ~fields pipeline in
+        (* No destination field at all. *)
+        let* response, _ = send [ ("dream.csrf", token) ] in
+        Alcotest.(check int) "missing field: 400" 400 (status_of response);
+        (* A blank choice is the required-feedback re-render. *)
+        let* response, body =
+          send [ ("dream.csrf", token); ("destination", ""); ("note", "") ]
+        in
+        Alcotest.(check int) "blank choice: 400" 400 (status_of response);
+        must body "Choose a community to share this thread with.";
+        (* An unknown extra field never reaches the store. *)
+        let* response, _ =
+          send
+            [ ("dream.csrf", token); ("destination", "sth-pv-d");
+              ("note", ""); ("extra", "x") ]
+        in
+        Alcotest.(check int) "extra field: 400" 400 (status_of response);
+        (* An oversized note. *)
+        let* response, body =
+          send
+            [ ("dream.csrf", token); ("destination", "sth-pv-d");
+              ("note", String.make 2001 'a') ]
+        in
+        Alcotest.(check int) "oversized note: 400" 400 (status_of response);
+        must body "Notes are limited to 2,000 characters";
+        (* Tampered destinations: an unconnected community and a missing
+           one answer identically. *)
+        let tampered label slug =
+          let* response, body =
+            send [ ("dream.csrf", token); ("destination", slug); ("note", "") ]
+          in
+          Alcotest.(check int) (label ^ ": 409") 409 (status_of response);
+          must body "That community is not available to share";
+          Lwt.return_unit
+        in
+        let* () = tampered "unconnected" "sth-pv-out" in
+        let* () = tampered "missing" "sth-pv-none" in
+        let* () = tampered "the origin itself" "sth-pv-o" in
+        let* n = find conn "rows" q_count_for_post post in
+        Alcotest.(check int) "nothing written" 0 n;
+        Lwt.return_unit)
+
+  let post_share_stale_case =
+    db_case "POST share: a connection, eligibility, content, or uniqueness \
+             change between render and submit is a safe refusal" (fun ~url conn ->
+        let* author, otop, _dtop, o, d, post, connection = fixture conn "pt" in
+        let target = share_path ~slug:"sth-pt-o" ~post in
+        let* pipeline, cookie, token, _ = acting "author" ~url ~uid:author () in
+        let send () =
+          send_post ~cookie ~target
+            ~fields:
+              [ ("dream.csrf", token); ("destination", "sth-pt-d");
+                ("note", "") ]
+            pipeline
+        in
+        (* Disconnected after the page rendered. *)
+        let* () =
+          Stp_store.disconnect conn ~actor:otop ~connection ~acting:o
+        in
+        let* response, body = send () in
+        Alcotest.(check int) "disconnected: 409" 409 (status_of response);
+        must body "That community is not available to share";
+        let* _ = Stp_store.connect conn ~actor:otop o d in
+        (* The destination went private. *)
+        let* () = exec conn "privatize" Phcv.q_make_private d in
+        let* response, body = send () in
+        Alcotest.(check int) "ineligible: 409" 409 (status_of response);
+        must body "That community is not available to share";
+        let* () = exec conn "restore" Stp_store.q_make_eligible d in
+        (* A concurrent duplicate already holds the active slot. *)
+        let* first = seed_request conn ~actor:author ~post ~destination:d () in
+        ignore first;
+        let* response, body = send () in
+        Alcotest.(check int) "duplicate: 409" 409 (status_of response);
+        must body "already shared with that community, or a request is";
+        let* n = find conn "rows" q_count_for_post post in
+        Alcotest.(check int) "exactly the seeded row" 1 n;
+        let* events = find conn "events" Stp_store.q_events_for_post post in
+        Alcotest.(check int) "exactly the seeded event" 1 events;
+        (* The thread was tombstoned: the share surface itself collapses. *)
+        let* () = exec conn "tombstone" Stp_store.q_tombstone (post, "[deleted]") in
+        let* response, body = send () in
+        Alcotest.(check int) "tombstoned: 404" 404 (status_of response);
+        must body "This page does not exist.";
+        Lwt.return_unit)
+
+  (* === GET /c/:slug/settings/shared-threads === *)
+
+  let mgmt_authz_case =
+    db_case "GET management: exactly top_mod and durable admins; everyone \
+             else is one generic 404" (fun ~url conn ->
+        let* _author, _otop, dtop, o, _d, _post, _ = fixture conn "ma" in
+        let* admin = insert_user conn "sth_ma_admin" in
+        let* () = set_admin conn ~user:admin true in
+        let* modu = insert_user conn "sth_ma_mod" in
+        let* legacy = insert_user conn "sth_ma_legacy" in
+        let* member = insert_user conn "sth_ma_member" in
+        let* stranger = insert_user conn "sth_ma_stranger" in
+        let* sonly = insert_user conn "sth_ma_sonly" in
+        let* d_id =
+          find conn "dest id"
+            ((Caqti_type.string ->! Caqti_type.int)
+               "SELECT id FROM communities WHERE slug = $1")
+            "sth-ma-d"
+        in
+        let* () = add_role conn ~user:modu ~community:d_id "mod" in
+        let* () = add_role conn ~user:legacy ~community:d_id "legacy_mod" in
+        let* () = add_member conn ~user:member ~community:d_id in
+        let sees label uid ~admin =
+          let pipeline = session ~url ~uid ~admin () in
+          let* response, body = get ~target:(mgmt_path "sth-ma-d") pipeline in
+          Alcotest.(check int) (label ^ ": 200") 200 (status_of response);
+          must body ">Shared threads</h1>";
+          Lwt.return_unit
+        in
+        let denied label uid ~admin ~slug =
+          let pipeline = session ~url ~uid ~admin () in
+          let* response, body = get ~target:(mgmt_path slug) pipeline in
+          Alcotest.(check int) (label ^ ": 404") 404 (status_of response);
+          must body "This page does not exist.";
+          must_not body "Shared threads</h1>";
+          Lwt.return_unit
+        in
+        let* () = sees "destination top mod" dtop ~admin:false in
+        let* () = sees "durable admin" admin ~admin:true in
+        let* () =
+          denied "durable admin without claim" admin ~admin:false ~slug:"sth-ma-d"
+        in
+        let* () = denied "session-only admin" sonly ~admin:true ~slug:"sth-ma-d" in
+        let* () = denied "ordinary mod" modu ~admin:false ~slug:"sth-ma-d" in
+        let* () = denied "legacy mod" legacy ~admin:false ~slug:"sth-ma-d" in
+        let* () = denied "member" member ~admin:false ~slug:"sth-ma-d" in
+        let* () = denied "stranger" stranger ~admin:false ~slug:"sth-ma-d" in
+        let* () =
+          denied "top mod of another community" dtop ~admin:false ~slug:"sth-ma-o"
+        in
+        ignore o;
+        let* () =
+          denied "missing community" dtop ~admin:false ~slug:"sth-ma-absent"
+        in
+        let anon = app_pipeline ~url () in
+        let* response, _ = get ~target:(mgmt_path "sth-ma-d") anon in
+        Alcotest.(check int) "anonymous: 303" 303 (status_of response);
+        Alcotest.(check (option string)) "to /login" (Some "/login")
+          (Dream.header response "Location");
+        Lwt.return_unit)
+
+  let mgmt_content_case =
+    db_case "GET management: the four bounded sections classify and order \
+             every live placement, with notes, sections, and escapes intact"
+      (fun ~url conn ->
+        (* X is the community under management: sectioned, with traffic in
+           all four directions. *)
+        let* xtop = insert_user conn "sth_mc_xtop" in
+        let* requester = insert_user conn "sth_mc_req" in
+        let* x = insert_community ~name:"Sth mc Home" conn "sth-mc-x" in
+        let* () = add_top_mod conn ~user:xtop ~community:x in
+        let* () = add_member conn ~user:requester ~community:x in
+        let* section =
+          find conn "section" Stp_store.q_insert_section (x, "sth-mc-general")
+        in
+        let* o1 = insert_community ~name:"Sth mc O1 & <b>co</b>" conn "sth-mc-o1" in
+        let* o1top = insert_user conn "sth_mc_o1top" in
+        let* () = add_top_mod conn ~user:o1top ~community:o1 in
+        let* () = add_member conn ~user:o1top ~community:o1 in
+        let* d1 = insert_community ~name:"Sth mc D1" conn "sth-mc-d1" in
+        let* () = exec conn "flat d1" Stp_store.q_set_sections (d1, false) in
+        let* d1top = insert_user conn "sth_mc_d1top" in
+        let* () = add_top_mod conn ~user:d1top ~community:d1 in
+        let* _ = Stp_store.connect conn ~actor:xtop x o1 in
+        let* _ = Stp_store.connect conn ~actor:xtop x d1 in
+        (* Two incoming pending rows from o1, in a fixed order, the first
+           with a hostile title and a private note. *)
+        let* in_post1 =
+          find conn "in post 1" q_insert_post
+            ("Sth mc <script>alert(1)</script> incoming", (o1, o1top))
+        in
+        let* in_post2 =
+          find conn "in post 2" q_insert_post ("Sth mc second incoming", (o1, o1top))
+        in
+        let* _in1 =
+          seed_request conn ~actor:o1top ~note:"STH_NOTE_MC_IN" ~post:in_post1
+            ~destination:x ()
+        in
+        let* _in2 = seed_request conn ~actor:o1top ~post:in_post2 ~destination:x () in
+        (* One outgoing pending row: X's own thread requested into d1. *)
+        let* out_post =
+          find conn "out post" q_insert_post ("Sth mc outgoing", (x, requester))
+        in
+        let* _out =
+          seed_request conn ~actor:requester ~note:"STH_NOTE_MC_OUT"
+            ~post:out_post ~destination:d1 ()
+        in
+        (* One accepted incoming (into the section) and one accepted
+           outgoing (flat). *)
+        let* acc_in_post =
+          find conn "acc in post" q_insert_post ("Sth mc accepted in", (o1, o1top))
+        in
+        let* acc_in =
+          seed_request conn ~actor:o1top ~post:acc_in_post ~destination:x ()
+        in
+        let* () =
+          seed_accept conn ~reviewer:xtop ~section:section
+            ~placement:acc_in ~destination:x ()
+        in
+        let* acc_out_post =
+          find conn "acc out post" q_insert_post ("Sth mc accepted out", (x, requester))
+        in
+        let* acc_out =
+          seed_request conn ~actor:requester ~post:acc_out_post ~destination:d1 ()
+        in
+        let* () =
+          seed_accept conn ~reviewer:d1top ~placement:acc_out ~destination:d1 ()
+        in
+        let pipeline = session ~url ~uid:xtop () in
+        let* response, body = get ~target:(mgmt_path "sth-mc-x") pipeline in
+        Alcotest.(check int) "page 200" 200 (status_of response);
+        (* Section order. *)
+        let idx label =
+          match ps_index_of body label 0 with
+          | Some i -> i
+          | None -> Alcotest.failf "section %S missing" label
+        in
+        let incoming = idx ">Incoming requests</h2>" in
+        let outgoing = idx ">Outgoing requests</h2>" in
+        let into = idx ">Shared into this community</h2>" in
+        let from = idx ">Shared from this community</h2>" in
+        Alcotest.(check bool) "order" true
+          (incoming < outgoing && outgoing < into && into < from);
+        (* Classification: each row in its own section's span. *)
+        let within lo hi needle =
+          match ps_index_of body needle 0 with
+          | Some i -> i > lo && i < hi
+          | None -> false
+        in
+        Alcotest.(check bool) "first incoming row" true
+          (within incoming outgoing
+             "Sth mc &lt;script&gt;alert(1)&lt;/script&gt; incoming");
+        Alcotest.(check bool) "second incoming row" true
+          (within incoming outgoing "Sth mc second incoming");
+        Alcotest.(check bool) "incoming order is arrival order" true
+          (match
+             ( ps_index_of body
+                 "Sth mc &lt;script&gt;alert(1)&lt;/script&gt; incoming" 0,
+               ps_index_of body "Sth mc second incoming" 0 )
+           with
+          | Some a, Some b -> a < b
+          | _ -> false);
+        Alcotest.(check bool) "outgoing row" true
+          (within outgoing into "Sth mc outgoing");
+        Alcotest.(check bool) "accepted incoming row" true
+          (within into from "Sth mc accepted in");
+        Alcotest.(check bool) "accepted outgoing row" true
+          (within from (String.length body) "Sth mc accepted out");
+        (* The hostile title stayed inert; the counterpart name escaped. *)
+        must_not body "<script>alert(1)</script>";
+        must body "Sth mc O1 &amp; &lt;b&gt;co&lt;/b&gt;";
+        (* Notes on both pending queues; the accepted rows carry none. *)
+        must body "STH_NOTE_MC_IN";
+        must body "STH_NOTE_MC_OUT";
+        (* Section labels: named for the sectioned acceptance, the flat
+           label for the flat one. *)
+        must body "Section: sth-mc-general";
+        must body "Uncategorized";
+        (* One selector per incoming accept form, only X's own sections. *)
+        must body "name='section'";
+        must body (Printf.sprintf "<option value='%d'>" section);
+        (* Timestamps render as relative text. *)
+        must body "just now";
+        Lwt.return_unit)
+
+  let mgmt_flat_and_ineligible_case =
+    db_case "GET management: a flat community renders no selector; an \
+             ineligible one keeps reject and remove but not accept"
+      (fun ~url conn ->
+        let* author, otop, dtop, o, d, post, _ = fixture conn "mf" in
+        ignore author;
+        let* post2 = find conn "post2" q_insert_post ("Sth mf two", (o, otop)) in
+        let* () = add_member conn ~user:otop ~community:o in
+        let* p1 = seed_request conn ~actor:otop ~post ~destination:d () in
+        let* p2 = seed_request conn ~actor:otop ~post:post2 ~destination:d () in
+        let* () = seed_accept conn ~reviewer:dtop ~placement:p2 ~destination:d () in
+        ignore p1;
+        let pipeline = session ~url ~uid:dtop () in
+        let* _, body = get ~target:(mgmt_path "sth-mf-d") pipeline in
+        (* Flat destination: accept form, no selector. *)
+        must body ">Accept</button>";
+        must_not body "name='section'";
+        (* Now ineligible: accept withdraws, reject and remove stay. *)
+        let* () = exec conn "privatize" Phcv.q_make_private d in
+        let* response, body = get ~target:(mgmt_path "sth-mf-d") pipeline in
+        Alcotest.(check int) "still 200" 200 (status_of response);
+        must body "cannot accept newly shared threads right now";
+        must_not body ">Accept</button>";
+        must body ">Reject</button>";
+        must body ">Remove</button>";
+        Lwt.return_unit)
+
+  (* === POST .../:placement_id/{accept,reject} === *)
+
+  let review_flow_case =
+    db_case "POST review: flat accept, sectioned accept, and reject each \
+             commit once with the PRG notice" (fun ~url conn ->
+        let* author, otop, dtop, o, d, post, _ = fixture conn "rf" in
+        let* p1 = seed_request conn ~actor:author ~post ~destination:d () in
+        let* pipeline, cookie, token, _ = acting "dtop" ~url ~uid:dtop () in
+        let* response, _ =
+          send_post ~cookie
+            ~target:(action_path ~slug:"sth-rf-d" ~id:p1 "accept")
+            ~fields:[ ("dream.csrf", token) ]
+            pipeline
+        in
+        check_location "flat accept"
+          (mgmt_path "sth-rf-d" ^ "?done=accepted")
+          response;
+        let* () = check_status "flat accept" conn p1 "accepted" in
+        let* section_id = find conn "flat section" q_section_of p1 in
+        Alcotest.(check (option int)) "flat: no section" None section_id;
+        (* The notice renders on the reloaded management page. *)
+        let* _, body =
+          get ~cookie
+            ~target:(mgmt_path "sth-rf-d" ^ "?done=accepted")
+            pipeline
+        in
+        must body "The thread is now shared into this community.";
+        (* A sectioned destination requires — and stores — the choice. *)
+        let* d2 = insert_community ~name:"Sth rf D2" conn "sth-rf-d2" in
+        let* () = add_top_mod conn ~user:dtop ~community:d2 in
+        let* _ = Stp_store.connect conn ~actor:otop o d2 in
+        let* section =
+          find conn "section" Stp_store.q_insert_section (d2, "sth-rf-sec")
+        in
+        let* post2 = find conn "post2" q_insert_post ("Sth rf two", (o, author)) in
+        let* p2 = seed_request conn ~actor:author ~post:post2 ~destination:d2 () in
+        let* response, _ =
+          send_post ~cookie
+            ~target:(action_path ~slug:"sth-rf-d2" ~id:p2 "accept")
+            ~fields:
+              [ ("dream.csrf", token); ("section", string_of_int section) ]
+            pipeline
+        in
+        check_location "sectioned accept"
+          (mgmt_path "sth-rf-d2" ^ "?done=accepted")
+          response;
+        let* stored = find conn "stored section" q_section_of p2 in
+        Alcotest.(check (option int)) "sectioned: stored" (Some section) stored;
+        (* Reject. *)
+        let* post3 = find conn "post3" q_insert_post ("Sth rf three", (o, author)) in
+        let* p3 = seed_request conn ~actor:author ~post:post3 ~destination:d () in
+        let* response, _ =
+          send_post ~cookie
+            ~target:(action_path ~slug:"sth-rf-d" ~id:p3 "reject")
+            ~fields:[ ("dream.csrf", token) ]
+            pipeline
+        in
+        check_location "reject"
+          (mgmt_path "sth-rf-d" ^ "?done=rejected")
+          response;
+        let* () = check_status "reject" conn p3 "rejected" in
+        let* _, body =
+          get ~cookie ~target:(mgmt_path "sth-rf-d" ^ "?done=rejected") pipeline
+        in
+        must body "The request was declined. Nothing else changed.";
+        Lwt.return_unit)
+
+  let review_section_case =
+    db_case "POST accept: a foreign, deleted, missing, or misplaced section \
+             choice is one generic invalid selection, without a write"
+      (fun ~url conn ->
+        let* author, otop, dtop, o, d, post, _ = fixture conn "rs" in
+        (* A sectioned second destination managed by the same reviewer. *)
+        let* d2 = insert_community ~name:"Sth rs D2" conn "sth-rs-d2" in
+        let* () = add_top_mod conn ~user:dtop ~community:d2 in
+        let* _ = Stp_store.connect conn ~actor:otop o d2 in
+        let* own_section =
+          find conn "own section" Stp_store.q_insert_section (d2, "sth-rs-own")
+        in
+        (* A section belonging to the origin: valid id, wrong community. *)
+        let* foreign_section =
+          find conn "foreign section" Stp_store.q_insert_section (o, "sth-rs-for")
+        in
+        let* doomed_section =
+          find conn "doomed section" Stp_store.q_insert_section (d2, "sth-rs-del")
+        in
+        let* () = exec conn "delete" Stp_store.q_delete_section doomed_section in
+        let* p =
+          seed_request conn ~actor:author ~post ~destination:d2 ()
+        in
+        let* pipeline, cookie, token, _ = acting "dtop" ~url ~uid:dtop () in
+        let target = action_path ~slug:"sth-rs-d2" ~id:p "accept" in
+        let refused label ~status fields =
+          let* response, body = send_post ~cookie ~target ~fields pipeline in
+          Alcotest.(check int) (label ^ ": status") status (status_of response);
+          must body "Choose one of this community's own forum sections";
+          let* () = check_status label conn p "pending" in
+          Lwt.return_unit
+        in
+        let* () =
+          refused "foreign section" ~status:409
+            [ ("dream.csrf", token);
+              ("section", string_of_int foreign_section) ]
+        in
+        let* () =
+          refused "deleted section" ~status:409
+            [ ("dream.csrf", token);
+              ("section", string_of_int doomed_section) ]
+        in
+        let* () =
+          refused "no choice on a sectioned destination" ~status:400
+            [ ("dream.csrf", token) ]
+        in
+        let* () =
+          refused "blank choice" ~status:400
+            [ ("dream.csrf", token); ("section", "") ]
+        in
+        (* On the flat destination a section field is refused too. *)
+        let* p_flat = seed_request conn ~actor:author ~post ~destination:d () in
+        let* response, _ =
+          send_post ~cookie
+            ~target:(action_path ~slug:"sth-rs-d" ~id:p_flat "accept")
+            ~fields:
+              [ ("dream.csrf", token);
+                ("section", string_of_int own_section) ]
+            pipeline
+        in
+        Alcotest.(check int) "section on flat: 400" 400 (status_of response);
+        let* () = check_status "flat untouched" conn p_flat "pending" in
+        (* The valid choice still works afterwards. *)
+        let* response, _ =
+          send_post ~cookie ~target
+            ~fields:
+              [ ("dream.csrf", token); ("section", string_of_int own_section) ]
+            pipeline
+        in
+        check_location "valid accept"
+          (mgmt_path "sth-rs-d2" ^ "?done=accepted")
+          response;
+        Lwt.return_unit)
+
+  let review_stale_case =
+    db_case "POST review: accept refuses on a stale world, reject always \
+             closes, and a decided request answers one stable conflict"
+      (fun ~url conn ->
+        let* author, otop, dtop, o, d, post, connection = fixture conn "rw" in
+        let* p1 = seed_request conn ~actor:author ~post ~destination:d () in
+        let* pipeline, cookie, token, _ = acting "dtop" ~url ~uid:dtop () in
+        let accept_target id = action_path ~slug:"sth-rw-d" ~id "accept" in
+        let reject_target id = action_path ~slug:"sth-rw-d" ~id "reject" in
+        let accept id =
+          send_post ~cookie ~target:(accept_target id)
+            ~fields:[ ("dream.csrf", token) ]
+            pipeline
+        in
+        let reject id =
+          send_post ~cookie ~target:(reject_target id)
+            ~fields:[ ("dream.csrf", token) ]
+            pipeline
+        in
+        (* Disconnected. *)
+        let* () = Stp_store.disconnect conn ~actor:otop ~connection ~acting:o in
+        let* response, body = accept p1 in
+        Alcotest.(check int) "disconnected accept: 409" 409 (status_of response);
+        must body "no longer available for sharing";
+        let* () = check_status "still pending" conn p1 "pending" in
+        let* connection = Stp_store.connect conn ~actor:otop o d in
+        ignore connection;
+        (* The origin went private. *)
+        let* () = exec conn "privatize origin" Phcv.q_make_private o in
+        let* response, body = accept p1 in
+        Alcotest.(check int) "origin ineligible accept: 409" 409
+          (status_of response);
+        must body "no longer available for sharing";
+        let* () = exec conn "restore origin" Stp_store.q_make_eligible o in
+        (* The thread was tombstoned. *)
+        let* () =
+          exec conn "tombstone" Stp_store.q_tombstone
+            (post, "[removed by moderator]")
+        in
+        let* response, body = accept p1 in
+        Alcotest.(check int) "tombstoned accept: 409" 409 (status_of response);
+        must body "This thread can no longer be shared.";
+        let* () = check_status "still pending" conn p1 "pending" in
+        (* Reject stays available under exactly those conditions. *)
+        let* () = exec conn "privatize origin" Phcv.q_make_private o in
+        let* response, _ = reject p1 in
+        check_location "stale-world reject"
+          (mgmt_path "sth-rw-d" ^ "?done=rejected")
+          response;
+        let* () = check_status "rejected" conn p1 "rejected" in
+        (* A decided request: both verbs answer the one stable conflict,
+           and neither writes a second decision, audit event, or
+           notification. *)
+        let* events_before = find conn "events" Stp_store.q_events_for_post post in
+        let* notifs_before = find conn "notifs" Stp_store.q_notifs_for_post post in
+        let* response, body = accept p1 in
+        Alcotest.(check int) "decided accept: 409" 409 (status_of response);
+        must body "That sharing request is no longer pending.";
+        let* response, body = reject p1 in
+        Alcotest.(check int) "decided reject: 409" 409 (status_of response);
+        must body "That sharing request is no longer pending.";
+        let* events_after = find conn "events" Stp_store.q_events_for_post post in
+        let* notifs_after = find conn "notifs" Stp_store.q_notifs_for_post post in
+        Alcotest.(check int) "no duplicate audit" events_before events_after;
+        Alcotest.(check int) "no duplicate notifications" notifs_before
+          notifs_after;
+        Lwt.return_unit)
+
+  let review_authz_case =
+    db_case "POST review: only the destination's top mods and durable \
+             admins, on the destination's own route, over its own placement"
+      (fun ~url conn ->
+        let* author, otop, dtop, o, d, post, _ = fixture conn "ra" in
+        let* p = seed_request conn ~actor:author ~post ~destination:d () in
+        (* An unrelated pair with its own pending placement. *)
+        let* o2 = insert_community ~name:"Sth ra O2" conn "sth-ra-o2" in
+        let* d2 = insert_community ~name:"Sth ra D2" conn "sth-ra-d2" in
+        let* () = exec conn "flat d2" Stp_store.q_set_sections (d2, false) in
+        let* other = insert_user conn "sth_ra_other" in
+        let* () = add_top_mod conn ~user:other ~community:o2 in
+        let* () = add_member conn ~user:other ~community:o2 in
+        let* _ = Stp_store.connect conn ~actor:other o2 d2 in
+        let* post2 = find conn "post2" q_insert_post ("Sth ra other", (o2, other)) in
+        let* foreign = seed_request conn ~actor:other ~post:post2 ~destination:d2 () in
+        let* modu = insert_user conn "sth_ra_mod" in
+        let* () = add_role conn ~user:modu ~community:d "mod" in
+        let* legacy = insert_user conn "sth_ra_legacy" in
+        let* () = add_role conn ~user:legacy ~community:d "legacy_mod" in
+        let refused label uid ~admin ~target =
+          let* pipeline, cookie, token, _ = acting label ~url ~uid ~admin () in
+          let* response, body =
+            send_post ~cookie ~target ~fields:[ ("dream.csrf", token) ] pipeline
+          in
+          Alcotest.(check int) (label ^ ": 404") 404 (status_of response);
+          must body "This page does not exist.";
+          Lwt.return_unit
+        in
+        let accept_d = action_path ~slug:"sth-ra-d" ~id:p "accept" in
+        let* () = refused "origin top mod" otop ~admin:false ~target:accept_d in
+        let* () = refused "ordinary mod" modu ~admin:false ~target:accept_d in
+        let* () = refused "legacy mod" legacy ~admin:false ~target:accept_d in
+        let* () = refused "author" author ~admin:false ~target:accept_d in
+        let* () =
+          refused "session-only admin" modu ~admin:true ~target:accept_d
+        in
+        (* The origin's route never reviews: subject mismatch. *)
+        let* () =
+          refused "origin-route accept" otop ~admin:false
+            ~target:(action_path ~slug:"sth-ra-o" ~id:p "accept")
+        in
+        (* Someone else's placement through this community's route. *)
+        let* () =
+          refused "foreign placement" dtop ~admin:false
+            ~target:(action_path ~slug:"sth-ra-d" ~id:foreign "accept")
+        in
+        (* Broken ids. *)
+        let* () =
+          refused "absent placement" dtop ~admin:false
+            ~target:(action_path ~slug:"sth-ra-d" ~id:99999999L "accept")
+        in
+        let* () =
+          refused "malformed placement id" dtop ~admin:false
+            ~target:(mgmt_path "sth-ra-d" ^ "/not-an-id/accept")
+        in
+        let* () = check_status "untouched" conn p "pending" in
+        let* () = check_status "foreign untouched" conn foreign "pending" in
+        ignore o;
+        Lwt.return_unit)
+
+  (* === POST .../:placement_id/withdraw === *)
+
+  let withdraw_authz_case =
+    db_case "POST withdraw: the requester, origin top mods, and durable \
+             admins; everyone else is one generic 404" (fun ~url conn ->
+        let* author, otop, dtop, o, d, post, _ = fixture conn "wa" in
+        let* admin = insert_user conn "sth_wa_admin" in
+        let* () = set_admin conn ~user:admin true in
+        let* stranger = insert_user conn "sth_wa_stranger" in
+        (* Three parallel pending requests to distinct destinations, all
+           sent by the author. *)
+        let* d2 = insert_community ~name:"Sth wa D2" conn "sth-wa-d2" in
+        let* _ = Stp_store.connect conn ~actor:otop o d2 in
+        let* d3 = insert_community ~name:"Sth wa D3" conn "sth-wa-d3" in
+        let* _ = Stp_store.connect conn ~actor:otop o d3 in
+        let* p1 = seed_request conn ~actor:author ~post ~destination:d () in
+        let* p2 = seed_request conn ~actor:author ~post ~destination:d2 () in
+        let* p3 = seed_request conn ~actor:author ~post ~destination:d3 () in
+        let withdraw label uid ~admin ~slug ~id =
+          let* pipeline, cookie, token, _ = acting label ~url ~uid ~admin () in
+          send_post ~cookie
+            ~target:(action_path ~slug ~id "withdraw")
+            ~fields:[ ("dream.csrf", token) ]
+            pipeline
+        in
+        (* Every denied identity first, against the same live request. *)
+        let refused label uid ~admin ~slug ~id =
+          let* response, body = withdraw label uid ~admin ~slug ~id in
+          Alcotest.(check int) (label ^ ": 404") 404 (status_of response);
+          must body "This page does not exist.";
+          let* () = check_status label conn id "pending" in
+          Lwt.return_unit
+        in
+        let* () =
+          refused "author as non-requester bystander" stranger ~admin:false
+            ~slug:"sth-wa-o" ~id:p1
+        in
+        let* () =
+          refused "destination top mod" dtop ~admin:false ~slug:"sth-wa-o" ~id:p1
+        in
+        let* () =
+          refused "destination route" author ~admin:false ~slug:"sth-wa-d" ~id:p1
+        in
+        let* () =
+          refused "session-only admin" stranger ~admin:true ~slug:"sth-wa-o"
+            ~id:p1
+        in
+        (* A thread author who did not send this request and holds no role:
+           a second author's post requested by the top mod. *)
+        let* author2 = insert_user conn "sth_wa_author2" in
+        let* () = add_member conn ~user:author2 ~community:o in
+        let* post2 = find conn "post2" q_insert_post ("Sth wa two", (o, author2)) in
+        let* d4 = insert_community ~name:"Sth wa D4" conn "sth-wa-d4" in
+        let* _ = Stp_store.connect conn ~actor:otop o d4 in
+        let* p4 = seed_request conn ~actor:otop ~post:post2 ~destination:d4 () in
+        let* () =
+          refused "author without requester or role" author2 ~admin:false
+            ~slug:"sth-wa-o" ~id:p4
+        in
+        (* The three authorized identities. *)
+        let* response, _ =
+          withdraw "requester" author ~admin:false ~slug:"sth-wa-o" ~id:p1
+        in
+        check_location "requester"
+          (mgmt_path "sth-wa-o" ^ "?done=withdrawn")
+          response;
+        let* () = check_status "requester withdrew" conn p1 "withdrawn" in
+        let* response, _ =
+          withdraw "origin top mod" otop ~admin:false ~slug:"sth-wa-o" ~id:p2
+        in
+        check_location "origin top mod"
+          (mgmt_path "sth-wa-o" ^ "?done=withdrawn")
+          response;
+        let* response, _ =
+          withdraw "durable admin" admin ~admin:true ~slug:"sth-wa-o" ~id:p3
+        in
+        check_location "durable admin"
+          (mgmt_path "sth-wa-o" ^ "?done=withdrawn")
+          response;
+        Lwt.return_unit)
+
+  let withdraw_resilience_case =
+    db_case "POST withdraw: survives disconnection, ineligibility, \
+             tombstoning, and membership loss; a stale repeat answers each \
+             surface truthfully" (fun ~url conn ->
+        let* author, otop, _dtop, o, d, post, connection = fixture conn "wr" in
+        let* p = seed_request conn ~actor:author ~post ~destination:d () in
+        (* The world rots completely. *)
+        let* () = Stp_store.disconnect conn ~actor:otop ~connection ~acting:o in
+        let* () = exec conn "privatize" Phcv.q_make_private o in
+        let* () = exec conn "tombstone" Stp_store.q_tombstone (post, "[deleted]") in
+        let* () = exec conn "leave" q_remove_member (author, o) in
+        let* pipeline, cookie, token, _ = acting "author" ~url ~uid:author () in
+        let target = action_path ~slug:"sth-wr-o" ~id:p "withdraw" in
+        let* response, _ =
+          send_post ~cookie ~target ~fields:[ ("dream.csrf", token) ] pipeline
+        in
+        check_location "withdrawal after everything"
+          (mgmt_path "sth-wr-o" ^ "?done=withdrawn")
+          response;
+        let* () = check_status "withdrawn" conn p "withdrawn" in
+        (* The stale repeat: the requester lost every surface, so the
+           truthful generic conflict page answers. *)
+        let* response, body =
+          send_post ~cookie ~target ~fields:[ ("dream.csrf", token) ] pipeline
+        in
+        Alcotest.(check int) "surface-less repeat: 409" 409 (status_of response);
+        must body "That sharing request is no longer pending. Nothing was";
+        (* A manager's stale repeat re-renders their management page. *)
+        let* mpipe, mcookie, mtoken, _ = acting "otop" ~url ~uid:otop () in
+        let* response, body =
+          send_post ~cookie:mcookie ~target
+            ~fields:[ ("dream.csrf", mtoken) ]
+            mpipe
+        in
+        Alcotest.(check int) "manager repeat: 409" 409 (status_of response);
+        must body ">Shared threads</h1>";
+        must body "That sharing request is no longer pending.";
+        Lwt.return_unit)
+
+  let withdraw_context_case =
+    db_case "POST withdraw: the share-page marker returns the browser to the \
+             Share page; anything else in the fields is refused" (fun ~url conn ->
+        let* author, _otop, _dtop, _o, d, post, _ = fixture conn "wc" in
+        let* p = seed_request conn ~actor:author ~post ~destination:d () in
+        let* pipeline, cookie, token, _ = acting "author" ~url ~uid:author () in
+        let target = action_path ~slug:"sth-wc-o" ~id:p "withdraw" in
+        (* An unknown field shape never reaches the store. *)
+        let* response, _ =
+          send_post ~cookie ~target
+            ~fields:[ ("dream.csrf", token); ("context", "elsewhere") ]
+            pipeline
+        in
+        Alcotest.(check int) "unknown context: 400" 400 (status_of response);
+        let* () = check_status "untouched" conn p "pending" in
+        let* response, _ =
+          send_post ~cookie ~target
+            ~fields:[ ("dream.csrf", token); ("context", "share") ]
+            pipeline
+        in
+        check_location "share-page withdrawal"
+          (Printf.sprintf "/c/sth-wc-o/t/%d/share?done=withdrawn" post)
+          response;
+        let* () = check_status "withdrawn" conn p "withdrawn" in
+        (* Following the redirect renders the notice on the Share page. *)
+        let* response, body =
+          get ~cookie
+            ~target:(Printf.sprintf "/c/sth-wc-o/t/%d/share?done=withdrawn" post)
+            pipeline
+        in
+        Alcotest.(check int) "share page 200" 200 (status_of response);
+        must body "The sharing request was withdrawn.";
+        Lwt.return_unit)
+
+  (* === POST .../:placement_id/remove === *)
+
+  let remove_authz_case =
+    db_case "POST remove: either side's top mods and durable admins; the \
+             author, ordinary moderators, and outside routes are 404"
+      (fun ~url conn ->
+        let* author, otop, dtop, o, d, post, _ = fixture conn "va" in
+        let* admin = insert_user conn "sth_va_admin" in
+        let* () = set_admin conn ~user:admin true in
+        let* modu = insert_user conn "sth_va_mod" in
+        let* () = add_role conn ~user:modu ~community:o "mod" in
+        let* legacy = insert_user conn "sth_va_legacy" in
+        let* () = add_role conn ~user:legacy ~community:d "legacy_mod" in
+        (* An uninvolved community with its own top mod. *)
+        let* x = insert_community ~name:"Sth va X" conn "sth-va-x" in
+        let* xtop = insert_user conn "sth_va_xtop" in
+        let* () = add_top_mod conn ~user:xtop ~community:x in
+        let accepted () =
+          let* p = seed_request conn ~actor:author ~post ~destination:d () in
+          let* () = seed_accept conn ~reviewer:dtop ~placement:p ~destination:d () in
+          Lwt.return p
+        in
+        let remove label uid ~admin ~slug ~id =
+          let* pipeline, cookie, token, _ = acting label ~url ~uid ~admin () in
+          send_post ~cookie
+            ~target:(action_path ~slug ~id "remove")
+            ~fields:[ ("dream.csrf", token) ]
+            pipeline
+        in
+        let* p = accepted () in
+        let refused label uid ~admin ~slug =
+          let* response, body = remove label uid ~admin ~slug ~id:p in
+          Alcotest.(check int) (label ^ ": 404") 404 (status_of response);
+          must body "This page does not exist.";
+          let* () = check_status label conn p "accepted" in
+          Lwt.return_unit
+        in
+        let* () =
+          refused "author without a role" author ~admin:false ~slug:"sth-va-o"
+        in
+        let* () = refused "ordinary mod" modu ~admin:false ~slug:"sth-va-o" in
+        let* () = refused "legacy mod" legacy ~admin:false ~slug:"sth-va-d" in
+        let* () =
+          refused "uninvolved community's top mod" xtop ~admin:false
+            ~slug:"sth-va-x"
+        in
+        let* () =
+          refused "session-only admin" modu ~admin:true ~slug:"sth-va-o"
+        in
+        (* The three authorized identities, one placement each. *)
+        let* response, _ = remove "origin top mod" otop ~admin:false ~slug:"sth-va-o" ~id:p in
+        check_location "origin side"
+          (mgmt_path "sth-va-o" ^ "?done=removed")
+          response;
+        let* () = check_status "removed" conn p "removed" in
+        let* p2 = accepted () in
+        let* response, _ =
+          remove "destination top mod" dtop ~admin:false ~slug:"sth-va-d" ~id:p2
+        in
+        check_location "destination side"
+          (mgmt_path "sth-va-d" ^ "?done=removed")
+          response;
+        let* p3 = accepted () in
+        let* response, _ =
+          remove "durable admin" admin ~admin:true ~slug:"sth-va-d" ~id:p3
+        in
+        check_location "admin"
+          (mgmt_path "sth-va-d" ^ "?done=removed")
+          response;
+        Lwt.return_unit)
+
+  let remove_resilience_case =
+    db_case "POST remove: survives every stale condition, touches only its \
+             own placement, and a repeat answers one stable conflict"
+      (fun ~url conn ->
+        let* author, otop, dtop, o, d, post, connection = fixture conn "vr" in
+        (* The destination becomes sectioned; the acceptance names the
+           section; a sibling placement of the same thread stays accepted
+           elsewhere; the canonical thread has a comment to preserve. *)
+        let* () = exec conn "sectioned" Stp_store.q_set_sections (d, true) in
+        let* section =
+          find conn "section" Stp_store.q_insert_section (d, "sth-vr-sec")
+        in
+        let* p = seed_request conn ~actor:author ~post ~destination:d () in
+        let* () =
+          seed_accept conn ~reviewer:dtop ~section:section ~placement:p
+            ~destination:d ()
+        in
+        let* d2 = insert_community ~name:"Sth vr D2" conn "sth-vr-d2" in
+        let* () = exec conn "flat d2" Stp_store.q_set_sections (d2, false) in
+        let* d2top = insert_user conn "sth_vr_d2top" in
+        let* () = add_top_mod conn ~user:d2top ~community:d2 in
+        let* _ = Stp_store.connect conn ~actor:otop o d2 in
+        let* sibling = seed_request conn ~actor:author ~post ~destination:d2 () in
+        let* () =
+          seed_accept conn ~reviewer:d2top ~placement:sibling ~destination:d2 ()
+        in
+        let* _comment =
+          find conn "comment" Stp_store.q_insert_comment (post, author)
+        in
+        (* The world rots: disconnect, privatize, tombstone, delete the
+           accepted section. *)
+        let* () = Stp_store.disconnect conn ~actor:otop ~connection ~acting:o in
+        let* () = exec conn "privatize origin" Phcv.q_make_private o in
+        let* () =
+          exec conn "tombstone" Stp_store.q_tombstone (post, "[removed by admin]")
+        in
+        let* () = exec conn "delete section" Stp_store.q_delete_section section in
+        let* pipeline, cookie, token, _ = acting "otop" ~url ~uid:otop () in
+        let target = action_path ~slug:"sth-vr-o" ~id:p "remove" in
+        let* response, _ =
+          send_post ~cookie ~target ~fields:[ ("dream.csrf", token) ] pipeline
+        in
+        check_location "removal after everything"
+          (mgmt_path "sth-vr-o" ^ "?done=removed")
+          response;
+        let* () = check_status "removed" conn p "removed" in
+        (* Only the selected placement changed; the canonical thread and
+           its comments survive untouched. *)
+        let* () = check_status "sibling untouched" conn sibling "accepted" in
+        let* title, content =
+          find conn "post row" Stp_store.q_post_row post
+        in
+        Alcotest.(check string) "title kept" "Sth vr thread" title;
+        Alcotest.(check (option string)) "content untouched by removal"
+          (Some "[removed by admin]") content;
+        let* comments = find conn "comments" Stp_store.q_comment_count post in
+        Alcotest.(check int) "comment kept" 1 comments;
+        (* A repeat answers the stable conflict on the management page. *)
+        let* response, body =
+          send_post ~cookie ~target ~fields:[ ("dream.csrf", token) ] pipeline
+        in
+        Alcotest.(check int) "repeat: 409" 409 (status_of response);
+        must body "That thread is no longer shared here.";
+        (* The share-page marker returns an origin-side manager to the
+           Share page — over a healthy world again, since a fresh request
+           needs the origin eligible and the content live. *)
+        let* () = exec conn "restore origin" Stp_store.q_make_eligible o in
+        let* () = exec conn "restore content" Stp_store.q_tombstone (post, "sth body") in
+        let* r =
+          Store.remove conn ~actor_user_id:otop ~placement_id:sibling
+            ~acting_community_id:o
+        in
+        let* () =
+          match r with
+          | Ok _ -> Lwt.return_unit
+          | Error e -> Alcotest.failf "clear sibling: %s" (Stp_store.error_str e)
+        in
+        let* p2 = seed_request conn ~actor:otop ~post ~destination:d2 () in
+        let* r =
+          Store.review conn ~reviewer_user_id:d2top ~placement_id:p2
+            ~destination_community_id:d2 ~decision:(Store.Accept None)
+        in
+        let* () =
+          match r with
+          | Ok _ -> Lwt.return_unit
+          | Error e -> Alcotest.failf "sibling accept: %s" (Stp_store.error_str e)
+        in
+        let* response, _ =
+          send_post ~cookie
+            ~target:(action_path ~slug:"sth-vr-o" ~id:p2 "remove")
+            ~fields:[ ("dream.csrf", token); ("context", "share") ]
+            pipeline
+        in
+        check_location "share-page removal"
+          (Printf.sprintf "/c/sth-vr-o/t/%d/share?done=removed" post)
+          response;
+        Lwt.return_unit)
+
+  (* === CSRF === *)
+
+  let csrf_case =
+    db_case "every mutation requires the framework CSRF field and answers a \
+             stale token with an authorized re-render" (fun ~url conn ->
+        let* author, otop, dtop, o, d, post, _ = fixture conn "cs" in
+        let* p_pending = seed_request conn ~actor:author ~post ~destination:d () in
+        let* post2 = find conn "post2" q_insert_post ("Sth cs two", (o, author)) in
+        let* p_accepted = seed_request conn ~actor:author ~post:post2 ~destination:d () in
+        let* () =
+          seed_accept conn ~reviewer:dtop ~placement:p_accepted ~destination:d ()
+        in
+        let* apipe, acookie, _atoken, aexpired = acting "author" ~url ~uid:author () in
+        let* dpipe, dcookie, _dtoken, dexpired = acting "dtop" ~url ~uid:dtop () in
+        let* opipe, ocookie, _otoken, oexpired = acting "otop" ~url ~uid:otop () in
+        let refused label ~pipeline ~cookie ~target ~fields =
+          let* response, body = send_post ~cookie ~target ~fields pipeline in
+          Alcotest.(check int) (label ^ ": 403") 403 (status_of response);
+          must body "open too long";
+          Lwt.return_unit
+        in
+        let share_target = share_path ~slug:"sth-cs-o" ~post in
+        let* () =
+          refused "share, no token" ~pipeline:apipe ~cookie:acookie
+            ~target:share_target
+            ~fields:[ ("destination", "sth-cs-d") ]
+        in
+        let* () =
+          refused "share, junk token" ~pipeline:apipe ~cookie:acookie
+            ~target:share_target
+            ~fields:[ ("dream.csrf", "junk"); ("destination", "sth-cs-d") ]
+        in
+        let* () =
+          refused "share, expired token" ~pipeline:apipe ~cookie:acookie
+            ~target:share_target
+            ~fields:[ ("dream.csrf", aexpired); ("destination", "sth-cs-d") ]
+        in
+        let* () =
+          refused "accept, no token" ~pipeline:dpipe ~cookie:dcookie
+            ~target:(action_path ~slug:"sth-cs-d" ~id:p_pending "accept")
+            ~fields:[]
+        in
+        let* () =
+          refused "reject, expired token" ~pipeline:dpipe ~cookie:dcookie
+            ~target:(action_path ~slug:"sth-cs-d" ~id:p_pending "reject")
+            ~fields:[ ("dream.csrf", dexpired) ]
+        in
+        let* () =
+          refused "withdraw, no token" ~pipeline:apipe ~cookie:acookie
+            ~target:(action_path ~slug:"sth-cs-o" ~id:p_pending "withdraw")
+            ~fields:[]
+        in
+        let* () =
+          refused "remove, expired token" ~pipeline:opipe ~cookie:ocookie
+            ~target:(action_path ~slug:"sth-cs-o" ~id:p_accepted "remove")
+            ~fields:[ ("dream.csrf", oexpired) ]
+        in
+        (* Nothing moved, and no event or notification was appended. *)
+        let* () = check_status "still pending" conn p_pending "pending" in
+        let* () = check_status "still accepted" conn p_accepted "accepted" in
+        let* events = find conn "events" Stp_store.q_events_for_post post in
+        Alcotest.(check int) "one request event only" 1 events;
+        let* n = find conn "rows" q_count_for_post post in
+        Alcotest.(check int) "one placement only" 1 n;
+        Lwt.return_unit)
+
+  (* === Notification rendering === *)
+
+  let notif_render_case =
+    db_case "the five kinds render actor-neutral copy with per-side links, \
+             count in the badge, and are read by visiting the mailbox"
+      (fun ~url conn ->
+        let* author, otop, dtop, o, d, post, _ = fixture conn "nr" in
+        let share_link =
+          Earde.Components.canonical_thread_path "sth-nr-o" post
+            "Sth nr thread"
+          ^ "/share"
+        in
+        (* 1: requested — the destination's exact top mods. *)
+        let* p1 =
+          seed_request conn ~actor:author ~note:"STH_NOTE_NR_SECRET"
+            ~post ~destination:d ()
+        in
+        let unread_of label user =
+          let* counted = Earde.Db.count_unread_notifs conn user in
+          match counted with
+          | Ok n -> Lwt.return n
+          | Error e -> Alcotest.failf "%s: %s" label e
+        in
+        (* The badge's own durable count includes the new kind with no
+           middleware change; the kind-filtered count isolates it from the
+           connection handshake the fixture already notified about. *)
+        let* unread_shared = find conn "kind unread" q_unread_kinds dtop in
+        Alcotest.(check int) "badge counts the new row" 1 unread_shared;
+        let* unread = unread_of "badge before" dtop in
+        Alcotest.(check bool) "durable count includes it" true (unread >= 1);
+        let dpipe = session ~url ~uid:dtop () in
+        let* response, body = get ~target:"/notifications" dpipe in
+        Alcotest.(check int) "mailbox 200" 200 (status_of response);
+        must body
+          "Sth nr Origin requested to share &#8220;Sth nr thread&#8221; with \
+           Sth nr Dest";
+        must body "href='/c/sth-nr-d/settings/shared-threads#incoming'";
+        must body "&#128279;";
+        must_not body "sth_nr_author";
+        must_not body "STH_NOTE_NR_SECRET";
+        (* Visiting the mailbox — and only that — marked it read. *)
+        let* unread = unread_of "badge after" dtop in
+        Alcotest.(check int) "mailbox visit marked read" 0 unread;
+        (* 2: accepted — the requester/author, in origin context. *)
+        let* () = seed_accept conn ~reviewer:dtop ~placement:p1 ~destination:d () in
+        let apipe = session ~url ~uid:author () in
+        let* _, body = get ~target:"/notifications" apipe in
+        must body "Sth nr Dest accepted &#8220;Sth nr thread&#8221;";
+        must body (Printf.sprintf "href='%s'" share_link);
+        must_not body "sth_nr_dtop";
+        (* 3: rejected. *)
+        let* post2 = find conn "post2" q_insert_post ("Sth nr two", (o, author)) in
+        let* p2 = seed_request conn ~actor:author ~post:post2 ~destination:d () in
+        let* r =
+          Store.review conn ~reviewer_user_id:dtop ~placement_id:p2
+            ~destination_community_id:d ~decision:Store.Reject
+        in
+        let* () =
+          match r with
+          | Ok _ -> Lwt.return_unit
+          | Error e -> Alcotest.failf "reject: %s" (Stp_store.error_str e)
+        in
+        let* _, body = get ~target:"/notifications" apipe in
+        must body "Sth nr Dest declined &#8220;Sth nr two&#8221;";
+        (* 4: withdrawn — the destination's top mods, actor excluded. *)
+        let* post3 = find conn "post3" q_insert_post ("Sth nr three", (o, author)) in
+        let* p3 = seed_request conn ~actor:author ~post:post3 ~destination:d () in
+        let* r =
+          Store.withdraw conn ~actor_user_id:author ~placement_id:p3
+            ~origin_community_id:o
+        in
+        let* () =
+          match r with
+          | Ok _ -> Lwt.return_unit
+          | Error e -> Alcotest.failf "withdraw: %s" (Stp_store.error_str e)
+        in
+        let* _, body = get ~target:"/notifications" dpipe in
+        must body
+          "A request to share &#8220;Sth nr three&#8221; with Sth nr Dest was \
+           withdrawn";
+        must body "href='/c/sth-nr-d/settings/shared-threads'";
+        (* 5: removed — origin-context recipients link to the Share page;
+           the destination actor is excluded. *)
+        let* r =
+          Store.remove conn ~actor_user_id:dtop ~placement_id:p1
+            ~acting_community_id:d
+        in
+        let* () =
+          match r with
+          | Ok _ -> Lwt.return_unit
+          | Error e -> Alcotest.failf "remove: %s" (Stp_store.error_str e)
+        in
+        let* _, body = get ~target:"/notifications" apipe in
+        must body
+          "&#8220;Sth nr thread&#8221; is no longer shared with Sth nr Dest";
+        let opipe = session ~url ~uid:otop () in
+        let* _, body = get ~target:"/notifications" opipe in
+        must body
+          "&#8220;Sth nr thread&#8221; is no longer shared with Sth nr Dest";
+        must body (Printf.sprintf "href='%s'" share_link);
+        let* _, body = get ~target:"/notifications" dpipe in
+        must_not body "is no longer shared with";
+        Lwt.return_unit)
+
+  let notif_access_loss_case =
+    db_case "a recipient who can no longer read a side gets the generic \
+             line, and the row survives access loss" (fun ~url conn ->
+        let* author, _otop, dtop, _o, d, post, _ = fixture conn "nl" in
+        let* _p =
+          seed_request conn ~actor:author ~note:"STH_NOTE_NL" ~post
+            ~destination:d ()
+        in
+        let dpipe = session ~url ~uid:dtop () in
+        let* _, body = get ~target:"/notifications" dpipe in
+        must body "requested to share &#8220;Sth nl thread&#8221;";
+        (* The origin goes private: its title and identity leave the
+           recipient's copy, but the row stays. *)
+        let* o_id =
+          find conn "origin id"
+            ((Caqti_type.string ->! Caqti_type.int)
+               "SELECT id FROM communities WHERE slug = $1")
+            "sth-nl-o"
+        in
+        let* () = exec conn "privatize origin" Phcv.q_make_private o_id in
+        let* _, body = get ~target:"/notifications" dpipe in
+        must body "A shared thread update";
+        must_not body "Sth nl thread";
+        must_not body "requested to share";
+        must_not body "sth-nl-o";
+        (* Restored access restores the full line. *)
+        let* () = exec conn "restore" Stp_store.q_make_eligible o_id in
+        let* _, body = get ~target:"/notifications" dpipe in
+        must body "requested to share &#8220;Sth nl thread&#8221;";
+        (* The destination goes private and the recipient loses the role:
+           now their own side is unreadable too. *)
+        let* () = exec conn "privatize dest" Phcv.q_make_private d in
+        let* () =
+          exec conn "demote" Phrv.q_remove_moderator (dtop, d)
+        in
+        let* _, body = get ~target:"/notifications" dpipe in
+        must body "A shared thread update";
+        must_not body "Sth nl thread";
+        must_not body "/settings/shared-threads";
+        Lwt.return_unit)
+
+  (* === Link capability ===
+
+     Read access decides what a notification may NAME; the link targets gate
+     harder. A rendered row must never link a page its recipient is
+     guaranteed to 404 on: the Share-page link follows that page's own gate
+     and degrades to the canonical thread, the management link follows the
+     settings gate and degrades to plain text. *)
+
+  let q_unban_community =
+    (Caqti_type.(t2 int int) ->. Caqti_type.unit)
+    "DELETE FROM community_bans WHERE user_id = $1 AND community_id = $2"
+
+  let q_unban_global =
+    (Caqti_type.int ->. Caqti_type.unit)
+    "UPDATE users SET is_banned = FALSE WHERE id = $1"
+
+  let q_restore_content =
+    (Caqti_type.int ->. Caqti_type.unit)
+    "UPDATE posts SET content = 'sth body' WHERE id = $1"
+
+  let capability_share_case =
+    db_case "accepted links follow the Share page's own gate: the author \
+             arm needs current unbanned membership, the admin arm the \
+             durable pair, and the fallback is the canonical thread"
+      (fun ~url conn ->
+        let* author, _otop, dtop, o, d, post, _ = fixture conn "cs" in
+        let thread_link =
+          Earde.Components.canonical_thread_path "sth-cs-o" post
+            "Sth cs thread"
+        in
+        let share_href = Printf.sprintf "href='%s/share'" thread_link in
+        let thread_href = Printf.sprintf "href='%s'" thread_link in
+        let* p1 =
+          seed_request conn ~actor:author ~note:"STH_NOTE_CS" ~post
+            ~destination:d ()
+        in
+        let* () =
+          seed_accept conn ~reviewer:dtop ~placement:p1 ~destination:d ()
+        in
+        let mailbox ?(admin = false) uid =
+          let pipeline = session ~url ~uid ~admin () in
+          let* _, body = get ~target:"/notifications" pipeline in
+          Lwt.return body
+        in
+        (* The author while a current member may open the Share page, so
+           the acceptance links there. *)
+        let* body = mailbox author in
+        must body "Sth cs Dest accepted &#8220;Sth cs thread&#8221;";
+        must body share_href;
+        must_not body "STH_NOTE_CS";
+        must_not body "sth_cs_dtop";
+        (* Leaving a public origin keeps the copy readable but closes the
+           Share page: the link falls back to the canonical thread. *)
+        let* () = exec conn "leave" q_remove_member (author, o) in
+        let* body = mailbox author in
+        must body "Sth cs Dest accepted &#8220;Sth cs thread&#8221;";
+        must body thread_href;
+        must_not body share_href;
+        let* () = add_member conn ~user:author ~community:o in
+        (* A community ban defeats the author arm the same way... *)
+        let* () = exec conn "cban" q_ban_community (author, o) in
+        let* body = mailbox author in
+        must body thread_href;
+        must_not body share_href;
+        let* () = exec conn "cunban" q_unban_community (author, o) in
+        (* ...as does a global ban. *)
+        let* () = exec conn "gban" q_ban_global author in
+        let* body = mailbox author in
+        must body thread_href;
+        must_not body share_href;
+        let* () = exec conn "gunban" q_unban_global author in
+        (* A session admin claim without durable users.is_admin grants
+           nothing; the durable pair restores the Share link even for a
+           departed author — and only behind the claim. *)
+        let* () = exec conn "leave again" q_remove_member (author, o) in
+        let* body = mailbox ~admin:true author in
+        must body thread_href;
+        must_not body share_href;
+        let* () = set_admin conn ~user:author true in
+        let* body = mailbox ~admin:true author in
+        must body share_href;
+        let* body = mailbox author in
+        must body thread_href;
+        must_not body share_href;
+        let* () = set_admin conn ~user:author false in
+        let* () = add_member conn ~user:author ~community:o in
+        (* A tombstoned thread closes the Share page for every viewer. *)
+        let* () =
+          exec conn "tombstone" Stp_store.q_tombstone (post, "[deleted]")
+        in
+        let* body = mailbox author in
+        must body thread_href;
+        must_not body share_href;
+        let* () = exec conn "restore" q_restore_content post in
+        let* body = mailbox author in
+        must body share_href;
+        (* Rejected rows choose their link the same way. *)
+        let* post2 =
+          find conn "post2" q_insert_post ("Sth cs two", (o, author))
+        in
+        let* p2 = seed_request conn ~actor:author ~post:post2 ~destination:d () in
+        let* r =
+          Store.review conn ~reviewer_user_id:dtop ~placement_id:p2
+            ~destination_community_id:d ~decision:Store.Reject
+        in
+        let* () =
+          match r with
+          | Ok _ -> Lwt.return_unit
+          | Error e -> Alcotest.failf "reject: %s" (Stp_store.error_str e)
+        in
+        let thread2 =
+          Earde.Components.canonical_thread_path "sth-cs-o" post2 "Sth cs two"
+        in
+        let* body = mailbox author in
+        must body "Sth cs Dest declined &#8220;Sth cs two&#8221;";
+        must body (Printf.sprintf "href='%s/share'" thread2);
+        let* () = exec conn "leave third" q_remove_member (author, o) in
+        let* body = mailbox author in
+        must body (Printf.sprintf "href='%s'" thread2);
+        must_not body (Printf.sprintf "href='%s/share'" thread2);
+        Lwt.return_unit)
+
+  let capability_requester_role_case =
+    db_case "having been the requester grants no Share-page link once the \
+             role that permitted sharing has lapsed" (fun ~url conn ->
+        let* _author, otop, dtop, o, d, post, _ = fixture conn "cq" in
+        let* p = seed_request conn ~actor:otop ~post ~destination:d () in
+        let* () =
+          seed_accept conn ~reviewer:dtop ~placement:p ~destination:d ()
+        in
+        let thread_link =
+          Earde.Components.canonical_thread_path "sth-cq-o" post
+            "Sth cq thread"
+        in
+        let share_href = Printf.sprintf "href='%s/share'" thread_link in
+        let thread_href = Printf.sprintf "href='%s'" thread_link in
+        let opipe = session ~url ~uid:otop () in
+        let* _, body = get ~target:"/notifications" opipe in
+        must body "Sth cq Dest accepted &#8220;Sth cq thread&#8221;";
+        must body share_href;
+        (* The role lapses: the still-public origin keeps the copy, and
+           the link degrades to the canonical thread. *)
+        let* () = exec conn "demote" Phrv.q_remove_moderator (otop, o) in
+        let* _, body = get ~target:"/notifications" opipe in
+        must body "Sth cq Dest accepted &#8220;Sth cq thread&#8221;";
+        must body thread_href;
+        must_not body share_href;
+        Lwt.return_unit)
+
+  let capability_manage_case =
+    db_case "management links render only for the destination's exact \
+             current top_mods and durable admins; every lapsed or lesser \
+             role keeps the copy without the link" (fun ~url conn ->
+        let* author, otop, dtop, o, d, post, _ = fixture conn "cn" in
+        let* dtop2 = insert_user conn "sth_cn_dtop2" in
+        let* dmodu = insert_user conn "sth_cn_dmodu" in
+        let* dlegacyu = insert_user conn "sth_cn_dlegacyu" in
+        let* dadmin = insert_user conn "sth_cn_dadmin" in
+        let* () = add_top_mod conn ~user:dtop2 ~community:d in
+        let* () = add_top_mod conn ~user:dmodu ~community:d in
+        let* () = add_top_mod conn ~user:dlegacyu ~community:d in
+        let* () = add_top_mod conn ~user:dadmin ~community:d in
+        let* p1 =
+          seed_request conn ~actor:author ~note:"STH_NOTE_CN" ~post
+            ~destination:d ()
+        in
+        let mgmt = "/c/sth-cn-d/settings/shared-threads" in
+        let incoming_href = Printf.sprintf "href='%s#incoming'" mgmt in
+        let mgmt_href = Printf.sprintf "href='%s'" mgmt in
+        let mailbox ?(admin = false) uid =
+          let pipeline = session ~url ~uid ~admin () in
+          let* _, body = get ~target:"/notifications" pipeline in
+          Lwt.return body
+        in
+        (* The destination top_mod who keeps the role links to the queue. *)
+        let* body = mailbox dtop in
+        must body "requested to share &#8220;Sth cn thread&#8221;";
+        must body incoming_href;
+        must_not body "STH_NOTE_CN";
+        must_not body "sth_cn_author";
+        (* Lapsing to plain membership keeps the copy — the community is
+           still readable — but never the link. *)
+        let* () = exec conn "demote dtop2" Phrv.q_remove_moderator (dtop2, d) in
+        let* () = add_member conn ~user:dtop2 ~community:d in
+        let* body = mailbox dtop2 in
+        must body "requested to share &#8220;Sth cn thread&#8221;";
+        must_not body "/settings/shared-threads";
+        (* mod and legacy_mod are not top_mod. *)
+        let* () = exec conn "demote dmodu" Phrv.q_remove_moderator (dmodu, d) in
+        let* () = add_role conn ~user:dmodu ~community:d "mod" in
+        let* body = mailbox dmodu in
+        must body "requested to share &#8220;Sth cn thread&#8221;";
+        must_not body "/settings/shared-threads";
+        let* () =
+          exec conn "demote dlegacyu" Phrv.q_remove_moderator (dlegacyu, d)
+        in
+        let* () = add_role conn ~user:dlegacyu ~community:d "legacy_mod" in
+        let* body = mailbox dlegacyu in
+        must body "requested to share &#8220;Sth cn thread&#8221;";
+        must_not body "/settings/shared-threads";
+        (* A stale session claim with durable is_admin FALSE grants
+           nothing. *)
+        let* body = mailbox ~admin:true dtop2 in
+        must_not body "/settings/shared-threads";
+        (* The durable pair alone suffices, with no moderator row at all —
+           and only behind the claim. *)
+        let* () = exec conn "unmod dadmin" Phrv.q_remove_moderator (dadmin, d) in
+        let* () = set_admin conn ~user:dadmin true in
+        let* body = mailbox ~admin:true dadmin in
+        must body incoming_href;
+        let* body = mailbox dadmin in
+        must_not body "/settings/shared-threads";
+        (* Withdrawn rows obey the same gate. *)
+        let* r =
+          Store.withdraw conn ~actor_user_id:author ~placement_id:p1
+            ~origin_community_id:o
+        in
+        let* () =
+          match r with
+          | Ok _ -> Lwt.return_unit
+          | Error e -> Alcotest.failf "withdraw: %s" (Stp_store.error_str e)
+        in
+        let* body = mailbox dtop in
+        must body
+          "A request to share &#8220;Sth cn thread&#8221; with Sth cn Dest \
+           was withdrawn";
+        must body mgmt_href;
+        (* Destination-context removal rows too: linked while the role
+           holds, plain text once it lapses — never a guaranteed 404. *)
+        let* p2 = seed_request conn ~actor:author ~post ~destination:d () in
+        let* () =
+          seed_accept conn ~reviewer:dtop ~placement:p2 ~destination:d ()
+        in
+        let* r =
+          Store.remove conn ~actor_user_id:otop ~placement_id:p2
+            ~acting_community_id:o
+        in
+        let* () =
+          match r with
+          | Ok _ -> Lwt.return_unit
+          | Error e -> Alcotest.failf "remove: %s" (Stp_store.error_str e)
+        in
+        let* body = mailbox dtop in
+        must body
+          "&#8220;Sth cn thread&#8221; is no longer shared with Sth cn Dest";
+        must body mgmt_href;
+        let* () = exec conn "demote dtop" Phrv.q_remove_moderator (dtop, d) in
+        let* body = mailbox dtop in
+        must body
+          "&#8220;Sth cn thread&#8221; is no longer shared with Sth cn Dest";
+        must_not body "/settings/shared-threads";
+        (* Total access loss still degrades to the generic unlinked line:
+           capability gating changed nothing about the read gate. *)
+        let* () = exec conn "privatize origin" Phcv.q_make_private o in
+        let* body = mailbox dtop2 in
+        must body "A shared thread update";
+        must_not body "Sth cn thread";
+        must_not body "/settings/shared-threads";
+        Lwt.return_unit)
+
+  (* === The read-side boundary === *)
+
+  (* === Slice 3: accepted-placement read integration ===
+     Fixtures and observations for the destination feeds, section
+     statistics, contextual thread pages, comment participation, and the
+     moderation boundary. *)
+
+  let q_insert_sectioned_post =
+    (Caqti_type.(t2 string (t3 int int int)) ->! Caqti_type.int)
+    "INSERT INTO posts (title, content, community_id, user_id, section_id) \
+     VALUES ($1, 'sth body', $2, $3, $4) RETURNING id"
+
+  let q_vote =
+    (Caqti_type.(t3 int int int) ->. Caqti_type.unit)
+    "INSERT INTO post_votes (user_id, post_id, direction) VALUES ($1, $2, $3)"
+
+  let q_age_post =
+    (Caqti_type.(t2 int int) ->. Caqti_type.unit)
+    "UPDATE posts SET created_at = NOW() - make_interval(hours => $2::int), \
+     last_activity_at = NOW() - make_interval(hours => $2::int) WHERE id = $1"
+
+  let q_set_activity =
+    (Caqti_type.(t2 int int) ->. Caqti_type.unit)
+    "UPDATE posts SET last_activity_at = NOW() - make_interval(hours => $2::int) \
+     WHERE id = $1"
+
+  let q_origin_section_of =
+    (Caqti_type.int ->! Caqti_type.(option int))
+    "SELECT section_id FROM posts WHERE id = $1"
+
+  let q_post_content =
+    (Caqti_type.int ->! Caqti_type.(option string))
+    "SELECT content FROM posts WHERE id = $1"
+
+  let q_comment_count =
+    (Caqti_type.int ->! Caqti_type.int)
+    "SELECT COUNT(*)::int FROM comments WHERE post_id = $1"
+
+  let q_local_comment_count =
+    (Caqti_type.(t2 int int) ->! Caqti_type.int)
+    "SELECT COALESCE((SELECT local_comment_count FROM community_user_stats \
+                      WHERE user_id = $1 AND community_id = $2), 0)::int"
+
+  let ok label = function
+    | Ok v -> v
+    | Error e -> Alcotest.failf "%s: %s" label e
+
+  let feed_ids (items : Earde.Db.feed_item list) =
+    List.map
+      (fun (it : Earde.Db.feed_item) -> it.Earde.Db.fi_post.id)
+      items
+
+  let reject_seed conn ~reviewer ~placement ~destination =
+    let* r =
+      Store.review conn ~reviewer_user_id:reviewer ~placement_id:placement
+        ~destination_community_id:destination ~decision:Store.Reject
+    in
+    match r with
+    | Ok _ -> Lwt.return_unit
+    | Error e -> Alcotest.failf "seed reject: %s" (Stp_store.error_str e)
+
+  let withdraw_seed conn ~actor ~placement ~origin =
+    let* r =
+      Store.withdraw conn ~actor_user_id:actor ~placement_id:placement
+        ~origin_community_id:origin
+    in
+    match r with
+    | Ok _ -> Lwt.return_unit
+    | Error e -> Alcotest.failf "seed withdraw: %s" (Stp_store.error_str e)
+
+  let remove_seed conn ~actor ~placement ~acting =
+    let* r =
+      Store.remove conn ~actor_user_id:actor ~placement_id:placement
+        ~acting_community_id:acting
+    in
+    match r with
+    | Ok _ -> Lwt.return_unit
+    | Error e -> Alcotest.failf "seed remove: %s" (Stp_store.error_str e)
+
+  let may_comment label conn ~user ~post expected =
+    let* r =
+      Earde.Shared_thread_reading.viewer_may_comment conn ~user_id:user
+        ~post_id:post
+    in
+    (match r with
+     | Ok got -> Alcotest.(check bool) label expected got
+     | Error _ -> Alcotest.failf "%s: storage error" label);
+    Lwt.return_unit
+
+  let check_301 label expected response =
+    Alcotest.(check int) (label ^ ": 301") 301 (status_of response);
+    Alcotest.(check (option string)) (label ^ ": Location") (Some expected)
+      (Dream.header response "Location")
+
+  let count label body needle expected =
+    Alcotest.(check int) label expected (count_sub body needle)
+
+  (* --- destination community feeds: lifecycle, uniqueness, links --- *)
+
+  let feed_lifecycle_case =
+    db_case "an accepted placement appears exactly once in each destination \
+             feed with destination links and provenance; every non-accepted \
+             state is absent; disconnection and eligibility drift keep it; \
+             origin privacy and removal end it; destination access still \
+             gates" (fun ~url conn ->
+        let* author, otop, dtop, o, d, post, connection = fixture conn "df" in
+        (* Second flat destination with its own reviewer. *)
+        let* d2top = insert_user conn "sth_df_d2top" in
+        let* d2 =
+          insert_community ~name:"Sth df Second" conn "sth-df-d2"
+        in
+        let* () = exec conn "flat d2" Stp_store.q_set_sections (d2, false) in
+        let* () = add_top_mod conn ~user:d2top ~community:d2 in
+        let* _ = Stp_store.connect conn ~actor:otop o d2 in
+        (* One post per non-accepted lifecycle state. *)
+        let* p_pending =
+          find conn "pending post" q_insert_post ("Sth df pending", (o, author))
+        in
+        let* p_rejected =
+          find conn "rejected post" q_insert_post
+            ("Sth df rejected", (o, author))
+        in
+        let* p_withdrawn =
+          find conn "withdrawn post" q_insert_post
+            ("Sth df withdrawn", (o, author))
+        in
+        let* pl = seed_request conn ~actor:author ~post ~destination:d () in
+        let* () = seed_accept conn ~reviewer:dtop ~placement:pl ~destination:d () in
+        let* pl2 = seed_request conn ~actor:author ~post ~destination:d2 () in
+        let* () =
+          seed_accept conn ~reviewer:d2top ~placement:pl2 ~destination:d2 ()
+        in
+        let* _pending =
+          seed_request conn ~actor:author ~note:"STH_NOTE_DF" ~post:p_pending
+            ~destination:d ()
+        in
+        let* plr =
+          seed_request conn ~actor:author ~post:p_rejected ~destination:d ()
+        in
+        let* () = reject_seed conn ~reviewer:dtop ~placement:plr ~destination:d in
+        let* plw =
+          seed_request conn ~actor:author ~post:p_withdrawn ~destination:d ()
+        in
+        let* () = withdraw_seed conn ~actor:author ~placement:plw ~origin:o in
+        let dest_href =
+          Earde.Components.canonical_thread_path "sth-df-d" post
+            "Sth df thread"
+        in
+        let anon = app_pipeline ~url () in
+        let* response, body = get ~target:"/c/sth-df-d" anon in
+        Alcotest.(check int) "destination feed 200" 200 (status_of response);
+        count "shared row renders exactly once" body "Sth df thread" 1;
+        count "one provenance label" body "Shared from" 1;
+        must body "Sth df Origin";
+        must body dest_href;
+        must_not body "Sth df pending";
+        must_not body "Sth df rejected";
+        must_not body "Sth df withdrawn";
+        must_not body "STH_NOTE_DF";
+        let* _, body = get ~target:"/c/sth-df-d2" anon in
+        count "once in the second destination" body "Sth df thread" 1;
+        (* The origin feed is unchanged: the row, no provenance grammar. *)
+        let* _, body = get ~target:"/c/sth-df-o" anon in
+        must body "Sth df thread";
+        must_not body "Shared from";
+        must_not body "Shared with";
+        (* Disconnection does not erase an accepted rendering. *)
+        let* () =
+          Stp_store.disconnect conn ~actor:otop ~connection ~acting:o
+        in
+        let* _, body = get ~target:"/c/sth-df-d" anon in
+        must body "Sth df thread";
+        (* Nor does losing discoverability/publication while still public. *)
+        let* () = exec conn "unlist origin" Phcv.q_make_unlisted o in
+        let* _, body = get ~target:"/c/sth-df-d" anon in
+        must body "Sth df thread";
+        (* A private origin vanishes from EVERY destination immediately. *)
+        let* () = exec conn "private origin" Phcv.q_make_private o in
+        let* _, body = get ~target:"/c/sth-df-d" anon in
+        must_not body "Sth df thread";
+        let* _, body = get ~target:"/c/sth-df-d2" anon in
+        must_not body "Sth df thread";
+        let* () = exec conn "restore origin" Stp_store.q_make_eligible o in
+        let* _, body = get ~target:"/c/sth-df-d" anon in
+        must body "Sth df thread";
+        (* Removal ends exactly its own destination; the sibling placement
+           and the canonical origin surface survive. *)
+        let* () = remove_seed conn ~actor:dtop ~placement:pl ~acting:d in
+        let* _, body = get ~target:"/c/sth-df-d" anon in
+        must_not body "Sth df thread";
+        let* _, body = get ~target:"/c/sth-df-d2" anon in
+        must body "Sth df thread";
+        let* _, body = get ~target:"/c/sth-df-o" anon in
+        must body "Sth df thread";
+        (* The destination's own access rules still gate its feed. *)
+        let* () = exec conn "private d2" Phcv.q_make_private d2 in
+        let* response, _ = get ~target:"/c/sth-df-d2" anon in
+        Alcotest.(check int) "private destination is 404 to anon" 404
+          (status_of response);
+        let* dmem = insert_user conn "sth_df_dmem" in
+        let* () = add_member conn ~user:dmem ~community:d2 in
+        let* response, body =
+          get ~target:"/c/sth-df-d2" (session ~url ~uid:dmem ())
+        in
+        Alcotest.(check int) "member still reads the private feed" 200
+          (status_of response);
+        must body "Sth df thread";
+        Lwt.return_unit)
+
+  let feed_ordering_case =
+    db_case "all four sort modes and LIMIT/OFFSET order the COMBINED result \
+             with canonical sort keys, no duplication across arms, and \
+             explicit shared context on placement rows" (fun ~url conn ->
+        ignore url;
+        let* author, otop, dtop, o, d, post, _ = fixture conn "dg" in
+        let* own_a = find conn "own a" q_insert_post ("Sth dg own a", (d, dtop)) in
+        let* own_b = find conn "own b" q_insert_post ("Sth dg own b", (d, dtop)) in
+        let* shared2 =
+          find conn "second shared" q_insert_post ("Sth dg second", (o, author))
+        in
+        let* pl = seed_request conn ~actor:author ~post ~destination:d () in
+        let* () = seed_accept conn ~reviewer:dtop ~placement:pl ~destination:d () in
+        let* pl2 = seed_request conn ~actor:author ~post:shared2 ~destination:d () in
+        let* () = seed_accept conn ~reviewer:dtop ~placement:pl2 ~destination:d () in
+        (* Distinct ages / activities / scores so every sort is decided. *)
+        let* () = exec conn "age own_a" q_age_post (own_a, 10) in
+        let* () = exec conn "age own_b" q_age_post (own_b, 1) in
+        let* () = exec conn "age shared" q_age_post (post, 5) in
+        let* () = exec conn "age shared2" q_age_post (shared2, 30) in
+        let* () = exec conn "act shared" q_set_activity (post, 1) in
+        let* () = exec conn "act own_a" q_set_activity (own_a, 2) in
+        let* () = exec conn "act own_b" q_set_activity (own_b, 3) in
+        let* () = exec conn "act shared2" q_set_activity (shared2, 4) in
+        let* () = exec conn "v1" q_vote (author, shared2, 1) in
+        let* () = exec conn "v2" q_vote (otop, shared2, 1) in
+        let* () = exec conn "v3" q_vote (dtop, shared2, 1) in
+        let* () = exec conn "v4" q_vote (author, own_a, 1) in
+        let* () = exec conn "v5" q_vote (otop, own_a, 1) in
+        let* () = exec conn "v6" q_vote (author, post, 1) in
+        let feed sort limit offset =
+          let* r = Earde.Db.get_posts_by_community conn d sort limit offset in
+          Lwt.return (ok "feed" r)
+        in
+        let* items = feed Earde.Db.Newest 20 0 in
+        Alcotest.(check (list int)) "newest"
+          [ own_b; post; own_a; shared2 ] (feed_ids items);
+        (* No duplication across the two arms. *)
+        Alcotest.(check int) "four distinct rows" 4
+          (List.length (List.sort_uniq compare (feed_ids items)));
+        (* Shared rows carry their context; own rows carry none. *)
+        List.iter
+          (fun (it : Earde.Db.feed_item) ->
+            match it.Earde.Db.fi_shared with
+            | Some ctx ->
+                Alcotest.(check bool) "shared row is a placement row" true
+                  (List.mem it.Earde.Db.fi_post.id [ post; shared2 ]);
+                Alcotest.(check string) "origin name travels"
+                  "Sth dg Origin" ctx.Earde.Db.fs_origin_name
+            | None ->
+                Alcotest.(check bool) "own row is the community's" true
+                  (List.mem it.Earde.Db.fi_post.id [ own_a; own_b ]))
+          items;
+        let* items = feed Earde.Db.Top 20 0 in
+        Alcotest.(check (list int)) "top"
+          [ shared2; own_a; post; own_b ] (feed_ids items);
+        let* items = feed Earde.Db.Hot 20 0 in
+        Alcotest.(check (list int)) "hot"
+          [ own_b; post; own_a; shared2 ] (feed_ids items);
+        let* items = feed Earde.Db.Active 20 0 in
+        Alcotest.(check (list int)) "active"
+          [ post; own_a; own_b; shared2 ] (feed_ids items);
+        (* Pagination applies to the combined result, never per arm. *)
+        let* items = feed Earde.Db.Newest 2 0 in
+        Alcotest.(check (list int)) "first page" [ own_b; post ]
+          (feed_ids items);
+        let* items = feed Earde.Db.Newest 2 2 in
+        Alcotest.(check (list int)) "second page" [ own_a; shared2 ]
+          (feed_ids items);
+        Lwt.return_unit)
+
+  (* --- destination sections, uncategorized, statistics --- *)
+
+  let section_stats_case =
+    db_case "an accepted placement lives in its chosen destination section, \
+             moves to Uncategorized when the section dies, counts in the \
+             destination statistics, and never touches the origin section \
+             or its statistics" (fun ~url conn ->
+        let* author, _otop, dtop, o, d, _post, _ = fixture conn "ds" in
+        let* () = exec conn "origin sectioned" Stp_store.q_set_sections (o, true) in
+        let* osec = find conn "osec" Stp_store.q_insert_section (o, "sth-ds-osec") in
+        let* () = exec conn "dest sectioned" Stp_store.q_set_sections (d, true) in
+        let* sec1 = find conn "sec1" Stp_store.q_insert_section (d, "sth-ds-sone") in
+        let* sec2 = find conn "sec2" Stp_store.q_insert_section (d, "sth-ds-stwo") in
+        let* post2 =
+          find conn "sectioned post" q_insert_sectioned_post
+            ("Sth ds sectioned", (o, author, osec))
+        in
+        let* pl = seed_request conn ~actor:author ~post:post2 ~destination:d () in
+        let* () =
+          seed_accept conn ~reviewer:dtop ~section:sec1 ~placement:pl
+            ~destination:d ()
+        in
+        let anon = app_pipeline ~url () in
+        (* The chosen destination section carries it — exactly once, in
+           destination context, with provenance. *)
+        let* response, body = get ~target:"/c/sth-ds-d/s/sth-ds-sone" anon in
+        Alcotest.(check int) "section feed 200" 200 (status_of response);
+        count "once in the chosen section" body "Sth ds sectioned" 1;
+        must body
+          (Earde.Components.canonical_thread_path "sth-ds-d" post2
+             "Sth ds sectioned");
+        must body "Shared from";
+        (* Not in a sibling section. *)
+        let* _, body = get ~target:"/c/sth-ds-d/s/sth-ds-stwo" anon in
+        must_not body "Sth ds sectioned";
+        (* Destination statistics count it, with real activity. *)
+        let* stats = Earde.Db.get_sections_with_stats conn d in
+        let stats = ok "dest stats" stats in
+        let stat_of sid =
+          match
+            List.find_opt
+              (fun ((s : Earde.Db.community_section), _, _) ->
+                s.Earde.Db.section_id = sid)
+              stats
+          with
+          | Some (_, n, act) -> (n, act)
+          | None -> Alcotest.failf "missing section %d" sid
+        in
+        let n1, act1 = stat_of sec1 in
+        Alcotest.(check int) "chosen section counts the placement" 1 n1;
+        Alcotest.(check bool) "placement drives last activity" true
+          (act1 <> None);
+        let n2, _ = stat_of sec2 in
+        Alcotest.(check int) "sibling section counts nothing" 0 n2;
+        (* The overview renders the same count. *)
+        let* _, body = get ~target:"/c/sth-ds-d" anon in
+        must body "<span class='launch-sec-count'>1</span>";
+        (* Origin section assignment and statistics are untouched. *)
+        let* stored_section = find conn "origin section" q_origin_section_of post2 in
+        Alcotest.(check (option int)) "origin section assignment intact"
+          (Some osec) stored_section;
+        let* ostats = Earde.Db.get_sections_with_stats conn o in
+        let ostats = ok "origin stats" ostats in
+        (match
+           List.find_opt
+             (fun ((s : Earde.Db.community_section), _, _) ->
+               s.Earde.Db.section_id = osec)
+             ostats
+         with
+         | Some (_, n, _) ->
+             Alcotest.(check int) "origin section still counts one" 1 n
+         | None -> Alcotest.fail "origin section vanished");
+        (* Deleting the destination section releases the placement to
+           Uncategorized (ON DELETE SET NULL) without ending it. *)
+        let* () = exec conn "delete sec1" Stp_store.q_delete_section sec1 in
+        let* response, body = get ~target:"/c/sth-ds-d/s/uncategorized" anon in
+        Alcotest.(check int) "uncategorized 200" 200 (status_of response);
+        count "released into Uncategorized" body "Sth ds sectioned" 1;
+        must body "Shared from";
+        let* orphaned = Earde.Db.get_orphaned_count_and_activity conn d in
+        let n, act = ok "orphaned" orphaned in
+        Alcotest.(check int) "orphaned count includes the placement" 1 n;
+        Alcotest.(check bool) "orphaned activity is real" true (act <> None);
+        (* Removal takes it out of the counts and the surface. *)
+        let* () = remove_seed conn ~actor:dtop ~placement:pl ~acting:d in
+        let* orphaned = Earde.Db.get_orphaned_count_and_activity conn d in
+        let n, _ = ok "orphaned after removal" orphaned in
+        Alcotest.(check int) "orphaned count falls back to zero" 0 n;
+        let* response, _ = get ~target:"/c/sth-ds-d/s/uncategorized" anon in
+        Alcotest.(check int) "empty uncategorized is a 404 again" 404
+          (status_of response);
+        Lwt.return_unit)
+
+  let recent_knowledge_case =
+    db_case "Recent durable knowledge shows accepted placements through the \
+             same combined community feed: destination link, provenance, \
+             destination section, combined ordering, the five-item limit, \
+             and origin privacy" (fun ~url conn ->
+        let* author, _otop, dtop, o, d, post, _ = fixture conn "dr" in
+        let* () = exec conn "dest sectioned" Stp_store.q_set_sections (d, true) in
+        let* dsec = find conn "dsec" Stp_store.q_insert_section (d, "sth-dr-sec") in
+        let* pl = seed_request conn ~actor:author ~post ~destination:d () in
+        let* () =
+          seed_accept conn ~reviewer:dtop ~section:dsec ~placement:pl
+            ~destination:d ()
+        in
+        let* () = exec conn "age shared" q_age_post (post, 2) in
+        let* local =
+          find conn "local" q_insert_post ("Sth dr local", (d, dtop))
+        in
+        let* () = exec conn "age local" q_age_post (local, 1) in
+        let anon = app_pipeline ~url () in
+        let* response, body = get ~target:"/c/sth-dr-d" anon in
+        Alcotest.(check int) "overview 200" 200 (status_of response);
+        (* The shared row: destination-context link, destination section,
+           compact provenance; the local row keeps its byte-identical
+           legacy link. *)
+        must body
+          (Earde.Components.canonical_thread_path "sth-dr-d" post
+             "Sth dr thread");
+        must body "Shared from";
+        must body "sth-dr-sec";
+        must body (Printf.sprintf "href='/p/%d'" local);
+        (* Combined ordering: the newer local row leads. *)
+        let pos needle =
+          match index_of body needle with
+          | Some i -> i
+          | None -> Alcotest.failf "missing: %s" needle
+        in
+        Alcotest.(check bool) "newer local row leads the panel" true
+          (pos "Sth dr local" < pos "Sth dr thread");
+        (* Origin privacy removes it immediately. *)
+        let* () = exec conn "private origin" Phcv.q_make_private o in
+        let* _, body = get ~target:"/c/sth-dr-d" anon in
+        must_not body "Sth dr thread";
+        let* () = exec conn "restore origin" Stp_store.q_make_eligible o in
+        (* The five-item limit applies AFTER combination. *)
+        let* () =
+          Lwt_list.iter_s
+            (fun i ->
+              let* _ =
+                find conn "filler" q_insert_post
+                  (Printf.sprintf "Sth dr filler %d" i, (d, dtop))
+              in
+              Lwt.return_unit)
+            [ 1; 2; 3; 4; 5 ]
+        in
+        let* _, body = get ~target:"/c/sth-dr-d" anon in
+        count "exactly five recent rows" body "launch-postrow" 5;
+        must_not body "Sth dr thread";
+        Lwt.return_unit)
+
+  (* --- destination-context thread pages --- *)
+
+  let context_url_case =
+    db_case "the destination thread URL renders the one canonical discussion \
+             under the destination shell with provenance, an origin-pointing \
+             canonical link, and noindex; every invalid context collapses \
+             into the pre-existing redirect-or-404 behavior" (fun ~url conn ->
+        let* author, _otop, dtop, o, d, post, _ = fixture conn "dc" in
+        let* () = exec conn "dest sectioned" Stp_store.q_set_sections (d, true) in
+        let* dsec = find conn "dsec" Stp_store.q_insert_section (d, "sth-dc-sec") in
+        let* _comment = find conn "comment" Stp_store.q_insert_comment (post, author) in
+        let* pl = seed_request conn ~actor:author ~post ~destination:d () in
+        let* () =
+          seed_accept conn ~reviewer:dtop ~section:dsec ~placement:pl
+            ~destination:d ()
+        in
+        let canonical =
+          Earde.Components.canonical_thread_path "sth-dc-o" post "Sth dc thread"
+        in
+        let dest_path =
+          Earde.Components.canonical_thread_path "sth-dc-d" post "Sth dc thread"
+        in
+        let anon = app_pipeline ~url () in
+        (* The origin page behaves exactly as before. *)
+        let* response, body = get ~target:canonical anon in
+        Alcotest.(check int) "origin page 200" 200 (status_of response);
+        must body
+          (Printf.sprintf "<link rel='canonical' href='%s'>" canonical);
+        must body "kept";
+        must_not body "Shared from";
+        must_not body "content='noindex'";
+        (* The destination context: same canonical post and comments, the
+           destination shell and section, the provenance label, the
+           origin-pointing canonical, noindex, and no Share entry point. *)
+        let* response, body = get ~target:dest_path anon in
+        Alcotest.(check int) "destination page 200" 200 (status_of response);
+        must body "Sth dc thread";
+        must body "kept";
+        must body "Shared from";
+        must body "href='/c/sth-dc-o'";
+        must body
+          (Printf.sprintf "<link rel='canonical' href='%s'>" canonical);
+        must body "content='noindex'";
+        must body "Sth dc Dest";
+        must body "/c/sth-dc-d/s/sth-dc-sec";
+        must_not body "Share with a community";
+        must_not body "sth_dc_dtop";
+        (* Wrong descriptive slug 301s WITHIN the destination context. *)
+        let* response, _ =
+          get ~target:(Printf.sprintf "/c/sth-dc-d/t/%d-junk" post) anon
+        in
+        check_301 "destination slug correction" dest_path response;
+        (* A logged-in non-member's join CTA targets the DESTINATION. *)
+        let* stranger = insert_user conn "sth_dc_str" in
+        let* _, body =
+          get ~target:dest_path
+            (session ~url ~uid:stranger ~username:"sth_dc_str" ())
+        in
+        must body "Join /c/sth-dc-d";
+        must body (Printf.sprintf "name='community_id' value='%d'" d);
+        (* A destination member's composer carries the closed context field. *)
+        let* dmem = insert_user conn "sth_dc_dmem" in
+        let* () = add_member conn ~user:dmem ~community:d in
+        let* _, body = get ~target:dest_path (session ~url ~uid:dmem ()) in
+        must body "name='context_community' value='sth-dc-d'";
+        (* Every invalid context is the pre-existing behavior, with no
+           observable difference between an unrelated community and every
+           inactive placement state. *)
+        let* _x = insert_community ~name:"Sth dc X" conn "sth-dc-x" in
+        let* response, _ =
+          get
+            ~target:(Printf.sprintf "/c/sth-dc-x/t/%d-sth-dc-thread" post)
+            anon
+        in
+        check_301 "unrelated community" canonical response;
+        let state_post label transition =
+          let* p =
+            find conn label q_insert_post ("Sth dc " ^ label, (o, author))
+          in
+          let* placement = seed_request conn ~actor:author ~post:p ~destination:d () in
+          let* () = transition p placement in
+          let* response, _ =
+            get
+              ~target:
+                (Earde.Components.canonical_thread_path "sth-dc-d" p
+                   ("Sth dc " ^ label))
+              anon
+          in
+          check_301 (label ^ " context")
+            (Earde.Components.canonical_thread_path "sth-dc-o" p
+               ("Sth dc " ^ label))
+            response;
+          Lwt.return_unit
+        in
+        let* () = state_post "pend" (fun _ _ -> Lwt.return_unit) in
+        let* () =
+          state_post "rej" (fun _ placement ->
+              reject_seed conn ~reviewer:dtop ~placement ~destination:d)
+        in
+        let* () =
+          state_post "wd" (fun _ placement ->
+              withdraw_seed conn ~actor:author ~placement ~origin:o)
+        in
+        let* () =
+          state_post "rm" (fun _ placement ->
+              let* () =
+                seed_accept conn ~reviewer:dtop ~section:dsec ~placement
+                  ~destination:d ()
+              in
+              remove_seed conn ~actor:dtop ~placement ~acting:d)
+        in
+        (* Origin privacy: the destination context stops rendering — a
+           viewer who may read the origin gets the canonical redirect, one
+           who may not gets the generic 404. *)
+        let* () = exec conn "private origin" Phcv.q_make_private o in
+        let* response, _ = get ~target:dest_path anon in
+        Alcotest.(check int) "private origin is 404 to anon" 404
+          (status_of response);
+        let* response, _ = get ~target:dest_path (session ~url ~uid:author ()) in
+        check_301 "origin member still converges on canonical" canonical
+          response;
+        let* () = exec conn "restore origin" Stp_store.q_make_eligible o in
+        (* A private destination renders only for its authorized viewers;
+           everyone else keeps the redirect. *)
+        let* () = exec conn "private dest" Phcv.q_make_private d in
+        let* response, _ = get ~target:dest_path anon in
+        check_301 "anon and the private destination" canonical response;
+        let* response, body = get ~target:dest_path (session ~url ~uid:dmem ()) in
+        Alcotest.(check int) "private-destination member renders" 200
+          (status_of response);
+        must body "Shared from";
+        let* () = exec conn "restore dest" Stp_store.q_make_eligible d in
+        let* () = exec conn "re-section dest" Stp_store.q_set_sections (d, true) in
+        (* Long names stay safe end to end. *)
+        let long_title = "Sth dc " ^ String.make 80 'x' in
+        let* p_long = find conn "long" q_insert_post (long_title, (o, author)) in
+        let* placement = seed_request conn ~actor:author ~post:p_long ~destination:d () in
+        let* () =
+          seed_accept conn ~reviewer:dtop ~section:dsec ~placement
+            ~destination:d ()
+        in
+        let* response, body =
+          get
+            ~target:
+              (Earde.Components.canonical_thread_path "sth-dc-d" p_long
+                 long_title)
+            anon
+        in
+        Alcotest.(check int) "long title renders" 200 (status_of response);
+        must body "Shared from";
+        Lwt.return_unit)
+
+  (* --- comment participation: the capability and the POST --- *)
+
+  let comment_participation_case =
+    db_case "one participation capability governs composer and POST: origin \
+             membership or a currently readable accepted destination \
+             membership, minus tombstone and every ban; the redirect keeps \
+             the destination context only while it is still readable"
+      (fun ~url conn ->
+        let* author, _otop, dtop, o, d, post, connection = fixture conn "dp" in
+        let* pl = seed_request conn ~actor:author ~post ~destination:d () in
+        let* () = seed_accept conn ~reviewer:dtop ~placement:pl ~destination:d () in
+        (* A second accepted destination and a pending one. *)
+        let* d3top = insert_user conn "sth_dp_d3top" in
+        let* d3 = insert_community ~name:"Sth dp Third" conn "sth-dp-d3" in
+        let* () = exec conn "flat d3" Stp_store.q_set_sections (d3, false) in
+        let* () = add_top_mod conn ~user:d3top ~community:d3 in
+        let* _ = Stp_store.connect conn ~actor:author o d3 in
+        let* pl3 = seed_request conn ~actor:author ~post ~destination:d3 () in
+        let* () =
+          seed_accept conn ~reviewer:d3top ~placement:pl3 ~destination:d3 ()
+        in
+        let* d2 = insert_community ~name:"Sth dp Second" conn "sth-dp-d2" in
+        let* () = exec conn "flat d2" Stp_store.q_set_sections (d2, false) in
+        let* _ = Stp_store.connect conn ~actor:author o d2 in
+        let* _pending = seed_request conn ~actor:author ~post ~destination:d2 () in
+        (* Posts frozen in each non-participating state. *)
+        let* p_r = find conn "p_r" q_insert_post ("Sth dp rej", (o, author)) in
+        let* plr = seed_request conn ~actor:author ~post:p_r ~destination:d () in
+        let* () = reject_seed conn ~reviewer:dtop ~placement:plr ~destination:d in
+        let* p_w = find conn "p_w" q_insert_post ("Sth dp wd", (o, author)) in
+        let* plw = seed_request conn ~actor:author ~post:p_w ~destination:d () in
+        let* () = withdraw_seed conn ~actor:author ~placement:plw ~origin:o in
+        let* p_m = find conn "p_m" q_insert_post ("Sth dp rm", (o, author)) in
+        let* plm = seed_request conn ~actor:author ~post:p_m ~destination:d () in
+        let* () = seed_accept conn ~reviewer:dtop ~placement:plm ~destination:d () in
+        let* () = remove_seed conn ~actor:dtop ~placement:plm ~acting:d in
+        (* The cast. *)
+        let* dmem = insert_user conn "sth_dp_dmem" in
+        let* () = add_member conn ~user:dmem ~community:d in
+        let* pmem = insert_user conn "sth_dp_pmem" in
+        let* () = add_member conn ~user:pmem ~community:d2 in
+        let* dban = insert_user conn "sth_dp_dban" in
+        let* () = add_member conn ~user:dban ~community:d in
+        let* () = exec conn "ban dban in d" q_ban_community (dban, d) in
+        let* oban = insert_user conn "sth_dp_oban" in
+        let* () = add_member conn ~user:oban ~community:d in
+        let* () = exec conn "ban oban in o" q_ban_community (oban, o) in
+        let* gban = insert_user conn "sth_dp_gban" in
+        let* () = add_member conn ~user:gban ~community:o in
+        let* () = exec conn "gban" q_ban_global gban in
+        let* stranger = insert_user conn "sth_dp_str" in
+        (* The capability matrix. *)
+        let* () = may_comment "origin member" conn ~user:author ~post true in
+        let* () = may_comment "accepted-destination member" conn ~user:dmem ~post true in
+        let* () = may_comment "pending grants nothing" conn ~user:pmem ~post false in
+        let* () = may_comment "rejected grants nothing" conn ~user:dmem ~post:p_r false in
+        let* () = may_comment "withdrawn grants nothing" conn ~user:dmem ~post:p_w false in
+        let* () = may_comment "removed grants nothing" conn ~user:dmem ~post:p_m false in
+        let* () = may_comment "destination ban closes that path" conn ~user:dban ~post false in
+        let* () = add_member conn ~user:dban ~community:d3 in
+        let* () = may_comment "one clean accepted path suffices" conn ~user:dban ~post true in
+        let* () = exec conn "ban dban in d3" q_ban_community (dban, d3) in
+        let* () = may_comment "banned in every path again" conn ~user:dban ~post false in
+        let* () = may_comment "origin ban blocks every path" conn ~user:oban ~post false in
+        let* () = may_comment "global ban blocks every path" conn ~user:gban ~post false in
+        let* () = may_comment "no membership anywhere" conn ~user:stranger ~post false in
+        let* () = exec conn "private origin" Phcv.q_make_private o in
+        let* () = may_comment "private origin voids destination paths" conn ~user:dmem ~post false in
+        let* () = may_comment "the origin member keeps their own path" conn ~user:author ~post true in
+        let* () = exec conn "restore origin" Stp_store.q_make_eligible o in
+        let* () = Stp_store.disconnect conn ~actor:author ~connection ~acting:o in
+        let* () = may_comment "disconnection keeps participation" conn ~user:dmem ~post true in
+        let* () = Stp_store.tombstone conn post "[deleted]" in
+        let* () = may_comment "tombstone refuses everyone" conn ~user:author ~post false in
+        let* () = exec conn "restore content" q_restore_content post in
+        (* The POST enforces the same rule and preserves context. *)
+        let dest_path =
+          Earde.Components.canonical_thread_path "sth-dp-d" post "Sth dp thread"
+        in
+        let post_comment label uid ~content ~context =
+          let* pipeline, cookie, token, _ = acting label ~url ~uid () in
+          let fields =
+            [ ("dream.csrf", token); ("content", content);
+              ("post_id", string_of_int post) ]
+            @ (match context with
+               | Some slug -> [ ("context_community", slug) ]
+               | None -> [])
+          in
+          send_post ~cookie ~target:"/comments" ~fields pipeline
+        in
+        let* response, _ =
+          post_comment "dmem" dmem ~content:"DPCTX reply"
+            ~context:(Some "sth-dp-d")
+        in
+        check_location "readable context is preserved" dest_path response;
+        (* The comment is the one canonical tree, visible in every context,
+           and karma stays canonically origin-scoped. *)
+        let anon = app_pipeline ~url () in
+        let* _, body =
+          get
+            ~target:
+              (Earde.Components.canonical_thread_path "sth-dp-o" post
+                 "Sth dp thread")
+            anon
+        in
+        must body "DPCTX reply";
+        let* _, body = get ~target:dest_path anon in
+        must body "DPCTX reply";
+        let* n = find conn "origin karma" q_local_comment_count (dmem, o) in
+        Alcotest.(check int) "comment counts toward the ORIGIN stats" 1 n;
+        let* n = find conn "dest karma" q_local_comment_count (dmem, d) in
+        Alcotest.(check int) "no destination-local counter" 0 n;
+        (* Refusals: participation, origin ban, global ban — each keeps its
+           observable shape and writes nothing. *)
+        let refused label uid ~status =
+          let* response, _ =
+            post_comment label uid ~content:"DPCTX refused" ~context:None
+          in
+          Alcotest.(check int) (label ^ ": status") status (status_of response);
+          Lwt.return_unit
+        in
+        let* () = refused "manual POST without membership" stranger ~status:403 in
+        let* () = refused "pending-only member" pmem ~status:403 in
+        let* () = refused "origin-banned" oban ~status:403 in
+        let* () = refused "globally banned" gban ~status:403 in
+        let* n = find conn "no writes" q_comment_count post in
+        Alcotest.(check int) "refusals wrote nothing" 1 n;
+        (* A private accepted destination: its member participates and keeps
+           the context; a non-member's forged context field decides nothing
+           — the comment lands, the redirect falls back to canonical. *)
+        let* () = exec conn "private d3" Phcv.q_make_private d3 in
+        let* d3mem = insert_user conn "sth_dp_d3mem" in
+        let* () = add_member conn ~user:d3mem ~community:d3 in
+        let* () = may_comment "private accepted destination member" conn ~user:d3mem ~post true in
+        let* response, _ =
+          post_comment "d3mem" d3mem ~content:"DPCTX private"
+            ~context:(Some "sth-dp-d3")
+        in
+        check_location "authorized private context preserved"
+          (Earde.Components.canonical_thread_path "sth-dp-d3" post
+             "Sth dp thread")
+          response;
+        let* response, _ =
+          post_comment "dmem forged" dmem ~content:"DPCTX forged"
+            ~context:(Some "sth-dp-d3")
+        in
+        check_location "forged context falls back"
+          (Printf.sprintf "/p/%d" post) response;
+        (* A context that stopped being readable falls back too. *)
+        let* () = remove_seed conn ~actor:dtop ~placement:pl ~acting:d in
+        let* response, _ =
+          post_comment "author stale" author ~content:"DPCTX stale"
+            ~context:(Some "sth-dp-d")
+        in
+        check_location "stale context falls back"
+          (Printf.sprintf "/p/%d" post) response;
+        (* Tombstone still refuses the write outright. *)
+        let* () = Stp_store.tombstone conn post "[deleted]" in
+        let* response, _ =
+          post_comment "author tombstone" author ~content:"DPCTX tomb"
+            ~context:None
+        in
+        Alcotest.(check int) "tombstoned thread refuses comments" 403
+          (status_of response);
+        Lwt.return_unit)
+
+  (* --- moderation boundary --- *)
+
+  let moderation_boundary_case =
+    db_case "destination standing grants no canonical-content moderation: no \
+             controls render for a destination top mod, direct mutations are \
+             refused, reports stay origin-scoped, and placement removal \
+             touches only the placement" (fun ~url conn ->
+        let* author, otop, dtop, _o, d, post, _ = fixture conn "dm" in
+        let* cid = find conn "comment" Stp_store.q_insert_comment (post, author) in
+        let* pl = seed_request conn ~actor:author ~post ~destination:d () in
+        let* () = seed_accept conn ~reviewer:dtop ~placement:pl ~destination:d () in
+        let dest_path =
+          Earde.Components.canonical_thread_path "sth-dm-d" post "Sth dm thread"
+        in
+        let canonical =
+          Earde.Components.canonical_thread_path "sth-dm-o" post "Sth dm thread"
+        in
+        (* The destination top mod sees a plain reader's page: no post or
+           comment removal, no bans, no management links — and the report
+           affordance resolves to the ORIGIN's reporting context. *)
+        let* response, body =
+          get ~target:dest_path
+            (session ~url ~uid:dtop ~username:"sth_dm_dtop" ())
+        in
+        Alcotest.(check int) "dtop reads 200" 200 (status_of response);
+        must_not body "Mod Remove";
+        must_not body "Mod Ban";
+        must_not body "Admin Remove";
+        must_not body "/settings/shared-threads";
+        must body "href='/c/sth-dm-o/report?type=post";
+        must body "/c/sth-dm-o/report?type=comment";
+        (* Origin authority travels with the canonical content: the origin
+           top mod keeps the controls on the destination-context page. *)
+        let* _, body =
+          get ~target:dest_path
+            (session ~url ~uid:otop ~username:"sth_dm_otop" ())
+        in
+        must body "Mod Remove";
+        (* And the destination feed card carries no destination-mod menu. *)
+        let* _, body =
+          get ~target:"/c/sth-dm-d"
+            (session ~url ~uid:dtop ~username:"sth_dm_dtop" ())
+        in
+        must_not body "Mod Remove";
+        must_not body "Mod Ban";
+        (* Direct mutations under either slug are refused and write
+           nothing. *)
+        let refuse label ~target ~uid =
+          let* pipeline, cookie, token, _ = acting label ~url ~uid () in
+          let* response, _ =
+            send_post ~cookie ~target
+              ~fields:[ ("dream.csrf", token); ("reason", "dm boundary") ]
+              pipeline
+          in
+          Alcotest.(check bool) (label ^ ": refused") true
+            (status_of response >= 400);
+          Lwt.return_unit
+        in
+        let* () =
+          refuse "post delete via destination slug"
+            ~target:(Printf.sprintf "/c/sth-dm-d/posts/%d/mod_delete" post)
+            ~uid:dtop
+        in
+        let* () =
+          refuse "post delete via origin slug"
+            ~target:(Printf.sprintf "/c/sth-dm-o/posts/%d/mod_delete" post)
+            ~uid:dtop
+        in
+        let* () =
+          refuse "comment delete via destination slug"
+            ~target:(Printf.sprintf "/c/sth-dm-d/comments/%d/mod_delete" cid)
+            ~uid:dtop
+        in
+        let* content = find conn "content" q_post_content post in
+        Alcotest.(check (option string)) "canonical post intact"
+          (Some "sth body") content;
+        let* n = find conn "comments" q_comment_count post in
+        Alcotest.(check int) "canonical comment intact" 1 n;
+        (* Placement removal ends the destination rendering and nothing
+           else. *)
+        let* () = remove_seed conn ~actor:dtop ~placement:pl ~acting:d in
+        let anon = app_pipeline ~url () in
+        let* response, _ = get ~target:dest_path anon in
+        check_301 "removed context converges on canonical" canonical response;
+        let* response, body = get ~target:canonical anon in
+        Alcotest.(check int) "origin survives removal" 200 (status_of response);
+        must body "kept";
+        Lwt.return_unit)
+
+  (* --- deferred surfaces and public privacy --- *)
+
+  let boundary_case =
+    db_case "the deferred discovery surfaces are unchanged — global feed, \
+             search, personalized feed, profiles, the legacy redirect — and \
+             no private workflow data reaches any public surface"
+      (fun ~url conn ->
+        let* author, otop, dtop, _o, d, post, _ = fixture conn "dx" in
+        ignore (author, d);
+        let* pl =
+          seed_request conn ~actor:otop ~note:"STH_NOTE_DX" ~post
+            ~destination:d ()
+        in
+        let* () = seed_accept conn ~reviewer:dtop ~placement:pl ~destination:d () in
+        let canonical =
+          Earde.Components.canonical_thread_path "sth-dx-o" post "Sth dx thread"
+        in
+        let anon = app_pipeline ~url () in
+        (* Global feed: the canonical row once, no provenance grammar, no
+           destination-context link. *)
+        let* response, body = get ~target:"/feed?scope=all&sort=new" anon in
+        Alcotest.(check int) "global feed 200" 200 (status_of response);
+        count "global feed carries the canonical row once" body
+          "Sth dx thread" 1;
+        must_not body "Shared from";
+        must_not body "/c/sth-dx-d/t/";
+        (* Personalized feed: unchanged membership surface. *)
+        let* _, body =
+          get ~target:"/feed?scope=following&sort=new"
+            (session ~url ~uid:author ())
+        in
+        count "personalized feed unchanged" body "Sth dx thread" 1;
+        must_not body "Shared from";
+        (* Search and the author profile: one canonical result each. *)
+        let* _, body = get ~target:"/search?q=Sth%20dx" anon in
+        count "search unchanged" body "Sth dx thread" 1;
+        must_not body "Shared from";
+        let* _, body = get ~target:"/u/sth_dx_author" anon in
+        count "profile unchanged" body "Sth dx thread" 1;
+        must_not body "Shared from";
+        (* The legacy post route still answers the one canonical path. *)
+        let* response, _ = get ~target:(Printf.sprintf "/p/%d" post) anon in
+        check_301 "legacy redirect unchanged" canonical response;
+        (* Public privacy: the destination surfaces name no note, no
+           requester, no placement id, no internal vocabulary — while the
+           canonical author attribution stays. *)
+        let* _, body = get ~target:"/c/sth-dx-d" anon in
+        must body "sth_dx_author";
+        must_not body "STH_NOTE_DX";
+        must_not body "sth_dx_otop";
+        must_not body "placement";
+        must_not body "shared_thread";
+        let* _, body =
+          get
+            ~target:
+              (Earde.Components.canonical_thread_path "sth-dx-d" post
+                 "Sth dx thread")
+            anon
+        in
+        must_not body "STH_NOTE_DX";
+        must_not body "sth_dx_otop";
+        must_not body "placement";
+        Lwt.return_unit)
+
+  (* === Slice 4: Create Shared Thread from the durable composer ===
+     The composer converges on the one existing placement operation
+     (Shared_thread_placement_store.request): these cases prove the optional
+     share area, the candidate read model's composer shape, the
+     post-first/placement-second ordering, the fixed notices, and that no
+     failure mode can roll back or duplicate the canonical post. *)
+
+  module Read = Earde.Shared_thread_placement_read_model
+
+  let q_posts_by_title =
+    (Caqti_type.string ->! Caqti_type.int)
+    "SELECT COUNT(*)::int FROM posts WHERE title = $1"
+
+  let q_post_id_by_title =
+    (Caqti_type.string ->! Caqti_type.int)
+    "SELECT id FROM posts WHERE title = $1"
+
+  let q_local_post_count =
+    (Caqti_type.(t2 int int) ->! Caqti_type.int)
+    "SELECT COALESCE((SELECT local_post_count FROM community_user_stats \
+                      WHERE user_id = $1 AND community_id = $2), 0)::int"
+
+  let q_audit_count_for_post =
+    (Caqti_type.int ->! Caqti_type.int)
+    "SELECT COUNT(*)::int FROM shared_thread_placement_audit_events \
+     WHERE post_id = $1"
+
+  let q_mention_count =
+    (Caqti_type.int ->! Caqti_type.int)
+    "SELECT COUNT(*)::int FROM notifications \
+     WHERE user_id = $1 AND notif_type = 'mention'"
+
+  let q_placement_of_post =
+    (Caqti_type.int
+     ->! Caqti_type.(t2 (t2 string int) (t2 (option string) (option int))))
+    "SELECT status, destination_community_id, request_note, \
+            requested_by_user_id \
+     FROM shared_thread_placements WHERE post_id = $1"
+
+  let q_placement_ids_for_post =
+    (Caqti_type.int ->* Caqti_type.int64)
+    "SELECT id FROM shared_thread_placements WHERE post_id = $1 ORDER BY id"
+
+  let q_placements_per_title =
+    (Caqti_type.string ->* Caqti_type.int)
+    "SELECT (SELECT COUNT(*)::int FROM shared_thread_placements sp \
+             WHERE sp.post_id = p.id) \
+     FROM posts p WHERE p.title = $1 ORDER BY p.id"
+
+  let q_first_post_by_title =
+    (Caqti_type.string ->! Caqti_type.int)
+    "SELECT MIN(id)::int FROM posts WHERE title = $1"
+
+  (* Raw connection fixtures for the read-model exclusion matrix and the
+     bound: the status-shape CHECK needs reviewed_at/removed_at coherent
+     with the status. The included (accepted) standing still goes through
+     the real connections store elsewhere. *)
+  let q_insert_connection_status =
+    (Caqti_type.(t3 int int string) ->. Caqti_type.unit)
+    "INSERT INTO community_connections \
+       (requester_community_id, recipient_community_id, status, \
+        reviewed_at, removed_at) \
+     VALUES ($1, $2, $3, \
+             CASE WHEN $3 = 'pending' THEN NULL ELSE NOW() END, \
+             CASE WHEN $3 = 'removed' THEN NOW() ELSE NULL END)"
+
+  let destinations label conn ~origin =
+    let* r = Read.connected_destinations conn ~origin_community_id:origin in
+    match r with
+    | Ok cs -> Lwt.return (List.map Read.candidate_slug cs)
+    | Error _ -> Alcotest.failf "%s: storage error" label
+
+  let composer_fields ~token ~community ?(title = "t") ?(content = "")
+      ?section ?destination ?note () =
+    [ ("dream.csrf", token); ("title", title); ("content", content);
+      ("community_id", string_of_int community) ]
+    @ (match section with
+       | Some s -> [ ("section_id", string_of_int s) ]
+       | None -> [])
+    @ (match destination with
+       | Some d -> [ ("share_destination", d) ]
+       | None -> [])
+    @ (match note with Some n -> [ ("share_note", n) ] | None -> [])
+
+  let with_analytics f =
+    let payloads = ref [] in
+    AnT.use_enabled_test_configuration ();
+    AnT.set_capture_sink (fun p -> payloads := p :: !payloads);
+    Lwt.finalize
+      (fun () -> f payloads)
+      (fun () ->
+        AnT.clear_capture_sink ();
+        AnT.clear_configuration_override ();
+        Lwt.return_unit)
+
+  (* --- the pure note rule, exactly the domain canonicalizer --- *)
+
+  let note_case name input expected =
+    Alcotest.test_case name `Quick (fun () ->
+        match
+          (Earde.Shared_thread_placements.canonical_request_note input, expected)
+        with
+        | Ok got, Ok want -> Alcotest.(check (option string)) name want got
+        | Error _, Error () -> ()
+        | Ok _, Error () -> Alcotest.failf "%s: expected refusal" name
+        | Error _, Ok _ -> Alcotest.failf "%s: expected acceptance" name)
+
+  let composer_note_suite =
+    [ note_case "absent stays absent" None (Ok None)
+    ; note_case "empty collapses to absent" (Some "") (Ok None)
+    ; note_case "whitespace-only collapses" (Some " \t\r\n ") (Ok None)
+    ; note_case "CRLF and CR normalize to LF" (Some "a\r\nb\rc")
+        (Ok (Some "a\nb\nc"))
+    ; note_case "outer ASCII trim only" (Some "  kept  inner\tspacing  ")
+        (Ok (Some "kept  inner\tspacing"))
+    ; note_case "exactly 2000 scalars pass" (Some (String.make 2000 'a'))
+        (Ok (Some (String.make 2000 'a')))
+    ; note_case "2001 scalars refuse" (Some (String.make 2001 'a')) (Error ())
+    ; note_case "NUL refuses" (Some "a\x00b") (Error ())
+    ; note_case "invalid UTF-8 refuses" (Some "a\xffb") (Error ())
+    ]
+
+  (* --- the composer form, DB-free --- *)
+
+  let composer_community : Earde.Db.community =
+    { id = 8811; slug = "sth-ui-comp";
+      name = "Sth Ui Composer";
+      description = None; rules = None; avatar_url = None; banner_url = None;
+      allow_downvotes = true; sections_enabled = false;
+      visibility = Earde.Db.Community_public; indexable = true;
+      is_network_community = false;
+      onboarding_state = Earde.Db.Community_published; discoverable = true }
+
+  let render_composer ?(share_candidates = []) () =
+    let captured = ref None in
+    let pipeline =
+      Dream.set_secret gck_secret @@ Dream.memory_sessions
+      @@ fun req ->
+      captured :=
+        Some
+          (Earde.Pages.new_post_form ~share_candidates [] composer_community
+             req);
+      Dream.html ""
+    in
+    ignore
+      (Lwt_main.run
+         (pipeline (Dream.request ~method_:`GET ~target:"/new-post" "")));
+    match !captured with
+    | Some html -> html
+    | None -> Alcotest.fail "composer renderer did not run"
+
+  let composer_fragment html =
+    match ps_index_of html "<div class='create-shell'>" 0 with
+    | None -> Alcotest.fail "create shell missing from composer page"
+    | Some s -> (
+        match ps_index_of html "</main>" s with
+        | None -> String.sub html s (String.length html - s)
+        | Some e -> String.sub html s (e - s))
+
+  let ui_must body needle =
+    if not (Cprj_schema.contains body ~needle) then
+      Alcotest.failf "missing fragment %S" needle
+
+  let ui_must_not body needle =
+    if Cprj_schema.contains body ~needle then
+      Alcotest.failf "forbidden fragment %S" needle
+
+  let ui_at body needle =
+    match ps_index_of body needle 0 with
+    | Some i -> i
+    | None -> Alcotest.failf "the composer has no %S" needle
+
+  let composer_form_absent_case =
+    Alcotest.test_case
+      "no eligible destination: the composer is the plain pre-slice form"
+      `Quick (fun () ->
+        let body = composer_fragment (render_composer ()) in
+        ui_must_not body "share_destination";
+        ui_must_not body "share_note";
+        ui_must_not body "Share with a connected community";
+        (* The classic fields and the one submit action are intact. *)
+        ui_must body "name='title'";
+        ui_must body "name='url'";
+        ui_must body "name='image'";
+        ui_must body "name='content'";
+        ui_must body "name='community_id' value='8811'";
+        ui_must body ">Submit post</button>")
+
+  let composer_form_area_case =
+    Alcotest.test_case
+      "candidates render one optional select with the blank Do-not-share \
+       default, a private note, and no JavaScript" `Quick (fun () ->
+        let body =
+          composer_fragment
+            (render_composer
+               ~share_candidates:
+                 [ ("sth-ui-a", "Alpha Dest");
+                   ("sth-ui-evil", "<b>Evil</b> & Sons");
+                 ]
+               ())
+        in
+        ui_must body "Share with a connected community";
+        ui_must body "<option value='' selected>Do not share</option>";
+        ui_must body "<option value='sth-ui-a'>Alpha Dest</option>";
+        (* Hostile names escape; the raw bytes never cross. *)
+        ui_must body "&lt;b&gt;Evil&lt;/b&gt; &amp; Sons";
+        ui_must_not body "<b>Evil</b>";
+        (* The note is optional, bounded, and visibly private — and the
+           stated visibility rule is the implemented one: the requester and
+           the authorized moderators, never any public surface. The old
+           "read only by the moderators reviewing the request" copy hid the
+           requester and must not come back. *)
+        ui_must body "name='share_note'";
+        ui_must body "maxlength='2000'";
+        ui_must body "Private request note";
+        ui_must body
+          "Visible only to the requester and authorized moderators. Never \
+           shown on the thread, in feeds, or in notifications.";
+        ui_must_not body "read only by the moderators";
+        (* Subordinate placement: after the content field, before the one
+           unchanged submit action. *)
+        let content_field = ui_at body "name='content'" in
+        let share = ui_at body "name='share_destination'" in
+        let submit = ui_at body ">Submit post</button>" in
+        Alcotest.(check bool) "share area after the text field" true
+          (content_field < share);
+        Alcotest.(check bool) "share area before the submit action" true
+          (share < submit);
+        (* Keyboard-accessible labels; no scripts, no inline handlers. *)
+        ui_must body "for='share-destination'";
+        ui_must body "for='share-note'";
+        ui_must_not body "<script";
+        ui_must_not body "onclick";
+        ui_must_not body "onchange";
+        ui_must_not body "onsubmit")
+
+  let composer_form_suite = [ composer_form_absent_case; composer_form_area_case ]
+
+  (* --- the candidate read model, composer shape --- *)
+
+  let candidate_query_case =
+    db_case "connected_destinations: accepted+eligible only, either request \
+             direction once, deterministic order, bound applied after \
+             eligibility filtering" (fun ~url:_ conn ->
+        let* actor = insert_user conn "sth_ca_actor" in
+        let* o = insert_community ~name:"Sth ca Origin" conn "sth-ca-o" in
+        let* beta = insert_community ~name:"beta Dest" conn "sth-ca-beta" in
+        let* alpha = insert_community ~name:"Alpha Dest" conn "sth-ca-alpha" in
+        (* One accepted standing per pair, created from either side. *)
+        let* _ = Stp_store.connect conn ~actor o beta in
+        let* _ = Stp_store.connect conn ~actor alpha o in
+        (* Excluded: every non-accepted connection state... *)
+        let* pend = insert_community ~name:"Aa Pending" conn "sth-ca-pend" in
+        let* () =
+          exec conn "pending" q_insert_connection_status (o, pend, "pending")
+        in
+        let* rej = insert_community ~name:"Aa Rejected" conn "sth-ca-rej" in
+        let* () =
+          exec conn "rejected" q_insert_connection_status (rej, o, "rejected")
+        in
+        let* rem = insert_community ~name:"Aa Removed" conn "sth-ca-rem" in
+        let* () =
+          exec conn "removed" q_insert_connection_status (o, rem, "removed")
+        in
+        (* ...and every accepted-but-ineligible destination (legacy
+           communities, so lifecycle drift is free of the network CHECKs). *)
+        let* priv =
+          Phcv.insert_community ~network:false ~name:"Aa Private"
+            ~visibility:"private" conn "sth-ca-priv"
+        in
+        let* () =
+          exec conn "priv acc" q_insert_connection_status (o, priv, "accepted")
+        in
+        let* draft =
+          Phcv.insert_community ~network:false ~name:"Aa Draft"
+            ~onboarding:"draft" ~visibility:"private" ~indexable:false
+            ~discoverable:false conn "sth-ca-draft"
+        in
+        let* () =
+          exec conn "draft acc" q_insert_connection_status (o, draft, "accepted")
+        in
+        let* hidden =
+          Phcv.insert_community ~network:false ~name:"Aa Hidden"
+            ~discoverable:false conn "sth-ca-hidden"
+        in
+        let* () =
+          exec conn "hidden acc"
+            q_insert_connection_status (o, hidden, "accepted")
+        in
+        let* slugs = destinations "matrix" conn ~origin:o in
+        Alcotest.(check (list string)) "exactly the eligible accepted pair, \
+                                        LOWER(name) order"
+          [ "sth-ca-alpha"; "sth-ca-beta" ] slugs;
+        (* Symmetry: from alpha's side the origin is a candidate and alpha
+           itself never is. *)
+        let* slugs = destinations "reverse" conn ~origin:alpha in
+        Alcotest.(check (list string)) "the counterpart, never itself"
+          [ "sth-ca-o" ] slugs;
+        (* The bound applies to ELIGIBLE rows: with 57 eligible accepted
+           destinations the list holds exactly 50, still ordered, and no
+           ineligible name buys a slot. *)
+        let* () =
+          Lwt_list.iter_s
+            (fun i ->
+              let slug = Printf.sprintf "sth-ca-b%02d" i in
+              let name = Printf.sprintf "bulk %02d" i in
+              let* c = insert_community ~name conn slug in
+              exec conn "bulk acc" q_insert_connection_status (o, c, "accepted"))
+            (List.init 55 (fun i -> i + 1))
+        in
+        let* slugs = destinations "bound" conn ~origin:o in
+        Alcotest.(check int) "bounded to 50" 50 (List.length slugs);
+        (match slugs with
+         | first :: _ ->
+             Alcotest.(check string) "still name-ordered from the top"
+               "sth-ca-alpha" first
+         | [] -> Alcotest.fail "empty bounded list");
+        Alcotest.(check (option string)) "last eligible inside the bound"
+          (Some "sth-ca-b48")
+          (List.nth_opt slugs 49);
+        Alcotest.(check bool) "no ineligible slot" false
+          (List.exists
+             (fun s ->
+               List.mem s
+                 [ "sth-ca-priv"; "sth-ca-draft"; "sth-ca-hidden";
+                   "sth-ca-pend"; "sth-ca-rej"; "sth-ca-rem"; "sth-ca-o" ])
+             slugs);
+        Lwt.return_unit)
+
+  (* --- the composer page over the real handler --- *)
+
+  let composer_page_case =
+    db_case "GET /new-post: the share area lists exactly the server-resolved \
+             eligible destinations for the resolved origin, and only for a \
+             member" (fun ~url conn ->
+        let* author, _otop, _dtop, o, _d, _post, _ = fixture conn "cb" in
+        let* d2 = insert_community ~name:"Sth cb Second" conn "sth-cb-d2" in
+        let* _ = Stp_store.connect conn ~actor:author o d2 in
+        let* priv =
+          Phcv.insert_community ~network:false ~name:"Sth cb Private"
+            ~visibility:"private" conn "sth-cb-priv"
+        in
+        let* () =
+          exec conn "priv acc" q_insert_connection_status (o, priv, "accepted")
+        in
+        let author_pipeline = session ~url ~uid:author () in
+        let* _, body =
+          get ~target:"/new-post?community=sth-cb-o" author_pipeline
+        in
+        must body "Share with a connected community";
+        must body "<option value='' selected>Do not share</option>";
+        must body "<option value='sth-cb-d'>Sth cb Dest</option>";
+        must body "<option value='sth-cb-d2'>Sth cb Second</option>";
+        must_not body "sth-cb-priv";
+        must_not body "Sth cb Private";
+        must body "Private request note";
+        (* A member of a community with no eligible destination keeps the
+           plain composer. *)
+        let* lone = insert_user conn "sth_cb_lone" in
+        let* alone = insert_community ~name:"Sth cb Alone" conn "sth-cb-alone" in
+        let* () = add_member conn ~user:lone ~community:alone in
+        let lone_pipeline = session ~url ~uid:lone () in
+        let* _, body =
+          get ~target:"/new-post?community=sth-cb-alone" lone_pipeline
+        in
+        must_not body "share_destination";
+        must_not body "Share with a connected community";
+        must body "name='title'";
+        Lwt.return_unit)
+
+  (* --- normal creation stays share-free --- *)
+
+  let normal_creation_case =
+    db_case "no destination selected: one canonical post, the untouched \
+             legacy redirect, and zero shared-thread rows" (fun ~url conn ->
+        let* author, _otop, dtop, o, _d, _fixture_post, _ = fixture conn "cc" in
+        let* () = exec conn "flat origin" Stp_store.q_set_sections (o, false) in
+        let* pal = insert_user conn "sth_cc_pal" in
+        let* pipeline, cookie, token, _ = acting "cc" ~url ~uid:author () in
+        let* response, _ =
+          send_multipart ~cookie ~target:"/posts"
+            ~fields:
+              (composer_fields ~token ~community:o ~title:"Sth cc plain"
+                 ~content:"hello @sth_cc_pal" ())
+            pipeline
+        in
+        let* post = find conn "created" q_post_id_by_title "Sth cc plain" in
+        check_location "legacy redirect kept"
+          (Printf.sprintf "/p/%d" post)
+          response;
+        let* n = find conn "one post" q_posts_by_title "Sth cc plain" in
+        Alcotest.(check int) "exactly one post" 1 n;
+        let* n = find conn "no placement" q_count_for_post post in
+        Alcotest.(check int) "no placement row" 0 n;
+        let* n = find conn "no audit" q_audit_count_for_post post in
+        Alcotest.(check int) "no audit event" 0 n;
+        let* n = find conn "no shared notifs" q_unread_kinds dtop in
+        Alcotest.(check int) "no shared-thread notification" 0 n;
+        let* n = find conn "counter" q_local_post_count (author, o) in
+        Alcotest.(check int) "local post count incremented" 1 n;
+        let* n = find conn "mention" q_mention_count pal in
+        Alcotest.(check int) "mention fan-out ran" 1 n;
+        (* A blank select is byte-for-byte the same path. *)
+        let* response, _ =
+          send_multipart ~cookie ~target:"/posts"
+            ~fields:
+              (composer_fields ~token ~community:o ~title:"Sth cc blank"
+                 ~destination:"" ~note:"a note nobody asked to send" ())
+            pipeline
+        in
+        let* post2 = find conn "created 2" q_post_id_by_title "Sth cc blank" in
+        check_location "blank share is the normal path"
+          (Printf.sprintf "/p/%d" post2)
+          response;
+        let* n = find conn "no placement 2" q_count_for_post post2 in
+        Alcotest.(check int) "blank select never shares" 0 n;
+        Lwt.return_unit)
+
+  (* --- successful Create Shared Thread --- *)
+
+  let composer_share_success_case =
+    db_case "a selected destination creates the canonical post first, then \
+             exactly the existing pending request with its audit event, \
+             notifications, analytics, and both queues" (fun ~url conn ->
+        let* author, otop, dtop, o, d, _fixture_post, _ = fixture conn "cd" in
+        let* () = exec conn "flat origin" Stp_store.q_set_sections (o, false) in
+        with_analytics (fun payloads ->
+            let* pipeline, cookie, token, _ = acting "cd" ~url ~uid:author () in
+            let* response, _ =
+              send_multipart ~cookie ~consent:true ~target:"/posts"
+                ~fields:
+                  (composer_fields ~token ~community:o ~title:"Sth cd shared"
+                     ~content:"shared body" ~destination:"sth-cd-d"
+                     ~note:"  first line\r\nsecond line  " ())
+                pipeline
+            in
+            let* post = find conn "created" q_post_id_by_title "Sth cd shared" in
+            let canonical =
+              Earde.Components.canonical_thread_path "sth-cd-o" post
+                "Sth cd shared"
+            in
+            check_location "PRG to the canonical origin thread"
+              (canonical ^ "?shared=requested")
+              response;
+            (* Exactly one pending placement, origin derived from the post,
+               the note canonicalized by the one domain rule. *)
+            let* n = find conn "one placement" q_count_for_post post in
+            Alcotest.(check int) "exactly one placement" 1 n;
+            let* (status, destination), (note, requested_by) =
+              find conn "placement row" q_placement_of_post post
+            in
+            Alcotest.(check string) "pending" "pending" status;
+            Alcotest.(check int) "destination bound" d destination;
+            Alcotest.(check (option string)) "canonical note"
+              (Some "first line\nsecond line") note;
+            Alcotest.(check (option int)) "requested by the author"
+              (Some author) requested_by;
+            let* n = find conn "audit" q_audit_count_for_post post in
+            Alcotest.(check int) "exactly one audit event" 1 n;
+            (* Destination top mods are notified; the acting author is not. *)
+            let* n = find conn "dtop notified" q_unread_kinds dtop in
+            Alcotest.(check int) "destination top mod notified" 1 n;
+            let* n = find conn "author quiet" q_unread_kinds author in
+            Alcotest.(check int) "actor excluded" 0 n;
+            (* Analytics: creation event plus exactly one committed-request
+               event, identifier-poor and origin-scoped. *)
+            let events = List.rev_map event_of !payloads in
+            Alcotest.(check (list string)) "events in order"
+              [ "forum_thread_created"; "shared_thread_request_submitted" ]
+              events;
+            (match
+               List.find_opt
+                 (fun p -> event_of p = "shared_thread_request_submitted")
+                 !payloads
+             with
+             | None -> Alcotest.fail "missing shared event payload"
+             | Some p ->
+                 Alcotest.(check (slist string compare)) "closed props"
+                   [ "user_id"; "community_id"; "post_id"; "$groups";
+                     "deployment_environment" ]
+                   (prop_keys p);
+                 Alcotest.(check (option string)) "origin group"
+                   (Some ("community:" ^ string_of_int o))
+                   (an_group_key p));
+            (* Origin renders it immediately; the destination must not until
+               the existing review accepts it. *)
+            let anon = app_pipeline ~url () in
+            let* _, body = get ~target:"/c/sth-cd-o" anon in
+            must body "Sth cd shared";
+            let* _, body = get ~target:"/c/sth-cd-d" anon in
+            must_not body "Sth cd shared";
+            (* The fixed success notice: only for the closed value, only on
+               the origin rendering. *)
+            let* _, body = get ~target:(canonical ^ "?shared=requested") anon in
+            must body "Thread created and sharing requested.";
+            let* _, body = get ~target:canonical anon in
+            must_not body "Thread created and sharing requested.";
+            let* _, body = get ~target:(canonical ^ "?shared=bogus") anon in
+            must_not body "Thread created and sharing requested.";
+            must_not body "sharing request could not be sent";
+            (* The Share page shows the pending placement and stops offering
+               the destination. *)
+            let author_pipeline = session ~url ~uid:author () in
+            let* _, body =
+              get ~target:(share_path ~slug:"sth-cd-o" ~post) author_pipeline
+            in
+            must body "Sth cd Dest";
+            must_not body "<option value='sth-cd-d'>";
+            (* Both management queues carry the request through the existing
+               review surfaces. *)
+            let dtop_pipeline = session ~url ~uid:dtop () in
+            let* _, body = get ~target:(mgmt_path "sth-cd-d") dtop_pipeline in
+            must body "Sth cd shared";
+            let otop_pipeline = session ~url ~uid:otop () in
+            let* _, body = get ~target:(mgmt_path "sth-cd-o") otop_pipeline in
+            must body "Sth cd shared";
+            Lwt.return_unit))
+
+  let composer_share_sectioned_case =
+    db_case "a sectioned origin binds the origin forum section exactly as a \
+             plain creation; the destination-context page never renders the \
+             creation notice" (fun ~url conn ->
+        let* author, _otop, dtop, o, d, _fixture_post, _ = fixture conn "ce" in
+        let* sid =
+          find conn "origin section" Stp_store.q_insert_section (o, "notes")
+        in
+        let* pipeline, cookie, token, _ = acting "ce" ~url ~uid:author () in
+        let* response, _ =
+          send_multipart ~cookie ~target:"/posts"
+            ~fields:
+              (composer_fields ~token ~community:o ~title:"Sth ce sectioned"
+                 ~section:sid ~destination:"sth-ce-d" ())
+            pipeline
+        in
+        let* post = find conn "created" q_post_id_by_title "Sth ce sectioned" in
+        let canonical =
+          Earde.Components.canonical_thread_path "sth-ce-o" post
+            "Sth ce sectioned"
+        in
+        check_location "sectioned PRG" (canonical ^ "?shared=requested")
+          response;
+        let* stored = find conn "section" q_origin_section_of post in
+        Alcotest.(check (option int)) "origin section bound" (Some sid) stored;
+        let* n = find conn "one placement" q_count_for_post post in
+        Alcotest.(check int) "one pending placement" 1 n;
+        (* Accept it, then prove the destination-context page ignores the
+           notice vocabulary. *)
+        let* placements =
+          Pod_read.collect conn "ids" q_placement_ids_for_post post
+        in
+        (match placements with
+         | [ placement ] ->
+             let* () =
+               seed_accept conn ~reviewer:dtop ~placement ~destination:d ()
+             in
+             let dest =
+               Earde.Components.canonical_thread_path "sth-ce-d" post
+                 "Sth ce sectioned"
+             in
+             let anon = app_pipeline ~url () in
+             let* _, body = get ~target:(dest ^ "?shared=requested") anon in
+             must_not body "Thread created and sharing requested.";
+             must body "Shared from";
+             Lwt.return_unit
+         | l ->
+             Alcotest.failf "expected one placement id, got %d" (List.length l))
+        )
+
+  (* --- partial success: the canonical post always survives --- *)
+
+  let partial_attempt conn ~url ~author ~origin_slug ~community ~pal label
+      ~destination ~title =
+    let* pipeline, cookie, token, _ = acting label ~url ~uid:author () in
+    let* mentions_before = find conn "mentions before" q_mention_count pal in
+    let* count_before =
+      find conn "counter before" q_local_post_count (author, community)
+    in
+    let* response, _ =
+      send_multipart ~cookie ~target:"/posts"
+        ~fields:
+          (composer_fields ~token ~community ~title
+             ~content:("cp body @sth_cp_pal for " ^ label)
+             ~destination ~note:"CP_PRIVATE_NOTE" ())
+        pipeline
+    in
+    let* post = find conn (label ^ ": created") q_post_id_by_title title in
+    let canonical =
+      Earde.Components.canonical_thread_path origin_slug post title
+    in
+    check_location (label ^ ": partial-success PRG")
+      (canonical ^ "?shared=failed")
+      response;
+    let* n = find conn (label ^ ": placements") q_count_for_post post in
+    Alcotest.(check int) (label ^ ": no placement") 0 n;
+    let* n = find conn (label ^ ": audit") q_audit_count_for_post post in
+    Alcotest.(check int) (label ^ ": no audit") 0 n;
+    let* mentions_after = find conn "mentions after" q_mention_count pal in
+    Alcotest.(check int) (label ^ ": mention still ran")
+      (mentions_before + 1) mentions_after;
+    let* count_after =
+      find conn "counter after" q_local_post_count (author, community)
+    in
+    Alcotest.(check int) (label ^ ": local count still ran")
+      (count_before + 1) count_after;
+    Lwt.return canonical
+
+  let composer_partial_case =
+    db_case "every sharing failure keeps the canonical post and its side \
+             effects, writes no placement, and lands on the fixed \
+             partial-success notice with a safe Share-page link"
+      (fun ~url conn ->
+        let* author, _otop, dtop, o, _d, _fixture_post, connection =
+          fixture conn "cp"
+        in
+        let* () = exec conn "flat origin" Stp_store.q_set_sections (o, false) in
+        let* pal = insert_user conn "sth_cp_pal" in
+        let* d2 = insert_community ~name:"Sth cp Second" conn "sth-cp-d2" in
+        let* _ = Stp_store.connect conn ~actor:author o d2 in
+        let* _unconnected =
+          insert_community ~name:"Sth cp Loose" conn "sth-cp-loose"
+        in
+        let attempt = partial_attempt conn ~url ~author ~origin_slug:"sth-cp-o"
+            ~community:o ~pal
+        in
+        (* The connection vanished between form render and submit. *)
+        let* () =
+          Stp_store.disconnect conn ~actor:author ~connection ~acting:o
+        in
+        let* canonical =
+          attempt "disconnected" ~destination:"sth-cp-d" ~title:"Sth cp one"
+        in
+        (* The destination stopped being eligible. *)
+        let* () = exec conn "private d2" Phcv.q_make_private d2 in
+        let* _ =
+          attempt "ineligible" ~destination:"sth-cp-d2" ~title:"Sth cp two"
+        in
+        (* Tampering: an unconnected community, the origin itself, and a
+           slug that names nothing. *)
+        let* _ =
+          attempt "unconnected" ~destination:"sth-cp-loose"
+            ~title:"Sth cp three"
+        in
+        let* _ =
+          attempt "origin itself" ~destination:"sth-cp-o" ~title:"Sth cp four"
+        in
+        let* _ =
+          attempt "ghost slug" ~destination:"sth-cp-ghost"
+            ~title:"Sth cp five"
+        in
+        (* No destination top mod heard anything, and the private note is
+           nowhere — not in the durable rows, not on any surface. *)
+        let* n = find conn "dtop quiet" q_unread_kinds dtop in
+        Alcotest.(check int) "no shared-thread notification" 0 n;
+        let anon = app_pipeline ~url () in
+        let* _, body = get ~target:(canonical ^ "?shared=failed") anon in
+        must body "Thread created, but the sharing request could not be sent.";
+        must body (canonical ^ "/share");
+        (* One fixed copy for every cause: neither the note nor any
+           destination identity leaks through the notice. *)
+        must_not body "CP_PRIVATE_NOTE";
+        must_not body "sth-cp-d";
+        Lwt.return_unit)
+
+  let composer_store_failure_case =
+    db_case "a placement-store failure rolls its whole transaction back, the \
+             post survives, no shared event is captured, and the Share page \
+             still offers the intact destination for a real retry"
+      (fun ~url conn ->
+        let* author, _otop, dtop, o, _d, _fixture_post, _ = fixture conn "cf" in
+        let* () = exec conn "flat origin" Stp_store.q_set_sections (o, false) in
+        with_analytics (fun payloads ->
+            let* pipeline, cookie, token, _ = acting "cf" ~url ~uid:author () in
+            let* () =
+              Stp_store.with_poison conn ~install:Stp_store.q_poison_notif
+                ~remove:Stp_store.q_unpoison_notif (fun () ->
+                  let* response, _ =
+                    send_multipart ~cookie ~consent:true ~target:"/posts"
+                      ~fields:
+                        (composer_fields ~token ~community:o
+                           ~title:"Sth cf stormy" ~destination:"sth-cf-d" ())
+                      pipeline
+                  in
+                  let* post =
+                    find conn "created" q_post_id_by_title "Sth cf stormy"
+                  in
+                  let canonical =
+                    Earde.Components.canonical_thread_path "sth-cf-o" post
+                      "Sth cf stormy"
+                  in
+                  check_location "store failure is partial success"
+                    (canonical ^ "?shared=failed")
+                    response;
+                  let* n = find conn "placements" q_count_for_post post in
+                  Alcotest.(check int) "atomic: no partial placement" 0 n;
+                  let* n = find conn "audit" q_audit_count_for_post post in
+                  Alcotest.(check int) "atomic: no orphan audit" 0 n;
+                  Lwt.return_unit)
+            in
+            (* Only the creation event: a failed request captures nothing. *)
+            Alcotest.(check (list string)) "no shared analytics on failure"
+              [ "forum_thread_created" ]
+              (List.rev_map event_of !payloads);
+            (* The destination is intact, so the Share page still offers it,
+               and the existing share flow completes the retry. *)
+            let* post = find conn "post" q_post_id_by_title "Sth cf stormy" in
+            let author_pipeline = session ~url ~uid:author () in
+            let* _, body =
+              get ~target:(share_path ~slug:"sth-cf-o" ~post) author_pipeline
+            in
+            must body "<option value='sth-cf-d'>";
+            let* pipeline, cookie, token, _ =
+              acting "cf retry" ~url ~uid:author ()
+            in
+            let* response, _ =
+              send_post ~cookie
+                ~target:(share_path ~slug:"sth-cf-o" ~post)
+                ~fields:
+                  [ ("dream.csrf", token); ("destination", "sth-cf-d");
+                    ("note", "") ]
+                pipeline
+            in
+            Alcotest.(check int) "retry accepted" 303 (status_of response);
+            let* n = find conn "retried placement" q_count_for_post post in
+            Alcotest.(check int) "exactly one placement after retry" 1 n;
+            let* n = find conn "dtop notified" q_unread_kinds dtop in
+            Alcotest.(check int) "retry notified the destination" 1 n;
+            Lwt.return_unit))
+
+  (* --- pre-insert refusals: nothing exists afterwards --- *)
+
+  let composer_preinsert_case =
+    db_case "CSRF, canonical-field, section, membership, ban, and note \
+             failures refuse before any write: no post, no placement, no \
+             leaked destination or note" (fun ~url conn ->
+        let* author, _otop, _dtop, o, _d, _fixture_post, _ = fixture conn "cg" in
+        let* sid =
+          find conn "origin section" Stp_store.q_insert_section (o, "field")
+        in
+        let* other = insert_community ~name:"Sth cg Other" conn "sth-cg-x" in
+        let* xsid =
+          find conn "foreign section" Stp_store.q_insert_section
+            (other, "alien")
+        in
+        let none_created label =
+          let* n = find conn (label ^ ": posts") q_posts_by_title "Sth cg nope" in
+          Alcotest.(check int) (label ^ ": no post") 0 n;
+          Lwt.return_unit
+        in
+        let* pipeline, cookie, token, expired = acting "cg" ~url ~uid:author () in
+        let refuse label ~fields ~status:expected =
+          let* response, body = send_multipart ~cookie ~target:"/posts" ~fields pipeline in
+          Alcotest.(check int) (label ^ ": status") expected
+            (status_of response);
+          must_not body "CG_SECRET_NOTE";
+          must_not body "sth-cg-d";
+          let* () = none_created label in
+          Lwt.return_unit
+        in
+        let base ?(title = "Sth cg nope") ?(token = token) ?section
+            ?(destination = "sth-cg-d") ?(note = "CG_SECRET_NOTE") () =
+          composer_fields ~token ~community:o ~title ?section ~destination
+            ~note ()
+        in
+        let* () =
+          refuse "stale CSRF" ~fields:(base ~token:expired ~section:sid ())
+            ~status:200
+        in
+        let* () =
+          refuse "empty title" ~fields:(base ~title:"" ~section:sid ())
+            ~status:200
+        in
+        let* () =
+          refuse "missing section" ~fields:(base ()) ~status:200
+        in
+        let* () =
+          refuse "foreign section" ~fields:(base ~section:xsid ()) ~status:400
+        in
+        let* () =
+          refuse "overlong note"
+            ~fields:
+              (composer_fields ~token ~community:o ~title:"Sth cg nope"
+                 ~section:sid ~destination:"sth-cg-d"
+                 ~note:(String.make 2001 'a') ())
+            ~status:200
+        in
+        (* Identity gates, each with its own account. *)
+        let* stranger = insert_user conn "sth_cg_str" in
+        let* spipe, scookie, stoken, _ = acting "cg str" ~url ~uid:stranger () in
+        let* response, _ =
+          send_multipart ~cookie:scookie ~target:"/posts"
+            ~fields:
+              (composer_fields ~token:stoken ~community:o ~title:"Sth cg nope"
+                 ~section:sid ~destination:"sth-cg-d" ())
+            spipe
+        in
+        Alcotest.(check int) "non-member refused" 200 (status_of response);
+        let* () = none_created "non-member" in
+        let* gban = insert_user conn "sth_cg_gban" in
+        let* () = add_member conn ~user:gban ~community:o in
+        let* () = exec conn "gban" q_ban_global gban in
+        let* gpipe, gcookie, gtoken, _ = acting "cg gban" ~url ~uid:gban () in
+        let* response, _ =
+          send_multipart ~cookie:gcookie ~target:"/posts"
+            ~fields:
+              (composer_fields ~token:gtoken ~community:o ~title:"Sth cg nope"
+                 ~section:sid ~destination:"sth-cg-d" ())
+            gpipe
+        in
+        Alcotest.(check int) "global ban refused" 403 (status_of response);
+        let* () = none_created "global ban" in
+        let* oban = insert_user conn "sth_cg_oban" in
+        let* () = add_member conn ~user:oban ~community:o in
+        let* () = exec conn "oban" q_ban_community (oban, o) in
+        let* opipe, ocookie, otoken, _ = acting "cg oban" ~url ~uid:oban () in
+        let* response, _ =
+          send_multipart ~cookie:ocookie ~target:"/posts"
+            ~fields:
+              (composer_fields ~token:otoken ~community:o ~title:"Sth cg nope"
+                 ~section:sid ~destination:"sth-cg-d" ())
+            opipe
+        in
+        Alcotest.(check int) "origin ban refused" 403 (status_of response);
+        let* () = none_created "origin ban" in
+        (* The overlong note only matters when a destination is selected:
+           without one it is ignored and the post is created normally. *)
+        let* response, _ =
+          send_multipart ~cookie ~target:"/posts"
+            ~fields:
+              (composer_fields ~token ~community:o ~title:"Sth cg noteless"
+                 ~section:sid ~note:(String.make 2001 'a') ())
+            pipeline
+        in
+        let* post = find conn "created" q_post_id_by_title "Sth cg noteless" in
+        check_location "ignored note, normal path"
+          (Printf.sprintf "/p/%d" post)
+          response;
+        let* n = find conn "no placement" q_count_for_post post in
+        Alcotest.(check int) "no placement without a destination" 0 n;
+        Lwt.return_unit)
+
+  (* --- idempotence and double submission --- *)
+
+  let composer_idempotence_case =
+    db_case "one POST creates one post and one placement; a repeated \
+             submission creates a second distinct post, never a second \
+             placement on the first; the share route cannot double-place \
+             either" (fun ~url conn ->
+        let* author, _otop, _dtop, o, _d, _fixture_post, _ = fixture conn "ch" in
+        let* () = exec conn "flat origin" Stp_store.q_set_sections (o, false) in
+        let* pipeline, cookie, token, _ = acting "ch" ~url ~uid:author () in
+        let fields =
+          composer_fields ~token ~community:o ~title:"Sth ch twice"
+            ~destination:"sth-ch-d" ()
+        in
+        let* _ = send_multipart ~cookie ~target:"/posts" ~fields pipeline in
+        let* _ = send_multipart ~cookie ~target:"/posts" ~fields pipeline in
+        let* n = find conn "posts" q_posts_by_title "Sth ch twice" in
+        Alcotest.(check int)
+          "a repeated browser submission is a second canonical post" 2 n;
+        let* per_post =
+          Pod_read.collect conn "per post" q_placements_per_title
+            "Sth ch twice"
+        in
+        Alcotest.(check (list int)) "exactly one placement each" [ 1; 1 ]
+          per_post;
+        (* The Share page path cannot add a second active placement for the
+           same post and destination. *)
+        let* post = find conn "first post" q_first_post_by_title "Sth ch twice" in
+        let* response, _ =
+          send_post ~cookie
+            ~target:(share_path ~slug:"sth-ch-o" ~post)
+            ~fields:
+              [ ("dream.csrf", token); ("destination", "sth-ch-d");
+                ("note", "") ]
+            pipeline
+        in
+        Alcotest.(check int) "active placement collapses to conflict" 409
+          (status_of response);
+        let* n = find conn "still one" q_count_for_post post in
+        Alcotest.(check int) "still exactly one placement" 1 n;
+        Lwt.return_unit)
+
+  let composer_candidate_suite = [ candidate_query_case ]
+  let composer_render_suite = [ composer_page_case ]
+  let composer_creation_suite = [ normal_creation_case ]
+
+  let composer_share_suite =
+    [ composer_share_success_case; composer_share_sectioned_case ]
+
+  let composer_partial_suite =
+    [ composer_partial_case; composer_store_failure_case ]
+
+  let composer_preinsert_suite = [ composer_preinsert_case ]
+  let composer_idempotence_suite = [ composer_idempotence_case ]
+
+  let share_get_suite =
+    [ get_share_authz_case; get_share_candidates_case; get_share_controls_case
+    ; thread_entry_case; settings_nav_case ]
+
+  let share_post_suite =
+    [ post_share_flow_case; post_share_denied_case; post_share_validation_case
+    ; post_share_stale_case ]
+
+  let mgmt_suite =
+    [ mgmt_authz_case; mgmt_content_case; mgmt_flat_and_ineligible_case ]
+
+  let review_suite =
+    [ review_flow_case; review_section_case; review_stale_case
+    ; review_authz_case ]
+
+  let withdraw_suite =
+    [ withdraw_authz_case; withdraw_resilience_case; withdraw_context_case ]
+
+  let remove_suite = [ remove_authz_case; remove_resilience_case ]
+  let csrf_suite = [ csrf_case ]
+  let notif_suite = [ notif_render_case; notif_access_loss_case ]
+
+  let notif_capability_suite =
+    [ capability_share_case; capability_requester_role_case
+    ; capability_manage_case ]
+
+  let destination_feed_suite = [ feed_lifecycle_case; feed_ordering_case ]
+  let destination_section_suite = [ section_stats_case; recent_knowledge_case ]
+  let destination_context_suite = [ context_url_case ]
+  let participation_suite = [ comment_participation_case ]
+  let moderation_suite = [ moderation_boundary_case ]
+  let boundary_suite = [ boundary_case ]
 end
 
 let () =
@@ -70753,4 +77664,60 @@ let () =
     ; ("launch_scope_css", Launch_scope_css.suite)
     ; ("community_home_ia", Comm_home_ia.suite)
     ; ("community_network_page", Comm_network_page.suite)
+      (* Shared threads, slice 1 (storage/domain foundation): the pure
+         placement lifecycle and note canonicalization are DB-free; the
+         placement and audit tables' constraints, the transactional store
+         with its one-audit-event-per-mutation rule and structured
+         notifications, the active-(post, destination) arbitration under
+         real concurrency, and the recipient policy are database-gated. *)
+    ; ("shared_thread_placements_domain", Stpd.suite)
+    ; ("shared_thread_placements_schema", Stp_schema.suite)
+    ; ("shared_thread_placement_store_request", Stp_store.request_suite)
+    ; ("shared_thread_placement_store_review", Stp_store.review_suite)
+    ; ("shared_thread_placement_store_withdraw", Stp_store.withdraw_suite)
+    ; ("shared_thread_placement_store_remove", Stp_store.remove_suite)
+    ; ("shared_thread_placement_atomicity", Stp_store.atomicity_suite)
+    ; ("shared_thread_placement_concurrency", Stp_store.concurrency_suite)
+    ; ("shared_thread_notifications", Stp_notif.suite)
+      (* Shared threads, slice 2 (HTTP workflow): the pure page renders are
+         DB-free; the Share and management surfaces, the five mutations'
+         authorization, subject binding, and CSRF behavior, the notification
+         rendering with its current-access gating, and the read-side
+         boundary all run over the real routed pipeline against the gated
+         database. *)
+    ; ("shared_thread_pages_ui", Sth_ui.suite)
+    ; ("shared_thread_share_page_http", Sth_http.share_get_suite)
+    ; ("shared_thread_share_request_http", Sth_http.share_post_suite)
+    ; ("shared_thread_management_http", Sth_http.mgmt_suite)
+    ; ("shared_thread_review_http", Sth_http.review_suite)
+    ; ("shared_thread_withdraw_http", Sth_http.withdraw_suite)
+    ; ("shared_thread_remove_http", Sth_http.remove_suite)
+    ; ("shared_thread_mutation_csrf", Sth_http.csrf_suite)
+    ; ("shared_thread_notification_rendering", Sth_http.notif_suite)
+    ; ("shared_thread_notification_link_capability",
+       Sth_http.notif_capability_suite)
+    ; ("shared_thread_destination_feeds", Sth_http.destination_feed_suite)
+    ; ("shared_thread_destination_sections", Sth_http.destination_section_suite)
+    ; ("shared_thread_destination_thread_context",
+       Sth_http.destination_context_suite)
+    ; ("shared_thread_comment_participation", Sth_http.participation_suite)
+    ; ("shared_thread_moderation_boundary", Sth_http.moderation_suite)
+    ; ("shared_thread_read_side_boundary", Sth_http.boundary_suite)
+      (* Slice 4 — Create Shared Thread from the durable composer. The pure
+         note rule and the DB-free composer form; then, database-gated: the
+         composer-shaped candidate read model, the real GET /new-post
+         rendering, the untouched share-free creation path, the successful
+         composer request (post first, then exactly the existing pending
+         placement with audit, notifications, and analytics), the
+         partial-success matrix (the canonical post always survives), the
+         pre-insert refusals, and double-submission behaviour. *)
+    ; ("shared_thread_composer_note_domain", Sth_http.composer_note_suite)
+    ; ("shared_thread_composer_form_ui", Sth_http.composer_form_suite)
+    ; ("shared_thread_composer_candidates", Sth_http.composer_candidate_suite)
+    ; ("shared_thread_composer_rendering", Sth_http.composer_render_suite)
+    ; ("shared_thread_composer_normal_creation", Sth_http.composer_creation_suite)
+    ; ("shared_thread_composer_request", Sth_http.composer_share_suite)
+    ; ("shared_thread_composer_partial_success", Sth_http.composer_partial_suite)
+    ; ("shared_thread_composer_preinsert", Sth_http.composer_preinsert_suite)
+    ; ("shared_thread_composer_idempotence", Sth_http.composer_idempotence_suite)
     ]

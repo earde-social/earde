@@ -131,6 +131,17 @@ type event =
       content_length : int;
       has_mention : bool;
     }
+  | Shared_thread_request_submitted of {
+      user_id : int;
+      community_id : int;  (** the ORIGIN community — the post's own *)
+      post_id : int;
+    }
+      (** a shared-thread placement request created from the thread composer
+          committed (placement + audit + notifications, one transaction).
+          Captured only for the committed request — a failed or refused
+          attempt produces nothing, like every other funnel event. The
+          closed record deliberately cannot carry the destination community
+          or the private request note. *)
   | Conversation_promoted of {
       user_id : int;
       community_id : int;

@@ -18,6 +18,28 @@ type post = {
   author_first_active_at : string option;
 }
 
+(** One row of a community-scoped feed (community page, section feed,
+    uncategorized feed, Recent durable knowledge). [fi_post] is the one
+    canonical post and keeps its immutable origin identity —
+    [post.community_slug] and the [post.section_*] fields are always the
+    ORIGIN's. [fi_shared = Some _] means the row reached this feed through an
+    accepted shared-thread placement into the requested community: the
+    provenance name for the "Shared from" label and the placement's own
+    destination section (the effective local section context) travel here,
+    never inside [post], so no renderer can read one field as two different
+    communities. [fi_shared = None] rows render byte-identically to the
+    pre-shared-threads feeds. *)
+type feed_shared_context = {
+  fs_origin_name : string;
+  fs_section_name : string option;
+  fs_section_slug : string option;
+}
+
+type feed_item = {
+  fi_post : post;
+  fi_shared : feed_shared_context option;
+}
+
 (** Community access control. [Community_private] => server-side read gate (members/mods/admins
     only); [Community_public] => readable by anyone. Distinct from the [indexable] SEO flag.
     Mirrors the DB CHECK on communities.visibility; [_of_string] is partial (None off-enum). *)
@@ -128,6 +150,26 @@ type notification = {
      relative to [community_slug] so the same stored row reads correctly from
      either direction. NULL for every other kind. *)
   counterpart_name : string option; counterpart_slug : string option;
+  (* The shared-thread subjects, joined at read time and NULL for every other
+     kind. The two [_visible] booleans are the recipient's CURRENT read
+     access to each side (public, or member / moderator / durable admin),
+     computed in the same bounded query: the renderer must not show a thread
+     title, community name, or link its recipient could no longer reach. *)
+  st_post_id : int option; st_post_title : string option;
+  st_origin_name : string option; st_origin_slug : string option;
+  st_destination_name : string option; st_destination_slug : string option;
+  (* Whether the notification's own community is the placement's origin side
+     — which management surface the recipient's copy should point at. *)
+  st_origin_context : bool option;
+  st_origin_visible : bool option; st_destination_visible : bool option;
+  (* Whether the recipient may CURRENTLY open the origin Share page and the
+     destination Shared-threads management page — the two authorized link
+     targets, whose gates are stricter than read access. Mirrors of those
+     pages' own SQL rules (author-while-member-unbanned / origin top_mod /
+     durable admin behind the session claim; destination top_mod / that same
+     durable-admin pair): a link its recipient is guaranteed to 404 on must
+     never render. *)
+  st_share_capable : bool option; st_manage_capable : bool option;
 }
 
 type mod_action = {
@@ -269,8 +311,15 @@ module Post : sig
   val create_post : (module Caqti_lwt.CONNECTION) -> string -> string option -> string option -> string option -> int option -> int -> int -> (int, string) result Lwt.t
   val get_all_posts : (module Caqti_lwt.CONNECTION) -> sort_mode -> int -> int -> (post list, string) result Lwt.t
   val get_personalized_feed : (module Caqti_lwt.CONNECTION) -> int -> sort_mode -> int -> int -> (post list, string) result Lwt.t
-  val get_posts_by_community : (module Caqti_lwt.CONNECTION) -> int -> sort_mode -> int -> int -> (post list, string) result Lwt.t
-  val get_posts_by_section : (module Caqti_lwt.CONNECTION) -> int -> int -> sort_mode -> int -> int -> (post list, string) result Lwt.t
+  (* Community-scoped feeds are destination-aware (Shared Threads read side):
+     one bounded UNION ALL statement returns the community's own posts AND
+     the canonical posts holding an accepted placement into it (public
+     origin only), with the sort mode and LIMIT/OFFSET applied to the
+     combined set. Current connection state, discoverability, and
+     onboarding eligibility deliberately do NOT gate the placement arm —
+     they gate request/acceptance, not continued rendering. *)
+  val get_posts_by_community : (module Caqti_lwt.CONNECTION) -> int -> sort_mode -> int -> int -> (feed_item list, string) result Lwt.t
+  val get_posts_by_section : (module Caqti_lwt.CONNECTION) -> int -> int -> sort_mode -> int -> int -> (feed_item list, string) result Lwt.t
   val get_post_by_id : (module Caqti_lwt.CONNECTION) -> int -> (post option, string) result Lwt.t
   val get_posts_by_user : (module Caqti_lwt.CONNECTION) -> int -> (post list, string) result Lwt.t
   (* Slice C/D/G profile leak-filter: (post_id, community_id, raw visibility, indexable,
@@ -296,7 +345,11 @@ module Section : sig
   val delete_section : (module Caqti_lwt.CONNECTION) -> int -> int -> (unit, string) result Lwt.t
   val get_sections_with_stats : (module Caqti_lwt.CONNECTION) -> int -> ((community_section * int * string option) list, string) result Lwt.t
   val get_orphaned_count_and_activity : (module Caqti_lwt.CONNECTION) -> int -> (int * string option, string) result Lwt.t
-  val get_orphaned_posts : (module Caqti_lwt.CONNECTION) -> int -> sort_mode -> int -> int -> (post list, string) result Lwt.t
+  (* Destination-aware like the community/section feeds: own sectionless
+     posts plus accepted NULL-section placements (sectionless destinations
+     and section deletions via ON DELETE SET NULL). The count query below
+     matches it row for row and gates the virtual Uncategorized page. *)
+  val get_orphaned_posts : (module Caqti_lwt.CONNECTION) -> int -> sort_mode -> int -> int -> (feed_item list, string) result Lwt.t
 end
 
 module Channel : sig
@@ -443,7 +496,10 @@ module Ban : sig
 end
 
 module Notification : sig
-  val get_notifications : (module Caqti_lwt.CONNECTION) -> int -> (notification list, string) result Lwt.t
+  (* [session_admin] is the caller's session admin claim; it only enables the
+     durable users.is_admin check inside the capability columns, never
+     replaces it. *)
+  val get_notifications : (module Caqti_lwt.CONNECTION) -> session_admin:bool -> int -> (notification list, string) result Lwt.t
   val count_unread_notifs : (module Caqti_lwt.CONNECTION) -> int -> (int, string) result Lwt.t
   val mark_notifs_read : (module Caqti_lwt.CONNECTION) -> int -> (unit, string) result Lwt.t
   val create_notif : (module Caqti_lwt.CONNECTION) -> int -> int option -> string -> string -> (unit, string) result Lwt.t
@@ -653,8 +709,8 @@ val community_get_banned_users : (module Caqti_lwt.CONNECTION) -> int -> (user l
 val create_post : (module Caqti_lwt.CONNECTION) -> string -> string option -> string option -> string option -> int option -> int -> int -> (int, string) result Lwt.t
 val get_all_posts : (module Caqti_lwt.CONNECTION) -> sort_mode -> int -> int -> (post list, string) result Lwt.t
 val get_personalized_feed : (module Caqti_lwt.CONNECTION) -> int -> sort_mode -> int -> int -> (post list, string) result Lwt.t
-val get_posts_by_community : (module Caqti_lwt.CONNECTION) -> int -> sort_mode -> int -> int -> (post list, string) result Lwt.t
-val get_posts_by_section : (module Caqti_lwt.CONNECTION) -> int -> int -> sort_mode -> int -> int -> (post list, string) result Lwt.t
+val get_posts_by_community : (module Caqti_lwt.CONNECTION) -> int -> sort_mode -> int -> int -> (feed_item list, string) result Lwt.t
+val get_posts_by_section : (module Caqti_lwt.CONNECTION) -> int -> int -> sort_mode -> int -> int -> (feed_item list, string) result Lwt.t
 val get_post_by_id : (module Caqti_lwt.CONNECTION) -> int -> (post option, string) result Lwt.t
 val get_posts_by_user : (module Caqti_lwt.CONNECTION) -> int -> (post list, string) result Lwt.t
 val get_post_communities : (module Caqti_lwt.CONNECTION) -> int list -> ((int * int * string * bool * bool) list, string) result Lwt.t
@@ -675,7 +731,7 @@ val update_section_indexable : (module Caqti_lwt.CONNECTION) -> int -> int -> bo
 val delete_section : (module Caqti_lwt.CONNECTION) -> int -> int -> (unit, string) result Lwt.t
 val get_sections_with_stats : (module Caqti_lwt.CONNECTION) -> int -> ((community_section * int * string option) list, string) result Lwt.t
 val get_orphaned_count_and_activity : (module Caqti_lwt.CONNECTION) -> int -> (int * string option, string) result Lwt.t
-val get_orphaned_posts : (module Caqti_lwt.CONNECTION) -> int -> sort_mode -> int -> int -> (post list, string) result Lwt.t
+val get_orphaned_posts : (module Caqti_lwt.CONNECTION) -> int -> sort_mode -> int -> int -> (feed_item list, string) result Lwt.t
 
 val create_channel : (module Caqti_lwt.CONNECTION) -> int -> string -> string option -> int -> (string, string) result Lwt.t
 val get_channels_by_community : (module Caqti_lwt.CONNECTION) -> int -> (channel list, string) result Lwt.t
@@ -715,7 +771,7 @@ val vote_comment : (module Caqti_lwt.CONNECTION) -> int -> int -> int -> (unit, 
 val remove_comment_vote : (module Caqti_lwt.CONNECTION) -> int -> int -> (unit, string) result Lwt.t
 val get_user_comment_votes : (module Caqti_lwt.CONNECTION) -> int -> ((int * int) list, string) result Lwt.t
 
-val get_notifications : (module Caqti_lwt.CONNECTION) -> int -> (notification list, string) result Lwt.t
+val get_notifications : (module Caqti_lwt.CONNECTION) -> session_admin:bool -> int -> (notification list, string) result Lwt.t
 val count_unread_notifs : (module Caqti_lwt.CONNECTION) -> int -> (int, string) result Lwt.t
 val mark_notifs_read : (module Caqti_lwt.CONNECTION) -> int -> (unit, string) result Lwt.t
 val create_notif : (module Caqti_lwt.CONNECTION) -> int -> int option -> string -> string -> (unit, string) result Lwt.t

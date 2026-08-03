@@ -196,10 +196,18 @@ val format_month_year : string -> string
     no controls. Shared by [render_post] and the search results page so both emit identical
     forms/routes/CSRF/dialogs/reason fields with the same Rule A/B/C visibility. *)
 val post_admin_actions : ?is_current_user_mod:bool -> ?admin_usernames:string list -> ?banned_usernames:string list -> csrf_token:string -> Dream.request -> Db.post -> string
-val render_post : ?is_current_user_mod:bool -> ?mod_usernames:string list -> ?admin_usernames:string list -> ?banned_usernames:string list -> Dream.request -> (int * int) list -> Db.post -> string
+
+(** Destination rendering context for an accepted shared-thread placement feed row:
+    the destination community's slug (all internal links stay in the destination
+    context) paired with the row's provenance/destination-section fields. Absent =
+    the community's own post, byte-identical rendering. On a shared row the
+    destination's moderator standing grants no canonical-content controls. *)
+type feed_shared = string * Db.feed_shared_context
+
+val render_post : ?is_current_user_mod:bool -> ?mod_usernames:string list -> ?admin_usernames:string list -> ?banned_usernames:string list -> ?shared:feed_shared -> Dream.request -> (int * int) list -> Db.post -> string
 (** Thread-first section-feed row (cool-grey shell idiom). Same call shape as [render_post];
     used by [Pages.community_section_shell_page]. Preserves the optimistic-vote DOM contract. *)
-val render_forum_row : ?is_current_user_mod:bool -> ?mod_usernames:string list -> ?admin_usernames:string list -> ?banned_usernames:string list -> ?show_context:bool -> Dream.request -> (int * int) list -> Db.post -> string
+val render_forum_row : ?is_current_user_mod:bool -> ?mod_usernames:string list -> ?admin_usernames:string list -> ?banned_usernames:string list -> ?show_context:bool -> ?shared:feed_shared -> Dream.request -> (int * int) list -> Db.post -> string
 
 (** [slugify title] → a URL-safe, descriptive thread slug (lowercase, non-alphanumerics
     collapsed to single dashes, trimmed, length-capped). Descriptive only — [post_id] is

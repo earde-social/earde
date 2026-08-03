@@ -89,6 +89,14 @@ type event =
       content_length : int;
       has_mention : bool;
     }
+  (* The ORIGIN community and the canonical post only: the closed record
+     cannot carry the destination community or the private request note, and
+     it is captured only after the placement store's transaction committed. *)
+  | Shared_thread_request_submitted of {
+      user_id : int;
+      community_id : int;
+      post_id : int;
+    }
   | Conversation_promoted of {
       user_id : int;
       community_id : int;
@@ -609,6 +617,7 @@ let event_name = function
   | Chat_message_sent _ -> "chat_message_sent"
   | Forum_thread_created _ -> "forum_thread_created"
   | Forum_comment_created _ -> "forum_comment_created"
+  | Shared_thread_request_submitted _ -> "shared_thread_request_submitted"
   | Conversation_promoted _ -> "conversation_promoted"
   | Account_deleted -> "account_deleted"
   | Github_app_install_started _ -> "github_app_install_started"
@@ -643,6 +652,8 @@ let event_community_id = function
   | Chat_message_sent { community_id; _ }
   | Forum_thread_created { community_id; _ }
   | Forum_comment_created { community_id; _ }
+  (* Scoped to the ORIGIN community — the id the composer handler holds. *)
+  | Shared_thread_request_submitted { community_id; _ }
   | Conversation_promoted { community_id; _ } ->
       Some community_id
 
@@ -716,6 +727,12 @@ let event_properties = function
           ("content_length", `Int content_length);
           ("has_mention", `Bool has_mention);
         ]
+  | Shared_thread_request_submitted { user_id; community_id; post_id } ->
+      [
+        ("user_id", `Int user_id);
+        ("community_id", `Int community_id);
+        ("post_id", `Int post_id);
+      ]
   | Conversation_promoted
       {
         user_id;
