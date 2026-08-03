@@ -68,6 +68,11 @@ type error =
   | Invalid_request_note
   | Invalid_transition
 
+val tombstone_labels : string list
+(** The closed set of durable deletion tombstone labels, exposed so SQL that
+    must mirror the tombstone rule (the notification capability columns) can
+    be built from this one list instead of respelling the bytes. *)
+
 val post_content_tombstoned : string option -> bool
 (** Whether a canonical post's stored [content] is one of the three durable
     deletion tombstones — [[deleted]], [[removed by admin]],

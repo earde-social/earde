@@ -64,11 +64,12 @@ type error =
    placement store cannot drift from the comment gate's semantics: a thread
    whose canonical content has been tombstoned is not shareable and not
    acceptable. NULL content is a link post, not a tombstone. *)
+let tombstone_labels =
+  [ "[deleted]"; "[removed by admin]"; "[removed by moderator]" ]
+
 let post_content_tombstoned = function
-  | Some "[deleted]" | Some "[removed by admin]"
-  | Some "[removed by moderator]" ->
-      true
-  | Some _ | None -> false
+  | Some content -> List.mem content tombstone_labels
+  | None -> false
 
 (* The same cap the sibling relation domains and the durable CHECK use:
    private workflow text has no reason to outgrow the longest user-visible

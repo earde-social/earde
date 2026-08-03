@@ -1505,7 +1505,7 @@ type thread_source_view =
    The optimistic-vote DOM contract (cs-vote = [upvote form, score span, downvote form], buttons
    carrying the exact legacy Tailwind colour classes the shared vote JS toggles — mapped to
    launch accents in earde.css) is preserved exactly. *)
-let thread_shell_page ?user ?(noindex=false) ~is_member ~is_current_user_mod ~mod_usernames ~admin_usernames
+let thread_shell_page ?user ?(noindex=false) ?(can_share=false) ~is_member ~is_current_user_mod ~mod_usernames ~admin_usernames
     ~banned_usernames ~(rail_communities : community list) ~(channels : channel list)
     ~(sections : community_section list) ~(community : community)
     ?(thread_source : thread_source_view option)
@@ -1697,7 +1697,17 @@ let thread_shell_page ?user ?(noindex=false) ~is_member ~is_current_user_mod ~mo
         Printf.sprintf "<a class='ct-act' href='/c/%s/report?type=post&amp;id=%d'>&#9873; report</a>"
           (esc post.community_slug) post.id
     | _ -> "" in
-  let post_mod_controls = post_action_btn ^ ban_post_btn ^ post_report_btn in
+  (* Quiet "Share with a community" affordance on the same ct-act treatment.
+     Render-time gate only: the handler decided can_share in SQL (author
+     while member and unbanned, origin top_mod, or durable admin — false for
+     a tombstoned post), and the share route fully reauthorizes on GET, so
+     this link grants nothing. *)
+  let post_share_btn =
+    if can_share then
+      Printf.sprintf "<a class='ct-act' href='%s/share'>&#8644; Share with a community</a>"
+        (esc (Components.canonical_thread_path post.community_slug post.id post.title))
+    else "" in
+  let post_mod_controls = post_action_btn ^ ban_post_btn ^ post_report_btn ^ post_share_btn in
 
   (* --- post meta + body --- *)
   let domain_html = match post.url with
@@ -3265,6 +3275,19 @@ let community_settings_page ?user ?(connected_projects="") ?(rail_communities=[]
         slug
     else ""
   in
+  (* Shared threads: the entry point to the shared-threads management
+     surface, on the same top-mod/admin display gate as Connections above.
+     The link grants nothing — that route reauthorizes from scratch in its
+     read model's SQL — and carries no count, no form, and no community
+     id. *)
+  let shared_threads_link =
+    if is_top_mod || is_admin then
+      Printf.sprintf
+        "<a class='cm-index-link' href='/c/%s/settings/shared-threads'>Shared \
+         threads</a>"
+        slug
+    else ""
+  in
   (* Connected projects: an ordinary panel nav entry, present only when the route supplied
      the management fragment (top-mod/admin surface). Regular mods, whom this page already
      knows are unauthorized for project-home moderation, never see it. *)
@@ -3297,7 +3320,7 @@ let community_settings_page ?user ?(connected_projects="") ?(rail_communities=[]
       <div class='cm-cols'>
         <nav class='cm-index'>
           <div class='cm-index-title'>Settings</div>
-          %s%s%s%s%s%s%s%s%s%s
+          %s%s%s%s%s%s%s%s%s%s%s
         </nav>
         <div class='cm-main'>
           %s
@@ -3314,6 +3337,7 @@ let community_settings_page ?user ?(connected_projects="") ?(rail_communities=[]
     connected_projects_nav
     project_home_requests_link
     connections_link
+    shared_threads_link
     (nav_item ~danger:true "bans" "Bans")
     main_panel
   in
@@ -5285,13 +5309,112 @@ let notifications_page ?user ?(rail_communities = []) (notifs : Db.notification 
           | _ -> Some ("A community connection update", None))
       | _ -> None
     in
-    (* One structured slot: a notification is either project-home or
-       community-connection, never both, so the two derivations cannot
-       collide. *)
+    (* Shared-thread notifications are structured the same way: no stored
+       prose, so the copy and destination derive from the durable kind, the
+       joined canonical thread and community identities, and the recipient's
+       own side of the placement. Unlike the two structured families above,
+       the thread title is canonical CONTENT and either community may since
+       have gone private, so every detail is gated on the recipient's
+       CURRENT read access (the two st_*_visible booleans, computed durably
+       in the same bounded query). When any needed detail is inaccessible or
+       gone the row degrades to a generic unlinked line — never deleted,
+       never naming what its recipient may no longer reach. The acting user
+       and the private request note are deliberately absent from the copy,
+       so a deleted actor renders identically and no username or note ever
+       appears. Every destination is built structurally from the joined
+       slugs and re-proves its own authorization for itself — the link
+       grants nothing — but a link only renders when the matching
+       capability boolean says its target page would currently let this
+       recipient in: the Share page and the management page gate harder
+       than reading, and a link that is guaranteed to 404 is worse than
+       none. *)
+    let shared_thread_label_link =
+      match n.notif_type with
+      | "shared_thread_requested" | "shared_thread_accepted"
+      | "shared_thread_rejected" | "shared_thread_removed"
+      | "shared_thread_withdrawn" -> (
+          match
+            ( ( n.st_post_id, n.st_post_title, n.st_origin_name,
+                n.st_origin_slug ),
+              ( n.st_destination_name, n.st_destination_slug,
+                n.st_origin_context ),
+              (n.st_origin_visible, n.st_destination_visible) )
+          with
+          | ( ( Some post_id, Some title, Some origin_name, Some origin_slug ),
+              ( Some destination_name, Some destination_slug,
+                Some origin_context ),
+              (Some true, Some true) ) ->
+              let t = Components.html_escape title in
+              let o = Components.html_escape origin_name in
+              let d = Components.html_escape destination_name in
+              (* Read access (checked above) decides what may be named; the
+                 two capability booleans decide what may be linked, because
+                 both link targets carry stricter gates than reading. A
+                 Share-page link degrades to the canonical thread — always
+                 readable here, since this branch requires current origin
+                 read access — and a management link degrades to plain
+                 text: never a link its recipient is guaranteed to 404
+                 on. *)
+              let thread_path =
+                Components.canonical_thread_path origin_slug post_id title
+              in
+              let share_or_thread =
+                Components.html_escape
+                  (if n.st_share_capable = Some true then
+                     thread_path ^ "/share"
+                   else thread_path)
+              in
+              let destination_settings suffix =
+                if n.st_manage_capable = Some true then
+                  Some
+                    (Printf.sprintf "/c/%s/settings/shared-threads%s"
+                       (Components.html_escape destination_slug)
+                       suffix)
+                else None
+              in
+              let label, href =
+                match n.notif_type with
+                | "shared_thread_requested" ->
+                    ( Printf.sprintf
+                        "%s requested to share &#8220;%s&#8221; with %s" o t d,
+                      destination_settings "#incoming" )
+                | "shared_thread_accepted" ->
+                    ( Printf.sprintf "%s accepted &#8220;%s&#8221;" d t,
+                      Some share_or_thread )
+                | "shared_thread_rejected" ->
+                    ( Printf.sprintf "%s declined &#8220;%s&#8221;" d t,
+                      Some share_or_thread )
+                | "shared_thread_withdrawn" ->
+                    ( Printf.sprintf
+                        "A request to share &#8220;%s&#8221; with %s was \
+                         withdrawn"
+                        t d,
+                      destination_settings "" )
+                | _ ->
+                    (* Removal notifies both sides: origin-context
+                       recipients return to the thread's own Share page,
+                       destination-context ones to their management
+                       surface. *)
+                    ( Printf.sprintf
+                        "&#8220;%s&#8221; is no longer shared with %s" t d,
+                      if origin_context then Some share_or_thread
+                      else destination_settings "" )
+              in
+              Some (label, href)
+          | _ -> Some ("A shared thread update", None))
+      | _ -> None
+    in
+    (* One structured slot: a notification is project-home, community-
+       connection, or shared-thread — never two at once (the durable shape
+       CHECK holds exactly one subject family per row), so the three
+       derivations cannot collide. *)
     let structured_label_link =
       match project_home_label_link with
       | Some _ as label -> label
-      | None -> connection_label_link
+      | None -> (
+          match connection_label_link with
+          | Some _ as label -> label
+          | None -> shared_thread_label_link)
     in
     let message = Option.value n.message ~default:"" in
     let icon = match n.notif_type with
@@ -5302,6 +5425,9 @@ let notifications_page ?user ?(rail_communities = []) (notifs : Db.notification 
       | "community_connection_requested" | "community_connection_accepted"
       | "community_connection_rejected" | "community_connection_removed" ->
           "&#8644;" (* ⇄ — the same sigil the Connections nav entry uses *)
+      | "shared_thread_requested" | "shared_thread_accepted"
+      | "shared_thread_rejected" | "shared_thread_removed"
+      | "shared_thread_withdrawn" -> "&#128279;" (* 🔗 — one thread, linked elsewhere *)
       | _ ->
           (* Legacy comment_reply: distinguish post vs comment reply by message suffix. *)
           let len = String.length message in

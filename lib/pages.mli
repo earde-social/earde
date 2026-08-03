@@ -36,7 +36,7 @@ type thread_source_view =
 (** Canonical thread view inside the persistent shell (/c/:slug/t/:post_id-:post_slug).
     Shell-styled comments/composer; mod/admin/ban dialogs preserve post_page behavior verbatim.
     Preserves the optimistic-vote DOM contract and all comment/vote/mod/delete routes & CSRF. *)
-val thread_shell_page : ?user:string -> ?noindex:bool -> is_member:bool -> is_current_user_mod:bool -> mod_usernames:string list -> admin_usernames:string list -> banned_usernames:string list -> rail_communities:Db.community list -> channels:Db.channel list -> sections:Db.community_section list -> community:Db.community -> ?thread_source:thread_source_view -> user_post_votes:(int * int) list -> user_comment_votes:(int * int) list -> post:Db.post -> comments:Db.comment list -> Dream.request -> string
+val thread_shell_page : ?user:string -> ?noindex:bool -> ?can_share:bool -> is_member:bool -> is_current_user_mod:bool -> mod_usernames:string list -> admin_usernames:string list -> banned_usernames:string list -> rail_communities:Db.community list -> channels:Db.channel list -> sections:Db.community_section list -> community:Db.community -> ?thread_source:thread_source_view -> user_post_votes:(int * int) list -> user_comment_votes:(int * int) list -> post:Db.post -> comments:Db.comment list -> Dream.request -> string
 (** [connected_projects_count] and [connected_communities_count] are how many records the
     two public connected-* read models returned for this community — the sizes of exactly
     the lists [/c/:slug/network] renders. The home carries the compact Network entry point

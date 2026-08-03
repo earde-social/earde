@@ -324,6 +324,37 @@ let () =
     Dream.post "/c/:slug/settings/connections/:id/remove"
       (Earde.Handlers.Rate_limit.middleware
          Earde.Community_connections_handlers.make_connection_removal_handler);
+    (* Shared-threads workflow: the per-thread Share page (longer literal
+       path than the /c/:slug/t/:thread GET, so no shadowing) and the
+       community-scoped management surface under
+       /c/:slug/settings/shared-threads — a distinct literal segment from
+       the /c/:slug/settings GET, the Slice E/F settings POSTs, and the
+       /settings/connections family, so nothing shadows anything. The two
+       GETs are informational and deliberately not rate-limited, matching
+       the other private settings GETs; the five mutations share the
+       sensitive-POST rate limit. Authorization is decided in the read
+       models' SQL and the subject binding inside the Slice 1 store's
+       guarded mutations — never by the route shape, and never by a form
+       field. *)
+    Dream.get "/c/:slug/t/:thread/share"
+      Earde.Shared_thread_placement_handlers.make_share_page_handler;
+    Dream.post "/c/:slug/t/:thread/share"
+      (Earde.Handlers.Rate_limit.middleware
+         Earde.Shared_thread_placement_handlers.make_share_request_handler);
+    Dream.get "/c/:slug/settings/shared-threads"
+      Earde.Shared_thread_placement_handlers.make_management_page_handler;
+    Dream.post "/c/:slug/settings/shared-threads/:placement_id/accept"
+      (Earde.Handlers.Rate_limit.middleware
+         Earde.Shared_thread_placement_handlers.make_accept_handler);
+    Dream.post "/c/:slug/settings/shared-threads/:placement_id/reject"
+      (Earde.Handlers.Rate_limit.middleware
+         Earde.Shared_thread_placement_handlers.make_reject_handler);
+    Dream.post "/c/:slug/settings/shared-threads/:placement_id/withdraw"
+      (Earde.Handlers.Rate_limit.middleware
+         Earde.Shared_thread_placement_handlers.make_withdrawal_handler);
+    Dream.post "/c/:slug/settings/shared-threads/:placement_id/remove"
+      (Earde.Handlers.Rate_limit.middleware
+         Earde.Shared_thread_placement_handlers.make_removal_handler);
     (* Public Network page: the community's connected projects and connected
        communities in full, which the community home now links to instead of
        listing. A distinct literal segment from settings/modlog/reports and

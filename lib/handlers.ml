@@ -3326,11 +3326,28 @@ let view_thread_handler request =
                      description = None; rules = None; avatar_url = None; banner_url = None; allow_downvotes = true; sections_enabled = false; visibility = Db.Community_public; indexable = true;
                      is_network_community = false; onboarding_state = Db.Community_published; discoverable = true } in
           let%lwt noindex = thread_noindex db community_for_page post in
+          (* Share entry point: decided in the shared-threads read model's SQL
+             (author while member and unbanned, origin top_mod, or durable
+             admin — false for a tombstoned post). Render gate only: the share
+             route fully reauthorizes on GET, and a mere login never shows the
+             action. Anonymous viewers skip the query; a failed probe hides
+             the link rather than becoming an error path. *)
+          let%lwt can_share =
+            if viewer_id <= 0 then Lwt.return false
+            else
+              match%lwt
+                Shared_thread_placement_read_model.viewer_may_share db
+                  ~user_id:viewer_id ~session_global_admin:is_admin
+                  ~post_id:post.id
+              with
+              | Ok can -> Lwt.return can
+              | Error _ -> Lwt.return false
+          in
           match comments_result, is_member_result with
           | Ok comments, Ok is_member ->
               let is_mod = match is_mod_res with Ok b -> b | _ -> false in
               let mod_usernames = match mods_res with Ok ms -> List.map (fun (u : Db.user) -> u.username) ms | _ -> [] in
-              Dream.html (Pages.thread_shell_page ?user:user_sess ~noindex ~is_member ~is_current_user_mod:is_mod
+              Dream.html (Pages.thread_shell_page ?user:user_sess ~noindex ~can_share ~is_member ~is_current_user_mod:is_mod
                 ~mod_usernames ~admin_usernames ~banned_usernames ~rail_communities ~channels ~sections
                 ~community:community_for_page ?thread_source ~user_post_votes ~user_comment_votes ~post ~comments request)
           | _ -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user:user_sess ~title:"Error" ~message:"Failed to load thread data. Please try again later." ~alert_type:"error" ~return_url:("/c/" ^ community_slug) request)
@@ -4839,8 +4856,11 @@ let notifications_handler request =
   | Some uid_str ->
       let user_id = int_of_string uid_str in
       let user = Dream.session_field request "username" in
+      (* The session claim only enables the durable users.is_admin check
+         inside the capability columns, never replaces it. *)
+      let session_admin = Dream.session_field request "is_admin" = Some "true" in
       Dream.sql request (fun db ->
-        let%lwt notifs = Db.get_notifications db user_id in
+        let%lwt notifs = Db.get_notifications db ~session_admin user_id in
         let%lwt _ = Db.mark_notifs_read db user_id in
         (* Joined communities feed the launch rail only; a failure degrades to
            an empty rail rather than blocking the notification list. *)
