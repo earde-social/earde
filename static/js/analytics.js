@@ -451,6 +451,10 @@
           }
         }
         clearPosthogPersistence();
+        /* The SDK can re-write its persistence entry after reset(); a
+           deferred second sweep catches that, and the denied-state sweep on
+           the next page load closes the race for good. */
+        window.setTimeout(clearPosthogPersistence, 300);
       },
       onError: function () {}
     });
@@ -478,6 +482,10 @@
     initAnalytics();
   } else if (state === null) {
     banner.hidden = false;
+  } else {
+    /* denied: SDK never loads, banner stays hidden; sweep any PostHog
+       persistence a pre-withdrawal session (or the revocation race above)
+       left behind. */
+    clearPosthogPersistence();
   }
-  /* denied: SDK never loads, banner stays hidden. */
 })();

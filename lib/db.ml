@@ -663,14 +663,18 @@ module User = struct
     )
 
   (* GDPR Art. 17 (right to erasure): scrub PII from the row, preserve post/comment rows for
-     thread coherence. Tombstone [deleted_N] prevents username recycling after deletion. *)
+     thread coherence. Tombstone [deleted_N] prevents username recycling after deletion.
+     bio/avatar_url are user-authored profile data and must not survive the account —
+     the settings page and /privacy both promise their removal. *)
   let anonymize_user_query =
     let open Caqti_request.Infix in
     (Caqti_type.int ->. Caqti_type.unit)
     "UPDATE users
      SET username = '[deleted_' || id || ']',
          email = 'deleted_' || id || '@earde.local',
-         password_hash = ''
+         password_hash = '',
+         bio = NULL,
+         avatar_url = NULL
      WHERE id = $1"
 
   let anonymize_user (module C : Caqti_lwt.CONNECTION) user_id =
@@ -689,6 +693,21 @@ module User = struct
     >>= function
     | Ok (Some (id, username, created_at, bio, avatar_url)) ->
         Lwt.return (Ok (Some (id, username, created_at, bio, avatar_url)))
+    | Ok None -> Lwt.return (Ok None)
+    | Error err -> Lwt.return (Error (Caqti_error.show err))
+
+  (* Narrow pre-deletion lookup: the avatar_url must be read BEFORE the
+     anonymize rewrite NULLs it, so the account-deletion handler can remove
+     the locally stored upload after the transaction commits. *)
+  let get_user_avatar_url_query =
+    let open Caqti_request.Infix in
+    (Caqti_type.int ->? Caqti_type.(option string))
+    "SELECT avatar_url FROM users WHERE id = $1"
+
+  let get_user_avatar_url (module C : Caqti_lwt.CONNECTION) user_id =
+    C.find_opt get_user_avatar_url_query user_id
+    >>= function
+    | Ok (Some avatar_url) -> Lwt.return (Ok avatar_url)
     | Ok None -> Lwt.return (Ok None)
     | Error err -> Lwt.return (Error (Caqti_error.show err))
 
@@ -3546,6 +3565,20 @@ end
 module Rate_limit = struct
   let max_attempts = 5
 
+  (* The one enforcement window, in seconds. check_q hardcodes the same 60.0
+     literal in its SQL (see its comment); keep the two in lockstep — the
+     cleanup retention below derives from this constant, so a longer window
+     automatically lengthens retention and can never be undercut by cleanup. *)
+  let window_seconds = 60.0
+
+  (* Retention for the stored (ip, endpoint) rows: one full window of slack
+     beyond the point where a row stops being enforceable (its next hit would
+     reset it anyway). Rows STRICTLY older than [now - cleanup_after_seconds]
+     are eligible; a row at exactly the boundary is kept — that strict-<
+     rule is the documented boundary behavior and is pinned by the gated
+     suite. *)
+  let cleanup_after_seconds = 2.0 *. window_seconds
+
   (* Single atomic upsert: resets the window when expired, otherwise increments.
      Hardcoding 60.0 avoids a fourth bind parameter and keeps the query plan stable. *)
   let check_q =
@@ -3570,6 +3603,30 @@ module Rate_limit = struct
     | Ok attempts ->
         if attempts > max_attempts then Lwt.return (Ok `Blocked)
         else Lwt.return (Ok `Allowed)
+    | Error e -> Lwt.return (Error (Caqti_error.show e))
+
+  (* One bounded cleanup batch: deletes at most [batch] expired rows so a
+     large backlog can never stall a request-path connection. The only bind
+     parameter is a timestamp — no IP or endpoint value can appear in the
+     query, its parameters, or a Caqti error string, so cleanup logging is
+     IP-free by construction. Concurrent executions are harmless (DELETE of
+     already-deleted ctids matches nothing). Returns the number of rows
+     removed. *)
+  let cleanup_batch = 500
+
+  let cleanup_q =
+    let open Caqti_request.Infix in
+    (Caqti_type.(t2 float int) ->! Caqti_type.int)
+    {|WITH doomed AS (
+        SELECT ctid FROM rate_limits WHERE window_start < $1 LIMIT $2
+      ), deleted AS (
+        DELETE FROM rate_limits WHERE ctid IN (SELECT ctid FROM doomed)
+        RETURNING 1
+      ) SELECT COUNT(*)::int FROM deleted|}
+
+  let cleanup_expired ?(now = Unix.gettimeofday ()) (module C : Caqti_lwt.CONNECTION) =
+    C.find cleanup_q (now -. cleanup_after_seconds, cleanup_batch) >>= function
+    | Ok deleted -> Lwt.return (Ok deleted)
     | Error e -> Lwt.return (Error (Caqti_error.show e))
 end
 
@@ -3665,6 +3722,7 @@ let user_exists = User.user_exists
 let get_user_for_login = User.get_user_for_login
 let anonymize_user = User.anonymize_user
 let get_user_public = User.get_user_public
+let get_user_avatar_url = User.get_user_avatar_url
 let get_user_analytics_props = User.get_user_analytics_props
 let update_user_profile = User.update_user_profile
 let get_user_karma = User.get_user_karma

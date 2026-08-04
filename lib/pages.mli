@@ -93,18 +93,18 @@ val community_settings_page : ?user:string -> ?connected_projects:string -> ?rai
     visibility marker, Live channels, Knowledge sections, Network links) in
     the exact grammar the converted /c/:slug routes render. Exposed for the
     project-home review handler, which supplies the prebuilt sidebar to its
-    page module rather than duplicating this renderer. [home_requests_active]
-    renders the Home requests entry active — callers must have re-proved the
-    top-mod/admin gate first; [show_visibility_note:false] suppresses the
-    private-community marker on the one surface that never names an
-    ineligibility reason; [moderation_log_active] marks the always-present
-    Moderation log entry current (modlog route only — the entry renders for
-    every viewer regardless); [reports_active] renders the Reports entry
-    active (report-queue route only — callers must have re-proved the M/TM/A
-    gate first); [manage_moderators_active] renders the Manage moderators
-    entry active (manage-mods route only — callers must have re-proved the
-    TM/A gate first). Defaults preserve every existing route's output. *)
-val launch_knowledge_sidebar : community:Db.community -> channels:Db.channel list -> sections:Db.community_section list -> ?active_section_slug:string -> ?append_uncategorized:bool -> ?settings_active:bool -> ?home_requests_active:bool -> ?connections_active:bool -> ?moderation_log_active:bool -> ?reports_active:bool -> ?manage_moderators_active:bool -> ?show_visibility_note:bool -> can_manage:bool -> unit -> string
+    page module rather than duplicating this renderer. [settings_active]
+    marks the Settings entry current — the settings hub AND every management
+    surface on the shared settings shell (Connections, Shared threads,
+    Project home requests, Manage moderators, Reports) pass it, so Settings
+    is the one active community-level item inside settings and the internal
+    settings navigation distinguishes the surfaces;
+    [show_visibility_note:false] suppresses the private-community marker on
+    the surfaces that never name an ineligibility reason;
+    [moderation_log_active] marks the always-present Moderation log entry
+    current (modlog route only — the entry renders for every viewer
+    regardless). Defaults preserve every existing route's output. *)
+val launch_knowledge_sidebar : community:Db.community -> channels:Db.channel list -> sections:Db.community_section list -> ?active_section_slug:string -> ?append_uncategorized:bool -> ?settings_active:bool -> ?moderation_log_active:bool -> ?show_visibility_note:bool -> can_manage:bool -> unit -> string
 
 (** Moderator roster + role actions (TM/A only — gated in the handler; the
     POST handlers re-check every role/hierarchy rule server-side, this only
@@ -148,7 +148,7 @@ val report_form_page : ?user:string -> ?rail_communities:Db.community list -> ch
     it render a safe "Target unavailable or deleted" cell. Renders nothing mutable.
     [rail_communities]/[channels]/[sections] feed the launch shell's global rail and shared
     community sidebar (pass 14B) — loaded by the handler only after authorization. *)
-val reports_queue_page : ?user:string -> ?rail_communities:Db.community list -> channels:Db.channel list -> sections:Db.community_section list -> community:Db.community -> status:Db.report_status -> reports:Db.report_row list -> previews:(int * (string * string)) list -> Dream.request -> string
+val reports_queue_page : ?user:string -> ?rail_communities:Db.community list -> is_admin:bool -> is_top_mod:bool -> channels:Db.channel list -> sections:Db.community_section list -> community:Db.community -> status:Db.report_status -> reports:Db.report_row list -> previews:(int * (string * string)) list -> Dream.request -> string
 
 (** "Start thread from chat" pure helpers (title prefill, checkbox-id parsing, server-side
     selection guard, provenance summary, reverse-navigation parsing). Pure — unit-tested

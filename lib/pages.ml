@@ -13,7 +13,7 @@ open Db
 (* Cartographic Civic (pass 2): /signup renders through the isolated launch
    wrapper. The form contract is unchanged — POST /signup, Dream CSRF tag,
    username/email/password names and required flags, the required privacy
-   checkbox with its exact legal wording, the off-screen 'website' honeypot,
+   checkbox and its /privacy link, the off-screen 'website' honeypot,
    and the optional Turnstile widget+script — only the chrome and skin moved
    to the approved component classes. The viewer-dependent ?user chrome is
    gone by design (deterministic anonymous top bar), so ?user is accepted
@@ -40,7 +40,7 @@ let signup_form ?user:_ ?error ?turnstile_site_key request =
           <div class='auth__head'>
             <img class='auth__mark' src='/static/images/logo-mark.svg' alt=''>
             <h1 class='auth__title'>Create an account</h1>
-            <p class='auth__sub'>One account for every community on Earde. No GitHub required.</p>
+            <p class='auth__sub'>One account for every community on Earde.</p>
           </div>
           %s
           <form action='/signup' method='POST' class='auth__card'>
@@ -75,7 +75,7 @@ let signup_form ?user:_ ?error ?turnstile_site_key request =
 
             <label class='check launch-auth__legal' for='privacy'>
                 <input id='privacy' name='privacy' type='checkbox' required>
-                <span>I agree to the <a href='/privacy' target='_blank'>Privacy Policy</a> and consent to data processing.</span>
+                <span>I have read and accept the <a href='/privacy' target='_blank'>Privacy Policy</a>.</span>
             </label>
 
             %s
@@ -120,7 +120,7 @@ let login_form ?user:_ request =
             </div>
             <button type='submit' class='btn btn--primary btn--block launch-auth__submit'>Log in</button>
           </form>
-          <p class='notice launch-auth__notice'>GitHub is only needed to <b>connect an open-source project</b>. Members read, join and chat with an Earde account alone.</p>
+          <p class='notice launch-auth__notice'>Maintaining an open-source project? <a href='/bring'>Connect it through GitHub</a> after logging in.</p>
           <p class='auth__foot'>No account? <a href='/signup'>Create one &#8594;</a></p>
         </div>"
     csrf_token
@@ -666,28 +666,21 @@ let community_page ?user ?(noindex=false) ?(connected_projects="") ?(connected_c
    virtual Uncategorized feed is appended (active) only when the viewer is on it: the handler
    404s that route unless real orphaned content exists, so the entry is always backed by
    data. Archived channels are hidden, mirroring the pre-launch Channels nav group.
-   [settings_active] marks the Settings entry current — used only by the settings route
-   (pass 11A), whose surface already re-proved the can_manage gate before rendering.
-   [home_requests_active] renders the Home requests entry (active) — used only by the
-   review-queue route (pass 11B), whose read model already re-proved the top-mod/admin
-   gate in SQL before anything renders; every other route keeps the entry absent, so
-   the settings suites' exactly-one-queue-link count per document stays true.
-   [show_visibility_note] defaults to the existing factual marker; the review queue
-   passes false because that surface never names an ineligibility reason
-   (private/draft/legacy) anywhere in its document.
+   [settings_active] marks the Settings entry current — used by the settings hub and by
+   every management surface on the shared settings shell (Connections, Shared threads,
+   Project home requests, Manage moderators, Reports): inside settings, Settings is the
+   one active community-level item and the internal settings navigation distinguishes
+   the surfaces. Each of those routes re-proved its own gate before rendering.
+   [show_visibility_note] defaults to the existing factual marker; the management
+   surfaces pass false because they never name an ineligibility reason
+   (private/draft/legacy) anywhere in their documents.
    [moderation_log_active] marks the always-present Moderation log entry current —
    used only by the modlog route (pass 14A), which is public by design, so the
-   entry itself renders for every viewer exactly as before.
-   [reports_active] renders the Reports entry (active) — used only by the
-   report-queue route (pass 14B), whose handler already re-proved the M/TM/A
-   gate before anything renders; every other route keeps the entry absent, so
-   the queue link never shows to a viewer who cannot open the route. *)
+   entry itself renders for every viewer exactly as before. *)
 let launch_knowledge_sidebar ~(community : community) ~(channels : channel list)
     ~(sections : community_section list) ?active_section_slug
     ?(append_uncategorized = false) ?(settings_active = false)
-    ?(home_requests_active = false) ?(connections_active = false)
     ?(moderation_log_active = false)
-    ?(reports_active = false) ?(manage_moderators_active = false)
     ?(show_visibility_note = true) ~can_manage () =
   let esc = Components.html_escape in
   let slug = esc community.slug in
@@ -759,38 +752,6 @@ let launch_knowledge_sidebar ~(community : community) ~(channels : channel list)
     ^ Printf.sprintf
         "<a class='navitem navitem--pad%s' href='/c/%s/modlog'><span class='navitem__sigil navitem__sigil--box'>&#9776;</span>Moderation log</a>"
         (if moderation_log_active then " navitem--active" else "") slug
-    ^ (if home_requests_active then
-         (* Same slot and grammar as the overview's Home requests entry;
-            rendered only by the queue route whose viewer the read model
-            already proved top_mod-or-durable-admin. *)
-         Printf.sprintf
-           "<a class='navitem navitem--pad navitem--active' href='/c/%s/project-home-requests'><span class='navitem__sigil navitem__sigil--box navitem__sigil--project'>&#9672;</span>Home requests</a>"
-           slug
-       else "")
-    ^ (if connections_active then
-         (* Same slot and grammar as the settings nav's Connections entry;
-            rendered only by the connections route, whose read model already
-            proved the viewer top_mod-or-durable-admin in SQL. *)
-         Printf.sprintf
-           "<a class='navitem navitem--pad navitem--active' href='/c/%s/settings/connections'><span class='navitem__sigil navitem__sigil--box'>&#8644;</span>Connections</a>"
-           slug
-       else "")
-    ^ (if reports_active then
-         (* Rendered only by the report-queue route, whose handler proved the
-            viewer M/TM/A before this document exists — never a render-time
-            authority decision of its own. *)
-         Printf.sprintf
-           "<a class='navitem navitem--pad navitem--active' href='/c/%s/reports'><span class='navitem__sigil navitem__sigil--box'>&#9873;</span>Reports</a>"
-           slug
-       else "")
-    ^ (if manage_moderators_active then
-         (* Rendered only by the manage-mods route, whose handler proved the
-            viewer TM/A before this document exists — never a render-time
-            authority decision of its own. *)
-         Printf.sprintf
-           "<a class='navitem navitem--pad navitem--active' href='/c/%s/manage-mods'><span class='navitem__sigil navitem__sigil--box'>&#9878;</span>Manage moderators</a>"
-           slug
-       else "")
     ^ (if can_manage then
          Printf.sprintf
            "<a class='navitem navitem--pad%s' href='/c/%s/settings'><span class='navitem__sigil navitem__sigil--box'>&#9881;</span>Settings</a>"
@@ -1022,13 +983,14 @@ let feed_page ?user ~scope ~sort_mode ~is_logged_in ~admin_usernames
       page_head posts_html pager
   in
 
-  (* Right aside — factual static product copy + real page data only: the
-     handoff's Bring block, the existing founder/pilot contacts, and the real
+  (* Right aside — factual static product copy + real page data only: ONE
+     project-acquisition block (heading, one-sentence body, one CTA — never a
+     second Bring/pilot variant), the existing founder contact, and the real
      Following list. No Atlas, no fake trends, no fabricated counts. *)
   let bring_block =
     "<div class='aside__block'>\
-     <div class='kicker aside__kicker'>Bring your community</div>\
-     <p class='aside__text'>Maintain an open-source project? Verify it through GitHub and give it a home on Earde.</p>\
+     <div class='kicker aside__kicker'>Bring your project</div>\
+     <p class='aside__text'>Create a dedicated community home for your open-source project, or connect it to an existing community.</p>\
      <a class='btn btn--accent btn--block btn--sm' href='/bring'>Connect a project</a>\
      </div>"
   in
@@ -1040,14 +1002,6 @@ let feed_page ?user ~scope ~sort_mode ~is_logged_in ~admin_usernames
      <div class='launch-aside-alt'><a href='mailto:metacirculardispatches@gmail.com'>or email me</a></div>\
      </div>"
     founder_tg
-  in
-  let pilot_block = Printf.sprintf
-    "<div class='aside__block'>\
-     <div class='kicker aside__kicker'>Start here</div>\
-     <p class='aside__text'>Want to try Earde with your community? I can help you set it up.</p>\
-     <a class='btn btn--outline-ochre btn--block btn--sm' href='%s'>Start a pilot community</a>\
-     </div>"
-    mail_pilot
   in
   (* Following mini-list — honest, no counts; shown only when the user actually
      follows things. Letter tiles use the shared deterministic launch palette
@@ -1067,7 +1021,7 @@ let feed_page ?user ~scope ~sort_mode ~is_logged_in ~admin_usernames
       ) rail_communities) in
       Printf.sprintf "<div class='aside__block'><div class='kicker aside__kicker'>Following</div>%s</div>" rows
   in
-  let aside = bring_block ^ founder_block ^ pilot_block ^ following_block in
+  let aside = bring_block ^ founder_block ^ following_block in
 
   Components.launch_app_page ?user ~request ~rail_communities ~aside
     ~page_class:"launch-feed" ~title:"Feed" ~content ()
@@ -2721,29 +2675,15 @@ let community_settings_page ?user ?(connected_projects="") ?(rail_communities=[]
     community.is_network_community
     && community.onboarding_state = Db.Community_draft
   in
-  (* The scoped network-slug grammar the database enforces on every network
-     row. Defensive: a slug outside it never becomes a setup link. *)
-  let canonical_network_slug value =
-    let n = String.length value in
-    let is_slug_char c = (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') in
-    n >= 1 && n <= 80
-    && value.[0] <> '-'
-    && value.[n - 1] <> '-'
-    &&
-    let rec ok i =
-      i >= n
-      ||
-      if is_slug_char value.[i] then ok (i + 1)
-      else value.[i] = '-' && value.[i + 1] <> '-' && ok (i + 1)
-    in
-    ok 0
-  in
   (* The setup surface independently reauthorizes (current top_mod of this
      community, or a durable users.is_admin holder), so this only decides
      whether the affordance is worth showing on a surface that already knows
-     the answer for the common cases. *)
+     the answer for the common cases. The predicate (network draft +
+     authorized viewer + canonical slug) lives in the shared settings shell
+     so every shell surface gates the setup link identically. *)
   let can_complete_setup =
-    is_network_draft && can_edit_vis && canonical_network_slug community.slug
+    Community_settings_shell.can_complete_setup ~community
+      ~authorized:can_edit_vis
   in
   let setup_pointer_note =
     if not can_complete_setup then
@@ -3367,103 +3307,27 @@ let community_settings_page ?user ?(connected_projects="") ?(rail_communities=[]
     | _ -> visibility_panel
   in
 
-  (* Left nav: real panel navigation (GET links back to this route), not on-page anchors. *)
-  let nav_item ?(danger=false) key label =
-    let active_cls = if panel = key then " cm-index-link--active" else "" in
-    let danger_cls = if danger then " cm-index-link--danger" else "" in
-    Printf.sprintf "<a class='cm-index-link%s%s' href='/c/%s/settings?panel=%s'>%s</a>"
-      danger_cls active_cls slug key label
+  (* Left nav + header + panel wrapper: the shared settings shell. The nav
+     is the one grouped index every settings/management surface renders; the
+     dedicated-route entries (Project home requests, Connections, Shared
+     threads, Manage moderators) still grant nothing — each route
+     reauthorizes from scratch — and the whole Network group plus Manage
+     moderators is display-gated to the top-mod/admin surface this page
+     already proved, so regular mods never see entries they cannot open. *)
+  let active : Community_settings_shell.item =
+    match panel with
+    | "profile" -> Profile
+    | "channels" -> Channels
+    | "members" -> Members
+    | "moderation" -> Moderation
+    | "bans" -> Bans
+    | "projects" -> Connected_projects
+    | _ -> Visibility
   in
-  (* Project home requests queue: a normal GET link to the dedicated
-     moderator route (its own handler + read model still authorize). Shown
-     only on the top-mod/admin surface — regular mods, whom this page
-     already knows are unauthorized for the queue, never see it. No badge or
-     pending count, no form, no community id. The URL is built structurally
-     from the canonical (escaped) slug, matching the other nav links. *)
-  let project_home_requests_link =
-    if is_top_mod || is_admin then
-      Printf.sprintf
-        "<a class='cm-index-link' href='/c/%s/project-home-requests'>Project home requests</a>"
-        slug
-    else ""
-  in
-  (* Connections: the entry point to the community-connections management
-     surface, on the same top-mod/admin gate its read model applies in SQL.
-     Regular mods, whom this page already knows are unauthorized there, never
-     see it. The link grants nothing — that route reauthorizes from scratch —
-     and carries no count, no form, and no community id. *)
-  let connections_link =
-    if is_top_mod || is_admin then
-      Printf.sprintf
-        "<a class='cm-index-link' href='/c/%s/settings/connections'>Connections</a>"
-        slug
-    else ""
-  in
-  (* Shared threads: the entry point to the shared-threads management
-     surface, on the same top-mod/admin display gate as Connections above.
-     The link grants nothing — that route reauthorizes from scratch in its
-     read model's SQL — and carries no count, no form, and no community
-     id. *)
-  let shared_threads_link =
-    if is_top_mod || is_admin then
-      Printf.sprintf
-        "<a class='cm-index-link' href='/c/%s/settings/shared-threads'>Shared \
-         threads</a>"
-        slug
-    else ""
-  in
-  (* Connected projects: an ordinary panel nav entry, present only when the route supplied
-     the management fragment (top-mod/admin surface). Regular mods, whom this page already
-     knows are unauthorized for project-home moderation, never see it. *)
-  let connected_projects_nav =
-    if has_connected_projects then nav_item "projects" "Connected projects" else ""
-  in
-  (* Complete setup and publish: a normal GET link to the dedicated setup
-     route, which independently reauthorizes (current top_mod of this
-     community, or a durable users.is_admin holder) and independently
-     re-checks the draft lifecycle. Shown only on a network setup draft's
-     top-mod/admin surface — legacy communities, already-published network
-     communities, ordinary members, mods, and legacy_mods never see it. No
-     form, no community id, no lifecycle detail; the URL is built
-     structurally from the canonical (escaped) slug, matching the other nav
-     links. *)
-  let setup_publish_link =
-    if can_complete_setup then
-      Printf.sprintf
-        "<a class='cm-index-link' href='/c/%s/setup'>Complete setup and publish</a>"
-        slug
-    else ""
-  in
-  let content = Printf.sprintf "
-    <div class='cm-wrap cm-wrap--settings'>
-      <div class='cm-head'>
-        <h1 class='cm-h1'>&#x2699;&#xFE0F; /c/%s <span class='accent'>settings</span></h1>
-        <a href='/c/%s' class='cm-back'>&larr; Back to community</a>
-      </div>
-
-      <div class='cm-cols'>
-        <nav class='cm-index'>
-          <div class='cm-index-title'>Settings</div>
-          %s%s%s%s%s%s%s%s%s%s%s
-        </nav>
-        <div class='cm-main'>
-          %s
-        </div>
-      </div>
-    </div>"
-    slug slug
-    setup_publish_link
-    (nav_item "visibility" "Visibility &amp; discovery")
-    (nav_item "profile" "Profile")
-    (nav_item "channels" "Channels &amp; sections")
-    (nav_item "members" "Members")
-    (nav_item "moderation" "Moderation")
-    connected_projects_nav
-    project_home_requests_link
-    connections_link
-    shared_threads_link
-    (nav_item ~danger:true "bans" "Bans")
-    main_panel
+  let content =
+    Community_settings_shell.wrap ~slug:community.slug ~active
+      ~can_complete_setup ~network_manager:(is_top_mod || is_admin)
+      ~panel:main_panel ()
   in
   (* Cartographic launch shell (pass 11A): the same four-pane chrome as the
      overview/channel/section/thread routes, wrapping the settings content
@@ -3593,13 +3457,9 @@ let manage_mods_page ?user ?(rail_communities = []) ~is_admin ~current_user_role
     else ""
   in
 
-  let content = Printf.sprintf "
-    <div class='cm-wrap'>
-      <div class='cm-head'>
-        <h1 class='cm-h1'>Council of Mods <span class='accent'>&mdash; /c/%s</span></h1>
-        <a href='/c/%s/settings?panel=moderation' class='cm-back'>&larr; Back to settings</a>
-      </div>
-
+  (* Panel body only — the shared settings shell below owns the header band
+     and the internal settings navigation (Manage moderators active). *)
+  let panel_body = Printf.sprintf "
       %s
 
       <section class='cm-panel'>
@@ -3613,13 +3473,19 @@ let manage_mods_page ?user ?(rail_communities = []) ~is_admin ~current_user_role
         %s
       </section>
 
-      %s
-    </div>"
-    slug slug
+      %s"
     add_mod_form
     top_mod_section
     mod_section
     legacy_section
+  in
+  let content =
+    Community_settings_shell.wrap ~slug:community.slug
+      ~active:Community_settings_shell.Manage_moderators
+      ~can_complete_setup:
+        (Community_settings_shell.can_complete_setup ~community
+           ~authorized:can_manage)
+      ~network_manager:can_manage ~panel:panel_body ()
   in
   (* Cartographic launch shell (pass 14C): the same four-pane chrome as the
      sibling community routes, wrapping the moderator roster verbatim — the
@@ -3640,7 +3506,7 @@ let manage_mods_page ?user ?(rail_communities = []) ~is_admin ~current_user_role
      community-id/visibility pair the legacy wrapper received). *)
   let sidebar =
     launch_knowledge_sidebar ~community ~channels ~sections
-      ~manage_moderators_active:true ~can_manage:true ()
+      ~settings_active:true ~can_manage:true ()
   in
   Components.launch_community_page ?user ~request ~rail_communities
     ~community ~sidebar
@@ -4106,7 +3972,8 @@ let report_form_page ?user ?(rail_communities = []) ~(channels : channel list)
    assoc the handler built with a bounded per-row lookup; rows missing from it (chat,
    deleted, or beyond the preview cap) degrade to "Target unavailable or deleted". This
    page is PRIVATE — the handler gates it on M/TM/A; it adds no authority of its own. *)
-let reports_queue_page ?user ?(rail_communities = []) ~(channels : channel list)
+let reports_queue_page ?user ?(rail_communities = []) ~is_admin ~is_top_mod
+    ~(channels : channel list)
     ~(sections : community_section list) ~(community : community) ~(status : Db.report_status)
     ~(reports : Db.report_row list) ~(previews : (int * (string * string)) list) request =
   let esc = Components.html_escape in
@@ -4220,15 +4087,12 @@ let reports_queue_page ?user ?(rail_communities = []) ~(channels : channel list)
        && List.exists (fun (r : Db.report_row) -> not (List.mem_assoc r.id previews)) reports
     then "<p class='cm-panel-desc'>Context previews are shown for the most recent reports; older rows link from their target type where available.</p>"
     else "" in
-  let content = Printf.sprintf "
-    <div class='cm-wrap cm-wrap--wide'>
-        <div class='cm-head'>
-            <h1 class='cm-h1'>Reports <span class='accent'>queue</span></h1>
-            <span class='mono launch-reports-ctx'>/c/%s</span>
-            <a href='/c/%s/settings?panel=moderation' class='cm-back'>&larr; Back to settings</a>
-        </div>
+  (* Panel body only — the shared settings shell below owns the header band
+     and the internal settings navigation (Moderation active: the queue is a
+     moderation work surface reached from the Moderation panel). *)
+  let panel_body = Printf.sprintf "
         <section class='cm-panel'>
-            <h2 class='cm-panel-title'>Member reports</h2>
+            <h2 class='cm-panel-title'>Reports queue</h2>
             <p class='cm-panel-desc'>Content flagged by members of this community, newest first. Private to moderators.</p>
             <nav class='cm-nav'>%s</nav>
             %s
@@ -4246,13 +4110,18 @@ let reports_queue_page ?user ?(rail_communities = []) ~(channels : channel list)
                     <tbody>%s</tbody>
                 </table>
             </div>
-        </section>
-    </div>"
-    slug
-    slug
+        </section>"
     tabs
     preview_note
     table_body
+  in
+  let content =
+    Community_settings_shell.wrap ~slug:community.slug
+      ~active:Community_settings_shell.Moderation
+      ~can_complete_setup:
+        (Community_settings_shell.can_complete_setup ~community
+           ~authorized:(is_top_mod || is_admin))
+      ~network_manager:(is_top_mod || is_admin) ~panel:panel_body ()
   in
   (* Cartographic launch shell (pass 14B): the same four-pane chrome as the
      sibling community routes, wrapping the review docket verbatim — the cm-*
@@ -4269,7 +4138,7 @@ let reports_queue_page ?user ?(rail_communities = []) ~(channels : channel list)
      launch shell additionally marks .shell, like the sibling routes). *)
   let sidebar =
     launch_knowledge_sidebar ~community ~channels ~sections
-      ~reports_active:true ~can_manage:true ()
+      ~settings_active:true ~can_manage:true ()
   in
   Components.launch_community_page ?user ~request ~rail_communities
     ~community ~sidebar
@@ -5341,7 +5210,7 @@ let settings_page ?user ?(rail_communities = []) bio avatar_url request =
 
         <div class='account-panel account-panel--card' data-analytics-settings hidden>
             <h2 class='account-section-title'>Analytics</h2>
-            <p class='account-section-desc'>Control whether Earde may collect anonymous product-usage analytics (PostHog) in your browser. Nothing is collected without your consent.</p>
+            <p class='account-section-desc'>Control whether Earde may collect optional product-usage analytics (PostHog) in your browser. Nothing is collected without your consent &mdash; see the <a href='/privacy#cookies-analytics'>Privacy Policy</a> for what analytics covers.</p>
             <div class='account-form'>
                 <span data-analytics-state class='account-hint'></span>
                 <div>
@@ -5870,80 +5739,253 @@ let search_results_page ?user ~admin_usernames ?(chat_sources=[]) ?(rail_communi
 
 (* === LEGAL / PRIVACY === *)
 
-(* Single-section structure: plain-English human summary up top, then technical spec.
-   Grounded in actual schema/auth.ml — no invented infrastructure or fictional DPO.
+(* Complete Article-13-style notice, rewritten 2026-08-04. Every factual claim
+   is grounded in the current implementation: schema + migrations (users,
+   pending_signups, rate_limits, page_views, dream_session, reports,
+   mod_actions, shared_thread_placements, community_connections, the github_*
+   and project_* tables), auth.ml (argon2id), email.ml (Brevo), turnstile.ml,
+   analytics.ml/.js (consent-gated PostHog EU, masked replay, deletion jobs),
+   the GitHub onboarding modules (no persisted tokens, public repos only,
+   read-only calls) and the delete-account / export handlers. No invented
+   entity, address, DPO, retention period or safeguard — where a fact is not
+   configured, the copy states a criterion instead of a number.
 
-   Cartographic Civic (pass 16C): /privacy renders through the isolated launch
-   entry wrapper. The inner legal fragment
-   below is preserved byte-for-byte — every heading, paragraph, list, link and
-   its wording is authoritative and untouched; the Tailwind utility
-   classes it carries are inert (no CDN is loaded) and are re-used as scoped
-   styling hooks by the "privacy policy only" section of earde.css (same
-   skin-the-legacy-markup idiom as the pass-16B recovery forms). The
-   viewer-dependent ?user chrome is gone by design (the entry chrome is
-   deterministic and viewer-independent), so ?user is accepted for signature
-   compatibility and ignored; analytics assets are the same shared helper the
-   legacy layout used, so consent-banner and identity-attribute behavior is
-   unchanged. *)
+   The document stays static and viewer-independent (?user accepted and
+   ignored; the entry chrome is deterministic), form-free (the consent
+   controls are the same data-analytics-* button anatomy analytics.js already
+   drives on /settings — button + fetch, no <form>), and indexable. Anchors
+   use real ids (never href='#'). The analytics-preferences panel ships
+   hidden; analytics.js reveals it only when the deployment has a valid
+   analytics configuration, so a deployment without PostHog renders no dead
+   control. Styling hooks live in the "privacy policy only" section of
+   earde.css, scoped under body.launch-privacy. *)
 let privacy_page ?user:_ request =
   let content = "
-    <div class='max-w-2xl mx-auto mt-10 mb-16 px-4'>
+    <div class='privacy-doc'>
 
-      <h1 class='text-3xl font-extrabold text-gray-900 mb-2'>Privacy Policy</h1>
-      <p class='text-sm text-gray-400 mb-10'>This page explains, in plain terms, what data Earde handles and why.</p>
+      <h1>Privacy Policy</h1>
+      <p class='privacy-updated'>Last updated: 4 August 2026</p>
 
-      <div class='space-y-8 text-gray-700 leading-relaxed'>
+      <div class='privacy-summary'>
+        <p>The short version:</p>
+        <ul>
+          <li>Visibility follows the surface you post on. Content in publicly accessible communities, channels and sections &mdash; posts, comment threads, chat archives, moderation logs and profiles &mdash; can be read by anyone and indexed by search engines. Content in private, members-only or moderator-only areas is limited to the people authorized to view it.</li>
+          <li>An account needs a username, an email address and a password. The password is stored only as a salted hash; your email address is never displayed publicly.</li>
+          <li>Optional product analytics (PostHog) runs only after you explicitly allow it, and you can withdraw that choice at any time on this page.</li>
+          <li>If you connect an open-source project, Earde stores public GitHub metadata about it. It never stores your GitHub tokens and never reads repository contents.</li>
+          <li>You can export your profile, posts and comments as JSON, and delete your account at any time from your settings.</li>
+        </ul>
+        <p>This policy covers the Earde service at earde.com. It is not a terms-of-service document.</p>
+      </div>
 
-        <section>
-          <h2 class='text-lg font-bold text-gray-900 mb-3 pb-1 border-b border-[#E0D9CC]'>What Earde is</h2>
-          <p>Earde is a community platform for technical communities. It combines live chat with durable discussion threads and a searchable archive.</p>
+      <nav class='privacy-toc' aria-label='Sections of this policy'>
+        <ul>
+          <li><a href='#controller'>Who controls your data</a></li>
+          <li><a href='#data-we-collect'>Data we collect</a></li>
+          <li><a href='#how-we-use'>How and why we use data</a></li>
+          <li><a href='#public-content'>Public content and search engines</a></li>
+          <li><a href='#shared-threads'>Connected communities and Shared Threads</a></li>
+          <li><a href='#github'>GitHub integration</a></li>
+          <li><a href='#cookies-analytics'>Cookies and analytics</a></li>
+          <li><a href='#recipients'>Who receives data</a></li>
+          <li><a href='#transfers'>International transfers</a></li>
+          <li><a href='#retention'>How long we keep data</a></li>
+          <li><a href='#security'>Security</a></li>
+          <li><a href='#your-rights'>Your rights</a></li>
+          <li><a href='#deletion'>Account and content deletion</a></li>
+          <li><a href='#automated-decisions'>Automated decisions</a></li>
+          <li><a href='#changes'>Changes to this policy</a></li>
+          <li><a href='#contact'>Contact</a></li>
+        </ul>
+      </nav>
+
+      <div class='privacy-sections'>
+
+        <section id='controller'>
+          <h2>Who controls your data</h2>
+          <p>Earde is a small, independently operated service. The operator of Earde decides how and why the personal data described in this policy is processed, and is the data controller for it.</p>
+          <p>For any question or request about your data, contact the operator at <a href='mailto:metacirculardispatches@gmail.com'>metacirculardispatches@gmail.com</a>. Earde has not appointed a data protection officer.</p>
         </section>
 
-        <section>
-          <h2 class='text-lg font-bold text-gray-900 mb-3 pb-1 border-b border-[#E0D9CC]'>Data we may collect or store</h2>
-          <p class='mb-3'>To operate the service, Earde may store:</p>
-          <ul class='list-disc list-inside space-y-2 text-sm'>
-            <li>Account information, such as your username and email address.</li>
-            <li>Profile information you choose to add.</li>
-            <li>Community content, posts, and comments you create.</li>
-            <li>Chat messages you send.</li>
-            <li>Session and authentication data needed to keep you signed in.</li>
-            <li>Moderation records related to reports and enforcement actions.</li>
-            <li>Operational and security logs.</li>
+        <section id='data-we-collect'>
+          <h2>Data we collect</h2>
+          <h3>Account and profile</h3>
+          <p>Creating an account requires a username, an email address and a password. Without them you can read public content but cannot post, comment, chat, vote or join communities. The password is stored only as a salted argon2id hash &mdash; Earde cannot read it back. Your email address is used to confirm your account and to reset your password; it is never displayed publicly and is not included in analytics. You can optionally add a bio and an avatar image to your profile; both are public.</p>
+          <h3>Signup confirmation</h3>
+          <p>When you sign up, Earde stores a pending record with your chosen username, email address, password hash, a hashed confirmation token, and the IP address and browser identifier (user agent) of the signup request. The confirmation link expires after 24 hours. Signup may also include a Cloudflare Turnstile bot check (see <a href='#recipients'>Who receives data</a>).</p>
+          <h3>Service and technical data</h3>
+          <ul>
+            <li>Login sessions, stored server-side in Earde's database; the browser cookie holds only a session identifier.</li>
+            <li>Rate-limiting records keyed by IP address and endpoint, for signup, login and password-reset requests.</li>
+            <li>First-party page-view statistics: the page path, the referring site's host name, and a pseudonymous identifier rebuilt each day from IP address, browser and date &mdash; it cannot link your visits across days, and the raw IP address is not stored with it.</li>
+            <li>Server request logs for operating and debugging the service; security-sensitive values (tokens, authorization codes) are redacted before logging.</li>
+          </ul>
+          <h3>Community content and activity</h3>
+          <p>Posts, comments, chat messages, votes, karma, community memberships, reports you file, moderation actions that concern you, and notifications addressed to you. Live presence, typing and cursor indicators are transient signals that are broadcast to other viewers of the page and are not stored.</p>
+          <h3>GitHub project data</h3>
+          <p>Only if you connect an open-source project &mdash; see <a href='#github'>GitHub integration</a>.</p>
+          <h3>Analytics data</h3>
+          <p>Only after you allow it &mdash; see <a href='#cookies-analytics'>Cookies and analytics</a>.</p>
+          <h3>Where this data comes from</h3>
+          <p>From you (forms and the content you write), from your browser (technical data that accompanies each request), and from GitHub (public metadata, when you connect a project).</p>
+        </section>
+
+        <section id='how-we-use'>
+          <h2>How and why we use data</h2>
+          <div class='privacy-table-wrap'>
+            <table class='privacy-table'>
+              <thead><tr><th>Purpose</th><th>Data</th><th>Legal basis</th></tr></thead>
+              <tbody>
+                <tr><td>Providing your account and the service: signing you in, publishing the content you write, memberships, notifications, data export</td><td>Account, profile, content and activity</td><td>Performance of a contract (Art. 6(1)(b) GDPR)</td></tr>
+                <tr><td>Sending transactional email: signup confirmation and password reset</td><td>Email address</td><td>Performance of a contract</td></tr>
+                <tr><td>Security and abuse prevention: rate limiting, the signup bot check, bans, moderation and report handling</td><td>IP address, technical data, moderation records</td><td>Legitimate interest: keeping the service and its communities secure and usable. You can object (see <a href='#your-rights'>Your rights</a>).</td></tr>
+                <tr><td>Aggregate first-party usage statistics (page-view counts with a daily-rotating pseudonymous identifier)</td><td>Technical data</td><td>Legitimate interest: understanding aggregate usage of a public service without profiling individuals across days. You can object.</td></tr>
+                <tr><td>Optional product analytics and session replay (PostHog)</td><td>Analytics data</td><td>Consent (Art. 6(1)(a) GDPR), withdrawable at any time</td></tr>
+                <tr><td>Complying with the law when a competent authority lawfully requires information</td><td>As required</td><td>Legal obligation</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <p>Earde does not rely on legitimate interest for optional analytics, and does not treat publishing content as blanket consent to unrelated processing.</p>
+        </section>
+
+        <section id='public-content'>
+          <h2>Public content and search engines</h2>
+          <p>How visible your content is depends on the visibility of the specific surface you post it on, not just on the community it belongs to. Content posted in publicly accessible communities, channels and sections &mdash; posts, comment threads and chat channel archives &mdash; can be read by anyone, including signed-out visitors, and may be indexed by search engines. Your profile page &mdash; username, bio, avatar, join date and your posts and comments on publicly accessible surfaces &mdash; is public too. A community's moderation log (the action taken, the acting moderator's username and the reason given) is visible to anyone who can view that community.</p>
+          <p>Vote totals on posts and comments are public; which way you voted is stored but not shown to other users. When a chat conversation is promoted into a thread, the thread displays the referenced chat messages with their authors, subject to the source surface's access rules.</p>
+          <p>Content posted in private, members-only or moderator-only areas &mdash; private communities and everything inside them, moderation queues, and the private workflow records described elsewhere in this policy &mdash; is limited to users authorized to view that area (which always includes Earde's administrators). Pages of private communities also ask search engines not to index them.</p>
+          <p>Anything published publicly can be crawled, cached, quoted or copied by search engines and other third parties. Deleting content on Earde stops Earde from displaying it, but does not reach copies that others have already made outside Earde's control.</p>
+        </section>
+
+        <section id='shared-threads'>
+          <h2>Connected communities and Shared Threads</h2>
+          <p>Independently governed communities on Earde can connect with each other, and a thread from one community can be shared into another. There is always one canonical thread, owned and moderated by its origin community; accepted destination communities display that same thread, and their members can read and comment on it according to the current access rules. A shared thread stops being shown in destinations if its origin community becomes private.</p>
+          <p>A share or connection request can carry an optional private note. That note is visible only to the person who wrote it, the top moderators of the origin and destination communities involved, and Earde's administrators. It never appears publicly, and it is not shown to the thread's author unless they made the request themselves.</p>
+          <p>Top moderators of the affected communities (and, for project requests, the project's stewards) receive structured notifications about these requests. Earde also keeps internal lifecycle records of who requested, accepted, rejected or removed a connection or placement and when; these records contain no free-text content.</p>
+        </section>
+
+        <section id='github'>
+          <h2>GitHub integration</h2>
+          <p>Connecting an open-source project through GitHub is optional, and it is not a way to sign in: your Earde account remains a separate username-and-password account.</p>
+          <p>When you connect a project, Earde receives from GitHub and stores: the numeric ID, login name and type (user or organization) of the GitHub account the app is installed on; the installation's identifier and status; and, for the public repositories you select, their repository IDs, names, owners, descriptions, default branches, archived status and public github.com URLs. Only repositories that are public on GitHub are stored &mdash; private and internal repositories are never kept. Project pages and connected community pages display this metadata publicly.</p>
+          <p>Earde never stores your GitHub tokens. The short-lived token GitHub issues during the flow is used only for the read-only requests needed to verify the installation and list the public repositories available through it, and is then discarded. The integration does not read repository contents and does not change anything on GitHub. During the flow, a temporary encrypted cookie (15 minutes, scoped to the connect pages) carries the flow's security material.</p>
+          <p>GitHub itself independently processes what you do on github.com &mdash; including the install and authorize screens &mdash; under its own <a href='https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement' target='_blank' rel='noopener'>privacy statement</a>.</p>
+          <p>If you uninstall the Earde app on GitHub, no further access is possible, but the project metadata already stored on Earde is not removed automatically &mdash; <a href='#contact'>contact the operator</a> to have it removed.</p>
+        </section>
+
+        <section id='cookies-analytics'>
+          <h2>Cookies and analytics</h2>
+          <h3>Strictly necessary storage</h3>
+          <div class='privacy-table-wrap'>
+            <table class='privacy-table'>
+              <thead><tr><th>Name</th><th>Purpose</th><th>Duration</th></tr></thead>
+              <tbody>
+                <tr><td>dream.session</td><td>Keeps you signed in. Holds only a session identifier; the session itself lives in Earde's database.</td><td>Up to two weeks; removed on logout.</td></tr>
+                <tr><td>earde_analytics_consent</td><td>Remembers your analytics choice: exactly granted or denied.</td><td>About 180 days.</td></tr>
+                <tr><td>Per-flow GitHub connect cookie</td><td>Carries encrypted security material during the GitHub connect flow only.</td><td>15 minutes.</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <p>Forms are protected against cross-site request forgery by a signed token embedded in the page rather than a cookie.</p>
+          <h3>Optional analytics (PostHog)</h3>
+          <p>Nothing analytics-related loads before you choose: until you select Allow, the PostHog script is not downloaded and no request of any kind is made to PostHog. If you allow it, PostHog stores its own state in your browser (cookies and local storage prefixed ph_), which Earde clears again when you withdraw.</p>
+          <p>After consent, analytics collects: page views with query strings, fragments and page titles stripped; structural click data that never includes on-page text; performance measurements; heatmaps; and Session Replay &mdash; a recording of page interactions in which everything you type and all user-generated text (posts, messages, usernames) is masked in your browser before anything is sent. Search queries are excluded from analytics, and JavaScript error capture is switched off.</p>
+          <p>Signed-out visitors are identified by a random identifier. When you are signed in, analytics is linked to an internal pseudonymous identifier of the form user:&lt;number&gt;, together with your username, signup date and whether the account is an administrator &mdash; never your email address. Community context is reported by internal numeric identifiers; for private communities no name or slug is sent, and pages of private communities do not run analytics at all, even with consent. Server-side product events (for example that a thread was created or a project connected) are likewise sent only while your consent cookie says granted.</p>
+          <p>Analytics data is sent to PostHog's EU cloud endpoints (eu.i.posthog.com). See <a href='https://posthog.com/privacy' target='_blank' rel='noopener'>PostHog's privacy notice</a> for how PostHog processes data.</p>
+          <h3>Analytics preferences</h3>
+          <p>Withdrawing consent is as easy as granting it. When optional analytics is active on this deployment, your current choice and the controls to change it appear below; they work for signed-in and signed-out visitors alike.</p>
+          <div class='privacy-consent' data-analytics-settings hidden>
+            <span data-analytics-state class='privacy-consent__state'></span>
+            <div class='privacy-consent__actions'>
+              <button type='button' data-analytics-accept class='privacy-consent__btn privacy-consent__btn--allow'>Allow analytics</button>
+              <button type='button' data-analytics-refuse class='privacy-consent__btn'>Turn off analytics</button>
+            </div>
+            <span data-analytics-error hidden class='privacy-consent__error'>Couldn&#39;t save your choice &mdash; please try again.</span>
+          </div>
+          <p>When you withdraw, the analytics script stops collecting, its browser storage is cleared, and from the next page load it is not downloaded at all. Withdrawal does not retroactively erase data already collected; you can ask the operator to delete it, and deleting your account automatically requests deletion of your analytics profile and its events at PostHog.</p>
+        </section>
+
+        <section id='recipients'>
+          <h2>Who receives data</h2>
+          <ul>
+            <li><strong>Brevo</strong> (transactional email delivery): receives your email address and the confirmation or password-reset message sent to you. See <a href='https://www.brevo.com/legal/privacypolicy/' target='_blank' rel='noopener'>Brevo's privacy policy</a>.</li>
+            <li><strong>Cloudflare</strong> (Turnstile bot check on signup, when enabled): your browser loads the challenge widget directly from Cloudflare, which processes that interaction under <a href='https://www.cloudflare.com/privacypolicy/' target='_blank' rel='noopener'>Cloudflare's privacy policy</a>. Earde's own server sends Cloudflare only the challenge token to verify &mdash; not your IP address.</li>
+            <li><strong>PostHog</strong> (EU cloud): the consented analytics data described above.</li>
+            <li><strong>GitHub</strong>: when you connect a project, you interact with GitHub directly; GitHub acts as an independent service, not on Earde's behalf.</li>
+            <li><strong>Hosting infrastructure</strong>: Earde runs on a server hosted with Hetzner; the service data described in this policy is stored there, in Earde's own PostgreSQL database.</li>
+            <li><strong>Other users, moderators and communities</strong>: content according to its visibility; reports you file go to the moderators of the community concerned; private request notes reach the limited audience described under <a href='#shared-threads'>Shared Threads</a>.</li>
+            <li><strong>Authorities</strong>: only if disclosure is lawfully required.</li>
+          </ul>
+          <p>Earde does not sell personal data and does not share it for cross-context behavioral advertising.</p>
+        </section>
+
+        <section id='transfers'>
+          <h2>International transfers</h2>
+          <p>Earde's analytics is configured to use PostHog's EU region endpoints. GitHub, Cloudflare and Brevo are independent global providers; when you interact with them as described above, they may process data outside the European Economic Area, as described in their own privacy notices linked in this policy.</p>
+        </section>
+
+        <section id='retention'>
+          <h2>How long we keep data</h2>
+          <ul>
+            <li><strong>Account data</strong>: while your account exists. On deletion, your identifying details are removed as described under <a href='#deletion'>Account and content deletion</a>.</li>
+            <li><strong>Login sessions</strong>: expire after about two weeks, or immediately on logout.</li>
+            <li><strong>Signup confirmation records</strong> (including the signup IP address and browser identifier): valid for 24 hours, then removed during routine cleanup.</li>
+            <li><strong>Password-reset records</strong>: valid for 2 hours; removed when used, unusable afterwards.</li>
+            <li><strong>Rate-limiting records</strong> (IP address and endpoint): used only for the current one-minute request window; routine cleanup deletes records shortly after their window has lapsed.</li>
+            <li><strong>First-party page-view statistics</strong>: kept as pseudonymous usage statistics; the daily-rotating identifier cannot link visits across days.</li>
+            <li><strong>Posts and comments</strong>: until you or a moderator deletes them. Deleting a post or comment replaces its text with a neutral placeholder; the placeholder row remains so that surrounding discussion stays coherent.</li>
+            <li><strong>Chat messages</strong>: until deleted. A deleted chat message is hidden from every reader, though the original text currently remains in the database record.</li>
+            <li><strong>Reports, moderation logs and lifecycle records</strong>: retained while needed for community safety, moderation accountability and dispute handling.</li>
+            <li><strong>Notifications</strong>: stored with your account; removed when the thing they point to is deleted.</li>
+            <li><strong>Project and GitHub metadata</strong>: for as long as the project remains on Earde. It is not removed automatically when the connecting account is deleted; contact the operator to remove it.</li>
+            <li><strong>Analytics data at PostHog</strong>: held by PostHog until deleted; deleting your Earde account triggers a deletion request for your analytics profile and its events.</li>
+            <li><strong>Server logs</strong>: kept for operating and troubleshooting the service.</li>
           </ul>
         </section>
 
-        <section>
-          <h2 class='text-lg font-bold text-gray-900 mb-3 pb-1 border-b border-[#E0D9CC]'>How we use data</h2>
-          <ul class='list-disc list-inside space-y-2 text-sm'>
-            <li>To operate and provide the service.</li>
-            <li>To authenticate users and keep accounts secure.</li>
-            <li>To display community content.</li>
-            <li>To moderate abuse and enforce community rules.</li>
-            <li>To maintain the security of the service.</li>
-            <li>To debug problems and improve reliability.</li>
+        <section id='security'>
+          <h2>Security</h2>
+          <ul>
+            <li>Passwords are stored only as salted argon2id hashes, never in a readable form.</li>
+            <li>One-time email tokens (signup confirmation, password reset) are stored only as SHA-256 hashes.</li>
+            <li>Sessions are kept server-side; the browser cookie carries only an identifier. Every state-changing form is protected by a signed anti-forgery token.</li>
+            <li>The GitHub connect flow uses PKCE, single-use state values stored only as hashes, and an encrypted, short-lived flow cookie.</li>
+            <li>The production service is served over HTTPS, and security-sensitive values are redacted from server logs.</li>
+          </ul>
+          <p>No online service can promise perfect security. If a breach affecting your data occurs, the operator will handle it as applicable law requires.</p>
+        </section>
+
+        <section id='your-rights'>
+          <h2>Your rights</h2>
+          <p>Under the GDPR you can ask for access to your data, correction, deletion, restriction of processing, and a portable copy; you can object to processing based on legitimate interest; and you can withdraw consent (for analytics, directly via the <a href='#cookies-analytics'>controls above</a>) at any time without affecting past processing.</p>
+          <p>You can exercise several of these yourself: edit your profile in <a href='/settings'>account settings</a>, download your profile, posts and comments as JSON via <a href='/export-data'>data export</a>, delete individual posts, comments and chat messages, and delete your whole account. For everything else &mdash; including access to data the export does not cover &mdash; email <a href='mailto:metacirculardispatches@gmail.com'>metacirculardispatches@gmail.com</a>; the operator may need to verify that you control the account concerned.</p>
+          <p>You also have the right to lodge a complaint with a data protection supervisory authority, in particular in the EU member state where you live, where you work, or where you believe an infringement occurred.</p>
+        </section>
+
+        <section id='deletion'>
+          <h2>Account and content deletion</h2>
+          <p>You can delete your account at any time from <a href='/settings'>account settings</a> (Danger zone &rarr; Delete account). This is irreversible. When you do:</p>
+          <ul>
+            <li>Your username is replaced by a neutral placeholder, shown as [deleted]; your email address, password hash, bio and avatar are removed from the account record; the uploaded avatar image file is deleted from Earde's storage; and your sessions are ended.</li>
+            <li>Earde automatically requests deletion of your analytics profile and its events at PostHog.</li>
+            <li>Your posts, comments and chat messages remain in their communities, no longer attributed to you. Delete any of them individually first if you do not want them to remain.</li>
+            <li>Records needed for community safety &mdash; reports, moderation logs, lifecycle records &mdash; and project or GitHub metadata you connected are retained as described under <a href='#retention'>How long we keep data</a>.</li>
+            <li>Copies of formerly public content held by search engines or other third parties are outside Earde's control.</li>
           </ul>
         </section>
 
-        <section>
-          <h2 class='text-lg font-bold text-gray-900 mb-3 pb-1 border-b border-[#E0D9CC]'>Cookies and sessions</h2>
-          <p>Earde may use cookies or similar browser storage for login and session functionality and for basic operation of the site.</p>
+        <section id='automated-decisions'>
+          <h2>Automated decisions</h2>
+          <p>Earde does not make automated decisions about you that produce legal or similarly significant effects. Automated protections exist &mdash; rate limiting, the signup bot check and a spam trap &mdash; but they only limit form submissions; if you believe one blocked you in error, <a href='#contact'>contact the operator</a>.</p>
         </section>
 
-        <section>
-          <h2 class='text-lg font-bold text-gray-900 mb-3 pb-1 border-b border-[#E0D9CC]'>Analytics and tracking</h2>
-          <p>If analytics or tracking tools are added in the future, they should be disclosed here and configured deliberately.</p>
+        <section id='changes'>
+          <h2>Changes to this policy</h2>
+          <p>When this policy changes, the new version is published on this page with an updated date at the top, and material changes are summarized here. This page is always reachable without an account.</p>
         </section>
 
-        <section>
-          <h2 class='text-lg font-bold text-gray-900 mb-3 pb-1 border-b border-[#E0D9CC]'>Your controls</h2>
-          <p class='mb-3'>You can contact the operator of this site with any questions about your account or your data.</p>
-          <p>From your <a href='/settings' class='text-[#C94C4C] underline hover:text-[#A83A3A]'>account settings</a> you can update your profile or delete your account, and you can <a href='/export-data' class='text-[#C94C4C] underline hover:text-[#A83A3A]'>export your data</a>.</p>
-        </section>
-
-        <section>
-          <h2 class='text-lg font-bold text-gray-900 mb-3 pb-1 border-b border-[#E0D9CC]'>Changes to this page</h2>
-          <p>This page may be updated as Earde changes.</p>
+        <section id='contact'>
+          <h2>Contact</h2>
+          <p>Questions, requests, objections, or anything unclear: <a href='mailto:metacirculardispatches@gmail.com'>metacirculardispatches@gmail.com</a>.</p>
         </section>
 
       </div>

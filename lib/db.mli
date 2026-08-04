@@ -525,6 +525,23 @@ end
 
 module Rate_limit : sig
   val check : (module Caqti_lwt.CONNECTION) -> string -> string -> ([`Allowed | `Blocked], string) result Lwt.t
+
+  (** The single enforcement window (seconds); [cleanup_after_seconds] is
+      derived from it (2x), so cleanup can never remove a row a configured
+      window still needs. *)
+  val window_seconds : float
+
+  val cleanup_after_seconds : float
+
+  (** Deletes one bounded batch of rate-limit rows STRICTLY older than
+      [now - cleanup_after_seconds] (a row at exactly the boundary is kept)
+      and returns how many were removed. The only bind parameter is a
+      timestamp, so no IP address can reach a query, parameter, or error
+      string. [?now] exists for tests; production callers omit it. *)
+  val cleanup_expired :
+    ?now:float ->
+    (module Caqti_lwt.CONNECTION) ->
+    (int, string) result Lwt.t
 end
 
 module Admin : sig
@@ -674,6 +691,12 @@ val user_exists : (module Caqti_lwt.CONNECTION) -> string -> string -> (bool, st
 val get_user_for_login : (module Caqti_lwt.CONNECTION) -> string -> (((int * string * string * string) * (string * bool * bool)) option, string) result Lwt.t
 val anonymize_user : (module Caqti_lwt.CONNECTION) -> int -> (unit, string) result Lwt.t
 val get_user_public : (module Caqti_lwt.CONNECTION) -> string -> ((int * string * string * string option * string option) option, string) result Lwt.t
+
+(** avatar_url by user id ([Ok None] for no avatar or no such user). Read
+    BEFORE anonymization, which NULLs the column, so the deletion handler can
+    remove the stored upload after commit. *)
+val get_user_avatar_url : (module Caqti_lwt.CONNECTION) -> int -> (string option, string) result Lwt.t
+
 val get_user_analytics_props : (module Caqti_lwt.CONNECTION) -> int -> ((string * string * string * bool) option, string) result Lwt.t
 val update_user_profile : (module Caqti_lwt.CONNECTION) -> string option -> string option -> int -> (unit, string) result Lwt.t
 val get_user_karma : (module Caqti_lwt.CONNECTION) -> int -> (int, string) result Lwt.t

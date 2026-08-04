@@ -187,7 +187,7 @@ let load_launch_shell request ~user_id ~canonical_slug =
           in
           let sidebar =
             Pages.launch_knowledge_sidebar ~community ~channels ~sections
-              ~connections_active:true ~show_visibility_note:false
+              ~settings_active:true ~show_visibility_note:false
               ~can_manage:true ()
           in
           Lwt.return (Some (community, rail_communities, sidebar))

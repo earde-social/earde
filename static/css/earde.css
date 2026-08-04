@@ -132,6 +132,20 @@ ol, ul { margin: 0; padding: 0; list-style: none; }
    ========================================================================== */
 .app { height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
 .shell { flex: 1; display: flex; min-height: 0; overflow: hidden; }
+
+/* Global legal footer: the .app column's last child, below .shell, on every
+   chrome-bearing launch wrapper (the message sheet stays chrome-free). A
+   single quiet mono line — flex:none so it can never steal .shell height
+   beyond its own line box. */
+.launch-footer {
+  flex: none; display: flex; align-items: center; justify-content: center;
+  gap: var(--sp-5); padding: var(--sp-2) var(--sp-8);
+  border-top: var(--bw) solid var(--line); background: var(--paper);
+  font-family: var(--mono); font-size: var(--fs-11); color: var(--muted);
+}
+.launch-footer a { color: var(--muted); }
+.launch-footer a:hover { color: var(--slate); }
+.launch-footer__sep { color: var(--line2); }
 .main {
   flex: 1; min-width: 0; display: flex; flex-direction: column;
   overflow: hidden; background: var(--surface);
@@ -4268,66 +4282,87 @@ ol, ul { margin: 0; padding: 0; list-style: none; }
    the flex chain so both privacy shapes share one layout. */
 .launch-community-settings .main > .ph-no-capture { display: contents; }
 
+/* The shared settings shell (Community_settings_shell.wrap): scoped on the
+   wrapper's own cm-wrap--settings modifier, not a body class, so every
+   settings/management surface that adopts the shell — the settings hub,
+   Connections, Shared threads, Project home requests, Manage moderators,
+   Reports — gets the identical structure with no page-class-specific
+   layout CSS. */
+
 /* cm-wrap fills <main> as a column: fixed head band over the two scrollers. */
-.launch-community-settings .cm-wrap {
+.cm-wrap--settings {
   flex: 1; min-height: 0; display: flex; flex-direction: column;
 }
 
 /* Page head band (reference .page__head--tight geometry). */
-.launch-community-settings .cm-head {
+.cm-wrap--settings .cm-head {
   flex: none; display: flex; align-items: baseline; gap: var(--sp-8);
   padding: 15px 28px; background: var(--surface);
   border-bottom: var(--bw) solid var(--line2);
 }
-.launch-community-settings .cm-h1 {
+.cm-wrap--settings .cm-h1 {
   font-family: var(--serif); font-weight: 600; font-size: var(--fs-22);
   color: var(--ink); min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.launch-community-settings .cm-h1 .accent { color: var(--moss); }
-.launch-community-settings .cm-back {
+.cm-wrap--settings .cm-h1 .accent { color: var(--moss); }
+.cm-wrap--settings .cm-back {
   margin-left: auto; flex: none;
   font-family: var(--mono); font-size: var(--fs-11-5); color: var(--muted);
   text-decoration: none;
 }
-.launch-community-settings .cm-back:hover { color: var(--ink); }
+.cm-wrap--settings .cm-back:hover { color: var(--ink); }
 
 /* Two independent scrollers: the settings index and the panel column. */
-.launch-community-settings .cm-cols {
+.cm-wrap--settings .cm-cols {
   flex: 1; min-height: 0; display: flex; overflow: hidden;
 }
-.launch-community-settings .cm-index {
+.cm-wrap--settings .cm-index {
   flex: none; width: var(--settings-nav-w);
   border-right: var(--bw) solid var(--line);
   overflow-y: auto; scrollbar-width: thin;
   padding: var(--sp-7) var(--sp-6);
 }
-.launch-community-settings .cm-index-title {
+.cm-wrap--settings .cm-index-title {
   font-family: var(--mono); font-size: var(--fs-10); font-weight: 600;
   letter-spacing: var(--ls-kicker); text-transform: uppercase;
   color: var(--muted); padding: var(--sp-2) var(--sp-4) 5px;
 }
+/* Group headings inside the index (Community / Network / Structure /
+   People): the sidebar kicker grammar at index scale. */
+.cm-wrap--settings .cm-index-group {
+  font-family: var(--mono); font-size: var(--fs-9); font-weight: 600;
+  letter-spacing: var(--ls-kicker); text-transform: uppercase;
+  color: var(--muted); opacity: .75;
+  padding: var(--sp-6) var(--sp-4) var(--sp-2);
+}
 /* Index links mirror the .navitem grammar (the markup is pinned, so the
    class names stay cm-*). */
-.launch-community-settings .cm-index-link {
+.cm-wrap--settings .cm-index-link {
   display: flex; align-items: center; gap: var(--sp-4);
   padding: var(--sp-3) 9px; margin-bottom: var(--sp-1);
   border: var(--bw) solid transparent; border-radius: var(--r-2);
   font-size: var(--fs-13-5); color: var(--muted); text-decoration: none;
 }
-.launch-community-settings .cm-index-link:hover { background: var(--surface3); color: var(--ink); }
-.launch-community-settings .cm-index-link--active {
+.cm-wrap--settings .cm-index-link:hover { background: var(--surface3); color: var(--ink); }
+.cm-wrap--settings .cm-index-link--active {
   color: var(--ink); background: var(--surface); border-color: var(--line2);
   font-weight: 600;
 }
-.launch-community-settings .cm-index-link--active:hover { background: var(--surface); }
-.launch-community-settings .cm-index-link--danger { color: var(--danger); }
-.launch-community-settings .cm-index-link--danger:hover { color: var(--danger); }
+.cm-wrap--settings .cm-index-link--active:hover { background: var(--surface); }
+.cm-wrap--settings .cm-index-link--danger { color: var(--danger); }
+.cm-wrap--settings .cm-index-link--danger:hover { color: var(--danger); }
 
 /* Panel column: compact operational width on the approved panel geometry. */
-.launch-community-settings .cm-main {
+.cm-wrap--settings .cm-main {
   flex: 1; min-width: 0; overflow-y: auto; scrollbar-width: thin;
   padding: var(--sp-11) var(--sp-13) 70px;
 }
+
+/* Management panels (Connections / Shared threads / Project home requests)
+   keep their create-wrap ledgers, but inside the shell the panel column owns
+   spacing — no centered column, no double padding. */
+.cm-wrap--settings .cm-main .create-wrap { margin: 0; padding: 0; }
 .launch-community-settings .cm-panel {
   max-width: 760px; margin-bottom: var(--sp-9);
   border: var(--bw) solid var(--line2); border-radius: var(--r-3);
@@ -4824,25 +4859,10 @@ ol, ul { margin: 0; padding: 0; list-style: none; }
 
 /* ---- Page anatomy ----------------------------------------------------------- */
 
-/* Compact head band: mono community context above the sliced fragment
-   (reference .page__head--tight geometry, context only — the serif title
-   lives inside the pinned create-head). */
-.launch-project-home-review .launch-review-context {
-  flex: none; display: flex; align-items: baseline; gap: var(--sp-4);
-  padding: 12px 28px; background: var(--surface);
-  border-bottom: var(--bw) solid var(--line2);
-  font-family: var(--mono); font-size: var(--fs-11); color: var(--muted);
-}
-.launch-project-home-review .launch-review-context-name { color: var(--ink); }
-.launch-project-home-review .launch-review-context-slug { color: var(--muted); }
-
-/* Legacy create.css wrappers, recast as the main scroller and its column. */
-.launch-project-home-review .create-shell {
-  flex: 1; min-height: 0; overflow-y: auto; scrollbar-width: thin;
-}
-.launch-project-home-review .create-wrap {
-  max-width: 760px; margin: 0 auto; padding: var(--sp-11) 30px 70px;
-}
+/* The head band, index column and scroller now come from the shared
+   .cm-wrap--settings shell; this scope keeps only the queue panel's column
+   width (spacing is owned by the shell's cm-main). */
+.launch-project-home-review .create-wrap { max-width: 760px; }
 .launch-project-home-review .create-panel { display: block; }
 
 /* Serif page title over factual explanatory copy. */
@@ -6380,39 +6400,10 @@ ol, ul { margin: 0; padding: 0; list-style: none; }
    the flex chain so both privacy shapes share one layout. */
 .launch-community-reports .main > .ph-no-capture { display: contents; }
 
-/* cm-wrap fills <main> as a column: fixed head band over the scrolling queue. */
-.launch-community-reports .cm-wrap {
-  flex: 1; min-height: 0; display: flex; flex-direction: column;
-}
-
-/* Page head band (reference .page__head--tight geometry): serif title,
-   mono /c/:slug context, quiet mono back link right. */
-.launch-community-reports .cm-head {
-  flex: none; display: flex; align-items: baseline; gap: var(--sp-6);
-  padding: 15px 28px; background: var(--surface);
-  border-bottom: var(--bw) solid var(--line2);
-}
-.launch-community-reports .cm-h1 {
-  font-family: var(--serif); font-weight: 600; font-size: var(--fs-22);
-  color: var(--ink); min-width: 0;
-}
-.launch-community-reports .cm-h1 .accent { color: var(--moss); }
-.launch-community-reports .launch-reports-ctx {
-  font-size: var(--fs-11-5); color: var(--muted);
-}
-.launch-community-reports .cm-back {
-  margin-left: auto; flex: none;
-  font-family: var(--mono); font-size: var(--fs-11-5); color: var(--muted);
-  text-decoration: none;
-}
-.launch-community-reports .cm-back:hover { color: var(--ink); }
-
-/* The queue column is the scroller; the five-column docket needs the wide
-   register (the renderer's cm-wrap--wide), so the cap sits above the ledger's. */
-.launch-community-reports .cm-panel {
-  flex: 1; min-height: 0; overflow-y: auto; scrollbar-width: thin;
-  padding: var(--sp-10) 28px 70px;
-}
+/* Shell structure (head band, index column, panel scroller) now comes from
+   the shared .cm-wrap--settings scope — this scope keeps only the docket's
+   own content styling. The five-column docket still gets the wide register:
+   the panel is a plain block inside the shell's scrolling cm-main. */
 .launch-community-reports .cm-panel > * { max-width: 1160px; }
 .launch-community-reports .cm-panel-title {
   font-family: var(--serif); font-weight: 600; font-size: var(--fs-19);
@@ -6662,41 +6653,12 @@ ol, ul { margin: 0; padding: 0; list-style: none; }
    the flex chain so both privacy shapes share one layout. */
 .launch-community-moderators .main > .ph-no-capture { display: contents; }
 
-/* Unlike the single-ledger siblings, this surface stacks several cm-panel
-   sections (add form, Top Mods, Moderators, Legacy) — so cm-wrap itself is
-   the scroller and the head band stays pinned above it. */
-.launch-community-moderators .cm-wrap {
-  flex: 1; min-height: 0; overflow-y: auto; scrollbar-width: thin;
-  padding-bottom: 70px;
-}
-
-/* Page head band (reference .page__head--tight geometry): compact serif
-   title; the legacy accent span carries "— /c/:slug", restyled as the quiet
-   mono route context rather than a display flourish. */
-.launch-community-moderators .cm-head {
-  position: sticky; top: 0; z-index: 5;
-  display: flex; align-items: baseline; gap: var(--sp-6);
-  padding: 15px 28px; background: var(--surface);
-  border-bottom: var(--bw) solid var(--line2);
-}
-.launch-community-moderators .cm-h1 {
-  font-family: var(--serif); font-weight: 600; font-size: var(--fs-22);
-  color: var(--ink); min-width: 0;
-}
-.launch-community-moderators .cm-h1 .accent {
-  font-family: var(--mono); font-weight: 400; font-size: var(--fs-11-5);
-  color: var(--muted); margin-left: var(--sp-3);
-}
-.launch-community-moderators .cm-back {
-  margin-left: auto; flex: none;
-  font-family: var(--mono); font-size: var(--fs-11-5); color: var(--muted);
-  text-decoration: none;
-}
-.launch-community-moderators .cm-back:hover { color: var(--ink); }
-
-/* Stacked panels at register width, thin-ruled — flat sections, no cards. */
+/* Shell structure (head band, index column, panel scroller) now comes from
+   the shared .cm-wrap--settings scope — this scope keeps only the roster's
+   own content styling. Stacked panels at register width, thin-ruled — flat
+   sections, no cards; the shell's cm-main owns outer spacing. */
 .launch-community-moderators .cm-panel {
-  margin: var(--sp-10) 28px 0; max-width: 860px;
+  margin: 0 0 var(--sp-10); max-width: 860px;
   padding-bottom: var(--sp-9);
   border-bottom: var(--bw) solid var(--line);
 }
@@ -8202,70 +8164,177 @@ body.launch-reset-password .auth-foot {
 /* ==========================================================================
    EARDE INTEGRATION — privacy policy only
    Scoped beneath body.launch-privacy (GET /privacy through
-   launch_entry_page). The legal document keeps its legacy inner markup
-   byte-for-byte — headings, paragraphs, lists, the /settings and
-   /export-data links, and the Tailwind utility classes it has always
-   carried. Those utility classes are inert without the CDN, so they serve
-   here purely as scoping hooks (.max-w-2xl = the document column,
-   .space-y-8 = the section stack), the same skin-the-legacy-markup idiom
-   as the password-recovery section above. Each rule mirrors an existing
-   base rule (noted inline); no new visual vocabulary is introduced.
+   launch_entry_page). The 2026-08-04 rewrite replaced the legacy
+   Tailwind-hook markup with semantic classes: .privacy-doc is the document
+   column, .privacy-summary the plain-English lede card, .privacy-toc the
+   anchor index, .privacy-sections the section stack, .privacy-table the
+   disclosure tables, .privacy-consent the analytics-preference control
+   (the same data-analytics-* anatomy analytics.js drives on /settings,
+   revealed only when analytics is configured). Each rule mirrors an
+   existing base rule (noted inline); no new visual vocabulary is
+   introduced.
    ========================================================================== */
 
 /* Readable long-form measure inside the wrapper's .container--form column
    (mirrors the capped content columns; ~65ch at base body size). */
-body.launch-privacy .max-w-2xl { max-width: 640px; margin: 0 auto; }
+body.launch-privacy .privacy-doc {
+  max-width: 680px; margin: var(--sp-13) auto var(--sp-15);
+}
 
 /* Serif document title (mirrors .page__title at the community/project
    title size). */
-body.launch-privacy .max-w-2xl h1 {
+body.launch-privacy .privacy-doc h1 {
   font-family: var(--serif); font-weight: 600; font-size: var(--fs-27);
   line-height: var(--lh-tight); color: var(--ink);
   margin-bottom: var(--sp-4);
 }
 
-/* Existing plain-terms subtitle as the quiet mono context line under the
-   title (mirrors .breadcrumb / mono meta). */
-body.launch-privacy .max-w-2xl h1 + p {
+/* Last-updated line as the quiet mono context line under the title
+   (mirrors .breadcrumb / mono meta). */
+body.launch-privacy .privacy-updated {
   font-family: var(--mono); font-size: var(--fs-11); color: var(--muted);
-  margin-bottom: var(--sp-14);
+  margin-bottom: var(--sp-10);
 }
 
-/* Section rhythm (replaces the inert space-y-8 utility). */
-body.launch-privacy .space-y-8 > section + section { margin-top: var(--sp-13); }
+/* Plain-English summary: an inset aside card (mirrors the surface2 aside
+   panels — thin line, tight radius, no shadow). */
+body.launch-privacy .privacy-summary {
+  background: var(--surface2); border: var(--bw) solid var(--line);
+  border-radius: var(--r-3); padding: var(--sp-8) var(--sp-9);
+  margin-bottom: var(--sp-10);
+}
+body.launch-privacy .privacy-summary p {
+  font-size: var(--fs-13); line-height: var(--lh-prose); color: var(--muted);
+}
+body.launch-privacy .privacy-summary p + p { margin-top: var(--sp-5); }
+body.launch-privacy .privacy-summary ul {
+  list-style: disc; padding-left: var(--sp-11); margin: var(--sp-5) 0;
+}
+body.launch-privacy .privacy-summary li {
+  font-size: var(--fs-13); line-height: var(--lh-body); color: var(--ink);
+}
+body.launch-privacy .privacy-summary li + li { margin-top: var(--sp-3); }
+
+/* Table of contents: two-column mono index (mirrors the mono meta rails). */
+body.launch-privacy .privacy-toc {
+  border: var(--bw) solid var(--line); border-radius: var(--r-3);
+  padding: var(--sp-7) var(--sp-9); margin-bottom: var(--sp-13);
+}
+body.launch-privacy .privacy-toc ul {
+  columns: 2; column-gap: var(--sp-12);
+}
+body.launch-privacy .privacy-toc li {
+  font-family: var(--mono); font-size: var(--fs-12); line-height: var(--lh-ui);
+  padding: var(--sp-1) 0; break-inside: avoid;
+}
+body.launch-privacy .privacy-toc a { color: var(--slate); }
+
+/* Section rhythm. */
+body.launch-privacy .privacy-sections > section + section {
+  margin-top: var(--sp-14);
+}
 
 /* Section headings over a thin separator (mirrors .panel h2 / the fs-19
-   section-title step; the legacy markup already drew a bottom border). */
-body.launch-privacy .space-y-8 h2 {
+   section-title step). scroll-margin keeps anchor jumps clear of the
+   fixed top bar. */
+body.launch-privacy .privacy-sections h2 {
   font-family: var(--serif); font-weight: 600; font-size: var(--fs-19);
   color: var(--ink); padding-bottom: var(--sp-3);
   border-bottom: var(--bw) solid var(--line);
   margin-bottom: var(--sp-6);
 }
+body.launch-privacy .privacy-sections section {
+  scroll-margin-top: calc(var(--topbar-h) + var(--sp-8));
+}
+
+/* Sub-headings inside a section: uppercase mono kicker step (mirrors the
+   section kickers elsewhere in the system). */
+body.launch-privacy .privacy-sections h3 {
+  font-family: var(--mono); font-weight: 600; font-size: var(--fs-10-5);
+  letter-spacing: var(--ls-kicker); text-transform: uppercase;
+  color: var(--muted); margin: var(--sp-9) 0 var(--sp-4);
+}
 
 /* Long-form body text (mirrors the prose line-height step). */
-body.launch-privacy .space-y-8 p {
+body.launch-privacy .privacy-sections p {
   font-size: var(--fs-14); line-height: var(--lh-prose); color: var(--ink);
 }
-body.launch-privacy .space-y-8 p + p { margin-top: var(--sp-6); }
+body.launch-privacy .privacy-sections p + p { margin-top: var(--sp-6); }
 
-/* Restore the semantic bullet lists the global reset strips (the legacy
-   list-disc/list-inside utilities are inert). */
-body.launch-privacy .space-y-8 ul {
+/* Semantic bullet lists (the global reset strips list styling). */
+body.launch-privacy .privacy-sections ul {
   list-style: disc; padding-left: var(--sp-11);
   margin-top: var(--sp-5);
 }
-body.launch-privacy .space-y-8 li {
+body.launch-privacy .privacy-sections li {
   font-size: var(--fs-13-5); line-height: var(--lh-body); color: var(--ink);
 }
-body.launch-privacy .space-y-8 li + li { margin-top: var(--sp-3); }
+body.launch-privacy .privacy-sections li + li { margin-top: var(--sp-3); }
+body.launch-privacy .privacy-sections ul + p { margin-top: var(--sp-6); }
 
 /* Inline document links: keep the system slate but underline for in-prose
    affordance (base `a` rule is unchanged elsewhere). */
-body.launch-privacy .space-y-8 a {
+body.launch-privacy .privacy-sections a,
+body.launch-privacy .privacy-summary a {
   color: var(--slate); text-decoration: underline;
   text-underline-offset: 2px;
 }
+
+/* Disclosure tables (purpose/basis, cookies): the flat table idiom —
+   hairline rules, mono header row, no zebra. The wrap keeps a wide table
+   scrolling inside its own box on narrow viewports instead of the page. */
+body.launch-privacy .privacy-table-wrap {
+  overflow-x: auto; margin: var(--sp-6) 0;
+  border: var(--bw) solid var(--line); border-radius: var(--r-3);
+}
+body.launch-privacy .privacy-table {
+  width: 100%; border-collapse: collapse; min-width: 480px;
+}
+body.launch-privacy .privacy-table th {
+  font-family: var(--mono); font-weight: 600; font-size: var(--fs-10-5);
+  letter-spacing: var(--ls-kicker); text-transform: uppercase;
+  color: var(--muted); text-align: left;
+  padding: var(--sp-4) var(--sp-7);
+  border-bottom: var(--bw) solid var(--line2);
+  background: var(--surface2);
+}
+body.launch-privacy .privacy-table td {
+  font-size: var(--fs-13); line-height: var(--lh-body); color: var(--ink);
+  padding: var(--sp-5) var(--sp-7); vertical-align: top;
+}
+body.launch-privacy .privacy-table tbody tr + tr td {
+  border-top: var(--bw) solid var(--line);
+}
+
+/* Analytics-preference control: an inset panel matching the settings-page
+   account-panel idiom (thin line, paper surface, quiet mono state line).
+   Ships hidden; analytics.js reveals it only under a valid analytics
+   configuration, so no dead control can render. */
+body.launch-privacy .privacy-consent {
+  background: var(--surface); border: var(--bw) solid var(--line2);
+  border-radius: var(--r-3); padding: var(--sp-8) var(--sp-9);
+  margin: var(--sp-6) 0;
+}
+body.launch-privacy .privacy-consent__state {
+  display: block; font-family: var(--mono); font-size: var(--fs-12);
+  color: var(--muted); margin-bottom: var(--sp-5);
+}
+body.launch-privacy .privacy-consent__btn {
+  font-family: var(--sans); font-weight: 600; font-size: var(--fs-12);
+  border: var(--bw) solid var(--line2); border-radius: var(--r-2);
+  padding: var(--sp-3) var(--sp-7); cursor: pointer;
+  background: var(--surface); color: var(--muted); margin-right: var(--sp-4);
+}
+body.launch-privacy .privacy-consent__btn--allow {
+  color: #fff; background: var(--moss); border-color: var(--moss);
+}
+body.launch-privacy .privacy-consent__error {
+  display: block; color: var(--danger); font-size: var(--fs-11);
+  margin-top: var(--sp-4);
+}
+/* display:block above would defeat the hidden attribute analytics.js
+   toggles — restate it. */
+body.launch-privacy .privacy-consent__error[hidden] { display: none; }
 
 /* Analytics consent banner (markup shared with the legacy layout; mirrors
    the .launch-bring block byte-for-byte under this root). */

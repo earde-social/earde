@@ -380,10 +380,13 @@ let confirm_body ?request ~(community : community) ~(target : target) ~note
 (* --- Documents --- *)
 
 (* Identical shell handling to the sibling review surface: with launch chrome
-   the mono community context precedes the create-shell marker; without it
-   (only when the durable community record could not be re-read AFTER
-   authorization succeeded) the same body renders inside the chrome-free
-   launch message document rather than fabricating community data. *)
+   the panel renders inside the shared community-settings shell (header band
+   + grouped settings navigation, Connections active — the viewer is
+   top_mod-or-durable-admin by the read model's SQL, so the full permitted
+   nav is honest); without it (only when the durable community record could
+   not be re-read AFTER authorization succeeded) the same body renders inside
+   the chrome-free launch message document rather than fabricating community
+   data. *)
 let document ?user ?request ?shell ~title ~body () =
   let wrapped =
     Printf.sprintf
@@ -397,21 +400,17 @@ let document ?user ?request ?shell ~title ~body () =
         ~content:(Printf.sprintf "<div class='create-shell'>%s</div>" wrapped)
         ()
   | Some ((community_record : Db.community), rail_communities, sidebar) ->
-      let context =
-        Printf.sprintf
-          "<div class='launch-review-context'><span \
-           class='launch-review-context-name'>%s</span><span \
-           class='launch-review-context-slug'>/c/%s</span></div>"
-          (esc community_record.Db.name)
-          (esc community_record.Db.slug)
+      let content =
+        Community_settings_shell.wrap ~slug:community_record.Db.slug
+          ~active:Community_settings_shell.Connections
+          ~can_complete_setup:
+            (Community_settings_shell.can_complete_setup
+               ~community:community_record ~authorized:true)
+          ~network_manager:true ~panel:wrapped ()
       in
       Components.launch_community_page ?user ?request ~noindex:true
         ~rail_communities ~community:community_record ~sidebar
-        ~page_class:"launch-community-connections" ~title
-        ~content:
-          (context
-          ^ Printf.sprintf "<div class='create-shell'>%s</div>" wrapped)
-        ()
+        ~page_class:"launch-community-connections" ~title ~content ()
 
 let management_page ?user ?request ?shell ~state ~feedback () =
   document ?user ?request ?shell ~title:"Connections"

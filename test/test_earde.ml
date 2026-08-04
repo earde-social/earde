@@ -2103,10 +2103,139 @@ module Step6_events = struct
             AnT.clear_configuration_override ();
             Lwt.return_unit))
 
+  let q_set_avatar =
+    (Caqti_type.(t2 (option string) int) ->. Caqti_type.unit)
+    "UPDATE users SET avatar_url = $1, bio = 'step6 bio' WHERE id = $2"
+
+  let q_bio_avatar_by_id =
+    (Caqti_type.int ->? Caqti_type.(t2 (option string) (option string)))
+    "SELECT bio, avatar_url FROM users WHERE id = $1"
+
+  (* Account deletion's file cleanup: the validated local upload disappears,
+     a bystander's file survives, a missing file and an external URL are both
+     harmless, and bio/avatar_url are scrubbed in the same transaction.
+     Fixture files live under the test CWD's static/uploads — the same
+     relative root production resolves — inside dune's _build sandbox, never
+     the source tree. *)
+  let delete_account_avatar_case =
+    db_case "account deletion removes only its own validated avatar file"
+      (fun ~url conn c ->
+        let (module C : Caqti_lwt.CONNECTION) = c in
+        let (_ : int) = Sys.command "mkdir -p static/uploads" in
+        let write path =
+          let oc = open_out_bin path in
+          output_string oc "step6 webp bytes";
+          close_out oc
+        in
+        let a_file = "static/uploads/earde_991000_000001.webp" in
+        let b_file = "static/uploads/earde_991000_000002.webp" in
+        write a_file;
+        write b_file;
+        let* a = C.find q_insert_user ("step6_avatar_a", "x") in
+        let* a = or_fail "user a" a in
+        let* b = C.find q_insert_user ("step6_avatar_b", "x") in
+        let* b = or_fail "user b" b in
+        let* c_missing = C.find q_insert_user ("step6_avatar_c", "x") in
+        let* c_missing = or_fail "user c" c_missing in
+        let* d_external = C.find q_insert_user ("step6_avatar_d", "x") in
+        let* d_external = or_fail "user d" d_external in
+        let set uid value =
+          let* r = C.exec q_set_avatar (value, uid) in
+          or_fail "avatar fixture" r
+        in
+        let* () = set a (Some "/static/uploads/earde_991000_000001.webp") in
+        let* () = set b (Some "/static/uploads/earde_991000_000002.webp") in
+        let* () =
+          set c_missing (Some "/static/uploads/earde_991000_000404.webp")
+        in
+        let* () =
+          set d_external (Some "https://cdn.example.com/earde_1_2.webp")
+        in
+        let run_delete uid name =
+          let pipeline =
+            Dream.sql_pool url @@ Dream.memory_sessions @@ fun req ->
+            let* () =
+              Dream.set_session_field req "user_id" (string_of_int uid)
+            in
+            let* () = Dream.set_session_field req "username" name in
+            let csrf = Dream.csrf_token req in
+            Dream.set_body req (form_body [ ("dream.csrf", csrf) ]);
+            Earde.Handlers.delete_account_handler req
+          in
+          pipeline
+            (Dream.request ~method_:`POST ~target:"/delete-account"
+               ~headers:
+                 [ ("Content-Type", "application/x-www-form-urlencoded") ]
+               "")
+        in
+        let check_scrubbed label uid =
+          let* profile = C.find_opt q_bio_avatar_by_id uid in
+          let* profile = or_fail (label ^ " row") profile in
+          match profile with
+          | Some (bio, avatar) ->
+              Alcotest.(check (option string)) (label ^ " bio cleared") None
+                bio;
+              Alcotest.(check (option string)) (label ^ " avatar cleared")
+                None avatar;
+              Lwt.return_unit
+          | None -> Alcotest.failf "%s row missing" label
+        in
+        let drop_job_and_user uid =
+          let did = "user:" ^ string_of_int uid in
+          let* job = Earde.Db.get_posthog_deletion_job conn did in
+          let* job = or_fail_s "job row" job in
+          let* () =
+            match job with
+            | Some (job_id, _, _, _) ->
+                let* r = C.exec q_delete_job job_id in
+                or_fail "drop job" r
+            | None -> Lwt.return_unit
+          in
+          let* r = C.exec q_delete_user uid in
+          or_fail "drop user" r
+        in
+        Lwt.finalize
+          (fun () ->
+            (* A: a real local upload — its file must go, B's must stay. *)
+            let* response = run_delete a "step6_avatar_a" in
+            Alcotest.(check bool) "A: deletion redirects" true
+              (is_redirect (Dream.status_to_int (Dream.status response)));
+            let* () =
+              wait_until ~label:"A avatar file removed" (fun () ->
+                  Lwt.return (not (Sys.file_exists a_file)))
+            in
+            Alcotest.(check bool) "bystander file untouched" true
+              (Sys.file_exists b_file);
+            let* () = check_scrubbed "A" a in
+            (* C: the stored URL's file never existed — deletion still
+               succeeds. *)
+            let* response = run_delete c_missing "step6_avatar_c" in
+            Alcotest.(check bool) "C: deletion redirects" true
+              (is_redirect (Dream.status_to_int (Dream.status response)));
+            let* () = check_scrubbed "C" c_missing in
+            (* D: an external URL never reaches the filesystem. *)
+            let* response = run_delete d_external "step6_avatar_d" in
+            Alcotest.(check bool) "D: deletion redirects" true
+              (is_redirect (Dream.status_to_int (Dream.status response)));
+            let* () = check_scrubbed "D" d_external in
+            Alcotest.(check bool) "bystander file still present at the end"
+              true
+              (Sys.file_exists b_file);
+            Lwt.return_unit)
+          (fun () ->
+            (try Sys.remove a_file with _ -> ());
+            (try Sys.remove b_file with _ -> ());
+            (* Anonymized rows no longer match the step6_ cleanup pattern —
+               drop their jobs and rows here; B keeps its step6_ name and is
+               swept by the module cleanup. *)
+            let* () = drop_job_and_user a in
+            let* () = drop_job_and_user c_missing in
+            drop_job_and_user d_external))
+
   let suite =
     [ signup_case; login_case; join_case; leave_case; chat_case; post_case
     ; comment_case; promote_case; create_community_case; update_settings_case
-    ; visibility_case; delete_account_case
+    ; visibility_case; delete_account_case; delete_account_avatar_case
     ]
 end
 
@@ -2349,12 +2478,23 @@ module Step7_deletion = struct
     let* row = C.find_opt q_job_state job_id in
     or_fail "job state" row
 
+  let q_set_profile =
+    (Caqti_type.int ->. Caqti_type.unit)
+    "UPDATE users SET bio = 'step7 bio', avatar_url = '/static/uploads/step7.webp'
+     WHERE id = $1"
+
+  let q_profile_by_id =
+    (Caqti_type.int ->? Caqti_type.(t2 (option string) (option string)))
+    "SELECT bio, avatar_url FROM users WHERE id = $1"
+
   let atomic_case =
     db_case "atomic anonymize+enqueue: one idempotent job, user anonymized"
       (fun ~url:_ conn c ->
         let (module C : Caqti_lwt.CONNECTION) = c in
         let* uid = C.find Step6_events.q_insert_user ("step7_atomic", "x") in
         let* uid = or_fail "user" uid in
+        let* r = C.exec q_set_profile uid in
+        let* () = or_fail "profile fixture" r in
         let did = "user:" ^ string_of_int uid in
         let* r = Earde.Db.anonymize_user_and_enqueue_posthog_deletion conn uid in
         let* job_id, distinct_id = or_fail_s "anonymize+enqueue" r in
@@ -2364,6 +2504,15 @@ module Step7_deletion = struct
         Alcotest.(check (option string)) "anonymized"
           (Some (Printf.sprintf "[deleted_%d]" uid))
           name;
+        (* The rewrite also erases the user-authored profile fields — the
+           settings copy and /privacy both promise their removal. *)
+        let* profile = C.find_opt q_profile_by_id uid in
+        let* profile = or_fail "profile row" profile in
+        (match profile with
+         | Some (bio, avatar) ->
+             Alcotest.(check (option string)) "bio cleared" None bio;
+             Alcotest.(check (option string)) "avatar cleared" None avatar
+         | None -> Alcotest.fail "anonymized user row missing");
         let* state = job_state c job_id in
         (match state with
          | Some (status, attempts, last_error) ->
@@ -3687,10 +3836,11 @@ let bring_feedbacks =
   ; ("failed", Some Gp.Failed)
   ]
 
-(* Shared invariants: every access × feedback state explains that members do
-   not need GitHub and what connecting does, keeps the factual verification
-   language, stays noindex, and never emits a forbidden endorsement claim
-   (checked case-insensitively) or a link to the admin-only legacy route. *)
+(* Shared invariants: every access × feedback state keeps the maintainer
+   flow explanation and the factual verification language, stays noindex,
+   never emits a forbidden endorsement claim (checked case-insensitively) or
+   a link to the admin-only legacy route — and carries none of the retired
+   members-don't-need-GitHub marketing or the named Lwt/OCaml example. *)
 let bring_shared_case (access_name, access) (feedback_name, feedback) =
   bring_case
     (Printf.sprintf "%s, %s" access_name feedback_name)
@@ -3702,18 +3852,28 @@ let bring_shared_case (access_name, access) (feedback_name, feedback) =
         Alcotest.(check bool) ("must not contain: " ^ s) false
           (contains lower (String.lowercase_ascii s))
       in
-      must "do not need a GitHub account";
       must "verify project maintainers and their public repositories";
       must "does not automatically grant moderation rights";
       must "Project connected through GitHub";
       must "Verified through GitHub";
+      must "Reads public-repository metadata only";
+      must "no source-code or write access";
       must "noindex";
       must_not_ci "official community";
       must_not_ci "official home";
       must_not_ci "GitHub-approved";
       must_not_ci "GitHub-endorsed";
       must_not_ci "/new-community";
-      must_not_ci "/projects/new")
+      must_not_ci "/projects/new";
+      (* Retired copy: the page no longer markets the absence of GitHub for
+         ordinary members (and never claims GitHub is required either), and
+         the two-option explainer stands without the named example. *)
+      must_not_ci "do not need a GitHub account";
+      must_not_ci "never need GitHub";
+      must_not_ci "without GitHub";
+      must_not_ci "No GitHub required";
+      must_not_ci "Lwt to OCaml";
+      must_not_ci "GitHub is required")
 
 let bring_shared_cases =
   List.concat_map
@@ -3997,7 +4157,7 @@ module Gh_bring = struct
     ]
 
   let copy_case =
-    case "copy: no endorsement claims, members-without-GitHub stated"
+    case "copy: no endorsement claims, no members-without-GitHub marketing"
       (fun () ->
         List.iter
           (fun (label, session, mode) ->
@@ -4009,9 +4169,12 @@ module Gh_bring = struct
                 Alcotest.(check bool) (label ^ " lacks " ^ phrase) false
                   (contains body phrase))
               [ "official community"; "official home"; "github-approved"
-              ; "github-endorsed" ];
-            Alcotest.(check bool) (label ^ ": members need no GitHub") true
-              (contains body "do not need a github account"))
+              ; "github-endorsed"
+              (* Retired: the page neither markets the absence of GitHub for
+                 ordinary members nor claims GitHub is required. *)
+              ; "do not need a github account"; "never need github"
+              ; "without github"; "no github required"; "lwt to ocaml"
+              ; "github is required" ])
           all_states)
 
   let headers_case =
@@ -15824,8 +15987,16 @@ let ps_count haystack needle =
   go 0 0
 
 let ps_fragment html =
-  let start_marker = "<div class='create-shell'>" in
-  match ps_index_of html start_marker 0 with
+  (* The feature panel: the degraded (chrome-free) documents keep the legacy
+     create-shell marker; the launch documents now render the panel inside
+     the shared settings shell's cm-main column. Either way the fragment is
+     the panel content, never the chrome. *)
+  let start =
+    match ps_index_of html "<div class='create-shell'>" 0 with
+    | Some s -> Some s
+    | None -> ps_index_of html "<div class='cm-main'>" 0
+  in
+  match start with
   | None -> Alcotest.fail "create shell missing from page"
   | Some s -> (
       match ps_index_of html "</main>" s with
@@ -55907,14 +56078,17 @@ module Reset_token_escaping = struct
       wrapper_case; login_signup_case ]
 end
 
-(* Cartographic Civic pass 16C: /privacy through the launch entry wrapper.
-   The legal document is authoritative: its complete inner fragment is pinned
-   byte-for-byte below, so any wording, structure, heading, list or link
-   drift in the policy fails loudly. The wrapper contract is asserted against
-   the real renderer through real session middleware: single local
-   stylesheet, no Tailwind CDN, no Google Fonts, no auth.css, no
-   notification chrome, no forms, and a viewer-independent document (the
-   ignored ?user must not change a byte). *)
+(* /privacy — the 2026-08-04 Article-13-style rewrite. The suite pins the
+   wrapper contract (single local stylesheet, no Tailwind CDN, no Google
+   Fonts, no auth.css, no notification chrome, no forms, viewer-independent,
+   indexable), the required disclosures (controller contact, data categories,
+   purpose/legal-basis rows, public-content/indexing, Shared Threads, GitHub,
+   PostHog + consent cookie, retention, rights, complaint route, automated
+   decisions), the anchor TOC's id/href pairing, the analytics-preference
+   control anatomy (the same data-analytics-* hooks analytics.js drives on
+   /settings — buttons + fetch, never a <form>), and the ABSENCE of the old
+   page's unsupportable claims (future-tense analytics disclosure,
+   "anonymous" analytics wording, absolute security/anonymity language). *)
 module Privacy_launch = struct
   let case name f = Alcotest.test_case name `Quick f
 
@@ -55930,69 +56104,13 @@ module Privacy_launch = struct
     in
     !rendered
 
-  (* Byte-for-byte copy of the legal fragment the renderer embeds. *)
-  let legal_fragment = {|
-    <div class='max-w-2xl mx-auto mt-10 mb-16 px-4'>
-
-      <h1 class='text-3xl font-extrabold text-gray-900 mb-2'>Privacy Policy</h1>
-      <p class='text-sm text-gray-400 mb-10'>This page explains, in plain terms, what data Earde handles and why.</p>
-
-      <div class='space-y-8 text-gray-700 leading-relaxed'>
-
-        <section>
-          <h2 class='text-lg font-bold text-gray-900 mb-3 pb-1 border-b border-[#E0D9CC]'>What Earde is</h2>
-          <p>Earde is a community platform for technical communities. It combines live chat with durable discussion threads and a searchable archive.</p>
-        </section>
-
-        <section>
-          <h2 class='text-lg font-bold text-gray-900 mb-3 pb-1 border-b border-[#E0D9CC]'>Data we may collect or store</h2>
-          <p class='mb-3'>To operate the service, Earde may store:</p>
-          <ul class='list-disc list-inside space-y-2 text-sm'>
-            <li>Account information, such as your username and email address.</li>
-            <li>Profile information you choose to add.</li>
-            <li>Community content, posts, and comments you create.</li>
-            <li>Chat messages you send.</li>
-            <li>Session and authentication data needed to keep you signed in.</li>
-            <li>Moderation records related to reports and enforcement actions.</li>
-            <li>Operational and security logs.</li>
-          </ul>
-        </section>
-
-        <section>
-          <h2 class='text-lg font-bold text-gray-900 mb-3 pb-1 border-b border-[#E0D9CC]'>How we use data</h2>
-          <ul class='list-disc list-inside space-y-2 text-sm'>
-            <li>To operate and provide the service.</li>
-            <li>To authenticate users and keep accounts secure.</li>
-            <li>To display community content.</li>
-            <li>To moderate abuse and enforce community rules.</li>
-            <li>To maintain the security of the service.</li>
-            <li>To debug problems and improve reliability.</li>
-          </ul>
-        </section>
-
-        <section>
-          <h2 class='text-lg font-bold text-gray-900 mb-3 pb-1 border-b border-[#E0D9CC]'>Cookies and sessions</h2>
-          <p>Earde may use cookies or similar browser storage for login and session functionality and for basic operation of the site.</p>
-        </section>
-
-        <section>
-          <h2 class='text-lg font-bold text-gray-900 mb-3 pb-1 border-b border-[#E0D9CC]'>Analytics and tracking</h2>
-          <p>If analytics or tracking tools are added in the future, they should be disclosed here and configured deliberately.</p>
-        </section>
-
-        <section>
-          <h2 class='text-lg font-bold text-gray-900 mb-3 pb-1 border-b border-[#E0D9CC]'>Your controls</h2>
-          <p class='mb-3'>You can contact the operator of this site with any questions about your account or your data.</p>
-          <p>From your <a href='/settings' class='text-[#C94C4C] underline hover:text-[#A83A3A]'>account settings</a> you can update your profile or delete your account, and you can <a href='/export-data' class='text-[#C94C4C] underline hover:text-[#A83A3A]'>export your data</a>.</p>
-        </section>
-
-        <section>
-          <h2 class='text-lg font-bold text-gray-900 mb-3 pb-1 border-b border-[#E0D9CC]'>Changes to this page</h2>
-          <p>This page may be updated as Earde changes.</p>
-        </section>
-
-      </div>
-    </div>|}
+  (* The 16 anchor sections, in document order. The TOC must link every one
+     and every one must exist as <section id='…'>. *)
+  let section_ids =
+    [ "controller"; "data-we-collect"; "how-we-use"; "public-content";
+      "shared-threads"; "github"; "cookies-analytics"; "recipients";
+      "transfers"; "retention"; "security"; "your-rights"; "deletion";
+      "automated-decisions"; "changes"; "contact" ]
 
   let wrapper_case =
     case "wrapper: launch entry shell, only local launch assets" (fun () ->
@@ -56013,16 +56131,138 @@ module Privacy_launch = struct
         (* Entry chrome is form-free and the document carries none. *)
         ps_must_not page "<form")
 
-  let legal_identity_case =
-    case "legal fragment is embedded byte-for-byte" (fun () ->
+  let structure_case =
+    case "title, date, TOC anchors and section skeleton" (fun () ->
         let page = render_privacy () in
-        ps_must page legal_fragment;
+        ps_must page "<h1>Privacy Policy</h1>";
+        ps_must page "Last updated: 4 August 2026";
         Alcotest.(check int) "one h1" 1 (ps_count page "<h1");
-        Alcotest.(check int) "seven h2" 7 (ps_count page "<h2");
-        Alcotest.(check int) "two lists" 2 (ps_count page "<ul");
-        Alcotest.(check int) "thirteen items" 13 (ps_count page "<li>");
-        Alcotest.(check int) "settings link" 1 (ps_count page "href='/settings'");
-        Alcotest.(check int) "export link" 1 (ps_count page "href='/export-data'"))
+        Alcotest.(check int) "sixteen h2" 16 (ps_count page "<h2");
+        Alcotest.(check int) "sixteen sections" 16
+          (ps_count page "<section id='");
+        Alcotest.(check int) "toc entries" 16
+          (List.length section_ids);
+        List.iter
+          (fun id ->
+            ps_must page (Printf.sprintf "href='#%s'" id);
+            ps_must page (Printf.sprintf "<section id='%s'>" id))
+          section_ids;
+        (* The self-service links: settings twice (rights + deletion),
+           export once. *)
+        Alcotest.(check int) "settings links" 2
+          (ps_count page "href='/settings'");
+        Alcotest.(check int) "export link" 1
+          (ps_count page "href='/export-data'"))
+
+  let disclosure_case =
+    case "required Article-13 disclosures are present" (fun () ->
+        let page = render_privacy () in
+        (* Controller and contact: named contact channel, three times
+           (controller, rights, contact). *)
+        ps_must page "is the data controller";
+        Alcotest.(check int) "contact mailto" 3
+          (ps_count page "mailto:metacirculardispatches@gmail.com");
+        (* Data categories and accuracy about credentials. *)
+        ps_must page "salted argon2id hash";
+        ps_must page "IP address";
+        ps_must page "user agent";
+        (* Purpose / legal-basis mapping. *)
+        ps_must page "Performance of a contract (Art. 6(1)(b) GDPR)";
+        ps_must page "Legitimate interest";
+        ps_must page "Consent (Art. 6(1)(a) GDPR)";
+        ps_must page "Legal obligation";
+        (* Public content and indexing: surface-based, never
+           community-categorical. *)
+        ps_must page "may be indexed by search engines";
+        ps_must page "moderation log";
+        ps_must page "publicly accessible communities, channels and sections";
+        ps_must page "limited to users authorized to view that area";
+        (* Shared Threads. *)
+        ps_must page "one canonical thread";
+        ps_must page "top moderators of the origin and destination";
+        (* GitHub: durable wording, no exact API-call count. *)
+        ps_must page "never stores your GitHub tokens";
+        ps_must page "Only repositories that are public on GitHub";
+        ps_must page
+          "only for the read-only requests needed to verify the installation";
+        (* Cookies + PostHog + consent. *)
+        ps_must page "dream.session";
+        ps_must page "earde_analytics_consent";
+        ps_must page "eu.i.posthog.com";
+        ps_must page "Session Replay";
+        ps_must page "the PostHog script is not downloaded";
+        (* Recipients, transfers, no-sale statement. *)
+        ps_must page "Brevo";
+        ps_must page "Cloudflare";
+        ps_must page "Hetzner";
+        ps_must page "does not sell personal data";
+        ps_must page "European Economic Area";
+        (* Retention. *)
+        ps_must page "How long we keep data";
+        ps_must page "24 hours";
+        ps_must page "about two weeks";
+        ps_must page "one-minute request window";
+        ps_must page "uploaded avatar image file is deleted";
+        (* Rights, withdrawal, complaint. *)
+        ps_must page "withdraw consent";
+        ps_must page "lodge a complaint";
+        ps_must page "supervisory authority";
+        (* Automated decisions and deletion behavior. *)
+        ps_must page
+          "does not make automated decisions about you that produce legal \
+           or similarly significant effects";
+        ps_must page "[deleted]")
+
+  let consent_controls_case =
+    case "analytics-preference control: settings anatomy, no form" (fun () ->
+        let page = render_privacy () in
+        (* Exactly the data-analytics-* anatomy analytics.js drives on
+           /settings, shipped hidden so a deployment without analytics
+           renders no dead control. Buttons, not a form. *)
+        ps_must page "<div class='privacy-consent' data-analytics-settings hidden>";
+        ps_must page "data-analytics-state";
+        ps_must page "data-analytics-accept";
+        ps_must page "data-analytics-refuse";
+        ps_must page "data-analytics-error";
+        Alcotest.(check int) "two buttons" 2
+          (ps_count page "<button type='button' data-analytics-");
+        ps_must_not page "<form";
+        (* One panel and one global footer — the footer's
+           Analytics-preferences link may not duplicate the control, and the
+           anchor it targets is this section's id. *)
+        Alcotest.(check int) "one preferences panel" 1
+          (ps_count page "data-analytics-settings");
+        Alcotest.(check int) "one global footer" 1
+          (ps_count page "<footer class='launch-footer'>");
+        ps_must page "<section id='cookies-analytics'>")
+
+  let removed_claims_case =
+    case "old unsupportable claims are gone" (fun () ->
+        let page = render_privacy () in
+        (* The pre-rewrite page deferred analytics to the future; PostHog is
+           live and consent-gated, so that sentence must never return. *)
+        ps_must_not page "If analytics or tracking tools are added in the future";
+        (* Authenticated analytics uses internal user:<id> identities, so no
+           "anonymous" claim may appear anywhere in the document. *)
+        ps_must_not page "anonymous";
+        ps_must_not page "Anonymous";
+        (* Absolute or template claims the audit could not support. *)
+        ps_must_not page "never share";
+        ps_must_not page "100% secure";
+        ps_must_not page "military-grade";
+        ps_must_not page "industry-standard";
+        ps_must_not page "end-to-end encrypted";
+        ps_must_not page "passwords are encrypted";
+        ps_must_not page "we value your privacy";
+        (* The categorical everything-in-a-public-community-is-public claim,
+           the fragile exact GitHub API-call count, and the indefinite
+           rate-limit retention wording are all retired. *)
+        ps_must_not page "Public communities are public";
+        ps_must_not page "exactly two read-only API calls";
+        ps_must_not page "not currently expired on a fixed schedule";
+        (* Passwords are hashed; the word "encrypted" may only describe the
+           GitHub flow cookie. *)
+        ps_must page "hashes, never in a readable form")
 
   let viewer_independence_case =
     case "ignored ?user changes nothing" (fun () ->
@@ -56046,8 +56286,256 @@ module Privacy_launch = struct
           "<a href='/privacy' target='_blank'>Privacy Policy</a>")
 
   let suite =
-    [ wrapper_case; legal_identity_case; viewer_independence_case;
-      signup_consent_link_case ]
+    [ wrapper_case; structure_case; disclosure_case; consent_controls_case;
+      removed_claims_case; viewer_independence_case; signup_consent_link_case ]
+end
+
+(* Avatar_uploads: the strict url→file mapping that makes account-deletion
+   file cleanup safe. Only the exact pipeline shape
+   /static/uploads/earde_<digits>_<digits>.webp maps to a local path;
+   external URLs, bundled assets, traversal shapes and free-text values all
+   map to None and never reach the filesystem. The removal test uses a
+   system temp file (outside the repository), not a repo path. *)
+module Avatar_upload_paths = struct
+  let case name f = Alcotest.test_case name `Quick f
+
+  let accepts =
+    case "pipeline-shaped urls map to their uploads file" (fun () ->
+        Alcotest.(check (option string))
+          "canonical shape"
+          (Some "static/uploads/earde_1722779100123_042917.webp")
+          (Earde.Avatar_uploads.local_file_of_url
+             "/static/uploads/earde_1722779100123_042917.webp");
+        Alcotest.(check (option string))
+          "short digit runs still match the shape"
+          (Some "static/uploads/earde_1_2.webp")
+          (Earde.Avatar_uploads.local_file_of_url
+             "/static/uploads/earde_1_2.webp"))
+
+  let rejects =
+    case "everything else maps to None" (fun () ->
+        let refuse label url =
+          Alcotest.(check (option string))
+            label None
+            (Earde.Avatar_uploads.local_file_of_url url)
+        in
+        refuse "external absolute URL"
+          "https://cdn.example.com/earde_1_2.webp";
+        refuse "protocol-relative URL" "//evil.example/earde_1_2.webp";
+        refuse "bundled static asset" "/static/images/logo-mark.svg";
+        refuse "traversal into images"
+          "/static/uploads/../images/logo-mark.svg";
+        refuse "encoded traversal" "/static/uploads/..%2F..%2Fetc%2Fpasswd";
+        refuse "nested separator" "/static/uploads/evil/earde_1_2.webp";
+        refuse "empty basename" "/static/uploads/";
+        refuse "bare prefix" "/static/uploads";
+        refuse "wrong suffix" "/static/uploads/earde_1_2.webp.sh";
+        refuse "wrong prefix" "/static/uploads/avatar_1_2.webp";
+        refuse "letters in the middle" "/static/uploads/earde_1_x2.webp";
+        refuse "missing separator" "/static/uploads/earde_12.webp";
+        refuse "two separators" "/static/uploads/earde_1_2_3.webp";
+        refuse "leading underscore" "/static/uploads/earde__2.webp";
+        refuse "dotted middle" "/static/uploads/earde_1_2.2.webp";
+        refuse "empty string" "";
+        refuse "plain text" "not a url at all")
+
+  let cleanup_dispatch =
+    case "cleanup composition: absent and non-local values touch nothing"
+      (fun () ->
+        let show = function
+          | `Removed -> "removed"
+          | `Absent -> "absent"
+          | `Failed -> "failed"
+          | `Not_local -> "not_local"
+        in
+        Alcotest.(check string) "no avatar" "not_local"
+          (show (Earde.Avatar_uploads.cleanup_deleted_account_avatar None));
+        Alcotest.(check string) "external avatar" "not_local"
+          (show
+             (Earde.Avatar_uploads.cleanup_deleted_account_avatar
+                (Some "https://cdn.example.com/earde_1_2.webp")));
+        Alcotest.(check string) "traversal avatar" "not_local"
+          (show
+             (Earde.Avatar_uploads.cleanup_deleted_account_avatar
+                (Some "/static/uploads/../images/logo-mark.svg"))))
+
+  let removal =
+    case "remove_local_file: unlink once, absent afterwards" (fun () ->
+        let path = Filename.temp_file "earde_avatar_test" ".webp" in
+        let show = function
+          | `Removed -> "removed"
+          | `Absent -> "absent"
+          | `Failed -> "failed"
+        in
+        Alcotest.(check string) "existing file is removed" "removed"
+          (show (Earde.Avatar_uploads.remove_local_file path));
+        Alcotest.(check bool) "file is gone" false (Sys.file_exists path);
+        Alcotest.(check string) "second attempt is absent, not a failure"
+          "absent"
+          (show (Earde.Avatar_uploads.remove_local_file path)))
+
+  let suite = [ accepts; rejects; cleanup_dispatch; removal ]
+end
+
+(* Db.Rate_limit.cleanup_expired: retention derives from the single
+   enforcement window (2x, so no configured window can outlive cleanup), the
+   boundary rule is strict-< (a row at exactly now - cleanup_after_seconds is
+   kept), active buckets survive, a forced DELETE failure surfaces as a
+   bounded Error that carries no fixture IP and leaves the limiter's check
+   path fully working, and the failure is transient (cleanup succeeds once
+   the fault is removed). Gated like every DB suite; the derivation case is
+   pure and always runs. *)
+module Rate_limit_cleanup = struct
+  let ( let* ) = Lwt.bind
+
+  open Caqti_request.Infix
+
+  let q_cleanup =
+    List.map
+      (fun sql -> (Caqti_type.unit ->. Caqti_type.unit) sql)
+      [ "DROP TRIGGER IF EXISTS rlc_fail_delete ON rate_limits"
+      ; "DROP FUNCTION IF EXISTS rlc_fail_fn()"
+      ; "DELETE FROM rate_limits WHERE ip_address LIKE 'rlc-%'"
+      ]
+
+  let or_fail label = function
+    | Ok v -> Lwt.return v
+    | Error e -> Alcotest.failf "%s: %s" label (Caqti_error.show e)
+
+  let or_fail_s label = function
+    | Ok v -> Lwt.return v
+    | Error e -> Alcotest.failf "%s: %s" label e
+
+  let db_case name f =
+    Alcotest.test_case name `Quick (fun () ->
+        match Sys.getenv_opt "EARDE_TEST_DATABASE_URL" with
+        | None | Some "" -> Alcotest.skip ()
+        | Some url ->
+            Lwt_main.run
+              (let* conn = Caqti_lwt_unix.connect (Uri.of_string url) in
+               let* conn = or_fail "connect" conn in
+               let (module C : Caqti_lwt.CONNECTION) = conn in
+               let cleanup () =
+                 Lwt_list.iter_s
+                   (fun q ->
+                     let* r = C.exec q () in
+                     let* _ = or_fail "cleanup" r in
+                     Lwt.return_unit)
+                   q_cleanup
+               in
+               let* () = cleanup () in
+               Lwt.finalize
+                 (fun () -> f conn (module C : Caqti_lwt.CONNECTION))
+                 (fun () ->
+                   Lwt.finalize cleanup (fun () -> C.disconnect ()))))
+
+  let q_insert_row =
+    (Caqti_type.(t2 (t2 string string) (t2 int float)) ->. Caqti_type.unit)
+    "INSERT INTO rate_limits (ip_address, endpoint, attempts, window_start)
+     VALUES ($1, $2, $3, $4)"
+
+  let q_surviving_ips =
+    (Caqti_type.unit ->* Caqti_type.string)
+    "SELECT ip_address FROM rate_limits WHERE ip_address LIKE 'rlc-%' ORDER BY ip_address"
+
+  let q_create_fail_fn =
+    (Caqti_type.unit ->. Caqti_type.unit)
+    "CREATE OR REPLACE FUNCTION rlc_fail_fn() RETURNS trigger AS 'BEGIN RAISE EXCEPTION ''rlc forced failure''; END' LANGUAGE plpgsql"
+
+  let q_create_fail_trigger =
+    (Caqti_type.unit ->. Caqti_type.unit)
+    "CREATE TRIGGER rlc_fail_delete BEFORE DELETE ON rate_limits FOR EACH ROW EXECUTE FUNCTION rlc_fail_fn()"
+
+  let q_drop_fail_trigger =
+    (Caqti_type.unit ->. Caqti_type.unit)
+    "DROP TRIGGER IF EXISTS rlc_fail_delete ON rate_limits"
+
+  let q_drop_fail_fn =
+    (Caqti_type.unit ->. Caqti_type.unit)
+    "DROP FUNCTION IF EXISTS rlc_fail_fn()"
+
+  (* Pure: the retention rule is derived from the enforcement window, never
+     invented — so a longer configured window automatically lengthens
+     retention and cleanup can never prune a row a current window needs. *)
+  let derivation_case =
+    Alcotest.test_case "retention derives from the enforcement window" `Quick
+      (fun () ->
+        Alcotest.(check (float 0.0001))
+          "one-minute window" 60.0 Earde.Db.Rate_limit.window_seconds;
+        Alcotest.(check (float 0.0001))
+          "retention is exactly two windows"
+          (2.0 *. Earde.Db.Rate_limit.window_seconds)
+          Earde.Db.Rate_limit.cleanup_after_seconds;
+        Alcotest.(check bool)
+          "retention can never undercut the window" true
+          (Earde.Db.Rate_limit.cleanup_after_seconds
+          >= Earde.Db.Rate_limit.window_seconds))
+
+  let expiry_case =
+    db_case "expired rows go, boundary and active rows stay" (fun conn c ->
+        let (module C : Caqti_lwt.CONNECTION) = c in
+        let now = 2_000_000.0 in
+        let retention = Earde.Db.Rate_limit.cleanup_after_seconds in
+        let insert ip age =
+          let* r = C.exec q_insert_row ((ip, "/login"), (3, now -. age)) in
+          or_fail "fixture row" r
+        in
+        let* () = insert "rlc-expired" (retention +. 0.5) in
+        (* Exactly at the boundary: the documented strict-< rule keeps it. *)
+        let* () = insert "rlc-boundary" retention in
+        let* () = insert "rlc-active" 10.0 in
+        let* deleted = Earde.Db.Rate_limit.cleanup_expired ~now conn in
+        let* deleted = or_fail_s "cleanup" deleted in
+        Alcotest.(check int) "exactly the expired row" 1 deleted;
+        let* ips = C.collect_list q_surviving_ips () in
+        let* ips = or_fail "surviving ips" ips in
+        Alcotest.(check (list string))
+          "boundary and active rows survive"
+          [ "rlc-active"; "rlc-boundary" ]
+          ips;
+        Lwt.return_unit)
+
+  let failure_case =
+    db_case "cleanup failure is bounded, IP-free, and leaves limiting working"
+      (fun conn c ->
+        let (module C : Caqti_lwt.CONNECTION) = c in
+        let now = 2_000_000.0 in
+        let retention = Earde.Db.Rate_limit.cleanup_after_seconds in
+        let* r =
+          C.exec q_insert_row
+            (("rlc-203.0.113.9", "/login"), (3, now -. retention -. 5.0))
+        in
+        let* () = or_fail "fixture row" r in
+        let* r = C.exec q_create_fail_fn () in
+        let* () = or_fail "create fn" r in
+        let* r = C.exec q_create_fail_trigger () in
+        let* () = or_fail "create trigger" r in
+        let* result = Earde.Db.Rate_limit.cleanup_expired ~now conn in
+        let* err =
+          match result with
+          | Error e -> Lwt.return e
+          | Ok _ -> Alcotest.fail "expected forced cleanup failure"
+        in
+        (* The DELETE binds only a timestamp — no stored IP can surface in
+           the bounded error string the middleware would log. *)
+        Alcotest.(check bool) "error carries no fixture IP" false
+          (contains err "203.0.113");
+        (* The limiter's own path is untouched by a broken cleanup. *)
+        let* check = Earde.Db.Rate_limit.check c "rlc-fresh" "/login" in
+        let* check = or_fail_s "check still works" check in
+        Alcotest.(check bool) "fresh request allowed" true
+          (check = `Allowed);
+        let* r = C.exec q_drop_fail_trigger () in
+        let* () = or_fail "drop trigger" r in
+        let* r = C.exec q_drop_fail_fn () in
+        let* () = or_fail "drop fn" r in
+        (* Transient: with the fault removed the same cleanup succeeds. *)
+        let* deleted = Earde.Db.Rate_limit.cleanup_expired ~now conn in
+        let* deleted = or_fail_s "cleanup after recovery" deleted in
+        Alcotest.(check bool) "expired rows now removed" true (deleted >= 1);
+        Lwt.return_unit)
+
+  let suite = [ derivation_case; expiry_case; failure_case ]
 end
 
 (* Cartographic Civic pass 17: the shared Pages.msg_page through the new
@@ -56769,9 +57257,16 @@ module Final_create_page = struct
       (fun () ->
         let page = launch_render ~user:"ncl_reviewer" () in
         ps_must page "<body class='launch-project-home-review'>";
-        ps_must page "launch-review-context";
+        (* The queue now renders inside the shared settings shell: the
+           header band, one grouped settings index with exactly one active
+           item (Project home requests), and the panel column. *)
+        ps_must page "cm-wrap cm-wrap--settings";
+        ps_must page "<nav class='cm-index'>";
+        ps_must page
+          "cm-index-link cm-index-link--active' \
+           href='/c/ocaml/project-home-requests'";
         ps_must page "<div class='ncl-sidebar-mark'></div>";
-        ps_must page "<div class='create-shell'>";
+        ps_must_not page "launch-review-context";
         ps_must_not page "launch-message-page")
 
   let degraded_suite =
@@ -58368,14 +58863,15 @@ module Legacy_census = struct
         Alcotest.(check int) "one copyPostLink definition" 1
           (count_in components "function copyPostLink");
         (* No count fetch anywhere in the component library: the badge is
-           server-rendered. The three document builders that carry a top bar
-           each call the one shared renderer, so no builder can hard-code a
-           badge (or a zero) of its own. *)
+           server-rendered. The four document builders that carry a
+           member-capable top bar (entry under Entry_viewer, app,
+           onboarding, community) each call the one shared renderer, so no
+           builder can hard-code a badge (or a zero) of its own. *)
         Alcotest.(check int) "no unread-notifs fetch call" 0
           (count_in components "unread-notifs");
         Alcotest.(check int) "no hard-coded badge markup" 0
           (count_in components "bell__count");
-        Alcotest.(check int) "three shared badge render calls" 3
+        Alcotest.(check int) "four shared badge render calls" 4
           (count_in components "Notification_badge.badge_html"))
 
   let suite =
@@ -58386,17 +58882,17 @@ module Legacy_census = struct
 end
 
 (* The persistent top-right launch-topbar action (Components.launch_connect_cta).
-   It replaced the ochre "＋ Connect" outline control with a compact dark
-   GitHub-mark "Connect" button, and it is the ONE shared value the four launch
-   documents render, so the assertions here are both rendered-document and
-   source-census: no wrapper may grow a private copy or drift back to the plus
-   glyph.
+   One shared value with the visible label "Connect a project", rendered
+   byte-identically for anonymous and authenticated viewers on every launch
+   topbar — the old anonymous "Bring a project" variant is retired — so the
+   assertions here are both rendered-document and source-census: no wrapper
+   may grow a private copy or a second wording.
 
-   The second half pins what must NOT have moved: /bring's own full-label
-   primary action stays byte-identical (the whole <form>…</form>, mark
-   included), the anonymous cluster keeps its three links and no Connect
-   button, and the auth/message documents — which have no application topbar —
-   gain nothing at all. Pure renderers plus a file scan: no database, no
+   The second half pins the /bring exception: the page whose route the CTA
+   targets suppresses the self-linking topbar action, keeps its own
+   full-label primary action byte-identical, and carries the viewer's auth
+   controls instead; the chrome-free message document gains nothing. Pure
+   renderers plus a file scan (and the real /bring handler): no database, no
    server. *)
 module Launch_cta = struct
   let cc_case name f = Alcotest.test_case name `Quick f
@@ -58405,42 +58901,62 @@ module Launch_cta = struct
 
   (* The exact element, as the wrapper emits it. Byte-exact on purpose: copy,
      destination, element type, accessible name and icon size are all product
-     decisions, and a diff here should be a deliberate edit, not a surprise. *)
+     decisions, and a diff here should be a deliberate edit, not a surprise.
+     The accessible name is the visible label itself — no aria-label to
+     drift from it. *)
   let cta_open =
     "<a class='btn btn--connect-github' href='/bring' title='Connect an \
-     open-source project' aria-label='Connect GitHub'>"
+     open-source project'>"
+
+  let cta_label = "<span>Connect a project</span></a>"
 
   let github_path = "<path d='M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59"
 
   (* Every live launch document whose top bar carries the persistent action:
-     the viewer-independent entry chrome plus the member arm of each app-chrome
-     wrapper. *)
+     BOTH viewer arms of each app-chrome wrapper, the auth documents'
+     deterministic anonymous topbar, and the viewer-independent entry chrome
+     (/privacy — /bring opts out below). *)
   let cta_documents () =
-    [ ( "launch_entry_page"
-      , Earde.Components.launch_entry_page ~page_class:"launch-bring"
+    [ ( "launch_entry_page (default chrome)"
+      , Earde.Components.launch_entry_page ~page_class:"launch-privacy"
           ~title:"T" ~content:"B" () )
     ; ( "launch_app_page (member)"
       , Earde.Components.launch_app_page ~user:"alice"
           ~page_class:"launch-feed" ~title:"T" ~content:"B" () )
+    ; ( "launch_app_page (anonymous)"
+      , Earde.Components.launch_app_page ~page_class:"launch-feed" ~title:"T"
+          ~content:"B" () )
     ; ( "launch_onboarding_page (member)"
       , Earde.Components.launch_onboarding_page ~user:"alice"
+          ~page_class:"launch-project-new" ~title:"T" ~content:"B" () )
+    ; ( "launch_onboarding_page (anonymous)"
+      , Earde.Components.launch_onboarding_page
           ~page_class:"launch-project-new" ~title:"T" ~content:"B" () )
     ; ( "launch_community_page (member)"
       , Earde.Components.launch_community_page ~user:"alice" ~community
           ~sidebar:"S" ~page_class:"launch-community-overview" ~title:"T"
           ~content:"B" () )
+    ; ( "launch_community_page (anonymous)"
+      , Earde.Components.launch_community_page ~community ~sidebar:"S"
+          ~page_class:"launch-community-overview" ~title:"T" ~content:"B" () )
     ; ( "launch_community_surface_page (member)"
       , Earde.Components.launch_community_surface_page ~user:"alice" ~community
           ~sidebar:"S" ~page_class:"launch-community-channel" ~title:"T"
           ~main_el:"<main class='cs-main'>B</main>" () )
+    ; ( "launch_auth_page (login)"
+      , Earde.Components.launch_auth_page ~page_class:"launch-login"
+          ~title:"T" ~content:"B" () )
+    ; ( "launch_auth_page (signup)"
+      , Earde.Components.launch_auth_page ~page_class:"launch-signup"
+          ~title:"T" ~content:"B" () )
     ]
 
-  (* 1./2./3./4./5. — the shape of the control itself, on every wrapper that
-     renders it. /feed, /search, /notifications, /u/:name, /settings and /admin
-     are all launch_app_page; the community surfaces are launch_community_doc;
-     so covering the wrappers covers the routes. *)
+  (* The shape of the control itself, on every wrapper and viewer arm that
+     renders it. /feed, /search, /notifications, /u/:name, /settings and
+     /admin are all launch_app_page; the community surfaces are
+     launch_community_doc; so covering the wrappers covers the routes. *)
   let shape_case =
-    cc_case "every launch topbar renders one compact GitHub Connect action"
+    cc_case "every launch topbar renders one Connect-a-project action"
       (fun () ->
         List.iter
           (fun (label, html) ->
@@ -58448,13 +58964,13 @@ module Launch_cta = struct
               (label ^ ": exactly one CTA")
               1 (count_sub html cta_open);
             Alcotest.(check bool)
-              (label ^ ": visible text is Connect")
+              (label ^ ": mark then label")
               true
               (contains html (cta_open ^ "<svg"));
             Alcotest.(check bool)
-              (label ^ ": label closes the element")
+              (label ^ ": visible label closes the element")
               true
-              (contains html "<span>Connect</span></a>");
+              (contains html cta_label);
             (* exactly one local GitHub mark in the topbar chrome *)
             Alcotest.(check int)
               (label ^ ": one GitHub mark")
@@ -58465,13 +58981,13 @@ module Launch_cta = struct
               (contains html
                  "<svg width='15' height='15' viewBox='0 0 16 16' \
                   fill='currentColor' aria-hidden='true'>");
-            (* no plus glyph anywhere in the actions cluster wording *)
+            (* no plus glyph, no ochre outline, no retired anonymous wording *)
             List.iter
               (fun needle ->
                 Alcotest.(check bool)
                   (label ^ ": no " ^ needle)
                   false (contains html needle))
-              [ "&#65291; Connect"; "btn--outline-ochre" ];
+              [ "&#65291; Connect"; "btn--outline-ochre"; "Bring a project" ];
             (* still a same-tab GET link to /bring: no form, no new window, no
                query string, no script hook *)
             List.iter
@@ -58523,61 +59039,55 @@ module Launch_cta = struct
         Alcotest.(check bool) "mark is an inline svg" true
           (contains cta github_path))
 
-  (* State behavior: anonymous viewers keep exactly the cluster they had. *)
-  let anonymous_case =
-    cc_case "anonymous launch chrome is unchanged and shows no Connect button"
+  (* Anonymous and authenticated viewers render the byte-identical control;
+     only the surrounding auth controls differ. *)
+  let identical_across_viewers_case =
+    cc_case "anonymous and member topbars share the byte-identical CTA"
       (fun () ->
+        let anon =
+          Earde.Components.launch_app_page ~page_class:"launch-feed"
+            ~title:"T" ~content:"B" ()
+        in
+        let member =
+          Earde.Components.launch_app_page ~user:"alice"
+            ~page_class:"launch-feed" ~title:"T" ~content:"B" ()
+        in
+        Alcotest.(check string) "same rendered element"
+          (cta_element anon) (cta_element member);
+        (* the surrounding clusters stay viewer-appropriate *)
         List.iter
-          (fun (label, html) ->
-            Alcotest.(check int)
-              (label ^ ": no Connect button")
-              0 (count_sub html cta_open);
-            Alcotest.(check int)
-              (label ^ ": no GitHub mark")
-              0 (count_sub html github_path);
-            List.iter
-              (fun needle ->
-                Alcotest.(check bool)
-                  (label ^ ": keeps " ^ needle)
-                  true (contains html needle))
-              [ "<a class='btn btn--quiet' href='/bring'>Bring a project</a>"
-              ; "<a class='btn btn--secondary btn--auth' href='/login'>Log \
-                 in</a>"
-              ; "<a class='btn btn--primary btn--auth' href='/signup'>Sign \
-                 up</a>" ])
-          [ ( "launch_app_page (anonymous)"
-            , Earde.Components.launch_app_page ~page_class:"launch-feed"
-                ~title:"T" ~content:"B" () )
-          ; ( "launch_onboarding_page (anonymous)"
-            , Earde.Components.launch_onboarding_page
-                ~page_class:"launch-project-new" ~title:"T" ~content:"B" () )
-          ; ( "launch_community_page (anonymous)"
-            , Earde.Components.launch_community_page ~community ~sidebar:"S"
-                ~page_class:"launch-community-overview" ~title:"T" ~content:"B"
-                () )
-          ])
+          (fun needle ->
+            Alcotest.(check bool) ("anonymous keeps " ^ needle) true
+              (contains anon needle))
+          [ "<a class='btn btn--secondary btn--auth' href='/login'>Log \
+             in</a>"
+          ; "<a class='btn btn--primary btn--auth' href='/signup'>Sign \
+             up</a>" ];
+        List.iter
+          (fun needle ->
+            Alcotest.(check bool) ("member keeps " ^ needle) true
+              (contains member needle))
+          [ "class='bell'"; "userchip" ];
+        List.iter
+          (fun needle ->
+            Alcotest.(check bool) ("member drops " ^ needle) false
+              (contains member needle))
+          [ "btn--auth' href='/login'"; "btn--auth' href='/signup'" ])
 
-  (* 8. documents without the application topbar gain nothing. *)
+  (* Documents without an application topbar gain nothing. *)
   let chromeless_case =
-    cc_case "auth and message documents keep no application Connect action"
+    cc_case "the message document keeps no application Connect action"
       (fun () ->
+        let html =
+          Earde.Components.launch_message_page ~title:"T" ~content:"B" ()
+        in
         List.iter
-          (fun (label, html) ->
-            List.iter
-              (fun needle ->
-                Alcotest.(check bool)
-                  (label ^ ": no " ^ needle)
-                  false (contains html needle))
-              [ "btn--connect-github"; github_path; "&#65291; Connect" ])
-          [ ( "launch_auth_page (login)"
-            , Earde.Components.launch_auth_page ~page_class:"launch-login"
-                ~title:"T" ~content:"B" () )
-          ; ( "launch_auth_page (signup)"
-            , Earde.Components.launch_auth_page ~page_class:"launch-signup"
-                ~title:"T" ~content:"B" () )
-          ; ( "launch_message_page"
-            , Earde.Components.launch_message_page ~title:"T" ~content:"B" () )
-          ])
+          (fun needle ->
+            Alcotest.(check bool)
+              ("launch_message_page: no " ^ needle)
+              false (contains html needle))
+          [ "btn--connect-github"; github_path; "&#65291; Connect"
+          ; "Bring a project" ])
 
   (* 6./7. /bring's own primary action is untouched, byte-for-byte: element,
      method, action, classes, 20px mark and full label. Rendered through the
@@ -58598,7 +59108,9 @@ module Launch_cta = struct
      Connect a GitHub project</button></form>"
 
   let bring_untouched_case =
-    cc_case "/bring keeps its byte-identical full-label primary action"
+    cc_case
+      "/bring suppresses the self-linking topbar CTA and keeps its \
+       byte-identical full-label primary action"
       (fun () ->
         let body =
           Gh_bring.body_of (Gh_bring.run ~session:Gh_bring.member ())
@@ -58607,20 +59119,44 @@ module Launch_cta = struct
           (count_sub body bring_start_form);
         Alcotest.(check bool) "full label intact" true
           (contains body "Connect a GitHub project");
-        (* Intentional on /bring only: the compact topbar action and the
-           explicit page CTA are both present, so the page carries two marks
-           and exactly one of them is the topbar's. *)
-        Alcotest.(check int) "topbar CTA present too" 1
-          (count_sub body cta_open);
-        Alcotest.(check int) "two GitHub marks in total" 2
+        (* The compact topbar action would self-link on this page, so it is
+           absent — the page's one GitHub mark is the start button's, and the
+           chrome still adds no form. *)
+        Alcotest.(check int) "no topbar CTA" 0 (count_sub body cta_open);
+        Alcotest.(check int) "no compact CTA class" 0
+          (count_sub body "btn--connect-github");
+        Alcotest.(check int) "one GitHub mark in total" 1
           (count_sub body github_path);
-        (* The topbar action is still a link: /bring's non-ready states assert
-           zero forms, so the chrome must not have grown one. *)
         Alcotest.(check int) "still exactly one form" 1
-          (count_sub body "<form"))
+          (count_sub body "<form");
+        (* The member topbar carries the viewer's controls instead: bell and
+           plain user-chip link, never the logout <details> menu (that menu
+           carries a POST form the form-free states forbid). *)
+        Alcotest.(check bool) "member bell" true
+          (contains body "class='bell'");
+        Alcotest.(check bool) "member chip" true
+          (contains body "<a class='userchip' href='/u/alice'>");
+        Alcotest.(check bool) "no logout menu" false
+          (contains body "launch-user__menu");
+        (* Anonymous /bring keeps the auth controls in the topbar and still
+           renders no form and no compact CTA. *)
+        let anon = Gh_bring.body_of (Gh_bring.run ()) in
+        Alcotest.(check int) "anonymous: no topbar CTA" 0
+          (count_sub anon cta_open);
+        Alcotest.(check bool) "anonymous: Log in control" true
+          (contains anon
+             "<a class='btn btn--secondary btn--auth' href='/login'>Log \
+              in</a>");
+        Alcotest.(check bool) "anonymous: Sign up control" true
+          (contains anon
+             "<a class='btn btn--primary btn--auth' href='/signup'>Sign \
+              up</a>");
+        Alcotest.(check int) "anonymous: no form" 0 (count_sub anon "<form"))
 
-  (* One definition, four call sites, no survivors: the control cannot drift
-     between wrappers and the retired outline class is gone from production. *)
+  (* One definition, five call sites (the shared anonymous cluster plus the
+     entry/app/onboarding/community member arms), no survivors: the control
+     cannot drift between wrappers, and both the retired plus glyph and the
+     retired anonymous "Bring a project" wording are gone from production. *)
   let single_definition_case =
     cc_case "one shared CTA definition feeds every launch topbar" (fun () ->
         let components =
@@ -58628,11 +59164,15 @@ module Launch_cta = struct
         in
         Alcotest.(check int) "one definition" 1
           (count_sub components "let launch_connect_cta");
-        Alcotest.(check int) "definition plus four call sites" 5
+        Alcotest.(check int) "definition plus five call sites" 6
           (count_sub components "launch_connect_cta");
+        Alcotest.(check int) "one shared anonymous cluster" 1
+          (count_sub components "let topbar_anon_actions");
         Alcotest.(check int) "four topbar action clusters" 4
           (count_sub components "<div class='topbar__actions'>");
         Legacy_census.absent_everywhere "retired plus glyph" "&#65291; Connect";
+        Legacy_census.absent_everywhere "retired anonymous CTA copy"
+          ">Bring a project<";
         (* The generic ochre outline button survives for its own callers, but
            no launch topbar uses it any more. *)
         Alcotest.(check int) "components.ml drops btn--outline-ochre" 0
@@ -58648,8 +59188,581 @@ module Launch_cta = struct
           (contains css ".topbar__actions .btn--connect-github { display: none; }"))
 
   let suite =
-    [ shape_case; no_external_asset_case; anonymous_case; chromeless_case
-    ; bring_untouched_case; single_definition_case ]
+    [ shape_case; no_external_asset_case; identical_across_viewers_case
+    ; chromeless_case; bring_untouched_case; single_definition_case ]
+end
+
+(* The global legal footer (Components.launch_footer): one slim strip as the
+   .app column's last child on every chrome-bearing launch wrapper, carrying
+   exactly one Privacy link and one Analytics-preferences link to the
+   /privacy section that hosts the working consent controls. Rendered
+   byte-identically for anonymous and authenticated viewers, form-free, and
+   OUTSIDE <main> so the create-shell/cm-main → </main> fragment slices and
+   the chat surface's .cs-main anatomy stay untouched. The message sheet
+   keeps its documented no-chrome contract and renders none. *)
+module Launch_footer = struct
+  let fc_case name f = Alcotest.test_case name `Quick f
+
+  let footer_open = "<footer class='launch-footer'>"
+  let privacy_link = "<a href='/privacy'>Privacy</a>"
+
+  let preferences_link =
+    "<a href='/privacy#cookies-analytics'>Analytics preferences</a>"
+
+  (* Every chrome-bearing wrapper, both viewer arms, including the /bring
+     entry-viewer arms the CTA suite's list omits. *)
+  let footer_documents () =
+    let community = nav_test_community in
+    [ ( "launch_entry_page (default chrome)"
+      , Earde.Components.launch_entry_page ~page_class:"launch-privacy"
+          ~title:"T" ~content:"B" () )
+    ; ( "launch_entry_page (viewer, member)"
+      , Earde.Components.launch_entry_page
+          ~topbar:(Earde.Components.Entry_viewer (Some "alice"))
+          ~page_class:"launch-bring" ~title:"T" ~content:"B" () )
+    ; ( "launch_entry_page (viewer, anonymous)"
+      , Earde.Components.launch_entry_page
+          ~topbar:(Earde.Components.Entry_viewer None)
+          ~page_class:"launch-bring" ~title:"T" ~content:"B" () )
+    ; ( "launch_auth_page (login)"
+      , Earde.Components.launch_auth_page ~page_class:"launch-login"
+          ~title:"T" ~content:"B" () )
+    ; ( "launch_app_page (member)"
+      , Earde.Components.launch_app_page ~user:"alice"
+          ~page_class:"launch-feed" ~title:"T" ~content:"B" () )
+    ; ( "launch_app_page (anonymous)"
+      , Earde.Components.launch_app_page ~page_class:"launch-feed" ~title:"T"
+          ~content:"B" () )
+    ; ( "launch_onboarding_page (member)"
+      , Earde.Components.launch_onboarding_page ~user:"alice"
+          ~page_class:"launch-project-new" ~title:"T" ~content:"B" () )
+    ; ( "launch_community_page (member)"
+      , Earde.Components.launch_community_page ~user:"alice" ~community
+          ~sidebar:"S" ~page_class:"launch-community-overview" ~title:"T"
+          ~content:"B" () )
+    ; ( "launch_community_page (anonymous)"
+      , Earde.Components.launch_community_page ~community ~sidebar:"S"
+          ~page_class:"launch-community-overview" ~title:"T" ~content:"B" () )
+    ; ( "launch_community_surface_page (member)"
+      , Earde.Components.launch_community_surface_page ~user:"alice"
+          ~community ~sidebar:"S" ~page_class:"launch-community-channel"
+          ~title:"T" ~main_el:"<main class='cs-main'>B</main>" () )
+    ]
+
+  let presence_case =
+    fc_case "every chrome wrapper renders one footer with both links"
+      (fun () ->
+        List.iter
+          (fun (label, html) ->
+            Alcotest.(check int)
+              (label ^ ": exactly one footer")
+              1 (count_sub html footer_open);
+            Alcotest.(check int)
+              (label ^ ": exactly one Privacy link")
+              1 (count_sub html privacy_link);
+            Alcotest.(check int)
+              (label ^ ": exactly one Analytics-preferences link")
+              1 (count_sub html preferences_link))
+          (footer_documents ()))
+
+  let outside_main_case =
+    fc_case "footer sits below the shell, never inside <main>" (fun () ->
+        List.iter
+          (fun (label, html) ->
+            (* The strip closes immediately before the .app close — outside
+               every </main>-terminated fragment slice. *)
+            Alcotest.(check bool)
+              (label ^ ": footer directly precedes the app close")
+              true
+              (contains html "</footer>\n</div>");
+            Alcotest.(check bool)
+              (label ^ ": no footer inside main")
+              false
+              (contains html (footer_open ^ "</main>")
+              || contains html ("<main" ^ footer_open)))
+          (footer_documents ()))
+
+  let inert_case =
+    fc_case "footer is links-only: no nested interactive controls" (fun () ->
+        let footer = Earde.Components.launch_footer in
+        Alcotest.(check bool) "no form" false (contains footer "<form");
+        Alcotest.(check bool) "no button" false (contains footer "<button");
+        Alcotest.(check bool) "no input" false (contains footer "<input");
+        Alcotest.(check bool) "no script" false (contains footer "<script");
+        Alcotest.(check int) "exactly two links" 2 (count_sub footer "<a ");
+        Alcotest.(check bool) "privacy link" true
+          (contains footer privacy_link);
+        Alcotest.(check bool) "preferences target is exact" true
+          (contains footer preferences_link))
+
+  let message_sheet_case =
+    fc_case "the chrome-free message sheet renders no footer" (fun () ->
+        let html =
+          Earde.Components.launch_message_page ~title:"T" ~content:"B" ()
+        in
+        Alcotest.(check int) "no footer" 0 (count_sub html footer_open);
+        Alcotest.(check int) "no preferences link" 0
+          (count_sub html preferences_link))
+
+  let suite =
+    [ presence_case; outside_main_case; inert_case; message_sheet_case ]
+end
+
+(* ===================== Show HN polish pass ===================================
+   The first visual/copy polish pass: the repo-wide GitHub-copy census, the
+   neutralized auth-page copy, the consolidated /feed right aside, and the
+   shared community-settings shell (header band + grouped internal settings
+   navigation + one active item) across every settings/management surface.
+   Pure renderers plus the discovered-source census: no database. *)
+module Show_hn_polish = struct
+  let case name f = Alcotest.test_case name `Quick f
+
+  module Shell = Earde.Community_settings_shell
+
+  let must html s =
+    Alcotest.(check bool) ("contains: " ^ s) true (contains html s)
+
+  let must_not html s =
+    Alcotest.(check bool) ("must not contain: " ^ s) false (contains html s)
+
+  let index_of html needle from =
+    let nl = String.length needle in
+    let hl = String.length html in
+    let rec loop i =
+      if i + nl > hl then None
+      else if String.sub html i nl = needle then Some i
+      else loop (i + 1)
+    in
+    loop from
+
+  (* CSRF-carrying renderers need a live secret + sessions pipeline. *)
+  let render_with_request ~target f =
+    let captured = ref None in
+    let pipeline =
+      Dream.set_secret gck_secret @@ Dream.memory_sessions
+      @@ fun req ->
+      captured := Some (f req);
+      Dream.html ""
+    in
+    ignore (Lwt_main.run (pipeline (Dream.request ~method_:`GET ~target "")));
+    match !captured with
+    | Some html -> html
+    | None -> Alcotest.fail "renderer did not run"
+
+  (* --- 1. repo-wide GitHub-copy census ---------------------------------- *)
+
+  (* The retired members-don't-need-GitHub marketing (and the named Lwt/OCaml
+     example, and the retired anonymous topbar wording) must not survive in
+     any production source — renderer, component, or copy-documenting
+     comment. Nothing here asserts that GitHub is required. *)
+  let github_copy_census_case =
+    case "no GitHub-absence marketing survives in production sources"
+      (fun () ->
+        List.iter
+          (Legacy_census.absent_everywhere "GitHub copy census")
+          [ "No GitHub required"
+          ; "never need GitHub"
+          ; "join and chat without GitHub"
+          ; "do not need a GitHub account"
+          ; "GitHub is only needed"
+          ; "Lwt to OCaml"
+          ; ">Bring a project<"
+          ; "GitHub is required" ])
+
+  (* --- 2. auth pages ------------------------------------------------------ *)
+
+  let render_login () =
+    render_with_request ~target:"/login" (fun req -> Earde.Pages.login_form req)
+
+  let render_signup () =
+    render_with_request ~target:"/signup" (fun req ->
+        Earde.Pages.signup_form req)
+
+  let auth_copy_case =
+    case "auth pages carry neutral copy and the shared topbar CTA" (fun () ->
+        let login = render_login () in
+        (* The old members-don't-need-GitHub notice became the
+           maintainer-oriented action. *)
+        must login "Maintaining an open-source project?";
+        must login "<a href='/bring'>Connect it through GitHub</a>";
+        must_not login "No GitHub required";
+        must_not login "GitHub is only needed";
+        must_not login "Members read, join and chat";
+        must login Launch_cta.cta_open;
+        let signup = render_signup () in
+        must signup
+          "<p class='auth__sub'>One account for every community on Earde.</p>";
+        must_not signup "No GitHub required";
+        (* The maintainer pointer that was already neutral stays. *)
+        must signup "connect a project through GitHub";
+        must signup Launch_cta.cta_open;
+        (* One CTA per document; no second wording. *)
+        Alcotest.(check int) "login: one CTA" 1
+          (count_sub login Launch_cta.cta_open);
+        Alcotest.(check int) "signup: one CTA" 1
+          (count_sub signup Launch_cta.cta_open);
+        must_not login "Bring a project";
+        must_not signup "Bring a project")
+
+  (* --- 3. /feed right aside ---------------------------------------------- *)
+
+  let render_feed ?user ~is_logged_in ?(rail = []) () =
+    render_with_request ~target:"/feed" (fun req ->
+        Earde.Pages.feed_page ?user ~scope:"all" ~sort_mode:"hot" ~is_logged_in
+          ~admin_usernames:[] ~rail_communities:rail ~user_votes:[]
+          ~current_page:1 [] req)
+
+  let aside_slice html =
+    match index_of html "<aside class='aside'" 0 with
+    | None -> Alcotest.fail "no aside in feed document"
+    | Some s -> (
+        match index_of html "</aside>" s with
+        | None -> Alcotest.fail "unterminated aside"
+        | Some e -> String.sub html s (e - s))
+
+  let feed_aside_contract label aside =
+    Alcotest.(check int)
+      (label ^ ": one project-acquisition heading")
+      1
+      (count_sub aside "Bring your project");
+    Alcotest.(check int)
+      (label ^ ": one Connect-a-project CTA")
+      1
+      (count_sub aside ">Connect a project</a>");
+    Alcotest.(check int)
+      (label ^ ": exactly one /bring target")
+      1
+      (count_sub aside "href='/bring'");
+    must_not aside "Start a pilot community";
+    must_not aside "Bring your community";
+    (* Unrelated aside content stays. *)
+    must aside "Earde is early"
+
+  let feed_aside_case =
+    case "feed aside keeps exactly one project-acquisition block" (fun () ->
+        let anon = render_feed ~is_logged_in:false () in
+        feed_aside_contract "anonymous" (aside_slice anon);
+        let member =
+          render_feed ~user:"alice" ~is_logged_in:true
+            ~rail:[ nav_test_community ] ()
+        in
+        let member_aside = aside_slice member in
+        feed_aside_contract "member" member_aside;
+        (* The block is identical for both viewer states; only the real
+           Following data differs. *)
+        Alcotest.(check bool) "member aside keeps Following" true
+          (contains member_aside "Following");
+        must member_aside
+          "<p class='aside__text'>Create a dedicated community home for your \
+           open-source project, or connect it to an existing community.</p>")
+
+  (* --- 4. settings shell: the grouped nav (pure) -------------------------- *)
+
+  let all_items : (Shell.item * string) list =
+    [ (Shell.Profile, "/settings?panel=profile")
+    ; (Shell.Visibility, "/settings?panel=visibility")
+    ; (Shell.Connected_projects, "/settings?panel=projects")
+    ; (Shell.Home_requests, "/project-home-requests")
+    ; (Shell.Connections, "/settings/connections")
+    ; (Shell.Shared_threads, "/settings/shared-threads")
+    ; (Shell.Channels, "/settings?panel=channels")
+    ; (Shell.Members, "/settings?panel=members")
+    ; (Shell.Manage_moderators, "/manage-mods")
+    ; (Shell.Moderation, "/settings?panel=moderation")
+    ; (Shell.Bans, "/settings?panel=bans")
+    ]
+
+  let nav_grouping_case =
+    case "grouped nav: complete top-mod set, ordered groups, one active"
+      (fun () ->
+        let nav =
+          Shell.nav ~slug:"polish" ~active:Shell.Visibility
+            ~can_complete_setup:false ~network_manager:true ()
+        in
+        (* Group headings in canonical order. *)
+        let pos needle =
+          match index_of nav needle 0 with
+          | Some i -> i
+          | None -> Alcotest.failf "nav lacks %s" needle
+        in
+        let community = pos ">Community</p>" in
+        let network = pos ">Network</p>" in
+        let structure = pos ">Structure</p>" in
+        let people = pos ">People</p>" in
+        Alcotest.(check bool) "Community < Network" true (community < network);
+        Alcotest.(check bool) "Network < Structure" true (network < structure);
+        Alcotest.(check bool) "Structure < People" true (structure < people);
+        (* Every entry present exactly once, server-built from the slug. *)
+        List.iter
+          (fun (_, suffix) ->
+            Alcotest.(check int)
+              ("one entry for " ^ suffix)
+              1
+              (count_sub nav ("href='/c/polish" ^ suffix ^ "'")))
+          all_items;
+        (* Exactly one active item, whichever item is active. *)
+        List.iter
+          (fun (item, suffix) ->
+            let nav =
+              Shell.nav ~slug:"polish" ~active:item ~can_complete_setup:false
+                ~network_manager:true ()
+            in
+            Alcotest.(check int)
+              ("one active for " ^ suffix)
+              1
+              (count_sub nav "cm-index-link--active");
+            Alcotest.(check bool)
+              ("active is " ^ suffix)
+              true
+              (contains nav
+                 ("cm-index-link--active' href='/c/polish" ^ suffix ^ "'")))
+          all_items;
+        (* Danger styling stays confined to Bans. *)
+        Alcotest.(check int) "one danger link" 1
+          (count_sub nav "cm-index-link--danger");
+        Alcotest.(check bool) "danger is Bans" true
+          (contains nav
+             "cm-index-link--danger' href='/c/polish/settings?panel=bans'"))
+
+  let nav_role_subset_case =
+    case "grouped nav: regular moderators get the coherent subset" (fun () ->
+        let nav =
+          Shell.nav ~slug:"polish" ~active:Shell.Moderation
+            ~can_complete_setup:false ~network_manager:false ()
+        in
+        (* No Network group, no entry the viewer categorically cannot open. *)
+        must_not nav ">Network</p>";
+        must_not nav "/project-home-requests";
+        must_not nav "/settings/connections";
+        must_not nav "/settings/shared-threads";
+        must_not nav "?panel=projects";
+        must_not nav "/manage-mods";
+        must_not nav "/setup'";
+        (* The rest of the groups survive intact. *)
+        List.iter (must nav)
+          [ ">Community</p>"; ">Structure</p>"; ">People</p>";
+            "?panel=profile"; "?panel=visibility"; "?panel=channels";
+            "?panel=members"; "?panel=moderation"; "?panel=bans" ];
+        Alcotest.(check int) "one active" 1
+          (count_sub nav "cm-index-link--active"))
+
+  let nav_setup_case =
+    case "grouped nav: the setup link renders only for eligible drafts"
+      (fun () ->
+        let without =
+          Shell.nav ~slug:"polish" ~active:Shell.Profile
+            ~can_complete_setup:false ~network_manager:true ()
+        in
+        must_not without "Complete setup and publish";
+        let with_setup =
+          Shell.nav ~slug:"polish" ~active:Shell.Profile
+            ~can_complete_setup:true ~network_manager:true ()
+        in
+        Alcotest.(check int) "one setup link" 1
+          (count_sub with_setup "href='/c/polish/setup'");
+        must with_setup ">Complete setup and publish</a>")
+
+  (* --- 5. settings surfaces: the shared DOM contract ---------------------- *)
+
+  (* One community rail, one community sidebar with Settings active, one
+     internal settings navigation with exactly one active item, the shared
+     header band, and no duplicate nav. *)
+  let assert_shell_contract label ~slug ~active_href html =
+    Alcotest.(check int)
+      (label ^ ": one settings wrap")
+      1
+      (count_sub html "<div class='cm-wrap cm-wrap--settings'>");
+    Alcotest.(check int)
+      (label ^ ": one settings index")
+      1
+      (count_sub html "<nav class='cm-index'>");
+    Alcotest.(check int)
+      (label ^ ": one index title")
+      1
+      (count_sub html "<div class='cm-index-title'>Settings</div>");
+    Alcotest.(check int)
+      (label ^ ": one active internal item")
+      1
+      (count_sub html "cm-index-link--active");
+    Alcotest.(check bool)
+      (label ^ ": the active item is " ^ active_href)
+      true
+      (contains html ("cm-index-link--active' href='" ^ active_href ^ "'"));
+    Alcotest.(check int)
+      (label ^ ": one header band")
+      1
+      (count_sub html "<div class='cm-head'>");
+    Alcotest.(check bool)
+      (label ^ ": header names the community")
+      true
+      (contains html ("/c/" ^ slug ^ " <span class='accent'>settings</span>"))
+
+  let polish_community : Earde.Db.community =
+    { nav_test_community with id = 777; slug = "polish"; name = "Polish" }
+
+  let render_settings ?(target = "/c/polish/settings") ~is_admin ~is_top_mod ()
+      =
+    render_with_request ~target (fun req ->
+        Earde.Pages.community_settings_page ~is_admin ~is_top_mod
+          ~open_reports_count:0 ~community:polish_community ~mods:[]
+          ~banned_users:[] ~members:[] ~sections:[] ~channels:[] req)
+
+  let settings_surface_case =
+    case "settings hub: base and query panels keep the shared contract"
+      (fun () ->
+        let base = render_settings ~is_admin:false ~is_top_mod:true () in
+        assert_shell_contract "base" ~slug:"polish"
+          ~active_href:"/c/polish/settings?panel=visibility" base;
+        (* The outer sidebar marks Settings as the active community item. *)
+        Alcotest.(check bool) "sidebar Settings active" true
+          (contains base
+             "navitem--active' href='/c/polish/settings'");
+        let members =
+          render_settings ~target:"/c/polish/settings?panel=members"
+            ~is_admin:false ~is_top_mod:true ()
+        in
+        assert_shell_contract "panel=members" ~slug:"polish"
+          ~active_href:"/c/polish/settings?panel=members" members)
+
+  (* The internal settings index alone (the outer community sidebar keeps
+     its own, always-rendered "Network" group heading for Moderation log). *)
+  let index_slice html =
+    match index_of html "<nav class='cm-index'>" 0 with
+    | None -> Alcotest.fail "no settings index in document"
+    | Some s -> (
+        match index_of html "</nav>" s with
+        | None -> Alcotest.fail "unterminated settings index"
+        | Some e -> String.sub html s (e - s))
+
+  let settings_role_case =
+    case "settings hub: regular moderators keep the coherent subset"
+      (fun () ->
+        let regular =
+          index_slice (render_settings ~is_admin:false ~is_top_mod:false ())
+        in
+        must_not regular ">Network</p>";
+        must_not regular "/c/polish/project-home-requests";
+        must_not regular "/c/polish/settings/connections";
+        must_not regular "/c/polish/settings/shared-threads";
+        must_not regular "/c/polish/manage-mods";
+        let top =
+          index_slice (render_settings ~is_admin:false ~is_top_mod:true ())
+        in
+        List.iter (must top)
+          [ ">Network</p>"; "/c/polish/project-home-requests";
+            "/c/polish/settings/connections";
+            "/c/polish/settings/shared-threads"; "/c/polish/manage-mods" ])
+
+  let manage_mods_case =
+    case "manage-mods renders inside the shell with Manage moderators active"
+      (fun () ->
+        let html =
+          render_with_request ~target:"/c/polish/manage-mods" (fun req ->
+              Earde.Pages.manage_mods_page ~is_admin:false
+                ~current_user_role:(Some "top_mod") ~channels:[] ~sections:[]
+                ~community:polish_community ~mods:[] req)
+        in
+        assert_shell_contract "manage-mods" ~slug:"polish"
+          ~active_href:"/c/polish/manage-mods" html;
+        (* The roster panels and the add form survive inside the panel
+           column. *)
+        must html "Top Mods";
+        must html "action='/c/polish/manage-mods/add'";
+        Alcotest.(check bool) "sidebar Settings active" true
+          (contains html "navitem--active' href='/c/polish/settings'"))
+
+  let reports_case =
+    case "reports queue renders inside the shell with Moderation active"
+      (fun () ->
+        let html =
+          render_with_request ~target:"/c/polish/reports" (fun req ->
+              Earde.Pages.reports_queue_page ~is_admin:false ~is_top_mod:true
+                ~channels:[] ~sections:[] ~community:polish_community
+                ~status:Earde.Db.Report_open ~reports:[] ~previews:[] req)
+        in
+        assert_shell_contract "reports" ~slug:"polish"
+          ~active_href:"/c/polish/settings?panel=moderation" html;
+        (* The queue's own status tabs stay inside the panel. *)
+        must html "cm-nav-link cm-nav-link--active";
+        must html "Reports queue")
+
+  (* The dedicated management routes: fabricated shell tuples, exactly like
+     the sibling review-page suite. *)
+  let mgmt_shell =
+    ( polish_community,
+      [ polish_community ],
+      "<aside class='sidebar' aria-label='Polish community'><a class='navitem \
+       navitem--pad navitem--active' href='/c/polish/settings'>Settings</a></aside>"
+    )
+
+  let connections_case =
+    case "connections management renders inside the shell, Connections active"
+      (fun () ->
+        let state : Earde.Community_connections_pages.state =
+          { community = { name = "Polish"; slug = "polish"; eligible = true };
+            accepted = [];
+            incoming = [];
+            outgoing = []
+          }
+        in
+        let html =
+          Earde.Community_connections_pages.management_page ~shell:mgmt_shell
+            ~state ~feedback:None ()
+        in
+        assert_shell_contract "connections" ~slug:"polish"
+          ~active_href:"/c/polish/settings/connections" html;
+        must html "community-connections";
+        must_not html "launch-review-context")
+
+  let shared_threads_case =
+    case "shared-threads management renders inside the shell, Shared threads \
+          active; the share page keeps its own document"
+      (fun () ->
+        let state : Earde.Shared_thread_placement_pages.management_state =
+          { community_name = "Polish";
+            community_slug = "polish";
+            community_eligible = true;
+            sections_enabled = false;
+            section_options = [];
+            incoming = [];
+            outgoing = [];
+            shared_into = [];
+            shared_from = []
+          }
+        in
+        let html =
+          Earde.Shared_thread_placement_pages.management_page
+            ~shell:mgmt_shell ~state ~notice:None ~feedback:None ()
+        in
+        assert_shell_contract "shared threads" ~slug:"polish"
+          ~active_href:"/c/polish/settings/shared-threads" html;
+        must html "community-shared-threads";
+        must_not html "launch-review-context";
+        (* The per-thread Share page is a member workflow, not a settings
+           surface: no settings shell, context block intact. *)
+        let share_state : Earde.Shared_thread_placement_pages.share_state =
+          { share_thread_title = "T";
+            share_origin_name = "Polish";
+            share_origin_slug = "polish";
+            share_thread_path = "/c/polish/t/1";
+            share_candidates = [];
+            share_placements = [];
+            share_manage_connections = false
+          }
+        in
+        let share =
+          Earde.Shared_thread_placement_pages.share_page ~shell:mgmt_shell
+            ~state:share_state ~notice:None ~feedback:None ()
+        in
+        must_not share "cm-wrap--settings";
+        must_not share "<nav class='cm-index'>";
+        must share "launch-review-context")
+
+  let suite =
+    [ github_copy_census_case; auth_copy_case; feed_aside_case;
+      nav_grouping_case; nav_role_subset_case; nav_setup_case;
+      settings_surface_case; settings_role_case; manage_mods_case;
+      reports_case; connections_case; shared_threads_case ]
 end
 
 (* ===================== community connections (issue #30) =====================
@@ -77594,6 +78707,8 @@ let () =
          DB-free. *)
     ; ("reset_token_attribute_escaping", Reset_token_escaping.suite)
     ; ("privacy_launch_page", Privacy_launch.suite)
+    ; ("avatar_upload_paths", Avatar_upload_paths.suite)
+    ; ("rate_limit_cleanup", Rate_limit_cleanup.suite)
     ; ("launch_message_page", Msg_launch.suite)
       (* Final create-page callers (pass 19): the /new-community renderer
          and admin-gate contracts on the launch app chrome, the unchanged
@@ -77639,6 +78754,8 @@ let () =
          full-label primary action still byte-identical. Pure renders plus a
          source/CSS census — DB-free. *)
     ; ("launch_connect_cta", Launch_cta.suite)
+    ; ("launch_footer", Launch_footer.suite)
+    ; ("show_hn_polish", Show_hn_polish.suite)
       (* Mutual connections between communities (issue #30), storage/domain
          slice: the pure lifecycle domain and note canonicalization are
          DB-free; the two tables' constraints, the transactional store with

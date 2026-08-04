@@ -31,10 +31,10 @@ let hero =
   "<div class='launch-hero'>\
    <img src='/static/images/logo-mark.svg' alt='' width='46' height='46'>\
    <h1 class='launch-hero__title'>Bring your open-source community</h1>\
-   <p class='launch-hero__lead'>Verify a project through GitHub, then give \
-   it a home on Earde &mdash; either a dedicated community, or as a \
-   connected project inside a broader existing community. This is for \
-   maintainers; ordinary members join and chat without GitHub.</p>\
+   <p class='launch-hero__lead'>Verify a project you maintain through \
+   GitHub, then give it a home on Earde &mdash; either a dedicated \
+   community, or as a connected project inside a broader existing \
+   community.</p>\
    </div>"
 
 (* The two home paths, explained side by side. Explainers only — the real
@@ -51,8 +51,8 @@ let option_cards =
    <div class='card card--pad launch-option'>\
    <p class='mono launch-option__kicker launch-option__kicker--ochre'>OPTION B</p>\
    <p class='launch-option__title'>Connect to an existing community</p>\
-   <p class='card__blurb'>Join a broader community (e.g. connect Lwt to \
-   OCaml) as a verified connected project &mdash; no empty duplicate \
+   <p class='card__blurb'>Join a broader existing community as a verified \
+   connected project &mdash; no empty duplicate \
    community.</p>\
    </div></div>"
 
@@ -62,12 +62,6 @@ let section ~heading body =
     "<div class='launch-explain__block'><h2 class='kicker'>%s</h2>\n\
      <p class='launch-explain__text'>%s</p></div>"
     heading body
-
-let members_section =
-  section ~heading:"Members never need GitHub"
-    "Reading, chatting, and posting work with a normal Earde account. \
-     Ordinary community members do not need a GitHub account. GitHub is used \
-     only by maintainers, to verify an open-source project they maintain."
 
 let connecting_section =
   section ~heading:"What connecting GitHub does"
@@ -85,8 +79,8 @@ let meaning_section =
      for a project."
 
 let explainers =
-  Printf.sprintf "<div class='panel launch-explain'>%s%s%s</div>"
-    members_section connecting_section meaning_section
+  Printf.sprintf "<div class='panel launch-explain'>%s%s</div>"
+    connecting_section meaning_section
 
 (* One-time callback feedback. At most one banner; None renders no element
    at all. The success copy claims only the connection itself — never a
@@ -171,7 +165,10 @@ let bring_page ?user ?request ~access ~feedback () =
          [ hero; feedback_html feedback; option_cards; cta; explainers ])
   in
   (* noindex: a session- and rollout-dependent onboarding surface — not
-     worth putting in search indexes. *)
+     worth putting in search indexes. Entry_viewer: this page IS /bring, so
+     the compact topbar Connect CTA would self-link; the topbar carries the
+     viewer's auth controls instead (form-free in both arms). *)
   Components.launch_entry_page ?request ~noindex:true
+    ~topbar:(Components.Entry_viewer user)
     ~page_class:"launch-bring" ~title:"Bring your open-source community"
     ~content ()

@@ -553,7 +553,14 @@ let management_body ?request ~(state : management_state) () =
    reuses that one stylesheet family whole — the CSS census pins one scope
    class per shell surface, and the distinguishing hook for this page is
    the community-shared-threads wrap class inside the panel. *)
-let document ?user ?request ?shell ~title ~body () =
+(* [in_settings_shell]: the management page is a community-settings surface,
+   so its launch branch renders inside the shared settings shell (header band
+   + grouped settings navigation, Shared threads active — the viewer is
+   top_mod-or-durable-admin by the read model's SQL). The share surface is a
+   thread workflow reachable by ordinary members, so it keeps the mono
+   community context + create-shell document. *)
+let document ?user ?request ?shell ?(in_settings_shell = false) ~title ~body ()
+    =
   let wrapped =
     Printf.sprintf
       "<div class='create-wrap community-shared-threads'><div \
@@ -566,21 +573,28 @@ let document ?user ?request ?shell ~title ~body () =
         ~content:(Printf.sprintf "<div class='create-shell'>%s</div>" wrapped)
         ()
   | Some ((community_record : Db.community), rail_communities, sidebar) ->
-      let context =
-        Printf.sprintf
-          "<div class='launch-review-context'><span \
-           class='launch-review-context-name'>%s</span><span \
-           class='launch-review-context-slug'>/c/%s</span></div>"
-          (esc community_record.Db.name)
-          (esc community_record.Db.slug)
+      let content =
+        if in_settings_shell then
+          Community_settings_shell.wrap ~slug:community_record.Db.slug
+            ~active:Community_settings_shell.Shared_threads
+            ~can_complete_setup:
+              (Community_settings_shell.can_complete_setup
+                 ~community:community_record ~authorized:true)
+            ~network_manager:true ~panel:wrapped ()
+        else
+          let context =
+            Printf.sprintf
+              "<div class='launch-review-context'><span \
+               class='launch-review-context-name'>%s</span><span \
+               class='launch-review-context-slug'>/c/%s</span></div>"
+              (esc community_record.Db.name)
+              (esc community_record.Db.slug)
+          in
+          context ^ Printf.sprintf "<div class='create-shell'>%s</div>" wrapped
       in
       Components.launch_community_page ?user ?request ~noindex:true
         ~rail_communities ~community:community_record ~sidebar
-        ~page_class:"launch-community-connections" ~title
-        ~content:
-          (context
-          ^ Printf.sprintf "<div class='create-shell'>%s</div>" wrapped)
-        ()
+        ~page_class:"launch-community-connections" ~title ~content ()
 
 let share_page ?user ?request ?shell ~state ~notice ~feedback () =
   document ?user ?request ?shell ~title:"Share thread"
@@ -590,7 +604,8 @@ let share_page ?user ?request ?shell ~state ~notice ~feedback () =
     ()
 
 let management_page ?user ?request ?shell ~state ~notice ~feedback () =
-  document ?user ?request ?shell ~title:"Shared threads"
+  document ?user ?request ?shell ~in_settings_shell:true
+    ~title:"Shared threads"
     ~body:
       (notice_html notice ^ feedback_html feedback
       ^ management_body ?request ~state ())

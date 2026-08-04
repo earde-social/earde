@@ -332,23 +332,23 @@ let project_home_review_page ?user ?request ?shell ~state ~feedback () =
         ~content:(Printf.sprintf "<div class='create-shell'>%s</div>" body) ()
   | Some shell ->
       (* Cartographic Civic conversion: only the outer document changes.
-         The mono community context precedes the create-shell marker, so
-         the test-sliced feature fragment (create-shell → </main>) stays
-         byte-identical to the legacy document; everything inside it is the
-         exact body above. *)
-      let context =
-        Printf.sprintf
-          "<div class='launch-review-context'><span \
-           class='launch-review-context-name'>%s</span><span \
-           class='launch-review-context-slug'>/c/%s</span></div>"
-          (esc state.community.name)
-          (esc state.community.slug)
+         The queue panel renders inside the shared community-settings shell
+         (header band + grouped settings navigation, Project home requests
+         active — the viewer is top_mod-or-durable-admin by the read model's
+         SQL, so the full permitted nav is honest); everything inside the
+         panel is the exact body above. *)
+      let content =
+        Community_settings_shell.wrap
+          ~slug:shell.community_record.Db.slug
+          ~active:Community_settings_shell.Home_requests
+          ~can_complete_setup:
+            (Community_settings_shell.can_complete_setup
+               ~community:shell.community_record ~authorized:true)
+          ~network_manager:true ~panel:body ()
       in
       Components.launch_community_page ?user ?request ~noindex:true
         ~rail_communities:shell.rail_communities
         ~community:shell.community_record ~sidebar:shell.sidebar
         ~page_class:"launch-project-home-review"
         ~title:"Project home requests"
-        ~content:
-          (context ^ Printf.sprintf "<div class='create-shell'>%s</div>" body)
-        ()
+        ~content ()
