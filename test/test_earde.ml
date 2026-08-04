@@ -3687,10 +3687,11 @@ let bring_feedbacks =
   ; ("failed", Some Gp.Failed)
   ]
 
-(* Shared invariants: every access × feedback state explains that members do
-   not need GitHub and what connecting does, keeps the factual verification
-   language, stays noindex, and never emits a forbidden endorsement claim
-   (checked case-insensitively) or a link to the admin-only legacy route. *)
+(* Shared invariants: every access × feedback state keeps the maintainer
+   flow explanation and the factual verification language, stays noindex,
+   never emits a forbidden endorsement claim (checked case-insensitively) or
+   a link to the admin-only legacy route — and carries none of the retired
+   members-don't-need-GitHub marketing or the named Lwt/OCaml example. *)
 let bring_shared_case (access_name, access) (feedback_name, feedback) =
   bring_case
     (Printf.sprintf "%s, %s" access_name feedback_name)
@@ -3702,18 +3703,28 @@ let bring_shared_case (access_name, access) (feedback_name, feedback) =
         Alcotest.(check bool) ("must not contain: " ^ s) false
           (contains lower (String.lowercase_ascii s))
       in
-      must "do not need a GitHub account";
       must "verify project maintainers and their public repositories";
       must "does not automatically grant moderation rights";
       must "Project connected through GitHub";
       must "Verified through GitHub";
+      must "Reads public-repository metadata only";
+      must "no source-code or write access";
       must "noindex";
       must_not_ci "official community";
       must_not_ci "official home";
       must_not_ci "GitHub-approved";
       must_not_ci "GitHub-endorsed";
       must_not_ci "/new-community";
-      must_not_ci "/projects/new")
+      must_not_ci "/projects/new";
+      (* Retired copy: the page no longer markets the absence of GitHub for
+         ordinary members (and never claims GitHub is required either), and
+         the two-option explainer stands without the named example. *)
+      must_not_ci "do not need a GitHub account";
+      must_not_ci "never need GitHub";
+      must_not_ci "without GitHub";
+      must_not_ci "No GitHub required";
+      must_not_ci "Lwt to OCaml";
+      must_not_ci "GitHub is required")
 
 let bring_shared_cases =
   List.concat_map
@@ -3997,7 +4008,7 @@ module Gh_bring = struct
     ]
 
   let copy_case =
-    case "copy: no endorsement claims, members-without-GitHub stated"
+    case "copy: no endorsement claims, no members-without-GitHub marketing"
       (fun () ->
         List.iter
           (fun (label, session, mode) ->
@@ -4009,9 +4020,12 @@ module Gh_bring = struct
                 Alcotest.(check bool) (label ^ " lacks " ^ phrase) false
                   (contains body phrase))
               [ "official community"; "official home"; "github-approved"
-              ; "github-endorsed" ];
-            Alcotest.(check bool) (label ^ ": members need no GitHub") true
-              (contains body "do not need a github account"))
+              ; "github-endorsed"
+              (* Retired: the page neither markets the absence of GitHub for
+                 ordinary members nor claims GitHub is required. *)
+              ; "do not need a github account"; "never need github"
+              ; "without github"; "no github required"; "lwt to ocaml"
+              ; "github is required" ])
           all_states)
 
   let headers_case =
@@ -15824,8 +15838,16 @@ let ps_count haystack needle =
   go 0 0
 
 let ps_fragment html =
-  let start_marker = "<div class='create-shell'>" in
-  match ps_index_of html start_marker 0 with
+  (* The feature panel: the degraded (chrome-free) documents keep the legacy
+     create-shell marker; the launch documents now render the panel inside
+     the shared settings shell's cm-main column. Either way the fragment is
+     the panel content, never the chrome. *)
+  let start =
+    match ps_index_of html "<div class='create-shell'>" 0 with
+    | Some s -> Some s
+    | None -> ps_index_of html "<div class='cm-main'>" 0
+  in
+  match start with
   | None -> Alcotest.fail "create shell missing from page"
   | Some s -> (
       match ps_index_of html "</main>" s with
@@ -56769,9 +56791,16 @@ module Final_create_page = struct
       (fun () ->
         let page = launch_render ~user:"ncl_reviewer" () in
         ps_must page "<body class='launch-project-home-review'>";
-        ps_must page "launch-review-context";
+        (* The queue now renders inside the shared settings shell: the
+           header band, one grouped settings index with exactly one active
+           item (Project home requests), and the panel column. *)
+        ps_must page "cm-wrap cm-wrap--settings";
+        ps_must page "<nav class='cm-index'>";
+        ps_must page
+          "cm-index-link cm-index-link--active' \
+           href='/c/ocaml/project-home-requests'";
         ps_must page "<div class='ncl-sidebar-mark'></div>";
-        ps_must page "<div class='create-shell'>";
+        ps_must_not page "launch-review-context";
         ps_must_not page "launch-message-page")
 
   let degraded_suite =
@@ -58368,14 +58397,15 @@ module Legacy_census = struct
         Alcotest.(check int) "one copyPostLink definition" 1
           (count_in components "function copyPostLink");
         (* No count fetch anywhere in the component library: the badge is
-           server-rendered. The three document builders that carry a top bar
-           each call the one shared renderer, so no builder can hard-code a
-           badge (or a zero) of its own. *)
+           server-rendered. The four document builders that carry a
+           member-capable top bar (entry under Entry_viewer, app,
+           onboarding, community) each call the one shared renderer, so no
+           builder can hard-code a badge (or a zero) of its own. *)
         Alcotest.(check int) "no unread-notifs fetch call" 0
           (count_in components "unread-notifs");
         Alcotest.(check int) "no hard-coded badge markup" 0
           (count_in components "bell__count");
-        Alcotest.(check int) "three shared badge render calls" 3
+        Alcotest.(check int) "four shared badge render calls" 4
           (count_in components "Notification_badge.badge_html"))
 
   let suite =
@@ -58386,17 +58416,17 @@ module Legacy_census = struct
 end
 
 (* The persistent top-right launch-topbar action (Components.launch_connect_cta).
-   It replaced the ochre "＋ Connect" outline control with a compact dark
-   GitHub-mark "Connect" button, and it is the ONE shared value the four launch
-   documents render, so the assertions here are both rendered-document and
-   source-census: no wrapper may grow a private copy or drift back to the plus
-   glyph.
+   One shared value with the visible label "Connect a project", rendered
+   byte-identically for anonymous and authenticated viewers on every launch
+   topbar — the old anonymous "Bring a project" variant is retired — so the
+   assertions here are both rendered-document and source-census: no wrapper
+   may grow a private copy or a second wording.
 
-   The second half pins what must NOT have moved: /bring's own full-label
-   primary action stays byte-identical (the whole <form>…</form>, mark
-   included), the anonymous cluster keeps its three links and no Connect
-   button, and the auth/message documents — which have no application topbar —
-   gain nothing at all. Pure renderers plus a file scan: no database, no
+   The second half pins the /bring exception: the page whose route the CTA
+   targets suppresses the self-linking topbar action, keeps its own
+   full-label primary action byte-identical, and carries the viewer's auth
+   controls instead; the chrome-free message document gains nothing. Pure
+   renderers plus a file scan (and the real /bring handler): no database, no
    server. *)
 module Launch_cta = struct
   let cc_case name f = Alcotest.test_case name `Quick f
@@ -58405,42 +58435,62 @@ module Launch_cta = struct
 
   (* The exact element, as the wrapper emits it. Byte-exact on purpose: copy,
      destination, element type, accessible name and icon size are all product
-     decisions, and a diff here should be a deliberate edit, not a surprise. *)
+     decisions, and a diff here should be a deliberate edit, not a surprise.
+     The accessible name is the visible label itself — no aria-label to
+     drift from it. *)
   let cta_open =
     "<a class='btn btn--connect-github' href='/bring' title='Connect an \
-     open-source project' aria-label='Connect GitHub'>"
+     open-source project'>"
+
+  let cta_label = "<span>Connect a project</span></a>"
 
   let github_path = "<path d='M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59"
 
   (* Every live launch document whose top bar carries the persistent action:
-     the viewer-independent entry chrome plus the member arm of each app-chrome
-     wrapper. *)
+     BOTH viewer arms of each app-chrome wrapper, the auth documents'
+     deterministic anonymous topbar, and the viewer-independent entry chrome
+     (/privacy — /bring opts out below). *)
   let cta_documents () =
-    [ ( "launch_entry_page"
-      , Earde.Components.launch_entry_page ~page_class:"launch-bring"
+    [ ( "launch_entry_page (default chrome)"
+      , Earde.Components.launch_entry_page ~page_class:"launch-privacy"
           ~title:"T" ~content:"B" () )
     ; ( "launch_app_page (member)"
       , Earde.Components.launch_app_page ~user:"alice"
           ~page_class:"launch-feed" ~title:"T" ~content:"B" () )
+    ; ( "launch_app_page (anonymous)"
+      , Earde.Components.launch_app_page ~page_class:"launch-feed" ~title:"T"
+          ~content:"B" () )
     ; ( "launch_onboarding_page (member)"
       , Earde.Components.launch_onboarding_page ~user:"alice"
+          ~page_class:"launch-project-new" ~title:"T" ~content:"B" () )
+    ; ( "launch_onboarding_page (anonymous)"
+      , Earde.Components.launch_onboarding_page
           ~page_class:"launch-project-new" ~title:"T" ~content:"B" () )
     ; ( "launch_community_page (member)"
       , Earde.Components.launch_community_page ~user:"alice" ~community
           ~sidebar:"S" ~page_class:"launch-community-overview" ~title:"T"
           ~content:"B" () )
+    ; ( "launch_community_page (anonymous)"
+      , Earde.Components.launch_community_page ~community ~sidebar:"S"
+          ~page_class:"launch-community-overview" ~title:"T" ~content:"B" () )
     ; ( "launch_community_surface_page (member)"
       , Earde.Components.launch_community_surface_page ~user:"alice" ~community
           ~sidebar:"S" ~page_class:"launch-community-channel" ~title:"T"
           ~main_el:"<main class='cs-main'>B</main>" () )
+    ; ( "launch_auth_page (login)"
+      , Earde.Components.launch_auth_page ~page_class:"launch-login"
+          ~title:"T" ~content:"B" () )
+    ; ( "launch_auth_page (signup)"
+      , Earde.Components.launch_auth_page ~page_class:"launch-signup"
+          ~title:"T" ~content:"B" () )
     ]
 
-  (* 1./2./3./4./5. — the shape of the control itself, on every wrapper that
-     renders it. /feed, /search, /notifications, /u/:name, /settings and /admin
-     are all launch_app_page; the community surfaces are launch_community_doc;
-     so covering the wrappers covers the routes. *)
+  (* The shape of the control itself, on every wrapper and viewer arm that
+     renders it. /feed, /search, /notifications, /u/:name, /settings and
+     /admin are all launch_app_page; the community surfaces are
+     launch_community_doc; so covering the wrappers covers the routes. *)
   let shape_case =
-    cc_case "every launch topbar renders one compact GitHub Connect action"
+    cc_case "every launch topbar renders one Connect-a-project action"
       (fun () ->
         List.iter
           (fun (label, html) ->
@@ -58448,13 +58498,13 @@ module Launch_cta = struct
               (label ^ ": exactly one CTA")
               1 (count_sub html cta_open);
             Alcotest.(check bool)
-              (label ^ ": visible text is Connect")
+              (label ^ ": mark then label")
               true
               (contains html (cta_open ^ "<svg"));
             Alcotest.(check bool)
-              (label ^ ": label closes the element")
+              (label ^ ": visible label closes the element")
               true
-              (contains html "<span>Connect</span></a>");
+              (contains html cta_label);
             (* exactly one local GitHub mark in the topbar chrome *)
             Alcotest.(check int)
               (label ^ ": one GitHub mark")
@@ -58465,13 +58515,13 @@ module Launch_cta = struct
               (contains html
                  "<svg width='15' height='15' viewBox='0 0 16 16' \
                   fill='currentColor' aria-hidden='true'>");
-            (* no plus glyph anywhere in the actions cluster wording *)
+            (* no plus glyph, no ochre outline, no retired anonymous wording *)
             List.iter
               (fun needle ->
                 Alcotest.(check bool)
                   (label ^ ": no " ^ needle)
                   false (contains html needle))
-              [ "&#65291; Connect"; "btn--outline-ochre" ];
+              [ "&#65291; Connect"; "btn--outline-ochre"; "Bring a project" ];
             (* still a same-tab GET link to /bring: no form, no new window, no
                query string, no script hook *)
             List.iter
@@ -58523,61 +58573,55 @@ module Launch_cta = struct
         Alcotest.(check bool) "mark is an inline svg" true
           (contains cta github_path))
 
-  (* State behavior: anonymous viewers keep exactly the cluster they had. *)
-  let anonymous_case =
-    cc_case "anonymous launch chrome is unchanged and shows no Connect button"
+  (* Anonymous and authenticated viewers render the byte-identical control;
+     only the surrounding auth controls differ. *)
+  let identical_across_viewers_case =
+    cc_case "anonymous and member topbars share the byte-identical CTA"
       (fun () ->
+        let anon =
+          Earde.Components.launch_app_page ~page_class:"launch-feed"
+            ~title:"T" ~content:"B" ()
+        in
+        let member =
+          Earde.Components.launch_app_page ~user:"alice"
+            ~page_class:"launch-feed" ~title:"T" ~content:"B" ()
+        in
+        Alcotest.(check string) "same rendered element"
+          (cta_element anon) (cta_element member);
+        (* the surrounding clusters stay viewer-appropriate *)
         List.iter
-          (fun (label, html) ->
-            Alcotest.(check int)
-              (label ^ ": no Connect button")
-              0 (count_sub html cta_open);
-            Alcotest.(check int)
-              (label ^ ": no GitHub mark")
-              0 (count_sub html github_path);
-            List.iter
-              (fun needle ->
-                Alcotest.(check bool)
-                  (label ^ ": keeps " ^ needle)
-                  true (contains html needle))
-              [ "<a class='btn btn--quiet' href='/bring'>Bring a project</a>"
-              ; "<a class='btn btn--secondary btn--auth' href='/login'>Log \
-                 in</a>"
-              ; "<a class='btn btn--primary btn--auth' href='/signup'>Sign \
-                 up</a>" ])
-          [ ( "launch_app_page (anonymous)"
-            , Earde.Components.launch_app_page ~page_class:"launch-feed"
-                ~title:"T" ~content:"B" () )
-          ; ( "launch_onboarding_page (anonymous)"
-            , Earde.Components.launch_onboarding_page
-                ~page_class:"launch-project-new" ~title:"T" ~content:"B" () )
-          ; ( "launch_community_page (anonymous)"
-            , Earde.Components.launch_community_page ~community ~sidebar:"S"
-                ~page_class:"launch-community-overview" ~title:"T" ~content:"B"
-                () )
-          ])
+          (fun needle ->
+            Alcotest.(check bool) ("anonymous keeps " ^ needle) true
+              (contains anon needle))
+          [ "<a class='btn btn--secondary btn--auth' href='/login'>Log \
+             in</a>"
+          ; "<a class='btn btn--primary btn--auth' href='/signup'>Sign \
+             up</a>" ];
+        List.iter
+          (fun needle ->
+            Alcotest.(check bool) ("member keeps " ^ needle) true
+              (contains member needle))
+          [ "class='bell'"; "userchip" ];
+        List.iter
+          (fun needle ->
+            Alcotest.(check bool) ("member drops " ^ needle) false
+              (contains member needle))
+          [ "btn--auth' href='/login'"; "btn--auth' href='/signup'" ])
 
-  (* 8. documents without the application topbar gain nothing. *)
+  (* Documents without an application topbar gain nothing. *)
   let chromeless_case =
-    cc_case "auth and message documents keep no application Connect action"
+    cc_case "the message document keeps no application Connect action"
       (fun () ->
+        let html =
+          Earde.Components.launch_message_page ~title:"T" ~content:"B" ()
+        in
         List.iter
-          (fun (label, html) ->
-            List.iter
-              (fun needle ->
-                Alcotest.(check bool)
-                  (label ^ ": no " ^ needle)
-                  false (contains html needle))
-              [ "btn--connect-github"; github_path; "&#65291; Connect" ])
-          [ ( "launch_auth_page (login)"
-            , Earde.Components.launch_auth_page ~page_class:"launch-login"
-                ~title:"T" ~content:"B" () )
-          ; ( "launch_auth_page (signup)"
-            , Earde.Components.launch_auth_page ~page_class:"launch-signup"
-                ~title:"T" ~content:"B" () )
-          ; ( "launch_message_page"
-            , Earde.Components.launch_message_page ~title:"T" ~content:"B" () )
-          ])
+          (fun needle ->
+            Alcotest.(check bool)
+              ("launch_message_page: no " ^ needle)
+              false (contains html needle))
+          [ "btn--connect-github"; github_path; "&#65291; Connect"
+          ; "Bring a project" ])
 
   (* 6./7. /bring's own primary action is untouched, byte-for-byte: element,
      method, action, classes, 20px mark and full label. Rendered through the
@@ -58598,7 +58642,9 @@ module Launch_cta = struct
      Connect a GitHub project</button></form>"
 
   let bring_untouched_case =
-    cc_case "/bring keeps its byte-identical full-label primary action"
+    cc_case
+      "/bring suppresses the self-linking topbar CTA and keeps its \
+       byte-identical full-label primary action"
       (fun () ->
         let body =
           Gh_bring.body_of (Gh_bring.run ~session:Gh_bring.member ())
@@ -58607,20 +58653,44 @@ module Launch_cta = struct
           (count_sub body bring_start_form);
         Alcotest.(check bool) "full label intact" true
           (contains body "Connect a GitHub project");
-        (* Intentional on /bring only: the compact topbar action and the
-           explicit page CTA are both present, so the page carries two marks
-           and exactly one of them is the topbar's. *)
-        Alcotest.(check int) "topbar CTA present too" 1
-          (count_sub body cta_open);
-        Alcotest.(check int) "two GitHub marks in total" 2
+        (* The compact topbar action would self-link on this page, so it is
+           absent — the page's one GitHub mark is the start button's, and the
+           chrome still adds no form. *)
+        Alcotest.(check int) "no topbar CTA" 0 (count_sub body cta_open);
+        Alcotest.(check int) "no compact CTA class" 0
+          (count_sub body "btn--connect-github");
+        Alcotest.(check int) "one GitHub mark in total" 1
           (count_sub body github_path);
-        (* The topbar action is still a link: /bring's non-ready states assert
-           zero forms, so the chrome must not have grown one. *)
         Alcotest.(check int) "still exactly one form" 1
-          (count_sub body "<form"))
+          (count_sub body "<form");
+        (* The member topbar carries the viewer's controls instead: bell and
+           plain user-chip link, never the logout <details> menu (that menu
+           carries a POST form the form-free states forbid). *)
+        Alcotest.(check bool) "member bell" true
+          (contains body "class='bell'");
+        Alcotest.(check bool) "member chip" true
+          (contains body "<a class='userchip' href='/u/alice'>");
+        Alcotest.(check bool) "no logout menu" false
+          (contains body "launch-user__menu");
+        (* Anonymous /bring keeps the auth controls in the topbar and still
+           renders no form and no compact CTA. *)
+        let anon = Gh_bring.body_of (Gh_bring.run ()) in
+        Alcotest.(check int) "anonymous: no topbar CTA" 0
+          (count_sub anon cta_open);
+        Alcotest.(check bool) "anonymous: Log in control" true
+          (contains anon
+             "<a class='btn btn--secondary btn--auth' href='/login'>Log \
+              in</a>");
+        Alcotest.(check bool) "anonymous: Sign up control" true
+          (contains anon
+             "<a class='btn btn--primary btn--auth' href='/signup'>Sign \
+              up</a>");
+        Alcotest.(check int) "anonymous: no form" 0 (count_sub anon "<form"))
 
-  (* One definition, four call sites, no survivors: the control cannot drift
-     between wrappers and the retired outline class is gone from production. *)
+  (* One definition, five call sites (the shared anonymous cluster plus the
+     entry/app/onboarding/community member arms), no survivors: the control
+     cannot drift between wrappers, and both the retired plus glyph and the
+     retired anonymous "Bring a project" wording are gone from production. *)
   let single_definition_case =
     cc_case "one shared CTA definition feeds every launch topbar" (fun () ->
         let components =
@@ -58628,11 +58698,15 @@ module Launch_cta = struct
         in
         Alcotest.(check int) "one definition" 1
           (count_sub components "let launch_connect_cta");
-        Alcotest.(check int) "definition plus four call sites" 5
+        Alcotest.(check int) "definition plus five call sites" 6
           (count_sub components "launch_connect_cta");
+        Alcotest.(check int) "one shared anonymous cluster" 1
+          (count_sub components "let topbar_anon_actions");
         Alcotest.(check int) "four topbar action clusters" 4
           (count_sub components "<div class='topbar__actions'>");
         Legacy_census.absent_everywhere "retired plus glyph" "&#65291; Connect";
+        Legacy_census.absent_everywhere "retired anonymous CTA copy"
+          ">Bring a project<";
         (* The generic ochre outline button survives for its own callers, but
            no launch topbar uses it any more. *)
         Alcotest.(check int) "components.ml drops btn--outline-ochre" 0
@@ -58648,8 +58722,465 @@ module Launch_cta = struct
           (contains css ".topbar__actions .btn--connect-github { display: none; }"))
 
   let suite =
-    [ shape_case; no_external_asset_case; anonymous_case; chromeless_case
-    ; bring_untouched_case; single_definition_case ]
+    [ shape_case; no_external_asset_case; identical_across_viewers_case
+    ; chromeless_case; bring_untouched_case; single_definition_case ]
+end
+
+(* ===================== Show HN polish pass ===================================
+   The first visual/copy polish pass: the repo-wide GitHub-copy census, the
+   neutralized auth-page copy, the consolidated /feed right aside, and the
+   shared community-settings shell (header band + grouped internal settings
+   navigation + one active item) across every settings/management surface.
+   Pure renderers plus the discovered-source census: no database. *)
+module Show_hn_polish = struct
+  let case name f = Alcotest.test_case name `Quick f
+
+  module Shell = Earde.Community_settings_shell
+
+  let must html s =
+    Alcotest.(check bool) ("contains: " ^ s) true (contains html s)
+
+  let must_not html s =
+    Alcotest.(check bool) ("must not contain: " ^ s) false (contains html s)
+
+  let index_of html needle from =
+    let nl = String.length needle in
+    let hl = String.length html in
+    let rec loop i =
+      if i + nl > hl then None
+      else if String.sub html i nl = needle then Some i
+      else loop (i + 1)
+    in
+    loop from
+
+  (* CSRF-carrying renderers need a live secret + sessions pipeline. *)
+  let render_with_request ~target f =
+    let captured = ref None in
+    let pipeline =
+      Dream.set_secret gck_secret @@ Dream.memory_sessions
+      @@ fun req ->
+      captured := Some (f req);
+      Dream.html ""
+    in
+    ignore (Lwt_main.run (pipeline (Dream.request ~method_:`GET ~target "")));
+    match !captured with
+    | Some html -> html
+    | None -> Alcotest.fail "renderer did not run"
+
+  (* --- 1. repo-wide GitHub-copy census ---------------------------------- *)
+
+  (* The retired members-don't-need-GitHub marketing (and the named Lwt/OCaml
+     example, and the retired anonymous topbar wording) must not survive in
+     any production source — renderer, component, or copy-documenting
+     comment. Nothing here asserts that GitHub is required. *)
+  let github_copy_census_case =
+    case "no GitHub-absence marketing survives in production sources"
+      (fun () ->
+        List.iter
+          (Legacy_census.absent_everywhere "GitHub copy census")
+          [ "No GitHub required"
+          ; "never need GitHub"
+          ; "join and chat without GitHub"
+          ; "do not need a GitHub account"
+          ; "GitHub is only needed"
+          ; "Lwt to OCaml"
+          ; ">Bring a project<"
+          ; "GitHub is required" ])
+
+  (* --- 2. auth pages ------------------------------------------------------ *)
+
+  let render_login () =
+    render_with_request ~target:"/login" (fun req -> Earde.Pages.login_form req)
+
+  let render_signup () =
+    render_with_request ~target:"/signup" (fun req ->
+        Earde.Pages.signup_form req)
+
+  let auth_copy_case =
+    case "auth pages carry neutral copy and the shared topbar CTA" (fun () ->
+        let login = render_login () in
+        (* The old members-don't-need-GitHub notice became the
+           maintainer-oriented action. *)
+        must login "Maintaining an open-source project?";
+        must login "<a href='/bring'>Connect it through GitHub</a>";
+        must_not login "No GitHub required";
+        must_not login "GitHub is only needed";
+        must_not login "Members read, join and chat";
+        must login Launch_cta.cta_open;
+        let signup = render_signup () in
+        must signup
+          "<p class='auth__sub'>One account for every community on Earde.</p>";
+        must_not signup "No GitHub required";
+        (* The maintainer pointer that was already neutral stays. *)
+        must signup "connect a project through GitHub";
+        must signup Launch_cta.cta_open;
+        (* One CTA per document; no second wording. *)
+        Alcotest.(check int) "login: one CTA" 1
+          (count_sub login Launch_cta.cta_open);
+        Alcotest.(check int) "signup: one CTA" 1
+          (count_sub signup Launch_cta.cta_open);
+        must_not login "Bring a project";
+        must_not signup "Bring a project")
+
+  (* --- 3. /feed right aside ---------------------------------------------- *)
+
+  let render_feed ?user ~is_logged_in ?(rail = []) () =
+    render_with_request ~target:"/feed" (fun req ->
+        Earde.Pages.feed_page ?user ~scope:"all" ~sort_mode:"hot" ~is_logged_in
+          ~admin_usernames:[] ~rail_communities:rail ~user_votes:[]
+          ~current_page:1 [] req)
+
+  let aside_slice html =
+    match index_of html "<aside class='aside'" 0 with
+    | None -> Alcotest.fail "no aside in feed document"
+    | Some s -> (
+        match index_of html "</aside>" s with
+        | None -> Alcotest.fail "unterminated aside"
+        | Some e -> String.sub html s (e - s))
+
+  let feed_aside_contract label aside =
+    Alcotest.(check int)
+      (label ^ ": one project-acquisition heading")
+      1
+      (count_sub aside "Bring your project");
+    Alcotest.(check int)
+      (label ^ ": one Connect-a-project CTA")
+      1
+      (count_sub aside ">Connect a project</a>");
+    Alcotest.(check int)
+      (label ^ ": exactly one /bring target")
+      1
+      (count_sub aside "href='/bring'");
+    must_not aside "Start a pilot community";
+    must_not aside "Bring your community";
+    (* Unrelated aside content stays. *)
+    must aside "Earde is early"
+
+  let feed_aside_case =
+    case "feed aside keeps exactly one project-acquisition block" (fun () ->
+        let anon = render_feed ~is_logged_in:false () in
+        feed_aside_contract "anonymous" (aside_slice anon);
+        let member =
+          render_feed ~user:"alice" ~is_logged_in:true
+            ~rail:[ nav_test_community ] ()
+        in
+        let member_aside = aside_slice member in
+        feed_aside_contract "member" member_aside;
+        (* The block is identical for both viewer states; only the real
+           Following data differs. *)
+        Alcotest.(check bool) "member aside keeps Following" true
+          (contains member_aside "Following");
+        must member_aside
+          "<p class='aside__text'>Create a dedicated community home for your \
+           open-source project, or connect it to an existing community.</p>")
+
+  (* --- 4. settings shell: the grouped nav (pure) -------------------------- *)
+
+  let all_items : (Shell.item * string) list =
+    [ (Shell.Profile, "/settings?panel=profile")
+    ; (Shell.Visibility, "/settings?panel=visibility")
+    ; (Shell.Connected_projects, "/settings?panel=projects")
+    ; (Shell.Home_requests, "/project-home-requests")
+    ; (Shell.Connections, "/settings/connections")
+    ; (Shell.Shared_threads, "/settings/shared-threads")
+    ; (Shell.Channels, "/settings?panel=channels")
+    ; (Shell.Members, "/settings?panel=members")
+    ; (Shell.Manage_moderators, "/manage-mods")
+    ; (Shell.Moderation, "/settings?panel=moderation")
+    ; (Shell.Bans, "/settings?panel=bans")
+    ]
+
+  let nav_grouping_case =
+    case "grouped nav: complete top-mod set, ordered groups, one active"
+      (fun () ->
+        let nav =
+          Shell.nav ~slug:"polish" ~active:Shell.Visibility
+            ~can_complete_setup:false ~network_manager:true ()
+        in
+        (* Group headings in canonical order. *)
+        let pos needle =
+          match index_of nav needle 0 with
+          | Some i -> i
+          | None -> Alcotest.failf "nav lacks %s" needle
+        in
+        let community = pos ">Community</p>" in
+        let network = pos ">Network</p>" in
+        let structure = pos ">Structure</p>" in
+        let people = pos ">People</p>" in
+        Alcotest.(check bool) "Community < Network" true (community < network);
+        Alcotest.(check bool) "Network < Structure" true (network < structure);
+        Alcotest.(check bool) "Structure < People" true (structure < people);
+        (* Every entry present exactly once, server-built from the slug. *)
+        List.iter
+          (fun (_, suffix) ->
+            Alcotest.(check int)
+              ("one entry for " ^ suffix)
+              1
+              (count_sub nav ("href='/c/polish" ^ suffix ^ "'")))
+          all_items;
+        (* Exactly one active item, whichever item is active. *)
+        List.iter
+          (fun (item, suffix) ->
+            let nav =
+              Shell.nav ~slug:"polish" ~active:item ~can_complete_setup:false
+                ~network_manager:true ()
+            in
+            Alcotest.(check int)
+              ("one active for " ^ suffix)
+              1
+              (count_sub nav "cm-index-link--active");
+            Alcotest.(check bool)
+              ("active is " ^ suffix)
+              true
+              (contains nav
+                 ("cm-index-link--active' href='/c/polish" ^ suffix ^ "'")))
+          all_items;
+        (* Danger styling stays confined to Bans. *)
+        Alcotest.(check int) "one danger link" 1
+          (count_sub nav "cm-index-link--danger");
+        Alcotest.(check bool) "danger is Bans" true
+          (contains nav
+             "cm-index-link--danger' href='/c/polish/settings?panel=bans'"))
+
+  let nav_role_subset_case =
+    case "grouped nav: regular moderators get the coherent subset" (fun () ->
+        let nav =
+          Shell.nav ~slug:"polish" ~active:Shell.Moderation
+            ~can_complete_setup:false ~network_manager:false ()
+        in
+        (* No Network group, no entry the viewer categorically cannot open. *)
+        must_not nav ">Network</p>";
+        must_not nav "/project-home-requests";
+        must_not nav "/settings/connections";
+        must_not nav "/settings/shared-threads";
+        must_not nav "?panel=projects";
+        must_not nav "/manage-mods";
+        must_not nav "/setup'";
+        (* The rest of the groups survive intact. *)
+        List.iter (must nav)
+          [ ">Community</p>"; ">Structure</p>"; ">People</p>";
+            "?panel=profile"; "?panel=visibility"; "?panel=channels";
+            "?panel=members"; "?panel=moderation"; "?panel=bans" ];
+        Alcotest.(check int) "one active" 1
+          (count_sub nav "cm-index-link--active"))
+
+  let nav_setup_case =
+    case "grouped nav: the setup link renders only for eligible drafts"
+      (fun () ->
+        let without =
+          Shell.nav ~slug:"polish" ~active:Shell.Profile
+            ~can_complete_setup:false ~network_manager:true ()
+        in
+        must_not without "Complete setup and publish";
+        let with_setup =
+          Shell.nav ~slug:"polish" ~active:Shell.Profile
+            ~can_complete_setup:true ~network_manager:true ()
+        in
+        Alcotest.(check int) "one setup link" 1
+          (count_sub with_setup "href='/c/polish/setup'");
+        must with_setup ">Complete setup and publish</a>")
+
+  (* --- 5. settings surfaces: the shared DOM contract ---------------------- *)
+
+  (* One community rail, one community sidebar with Settings active, one
+     internal settings navigation with exactly one active item, the shared
+     header band, and no duplicate nav. *)
+  let assert_shell_contract label ~slug ~active_href html =
+    Alcotest.(check int)
+      (label ^ ": one settings wrap")
+      1
+      (count_sub html "<div class='cm-wrap cm-wrap--settings'>");
+    Alcotest.(check int)
+      (label ^ ": one settings index")
+      1
+      (count_sub html "<nav class='cm-index'>");
+    Alcotest.(check int)
+      (label ^ ": one index title")
+      1
+      (count_sub html "<div class='cm-index-title'>Settings</div>");
+    Alcotest.(check int)
+      (label ^ ": one active internal item")
+      1
+      (count_sub html "cm-index-link--active");
+    Alcotest.(check bool)
+      (label ^ ": the active item is " ^ active_href)
+      true
+      (contains html ("cm-index-link--active' href='" ^ active_href ^ "'"));
+    Alcotest.(check int)
+      (label ^ ": one header band")
+      1
+      (count_sub html "<div class='cm-head'>");
+    Alcotest.(check bool)
+      (label ^ ": header names the community")
+      true
+      (contains html ("/c/" ^ slug ^ " <span class='accent'>settings</span>"))
+
+  let polish_community : Earde.Db.community =
+    { nav_test_community with id = 777; slug = "polish"; name = "Polish" }
+
+  let render_settings ?(target = "/c/polish/settings") ~is_admin ~is_top_mod ()
+      =
+    render_with_request ~target (fun req ->
+        Earde.Pages.community_settings_page ~is_admin ~is_top_mod
+          ~open_reports_count:0 ~community:polish_community ~mods:[]
+          ~banned_users:[] ~members:[] ~sections:[] ~channels:[] req)
+
+  let settings_surface_case =
+    case "settings hub: base and query panels keep the shared contract"
+      (fun () ->
+        let base = render_settings ~is_admin:false ~is_top_mod:true () in
+        assert_shell_contract "base" ~slug:"polish"
+          ~active_href:"/c/polish/settings?panel=visibility" base;
+        (* The outer sidebar marks Settings as the active community item. *)
+        Alcotest.(check bool) "sidebar Settings active" true
+          (contains base
+             "navitem--active' href='/c/polish/settings'");
+        let members =
+          render_settings ~target:"/c/polish/settings?panel=members"
+            ~is_admin:false ~is_top_mod:true ()
+        in
+        assert_shell_contract "panel=members" ~slug:"polish"
+          ~active_href:"/c/polish/settings?panel=members" members)
+
+  (* The internal settings index alone (the outer community sidebar keeps
+     its own, always-rendered "Network" group heading for Moderation log). *)
+  let index_slice html =
+    match index_of html "<nav class='cm-index'>" 0 with
+    | None -> Alcotest.fail "no settings index in document"
+    | Some s -> (
+        match index_of html "</nav>" s with
+        | None -> Alcotest.fail "unterminated settings index"
+        | Some e -> String.sub html s (e - s))
+
+  let settings_role_case =
+    case "settings hub: regular moderators keep the coherent subset"
+      (fun () ->
+        let regular =
+          index_slice (render_settings ~is_admin:false ~is_top_mod:false ())
+        in
+        must_not regular ">Network</p>";
+        must_not regular "/c/polish/project-home-requests";
+        must_not regular "/c/polish/settings/connections";
+        must_not regular "/c/polish/settings/shared-threads";
+        must_not regular "/c/polish/manage-mods";
+        let top =
+          index_slice (render_settings ~is_admin:false ~is_top_mod:true ())
+        in
+        List.iter (must top)
+          [ ">Network</p>"; "/c/polish/project-home-requests";
+            "/c/polish/settings/connections";
+            "/c/polish/settings/shared-threads"; "/c/polish/manage-mods" ])
+
+  let manage_mods_case =
+    case "manage-mods renders inside the shell with Manage moderators active"
+      (fun () ->
+        let html =
+          render_with_request ~target:"/c/polish/manage-mods" (fun req ->
+              Earde.Pages.manage_mods_page ~is_admin:false
+                ~current_user_role:(Some "top_mod") ~channels:[] ~sections:[]
+                ~community:polish_community ~mods:[] req)
+        in
+        assert_shell_contract "manage-mods" ~slug:"polish"
+          ~active_href:"/c/polish/manage-mods" html;
+        (* The roster panels and the add form survive inside the panel
+           column. *)
+        must html "Top Mods";
+        must html "action='/c/polish/manage-mods/add'";
+        Alcotest.(check bool) "sidebar Settings active" true
+          (contains html "navitem--active' href='/c/polish/settings'"))
+
+  let reports_case =
+    case "reports queue renders inside the shell with Moderation active"
+      (fun () ->
+        let html =
+          render_with_request ~target:"/c/polish/reports" (fun req ->
+              Earde.Pages.reports_queue_page ~is_admin:false ~is_top_mod:true
+                ~channels:[] ~sections:[] ~community:polish_community
+                ~status:Earde.Db.Report_open ~reports:[] ~previews:[] req)
+        in
+        assert_shell_contract "reports" ~slug:"polish"
+          ~active_href:"/c/polish/settings?panel=moderation" html;
+        (* The queue's own status tabs stay inside the panel. *)
+        must html "cm-nav-link cm-nav-link--active";
+        must html "Reports queue")
+
+  (* The dedicated management routes: fabricated shell tuples, exactly like
+     the sibling review-page suite. *)
+  let mgmt_shell =
+    ( polish_community,
+      [ polish_community ],
+      "<aside class='sidebar' aria-label='Polish community'><a class='navitem \
+       navitem--pad navitem--active' href='/c/polish/settings'>Settings</a></aside>"
+    )
+
+  let connections_case =
+    case "connections management renders inside the shell, Connections active"
+      (fun () ->
+        let state : Earde.Community_connections_pages.state =
+          { community = { name = "Polish"; slug = "polish"; eligible = true };
+            accepted = [];
+            incoming = [];
+            outgoing = []
+          }
+        in
+        let html =
+          Earde.Community_connections_pages.management_page ~shell:mgmt_shell
+            ~state ~feedback:None ()
+        in
+        assert_shell_contract "connections" ~slug:"polish"
+          ~active_href:"/c/polish/settings/connections" html;
+        must html "community-connections";
+        must_not html "launch-review-context")
+
+  let shared_threads_case =
+    case "shared-threads management renders inside the shell, Shared threads \
+          active; the share page keeps its own document"
+      (fun () ->
+        let state : Earde.Shared_thread_placement_pages.management_state =
+          { community_name = "Polish";
+            community_slug = "polish";
+            community_eligible = true;
+            sections_enabled = false;
+            section_options = [];
+            incoming = [];
+            outgoing = [];
+            shared_into = [];
+            shared_from = []
+          }
+        in
+        let html =
+          Earde.Shared_thread_placement_pages.management_page
+            ~shell:mgmt_shell ~state ~notice:None ~feedback:None ()
+        in
+        assert_shell_contract "shared threads" ~slug:"polish"
+          ~active_href:"/c/polish/settings/shared-threads" html;
+        must html "community-shared-threads";
+        must_not html "launch-review-context";
+        (* The per-thread Share page is a member workflow, not a settings
+           surface: no settings shell, context block intact. *)
+        let share_state : Earde.Shared_thread_placement_pages.share_state =
+          { share_thread_title = "T";
+            share_origin_name = "Polish";
+            share_origin_slug = "polish";
+            share_thread_path = "/c/polish/t/1";
+            share_candidates = [];
+            share_placements = [];
+            share_manage_connections = false
+          }
+        in
+        let share =
+          Earde.Shared_thread_placement_pages.share_page ~shell:mgmt_shell
+            ~state:share_state ~notice:None ~feedback:None ()
+        in
+        must_not share "cm-wrap--settings";
+        must_not share "<nav class='cm-index'>";
+        must share "launch-review-context")
+
+  let suite =
+    [ github_copy_census_case; auth_copy_case; feed_aside_case;
+      nav_grouping_case; nav_role_subset_case; nav_setup_case;
+      settings_surface_case; settings_role_case; manage_mods_case;
+      reports_case; connections_case; shared_threads_case ]
 end
 
 (* ===================== community connections (issue #30) =====================
@@ -77639,6 +78170,7 @@ let () =
          full-label primary action still byte-identical. Pure renders plus a
          source/CSS census — DB-free. *)
     ; ("launch_connect_cta", Launch_cta.suite)
+    ; ("show_hn_polish", Show_hn_polish.suite)
       (* Mutual connections between communities (issue #30), storage/domain
          slice: the pure lifecycle domain and note canonicalization are
          DB-free; the two tables' constraints, the transactional store with

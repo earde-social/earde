@@ -4069,6 +4069,16 @@ let reports_queue_handler request =
                 match%lwt Db.get_user_communities db user_id with
                 | Ok cs -> Lwt.return cs | Error _ -> Lwt.return []
               in
+              (* Read-only role lookup for the shared settings shell's nav:
+                 display-gates the top-mod/admin entries (Network group,
+                 Manage moderators) exactly like the settings hub. Every
+                 linked route still reauthorizes — this changes no
+                 permission. *)
+              let%lwt is_top_mod =
+                match%lwt Db.get_moderator_role db user_id community.id with
+                | Ok (Some "top_mod") -> Lwt.return true
+                | _ -> Lwt.return false
+              in
               (match%lwt Db.get_reports_by_community db community.id ~status with
                | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:("Database error: " ^ e) ~alert_type:"error" ~return_url:("/c/" ^ slug) request)
                | Ok reports ->
@@ -4085,7 +4095,7 @@ let reports_queue_handler request =
                        | _ -> Lwt.return None)
                        (take preview_cap reports)
                    in
-                   Dream.html (Pages.reports_queue_page ?user ~rail_communities ~channels ~sections ~community ~status ~reports ~previews request)))
+                   Dream.html (Pages.reports_queue_page ?user ~rail_communities ~is_admin ~is_top_mod ~channels ~sections ~community ~status ~reports ~previews request)))
 
 (* Slice E: resolve an open report (dismiss / mark action-taken) and write a modlog entry.
    Shared by dismiss_report_handler and action_report_handler. Both gate exactly like the

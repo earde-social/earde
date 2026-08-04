@@ -43,23 +43,39 @@ val post_thumbnail : ?alt:string -> img_class:string -> string option -> string
 
 (** === LAYOUT === *)
 
+(** The one topbar Connect-a-project CTA every launch topbar renders (visible
+    label "Connect a project", href /bring), byte-identical for anonymous and
+    authenticated viewers. Exposed so page modules never grow a private copy. *)
+val launch_connect_cta : string
+
+(** Entry-chrome topbar policy for [launch_entry_page]:
+    [Entry_connect_cta] (default) keeps the viewer-independent chrome — the
+    shared Connect CTA alone (/privacy). [Entry_viewer user] renders viewer
+    auth controls and suppresses the CTA — /bring only, where the compact CTA
+    would self-link. Both arms stay form-free. *)
+type entry_topbar =
+  | Entry_connect_cta
+  | Entry_viewer of string option
+
 (** Cartographic Civic launch entry document (pass 1: /bring only). A complete,
     self-contained document loading only /static/css/earde.css — no Tailwind, no
-    external fonts, no legacy per-page CSS — with a viewer-independent, form-free
-    top bar (command field is a link to /search) and icon rail over a centred
+    external fonts, no legacy per-page CSS — with a form-free
+    top bar (command field is a link to /search; contents per [topbar]) and icon
+    rail over a centred
     onboarding column. Emits no forms and only real routes, so pages whose tests
-    assert zero forms document-wide can adopt it. [request] feeds only the shared
+    assert zero forms document-wide can adopt it. [request] feeds the shared
     analytics assets (the same [analytics_assets] every launch document
-    emits). [page_class] is the route-specific scoping root stamped on <body>
+    emits) and, under [Entry_viewer], the server-rendered notification badge.
+    [page_class] is the route-specific scoping root stamped on <body>
     (e.g. "launch-bring") that the integration CSS at the end of earde.css
     keys on. *)
-val launch_entry_page : ?noindex:bool -> ?request:Dream.request -> page_class:string -> title:string -> content:string -> unit -> string
+val launch_entry_page : ?noindex:bool -> ?request:Dream.request -> ?topbar:entry_topbar -> page_class:string -> title:string -> content:string -> unit -> string
 
 (** Cartographic Civic launch auth document (pass 2: /login and /signup only).
     A complete, self-contained document loading only /static/css/earde.css — no
     Tailwind, no external fonts, no legacy per-page CSS, no mobile gate, no
-    notification polling — under the approved deterministic *anonymous* top bar (Bring a
-    project / Log in / Sign up, command field as a link to /search) and no
+    notification polling — under the approved deterministic *anonymous* top bar (the
+    shared Connect CTA / Log in / Sign up, command field as a link to /search) and no
     rail/sidebar/aside. [request] feeds only the shared analytics assets
     (identical to every other launch document's). [page_class]
     ("launch-login" / "launch-signup")
@@ -85,8 +101,9 @@ val launch_message_page : ?noindex:bool -> ?request:Dream.request -> title:strin
     self-contained document loading only /static/css/earde.css plus the shared
     desktop-only mobile gate — no Tailwind, no external fonts, no legacy
     per-page CSS — under the approved app chrome: 54px top bar (brand → /feed, a real /search
-    form, viewer-state actions: anonymous Bring/Log in/Sign up, or the member
-    GitHub-mark Connect, the id='notif-badge' bell, and a pure-CSS user menu whose
+    form, viewer-state actions: the shared Connect-a-project CTA plus anonymous
+    Log in/Sign up, or the member
+    cluster with the same CTA, the id='notif-badge' bell, and a pure-CSS user menu whose
     logout stays a POST form), the dark 64px icon rail (Feed active, one tile
     per real joined community targeting the legacy /c/:slug/ch/general
     destination, ＋ → /bring), the central main column and an optional right

@@ -224,20 +224,21 @@ let analytics_assets ?request ?analytics_community () =
    desktop-only mobile gate on app surfaces) and nothing external. *)
 
 (* The persistent top-right launch-topbar action: the compact, always-present
-   entry point to /bring. One shared value so the four launch documents below
+   entry point to /bring. One shared value — rendered identically to
+   anonymous and authenticated viewers — so the launch documents below
    cannot drift apart.
 
    The mark is the same local GitHub path the /bring start button draws, at
    topbar scale (15px) and inheriting the button's white foreground through
-   fill='currentColor' — no external asset, no icon font, no emoji. It carries
-   no meaning of its own (aria-hidden), so the accessible name comes from
-   aria-label ("Connect GitHub"): screen readers get the GitHub context
-   without a second visible or layout-affecting text node. The element stays a
-   plain same-tab <a href='/bring'> — the /bring page keeps the explicit
-   full-label primary action. *)
+   fill='currentColor' — no external asset, no icon font, no emoji. The mark
+   is decorative (aria-hidden), so the accessible name is exactly the visible
+   label "Connect a project" — no aria-label that could drift from the text.
+   The element stays a plain same-tab <a href='/bring'> — the /bring page
+   keeps the explicit full-label primary action, and suppresses this compact
+   one because it would self-link. *)
 let launch_connect_cta =
   "<a class='btn btn--connect-github' href='/bring' \
-   title='Connect an open-source project' aria-label='Connect GitHub'>\
+   title='Connect an open-source project'>\
    <svg width='15' height='15' viewBox='0 0 16 16' fill='currentColor' \
    aria-hidden='true'><path d='M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 \
    5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 \
@@ -248,24 +249,46 @@ let launch_connect_cta =
    2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 \
    3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 \
    .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z'/></svg>\
-   <span>Connect</span></a>"
+   <span>Connect a project</span></a>"
+
+(* The one anonymous topbar action cluster: the shared Connect CTA plus the
+   two authentication controls. One value used by every launch wrapper with
+   an anonymous arm, so the anonymous and authenticated topbars render the
+   byte-identical CTA and only the surrounding controls differ. *)
+let topbar_anon_actions =
+  launch_connect_cta
+  ^ "<a class='btn btn--secondary btn--auth' href='/login'>Log in</a>\
+     <a class='btn btn--primary btn--auth' href='/signup'>Sign up</a>"
+
+(* Entry-chrome topbar policy, chosen per route:
+   - [Entry_connect_cta] (default): the viewer-independent chrome — the shared
+     Connect CTA alone, no auth controls (/privacy).
+   - [Entry_viewer user]: viewer-dependent auth controls and NO Connect CTA —
+     /bring only, where the compact CTA would self-link. Anonymous viewers get
+     the two auth links; members get the bell and the plain user-chip link
+     (never the <details> menu with its logout POST: /bring's non-ready
+     states assert zero <form> elements document-wide). *)
+type entry_topbar =
+  | Entry_connect_cta
+  | Entry_viewer of string option
 
 (* Cartographic Civic launch entry document (pass 1: /bring only). A complete,
    self-contained HTML document that loads only the launch stylesheet
    (earde.css) — no Tailwind, no external fonts, no legacy per-page CSS.
 
-   The chrome is deliberately viewer-independent and form-free: /bring's
-   non-ready states assert zero <form> elements across the whole document,
-   and its Off state additionally forbids a /login link, so the top bar
-   renders the command field as a link to /search and offers no search form,
-   no logout, and no login/signup. Every link is a real route (/feed,
-   /search, /bring).
+   The chrome is form-free: /bring's non-ready states assert zero <form>
+   elements across the whole document, and its authenticated Off state
+   additionally forbids a /login link, so the top bar renders the command
+   field as a link to /search and offers no search form and no logout.
+   Every link is a real route (/feed, /search, /bring, /login, /signup,
+   /notifications, /u/:name — the last four only under [Entry_viewer]).
 
    Analytics behavior is the shared [analytics_assets] (script + consent
    banner); the scoped integration CSS at the end of earde.css positions the
    banner, whose utility classes are inert without Tailwind. [page_class] is the route-specific scoping root for
    that integration CSS (e.g. "launch-bring"), stamped on <body>. *)
-let launch_entry_page ?(noindex = false) ?request ~page_class ~title ~content () =
+let launch_entry_page ?(noindex = false) ?request ?(topbar = Entry_connect_cta)
+    ~page_class ~title ~content () =
   let analytics_head, analytics_banner = analytics_assets ?request () in
   let robots_meta =
     if noindex then "<meta name='robots' content='noindex'>" else ""
@@ -275,6 +298,35 @@ let launch_entry_page ?(noindex = false) ?request ~page_class ~title ~content ()
      stroke='currentColor' stroke-width='1.7' stroke-linecap='round' \
      stroke-linejoin='round' aria-hidden='true'><path d='M3 10.5 12 3l9 \
      7.5'></path><path d='M5 9.5V21h14V9.5'></path></svg>"
+  in
+  let bell_icon =
+    "<svg width='16' height='16' viewBox='0 0 24 24' fill='none' \
+     stroke='currentColor' stroke-width='1.7' stroke-linecap='round' \
+     stroke-linejoin='round' aria-hidden='true'><path d='M18 8a6 6 0 0 \
+     0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9'></path><path d='M10 21h4'></path></svg>"
+  in
+  let actions =
+    match topbar with
+    | Entry_connect_cta -> launch_connect_cta
+    | Entry_viewer (Some username) ->
+        let u = html_escape username in
+        let initial =
+          if String.length username > 0
+          then html_escape (String.sub (String.uppercase_ascii username) 0 1)
+          else "?"
+        in
+        (* Form-free member cluster (the onboarding wrapper's, minus the CTA):
+           badge server-rendered from the request's unread count, user chip a
+           plain link — no <details> menu, no logout form. *)
+        Printf.sprintf
+          "<a class='bell' href='/notifications' title='Notifications' aria-label='Notifications'>%s%s</a>\
+           <a class='userchip' href='/u/%s'><span class='avatar avatar--24'>%s</span><span class='userchip__name'>u/%s</span></a>"
+          bell_icon
+          (Notification_badge.badge_html ?request ())
+          u initial u
+    | Entry_viewer None ->
+        "<a class='btn btn--secondary btn--auth' href='/login'>Log in</a>\
+         <a class='btn btn--primary btn--auth' href='/signup'>Sign up</a>"
   in
   Printf.sprintf
     "<!DOCTYPE html>\n\
@@ -316,13 +368,13 @@ let launch_entry_page ?(noindex = false) ?request ~page_class ~title ~content ()
      </body>\n\
      </html>"
     (html_escape title) robots_meta analytics_head page_class
-    launch_connect_cta house_icon content analytics_banner
+    actions house_icon content analytics_banner
 
 (* Cartographic Civic launch auth document (pass 2: /login and /signup only).
    Like [launch_entry_page], a complete self-contained document that loads only
    earde.css — no Tailwind, no external fonts, no legacy per-page CSS, no
-   mobile gate, no notification polling — but with the approved *anonymous* top bar (Bring a
-   project / Log in / Sign up) instead of the entry chrome, and no icon rail:
+   mobile gate, no notification polling — but with the approved *anonymous* top bar (the shared
+   Connect-a-project CTA / Log in / Sign up) instead of the entry chrome, and no icon rail:
    the /login and /signup routes render no panes at all (04-ROUTES).
 
    The chrome is deterministic and viewer-independent: the same three real
@@ -362,11 +414,7 @@ let launch_auth_page ?(noindex = false) ?request ~page_class ~title ~content () 
      <span class='launch-search__hint'>grep threads &middot; projects &middot; communities&hellip;</span>\
      <span class='launch-search__enter' aria-hidden='true'>&#8629;</span>\
      </a>\
-     <div class='topbar__actions topbar__actions--anon'>\
-     <a class='btn btn--quiet' href='/bring'>Bring a project</a>\
-     <a class='btn btn--secondary btn--auth' href='/login'>Log in</a>\
-     <a class='btn btn--primary btn--auth' href='/signup'>Sign up</a>\
-     </div>\
+     <div class='topbar__actions topbar__actions--anon'>%s</div>\
      </header>\n\
      <div class='shell'>\
      <main class='main main--paper'><div class='scroll'>\n\
@@ -377,8 +425,8 @@ let launch_auth_page ?(noindex = false) ?request ~page_class ~title ~content () 
      %s\n\
      </body>\n\
      </html>"
-    (html_escape title) robots_meta analytics_head page_class content
-    analytics_banner
+    (html_escape title) robots_meta analytics_head page_class
+    topbar_anon_actions content analytics_banner
 
 (* Cartographic Civic launch message document (pass 17: the shared
    Pages.msg_page only). Like the other launch documents, complete and
@@ -674,9 +722,7 @@ let launch_app_page ?(noindex = false) ?request ?user ?(rail_communities = [])
     | None ->
         (* Anonymous cluster (04-ROUTES): no bell, no user chip, no logout,
            and therefore no notification fetch anywhere in the document. *)
-        "<a class='btn btn--quiet' href='/bring'>Bring a project</a>\
-         <a class='btn btn--secondary btn--auth' href='/login'>Log in</a>\
-         <a class='btn btn--primary btn--auth' href='/signup'>Sign up</a>"
+        topbar_anon_actions
   in
   (* Same face fallback as the legacy rail's rail_glyph (defined later in
      this file): first two slug letters, one if short, "?" if empty — only
@@ -771,7 +817,7 @@ let launch_app_page ?(noindex = false) ?request ?user ?(rail_communities = [])
    external fonts, no legacy per-page CSS — under the launch app chrome:
    the 54px top bar (brand → /feed, the command field as a styled LINK to
    /search — this wrapper adds no form of its own beyond the page content —
-   and viewer-state actions: anonymous Bring/Log in/Sign up, or the member
+   and viewer-state actions: the anonymous Connect/Log in/Sign up cluster, or the member
    GitHub-mark Connect, the id='notif-badge' bell, and the user chip as a plain link to
    /u/:name), the dark 64px icon rail (Feed, ＋ → /bring; no community tiles —
    the onboarding renderers receive no membership data and none is invented),
@@ -832,9 +878,7 @@ let launch_onboarding_page ?(noindex = false) ?request ?user ?(stepper = "")
           (Notification_badge.badge_html ?request ())
           u initial u
     | None ->
-        "<a class='btn btn--quiet' href='/bring'>Bring a project</a>\
-         <a class='btn btn--secondary btn--auth' href='/login'>Log in</a>\
-         <a class='btn btn--primary btn--auth' href='/signup'>Sign up</a>"
+        topbar_anon_actions
   in
   let behavior_script = match user with
     | Some _ -> launch_behavior_script
@@ -980,9 +1024,7 @@ let launch_community_doc ?(noindex = false) ?request ?user
           (Notification_badge.badge_html ?request ())
           initial u u admin_item
     | None ->
-        "<a class='btn btn--quiet' href='/bring'>Bring a project</a>\
-         <a class='btn btn--secondary btn--auth' href='/login'>Log in</a>\
-         <a class='btn btn--primary btn--auth' href='/signup'>Sign up</a>"
+        topbar_anon_actions
   in
   (* The rail shows only what this renderer really has: Feed, the joined
      communities the handler supplies (kept in their established order), the

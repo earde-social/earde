@@ -299,7 +299,8 @@ let management_state_of_view view : Pages_sth.management_state =
    never touches membership data and the generic-404 collapse is unchanged.
    Every failure degrades to None — the page then falls back to its
    chrome-free document. *)
-let load_launch_shell request ~user_id ~canonical_slug ~can_manage =
+let load_launch_shell request ~user_id ~canonical_slug ~can_manage
+    ~settings_active =
   Dream.sql request (fun db ->
       match%lwt Db.get_community_by_slug db canonical_slug with
       | Ok (Some community) ->
@@ -320,7 +321,7 @@ let load_launch_shell request ~user_id ~canonical_slug ~can_manage =
           in
           let sidebar =
             Pages.launch_knowledge_sidebar ~community ~channels ~sections
-              ~show_visibility_note:false ~can_manage ()
+              ~settings_active ~show_visibility_note:false ~can_manage ()
           in
           Lwt.return (Some (community, rail_communities, sidebar))
       | Ok None | Error _ -> Lwt.return None)
@@ -392,7 +393,7 @@ let respond_share request ~user_id ~community_slug ~post_id ~notice ~feedback
       let%lwt shell =
         load_launch_shell request ~user_id
           ~canonical_slug:(Share.view_origin_community_slug view)
-          ~can_manage:(Share.view_origin_manager view)
+          ~can_manage:(Share.view_origin_manager view) ~settings_active:false
       in
       Dream.respond ~status ~headers:page_headers
         (Pages_sth.share_page ?user:(session_user request) ~request ?shell
@@ -535,7 +536,7 @@ let respond_management request ~user_id ~community_slug ~notice ~feedback
       let%lwt shell =
         load_launch_shell request ~user_id
           ~canonical_slug:(Manage.view_community_slug view)
-          ~can_manage:true
+          ~can_manage:true ~settings_active:true
       in
       Dream.respond ~status ~headers:page_headers
         (Pages_sth.management_page ?user:(session_user request) ~request

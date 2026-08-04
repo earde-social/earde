@@ -40,7 +40,7 @@ let signup_form ?user:_ ?error ?turnstile_site_key request =
           <div class='auth__head'>
             <img class='auth__mark' src='/static/images/logo-mark.svg' alt=''>
             <h1 class='auth__title'>Create an account</h1>
-            <p class='auth__sub'>One account for every community on Earde. No GitHub required.</p>
+            <p class='auth__sub'>One account for every community on Earde.</p>
           </div>
           %s
           <form action='/signup' method='POST' class='auth__card'>
@@ -120,7 +120,7 @@ let login_form ?user:_ request =
             </div>
             <button type='submit' class='btn btn--primary btn--block launch-auth__submit'>Log in</button>
           </form>
-          <p class='notice launch-auth__notice'>GitHub is only needed to <b>connect an open-source project</b>. Members read, join and chat with an Earde account alone.</p>
+          <p class='notice launch-auth__notice'>Maintaining an open-source project? <a href='/bring'>Connect it through GitHub</a> after logging in.</p>
           <p class='auth__foot'>No account? <a href='/signup'>Create one &#8594;</a></p>
         </div>"
     csrf_token
@@ -666,28 +666,21 @@ let community_page ?user ?(noindex=false) ?(connected_projects="") ?(connected_c
    virtual Uncategorized feed is appended (active) only when the viewer is on it: the handler
    404s that route unless real orphaned content exists, so the entry is always backed by
    data. Archived channels are hidden, mirroring the pre-launch Channels nav group.
-   [settings_active] marks the Settings entry current — used only by the settings route
-   (pass 11A), whose surface already re-proved the can_manage gate before rendering.
-   [home_requests_active] renders the Home requests entry (active) — used only by the
-   review-queue route (pass 11B), whose read model already re-proved the top-mod/admin
-   gate in SQL before anything renders; every other route keeps the entry absent, so
-   the settings suites' exactly-one-queue-link count per document stays true.
-   [show_visibility_note] defaults to the existing factual marker; the review queue
-   passes false because that surface never names an ineligibility reason
-   (private/draft/legacy) anywhere in its document.
+   [settings_active] marks the Settings entry current — used by the settings hub and by
+   every management surface on the shared settings shell (Connections, Shared threads,
+   Project home requests, Manage moderators, Reports): inside settings, Settings is the
+   one active community-level item and the internal settings navigation distinguishes
+   the surfaces. Each of those routes re-proved its own gate before rendering.
+   [show_visibility_note] defaults to the existing factual marker; the management
+   surfaces pass false because they never name an ineligibility reason
+   (private/draft/legacy) anywhere in their documents.
    [moderation_log_active] marks the always-present Moderation log entry current —
    used only by the modlog route (pass 14A), which is public by design, so the
-   entry itself renders for every viewer exactly as before.
-   [reports_active] renders the Reports entry (active) — used only by the
-   report-queue route (pass 14B), whose handler already re-proved the M/TM/A
-   gate before anything renders; every other route keeps the entry absent, so
-   the queue link never shows to a viewer who cannot open the route. *)
+   entry itself renders for every viewer exactly as before. *)
 let launch_knowledge_sidebar ~(community : community) ~(channels : channel list)
     ~(sections : community_section list) ?active_section_slug
     ?(append_uncategorized = false) ?(settings_active = false)
-    ?(home_requests_active = false) ?(connections_active = false)
     ?(moderation_log_active = false)
-    ?(reports_active = false) ?(manage_moderators_active = false)
     ?(show_visibility_note = true) ~can_manage () =
   let esc = Components.html_escape in
   let slug = esc community.slug in
@@ -759,38 +752,6 @@ let launch_knowledge_sidebar ~(community : community) ~(channels : channel list)
     ^ Printf.sprintf
         "<a class='navitem navitem--pad%s' href='/c/%s/modlog'><span class='navitem__sigil navitem__sigil--box'>&#9776;</span>Moderation log</a>"
         (if moderation_log_active then " navitem--active" else "") slug
-    ^ (if home_requests_active then
-         (* Same slot and grammar as the overview's Home requests entry;
-            rendered only by the queue route whose viewer the read model
-            already proved top_mod-or-durable-admin. *)
-         Printf.sprintf
-           "<a class='navitem navitem--pad navitem--active' href='/c/%s/project-home-requests'><span class='navitem__sigil navitem__sigil--box navitem__sigil--project'>&#9672;</span>Home requests</a>"
-           slug
-       else "")
-    ^ (if connections_active then
-         (* Same slot and grammar as the settings nav's Connections entry;
-            rendered only by the connections route, whose read model already
-            proved the viewer top_mod-or-durable-admin in SQL. *)
-         Printf.sprintf
-           "<a class='navitem navitem--pad navitem--active' href='/c/%s/settings/connections'><span class='navitem__sigil navitem__sigil--box'>&#8644;</span>Connections</a>"
-           slug
-       else "")
-    ^ (if reports_active then
-         (* Rendered only by the report-queue route, whose handler proved the
-            viewer M/TM/A before this document exists — never a render-time
-            authority decision of its own. *)
-         Printf.sprintf
-           "<a class='navitem navitem--pad navitem--active' href='/c/%s/reports'><span class='navitem__sigil navitem__sigil--box'>&#9873;</span>Reports</a>"
-           slug
-       else "")
-    ^ (if manage_moderators_active then
-         (* Rendered only by the manage-mods route, whose handler proved the
-            viewer TM/A before this document exists — never a render-time
-            authority decision of its own. *)
-         Printf.sprintf
-           "<a class='navitem navitem--pad navitem--active' href='/c/%s/manage-mods'><span class='navitem__sigil navitem__sigil--box'>&#9878;</span>Manage moderators</a>"
-           slug
-       else "")
     ^ (if can_manage then
          Printf.sprintf
            "<a class='navitem navitem--pad%s' href='/c/%s/settings'><span class='navitem__sigil navitem__sigil--box'>&#9881;</span>Settings</a>"
@@ -1022,13 +983,14 @@ let feed_page ?user ~scope ~sort_mode ~is_logged_in ~admin_usernames
       page_head posts_html pager
   in
 
-  (* Right aside — factual static product copy + real page data only: the
-     handoff's Bring block, the existing founder/pilot contacts, and the real
+  (* Right aside — factual static product copy + real page data only: ONE
+     project-acquisition block (heading, one-sentence body, one CTA — never a
+     second Bring/pilot variant), the existing founder contact, and the real
      Following list. No Atlas, no fake trends, no fabricated counts. *)
   let bring_block =
     "<div class='aside__block'>\
-     <div class='kicker aside__kicker'>Bring your community</div>\
-     <p class='aside__text'>Maintain an open-source project? Verify it through GitHub and give it a home on Earde.</p>\
+     <div class='kicker aside__kicker'>Bring your project</div>\
+     <p class='aside__text'>Create a dedicated community home for your open-source project, or connect it to an existing community.</p>\
      <a class='btn btn--accent btn--block btn--sm' href='/bring'>Connect a project</a>\
      </div>"
   in
@@ -1040,14 +1002,6 @@ let feed_page ?user ~scope ~sort_mode ~is_logged_in ~admin_usernames
      <div class='launch-aside-alt'><a href='mailto:metacirculardispatches@gmail.com'>or email me</a></div>\
      </div>"
     founder_tg
-  in
-  let pilot_block = Printf.sprintf
-    "<div class='aside__block'>\
-     <div class='kicker aside__kicker'>Start here</div>\
-     <p class='aside__text'>Want to try Earde with your community? I can help you set it up.</p>\
-     <a class='btn btn--outline-ochre btn--block btn--sm' href='%s'>Start a pilot community</a>\
-     </div>"
-    mail_pilot
   in
   (* Following mini-list — honest, no counts; shown only when the user actually
      follows things. Letter tiles use the shared deterministic launch palette
@@ -1067,7 +1021,7 @@ let feed_page ?user ~scope ~sort_mode ~is_logged_in ~admin_usernames
       ) rail_communities) in
       Printf.sprintf "<div class='aside__block'><div class='kicker aside__kicker'>Following</div>%s</div>" rows
   in
-  let aside = bring_block ^ founder_block ^ pilot_block ^ following_block in
+  let aside = bring_block ^ founder_block ^ following_block in
 
   Components.launch_app_page ?user ~request ~rail_communities ~aside
     ~page_class:"launch-feed" ~title:"Feed" ~content ()
@@ -2721,29 +2675,15 @@ let community_settings_page ?user ?(connected_projects="") ?(rail_communities=[]
     community.is_network_community
     && community.onboarding_state = Db.Community_draft
   in
-  (* The scoped network-slug grammar the database enforces on every network
-     row. Defensive: a slug outside it never becomes a setup link. *)
-  let canonical_network_slug value =
-    let n = String.length value in
-    let is_slug_char c = (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') in
-    n >= 1 && n <= 80
-    && value.[0] <> '-'
-    && value.[n - 1] <> '-'
-    &&
-    let rec ok i =
-      i >= n
-      ||
-      if is_slug_char value.[i] then ok (i + 1)
-      else value.[i] = '-' && value.[i + 1] <> '-' && ok (i + 1)
-    in
-    ok 0
-  in
   (* The setup surface independently reauthorizes (current top_mod of this
      community, or a durable users.is_admin holder), so this only decides
      whether the affordance is worth showing on a surface that already knows
-     the answer for the common cases. *)
+     the answer for the common cases. The predicate (network draft +
+     authorized viewer + canonical slug) lives in the shared settings shell
+     so every shell surface gates the setup link identically. *)
   let can_complete_setup =
-    is_network_draft && can_edit_vis && canonical_network_slug community.slug
+    Community_settings_shell.can_complete_setup ~community
+      ~authorized:can_edit_vis
   in
   let setup_pointer_note =
     if not can_complete_setup then
@@ -3367,103 +3307,27 @@ let community_settings_page ?user ?(connected_projects="") ?(rail_communities=[]
     | _ -> visibility_panel
   in
 
-  (* Left nav: real panel navigation (GET links back to this route), not on-page anchors. *)
-  let nav_item ?(danger=false) key label =
-    let active_cls = if panel = key then " cm-index-link--active" else "" in
-    let danger_cls = if danger then " cm-index-link--danger" else "" in
-    Printf.sprintf "<a class='cm-index-link%s%s' href='/c/%s/settings?panel=%s'>%s</a>"
-      danger_cls active_cls slug key label
+  (* Left nav + header + panel wrapper: the shared settings shell. The nav
+     is the one grouped index every settings/management surface renders; the
+     dedicated-route entries (Project home requests, Connections, Shared
+     threads, Manage moderators) still grant nothing — each route
+     reauthorizes from scratch — and the whole Network group plus Manage
+     moderators is display-gated to the top-mod/admin surface this page
+     already proved, so regular mods never see entries they cannot open. *)
+  let active : Community_settings_shell.item =
+    match panel with
+    | "profile" -> Profile
+    | "channels" -> Channels
+    | "members" -> Members
+    | "moderation" -> Moderation
+    | "bans" -> Bans
+    | "projects" -> Connected_projects
+    | _ -> Visibility
   in
-  (* Project home requests queue: a normal GET link to the dedicated
-     moderator route (its own handler + read model still authorize). Shown
-     only on the top-mod/admin surface — regular mods, whom this page
-     already knows are unauthorized for the queue, never see it. No badge or
-     pending count, no form, no community id. The URL is built structurally
-     from the canonical (escaped) slug, matching the other nav links. *)
-  let project_home_requests_link =
-    if is_top_mod || is_admin then
-      Printf.sprintf
-        "<a class='cm-index-link' href='/c/%s/project-home-requests'>Project home requests</a>"
-        slug
-    else ""
-  in
-  (* Connections: the entry point to the community-connections management
-     surface, on the same top-mod/admin gate its read model applies in SQL.
-     Regular mods, whom this page already knows are unauthorized there, never
-     see it. The link grants nothing — that route reauthorizes from scratch —
-     and carries no count, no form, and no community id. *)
-  let connections_link =
-    if is_top_mod || is_admin then
-      Printf.sprintf
-        "<a class='cm-index-link' href='/c/%s/settings/connections'>Connections</a>"
-        slug
-    else ""
-  in
-  (* Shared threads: the entry point to the shared-threads management
-     surface, on the same top-mod/admin display gate as Connections above.
-     The link grants nothing — that route reauthorizes from scratch in its
-     read model's SQL — and carries no count, no form, and no community
-     id. *)
-  let shared_threads_link =
-    if is_top_mod || is_admin then
-      Printf.sprintf
-        "<a class='cm-index-link' href='/c/%s/settings/shared-threads'>Shared \
-         threads</a>"
-        slug
-    else ""
-  in
-  (* Connected projects: an ordinary panel nav entry, present only when the route supplied
-     the management fragment (top-mod/admin surface). Regular mods, whom this page already
-     knows are unauthorized for project-home moderation, never see it. *)
-  let connected_projects_nav =
-    if has_connected_projects then nav_item "projects" "Connected projects" else ""
-  in
-  (* Complete setup and publish: a normal GET link to the dedicated setup
-     route, which independently reauthorizes (current top_mod of this
-     community, or a durable users.is_admin holder) and independently
-     re-checks the draft lifecycle. Shown only on a network setup draft's
-     top-mod/admin surface — legacy communities, already-published network
-     communities, ordinary members, mods, and legacy_mods never see it. No
-     form, no community id, no lifecycle detail; the URL is built
-     structurally from the canonical (escaped) slug, matching the other nav
-     links. *)
-  let setup_publish_link =
-    if can_complete_setup then
-      Printf.sprintf
-        "<a class='cm-index-link' href='/c/%s/setup'>Complete setup and publish</a>"
-        slug
-    else ""
-  in
-  let content = Printf.sprintf "
-    <div class='cm-wrap cm-wrap--settings'>
-      <div class='cm-head'>
-        <h1 class='cm-h1'>&#x2699;&#xFE0F; /c/%s <span class='accent'>settings</span></h1>
-        <a href='/c/%s' class='cm-back'>&larr; Back to community</a>
-      </div>
-
-      <div class='cm-cols'>
-        <nav class='cm-index'>
-          <div class='cm-index-title'>Settings</div>
-          %s%s%s%s%s%s%s%s%s%s%s
-        </nav>
-        <div class='cm-main'>
-          %s
-        </div>
-      </div>
-    </div>"
-    slug slug
-    setup_publish_link
-    (nav_item "visibility" "Visibility &amp; discovery")
-    (nav_item "profile" "Profile")
-    (nav_item "channels" "Channels &amp; sections")
-    (nav_item "members" "Members")
-    (nav_item "moderation" "Moderation")
-    connected_projects_nav
-    project_home_requests_link
-    connections_link
-    shared_threads_link
-    (nav_item ~danger:true "bans" "Bans")
-    main_panel
+  let content =
+    Community_settings_shell.wrap ~slug:community.slug ~active
+      ~can_complete_setup ~network_manager:(is_top_mod || is_admin)
+      ~panel:main_panel ()
   in
   (* Cartographic launch shell (pass 11A): the same four-pane chrome as the
      overview/channel/section/thread routes, wrapping the settings content
@@ -3593,13 +3457,9 @@ let manage_mods_page ?user ?(rail_communities = []) ~is_admin ~current_user_role
     else ""
   in
 
-  let content = Printf.sprintf "
-    <div class='cm-wrap'>
-      <div class='cm-head'>
-        <h1 class='cm-h1'>Council of Mods <span class='accent'>&mdash; /c/%s</span></h1>
-        <a href='/c/%s/settings?panel=moderation' class='cm-back'>&larr; Back to settings</a>
-      </div>
-
+  (* Panel body only — the shared settings shell below owns the header band
+     and the internal settings navigation (Manage moderators active). *)
+  let panel_body = Printf.sprintf "
       %s
 
       <section class='cm-panel'>
@@ -3613,13 +3473,19 @@ let manage_mods_page ?user ?(rail_communities = []) ~is_admin ~current_user_role
         %s
       </section>
 
-      %s
-    </div>"
-    slug slug
+      %s"
     add_mod_form
     top_mod_section
     mod_section
     legacy_section
+  in
+  let content =
+    Community_settings_shell.wrap ~slug:community.slug
+      ~active:Community_settings_shell.Manage_moderators
+      ~can_complete_setup:
+        (Community_settings_shell.can_complete_setup ~community
+           ~authorized:can_manage)
+      ~network_manager:can_manage ~panel:panel_body ()
   in
   (* Cartographic launch shell (pass 14C): the same four-pane chrome as the
      sibling community routes, wrapping the moderator roster verbatim — the
@@ -3640,7 +3506,7 @@ let manage_mods_page ?user ?(rail_communities = []) ~is_admin ~current_user_role
      community-id/visibility pair the legacy wrapper received). *)
   let sidebar =
     launch_knowledge_sidebar ~community ~channels ~sections
-      ~manage_moderators_active:true ~can_manage:true ()
+      ~settings_active:true ~can_manage:true ()
   in
   Components.launch_community_page ?user ~request ~rail_communities
     ~community ~sidebar
@@ -4106,7 +3972,8 @@ let report_form_page ?user ?(rail_communities = []) ~(channels : channel list)
    assoc the handler built with a bounded per-row lookup; rows missing from it (chat,
    deleted, or beyond the preview cap) degrade to "Target unavailable or deleted". This
    page is PRIVATE — the handler gates it on M/TM/A; it adds no authority of its own. *)
-let reports_queue_page ?user ?(rail_communities = []) ~(channels : channel list)
+let reports_queue_page ?user ?(rail_communities = []) ~is_admin ~is_top_mod
+    ~(channels : channel list)
     ~(sections : community_section list) ~(community : community) ~(status : Db.report_status)
     ~(reports : Db.report_row list) ~(previews : (int * (string * string)) list) request =
   let esc = Components.html_escape in
@@ -4220,15 +4087,12 @@ let reports_queue_page ?user ?(rail_communities = []) ~(channels : channel list)
        && List.exists (fun (r : Db.report_row) -> not (List.mem_assoc r.id previews)) reports
     then "<p class='cm-panel-desc'>Context previews are shown for the most recent reports; older rows link from their target type where available.</p>"
     else "" in
-  let content = Printf.sprintf "
-    <div class='cm-wrap cm-wrap--wide'>
-        <div class='cm-head'>
-            <h1 class='cm-h1'>Reports <span class='accent'>queue</span></h1>
-            <span class='mono launch-reports-ctx'>/c/%s</span>
-            <a href='/c/%s/settings?panel=moderation' class='cm-back'>&larr; Back to settings</a>
-        </div>
+  (* Panel body only — the shared settings shell below owns the header band
+     and the internal settings navigation (Moderation active: the queue is a
+     moderation work surface reached from the Moderation panel). *)
+  let panel_body = Printf.sprintf "
         <section class='cm-panel'>
-            <h2 class='cm-panel-title'>Member reports</h2>
+            <h2 class='cm-panel-title'>Reports queue</h2>
             <p class='cm-panel-desc'>Content flagged by members of this community, newest first. Private to moderators.</p>
             <nav class='cm-nav'>%s</nav>
             %s
@@ -4246,13 +4110,18 @@ let reports_queue_page ?user ?(rail_communities = []) ~(channels : channel list)
                     <tbody>%s</tbody>
                 </table>
             </div>
-        </section>
-    </div>"
-    slug
-    slug
+        </section>"
     tabs
     preview_note
     table_body
+  in
+  let content =
+    Community_settings_shell.wrap ~slug:community.slug
+      ~active:Community_settings_shell.Moderation
+      ~can_complete_setup:
+        (Community_settings_shell.can_complete_setup ~community
+           ~authorized:(is_top_mod || is_admin))
+      ~network_manager:(is_top_mod || is_admin) ~panel:panel_body ()
   in
   (* Cartographic launch shell (pass 14B): the same four-pane chrome as the
      sibling community routes, wrapping the review docket verbatim — the cm-*
@@ -4269,7 +4138,7 @@ let reports_queue_page ?user ?(rail_communities = []) ~(channels : channel list)
      launch shell additionally marks .shell, like the sibling routes). *)
   let sidebar =
     launch_knowledge_sidebar ~community ~channels ~sections
-      ~reports_active:true ~can_manage:true ()
+      ~settings_active:true ~can_manage:true ()
   in
   Components.launch_community_page ?user ~request ~rail_communities
     ~community ~sidebar
