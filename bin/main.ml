@@ -30,14 +30,29 @@ let () =
     | Some h -> h
     | None -> "localhost"
   in
-  (* Dream alpha7 has no Dream.proxy. We trust X-Forwarded-For from Nginx so
-     Dream.client returns the real user IP for the rate limiter. *)
+  (* Dream alpha7 has no Dream.proxy, so the forwarded-header trust boundary
+     is ours to draw. It is drawn once, here, and every consumer of
+     Dream.client (the rate limiter, the stored signup IP, the admin view)
+     inherits it.
+
+     This used to take the LEFTMOST X-Forwarded-For value unconditionally.
+     That value is the one segment of the header a client fully controls, so
+     rotating it minted an unlimited supply of rate-limit buckets; and with
+     no header at all Dream.client kept its "address:port" form, whose
+     ephemeral port minted a fresh bucket per connection. Client_address
+     fixes both: forwarded headers count only when the immediate peer is a
+     configured trusted proxy, only the rightmost entry (the address that
+     proxy itself observed) is believed, and the result is always a bare
+     normalized address.
+
+     Resolved once per process — the trusted set is deployment topology, not
+     per-request state. *)
+  let trusted_proxies = Earde.Client_address.trusted_proxies_from_env () in
   let proxy handler request =
-    (match Dream.header request "X-Forwarded-For" with
-     | Some v ->
-       let ip = String.trim (List.nth (String.split_on_char ',' v) 0) in
-       Dream.set_client request ip
-     | None -> ());
+    Dream.set_client request
+      (Earde.Client_address.client_ip ~trusted_proxies
+         ~peer:(Dream.client request)
+         ~forwarded_for:(Dream.header request "X-Forwarded-For"));
     handler request
   in
   Dream.run ~interface ~port:8080
@@ -53,6 +68,14 @@ let () =
   @@ Dream.logger
   @@ Dream.sql_pool ~size:db_pool_size db_url
   @@ secret_middleware
+  (* OUTSIDE sql_sessions so it sees the session's own Set-Cookie. Dream
+     infers Secure from its TLS listener flag, which is false behind a
+     TLS-terminating nginx, and neither sql_sessions nor any exported setter
+     can override it — so the attribute is added to the outgoing header
+     instead, decided by EARDE_PUBLIC_ORIGIN (server-side configuration, not
+     a forwarded header). No-op on an http origin, so local development is
+     unchanged. See session_cookie_policy.mli. *)
+  @@ Earde.Session_cookie_policy.middleware
   (* sql_sessions trades ~1ms per-request DB round-trip for crash-safe session
      persistence. memory_sessions is zero-latency but loses all sessions on
      every systemd restart, forcing mass re-login. *)
@@ -398,8 +421,14 @@ let () =
     Dream.post "/c/:slug/channels/:channel_id/archive" Earde.Handlers.archive_channel_handler;
     Dream.post "/c/:slug/channels/:channel_id/unarchive" Earde.Handlers.unarchive_channel_handler;
     Dream.post "/update-community" Earde.Handlers.update_community_handler;
-    Dream.post "/add-mod" Earde.Handlers.add_mod_handler;
-    Dream.post "/remove-mod" Earde.Handlers.remove_mod_handler;
+    (* There are deliberately no /add-mod and /remove-mod routes. They were
+       an unreferenced legacy pair — no form, link, script or test emitted
+       them — whose authorization was strictly weaker than the surface that
+       replaced them: they admitted ANY moderator of the community, so an
+       ordinary mod could appoint other moderators and remove a Top Mod. The
+       live surface is /c/:slug/manage-mods/{add,promote,remove}, which
+       requires top_mod (or a durable admin) and protects top_mod targets.
+       Both handlers were deleted with the routes; nothing references them. *)
     Dream.post "/ban-community-user" Earde.Handlers.ban_community_user_handler;
     Dream.post "/unban-community-user" Earde.Handlers.unban_community_user_handler;
     Dream.get "/new-post" Earde.Handlers.new_post_page;

@@ -104,48 +104,149 @@ let extract_mentions text =
   done;
   List.sort_uniq String.compare !mentions
 
-(* Reusable image-upload pipeline: write bytes to /tmp, invoke ImageMagick mogrify
-   to convert+resize to WebP, then mv to static/uploads/.
-   ~resize uses ImageMagick geometry syntax; '>' suffix means only-shrink-never-upscale.
-   Returns Ok None when image_bytes is empty (no file selected by the user). *)
-let process_image_upload ~max_bytes ~resize image_bytes =
-  if image_bytes = "" then Ok None
-  else if String.length image_bytes > max_bytes then
-    Error (Printf.sprintf "Image exceeds the %d MB limit." (max_bytes / (1024 * 1024)))
-  else begin
-    let ts = Int64.of_float (Unix.gettimeofday () *. 1000.0) in
-    let rand = Random.int 999999 in
-    let base = Printf.sprintf "earde_%Ld_%06d" ts rand in
-    let tmp_path = "/tmp/" ^ base ^ ".tmp" in
-    let webp_path = "/tmp/" ^ base ^ ".webp" in
-    let dest_name = base ^ ".webp" in
-    let dest_path = "static/uploads/" ^ dest_name in
-    let url_path = "/static/uploads/" ^ dest_name in
-    (try
-      let oc = open_out_bin tmp_path in
-      output_string oc image_bytes;
-      close_out oc;
-      (* Filename.quote prevents shell injection from the timestamp/random basename.
-         The resize geometry is a compile-time constant, not user input. *)
-      let cmd = Printf.sprintf
-        "mogrify -format webp -quality 80 -resize '%s' %s 2>/dev/null"
-        resize (Filename.quote tmp_path) in
-      let exit_code = Sys.command cmd in
-      (try Sys.remove tmp_path with _ -> ());
-      if exit_code <> 0 then
-        Error "Image processing failed. Please upload a valid image (JPEG, PNG, GIF, WebP)."
-      else begin
-        let mv_exit = Sys.command (Printf.sprintf "mv %s %s"
-          (Filename.quote webp_path) (Filename.quote dest_path)) in
-        if mv_exit <> 0 then
-          Error "Failed to store the processed image."
-        else
-          Ok (Some url_path)
-      end
-    with exn ->
-      (try Sys.remove tmp_path with _ -> ());
-      Error ("Image write error: " ^ Printexc.to_string exn))
-  end
+(* === IMAGE UPLOADS ===
+
+   The pipeline's policy — which payloads are accepted and the exact argument
+   vector ImageMagick runs with — lives in the pure [Image_upload] module.
+   What is left here is the IO: the rate-limit check, writing the temporary
+   file, running the process off the event loop, and moving the result into
+   public storage.
+
+   Callers MUST perform authentication, ban and resource-authorization checks
+   before calling this. Nothing below re-derives who may upload; it only
+   refuses work that is already authorized but abusive or malformed. *)
+
+(* ImageMagick 7 installs `magick` and (usually) a `convert` compatibility
+   alias; ImageMagick 6 installs `convert` only. Resolved once per process
+   rather than per request, and deliberately NOT configurable from the
+   environment — the binary that decodes hostile bytes is not something a
+   request or a stray env var should be able to redirect. *)
+let imagemagick_binary =
+  lazy
+    (let exists name =
+       Sys.command (Printf.sprintf "command -v %s >/dev/null 2>&1" (Filename.quote name)) = 0
+     in
+     if exists "magick" then "magick" else "convert")
+
+(* Bounds how many conversions may run at once. Without this, the move to a
+   non-blocking process would replace "one upload stalls everyone" with
+   "N concurrent uploads fork N ImageMagick processes", which is a worse
+   failure mode on a single small instance. Requests beyond the bound wait
+   for a slot rather than being refused. *)
+let image_workers = 2
+
+let image_worker_pool =
+  lazy (Lwt_pool.create image_workers (fun () -> Lwt.return_unit))
+
+(* Wall-clock ceiling on one conversion, independent of ImageMagick's own
+   `-limit time`: that limit governs decode work, and cannot end a process
+   wedged on IO. Comfortably above the limit so the in-process one is what
+   normally fires. *)
+let image_convert_timeout_seconds = 30.0
+
+let run_image_convert argv =
+  Lwt_pool.use (Lazy.force image_worker_pool) (fun () ->
+      Lwt.catch
+        (fun () ->
+          let process = Lwt_process.open_process_none ("", argv) in
+          (* Lwt.protected keeps the losing branch of the pick from
+             cancelling the status promise the terminate path still needs. *)
+          let status = Lwt.protected process#status in
+          let%lwt outcome =
+            Lwt.pick
+              [ (let%lwt s = status in
+                 Lwt.return (`Exited s));
+                (let%lwt () = Lwt_unix.sleep image_convert_timeout_seconds in
+                 Lwt.return `Timeout) ]
+          in
+          match outcome with
+          | `Exited (Unix.WEXITED 0) -> Lwt.return true
+          | `Exited _ -> Lwt.return false
+          | `Timeout ->
+              process#terminate;
+              let%lwt _ = process#close in
+              Lwt.return false)
+        (fun _ -> Lwt.return false))
+
+(* Returns Ok None when no file was submitted (the field is present but
+   empty on every one of these forms). Every failure path removes both
+   temporary files, so a refused or crashed conversion leaves nothing
+   behind and nothing ever reaches static/uploads. *)
+let process_image_upload ~db ~ip ~purpose image_bytes =
+  if image_bytes = "" then Lwt.return (Ok None)
+  else if String.length image_bytes > Image_upload.max_bytes then
+    Lwt.return (Error Image_upload.too_large_message)
+  else
+    match Image_upload.detect_format image_bytes with
+    | None ->
+        (* Refused on the payload's own leading bytes, before a temporary
+           file exists and before any decoder is invoked. *)
+        Lwt.return (Error Image_upload.rejected_message)
+    | Some format -> (
+        match%lwt Db.Rate_limit.check_upload db ip with
+        | Ok `Blocked -> Lwt.return (Error Image_upload.rate_limited_message)
+        | Ok `Allowed | Error _ ->
+            (* Same fail-open-on-storage-error posture as the request-path
+               limiter: a database problem must not make uploads impossible. *)
+            let ts = Int64.of_float (Unix.gettimeofday () *. 1000.0) in
+            let rand = Random.int 999999 in
+            let base = Printf.sprintf "earde_%Ld_%06d" ts rand in
+            let tmp_path = Filename.concat (Filename.get_temp_dir_name ()) (base ^ ".tmp") in
+            let webp_path = Filename.concat (Filename.get_temp_dir_name ()) (base ^ ".webp") in
+            let dest_name = base ^ ".webp" in
+            let dest_path = "static/uploads/" ^ dest_name in
+            let url_path = "/static/uploads/" ^ dest_name in
+            let cleanup () =
+              (try Sys.remove tmp_path with _ -> ());
+              (try Sys.remove webp_path with _ -> ())
+            in
+            Lwt.catch
+              (fun () ->
+                let oc = open_out_bin tmp_path in
+                output_string oc image_bytes;
+                close_out oc;
+                let argv =
+                  Image_upload.convert_argv
+                    ~binary:(Lazy.force imagemagick_binary)
+                    ~format ~purpose ~input:tmp_path ~output:webp_path
+                in
+                let%lwt converted = run_image_convert argv in
+                (try Sys.remove tmp_path with _ -> ());
+                if not converted then begin
+                  cleanup ();
+                  Lwt.return (Error Image_upload.rejected_message)
+                end
+                else
+                  (* Rename rather than shelling out to mv. Falls back to a
+                     copy when /tmp and static/uploads are on different
+                     filesystems, which Sys.rename cannot cross. *)
+                  match
+                    (try
+                       Sys.rename webp_path dest_path;
+                       `Ok
+                     with _ -> (
+                       try
+                         let ic = open_in_bin webp_path in
+                         let len = in_channel_length ic in
+                         let data = really_input_string ic len in
+                         close_in ic;
+                         let oc = open_out_bin dest_path in
+                         output_string oc data;
+                         close_out oc;
+                         (try Sys.remove webp_path with _ -> ());
+                         `Ok
+                       with _ -> `Failed))
+                  with
+                  | `Ok -> Lwt.return (Ok (Some url_path))
+                  | `Failed ->
+                      cleanup ();
+                      Lwt.return (Error "Failed to store the processed image."))
+              (fun _ ->
+                cleanup ();
+                (* The exception text is not reflected: it can name host
+                   paths and errno detail the uploader has no business
+                   seeing. *)
+                Lwt.return (Error Image_upload.rejected_message)))
 
 (* === RATE LIMITING === *)
 
@@ -293,6 +394,27 @@ let signups_enabled () =
        | _ -> false)
   | None -> false
 
+(* Route-safe ASCII syntax for NEW usernames. A username is a path segment
+   (/u/:username), a form value, and a rendered identity on a public,
+   crawlable profile; before this rule the only check was a length bound, so
+   quotes and angle brackets could be registered and later rendered. Escaping
+   at every sink is the actual XSS defence and stays in place — this is the
+   second layer, and it also keeps handles unambiguous in URLs and @mentions
+   (extract_mentions already recognises exactly this alphabet).
+
+   Deliberately NOT applied to existing accounts: login, lookup and rendering
+   never call it, so no current user is locked out or renamed. Pure, so it is
+   unit-tested without a database. *)
+let is_valid_new_username name =
+  String.length name > 0
+  && String.for_all
+       (fun c ->
+         (c >= 'a' && c <= 'z')
+         || (c >= 'A' && c <= 'Z')
+         || (c >= '0' && c <= '9')
+         || c = '_' || c = '-')
+       name
+
 let signups_closed_page request =
   let user = Dream.session_field request "username" in
   Pages.msg_page ~auth:true ?user ~title:"Signups are closed"
@@ -373,6 +495,8 @@ let signup_handler request =
         Dream.html (Pages.msg_page ~auth:true ~title:"Validation Error" ~message:"Username, email, and password are all required." ~alert_type:"error" ~return_url:"/signup" request)
       else if String.length username < 3 || String.length username > 30 then
         Dream.html (Pages.msg_page ~auth:true ~title:"Validation Error" ~message:"Username must be between 3 and 30 characters." ~alert_type:"error" ~return_url:"/signup" request)
+      else if not (is_valid_new_username username) then
+        Dream.html (Pages.msg_page ~auth:true ~title:"Validation Error" ~message:"Username can only contain letters, numbers, underscores and hyphens." ~alert_type:"error" ~return_url:"/signup" request)
       else if not (String.contains email '@') then
         Dream.html (Pages.msg_page ~auth:true ~title:"Validation Error" ~message:"Please enter a valid email address." ~alert_type:"error" ~return_url:"/signup" request)
       else if String.length password < 8 then
@@ -2735,15 +2859,6 @@ let update_community_handler request =
           let banner_bytes = get_field "banner_url" in
           let existing_avatar = str_opt (get_field "existing_avatar_url") in
           let existing_banner = str_opt (get_field "existing_banner_url") in
-          let avatar_result = process_image_upload ~max_bytes:(5 * 1024 * 1024) ~resize:"512x512>" avatar_bytes in
-          let banner_result = process_image_upload ~max_bytes:(5 * 1024 * 1024) ~resize:"1920x480>" banner_bytes in
-          (match avatar_result, banner_result with
-          | Error e, _ | _, Error e ->
-              Dream.html (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Image Error" ~message:e ~alert_type:"error" ~return_url:("/c/" ^ community_slug ^ "/settings") request)
-          | Ok new_avatar, Ok new_banner ->
-          (* new_avatar/new_banner are None when no file was submitted; fall back to existing. *)
-          let avatar_url = if new_avatar <> None then new_avatar else existing_avatar in
-          let banner_url = if new_banner <> None then new_banner else existing_banner in
           with_analytics_after_sql (fun record ->
           Dream.sql request (fun db ->
             (* Re-verify authority on every mutation — same TOCTOU guard as add_mod. *)
@@ -2756,6 +2871,26 @@ let update_community_handler request =
             if not authorized then
               Dream.respond ~status:`Forbidden (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Access Denied" ~message:"You must be a moderator to perform this action." ~alert_type:"error" ~return_url:"/" request)
             else
+            (* Image processing runs only AFTER the moderator check. It used
+               to run before it, so any authenticated user could force two
+               full ImageMagick conversions and leave two files in
+               static/uploads for any community id, then be told "Access
+               Denied" — the work and the storage happened regardless. *)
+            let%lwt avatar_result =
+              process_image_upload ~db ~ip:(Dream.client request)
+                ~purpose:Image_upload.Community_avatar avatar_bytes
+            in
+            let%lwt banner_result =
+              process_image_upload ~db ~ip:(Dream.client request)
+                ~purpose:Image_upload.Community_banner banner_bytes
+            in
+            match avatar_result, banner_result with
+            | Error e, _ | _, Error e ->
+                Dream.html (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Image Error" ~message:e ~alert_type:"error" ~return_url:("/c/" ^ community_slug ^ "/settings") request)
+            | Ok new_avatar, Ok new_banner ->
+              (* new_avatar/new_banner are None when no file was submitted; fall back to existing. *)
+              let avatar_url = if new_avatar <> None then new_avatar else existing_avatar in
+              let banner_url = if new_banner <> None then new_banner else existing_banner in
               (* Network-community guard, before any write. The description is
                  canonical community identity, so a setup draft is refused
                  outright (its identity belongs to /c/:slug/setup) and a
@@ -2801,87 +2936,17 @@ let update_community_handler request =
                      nothing. *)
                   Dream.redirect request ("/c/" ^ community_slug ^ "/settings")
               | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Error" ~message:("Database error: " ^ e) ~alert_type:"error" ~return_url:("/c/" ^ community_slug ^ "/settings") request)))
-          )))
+          ))
       | _ -> Dream.respond ~status:`Bad_Request (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Form Error" ~message:"Invalid form submission." ~alert_type:"error" ~return_url:"/" request)
 
-let add_mod_handler request =
-  match Dream.session_field request "user_id" with
-  | None -> Dream.redirect request "/login"
-  | Some uid_str ->
-      let user_id = int_of_string uid_str in
-      let is_admin = Dream.session_field request "is_admin" = Some "true" in
-      match%lwt Dream.form request with
-      | `Ok form_data ->
-          let community_id = try int_of_string (List.assoc_opt "community_id" form_data |> Option.value ~default:"") with _ -> 0 in
-          let community_slug = List.assoc_opt "community_slug" form_data |> Option.value ~default:"" in
-          let target_username = String.trim (List.assoc_opt "username" form_data |> Option.value ~default:"") in
-          if community_id = 0 || target_username = "" then
-            Dream.respond ~status:`Bad_Request (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Form Error" ~message:"Invalid form data." ~alert_type:"error" ~return_url:"/" request)
-          else
-          Dream.sql request (fun db ->
-            (* Global admins bypass local mod check; local mods re-verified on
-               each mutation to prevent TOCTOU between render and submission. *)
-            let%lwt is_authorized =
-              if is_admin then Lwt.return true
-              else (match%lwt Db.is_moderator db user_id community_id with
-                | Ok b -> Lwt.return b
-                | _ -> Lwt.return false)
-            in
-            if not is_authorized then
-              Dream.respond ~status:`Forbidden (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Access Denied" ~message:"You are not a moderator of this community." ~alert_type:"error" ~return_url:"/" request)
-            else
-              match%lwt Db.get_user_by_username db target_username with
-              | Ok (Some target_user) ->
-                  let%lwt _ = Db.add_moderator db target_user.id community_id in
-                  Dream.redirect request ("/c/" ^ community_slug ^ "/settings")
-              | Ok None -> Dream.html (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"User Not Found" ~message:("No user was found with the username u/" ^ target_username ^ ".") ~alert_type:"error" ~return_url:("/c/" ^ community_slug ^ "/settings") request)
-              | Error e -> Dream.html (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Error" ~message:("A database error occurred: " ^ e) ~alert_type:"error" ~return_url:"/" request)
-          )
-      | _ -> Dream.html (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Form Error" ~message:"There was a problem with your form submission. Please try again." ~alert_type:"error" ~return_url:"/" request)
-
-let remove_mod_handler request =
-  match Dream.session_field request "user_id" with
-  | None -> Dream.redirect request "/login"
-  | Some uid_str ->
-      let user_id = int_of_string uid_str in
-      let is_admin = Dream.session_field request "is_admin" = Some "true" in
-      match%lwt Dream.form request with
-      | `Ok form_data ->
-          let community_id = try int_of_string (List.assoc_opt "community_id" form_data |> Option.value ~default:"") with _ -> 0 in
-          let community_slug = List.assoc_opt "community_slug" form_data |> Option.value ~default:"" in
-          let target_user_id = try int_of_string (List.assoc_opt "target_user_id" form_data |> Option.value ~default:"") with _ -> 0 in
-          if community_id = 0 || target_user_id = 0 then
-            Dream.respond ~status:`Bad_Request (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Form Error" ~message:"Invalid form data." ~alert_type:"error" ~return_url:"/" request)
-          else
-          Dream.sql request (fun db ->
-            (* Global admins bypass local mod check; local mods re-verified on
-               each mutation to prevent TOCTOU between render and submission. *)
-            let%lwt is_authorized =
-              if is_admin then Lwt.return true
-              else (match%lwt Db.is_moderator db user_id community_id with
-                | Ok b -> Lwt.return b
-                | _ -> Lwt.return false)
-            in
-            if not is_authorized then
-              Dream.respond ~status:`Forbidden (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Access Denied" ~message:"You are not a moderator of this community." ~alert_type:"error" ~return_url:"/" request)
-            else
-              (* Re-count mods server-side: the render-time guard is advisory;
-                 only this check is authoritative against the last-mod race. *)
-              match%lwt Db.get_community_moderators db community_id with
-              | Ok mods when List.length mods > 1 ->
-                  (* Global admins have sovereign immunity: a local mod cannot demote
-                     a site admin from mod status via the community settings UI. *)
-                  (match%lwt Db.is_user_admin db target_user_id with
-                  | Ok true ->
-                      Dream.html (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Action Denied" ~message:"You cannot remove a Global Administrator from moderation." ~alert_type:"error" ~return_url:("/c/" ^ community_slug ^ "/settings") request)
-                  | _ ->
-                      let%lwt _ = Db.remove_moderator db target_user_id community_id in
-                      Dream.redirect request ("/c/" ^ community_slug ^ "/settings"))
-              | Ok _ ->
-                  Dream.html (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Cannot Remove Moderator" ~message:"You cannot remove the last moderator of a community." ~alert_type:"error" ~return_url:("/c/" ^ community_slug ^ "/settings") request)
-              | Error e -> Dream.html (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Error" ~message:("A database error occurred: " ^ e) ~alert_type:"error" ~return_url:"/" request)
-          )
-      | _ -> Dream.html (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Form Error" ~message:"There was a problem with your form submission. Please try again." ~alert_type:"error" ~return_url:"/" request)
+(* There are deliberately no add_mod_handler / remove_mod_handler. The
+   /add-mod and /remove-mod routes they served were unreferenced legacy
+   endpoints — no form, link, script or test emitted them — with strictly
+   weaker authorization than the surface that replaced them: they admitted
+   ANY moderator of the community, so an ordinary mod could appoint further
+   moderators and unseat the Top Mod. Moderator management now lives only on
+   /c/:slug/manage-mods/{add,promote,remove}, which requires top_mod (or a
+   durable global admin) and refuses to remove a top_mod target. *)
 
 let ban_community_user_handler request =
   match Dream.session_field request "user_id" with
@@ -3124,17 +3189,6 @@ let create_post_handler request =
             Dream.respond ~status:`Bad_Request (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Form Error" ~message:"Invalid community selection." ~alert_type:"error" ~return_url:"/" request)
           else
 
-          (* Sys.command shells out to ImageMagick instead of OCaml C-bindings:
-             ~10 ms process-spawn latency and Lwt event-loop blocking vs.
-             zero native library maintenance burden on the Hetzner instance.
-             Acceptable for a low-traffic community server where image posts are rare. *)
-          let image_result = process_image_upload ~max_bytes:(5 * 1024 * 1024) ~resize:"1920x1080>" image_bytes in
-
-          (match image_result with
-          | Error img_err ->
-              Dream.html (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Image Error" ~message:img_err ~alert_type:"error" ~return_url:"/" request)
-          | Ok image_url ->
-
           with_analytics_after_sql (fun record ->
           Dream.sql request (fun db ->
             (* Global ban gate: checked first — a globally banned user's session may
@@ -3153,6 +3207,17 @@ let create_post_handler request =
                   | Ok true ->
                       Dream.respond ~status:`Forbidden (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Banned from Community" ~message:"You are banned from posting in this community." ~alert_type:"error" ~return_url:"/" request)
                   | _ ->
+                  (* Image processing runs here, after the global-ban,
+                     membership and community-ban gates. It used to run before
+                     all three, so a banned user or a non-member could force a
+                     full ImageMagick conversion and leave a file in
+                     static/uploads for any community id and still be refused
+                     the post. *)
+                  (match%lwt process_image_upload ~db ~ip:(Dream.client request)
+                               ~purpose:Image_upload.Post_image image_bytes with
+                  | Error img_err ->
+                      Dream.html (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Image Error" ~message:img_err ~alert_type:"error" ~return_url:"/" request)
+                  | Ok image_url ->
                       (* Server-side section validation: section_id must belong to this community.
                          Prevents posting to a section from a different community via crafted form. *)
                       (* Loaded once: section validation here and, on the
@@ -3282,11 +3347,11 @@ let create_post_handler request =
                                         (Components.canonical_thread_path comm.Db.slug new_post_id title
                                          ^ "?shared=" ^ notice)
                                   | _ -> Dream.redirect request ("/p/" ^ string_of_int new_post_id)))
-                          | Error err -> Dream.html (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Error" ~message:("Error: " ^ err) ~alert_type:"error" ~return_url:"/" request))))
+                          | Error err -> Dream.html (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Error" ~message:("Error: " ^ err) ~alert_type:"error" ~return_url:"/" request)))))
               | Ok false ->
                   Dream.html (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Not a Member" ~message:"You must join this community before you can post in it." ~alert_type:"error" ~return_url:"/" request)
               | Error err -> Dream.html (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Error" ~message:("Database error: " ^ err) ~alert_type:"error" ~return_url:"/" request)
-          )))
+          ))
       | _ -> Dream.html (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Form Error" ~message:"There was a problem with your form submission. Please try again." ~alert_type:"error" ~return_url:"/" request)
 
 let view_post_handler request =
@@ -4287,7 +4352,18 @@ let create_comment_handler request =
                         Dream.respond ~status:`Forbidden (Pages.msg_page ~user:username ~title:"Membership required" ~message:"Only current members of a community this thread belongs to can comment." ~alert_type:"error" ~return_url:("/p/" ^ string_of_int post_id) request)
                     | Ok true ->
                     (match%lwt Db.create_comment db content post_id user_id parent_id_opt with
-                    | Ok comment_id ->
+                    | Ok `Invalid_parent ->
+                        (* The submitted parent does not exist, or belongs to a
+                           different post — and therefore possibly a different
+                           community, possibly a private one. The store refused
+                           inside the INSERT, so there is no comment row, no
+                           notification, no karma change, no comment counter
+                           and no activity bump to undo. The response is a
+                           generic client error: it names no post, comment or
+                           community, so it cannot be used to probe which
+                           parent ids exist or where they live. *)
+                        Dream.respond ~status:`Bad_Request (Pages.msg_page ~user:username ~title:"Form Error" ~message:"Invalid reply reference." ~alert_type:"error" ~return_url:("/p/" ^ string_of_int post_id) request)
+                    | Ok (`Created comment_id) ->
                         (* comment_id is the real inserted id from the step-3
                            INSERT ... RETURNING. Length/mention flags only —
                            never the comment text. *)
@@ -5003,20 +5079,35 @@ let update_profile_handler request =
           in
           let bio = match get_field "bio" with "" -> None | b -> Some b in
           let avatar_bytes = get_field "avatar_url" in
-          let existing_avatar =
-            match get_field "existing_avatar_url" with "" -> None | a -> Some a
-          in
-          (match process_image_upload ~max_bytes:(5 * 1024 * 1024) ~resize:"512x512>" avatar_bytes with
-          | Error e ->
-              Dream.html (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Image Error" ~message:e ~alert_type:"error" ~return_url:"/settings" request)
-          | Ok new_avatar ->
-          (* Keep existing avatar when no new file submitted. *)
-          let avatar_url = if new_avatar <> None then new_avatar else existing_avatar in
+          (* The browser supplies bytes for a NEW avatar and nothing else.
+             The form used to also round-trip the stored URL in a hidden
+             existing_avatar_url field, which this handler wrote back
+             verbatim — so a caller could set their own users.avatar_url to
+             ANY string, including another user's /static/uploads/ file, and
+             then have delete_account_handler unlink it. The submitted value
+             is now ignored entirely (the field is gone from the form) and
+             the fallback is re-read from the caller's own row, which is the
+             only avatar they could legitimately keep. *)
           Dream.sql request (fun db ->
+            match%lwt process_image_upload ~db ~ip:(Dream.client request)
+                        ~purpose:Image_upload.Profile_avatar avatar_bytes with
+            | Error e ->
+                Dream.html (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Image Error" ~message:e ~alert_type:"error" ~return_url:"/settings" request)
+            | Ok new_avatar ->
+            (* A failed read must not silently clear the stored avatar: the
+               profile write is refused instead. *)
+            let%lwt stored_avatar =
+              match new_avatar with
+              | Some _ -> Lwt.return (Ok new_avatar)
+              | None -> Db.get_user_avatar_url db user_id
+            in
+            match stored_avatar with
+            | Error err -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Error" ~message:("Database error: " ^ err) ~alert_type:"error" ~return_url:"/settings" request)
+            | Ok avatar_url ->
             match%lwt Db.update_user_profile db bio avatar_url user_id with
             | Ok () -> Dream.redirect request "/settings"
             | Error err -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Error" ~message:("Database error: " ^ err) ~alert_type:"error" ~return_url:"/settings" request)
-          ))
+          )
       | _ -> Dream.respond ~status:`Bad_Request (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Form Error" ~message:"Invalid form submission." ~alert_type:"error" ~return_url:"/settings" request)
 
 (* Re-authenticate with old password before rotating the secret — prevents session
