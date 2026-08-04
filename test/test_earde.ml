@@ -2103,10 +2103,139 @@ module Step6_events = struct
             AnT.clear_configuration_override ();
             Lwt.return_unit))
 
+  let q_set_avatar =
+    (Caqti_type.(t2 (option string) int) ->. Caqti_type.unit)
+    "UPDATE users SET avatar_url = $1, bio = 'step6 bio' WHERE id = $2"
+
+  let q_bio_avatar_by_id =
+    (Caqti_type.int ->? Caqti_type.(t2 (option string) (option string)))
+    "SELECT bio, avatar_url FROM users WHERE id = $1"
+
+  (* Account deletion's file cleanup: the validated local upload disappears,
+     a bystander's file survives, a missing file and an external URL are both
+     harmless, and bio/avatar_url are scrubbed in the same transaction.
+     Fixture files live under the test CWD's static/uploads — the same
+     relative root production resolves — inside dune's _build sandbox, never
+     the source tree. *)
+  let delete_account_avatar_case =
+    db_case "account deletion removes only its own validated avatar file"
+      (fun ~url conn c ->
+        let (module C : Caqti_lwt.CONNECTION) = c in
+        let (_ : int) = Sys.command "mkdir -p static/uploads" in
+        let write path =
+          let oc = open_out_bin path in
+          output_string oc "step6 webp bytes";
+          close_out oc
+        in
+        let a_file = "static/uploads/earde_991000_000001.webp" in
+        let b_file = "static/uploads/earde_991000_000002.webp" in
+        write a_file;
+        write b_file;
+        let* a = C.find q_insert_user ("step6_avatar_a", "x") in
+        let* a = or_fail "user a" a in
+        let* b = C.find q_insert_user ("step6_avatar_b", "x") in
+        let* b = or_fail "user b" b in
+        let* c_missing = C.find q_insert_user ("step6_avatar_c", "x") in
+        let* c_missing = or_fail "user c" c_missing in
+        let* d_external = C.find q_insert_user ("step6_avatar_d", "x") in
+        let* d_external = or_fail "user d" d_external in
+        let set uid value =
+          let* r = C.exec q_set_avatar (value, uid) in
+          or_fail "avatar fixture" r
+        in
+        let* () = set a (Some "/static/uploads/earde_991000_000001.webp") in
+        let* () = set b (Some "/static/uploads/earde_991000_000002.webp") in
+        let* () =
+          set c_missing (Some "/static/uploads/earde_991000_000404.webp")
+        in
+        let* () =
+          set d_external (Some "https://cdn.example.com/earde_1_2.webp")
+        in
+        let run_delete uid name =
+          let pipeline =
+            Dream.sql_pool url @@ Dream.memory_sessions @@ fun req ->
+            let* () =
+              Dream.set_session_field req "user_id" (string_of_int uid)
+            in
+            let* () = Dream.set_session_field req "username" name in
+            let csrf = Dream.csrf_token req in
+            Dream.set_body req (form_body [ ("dream.csrf", csrf) ]);
+            Earde.Handlers.delete_account_handler req
+          in
+          pipeline
+            (Dream.request ~method_:`POST ~target:"/delete-account"
+               ~headers:
+                 [ ("Content-Type", "application/x-www-form-urlencoded") ]
+               "")
+        in
+        let check_scrubbed label uid =
+          let* profile = C.find_opt q_bio_avatar_by_id uid in
+          let* profile = or_fail (label ^ " row") profile in
+          match profile with
+          | Some (bio, avatar) ->
+              Alcotest.(check (option string)) (label ^ " bio cleared") None
+                bio;
+              Alcotest.(check (option string)) (label ^ " avatar cleared")
+                None avatar;
+              Lwt.return_unit
+          | None -> Alcotest.failf "%s row missing" label
+        in
+        let drop_job_and_user uid =
+          let did = "user:" ^ string_of_int uid in
+          let* job = Earde.Db.get_posthog_deletion_job conn did in
+          let* job = or_fail_s "job row" job in
+          let* () =
+            match job with
+            | Some (job_id, _, _, _) ->
+                let* r = C.exec q_delete_job job_id in
+                or_fail "drop job" r
+            | None -> Lwt.return_unit
+          in
+          let* r = C.exec q_delete_user uid in
+          or_fail "drop user" r
+        in
+        Lwt.finalize
+          (fun () ->
+            (* A: a real local upload — its file must go, B's must stay. *)
+            let* response = run_delete a "step6_avatar_a" in
+            Alcotest.(check bool) "A: deletion redirects" true
+              (is_redirect (Dream.status_to_int (Dream.status response)));
+            let* () =
+              wait_until ~label:"A avatar file removed" (fun () ->
+                  Lwt.return (not (Sys.file_exists a_file)))
+            in
+            Alcotest.(check bool) "bystander file untouched" true
+              (Sys.file_exists b_file);
+            let* () = check_scrubbed "A" a in
+            (* C: the stored URL's file never existed — deletion still
+               succeeds. *)
+            let* response = run_delete c_missing "step6_avatar_c" in
+            Alcotest.(check bool) "C: deletion redirects" true
+              (is_redirect (Dream.status_to_int (Dream.status response)));
+            let* () = check_scrubbed "C" c_missing in
+            (* D: an external URL never reaches the filesystem. *)
+            let* response = run_delete d_external "step6_avatar_d" in
+            Alcotest.(check bool) "D: deletion redirects" true
+              (is_redirect (Dream.status_to_int (Dream.status response)));
+            let* () = check_scrubbed "D" d_external in
+            Alcotest.(check bool) "bystander file still present at the end"
+              true
+              (Sys.file_exists b_file);
+            Lwt.return_unit)
+          (fun () ->
+            (try Sys.remove a_file with _ -> ());
+            (try Sys.remove b_file with _ -> ());
+            (* Anonymized rows no longer match the step6_ cleanup pattern —
+               drop their jobs and rows here; B keeps its step6_ name and is
+               swept by the module cleanup. *)
+            let* () = drop_job_and_user a in
+            let* () = drop_job_and_user c_missing in
+            drop_job_and_user d_external))
+
   let suite =
     [ signup_case; login_case; join_case; leave_case; chat_case; post_case
     ; comment_case; promote_case; create_community_case; update_settings_case
-    ; visibility_case; delete_account_case
+    ; visibility_case; delete_account_case; delete_account_avatar_case
     ]
 end
 
@@ -2349,12 +2478,23 @@ module Step7_deletion = struct
     let* row = C.find_opt q_job_state job_id in
     or_fail "job state" row
 
+  let q_set_profile =
+    (Caqti_type.int ->. Caqti_type.unit)
+    "UPDATE users SET bio = 'step7 bio', avatar_url = '/static/uploads/step7.webp'
+     WHERE id = $1"
+
+  let q_profile_by_id =
+    (Caqti_type.int ->? Caqti_type.(t2 (option string) (option string)))
+    "SELECT bio, avatar_url FROM users WHERE id = $1"
+
   let atomic_case =
     db_case "atomic anonymize+enqueue: one idempotent job, user anonymized"
       (fun ~url:_ conn c ->
         let (module C : Caqti_lwt.CONNECTION) = c in
         let* uid = C.find Step6_events.q_insert_user ("step7_atomic", "x") in
         let* uid = or_fail "user" uid in
+        let* r = C.exec q_set_profile uid in
+        let* () = or_fail "profile fixture" r in
         let did = "user:" ^ string_of_int uid in
         let* r = Earde.Db.anonymize_user_and_enqueue_posthog_deletion conn uid in
         let* job_id, distinct_id = or_fail_s "anonymize+enqueue" r in
@@ -2364,6 +2504,15 @@ module Step7_deletion = struct
         Alcotest.(check (option string)) "anonymized"
           (Some (Printf.sprintf "[deleted_%d]" uid))
           name;
+        (* The rewrite also erases the user-authored profile fields — the
+           settings copy and /privacy both promise their removal. *)
+        let* profile = C.find_opt q_profile_by_id uid in
+        let* profile = or_fail "profile row" profile in
+        (match profile with
+         | Some (bio, avatar) ->
+             Alcotest.(check (option string)) "bio cleared" None bio;
+             Alcotest.(check (option string)) "avatar cleared" None avatar
+         | None -> Alcotest.fail "anonymized user row missing");
         let* state = job_state c job_id in
         (match state with
          | Some (status, attempts, last_error) ->
@@ -55929,14 +56078,17 @@ module Reset_token_escaping = struct
       wrapper_case; login_signup_case ]
 end
 
-(* Cartographic Civic pass 16C: /privacy through the launch entry wrapper.
-   The legal document is authoritative: its complete inner fragment is pinned
-   byte-for-byte below, so any wording, structure, heading, list or link
-   drift in the policy fails loudly. The wrapper contract is asserted against
-   the real renderer through real session middleware: single local
-   stylesheet, no Tailwind CDN, no Google Fonts, no auth.css, no
-   notification chrome, no forms, and a viewer-independent document (the
-   ignored ?user must not change a byte). *)
+(* /privacy — the 2026-08-04 Article-13-style rewrite. The suite pins the
+   wrapper contract (single local stylesheet, no Tailwind CDN, no Google
+   Fonts, no auth.css, no notification chrome, no forms, viewer-independent,
+   indexable), the required disclosures (controller contact, data categories,
+   purpose/legal-basis rows, public-content/indexing, Shared Threads, GitHub,
+   PostHog + consent cookie, retention, rights, complaint route, automated
+   decisions), the anchor TOC's id/href pairing, the analytics-preference
+   control anatomy (the same data-analytics-* hooks analytics.js drives on
+   /settings — buttons + fetch, never a <form>), and the ABSENCE of the old
+   page's unsupportable claims (future-tense analytics disclosure,
+   "anonymous" analytics wording, absolute security/anonymity language). *)
 module Privacy_launch = struct
   let case name f = Alcotest.test_case name `Quick f
 
@@ -55952,69 +56104,13 @@ module Privacy_launch = struct
     in
     !rendered
 
-  (* Byte-for-byte copy of the legal fragment the renderer embeds. *)
-  let legal_fragment = {|
-    <div class='max-w-2xl mx-auto mt-10 mb-16 px-4'>
-
-      <h1 class='text-3xl font-extrabold text-gray-900 mb-2'>Privacy Policy</h1>
-      <p class='text-sm text-gray-400 mb-10'>This page explains, in plain terms, what data Earde handles and why.</p>
-
-      <div class='space-y-8 text-gray-700 leading-relaxed'>
-
-        <section>
-          <h2 class='text-lg font-bold text-gray-900 mb-3 pb-1 border-b border-[#E0D9CC]'>What Earde is</h2>
-          <p>Earde is a community platform for technical communities. It combines live chat with durable discussion threads and a searchable archive.</p>
-        </section>
-
-        <section>
-          <h2 class='text-lg font-bold text-gray-900 mb-3 pb-1 border-b border-[#E0D9CC]'>Data we may collect or store</h2>
-          <p class='mb-3'>To operate the service, Earde may store:</p>
-          <ul class='list-disc list-inside space-y-2 text-sm'>
-            <li>Account information, such as your username and email address.</li>
-            <li>Profile information you choose to add.</li>
-            <li>Community content, posts, and comments you create.</li>
-            <li>Chat messages you send.</li>
-            <li>Session and authentication data needed to keep you signed in.</li>
-            <li>Moderation records related to reports and enforcement actions.</li>
-            <li>Operational and security logs.</li>
-          </ul>
-        </section>
-
-        <section>
-          <h2 class='text-lg font-bold text-gray-900 mb-3 pb-1 border-b border-[#E0D9CC]'>How we use data</h2>
-          <ul class='list-disc list-inside space-y-2 text-sm'>
-            <li>To operate and provide the service.</li>
-            <li>To authenticate users and keep accounts secure.</li>
-            <li>To display community content.</li>
-            <li>To moderate abuse and enforce community rules.</li>
-            <li>To maintain the security of the service.</li>
-            <li>To debug problems and improve reliability.</li>
-          </ul>
-        </section>
-
-        <section>
-          <h2 class='text-lg font-bold text-gray-900 mb-3 pb-1 border-b border-[#E0D9CC]'>Cookies and sessions</h2>
-          <p>Earde may use cookies or similar browser storage for login and session functionality and for basic operation of the site.</p>
-        </section>
-
-        <section>
-          <h2 class='text-lg font-bold text-gray-900 mb-3 pb-1 border-b border-[#E0D9CC]'>Analytics and tracking</h2>
-          <p>If analytics or tracking tools are added in the future, they should be disclosed here and configured deliberately.</p>
-        </section>
-
-        <section>
-          <h2 class='text-lg font-bold text-gray-900 mb-3 pb-1 border-b border-[#E0D9CC]'>Your controls</h2>
-          <p class='mb-3'>You can contact the operator of this site with any questions about your account or your data.</p>
-          <p>From your <a href='/settings' class='text-[#C94C4C] underline hover:text-[#A83A3A]'>account settings</a> you can update your profile or delete your account, and you can <a href='/export-data' class='text-[#C94C4C] underline hover:text-[#A83A3A]'>export your data</a>.</p>
-        </section>
-
-        <section>
-          <h2 class='text-lg font-bold text-gray-900 mb-3 pb-1 border-b border-[#E0D9CC]'>Changes to this page</h2>
-          <p>This page may be updated as Earde changes.</p>
-        </section>
-
-      </div>
-    </div>|}
+  (* The 16 anchor sections, in document order. The TOC must link every one
+     and every one must exist as <section id='…'>. *)
+  let section_ids =
+    [ "controller"; "data-we-collect"; "how-we-use"; "public-content";
+      "shared-threads"; "github"; "cookies-analytics"; "recipients";
+      "transfers"; "retention"; "security"; "your-rights"; "deletion";
+      "automated-decisions"; "changes"; "contact" ]
 
   let wrapper_case =
     case "wrapper: launch entry shell, only local launch assets" (fun () ->
@@ -56035,16 +56131,138 @@ module Privacy_launch = struct
         (* Entry chrome is form-free and the document carries none. *)
         ps_must_not page "<form")
 
-  let legal_identity_case =
-    case "legal fragment is embedded byte-for-byte" (fun () ->
+  let structure_case =
+    case "title, date, TOC anchors and section skeleton" (fun () ->
         let page = render_privacy () in
-        ps_must page legal_fragment;
+        ps_must page "<h1>Privacy Policy</h1>";
+        ps_must page "Last updated: 4 August 2026";
         Alcotest.(check int) "one h1" 1 (ps_count page "<h1");
-        Alcotest.(check int) "seven h2" 7 (ps_count page "<h2");
-        Alcotest.(check int) "two lists" 2 (ps_count page "<ul");
-        Alcotest.(check int) "thirteen items" 13 (ps_count page "<li>");
-        Alcotest.(check int) "settings link" 1 (ps_count page "href='/settings'");
-        Alcotest.(check int) "export link" 1 (ps_count page "href='/export-data'"))
+        Alcotest.(check int) "sixteen h2" 16 (ps_count page "<h2");
+        Alcotest.(check int) "sixteen sections" 16
+          (ps_count page "<section id='");
+        Alcotest.(check int) "toc entries" 16
+          (List.length section_ids);
+        List.iter
+          (fun id ->
+            ps_must page (Printf.sprintf "href='#%s'" id);
+            ps_must page (Printf.sprintf "<section id='%s'>" id))
+          section_ids;
+        (* The self-service links: settings twice (rights + deletion),
+           export once. *)
+        Alcotest.(check int) "settings links" 2
+          (ps_count page "href='/settings'");
+        Alcotest.(check int) "export link" 1
+          (ps_count page "href='/export-data'"))
+
+  let disclosure_case =
+    case "required Article-13 disclosures are present" (fun () ->
+        let page = render_privacy () in
+        (* Controller and contact: named contact channel, three times
+           (controller, rights, contact). *)
+        ps_must page "is the data controller";
+        Alcotest.(check int) "contact mailto" 3
+          (ps_count page "mailto:metacirculardispatches@gmail.com");
+        (* Data categories and accuracy about credentials. *)
+        ps_must page "salted argon2id hash";
+        ps_must page "IP address";
+        ps_must page "user agent";
+        (* Purpose / legal-basis mapping. *)
+        ps_must page "Performance of a contract (Art. 6(1)(b) GDPR)";
+        ps_must page "Legitimate interest";
+        ps_must page "Consent (Art. 6(1)(a) GDPR)";
+        ps_must page "Legal obligation";
+        (* Public content and indexing: surface-based, never
+           community-categorical. *)
+        ps_must page "may be indexed by search engines";
+        ps_must page "moderation log";
+        ps_must page "publicly accessible communities, channels and sections";
+        ps_must page "limited to users authorized to view that area";
+        (* Shared Threads. *)
+        ps_must page "one canonical thread";
+        ps_must page "top moderators of the origin and destination";
+        (* GitHub: durable wording, no exact API-call count. *)
+        ps_must page "never stores your GitHub tokens";
+        ps_must page "Only repositories that are public on GitHub";
+        ps_must page
+          "only for the read-only requests needed to verify the installation";
+        (* Cookies + PostHog + consent. *)
+        ps_must page "dream.session";
+        ps_must page "earde_analytics_consent";
+        ps_must page "eu.i.posthog.com";
+        ps_must page "Session Replay";
+        ps_must page "the PostHog script is not downloaded";
+        (* Recipients, transfers, no-sale statement. *)
+        ps_must page "Brevo";
+        ps_must page "Cloudflare";
+        ps_must page "Hetzner";
+        ps_must page "does not sell personal data";
+        ps_must page "European Economic Area";
+        (* Retention. *)
+        ps_must page "How long we keep data";
+        ps_must page "24 hours";
+        ps_must page "about two weeks";
+        ps_must page "one-minute request window";
+        ps_must page "uploaded avatar image file is deleted";
+        (* Rights, withdrawal, complaint. *)
+        ps_must page "withdraw consent";
+        ps_must page "lodge a complaint";
+        ps_must page "supervisory authority";
+        (* Automated decisions and deletion behavior. *)
+        ps_must page
+          "does not make automated decisions about you that produce legal \
+           or similarly significant effects";
+        ps_must page "[deleted]")
+
+  let consent_controls_case =
+    case "analytics-preference control: settings anatomy, no form" (fun () ->
+        let page = render_privacy () in
+        (* Exactly the data-analytics-* anatomy analytics.js drives on
+           /settings, shipped hidden so a deployment without analytics
+           renders no dead control. Buttons, not a form. *)
+        ps_must page "<div class='privacy-consent' data-analytics-settings hidden>";
+        ps_must page "data-analytics-state";
+        ps_must page "data-analytics-accept";
+        ps_must page "data-analytics-refuse";
+        ps_must page "data-analytics-error";
+        Alcotest.(check int) "two buttons" 2
+          (ps_count page "<button type='button' data-analytics-");
+        ps_must_not page "<form";
+        (* One panel and one global footer — the footer's
+           Analytics-preferences link may not duplicate the control, and the
+           anchor it targets is this section's id. *)
+        Alcotest.(check int) "one preferences panel" 1
+          (ps_count page "data-analytics-settings");
+        Alcotest.(check int) "one global footer" 1
+          (ps_count page "<footer class='launch-footer'>");
+        ps_must page "<section id='cookies-analytics'>")
+
+  let removed_claims_case =
+    case "old unsupportable claims are gone" (fun () ->
+        let page = render_privacy () in
+        (* The pre-rewrite page deferred analytics to the future; PostHog is
+           live and consent-gated, so that sentence must never return. *)
+        ps_must_not page "If analytics or tracking tools are added in the future";
+        (* Authenticated analytics uses internal user:<id> identities, so no
+           "anonymous" claim may appear anywhere in the document. *)
+        ps_must_not page "anonymous";
+        ps_must_not page "Anonymous";
+        (* Absolute or template claims the audit could not support. *)
+        ps_must_not page "never share";
+        ps_must_not page "100% secure";
+        ps_must_not page "military-grade";
+        ps_must_not page "industry-standard";
+        ps_must_not page "end-to-end encrypted";
+        ps_must_not page "passwords are encrypted";
+        ps_must_not page "we value your privacy";
+        (* The categorical everything-in-a-public-community-is-public claim,
+           the fragile exact GitHub API-call count, and the indefinite
+           rate-limit retention wording are all retired. *)
+        ps_must_not page "Public communities are public";
+        ps_must_not page "exactly two read-only API calls";
+        ps_must_not page "not currently expired on a fixed schedule";
+        (* Passwords are hashed; the word "encrypted" may only describe the
+           GitHub flow cookie. *)
+        ps_must page "hashes, never in a readable form")
 
   let viewer_independence_case =
     case "ignored ?user changes nothing" (fun () ->
@@ -56068,8 +56286,256 @@ module Privacy_launch = struct
           "<a href='/privacy' target='_blank'>Privacy Policy</a>")
 
   let suite =
-    [ wrapper_case; legal_identity_case; viewer_independence_case;
-      signup_consent_link_case ]
+    [ wrapper_case; structure_case; disclosure_case; consent_controls_case;
+      removed_claims_case; viewer_independence_case; signup_consent_link_case ]
+end
+
+(* Avatar_uploads: the strict url→file mapping that makes account-deletion
+   file cleanup safe. Only the exact pipeline shape
+   /static/uploads/earde_<digits>_<digits>.webp maps to a local path;
+   external URLs, bundled assets, traversal shapes and free-text values all
+   map to None and never reach the filesystem. The removal test uses a
+   system temp file (outside the repository), not a repo path. *)
+module Avatar_upload_paths = struct
+  let case name f = Alcotest.test_case name `Quick f
+
+  let accepts =
+    case "pipeline-shaped urls map to their uploads file" (fun () ->
+        Alcotest.(check (option string))
+          "canonical shape"
+          (Some "static/uploads/earde_1722779100123_042917.webp")
+          (Earde.Avatar_uploads.local_file_of_url
+             "/static/uploads/earde_1722779100123_042917.webp");
+        Alcotest.(check (option string))
+          "short digit runs still match the shape"
+          (Some "static/uploads/earde_1_2.webp")
+          (Earde.Avatar_uploads.local_file_of_url
+             "/static/uploads/earde_1_2.webp"))
+
+  let rejects =
+    case "everything else maps to None" (fun () ->
+        let refuse label url =
+          Alcotest.(check (option string))
+            label None
+            (Earde.Avatar_uploads.local_file_of_url url)
+        in
+        refuse "external absolute URL"
+          "https://cdn.example.com/earde_1_2.webp";
+        refuse "protocol-relative URL" "//evil.example/earde_1_2.webp";
+        refuse "bundled static asset" "/static/images/logo-mark.svg";
+        refuse "traversal into images"
+          "/static/uploads/../images/logo-mark.svg";
+        refuse "encoded traversal" "/static/uploads/..%2F..%2Fetc%2Fpasswd";
+        refuse "nested separator" "/static/uploads/evil/earde_1_2.webp";
+        refuse "empty basename" "/static/uploads/";
+        refuse "bare prefix" "/static/uploads";
+        refuse "wrong suffix" "/static/uploads/earde_1_2.webp.sh";
+        refuse "wrong prefix" "/static/uploads/avatar_1_2.webp";
+        refuse "letters in the middle" "/static/uploads/earde_1_x2.webp";
+        refuse "missing separator" "/static/uploads/earde_12.webp";
+        refuse "two separators" "/static/uploads/earde_1_2_3.webp";
+        refuse "leading underscore" "/static/uploads/earde__2.webp";
+        refuse "dotted middle" "/static/uploads/earde_1_2.2.webp";
+        refuse "empty string" "";
+        refuse "plain text" "not a url at all")
+
+  let cleanup_dispatch =
+    case "cleanup composition: absent and non-local values touch nothing"
+      (fun () ->
+        let show = function
+          | `Removed -> "removed"
+          | `Absent -> "absent"
+          | `Failed -> "failed"
+          | `Not_local -> "not_local"
+        in
+        Alcotest.(check string) "no avatar" "not_local"
+          (show (Earde.Avatar_uploads.cleanup_deleted_account_avatar None));
+        Alcotest.(check string) "external avatar" "not_local"
+          (show
+             (Earde.Avatar_uploads.cleanup_deleted_account_avatar
+                (Some "https://cdn.example.com/earde_1_2.webp")));
+        Alcotest.(check string) "traversal avatar" "not_local"
+          (show
+             (Earde.Avatar_uploads.cleanup_deleted_account_avatar
+                (Some "/static/uploads/../images/logo-mark.svg"))))
+
+  let removal =
+    case "remove_local_file: unlink once, absent afterwards" (fun () ->
+        let path = Filename.temp_file "earde_avatar_test" ".webp" in
+        let show = function
+          | `Removed -> "removed"
+          | `Absent -> "absent"
+          | `Failed -> "failed"
+        in
+        Alcotest.(check string) "existing file is removed" "removed"
+          (show (Earde.Avatar_uploads.remove_local_file path));
+        Alcotest.(check bool) "file is gone" false (Sys.file_exists path);
+        Alcotest.(check string) "second attempt is absent, not a failure"
+          "absent"
+          (show (Earde.Avatar_uploads.remove_local_file path)))
+
+  let suite = [ accepts; rejects; cleanup_dispatch; removal ]
+end
+
+(* Db.Rate_limit.cleanup_expired: retention derives from the single
+   enforcement window (2x, so no configured window can outlive cleanup), the
+   boundary rule is strict-< (a row at exactly now - cleanup_after_seconds is
+   kept), active buckets survive, a forced DELETE failure surfaces as a
+   bounded Error that carries no fixture IP and leaves the limiter's check
+   path fully working, and the failure is transient (cleanup succeeds once
+   the fault is removed). Gated like every DB suite; the derivation case is
+   pure and always runs. *)
+module Rate_limit_cleanup = struct
+  let ( let* ) = Lwt.bind
+
+  open Caqti_request.Infix
+
+  let q_cleanup =
+    List.map
+      (fun sql -> (Caqti_type.unit ->. Caqti_type.unit) sql)
+      [ "DROP TRIGGER IF EXISTS rlc_fail_delete ON rate_limits"
+      ; "DROP FUNCTION IF EXISTS rlc_fail_fn()"
+      ; "DELETE FROM rate_limits WHERE ip_address LIKE 'rlc-%'"
+      ]
+
+  let or_fail label = function
+    | Ok v -> Lwt.return v
+    | Error e -> Alcotest.failf "%s: %s" label (Caqti_error.show e)
+
+  let or_fail_s label = function
+    | Ok v -> Lwt.return v
+    | Error e -> Alcotest.failf "%s: %s" label e
+
+  let db_case name f =
+    Alcotest.test_case name `Quick (fun () ->
+        match Sys.getenv_opt "EARDE_TEST_DATABASE_URL" with
+        | None | Some "" -> Alcotest.skip ()
+        | Some url ->
+            Lwt_main.run
+              (let* conn = Caqti_lwt_unix.connect (Uri.of_string url) in
+               let* conn = or_fail "connect" conn in
+               let (module C : Caqti_lwt.CONNECTION) = conn in
+               let cleanup () =
+                 Lwt_list.iter_s
+                   (fun q ->
+                     let* r = C.exec q () in
+                     let* _ = or_fail "cleanup" r in
+                     Lwt.return_unit)
+                   q_cleanup
+               in
+               let* () = cleanup () in
+               Lwt.finalize
+                 (fun () -> f conn (module C : Caqti_lwt.CONNECTION))
+                 (fun () ->
+                   Lwt.finalize cleanup (fun () -> C.disconnect ()))))
+
+  let q_insert_row =
+    (Caqti_type.(t2 (t2 string string) (t2 int float)) ->. Caqti_type.unit)
+    "INSERT INTO rate_limits (ip_address, endpoint, attempts, window_start)
+     VALUES ($1, $2, $3, $4)"
+
+  let q_surviving_ips =
+    (Caqti_type.unit ->* Caqti_type.string)
+    "SELECT ip_address FROM rate_limits WHERE ip_address LIKE 'rlc-%' ORDER BY ip_address"
+
+  let q_create_fail_fn =
+    (Caqti_type.unit ->. Caqti_type.unit)
+    "CREATE OR REPLACE FUNCTION rlc_fail_fn() RETURNS trigger AS 'BEGIN RAISE EXCEPTION ''rlc forced failure''; END' LANGUAGE plpgsql"
+
+  let q_create_fail_trigger =
+    (Caqti_type.unit ->. Caqti_type.unit)
+    "CREATE TRIGGER rlc_fail_delete BEFORE DELETE ON rate_limits FOR EACH ROW EXECUTE FUNCTION rlc_fail_fn()"
+
+  let q_drop_fail_trigger =
+    (Caqti_type.unit ->. Caqti_type.unit)
+    "DROP TRIGGER IF EXISTS rlc_fail_delete ON rate_limits"
+
+  let q_drop_fail_fn =
+    (Caqti_type.unit ->. Caqti_type.unit)
+    "DROP FUNCTION IF EXISTS rlc_fail_fn()"
+
+  (* Pure: the retention rule is derived from the enforcement window, never
+     invented — so a longer configured window automatically lengthens
+     retention and cleanup can never prune a row a current window needs. *)
+  let derivation_case =
+    Alcotest.test_case "retention derives from the enforcement window" `Quick
+      (fun () ->
+        Alcotest.(check (float 0.0001))
+          "one-minute window" 60.0 Earde.Db.Rate_limit.window_seconds;
+        Alcotest.(check (float 0.0001))
+          "retention is exactly two windows"
+          (2.0 *. Earde.Db.Rate_limit.window_seconds)
+          Earde.Db.Rate_limit.cleanup_after_seconds;
+        Alcotest.(check bool)
+          "retention can never undercut the window" true
+          (Earde.Db.Rate_limit.cleanup_after_seconds
+          >= Earde.Db.Rate_limit.window_seconds))
+
+  let expiry_case =
+    db_case "expired rows go, boundary and active rows stay" (fun conn c ->
+        let (module C : Caqti_lwt.CONNECTION) = c in
+        let now = 2_000_000.0 in
+        let retention = Earde.Db.Rate_limit.cleanup_after_seconds in
+        let insert ip age =
+          let* r = C.exec q_insert_row ((ip, "/login"), (3, now -. age)) in
+          or_fail "fixture row" r
+        in
+        let* () = insert "rlc-expired" (retention +. 0.5) in
+        (* Exactly at the boundary: the documented strict-< rule keeps it. *)
+        let* () = insert "rlc-boundary" retention in
+        let* () = insert "rlc-active" 10.0 in
+        let* deleted = Earde.Db.Rate_limit.cleanup_expired ~now conn in
+        let* deleted = or_fail_s "cleanup" deleted in
+        Alcotest.(check int) "exactly the expired row" 1 deleted;
+        let* ips = C.collect_list q_surviving_ips () in
+        let* ips = or_fail "surviving ips" ips in
+        Alcotest.(check (list string))
+          "boundary and active rows survive"
+          [ "rlc-active"; "rlc-boundary" ]
+          ips;
+        Lwt.return_unit)
+
+  let failure_case =
+    db_case "cleanup failure is bounded, IP-free, and leaves limiting working"
+      (fun conn c ->
+        let (module C : Caqti_lwt.CONNECTION) = c in
+        let now = 2_000_000.0 in
+        let retention = Earde.Db.Rate_limit.cleanup_after_seconds in
+        let* r =
+          C.exec q_insert_row
+            (("rlc-203.0.113.9", "/login"), (3, now -. retention -. 5.0))
+        in
+        let* () = or_fail "fixture row" r in
+        let* r = C.exec q_create_fail_fn () in
+        let* () = or_fail "create fn" r in
+        let* r = C.exec q_create_fail_trigger () in
+        let* () = or_fail "create trigger" r in
+        let* result = Earde.Db.Rate_limit.cleanup_expired ~now conn in
+        let* err =
+          match result with
+          | Error e -> Lwt.return e
+          | Ok _ -> Alcotest.fail "expected forced cleanup failure"
+        in
+        (* The DELETE binds only a timestamp — no stored IP can surface in
+           the bounded error string the middleware would log. *)
+        Alcotest.(check bool) "error carries no fixture IP" false
+          (contains err "203.0.113");
+        (* The limiter's own path is untouched by a broken cleanup. *)
+        let* check = Earde.Db.Rate_limit.check c "rlc-fresh" "/login" in
+        let* check = or_fail_s "check still works" check in
+        Alcotest.(check bool) "fresh request allowed" true
+          (check = `Allowed);
+        let* r = C.exec q_drop_fail_trigger () in
+        let* () = or_fail "drop trigger" r in
+        let* r = C.exec q_drop_fail_fn () in
+        let* () = or_fail "drop fn" r in
+        (* Transient: with the fault removed the same cleanup succeeds. *)
+        let* deleted = Earde.Db.Rate_limit.cleanup_expired ~now conn in
+        let* deleted = or_fail_s "cleanup after recovery" deleted in
+        Alcotest.(check bool) "expired rows now removed" true (deleted >= 1);
+        Lwt.return_unit)
+
+  let suite = [ derivation_case; expiry_case; failure_case ]
 end
 
 (* Cartographic Civic pass 17: the shared Pages.msg_page through the new
@@ -58724,6 +59190,122 @@ module Launch_cta = struct
   let suite =
     [ shape_case; no_external_asset_case; identical_across_viewers_case
     ; chromeless_case; bring_untouched_case; single_definition_case ]
+end
+
+(* The global legal footer (Components.launch_footer): one slim strip as the
+   .app column's last child on every chrome-bearing launch wrapper, carrying
+   exactly one Privacy link and one Analytics-preferences link to the
+   /privacy section that hosts the working consent controls. Rendered
+   byte-identically for anonymous and authenticated viewers, form-free, and
+   OUTSIDE <main> so the create-shell/cm-main → </main> fragment slices and
+   the chat surface's .cs-main anatomy stay untouched. The message sheet
+   keeps its documented no-chrome contract and renders none. *)
+module Launch_footer = struct
+  let fc_case name f = Alcotest.test_case name `Quick f
+
+  let footer_open = "<footer class='launch-footer'>"
+  let privacy_link = "<a href='/privacy'>Privacy</a>"
+
+  let preferences_link =
+    "<a href='/privacy#cookies-analytics'>Analytics preferences</a>"
+
+  (* Every chrome-bearing wrapper, both viewer arms, including the /bring
+     entry-viewer arms the CTA suite's list omits. *)
+  let footer_documents () =
+    let community = nav_test_community in
+    [ ( "launch_entry_page (default chrome)"
+      , Earde.Components.launch_entry_page ~page_class:"launch-privacy"
+          ~title:"T" ~content:"B" () )
+    ; ( "launch_entry_page (viewer, member)"
+      , Earde.Components.launch_entry_page
+          ~topbar:(Earde.Components.Entry_viewer (Some "alice"))
+          ~page_class:"launch-bring" ~title:"T" ~content:"B" () )
+    ; ( "launch_entry_page (viewer, anonymous)"
+      , Earde.Components.launch_entry_page
+          ~topbar:(Earde.Components.Entry_viewer None)
+          ~page_class:"launch-bring" ~title:"T" ~content:"B" () )
+    ; ( "launch_auth_page (login)"
+      , Earde.Components.launch_auth_page ~page_class:"launch-login"
+          ~title:"T" ~content:"B" () )
+    ; ( "launch_app_page (member)"
+      , Earde.Components.launch_app_page ~user:"alice"
+          ~page_class:"launch-feed" ~title:"T" ~content:"B" () )
+    ; ( "launch_app_page (anonymous)"
+      , Earde.Components.launch_app_page ~page_class:"launch-feed" ~title:"T"
+          ~content:"B" () )
+    ; ( "launch_onboarding_page (member)"
+      , Earde.Components.launch_onboarding_page ~user:"alice"
+          ~page_class:"launch-project-new" ~title:"T" ~content:"B" () )
+    ; ( "launch_community_page (member)"
+      , Earde.Components.launch_community_page ~user:"alice" ~community
+          ~sidebar:"S" ~page_class:"launch-community-overview" ~title:"T"
+          ~content:"B" () )
+    ; ( "launch_community_page (anonymous)"
+      , Earde.Components.launch_community_page ~community ~sidebar:"S"
+          ~page_class:"launch-community-overview" ~title:"T" ~content:"B" () )
+    ; ( "launch_community_surface_page (member)"
+      , Earde.Components.launch_community_surface_page ~user:"alice"
+          ~community ~sidebar:"S" ~page_class:"launch-community-channel"
+          ~title:"T" ~main_el:"<main class='cs-main'>B</main>" () )
+    ]
+
+  let presence_case =
+    fc_case "every chrome wrapper renders one footer with both links"
+      (fun () ->
+        List.iter
+          (fun (label, html) ->
+            Alcotest.(check int)
+              (label ^ ": exactly one footer")
+              1 (count_sub html footer_open);
+            Alcotest.(check int)
+              (label ^ ": exactly one Privacy link")
+              1 (count_sub html privacy_link);
+            Alcotest.(check int)
+              (label ^ ": exactly one Analytics-preferences link")
+              1 (count_sub html preferences_link))
+          (footer_documents ()))
+
+  let outside_main_case =
+    fc_case "footer sits below the shell, never inside <main>" (fun () ->
+        List.iter
+          (fun (label, html) ->
+            (* The strip closes immediately before the .app close — outside
+               every </main>-terminated fragment slice. *)
+            Alcotest.(check bool)
+              (label ^ ": footer directly precedes the app close")
+              true
+              (contains html "</footer>\n</div>");
+            Alcotest.(check bool)
+              (label ^ ": no footer inside main")
+              false
+              (contains html (footer_open ^ "</main>")
+              || contains html ("<main" ^ footer_open)))
+          (footer_documents ()))
+
+  let inert_case =
+    fc_case "footer is links-only: no nested interactive controls" (fun () ->
+        let footer = Earde.Components.launch_footer in
+        Alcotest.(check bool) "no form" false (contains footer "<form");
+        Alcotest.(check bool) "no button" false (contains footer "<button");
+        Alcotest.(check bool) "no input" false (contains footer "<input");
+        Alcotest.(check bool) "no script" false (contains footer "<script");
+        Alcotest.(check int) "exactly two links" 2 (count_sub footer "<a ");
+        Alcotest.(check bool) "privacy link" true
+          (contains footer privacy_link);
+        Alcotest.(check bool) "preferences target is exact" true
+          (contains footer preferences_link))
+
+  let message_sheet_case =
+    fc_case "the chrome-free message sheet renders no footer" (fun () ->
+        let html =
+          Earde.Components.launch_message_page ~title:"T" ~content:"B" ()
+        in
+        Alcotest.(check int) "no footer" 0 (count_sub html footer_open);
+        Alcotest.(check int) "no preferences link" 0
+          (count_sub html preferences_link))
+
+  let suite =
+    [ presence_case; outside_main_case; inert_case; message_sheet_case ]
 end
 
 (* ===================== Show HN polish pass ===================================
@@ -78125,6 +78707,8 @@ let () =
          DB-free. *)
     ; ("reset_token_attribute_escaping", Reset_token_escaping.suite)
     ; ("privacy_launch_page", Privacy_launch.suite)
+    ; ("avatar_upload_paths", Avatar_upload_paths.suite)
+    ; ("rate_limit_cleanup", Rate_limit_cleanup.suite)
     ; ("launch_message_page", Msg_launch.suite)
       (* Final create-page callers (pass 19): the /new-community renderer
          and admin-gate contracts on the launch app chrome, the unchanged
@@ -78170,6 +78754,7 @@ let () =
          full-label primary action still byte-identical. Pure renders plus a
          source/CSS census — DB-free. *)
     ; ("launch_connect_cta", Launch_cta.suite)
+    ; ("launch_footer", Launch_footer.suite)
     ; ("show_hn_polish", Show_hn_polish.suite)
       (* Mutual connections between communities (issue #30), storage/domain
          slice: the pure lifecycle domain and note canonicalization are

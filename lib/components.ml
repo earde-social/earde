@@ -205,7 +205,7 @@ let analytics_assets ?request ?analytics_community () =
         ( "<script src='/static/js/analytics.js' defer></script>",
           Printf.sprintf
             "<div id='analytics-consent' hidden data-ph-token='%s' data-ph-api-host='%s' data-ph-deployment-environment='%s'%s%s%s class='fixed bottom-4 left-1/2 -translate-x-1/2 z-50 w-[calc(100%%-2rem)] max-w-md bg-white border border-[#E0D9CC] rounded-2xl shadow-xl p-4'>\
-               <p class='text-sm text-gray-700 mb-3'>Earde can collect anonymous usage analytics (PostHog) to improve the product. Nothing is collected until you choose.</p>\
+               <p class='text-sm text-gray-700 mb-3'>Earde can collect optional usage analytics (PostHog) to improve the product. Nothing is collected until you choose, and you can change your choice at any time on the <a href='/privacy#cookies-analytics'>privacy page</a>.</p>\
                <div class='flex items-center gap-2'>\
                  <button type='button' data-analytics-accept class='px-4 py-1.5 text-sm font-semibold bg-[#C94C4C] text-white rounded-full hover:bg-[#A83A3A] transition'>Accept</button>\
                  <button type='button' data-analytics-refuse class='px-4 py-1.5 text-sm font-semibold text-gray-600 bg-gray-100 rounded-full hover:bg-gray-200 transition'>Refuse</button>\
@@ -251,6 +251,24 @@ let launch_connect_cta =
    .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z'/></svg>\
    <span>Connect a project</span></a>"
 
+(* The one global footer: a slim, viewer-independent legal strip rendered as
+   the .app column's last child (below .shell) by every chrome-bearing launch
+   wrapper — entry, auth, app, onboarding and both community documents. It
+   deliberately sits OUTSIDE <main>: the onboarding/settings feature suites
+   slice fragments as create-shell/cm-main → </main>, and the chat surface's
+   .cs-main flex column must keep its exact direct children, so nothing may
+   be appended inside a main element. The message sheet keeps its documented
+   no-chrome contract and renders no footer. Static internal links only —
+   byte-identical for anonymous and authenticated viewers, no forms, no
+   scripts, and the Analytics-preferences target is the /privacy section
+   hosting the working consent controls. *)
+let launch_footer =
+  "<footer class='launch-footer'>\
+   <a href='/privacy'>Privacy</a>\
+   <span class='launch-footer__sep' aria-hidden='true'>&middot;</span>\
+   <a href='/privacy#cookies-analytics'>Analytics preferences</a>\
+   </footer>"
+
 (* The one anonymous topbar action cluster: the shared Connect CTA plus the
    two authentication controls. One value used by every launch wrapper with
    an anonymous arm, so the anonymous and authenticated topbars render the
@@ -281,7 +299,8 @@ type entry_topbar =
    additionally forbids a /login link, so the top bar renders the command
    field as a link to /search and offers no search form and no logout.
    Every link is a real route (/feed, /search, /bring, /login, /signup,
-   /notifications, /u/:name — the last four only under [Entry_viewer]).
+   /notifications, /u/:name — the last four only under [Entry_viewer] — plus
+   the shared [launch_footer]'s /privacy links).
 
    Analytics behavior is the shared [analytics_assets] (script + consent
    banner); the scoped integration CSS at the end of earde.css positions the
@@ -363,12 +382,13 @@ let launch_entry_page ?(noindex = false) ?request ?(topbar = Entry_connect_cta)
      %s\n\
      </div></div></main>\
      </div>\n\
+     %s\n\
      </div>\n\
      %s\n\
      </body>\n\
      </html>"
     (html_escape title) robots_meta analytics_head page_class
-    actions house_icon content analytics_banner
+    actions house_icon content launch_footer analytics_banner
 
 (* Cartographic Civic launch auth document (pass 2: /login and /signup only).
    Like [launch_entry_page], a complete self-contained document that loads only
@@ -421,12 +441,13 @@ let launch_auth_page ?(noindex = false) ?request ~page_class ~title ~content () 
      %s\n\
      </div></main>\
      </div>\n\
+     %s\n\
      </div>\n\
      %s\n\
      </body>\n\
      </html>"
     (html_escape title) robots_meta analytics_head page_class
-    topbar_anon_actions content analytics_banner
+    topbar_anon_actions content launch_footer analytics_banner
 
 (* Cartographic Civic launch message document (pass 17: the shared
    Pages.msg_page only). Like the other launch documents, complete and
@@ -801,6 +822,7 @@ let launch_app_page ?(noindex = false) ?request ?user ?(rail_communities = [])
      </main>\
      %s\
      </div>\n\
+     %s\n\
      </div>\n\
      %s\n\
      %s\n\
@@ -808,7 +830,7 @@ let launch_app_page ?(noindex = false) ?request ?user ?(rail_communities = [])
      </body>\n\
      </html>"
     (html_escape title) robots_meta mobile_gate_css_link analytics_head
-    page_class search_form actions rail content aside_html
+    page_class search_form actions rail content aside_html launch_footer
     mobile_desktop_gate analytics_banner behavior_script
 
 (* Cartographic Civic launch onboarding document (pass 4: /projects/new only).
@@ -919,6 +941,7 @@ let launch_onboarding_page ?(noindex = false) ?request ?user ?(stepper = "")
      <main class='main'><div class='scroll'><div class='container--form'>\n\
      %s<div class='create-shell'>%s</div></div></div></main>\
      </div>\n\
+     %s\n\
      </div>\n\
      %s\n\
      %s\n\
@@ -926,7 +949,7 @@ let launch_onboarding_page ?(noindex = false) ?request ?user ?(stepper = "")
      </body>\n\
      </html>"
     (html_escape title) robots_meta mobile_gate_css_link analytics_head
-    page_class actions house_icon stepper content
+    page_class actions house_icon stepper content launch_footer
     mobile_desktop_gate analytics_banner behavior_script
 
 (* Cartographic Civic launch community document (pass 8: the structured
@@ -1119,6 +1142,7 @@ let launch_community_doc ?(noindex = false) ?request ?user
      %s\
      %s\
      </div>\n\
+     %s\n\
      </div>\n\
      %s\n\
      %s\n\
@@ -1128,7 +1152,7 @@ let launch_community_doc ?(noindex = false) ?request ?user
     (html_escape title) robots_meta mobile_gate_css_link
     (analytics_head ^ head_extra)
     page_class search_form actions shell_cls rail sidebar main_el aside
-    mobile_desktop_gate analytics_banner behavior_script
+    launch_footer mobile_desktop_gate analytics_banner behavior_script
 
 (* Public pass-8 entry point: the overview content is wrapped in the exact
    `<main class='main'>` element (same newlines) the pre-extraction template

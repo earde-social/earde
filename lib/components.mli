@@ -48,6 +48,15 @@ val post_thumbnail : ?alt:string -> img_class:string -> string option -> string
     authenticated viewers. Exposed so page modules never grow a private copy. *)
 val launch_connect_cta : string
 
+(** The one global legal footer every chrome-bearing launch wrapper renders
+    as the .app column's last child (below .shell, outside <main>): exactly
+    one /privacy link and one /privacy#cookies-analytics
+    "Analytics preferences" link, byte-identical for anonymous and
+    authenticated viewers, links only — no forms, no scripts. The chrome-free
+    message sheet deliberately renders none. Exposed for the footer contract
+    tests. *)
+val launch_footer : string
+
 (** Entry-chrome topbar policy for [launch_entry_page]:
     [Entry_connect_cta] (default) keeps the viewer-independent chrome — the
     shared Connect CTA alone (/privacy). [Entry_viewer user] renders viewer

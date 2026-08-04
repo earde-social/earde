@@ -153,12 +153,45 @@ let process_image_upload ~max_bytes ~resize image_bytes =
    Postgres; the ~1ms I/O penalty is the price of crash resilience and shared
    state across replicas — unavoidable once we move beyond a single process. *)
 module Rate_limit = struct
+  (* Opportunistic expiry cleanup, piggybacked on rate-limited requests at a
+     bounded cadence: at most one batch per [cleanup_every_seconds] per
+     process, off the response path (Lwt.async, same pattern as the PostHog
+     deletion attempts). The retention rule lives in Db.Rate_limit
+     (rows strictly older than 2x the enforcement window); a cleanup failure
+     only logs a bounded, IP-free error and never affects the limiter's
+     Allowed/Blocked decision. A racing double-fire between the read and the
+     write of [last_cleanup] just runs a second idempotent batch. *)
+  let cleanup_every_seconds = 600.0
+
+  let last_cleanup = ref 0.0
+
+  let maybe_cleanup request =
+    let now = Unix.gettimeofday () in
+    if now -. !last_cleanup >= cleanup_every_seconds then begin
+      last_cleanup := now;
+      Lwt.async (fun () ->
+          Lwt.catch
+            (fun () ->
+              match%lwt
+                Dream.sql request (fun db -> Db.Rate_limit.cleanup_expired db)
+              with
+              | Ok _deleted -> Lwt.return_unit
+              | Error e ->
+                  Dream.log "rate-limit cleanup failed: %s" e;
+                  Lwt.return_unit)
+            (fun exn ->
+              Dream.log "rate-limit cleanup skipped: %s"
+                (Printexc.to_string exn);
+              Lwt.return_unit))
+    end
+
   let middleware inner_handler request =
     let ip = Dream.client request in
     (* Path only: the rate-limit table must never persist query values (reset
        tokens, OAuth state/code, search terms), and /login?x=y must share
        /login's bucket rather than minting a fresh one per query string. *)
     let endpoint = Request_target_redaction.path_only (Dream.target request) in
+    maybe_cleanup request;
     match%lwt Dream.sql request (fun db -> Db.Rate_limit.check db ip endpoint) with
     | Ok `Blocked ->
         let user = Dream.session_field request "username" in
@@ -5123,6 +5156,21 @@ let delete_account_handler request =
       let user_id = int_of_string uid_str in
       match%lwt Dream.form request with
       | `Ok _ ->
+          (* The stored avatar reference must be read BEFORE the anonymize
+             rewrite NULLs it. A read failure only skips file cleanup — it
+             must never block the deletion itself. *)
+          let%lwt avatar_url =
+            Lwt.catch
+              (fun () ->
+                let%lwt res =
+                  Dream.sql request (fun db ->
+                      Db.get_user_avatar_url db user_id)
+                in
+                match res with
+                | Ok v -> Lwt.return v
+                | Error _ -> Lwt.return None)
+              (fun _ -> Lwt.return None)
+          in
           (* §3.3 atomic local deletion: anonymization and the durable
              deletion job commit together (or roll back together) — no crash
              window with an anonymized user and no job. The transaction never
@@ -5134,15 +5182,28 @@ let delete_account_handler request =
           (match result with
             | Ok (job_id, _distinct_id) ->
                 (* One async cleanup chain, off the response path:
-                   1. the consent-gated PERSONLESS account_deleted metric
+                   1. the locally stored avatar file, only after the commit
+                      (Avatar_uploads validates the path shape; anything not
+                      a pipeline upload is untouched, a missing file is
+                      success, and a real failure logs a fixed, path-free
+                      line and never unwinds the committed deletion);
+                   2. the consent-gated PERSONLESS account_deleted metric
                       (constant system distinct id, person processing off — so
                       ingestion timing can never associate it with, or
                       recreate, the person being deleted);
-                   2. then — regardless of the metric's outcome — the
+                   3. then — regardless of the metric's outcome — the
                       immediate durable deletion attempt for the real
                       user:<id> job. PostHog being down or unconfigured only
                       leaves the committed job pending. *)
                 Lwt.async (fun () ->
+                    (match
+                       Avatar_uploads.cleanup_deleted_account_avatar avatar_url
+                     with
+                    | `Removed | `Absent | `Not_local -> ()
+                    | `Failed ->
+                        Dream.log
+                          "avatar cleanup failed for a deleted account; file \
+                           retained under static/uploads");
                     let%lwt () =
                       Lwt.catch
                         (fun () ->
