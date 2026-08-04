@@ -7,11 +7,30 @@
 (** === ESCAPING === *)
 val html_escape : string -> string
 val safe_url : string -> string
-(** [safe_internal_path p] gates a server-built rooted internal path (e.g. "/c/x/t/1"):
-    passes a single-leading-slash path (html-escaped), rejects ""/"#"/protocol-relative
-    "//host" (and the "/\\host" variant) → "#". Use for app nav targets, NOT [safe_url]
-    (which only passes http(s) and would collapse every relative path to "#"). *)
+(** [safe_internal_path p] gates a rooted internal path (e.g. "/c/x/t/1"):
+    passes a single-leading-slash path (html-escaped) and the bare site root "/",
+    rejects ""/"#"/protocol-relative "//host" (and the "/\\host" variant) → "#".
+    Use for app nav targets, NOT [safe_url] (which only passes http(s) and would
+    collapse every relative path to "#").
+
+    Safe for ATTACKER-supplied values as well as server-built ones: it escapes
+    what it passes and refuses anything that could leave the origin, which is
+    what lets the shared message page gate its "Go back" destination once
+    instead of at ~70 call sites. *)
 val safe_internal_path : string -> string
+
+(** [js_single_quoted_attr s] renders [s] for the ONE context that
+    [html_escape] alone cannot secure: a JavaScript single-quoted string
+    literal sitting inside an HTML event-handler attribute, e.g.
+    [onsubmit="confirmModal(event, 'Ban u/NAME?')"].
+
+    There the HTML parser decodes entities BEFORE the JavaScript parser runs,
+    so an [html_escape]d apostrophe ([&#39;]) turns back into a real ['] and
+    closes the literal. This applies JavaScript escaping first (so the
+    post-decode source is a well-formed literal) and HTML escaping second (so
+    the attribute itself cannot be closed). Because [html_escape] is exactly
+    reversible, the browser decodes back to the JavaScript-escaped form. *)
+val js_single_quoted_attr : string -> string
 
 (** === IMAGES ===
     [safe_img_src] is the escaping gate for image [src] attributes: it passes rooted local

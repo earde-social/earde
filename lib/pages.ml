@@ -4328,7 +4328,8 @@ let post_page ?user ?(noindex=false) ~is_member ~is_current_user_mod ~mod_userna
                         </form>
                       </div>
                     </dialog>"
-                    c.id c.id csrf_token c.username post.community_id c.id
+                    c.id c.id csrf_token (Components.html_escape c.username)
+                    post.community_id c.id
                 else
                   (* Rule C: admin acting without mod role — handler prefixes reason as admin override *)
                   Printf.sprintf "
@@ -4358,7 +4359,8 @@ let post_page ?user ?(noindex=false) ~is_member ~is_current_user_mod ~mod_userna
                         </form>
                       </div>
                     </dialog>"
-                    c.id c.id csrf_token c.username post.community_id c.id
+                    c.id c.id csrf_token (Components.html_escape c.username)
+                    post.community_id c.id
             | _ -> ""
           else ""
         in
@@ -4727,9 +4729,15 @@ let post_page ?user ?(noindex=false) ~is_member ~is_current_user_mod ~mod_userna
     post_rules_html (Components.html_escape community.slug) (Components.html_escape community.slug) post_mods_html
   in
 
+  (* Escaped like every other letter-tile initial (Components.initial_tile and
+     the launch moderator rows already do this): the byte is taken from a
+     stored username, so a legacy account whose name starts with "<" must not
+     put a raw markup character into the document. *)
   let post_author_initial =
     if is_post_deleted then "?"
-    else String.uppercase_ascii (String.sub post.username 0 1)
+    else
+      Components.html_escape
+        (String.uppercase_ascii (String.sub post.username 0 1))
   in
   let post_local_stats_html =
     let total_contribs = post.author_local_post_count + post.author_local_comment_count in
@@ -4902,21 +4910,27 @@ let user_profile_page ?user ?(rail_communities = []) ~is_admin ~is_globally_bann
     else Printf.sprintf "<div class='account-actions'>%s%s</div>" edit_profile_btn admin_panel_btn
   in
 
+  (* The username is attacker-chosen for accounts created before the signup
+     charset rule, so every sink below is escaped for its own context. The two
+     confirmModal hooks are JavaScript string literals inside an HTML
+     attribute — html_escape alone decodes back to a live apostrophe there,
+     so they take js_single_quoted_attr. *)
   let admin_controls =
     if is_admin && (Option.value ~default:"" user) <> username then
+      let js_username = Components.js_single_quoted_attr username in
       let ban_or_unban_btn =
         if is_globally_banned then
           Printf.sprintf "
             <form action='/admin/unban/user/%d' method='POST' onsubmit=\"confirmModal(event, 'Lift global ban on u/%s?')\">
                 %s
                 <button type='submit' class='account-btn account-btn--secondary'>Unban user</button>
-            </form>" profile_id username csrf_token
+            </form>" profile_id js_username csrf_token
         else
           Printf.sprintf "
             <form action='/admin/ban/user/%d' method='POST' onsubmit=\"confirmModal(event, 'Permanently ban u/%s? They will be blocked from logging in and posting.')\">
                 %s
                 <button type='submit' class='account-btn'>Ban user</button>
-            </form>" profile_id username csrf_token
+            </form>" profile_id js_username csrf_token
       in
       Printf.sprintf "
         <div class='account-admin'>
@@ -4931,12 +4945,13 @@ let user_profile_page ?user ?(rail_communities = []) ~is_admin ~is_globally_bann
   in
   (* User-facing label is "Threads"; the query param stays ?tab=posts so existing links,
      the handler's tab dispatch, and bookmarks keep working unchanged. *)
+  let esc_username = Components.html_escape username in
   let tab_nav = Printf.sprintf "
     <div class='account-tabs'>
         <a href='/u/%s?tab=posts' class='%s'>Threads</a>
         <a href='/u/%s?tab=comments' class='%s'>Comments</a>
         <a href='/u/%s?tab=communities' class='%s'>Communities</a>
-    </div>" username (tab_class "posts") username (tab_class "comments") username (tab_class "communities")
+    </div>" esc_username (tab_class "posts") esc_username (tab_class "comments") esc_username (tab_class "communities")
   in
 
   (* Profile-specific thread row. The shared render_forum_row markup is scoped to the
@@ -5089,7 +5104,7 @@ let user_profile_page ?user ?(rail_communities = []) ~is_admin ~is_globally_bann
 
         %s
         %s
-    </div>" avatar_html username role_badges karma joined_at header_actions (Components.html_escape bio) admin_controls tab_nav feed_html
+    </div>" avatar_html esc_username role_badges karma joined_at header_actions (Components.html_escape bio) admin_controls tab_nav feed_html
   in
   (* Standard launch scroller column around the untouched account-* fragments;
      no noindex — the profile stays a public, crawlable discovery surface. *)
@@ -5112,15 +5127,22 @@ let user_profile_page ?user ?(rail_communities = []) ~is_admin ~is_globally_bann
    view-profile link. Panels are skinned by the "account settings only"
    integration section at the end of earde.css.
 
-   The stored bio and avatar URL are user-controlled (bio via this form,
-   avatar_url via the browser-supplied existing_avatar_url field) and were
-   previously interpolated raw; they are now escaped at this template
-   boundary — textarea text context and value='…' attribute context — per
-   the store-raw/escape-at-render convention. *)
+   The stored bio is user-controlled via this form and was previously
+   interpolated raw; it is now escaped at this template boundary (textarea
+   text context) per the store-raw/escape-at-render convention.
+
+   There is deliberately NO hidden existing_avatar_url field. It used to
+   round-trip the stored avatar URL through the browser, and
+   update_profile_handler wrote whatever came back straight into
+   users.avatar_url — so any user could point their own row at another
+   user's upload and have account deletion unlink that victim's file. The
+   handler now re-reads the caller's own stored avatar from the database
+   when no new file is submitted, which is the only value the browser could
+   legitimately have supplied. The read-only preview below still renders
+   [avatar_url]; it just no longer travels back as an input. *)
 let settings_page ?user ?(rail_communities = []) bio avatar_url request =
   let csrf_token = Dream.csrf_tag request in
   let current_bio = Components.html_escape (Option.value ~default:"" bio) in
-  let current_avatar = Components.html_escape (Option.value ~default:"" avatar_url) in
 
   (* Read-only preview of the stored avatar above the upload input. Same Components.user_avatar
      gate (safe_img_src) + letter-tile fallback as the profile header, so a missing/unsafe
@@ -5166,7 +5188,6 @@ let settings_page ?user ?(rail_communities = []) bio avatar_url request =
                     <div class='account-avatar-row'>
                         %s
                         <div class='account-avatar-ctl'>
-                            <input type='hidden' name='existing_avatar_url' value='%s'>
                             <input type='file' name='avatar_url' accept='image/*' class='account-file'>
                             <span class='account-hint'>PNG or JPG &middot; square images look best</span>
                         </div>
@@ -5230,7 +5251,7 @@ let settings_page ?user ?(rail_communities = []) bio avatar_url request =
             </form>
         </div>
     </div>"
-    csrf_token avatar_preview current_avatar current_bio csrf_token csrf_token
+    csrf_token avatar_preview current_bio csrf_token csrf_token
   in
   let content =
     Printf.sprintf
@@ -6010,7 +6031,18 @@ let privacy_page ?user:_ request =
    the old `Auth chrome already rendered no viewer-dependent bytes, and the
    document must stay viewer-independent because anti-enumeration pins
    require byte-identical denials. No handler, status, header, redirect or
-   message string changes. *)
+   message string changes.
+
+   [return_url] is gated by Components.safe_internal_path at this ONE shared
+   sink rather than at each of the ~70 call sites. Several of those build the
+   destination from a route parameter (e.g. "/c/" ^ Dream.param "slug"), and
+   Dream percent-decodes parameters, so a crafted slug put attacker bytes
+   straight into the href — reachable without a session and, via the
+   CSRF-failure arm of the settings POSTs, without a token either. The gate
+   escapes the value and collapses anything that is not a rooted internal
+   path (foreign origins, "//host", javascript:, quote/markup payloads) to
+   the inert "#". Every real caller passes a server-built rooted path, so no
+   legitimate back link changes. *)
 let msg_page ?user:_ ?auth:_ ~title ~message ~alert_type ~return_url request =
   let icon_html = match alert_type with
     | "success" ->
@@ -6033,7 +6065,8 @@ let msg_page ?user:_ ?auth:_ ~title ~message ~alert_type ~return_url request =
             <div class='launch-msg__foot'><a href='%s' class='launch-msg__back'>Go back</a></div>
           </div>
         </div>"
-    (Components.html_escape title) icon_html (Components.html_escape message) return_url
+    (Components.html_escape title) icon_html (Components.html_escape message)
+    (Components.safe_internal_path return_url)
   in
   Components.launch_message_page ~request ~title ~content ()
 
@@ -6210,7 +6243,10 @@ let admin_dashboard_page ?user ?(rail_communities = []) ~signups_enabled
                  </form>\
                </td>\
              </tr>"
-            (esc u.username) (esc u.username) (esc u.email) u.id (esc u.username) csrf_token
+            (esc u.username) (esc u.username) (esc u.email) u.id
+            (* JS string literal inside an HTML attribute: html_escape alone
+               decodes back to a live apostrophe before JavaScript parses it. *)
+            (Components.js_single_quoted_attr u.username) csrf_token
         ) banned_users)
     in
     Printf.sprintf

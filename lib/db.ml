@@ -821,6 +821,37 @@ module User = struct
     | Error err -> Lwt.return (Error (Caqti_error.show err))
 end
 
+(* Durable revocation of Dream's SQL-backed sessions.
+
+   Dream.invalidate_session only ends the session carrying the CURRENT
+   request, so "delete my account" and "reset my password" both left every
+   other logged-in browser (or a stolen cookie) fully authenticated: the
+   session row survived, and every authorization path in the app keys off
+   Dream.session_field "user_id", which still resolved. A deleted account
+   could go on commenting, voting, chatting and moderating for the remaining
+   session lifetime, under a tombstoned name.
+
+   The row shape is Dream's own (see the init migration, which mirrors it
+   deliberately): payload is the JSON object Dream serializes from the
+   session dictionary, so the user id is payload->>'user_id' — a STRING,
+   because Dream's payload is (string * string) list. Matching on that field
+   rather than on a username or email is what makes this survive
+   anonymization, which rewrites both of those. *)
+module Session_store = struct
+  (* Compared as text on both sides: casting the column to int would fail the
+     whole statement on any session whose payload holds a non-numeric
+     user_id, and there is no such row today only by convention. *)
+  let delete_for_user_query =
+    let open Caqti_request.Infix in
+    (Caqti_type.string ->. Caqti_type.unit)
+    "DELETE FROM dream_session WHERE payload::jsonb ->> 'user_id' = $1"
+
+  let delete_for_user (module C : Caqti_lwt.CONNECTION) user_id =
+    C.exec delete_for_user_query (string_of_int user_id) >>= function
+    | Ok () -> Lwt.return (Ok ())
+    | Error err -> Lwt.return (Error (Caqti_error.show err))
+end
+
 module Post = struct
   let create_post_query =
     let open Caqti_request.Infix in
@@ -1266,16 +1297,40 @@ module Comment = struct
     | Error err -> Lwt.return (Error (Caqti_error.show err))
 
   (* RETURNING id: the inserted comment id is part of the success payload so
-     later consumers (e.g. analytics) never need a second lookup query. *)
+     later consumers (e.g. analytics) never need a second lookup query.
+
+     The INSERT ... SELECT ... WHERE is the parent-binding guard. The schema's
+     only constraint on parent_id is a foreign key to comments(id) — nothing
+     ties the parent to the post being commented on — so a submitted
+     parent_id used to be accepted from ANY post in ANY community, including
+     a private one the author cannot read. That produced durable corruption
+     (render_comment_tree walks down from parent_id = None, so such a row is
+     stored, counted, and never displayed) and let a reply notification be
+     aimed at the owner of a comment in a community the sender cannot see.
+
+     Enforcing it in the mutation's own WHERE rather than in a preceding
+     SELECT closes the TOCTOU window: the parent's post_id is read under the
+     same statement that writes the row, so a concurrent change cannot land
+     between the check and the insert. Zero rows inserted (find_opt returns
+     None) means the parent failed the binding — the only way the predicate
+     can reject — and the caller must treat it as a client error. A parent
+     that does not exist at all still fails here rather than reaching the
+     foreign key, so no constraint name can leak into a response. *)
   let create_comment_query =
     let open Caqti_request.Infix in
-    (Caqti_type.(t4 string int int (option int)) ->! Caqti_type.int)
-    "INSERT INTO comments (content, post_id, user_id, parent_id) VALUES ($1, $2, $3, $4) RETURNING id"
+    (Caqti_type.(t4 string int int (option int)) ->? Caqti_type.int)
+    {|INSERT INTO comments (content, post_id, user_id, parent_id)
+      SELECT $1::text, $2::int, $3::int, $4::int
+      WHERE $4::int IS NULL
+         OR EXISTS (SELECT 1 FROM comments parent
+                     WHERE parent.id = $4::int AND parent.post_id = $2::int)
+      RETURNING id|}
 
   let create_comment (module C : Caqti_lwt.CONNECTION) content post_id user_id parent_id =
-    C.find create_comment_query (content, post_id, user_id, parent_id)
+    C.find_opt create_comment_query (content, post_id, user_id, parent_id)
     >>= function
-    | Ok comment_id -> Lwt.return (Ok comment_id)
+    | Ok (Some comment_id) -> Lwt.return (Ok (`Created comment_id))
+    | Ok None -> Lwt.return (Ok `Invalid_parent)
     | Error err -> Lwt.return (Error (Caqti_error.show err))
 
   (* Bumped on every new comment so the "active" sort reflects engagement recency, not creation time. *)
@@ -2976,9 +3031,17 @@ module PasswordReset = struct
           | Error e ->
               C.rollback () >>= fun _ -> Lwt.return (Error (Caqti_error.show e))
           | Ok () ->
-              C.commit () >>= function
-              | Error e -> Lwt.return (Error (Caqti_error.show e))
-              | Ok () -> Lwt.return (Ok true)))
+              (* A password reset is the remedy for a compromised account, so
+                 it must also end the attacker's sessions — otherwise the new
+                 password changes nothing for whoever already holds a cookie.
+                 Same transaction as the token consumption and the password
+                 write: either all three land or none does. *)
+              (Session_store.delete_for_user (module C) user_id >>= function
+               | Error e -> C.rollback () >>= fun _ -> Lwt.return (Error e)
+               | Ok () ->
+                   C.commit () >>= function
+                   | Error e -> Lwt.return (Error (Caqti_error.show e))
+                   | Ok () -> Lwt.return (Ok true))))
 end
 
 (* Holds unconfirmed signups so a bot/abandoned signup never reaches the users table.
@@ -3159,12 +3222,21 @@ module PosthogDeletionJobs = struct
          (User.anonymize_user (module C) user_id >>= function
           | Error e -> C.rollback () >>= fun _ -> Lwt.return (Error e)
           | Ok () ->
+            (* Session revocation joins the same transaction as the
+               anonymization and the deletion job: there is no window in
+               which the account is anonymized but another browser still
+               authenticates as it, and a failure here rolls the whole
+               deletion back rather than leaving it half-done. Only this
+               user's rows are matched. *)
+            (Session_store.delete_for_user (module C) user_id >>= function
+             | Error e -> C.rollback () >>= fun _ -> Lwt.return (Error e)
+             | Ok () ->
             (C.find enqueue_query distinct_id >>= function
              | Error e -> C.rollback () >>= fun _ -> Lwt.return (Error (Caqti_error.show e))
              | Ok job_id ->
                (C.commit () >>= function
                 | Error e -> Lwt.return (Error (Caqti_error.show e))
-                | Ok () -> Lwt.return (Ok (job_id, distinct_id))))))
+                | Ok () -> Lwt.return (Ok (job_id, distinct_id)))))))
 
   (* Atomic claim of one specific pending job (the immediate post-deletion
      attempt): attempts and the lease timestamp advance in the same statement.
@@ -3597,13 +3669,30 @@ module Rate_limit = struct
                            END
       RETURNING attempts|}
 
-  let check (module C : Caqti_lwt.CONNECTION) ip endpoint =
+  (* The per-endpoint allowance is applied in OCaml, so a second policy needs
+     no second query and no schema change: the upsert always counts, and only
+     the comparison differs. The 60s window stays shared and hardcoded in the
+     SQL above. *)
+  let check_with ~max_attempts (module C : Caqti_lwt.CONNECTION) ip endpoint =
     let now = Unix.gettimeofday () in
     C.find check_q (ip, endpoint, now) >>= function
     | Ok attempts ->
         if attempts > max_attempts then Lwt.return (Ok `Blocked)
         else Lwt.return (Ok `Allowed)
     | Error e -> Lwt.return (Error (Caqti_error.show e))
+
+  let check db ip endpoint = check_with ~max_attempts db ip endpoint
+
+  (* Image uploads get their own bucket rather than sharing the
+     authentication allowance: an upload is far more expensive than a login
+     attempt, but a member legitimately edits several images in a row, so the
+     two policies want different numbers. The endpoint name is a constant,
+     never a request path, so all three upload routes share one budget. *)
+  let upload_endpoint = "image-upload"
+
+  let upload_max_attempts = 10
+
+  let check_upload db ip = check_with ~max_attempts:upload_max_attempts db ip upload_endpoint
 
   (* One bounded cleanup batch: deletes at most [batch] expired rows so a
      large backlog can never stall a request-path connection. The only bind
@@ -3836,6 +3925,8 @@ let pending_signup_username_elsewhere = PendingSignup.username_pending_elsewhere
 let pending_signup_upsert = PendingSignup.upsert
 let pending_signup_sweep_expired = PendingSignup.sweep_expired
 let pending_signup_confirm = PendingSignup.confirm
+
+let delete_user_sessions = Session_store.delete_for_user
 
 let anonymize_user_and_enqueue_posthog_deletion =
   PosthogDeletionJobs.anonymize_and_enqueue

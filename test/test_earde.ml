@@ -621,7 +621,9 @@ module Returning_ids = struct
           Earde.Db.create_comment conn "step3ret top comment" post author None
         in
         let top = match top with
-          | Ok id -> id
+          | Ok (`Created id) -> id
+          | Ok `Invalid_parent ->
+              Alcotest.fail "create_comment top: parentless insert refused"
           | Error e -> Alcotest.failf "create_comment top: %s" e
         in
         let* row = C.find_opt q_comment_by_id top in
@@ -638,7 +640,9 @@ module Returning_ids = struct
             (Some top)
         in
         let reply = match reply with
-          | Ok id -> id
+          | Ok (`Created id) -> id
+          | Ok `Invalid_parent ->
+              Alcotest.fail "create_comment reply: same-post parent refused"
           | Error e -> Alcotest.failf "create_comment reply: %s" e
         in
         Alcotest.(check bool) "reply id differs from top id" true (reply <> top);
@@ -57381,8 +57385,14 @@ module Admin_launch = struct
         in
         ps_must page
           "<form class='admin-act-form' action='/admin/unban/user/41' method='POST' onsubmit=\"confirmModal(event, 'Lift global ban on u/marge?')\">";
+        (* The apostrophe is BACKSLASHED before it is entity-encoded. The
+           previous expectation here was the bare "u/o&#39;brien", which is
+           what the vulnerability looked like: the HTML parser decodes the
+           entity before JavaScript parses the attribute, so an unescaped
+           &#39; closes the string literal and everything after it in the
+           username becomes executable. *)
         ps_must page
-          "<form class='admin-act-form' action='/admin/unban/user/42' method='POST' onsubmit=\"confirmModal(event, 'Lift global ban on u/o&#39;brien?')\">";
+          "<form class='admin-act-form' action='/admin/unban/user/42' method='POST' onsubmit=\"confirmModal(event, 'Lift global ban on u/o\\&#39;brien?')\">";
         Alcotest.(check int) "exactly two unban forms" 2
           (ps_count page "action='/admin/unban/user/");
         Alcotest.(check int) "one Unban button per form" 2
@@ -72180,6 +72190,1504 @@ module Sth_http = struct
   let boundary_suite = [ boundary_case ]
 end
 
+(* === PRE-LAUNCH SECURITY FIXES: the DB-free half ===
+
+   One regression per confirmed audit finding, reproducing the original
+   attack rather than merely asserting the fixed behaviour. The pure
+   decisions (escaping, username syntax, upload policy, cookie policy,
+   client-address resolution) live here; the database-backed halves are in
+   [Sec_db] below, behind the usual EARDE_TEST_DATABASE_URL gate. *)
+module Sec_pure = struct
+  let case name f = Alcotest.test_case name `Quick f
+
+  let contains haystack needle =
+    let hn = String.length haystack and nn = String.length needle in
+    let rec go i = i + nn <= hn && (String.sub haystack i nn = needle || go (i + 1)) in
+    nn = 0 || go 0
+
+  let must label body needle =
+    if not (contains body needle) then
+      Alcotest.failf "%s: missing fragment %S" label needle
+
+  let must_not label body needle =
+    if contains body needle then
+      Alcotest.failf "%s: forbidden fragment %S" label needle
+
+  let req target = Dream.request ~method_:`GET ~target ""
+
+  (* Pages that emit a CSRF field need a request that has been through
+     session middleware; Dream.csrf_tag raises otherwise. Same shape as the
+     existing launch-message wrapper suite. *)
+  let render_with_session target f =
+    let rendered = ref "" in
+    let (_ : Dream.response) =
+      Lwt_main.run
+        (Dream.memory_sessions
+           (fun r ->
+             rendered := f r;
+             Dream.html "")
+           (Dream.request ~method_:`GET ~target ""))
+    in
+    !rendered
+
+  (* --- Fix 2: reflected XSS through msg_page's return_url ---------------- *)
+
+  (* The original exploit: GET /c/<payload>/t/z answered 404 with the payload
+     interpolated raw into the "Go back" href. The payload arrives through
+     Dream.param, which percent-decodes, so quotes and angle brackets reach
+     the renderer intact. *)
+  let msg_page_hostile_return_url =
+    case "msg_page: a quote+markup return_url emits no raw tag" (fun () ->
+        let payload = "/c/x'><svg onload=alert(document.domain)>/t/z" in
+        let body =
+          Earde.Pages.msg_page ~title:"Not Found" ~message:"This community does not exist."
+            ~alert_type:"error" ~return_url:payload (req "/")
+        in
+        (* The document's own alert glyph is an <svg>, so the assertion is on
+           the PAYLOAD: no attribute-closing quote, no event handler, no
+           second element smuggled in through the href. *)
+        must_not "hostile return_url" body "<svg onload";
+        must_not "hostile return_url" body "x'>";
+        (* The whole payload survives ONLY as the escaped text of one href
+           attribute value it cannot close, which is the precise property
+           that makes it inert. *)
+        must "hostile return_url" body
+          "href='/c/x&#39;&gt;&lt;svg onload=alert(document.domain)&gt;/t/z'";
+        must "hostile return_url" body "launch-msg__back")
+
+  let msg_page_rejects_foreign_targets =
+    case "msg_page: javascript:, protocol-relative and foreign URLs collapse"
+      (fun () ->
+        let render return_url =
+          Earde.Pages.msg_page ~title:"T" ~message:"M" ~alert_type:"error"
+            ~return_url (req "/")
+        in
+        List.iter
+          (fun (label, hostile) ->
+            let body = render hostile in
+            must_not label body "href='javascript:";
+            must_not label body "href='//evil.example";
+            must_not label body "href='https://evil.example";
+            must_not label body "href='/\\\\evil.example";
+            must label body "href='#'")
+          [ ("javascript:", "javascript:alert(1)");
+            ("protocol-relative", "//evil.example/x");
+            ("backslash variant", "/\\evil.example/x");
+            ("absolute foreign", "https://evil.example/x");
+            ("empty", "");
+            ("bare fragment", "#") ])
+
+  let msg_page_preserves_internal_paths =
+    case "msg_page: ordinary internal back links are unchanged" (fun () ->
+        List.iter
+          (fun path ->
+            let body =
+              Earde.Pages.msg_page ~title:"T" ~message:"M" ~alert_type:"error"
+                ~return_url:path (req "/")
+            in
+            must ("internal " ^ path) body (Printf.sprintf "href='%s'" path))
+          [ "/"; "/c/example"; "/c/example/settings"; "/settings"; "/p/12";
+            "/c/example/t/12-a-thread" ])
+
+  (* --- Fix 3: username escaping and the new signup syntax ---------------- *)
+
+  let js_attr_escaping =
+    case "js_single_quoted_attr: the literal cannot be closed" (fun () ->
+        let esc = Earde.Components.js_single_quoted_attr in
+        (* html_escape alone is NOT enough here: &#39; decodes back to a live
+           apostrophe before JavaScript parses the attribute. The apostrophe
+           must survive as a backslash escape. *)
+        let out = esc "x'); alert(1); ('" in
+        (* After HTML decoding the browser hands JavaScript a BACKSLASHED
+           apostrophe, so the entity is present but never unescaped: every
+           &#39; in the attribute must be preceded by a backslash. *)
+        must "quote" out "\\&#39;";
+        let rec no_bare_quote i =
+          match ps_index_of out "&#39;" i with
+          | None -> ()
+          | Some j ->
+              if j = 0 || out.[j - 1] <> '\\' then
+                Alcotest.fail "an unescaped apostrophe reaches the JS literal"
+              else no_bare_quote (j + 1)
+        in
+        no_bare_quote 0;
+        let markup = esc "</script><svg onload=alert(1)>" in
+        must_not "markup" markup "<svg";
+        must_not "markup" markup "</script";
+        must "markup" markup "\\x3C";
+        (* A backslash must be escaped first, or it would escape our escape. *)
+        Alcotest.(check string) "backslash" "a\\\\b" (esc "a\\b");
+        (* Line terminators are syntax errors inside a literal. *)
+        must "newline" (esc "a\nb") "\\n";
+        must "carriage return" (esc "a\rb") "\\r";
+        must "control byte" (esc "a\x01b") "\\x01";
+        (* An ordinary name passes through untouched. *)
+        Alcotest.(check string) "ordinary" "alice_1-x" (esc "alice_1-x"))
+
+  let username_syntax =
+    case "is_valid_new_username: route-safe ASCII only" (fun () ->
+        let ok = Earde.Handlers.is_valid_new_username in
+        List.iter
+          (fun name ->
+            Alcotest.(check bool) ("accepted: " ^ name) true (ok name))
+          [ "alice"; "Alice"; "alice_1"; "a-b-c"; "ABC123"; "_x"; "x-" ];
+        List.iter
+          (fun name ->
+            Alcotest.(check bool) ("rejected: " ^ String.escaped name) false (ok name))
+          [ ""; "x'><svg onload=alert(1)>"; "a b"; "a\tb"; "a\nb"; "a/b";
+            "a\\b"; "a\"b"; "a'b"; "a<b"; "a>b"; "a&b"; "a?b"; "a#b"; "a%b";
+            "a.b"; "a@b"; "a\x00b"; "a\x7fb"; "ünïcode" ])
+
+  (* The stored-XSS half: an account whose hostile name predates the syntax
+     rule must still render inert on its public, crawlable profile. *)
+  let hostile_username_profile_render =
+    case "user_profile_page: a stored hostile username renders inert" (fun () ->
+        let hostile = "x'><svg onload=alert(1)>" in
+        let render ~is_admin ~viewer =
+          render_with_session ("/u/" ^ hostile) (fun r ->
+              Earde.Pages.user_profile_page ?user:viewer ~is_admin
+                ~is_globally_banned:false ~profile_id:7 ~admin_usernames:[]
+                ~moderated_communities:[] ~active_tab:"posts" [] hostile
+                "2026-01-01 00:00:00" (Some "a bio") None 0 [] [] [] r)
+        in
+        (* Anonymous view: heading and the three tab links. *)
+        let anon = render ~is_admin:false ~viewer:None in
+        (* The launch chrome renders its own <svg> icons, so the assertion is
+           on the PAYLOAD: it must never appear with live syntax, and it must
+           appear escaped in the heading and in all three tab links. *)
+        must_not "anonymous profile" anon "<svg onload";
+        must_not "anonymous profile" anon "x'>";
+        must "anonymous profile" anon
+          "u/x&#39;&gt;&lt;svg onload=alert(1)&gt;";
+        must "anonymous profile" anon
+          "href='/u/x&#39;&gt;&lt;svg onload=alert(1)&gt;?tab=posts'";
+        must "anonymous profile" anon
+          "href='/u/x&#39;&gt;&lt;svg onload=alert(1)&gt;?tab=comments'";
+        must "anonymous profile" anon
+          "href='/u/x&#39;&gt;&lt;svg onload=alert(1)&gt;?tab=communities'";
+        (* Admin view additionally renders the two confirmModal handlers,
+           where html_escape alone would decode back into live JavaScript. *)
+        let admin = render ~is_admin:true ~viewer:(Some "someadmin") in
+        must_not "admin profile" admin "<svg onload";
+        must_not "admin profile" admin "x'>";
+        must "admin profile" admin "confirmModal(event,";
+        (* Inside the onsubmit the apostrophe must be a JS escape, not an
+           HTML entity that decodes back to a live quote. *)
+        must "admin profile" admin "\\&#39;";
+        must "admin profile" admin "\\x3C")
+
+  let ordinary_username_profile_render =
+    case "user_profile_page: ordinary tabs and controls still target the user"
+      (fun () ->
+        let body =
+          render_with_session "/u/alice" (fun r ->
+              Earde.Pages.user_profile_page ~user:"root" ~is_admin:true
+                ~is_globally_banned:false ~profile_id:9 ~admin_usernames:[]
+                ~moderated_communities:[] ~active_tab:"posts" [] "alice"
+                "2026-01-01 00:00:00" None None 0 [] [] [] r)
+        in
+        must "tabs" body "href='/u/alice?tab=posts'";
+        must "tabs" body "href='/u/alice?tab=comments'";
+        must "tabs" body "href='/u/alice?tab=communities'";
+        must "heading" body "u/alice";
+        must "admin control" body "action='/admin/ban/user/9'";
+        must "admin control" body "ban u/alice?")
+
+  (* --- Fix 1: the settings form no longer round-trips the avatar URL ----- *)
+
+  let settings_form_has_no_avatar_input =
+    case "settings_page: no existing_avatar_url field is rendered" (fun () ->
+        let body =
+          render_with_session "/settings" (fun r ->
+              Earde.Pages.settings_page ~user:"alice" (Some "bio")
+                (Some "/static/uploads/earde_1_2.webp") r)
+        in
+        must_not "settings form" body "existing_avatar_url";
+        (* The upload control and the read-only preview both remain. *)
+        must "settings form" body "name='avatar_url'";
+        must "settings form" body "/static/uploads/earde_1_2.webp")
+
+  (* --- Fix 6: production-aware Secure session cookie -------------------- *)
+
+  let cookie_policy_origin_rule =
+    case "session cookie: Secure follows the configured public origin" (fun () ->
+        let p = Earde.Session_cookie_policy.secure_required in
+        Alcotest.(check bool) "https origin" true (p (Some "https://earde.com"));
+        Alcotest.(check bool) "https with path" true (p (Some "https://earde.com/"));
+        Alcotest.(check bool) "http origin" false (p (Some "http://localhost:8080"));
+        Alcotest.(check bool) "unset" false (p None);
+        Alcotest.(check bool) "empty" false (p (Some ""));
+        (* Never derived from a forwarded header, so a client-supplied
+           "https" spelling in some other field cannot matter. *)
+        Alcotest.(check bool) "nonsense" false (p (Some "https-ish")))
+
+  let cookie_policy_attribute =
+    case "session cookie: Secure is appended exactly once" (fun () ->
+        let add = Earde.Session_cookie_policy.add_secure_attribute in
+        let has = Earde.Session_cookie_policy.has_secure_attribute in
+        let plain =
+          "dream.session=abc; Max-Age=1209599; Path=/; HttpOnly; SameSite=Lax"
+        in
+        let secured = add plain in
+        must "adds Secure" secured "; Secure";
+        must "keeps HttpOnly" secured "HttpOnly";
+        must "keeps SameSite" secured "SameSite=Lax";
+        must "keeps Max-Age" secured "Max-Age=1209599";
+        must "keeps the name" secured "dream.session=abc";
+        (* Idempotent, and case-insensitive about an existing attribute. *)
+        Alcotest.(check string) "idempotent" secured (add secured);
+        Alcotest.(check bool) "detects lowercase" true
+          (has "a=b; path=/; secure");
+        (* A cookie whose VALUE merely contains the word is not already
+           secure — the check is anchored to ';'-separated attributes. *)
+        Alcotest.(check bool) "value is not an attribute" false
+          (has "dream.session=secure; Path=/");
+        must "value is not an attribute" (add "dream.session=secure; Path=/")
+          "; Secure")
+
+  (* --- Fix 7: image-upload policy --------------------------------------- *)
+
+  let png_header = "\x89PNG\r\n\x1a\n\x00\x00\x00\x0dIHDR"
+  let jpeg_header = "\xff\xd8\xff\xe0\x00\x10JFIF"
+  let gif_header = "GIF89a\x01\x00\x01\x00"
+  let webp_header = "RIFF\x24\x00\x00\x00WEBPVP8 "
+
+  let upload_format_gate =
+    case "image upload: the format gate reads magic bytes, not labels"
+      (fun () ->
+        let d = Earde.Image_upload.detect_format in
+        Alcotest.(check bool) "png" true (d png_header = Some Earde.Image_upload.Png);
+        Alcotest.(check bool) "jpeg" true (d jpeg_header = Some Earde.Image_upload.Jpeg);
+        Alcotest.(check bool) "gif87a" true (d "GIF87a\x01\x00" = Some Earde.Image_upload.Gif);
+        Alcotest.(check bool) "gif89a" true (d gif_header = Some Earde.Image_upload.Gif);
+        Alcotest.(check bool) "webp" true (d webp_header = Some Earde.Image_upload.Webp);
+        List.iter
+          (fun (label, payload) ->
+            Alcotest.(check bool) ("rejected: " ^ label) true (d payload = None))
+          [ ("empty", "");
+            ("truncated png", "\x89PN");
+            ("truncated webp riff", "RIFFabc");
+            ("riff that is not webp", "RIFF\x24\x00\x00\x00WAVEfmt ");
+            ("svg", "<?xml version=\"1.0\"?><svg xmlns='http://www.w3.org/2000/svg'/>");
+            ("svg no prologue", "<svg onload=alert(1)></svg>");
+            ("imagemagick MSL", "<?xml version=\"1.0\"?><image><read filename=\"x\"/></image>");
+            ("imagemagick MVG", "push graphic-context\nviewbox 0 0 1 1\n");
+            ("pdf", "%PDF-1.7\n");
+            ("postscript", "%!PS-Adobe-3.0\n");
+            ("elf", "\x7fELF\x02\x01\x01");
+            ("shell script", "#!/bin/sh\nrm -rf /\n");
+            ("plain text", "hello");
+            ("html", "<html><body>x</body></html>") ])
+
+  let upload_argv_is_safe =
+    case "image upload: argv pins the coder, the limits and every path"
+      (fun () ->
+        let argv =
+          Earde.Image_upload.convert_argv ~binary:"convert"
+            ~format:Earde.Image_upload.Png ~purpose:Earde.Image_upload.Post_image
+            ~input:"/tmp/earde_1_2.tmp" ~output:"/tmp/earde_1_2.webp"
+        in
+        let l = Array.to_list argv in
+        let joined = String.concat " " l in
+        Alcotest.(check string) "binary is argv0" "convert" (List.nth l 0);
+        (* The input is coder-qualified, so ImageMagick never sniffs it into
+           a delegate coder, and [0] keeps a multi-frame payload from fanning
+           out into a directory of files. *)
+        must "input coder" joined "PNG:/tmp/earde_1_2.tmp[0]";
+        must "output coder" joined "webp:/tmp/earde_1_2.webp";
+        must "metadata stripped" joined "-strip";
+        (* Every limit the brief requires is present. *)
+        List.iter
+          (fun limit -> must "resource limit" joined limit)
+          [ "memory"; "map"; "disk"; "area"; "width"; "height"; "time" ];
+        (* Geometry is a compile-time constant per surface. *)
+        must "resize" joined "1920x1080>";
+        Alcotest.(check string) "avatar geometry" "512x512>"
+          (Earde.Image_upload.resize_geometry Earde.Image_upload.Profile_avatar);
+        Alcotest.(check string) "banner geometry" "1920x480>"
+          (Earde.Image_upload.resize_geometry Earde.Image_upload.Community_banner))
+
+  let upload_argv_neutralises_metacharacters =
+    case "image upload: a metacharacter in a path is one inert argv element"
+      (fun () ->
+        (* The basename is server-minted, so this can only happen through a
+           future change — but the argv form means it stays inert regardless,
+           where the previous shell string depended on quoting. *)
+        let nasty = "/tmp/x; rm -rf ~/`id`$(id) 'q' \"q\".tmp" in
+        let argv =
+          Earde.Image_upload.convert_argv ~binary:"convert"
+            ~format:Earde.Image_upload.Jpeg
+            ~purpose:Earde.Image_upload.Profile_avatar ~input:nasty
+            ~output:"/tmp/out.webp"
+        in
+        let l = Array.to_list argv in
+        (* Exactly one element carries the whole path; nothing is split. *)
+        let carriers =
+          List.filter (fun e -> contains e "rm -rf") l
+        in
+        Alcotest.(check int) "one argv element carries it" 1
+          (List.length carriers);
+        Alcotest.(check string) "carried verbatim, coder-qualified"
+          ("JPEG:" ^ nasty ^ "[0]") (List.hd carriers))
+
+  let upload_messages_are_uniform =
+    case "image upload: refusal messages disclose nothing about the payload"
+      (fun () ->
+        (* One message for every refusal reason, so a payload cannot be used
+           to probe what the pipeline recognises. *)
+        must "message" Earde.Image_upload.rejected_message "JPEG, PNG, GIF, WebP";
+        Alcotest.(check int) "5 MiB cap" (5 * 1024 * 1024)
+          Earde.Image_upload.max_bytes;
+        must "size message" Earde.Image_upload.too_large_message "5 MB")
+
+  (* --- Fix 9: the rate limiter's client identity ------------------------- *)
+
+  let peer_parsing =
+    case "client address: the ephemeral source port never reaches the key"
+      (fun () ->
+        let p = Earde.Client_address.peer_ip in
+        Alcotest.(check (option string)) "ipv4" (Some "127.0.0.1")
+          (p "127.0.0.1:44746");
+        Alcotest.(check (option string)) "ipv4 other port" (Some "127.0.0.1")
+          (p "127.0.0.1:51001");
+        Alcotest.(check (option string)) "public ipv4" (Some "198.51.100.44")
+          (p "198.51.100.44:9");
+        (* Dream renders IPv6 unbracketed, so the split must be at the LAST
+           colon. *)
+        Alcotest.(check (option string)) "ipv6 loopback" (Some "::1")
+          (p "::1:44746");
+        Alcotest.(check (option string)) "ipv6 full" (Some "2001:db8::1")
+          (p "2001:db8::1:0");
+        (* A Unix-socket peer is a path, not an address. *)
+        Alcotest.(check (option string)) "unix socket" None (p "/run/earde.sock");
+        Alcotest.(check (option string)) "garbage" None (p "not-an-address:1"))
+
+  let normalisation_collapses_spellings =
+    case "client address: alternative spellings collapse to one key" (fun () ->
+        let n = Earde.Client_address.normalize_ip in
+        Alcotest.(check (option string)) "ipv6 leading zeros" (Some "::1")
+          (n "::0001");
+        Alcotest.(check (option string)) "ipv6 canonical" (n "::1") (n "0:0:0:0:0:0:0:1");
+        Alcotest.(check (option string)) "malformed" None (n "999.999.999.999");
+        Alcotest.(check (option string)) "empty" None (n "");
+        Alcotest.(check (option string)) "text" None (n "evil"))
+
+  let trusted = [ "127.0.0.1"; "::1" ]
+
+  let forwarded_header_is_ignored_on_direct_connections =
+    case "client address: a direct client cannot nominate its own identity"
+      (fun () ->
+        let key ff =
+          Earde.Client_address.client_ip ~trusted_proxies:trusted
+            ~peer:"198.51.100.44:33001" ~forwarded_for:ff
+        in
+        (* The original bypass: rotate the leftmost X-Forwarded-For value and
+           every request lands in a fresh bucket. From a direct peer the
+           header is now ignored entirely. *)
+        let keys =
+          List.map
+            (fun i -> key (Some (Printf.sprintf "10.0.0.%d" i)))
+            [ 1; 2; 3; 4; 5; 6; 7; 8 ]
+        in
+        List.iter
+          (fun k ->
+            Alcotest.(check string) "one stable bucket" "198.51.100.44" k)
+          keys;
+        Alcotest.(check string) "no header" "198.51.100.44" (key None);
+        Alcotest.(check string) "comma salad" "198.51.100.44"
+          (key (Some "1.1.1.1, 2.2.2.2, 3.3.3.3")))
+
+  let ports_share_one_bucket =
+    case "client address: one IP on many ports is one bucket" (fun () ->
+        let key port =
+          Earde.Client_address.client_ip ~trusted_proxies:trusted
+            ~peer:(Printf.sprintf "203.0.113.7:%d" port) ~forwarded_for:None
+        in
+        List.iter
+          (fun port ->
+            Alcotest.(check string) "stable across ports" "203.0.113.7" (key port))
+          [ 1024; 33001; 44746; 51001; 65535 ])
+
+  let trusted_proxy_uses_rightmost_entry =
+    case "client address: behind a trusted proxy, only its own observation counts"
+      (fun () ->
+        let key ff =
+          Earde.Client_address.client_ip ~trusted_proxies:trusted
+            ~peer:"127.0.0.1:44746" ~forwarded_for:(Some ff)
+        in
+        (* nginx's proxy_add_x_forwarded_for APPENDS what it saw, so the
+           rightmost entry is the trustworthy one and everything left of it
+           is client-supplied noise. *)
+        Alcotest.(check string) "single entry" "198.51.100.44"
+          (key "198.51.100.44");
+        Alcotest.(check string) "client-prepended noise is ignored"
+          "198.51.100.44" (key "10.0.0.1, 198.51.100.44");
+        Alcotest.(check string) "a long forged chain is ignored"
+          "198.51.100.44"
+          (key "1.1.1.1, 2.2.2.2, 3.3.3.3, 4.4.4.4, 198.51.100.44");
+        Alcotest.(check string) "whitespace tolerated" "198.51.100.44"
+          (key "  10.0.0.1 ,   198.51.100.44   ");
+        (* The forged prefix cannot mint buckets: rotating it changes nothing. *)
+        let rotated =
+          List.map (fun i -> key (Printf.sprintf "10.0.0.%d, 198.51.100.44" i))
+            [ 1; 2; 3; 4; 5 ]
+        in
+        List.iter
+          (fun k -> Alcotest.(check string) "rotation is inert" "198.51.100.44" k)
+          rotated)
+
+  let malformed_forwarded_fails_safe =
+    case "client address: a malformed forwarded header falls back, never bypasses"
+      (fun () ->
+        let key ff =
+          Earde.Client_address.client_ip ~trusted_proxies:trusted
+            ~peer:"127.0.0.1:44746" ~forwarded_for:(Some ff)
+        in
+        (* Falling back to the proxy's own address gives ONE shared bucket:
+           over-limiting, never a bypass. And rotating garbage cannot make
+           more than that one bucket. *)
+        List.iter
+          (fun ff -> Alcotest.(check string) ("falls back: " ^ ff) "127.0.0.1" (key ff))
+          [ ""; ","; "not-an-ip"; "evil, worse"; "999.999.999.999";
+            "<script>"; "10.0.0.1.5"; "unknown" ];
+        (* A malformed tail with a valid entry to its left still refuses the
+           left value: only the proxy's own appended entry is trusted, and it
+           is unusable here. *)
+        Alcotest.(check string) "valid-left, garbage-right" "127.0.0.1"
+          (key "198.51.100.44, garbage"))
+
+  let distinct_clients_stay_distinct =
+    case "client address: different real clients keep different buckets"
+      (fun () ->
+        let via_proxy ip =
+          Earde.Client_address.client_ip ~trusted_proxies:trusted
+            ~peer:"127.0.0.1:1" ~forwarded_for:(Some ip)
+        in
+        let a = via_proxy "198.51.100.1" and b = via_proxy "198.51.100.2" in
+        Alcotest.(check bool) "distinct" true (a <> b);
+        Alcotest.(check string) "a" "198.51.100.1" a;
+        Alcotest.(check string) "b" "198.51.100.2" b;
+        (* IPv6 clients work the same way. *)
+        Alcotest.(check string) "ipv6 client" "2001:db8::5"
+          (via_proxy "2001:db8::5"))
+
+  let unparseable_peer_is_one_shared_bucket =
+    case "client address: an unparseable peer shares one constant bucket"
+      (fun () ->
+        let key peer =
+          Earde.Client_address.client_ip ~trusted_proxies:trusted ~peer
+            ~forwarded_for:(Some "1.2.3.4")
+        in
+        Alcotest.(check string) "unix socket" Earde.Client_address.fallback_key
+          (key "/run/earde.sock");
+        Alcotest.(check string) "garbage" Earde.Client_address.fallback_key
+          (key "???"))
+
+  let empty_trusted_set_trusts_nothing =
+    case "client address: an empty trusted set ignores every forwarded header"
+      (fun () ->
+        Alcotest.(check string) "loopback peer, no trust" "127.0.0.1"
+          (Earde.Client_address.client_ip ~trusted_proxies:[]
+             ~peer:"127.0.0.1:44746" ~forwarded_for:(Some "198.51.100.44"));
+        Alcotest.(check bool) "loopback is the default trusted set" true
+          (Earde.Client_address.default_trusted_proxies
+           = [ "127.0.0.1"; "::1" ]))
+
+  let escaping_suite =
+    [ msg_page_hostile_return_url; msg_page_rejects_foreign_targets;
+      msg_page_preserves_internal_paths; js_attr_escaping; username_syntax;
+      hostile_username_profile_render; ordinary_username_profile_render;
+      settings_form_has_no_avatar_input ]
+
+  let cookie_suite = [ cookie_policy_origin_rule; cookie_policy_attribute ]
+
+  let upload_suite =
+    [ upload_format_gate; upload_argv_is_safe;
+      upload_argv_neutralises_metacharacters; upload_messages_are_uniform ]
+
+  let client_address_suite =
+    [ peer_parsing; normalisation_collapses_spellings;
+      forwarded_header_is_ignored_on_direct_connections; ports_share_one_bucket;
+      trusted_proxy_uses_rightmost_entry; malformed_forwarded_fails_safe;
+      distinct_clients_stay_distinct; unparseable_peer_is_one_shared_bucket;
+      empty_trusted_set_trusts_nothing ]
+end
+
+(* === PRE-LAUNCH SECURITY FIXES: the database-backed half ===
+
+   Each case reproduces the ORIGINAL attack against the real handlers over
+   the real routed pipeline, so a regression fails here rather than merely
+   changing a rendered string. Same EARDE_TEST_DATABASE_URL opt-in gate as
+   every other DB-backed suite; without it nothing here touches a database.
+
+   Sessions are Dream.sql_sessions rather than memory_sessions, because the
+   account-deletion case needs the durable dream_session rows the production
+   deployment actually stores. *)
+module Sec_db = struct
+  let ( let* ) = Lwt.bind
+
+  open Caqti_request.Infix
+
+  let contains haystack needle = Sec_pure.contains haystack needle
+
+  let q_cleanup =
+    List.map
+      (fun sql -> (Caqti_type.unit ->. Caqti_type.unit) sql)
+      [ "DELETE FROM notifications WHERE user_id IN (SELECT id FROM users WHERE username LIKE 'sec\\_%')"
+      ; "DELETE FROM comments WHERE user_id IN (SELECT id FROM users WHERE username LIKE 'sec\\_%')"
+      ; "DELETE FROM comments WHERE post_id IN (SELECT id FROM posts WHERE title LIKE 'sec %')"
+      ; "DELETE FROM post_votes WHERE user_id IN (SELECT id FROM users WHERE username LIKE 'sec\\_%')"
+      ; "DELETE FROM comment_votes WHERE user_id IN (SELECT id FROM users WHERE username LIKE 'sec\\_%')"
+      ; "DELETE FROM posts WHERE title LIKE 'sec %'"
+      ; "DELETE FROM community_user_stats WHERE community_id IN (SELECT id FROM communities WHERE slug LIKE 'sec-%')"
+      ; "DELETE FROM community_members WHERE community_id IN (SELECT id FROM communities WHERE slug LIKE 'sec-%')"
+      ; "DELETE FROM community_moderators WHERE community_id IN (SELECT id FROM communities WHERE slug LIKE 'sec-%')"
+      ; "DELETE FROM community_bans WHERE community_id IN (SELECT id FROM communities WHERE slug LIKE 'sec-%')"
+      ; "DELETE FROM community_sections WHERE community_id IN (SELECT id FROM communities WHERE slug LIKE 'sec-%')"
+      ; "DELETE FROM channels WHERE community_id IN (SELECT id FROM communities WHERE slug LIKE 'sec-%')"
+      ; "DELETE FROM posthog_group_cleanup_jobs WHERE group_key IN (SELECT 'community:' || c.id::text FROM communities c WHERE c.slug LIKE 'sec-%')"
+      ; "DELETE FROM communities WHERE slug LIKE 'sec-%'"
+      ; "DELETE FROM posthog_person_deletion_jobs WHERE distinct_id IN (SELECT 'user:' || id::text FROM users WHERE username LIKE 'sec\\_%' OR username LIKE '[deleted\\_%')"
+      ; "DELETE FROM rate_limits WHERE ip_address LIKE 'sec-%'"
+      ; "DELETE FROM dream_session WHERE payload LIKE '%sec\\_%'"
+      ; "DELETE FROM users WHERE username LIKE 'sec\\_%'"
+      ]
+
+  let or_fail label = function
+    | Ok v -> Lwt.return v
+    | Error e -> Alcotest.failf "%s: %s" label (Caqti_error.show e)
+
+  let or_fail_s label = function
+    | Ok v -> Lwt.return v
+    | Error e -> Alcotest.failf "%s: %s" label e
+
+  (* The uploads directory the handlers write to is resolved relative to the
+     process CWD, which under dune is the test's own build directory — never
+     the repository's static/uploads. *)
+  let uploads_dir = "static/uploads"
+
+  let ensure_uploads_dir () =
+    let rec mk path =
+      if not (Sys.file_exists path) then begin
+        mk (Filename.dirname path);
+        try Unix.mkdir path 0o755 with Unix.Unix_error (Unix.EEXIST, _, _) -> ()
+      end
+    in
+    mk uploads_dir
+
+  let uploads_listing () =
+    if Sys.file_exists uploads_dir then
+      Array.to_list (Sys.readdir uploads_dir) |> List.sort String.compare
+    else []
+
+  let db_case name f =
+    Alcotest.test_case name `Quick (fun () ->
+        match Sys.getenv_opt "EARDE_TEST_DATABASE_URL" with
+        | None | Some "" -> Alcotest.skip ()
+        | Some url ->
+            Lwt_main.run
+              (let* conn = Caqti_lwt_unix.connect (Uri.of_string url) in
+               let* conn = or_fail "connect" conn in
+               let (module C : Caqti_lwt.CONNECTION) = conn in
+               let cleanup () =
+                 Lwt_list.iter_s
+                   (fun q ->
+                     let* r = C.exec q () in
+                     let* _ = or_fail "cleanup" r in
+                     Lwt.return_unit)
+                   q_cleanup
+               in
+               ensure_uploads_dir ();
+               let* () = cleanup () in
+               Lwt.finalize
+                 (fun () -> f ~url conn (module C : Caqti_lwt.CONNECTION))
+                 (fun () ->
+                   Lwt.finalize cleanup (fun () -> C.disconnect ()))))
+
+  (* === fixtures === *)
+
+  let q_user =
+    (Caqti_type.string ->! Caqti_type.int)
+    "INSERT INTO users (username, email, password_hash, is_email_verified)
+     VALUES ($1, $1 || '@sec.invalid', 'x', TRUE) RETURNING id"
+
+  let q_community =
+    (Caqti_type.(t2 string string) ->! Caqti_type.int)
+    "INSERT INTO communities (slug, name, visibility) VALUES ($1, $1, $2)
+     RETURNING id"
+
+  let q_member =
+    (Caqti_type.(t2 int int) ->. Caqti_type.unit)
+    "INSERT INTO community_members (user_id, community_id) VALUES ($1, $2)
+     ON CONFLICT DO NOTHING"
+
+  let q_moderator =
+    (Caqti_type.(t2 int int) ->. Caqti_type.unit)
+    "INSERT INTO community_moderators (user_id, community_id) VALUES ($1, $2)
+     ON CONFLICT DO NOTHING"
+
+  let q_post =
+    (Caqti_type.(t3 string int int) ->! Caqti_type.int)
+    "INSERT INTO posts (title, content, community_id, user_id)
+     VALUES ($1, 'sec body', $2, $3) RETURNING id"
+
+  let q_comment =
+    (Caqti_type.(t3 string int int) ->! Caqti_type.int)
+    "INSERT INTO comments (content, post_id, user_id) VALUES ($1, $2, $3)
+     RETURNING id"
+
+  let q_set_avatar =
+    (Caqti_type.(t2 (option string) int) ->. Caqti_type.unit)
+    "UPDATE users SET avatar_url = $1 WHERE id = $2"
+
+  let q_avatar =
+    (Caqti_type.int ->? Caqti_type.(option string))
+    "SELECT avatar_url FROM users WHERE id = $1"
+
+  let q_username = (Caqti_type.int ->? Caqti_type.string)
+    "SELECT username FROM users WHERE id = $1"
+
+  let q_count_comments_on_post =
+    (Caqti_type.int ->! Caqti_type.int)
+    "SELECT COUNT(*)::int FROM comments WHERE post_id = $1"
+
+  let q_count_notifs =
+    (Caqti_type.int ->! Caqti_type.int)
+    "SELECT COUNT(*)::int FROM notifications WHERE user_id = $1"
+
+  let q_count_sessions =
+    (Caqti_type.string ->! Caqti_type.int)
+    "SELECT COUNT(*)::int FROM dream_session
+      WHERE payload::jsonb ->> 'user_id' = $1"
+
+  let q_local_comment_count =
+    (Caqti_type.(t2 int int) ->? Caqti_type.int)
+    "SELECT local_comment_count FROM community_user_stats
+      WHERE user_id = $1 AND community_id = $2"
+
+  let avatar_url_of name = "/static/uploads/" ^ name
+
+  let make_upload_file name =
+    let path = Filename.concat uploads_dir name in
+    let oc = open_out_bin path in
+    output_string oc "not really a webp, but a real file";
+    close_out oc;
+    path
+
+  (* A genuine 1x1 PNG — the pipeline must be able to decode it, so it cannot
+     be a placeholder. *)
+  let real_png =
+    "\x89\x50\x4e\x47\x0d\x0a\x1a\x0a\x00\x00\x00\x0d\x49\x48\x44\x52\x00\x00\
+     \x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\
+     \x0d\x49\x44\x41\x54\x78\xda\x63\x64\x60\xf8\x5f\x0f\x00\x02\x87\x01\x80\
+     \xeb\x47\xba\x92\x00\x00\x00\x00\x49\x45\x4e\x44\xae\x42\x60\x82"
+
+  (* === the pipeline === *)
+
+  let sec_secret = "sec-test-secret-value"
+  let shared_pipeline = ref None
+
+  (* Set by the /session route: which identity the NEXT minted session gets. *)
+  let next_identity = ref (None : int option)
+
+  let pipeline_for ~url =
+    match !shared_pipeline with
+    | Some p -> p
+    | None ->
+        let p =
+          Dream.sql_pool ~size:4 url @@ Dream.set_secret sec_secret
+          (* Real SQL sessions: the account-deletion case asserts on the
+             durable dream_session rows, which memory_sessions does not
+             create. *)
+          @@ Dream.sql_sessions
+          @@ Dream.router
+               [ (* Mints a session for the requested identity and hands back
+                    a CSRF token minted inside it. Stands in for POST /login
+                    without needing argon2 in the test path; the session it
+                    creates is the same durable row a real login creates. *)
+                 Dream.get "/session" (fun req ->
+                     let* () =
+                       match !next_identity with
+                       | None -> Lwt.return_unit
+                       | Some uid ->
+                           let* () =
+                             Dream.set_session_field req "user_id"
+                               (string_of_int uid)
+                           in
+                           let* name =
+                             Lwt.return
+                               (Option.value
+                                  (Dream.session_field req "username")
+                                  ~default:"")
+                           in
+                           ignore name;
+                           Lwt.return_unit
+                     in
+                     Dream.respond (Dream.csrf_token req));
+                 Dream.get "/whoami" (fun req ->
+                     match Dream.session_field req "user_id" with
+                     | Some uid -> Dream.respond ("uid:" ^ uid)
+                     | None -> Dream.respond ~status:`Unauthorized "anon");
+                 Dream.get "/token" (fun req ->
+                     Dream.respond (Dream.csrf_token req));
+                 Dream.get "/settings" Earde.Handlers.settings_page_handler;
+                 Dream.post "/settings" Earde.Handlers.update_profile_handler;
+                 Dream.post "/delete-account"
+                   Earde.Handlers.delete_account_handler;
+                 Dream.post "/comments" Earde.Handlers.create_comment_handler;
+                 Dream.post "/posts" Earde.Handlers.create_post_handler;
+                 Dream.post "/update-community"
+                   Earde.Handlers.update_community_handler
+                 (* No /add-mod and no /remove-mod: their absence from this
+                    router mirrors bin/main.ml, and the legacy-route case
+                    asserts the real app answers 404 for them. *)
+               ]
+        in
+        shared_pipeline := Some p;
+        p
+
+  let session_cookie label response =
+    match
+      List.find_opt
+        (fun v -> contains v "dream.session")
+        (Dream.headers response "Set-Cookie")
+    with
+    | None -> Alcotest.fail (label ^ ": no session cookie")
+    | Some v -> (
+        match String.index_opt v ';' with
+        | Some i -> String.sub v 0 i
+        | None -> v)
+
+  (* One live session for [uid], plus a CSRF token minted inside it. *)
+  let login ~url uid =
+    next_identity := Some uid;
+    let p = pipeline_for ~url in
+    let* response = p (Dream.request ~method_:`GET ~target:"/session" "") in
+    let cookie = session_cookie "session" response in
+    let* token = Dream.body response in
+    next_identity := None;
+    Lwt.return (cookie, token)
+
+  (* A fresh CSRF token inside an EXISTING session. *)
+  let token_in ~url ~cookie =
+    let p = pipeline_for ~url in
+    let* response =
+      p
+        (Dream.request ~method_:`GET ~target:"/token"
+           ~headers:[ ("Cookie", cookie) ] "")
+    in
+    Dream.body response
+
+  let form_body fields =
+    String.concat "&"
+      (List.map
+         (fun (k, v) ->
+           Dream.to_percent_encoded k ^ "=" ^ Dream.to_percent_encoded v)
+         fields)
+
+  let boundary = "secboundary"
+
+  let multipart_body fields =
+    String.concat ""
+      (List.map
+         (fun (k, v) ->
+           Printf.sprintf
+             "--%s\r\nContent-Disposition: form-data; name=\"%s\"\r\n\r\n%s\r\n"
+             boundary k v)
+         fields)
+    ^ Printf.sprintf "--%s--\r\n" boundary
+
+  (* A file part, so the handler's multipart parse yields real upload bytes. *)
+  let multipart_body_with_file ~file_field ~filename ~bytes fields =
+    String.concat ""
+      (List.map
+         (fun (k, v) ->
+           Printf.sprintf
+             "--%s\r\nContent-Disposition: form-data; name=\"%s\"\r\n\r\n%s\r\n"
+             boundary k v)
+         fields)
+    ^ Printf.sprintf
+        "--%s\r\nContent-Disposition: form-data; name=\"%s\"; \
+         filename=\"%s\"\r\nContent-Type: image/png\r\n\r\n%s\r\n"
+        boundary file_field filename bytes
+    ^ Printf.sprintf "--%s--\r\n" boundary
+
+  let do_get ~url ~cookie ~target =
+    let p = pipeline_for ~url in
+    let* response =
+      p
+        (Dream.request ~method_:`GET ~target
+           ~headers:[ ("Cookie", cookie) ]
+           "")
+    in
+    let* body = Dream.body response in
+    Lwt.return (Dream.status_to_int (Dream.status response), response, body)
+
+  let do_post ~url ~cookie ~target ~token ?(multipart = false) ?file fields =
+    let p = pipeline_for ~url in
+    let all = ("dream.csrf", token) :: fields in
+    let body =
+      match file with
+      | Some (file_field, filename, bytes) ->
+          multipart_body_with_file ~file_field ~filename ~bytes all
+      | None -> if multipart then multipart_body all else form_body all
+    in
+    let headers =
+      [ ( "Content-Type",
+          if multipart || file <> None then
+            "multipart/form-data; boundary=" ^ boundary
+          else "application/x-www-form-urlencoded" );
+        ("Cookie", cookie)
+      ]
+    in
+    let request = Dream.request ~method_:`POST ~target ~headers "" in
+    Dream.set_body request body;
+    let* response = p request in
+    let* rbody = Dream.body response in
+    Lwt.return (Dream.status_to_int (Dream.status response), response, rbody)
+
+  (* ------------------------------------------------------------------ *)
+  (* Fix 1 — arbitrary cross-user media deletion                         *)
+  (* ------------------------------------------------------------------ *)
+
+  (* The original P0, end to end: the attacker points their own avatar_url at
+     the victim's upload through the hidden existing_avatar_url field, then
+     deletes their own account so the deletion-side cleanup unlinks the
+     victim's file. *)
+  let avatar_theft_case =
+    db_case
+      "cross-user media deletion: existing_avatar_url is ignored and the \
+       victim's file survives the attacker's account deletion"
+      (fun ~url _conn c ->
+        let (module C : Caqti_lwt.CONNECTION) = c in
+        let* victim = C.find q_user "sec_victim" in
+        let* victim = or_fail "victim" victim in
+        let* attacker = C.find q_user "sec_attacker" in
+        let* attacker = or_fail "attacker" attacker in
+        let victim_file = "earde_1753000000123_004217.webp" in
+        let victim_path = make_upload_file victim_file in
+        let* r =
+          C.exec q_set_avatar (Some (avatar_url_of victim_file), victim)
+        in
+        let* () = or_fail "set victim avatar" r in
+        (* The attacker starts with an avatar of their own, so the assertion
+           below distinguishes "kept mine" from "took nothing". *)
+        let attacker_file = "earde_1753000000999_000001.webp" in
+        let attacker_path = make_upload_file attacker_file in
+        let* r =
+          C.exec q_set_avatar (Some (avatar_url_of attacker_file), attacker)
+        in
+        let* () = or_fail "set attacker avatar" r in
+        Alcotest.(check bool) "victim file exists before" true
+          (Sys.file_exists victim_path);
+
+        let* cookie, token = login ~url attacker in
+        (* Exactly the exploit request: no file part, and the victim's URL in
+           the field the form used to round-trip. *)
+        let* status, _, _ =
+          do_post ~url ~cookie ~target:"/settings" ~token ~multipart:true
+            [ ("bio", "sec bio");
+              ("existing_avatar_url", avatar_url_of victim_file);
+              ("avatar_url", "")
+            ]
+        in
+        Alcotest.(check int) "profile update accepted" 303 status;
+
+        let* stored = C.find_opt q_avatar attacker in
+        let* stored = or_fail "attacker avatar" stored in
+        Alcotest.(check (option (option string)))
+          "attacker keeps their OWN avatar, never the victim's"
+          (Some (Some (avatar_url_of attacker_file)))
+          stored;
+
+        (* And the deletion-side cleanup therefore touches only the
+           attacker's own file. *)
+        let* token = token_in ~url ~cookie in
+        let* status, _, _ =
+          do_post ~url ~cookie ~target:"/delete-account" ~token []
+        in
+        Alcotest.(check int) "account deleted" 303 status;
+        Alcotest.(check bool) "VICTIM FILE SURVIVES" true
+          (Sys.file_exists victim_path);
+        Alcotest.(check bool) "attacker's own file is cleaned up" false
+          (Sys.file_exists attacker_path);
+        (* The victim's row is untouched. *)
+        let* still = C.find_opt q_avatar victim in
+        let* still = or_fail "victim avatar" still in
+        Alcotest.(check (option (option string)))
+          "victim avatar unchanged"
+          (Some (Some (avatar_url_of victim_file)))
+          still;
+        Lwt.return_unit)
+
+  (* The legitimate behaviour the removed field used to provide: saving the
+     profile without choosing a new file must keep the current avatar. *)
+  let avatar_preserved_case =
+    db_case
+      "profile update with no new upload preserves the caller's real current \
+       avatar"
+      (fun ~url _conn c ->
+        let (module C : Caqti_lwt.CONNECTION) = c in
+        let* uid = C.find q_user "sec_keeper" in
+        let* uid = or_fail "user" uid in
+        let mine = "earde_1753000111222_000042.webp" in
+        let _ = make_upload_file mine in
+        let* r = C.exec q_set_avatar (Some (avatar_url_of mine), uid) in
+        let* () = or_fail "set avatar" r in
+        let* cookie, token = login ~url uid in
+        (* No file part and no existing_avatar_url at all — the browser now
+           sends neither. *)
+        let* status, _, _ =
+          do_post ~url ~cookie ~target:"/settings" ~token ~multipart:true
+            [ ("bio", "sec updated bio"); ("avatar_url", "") ]
+        in
+        Alcotest.(check int) "accepted" 303 status;
+        let* stored = C.find_opt q_avatar uid in
+        let* stored = or_fail "avatar" stored in
+        Alcotest.(check (option (option string)))
+          "avatar preserved"
+          (Some (Some (avatar_url_of mine)))
+          stored;
+        Lwt.return_unit)
+
+  (* ------------------------------------------------------------------ *)
+  (* Fix 4 — account deletion revokes every session                      *)
+  (* ------------------------------------------------------------------ *)
+
+  let session_revocation_case =
+    db_case
+      "account deletion: a second live session stops authenticating and \
+       writes nothing"
+      (fun ~url _conn c ->
+        let (module C : Caqti_lwt.CONNECTION) = c in
+        let* uid = C.find q_user "sec_twosession" in
+        let* uid = or_fail "user" uid in
+        let* other = C.find q_user "sec_bystander" in
+        let* other = or_fail "bystander" other in
+        let* community = C.find q_community ("sec-two", "public") in
+        let* community = or_fail "community" community in
+        let* r = C.exec q_member (uid, community) in
+        let* () = or_fail "member" r in
+        let* post = C.find q_post ("sec twosession post", community, uid) in
+        let* post = or_fail "post" post in
+
+        (* Two independent browsers for one account. *)
+        let* cookie_a, token_a = login ~url uid in
+        let* cookie_b, _ = login ~url uid in
+        Alcotest.(check bool) "two distinct sessions" true (cookie_a <> cookie_b);
+        (* A bystander's session must survive all of this. *)
+        let* cookie_c, _ = login ~url other in
+
+        let* n = C.find q_count_sessions (string_of_int uid) in
+        let* n = or_fail "session count" n in
+        Alcotest.(check int) "both sessions are durable rows" 2 n;
+
+        let* status, _, _ = do_get ~url ~cookie:cookie_b ~target:"/whoami" in
+        Alcotest.(check int) "session B authenticates before deletion" 200 status;
+
+        let* status, _, _ =
+          do_post ~url ~cookie:cookie_a ~target:"/delete-account" ~token:token_a []
+        in
+        Alcotest.(check int) "deleted through session A" 303 status;
+
+        let* n = C.find q_count_sessions (string_of_int uid) in
+        let* n = or_fail "session count after" n in
+        Alcotest.(check int) "no session row survives for that user" 0 n;
+
+        (* Session B is now anonymous on a read... *)
+        let* status, _, _ = do_get ~url ~cookie:cookie_b ~target:"/whoami" in
+        Alcotest.(check int) "session B is logged out" 401 status;
+        let* status, _, body = do_get ~url ~cookie:cookie_b ~target:"/settings" in
+        Alcotest.(check bool) "settings sends B to login" true
+          (status = 302 || status = 303 || contains body "login");
+
+        (* ...and writes nothing. The token must be minted inside B, which
+           now means an anonymous session — exactly what an attacker holding
+           the old cookie would have. *)
+        let before = C.find q_count_comments_on_post post in
+        let* before = before in
+        let* before = or_fail "comments before" before in
+        let* token_b = token_in ~url ~cookie:cookie_b in
+        let* _ =
+          do_post ~url ~cookie:cookie_b ~target:"/comments" ~token:token_b
+            [ ("content", "sec after-delete comment");
+              ("post_id", string_of_int post)
+            ]
+        in
+        let* after = C.find q_count_comments_on_post post in
+        let* after = or_fail "comments after" after in
+        Alcotest.(check int) "no comment was written" before after;
+
+        (* The bystander is untouched. *)
+        let* status, _, _ = do_get ~url ~cookie:cookie_c ~target:"/whoami" in
+        Alcotest.(check int) "another user's session is unaffected" 200 status;
+        let* n = C.find q_count_sessions (string_of_int other) in
+        let* n = or_fail "bystander sessions" n in
+        Alcotest.(check int) "bystander session row survives" 1 n;
+
+        (* The account really was deleted, not merely logged out. *)
+        let* name = C.find_opt q_username uid in
+        let* name = or_fail "username" name in
+        Alcotest.(check bool) "account anonymized" true
+          (match name with Some n -> contains n "[deleted_" | None -> false);
+        Lwt.return_unit)
+
+  let password_reset_revocation_case =
+    db_case "password reset revokes the user's other sessions" (fun ~url _conn c ->
+        let (module C : Caqti_lwt.CONNECTION) = c in
+        let* uid = C.find q_user "sec_resetter" in
+        let* uid = or_fail "user" uid in
+        let* other = C.find q_user "sec_reset_bystander" in
+        let* other = or_fail "bystander" other in
+        let* _ = login ~url uid in
+        let* _ = login ~url uid in
+        let* cookie_c, _ = login ~url other in
+        let* n = C.find q_count_sessions (string_of_int uid) in
+        let* n = or_fail "before" n in
+        Alcotest.(check int) "two sessions before the reset" 2 n;
+
+        let token = "sec-reset-token-value" in
+        let* created =
+          Earde.Db.password_reset_create_token c
+            ("sec_resetter@sec.invalid") token
+        in
+        let* created = or_fail_s "create token" created in
+        Alcotest.(check bool) "token created" true created;
+        let* ok = Earde.Db.password_reset_atomically c token "sec-new-hash" in
+        let* ok = or_fail_s "reset" ok in
+        Alcotest.(check bool) "reset applied" true ok;
+
+        let* n = C.find q_count_sessions (string_of_int uid) in
+        let* n = or_fail "after" n in
+        Alcotest.(check int) "every session of that user is gone" 0 n;
+        let* status, _, _ = do_get ~url ~cookie:cookie_c ~target:"/whoami" in
+        Alcotest.(check int) "another user's session is unaffected" 200 status;
+        Lwt.return_unit)
+
+  (* ------------------------------------------------------------------ *)
+  (* Fix 5 — parent comments are bound to the canonical post             *)
+  (* ------------------------------------------------------------------ *)
+
+  let parent_binding_case =
+    db_case
+      "comment parent binding: same-post accepted; cross-post, \
+       cross-community, private and nonexistent parents refused"
+      (fun ~url:_ _conn c ->
+        let (module C : Caqti_lwt.CONNECTION) = c in
+        let* author = C.find q_user "sec_pauthor" in
+        let* author = or_fail "author" author in
+        let* alpha = C.find q_community ("sec-alpha", "public") in
+        let* alpha = or_fail "alpha" alpha in
+        let* beta = C.find q_community ("sec-beta", "public") in
+        let* beta = or_fail "beta" beta in
+        let* secret = C.find q_community ("sec-secret", "private") in
+        let* secret = or_fail "secret" secret in
+        let* post_a = C.find q_post ("sec alpha post", alpha, author) in
+        let* post_a = or_fail "post a" post_a in
+        (* A SECOND post in the SAME community: a cross-post parent must be
+           refused even when no community boundary is crossed. *)
+        let* post_a2 = C.find q_post ("sec alpha post two", alpha, author) in
+        let* post_a2 = or_fail "post a2" post_a2 in
+        let* post_b = C.find q_post ("sec beta post", beta, author) in
+        let* post_b = or_fail "post b" post_b in
+        let* post_s = C.find q_post ("sec secret post", secret, author) in
+        let* post_s = or_fail "post s" post_s in
+        let* parent_a = C.find q_comment ("sec parent a", post_a, author) in
+        let* parent_a = or_fail "parent a" parent_a in
+        let* parent_a2 = C.find q_comment ("sec parent a2", post_a2, author) in
+        let* parent_a2 = or_fail "parent a2" parent_a2 in
+        let* parent_b = C.find q_comment ("sec parent b", post_b, author) in
+        let* parent_b = or_fail "parent b" parent_b in
+        let* parent_s = C.find q_comment ("sec parent s", post_s, author) in
+        let* parent_s = or_fail "parent s" parent_s in
+
+        let create ?parent label =
+          let* r =
+            Earde.Db.create_comment c ("sec reply " ^ label) post_a author
+              parent
+          in
+          or_fail_s ("create " ^ label) r
+        in
+        let create_none label = create label in
+        ignore create_none;
+        let refused label = function
+          | `Invalid_parent -> Lwt.return_unit
+          | `Created id ->
+              Alcotest.failf "%s: accepted, wrote comment %d" label id
+        in
+        let created label = function
+          | `Created _ -> Lwt.return_unit
+          | `Invalid_parent -> Alcotest.failf "%s: refused" label
+        in
+
+        let* r = create "toplevel" in
+        let* () = created "no parent" r in
+        let* r = create ~parent:parent_a "same-post" in
+        let* () = created "same-post parent" r in
+        let* r = create ~parent:parent_a2 "cross-post" in
+        let* () = refused "cross-post parent (same community)" r in
+        let* r = create ~parent:parent_b "cross-community" in
+        let* () = refused "cross-community parent" r in
+        let* r = create ~parent:parent_s "private" in
+        let* () = refused "private-community parent" r in
+        let* r = create ~parent:2147483000 "nonexistent" in
+        let* () = refused "nonexistent parent" r in
+        Lwt.return_unit)
+
+  (* The handler half: the refusal must land BEFORE every side effect, so a
+     rejected reply leaves no comment, no notification, and no counter. *)
+  let parent_binding_no_side_effects_case =
+    db_case
+      "a refused cross-community reply writes no comment, no notification \
+       and no counter"
+      (fun ~url _conn c ->
+        let (module C : Caqti_lwt.CONNECTION) = c in
+        let* mallory = C.find q_user "sec_mallory" in
+        let* mallory = or_fail "mallory" mallory in
+        let* carol = C.find q_user "sec_carol" in
+        let* carol = or_fail "carol" carol in
+        let* alpha = C.find q_community ("sec-h-alpha", "public") in
+        let* alpha = or_fail "alpha" alpha in
+        let* secret = C.find q_community ("sec-h-secret", "private") in
+        let* secret = or_fail "secret" secret in
+        let* r = C.exec q_member (mallory, alpha) in
+        let* () = or_fail "member" r in
+        let* r = C.exec q_member (carol, secret) in
+        let* () = or_fail "carol member" r in
+        let* post_a = C.find q_post ("sec h alpha post", alpha, mallory) in
+        let* post_a = or_fail "post a" post_a in
+        let* post_s = C.find q_post ("sec h secret post", secret, carol) in
+        let* post_s = or_fail "post s" post_s in
+        (* Carol's comment inside the private community Mallory cannot see. *)
+        let* carol_comment =
+          C.find q_comment ("sec h carol secret", post_s, carol)
+        in
+        let* carol_comment = or_fail "carol comment" carol_comment in
+
+        let* comments_before = C.find q_count_comments_on_post post_a in
+        let* comments_before = or_fail "before" comments_before in
+        let* notifs_before = C.find q_count_notifs carol in
+        let* notifs_before = or_fail "notifs before" notifs_before in
+
+        let* cookie, token = login ~url mallory in
+        let* status, _, body =
+          do_post ~url ~cookie ~target:"/comments" ~token
+            [ ("content", "sec h injected reply");
+              ("post_id", string_of_int post_a);
+              ("parent_id", string_of_int carol_comment)
+            ]
+        in
+        Alcotest.(check int) "refused as a client error" 400 status;
+        (* The refusal must not disclose the parent, its post, or its
+           community — it is the anti-oracle property that keeps this from
+           becoming a private-content probe. *)
+        List.iter
+          (fun needle ->
+            Alcotest.(check bool)
+              ("response does not leak " ^ needle)
+              false (contains body needle))
+          [ "sec-h-secret"; "sec h secret post"; "sec h carol secret";
+            "comments_parent_id_fkey"; "constraint"; "Database error";
+            "INSERT"; "Caqti"; string_of_int carol_comment ];
+
+        let* comments_after = C.find q_count_comments_on_post post_a in
+        let* comments_after = or_fail "after" comments_after in
+        Alcotest.(check int) "no comment row" comments_before comments_after;
+        let* notifs_after = C.find q_count_notifs carol in
+        let* notifs_after = or_fail "notifs after" notifs_after in
+        Alcotest.(check int) "no notification for the foreign parent's owner"
+          notifs_before notifs_after;
+        let* stats = C.find_opt q_local_comment_count (mallory, alpha) in
+        let* stats = or_fail "stats" stats in
+        Alcotest.(check bool) "no local comment counter" true
+          (match stats with None -> true | Some n -> n = 0);
+
+        (* The same request WITHOUT the forged parent still works, so the
+           gate is the parent and nothing else. *)
+        let* token = token_in ~url ~cookie in
+        let* status, _, _ =
+          do_post ~url ~cookie ~target:"/comments" ~token
+            [ ("content", "sec h ordinary reply");
+              ("post_id", string_of_int post_a)
+            ]
+        in
+        Alcotest.(check int) "an ordinary comment still succeeds" 303 status;
+        let* final = C.find q_count_comments_on_post post_a in
+        let* final = or_fail "final" final in
+        Alcotest.(check int) "exactly one comment was written"
+          (comments_before + 1) final;
+        Lwt.return_unit)
+
+  (* ------------------------------------------------------------------ *)
+  (* Fix 7 — image uploads                                               *)
+  (* ------------------------------------------------------------------ *)
+
+  let upload_authorization_ordering_case =
+    db_case
+      "unauthorized upload: a non-member's post attempt runs no conversion \
+       and stores no file"
+      (fun ~url _conn c ->
+        let (module C : Caqti_lwt.CONNECTION) = c in
+        let* outsider = C.find q_user "sec_outsider" in
+        let* outsider = or_fail "outsider" outsider in
+        let* owner = C.find q_user "sec_owner" in
+        let* owner = or_fail "owner" owner in
+        let* community = C.find q_community ("sec-closed", "public") in
+        let* community = or_fail "community" community in
+        let* r = C.exec q_member (owner, community) in
+        let* () = or_fail "member" r in
+
+        let before = uploads_listing () in
+        let* cookie, token = login ~url outsider in
+        let* status, _, _ =
+          do_post ~url ~cookie ~target:"/posts" ~token
+            ~file:("image_url", "x.png", real_png)
+            [ ("title", "sec outsider post");
+              ("content", "sec body");
+              ("community_id", string_of_int community);
+              ("url", "")
+            ]
+        in
+        Alcotest.(check bool) "refused" true (status <> 303);
+        let after = uploads_listing () in
+        Alcotest.(check (list string))
+          "static/uploads is untouched by an unauthorized upload" before after;
+        Lwt.return_unit)
+
+  let upload_format_gate_case =
+    db_case
+      "upload: a valid PNG becomes a stored WebP; a non-image is refused \
+       before any file is created"
+      (fun ~url _conn c ->
+        let (module C : Caqti_lwt.CONNECTION) = c in
+        let* uid = C.find q_user "sec_uploader" in
+        let* uid = or_fail "user" uid in
+        let* cookie, _token = login ~url uid in
+
+        (* --- refusals leave nothing behind --- *)
+        let before = uploads_listing () in
+        let refuse ?(message = "JPEG, PNG, GIF, WebP") label bytes =
+          let* token = token_in ~url ~cookie in
+          let* status, _, body =
+            do_post ~url ~cookie ~target:"/settings" ~token
+              ~file:("avatar_url", "payload.png", bytes)
+              [ ("bio", "sec bio") ]
+          in
+          Alcotest.(check bool)
+            (label ^ ": not accepted")
+            true (status <> 303);
+          Alcotest.(check bool)
+            (label ^ ": expected refusal message")
+            true (contains body message);
+          Alcotest.(check (list string))
+            (label ^ ": no file created") before (uploads_listing ());
+          Lwt.return_unit
+        in
+        let* () = refuse "plain text" "hello, not an image" in
+        let* () = refuse "svg" "<svg xmlns='http://www.w3.org/2000/svg'/>" in
+        let* () =
+          refuse "imagemagick MSL"
+            "<?xml version=\"1.0\"?><image><read filename=\"/etc/passwd\"/></image>"
+        in
+        let* () = refuse "postscript" "%!PS-Adobe-3.0\nshowpage\n" in
+        let* () = refuse "truncated png" "\x89PN" in
+        (* The byte cap is checked before the format gate, so this one gets
+           the size message — the only refusal that is allowed to differ,
+           because the uploader must be able to tell "too big" from
+           "unsupported". *)
+        let* () =
+          refuse ~message:"5 MB limit" "oversized"
+            (String.make ((5 * 1024 * 1024) + 1) 'a')
+        in
+
+        (* --- a real image succeeds and is transcoded --- *)
+        let* token = token_in ~url ~cookie in
+        let* status, _, _ =
+          do_post ~url ~cookie ~target:"/settings" ~token
+            ~file:("avatar_url", "tiny.png", real_png)
+            [ ("bio", "sec bio") ]
+        in
+        Alcotest.(check int) "valid PNG accepted" 303 status;
+        let* stored = C.find_opt q_avatar uid in
+        let* stored = or_fail "avatar" stored in
+        (match stored with
+        | Some (Some u) ->
+            Alcotest.(check bool) "stored under the uploads prefix" true
+              (contains u "/static/uploads/earde_");
+            Alcotest.(check bool) "output is WebP, not the submitted format"
+              true
+              (Filename.check_suffix u ".webp");
+            let path =
+              Filename.concat uploads_dir (Filename.basename u)
+            in
+            Alcotest.(check bool) "the file really exists" true
+              (Sys.file_exists path);
+            (* Transcoded, not stored verbatim. *)
+            let ic = open_in_bin path in
+            let len = min 12 (in_channel_length ic) in
+            let head = really_input_string ic len in
+            close_in ic;
+            Alcotest.(check bool) "content is a WebP container" true
+              (contains head "WEBP");
+            Alcotest.(check bool) "the PNG signature is gone" false
+              (contains head "PNG")
+        | _ -> Alcotest.fail "no avatar stored after a valid upload");
+
+        (* No stray temporaries: exactly one new file. *)
+        let after = uploads_listing () in
+        Alcotest.(check int) "exactly one new stored file"
+          (List.length before + 1) (List.length after);
+        ignore token;
+        Lwt.return_unit)
+
+  let upload_rate_limit_case =
+    db_case "upload rate limit: a separate bucket from the auth allowance"
+      (fun ~url:_ _conn c ->
+        (* The limiter is exercised directly so the case does not depend on
+           running a dozen real conversions. *)
+        let ip = "sec-upload-ip" in
+        let rec hit n acc =
+          if n = 0 then Lwt.return (List.rev acc)
+          else
+            let* r = Earde.Db.Rate_limit.check_upload c ip in
+            let* r = or_fail_s "check_upload" r in
+            hit (n - 1) (r :: acc)
+        in
+        let* results = hit (Earde.Db.Rate_limit.upload_max_attempts + 2) [] in
+        let allowed =
+          List.length (List.filter (fun r -> r = `Allowed) results)
+        in
+        Alcotest.(check int) "allowance is spent, then blocked"
+          Earde.Db.Rate_limit.upload_max_attempts allowed;
+        Alcotest.(check bool) "the tail is blocked" true
+          (List.exists (fun r -> r = `Blocked) results);
+        (* Distinct from the authentication bucket: spending the upload
+           allowance must not lock the user out of logging in. *)
+        let* login_check = Earde.Db.Rate_limit.check c ip "/login" in
+        let* login_check = or_fail_s "login bucket" login_check in
+        Alcotest.(check bool) "the /login bucket is untouched" true
+          (login_check = `Allowed);
+        Alcotest.(check bool) "upload allowance differs from auth allowance"
+          true
+          (Earde.Db.Rate_limit.upload_max_attempts <> 5
+          || Earde.Db.Rate_limit.upload_endpoint <> "/login");
+        Lwt.return_unit)
+
+  (* ------------------------------------------------------------------ *)
+  (* Fix 8 — the legacy moderator endpoints are gone                     *)
+  (* ------------------------------------------------------------------ *)
+
+  (* A direct HTTP request against the REAL application router, not an
+     inspection of whether a link exists: an ordinary moderator holding a
+     live session and a valid CSRF token must find nothing there. *)
+  let legacy_mod_routes_case =
+    db_case
+      "legacy /add-mod and /remove-mod are unroutable for an ordinary \
+       moderator"
+      (fun ~url _conn c ->
+        let (module C : Caqti_lwt.CONNECTION) = c in
+        let* top = C.find q_user "sec_topmod" in
+        let* top = or_fail "top" top in
+        let* ordinary = C.find q_user "sec_ordinarymod" in
+        let* ordinary = or_fail "ordinary" ordinary in
+        let* target = C.find q_user "sec_modtarget" in
+        let* target = or_fail "target" target in
+        let* community = C.find q_community ("sec-mods", "public") in
+        let* community = or_fail "community" community in
+        let* r = C.exec q_moderator (top, community) in
+        let* () = or_fail "top mod" r in
+        let* r = C.exec q_moderator (ordinary, community) in
+        let* () = or_fail "ordinary mod" r in
+
+        (* The real route table, exactly as bin/main.ml builds it. *)
+        let app =
+          Dream.sql_pool ~size:1 url @@ Dream.set_secret sec_secret
+          @@ Dream.memory_sessions
+          @@ (fun handler request ->
+               let* () =
+                 Dream.set_session_field request "user_id"
+                   (string_of_int ordinary)
+               in
+               handler request)
+          @@ Dream.router
+               [ Dream.get "/mint" (fun req ->
+                     Dream.respond (Dream.csrf_token req));
+                 Dream.post "/update-community"
+                   Earde.Handlers.update_community_handler;
+                 Dream.post "/c/:slug/manage-mods/add"
+                   Earde.Handlers.manage_mods_add_handler;
+                 Dream.post "/c/:slug/manage-mods/remove"
+                   Earde.Handlers.manage_mods_remove_handler
+               ]
+        in
+        let* mint = app (Dream.request ~method_:`GET ~target:"/mint" "") in
+        let cookie = session_cookie "mint" mint in
+        let* token = Dream.body mint in
+        let post target fields =
+          let request =
+            Dream.request ~method_:`POST ~target
+              ~headers:
+                [ ("Content-Type", "application/x-www-form-urlencoded");
+                  ("Cookie", cookie)
+                ]
+              ""
+          in
+          Dream.set_body request (form_body (("dream.csrf", token) :: fields));
+          let* response = app request in
+          Lwt.return (Dream.status_to_int (Dream.status response))
+        in
+        let* status =
+          post "/add-mod"
+            [ ("community_id", string_of_int community);
+              ("community_slug", "sec-mods");
+              ("username", "sec_modtarget")
+            ]
+        in
+        Alcotest.(check int) "POST /add-mod is not routed" 404 status;
+        let* status =
+          post "/remove-mod"
+            [ ("community_id", string_of_int community);
+              ("community_slug", "sec-mods");
+              ("target_user_id", string_of_int top)
+            ]
+        in
+        Alcotest.(check int) "POST /remove-mod is not routed" 404 status;
+
+        (* Nothing changed, and the modern surface still refuses an ordinary
+           moderator on its own terms rather than by being absent. *)
+        let* mods = Earde.Db.get_community_moderators c community in
+        let* mods = or_fail_s "mods" mods in
+        Alcotest.(check bool) "the Top Mod is still a moderator" true
+          (List.exists (fun (u : Earde.Db.user) -> u.id = top) mods);
+        Alcotest.(check bool) "no new moderator was appointed" false
+          (List.exists (fun (u : Earde.Db.user) -> u.id = target) mods);
+        let* status =
+          post "/c/sec-mods/manage-mods/add" [ ("username", "sec_modtarget") ]
+        in
+        Alcotest.(check bool)
+          "the modern add surface refuses an ordinary moderator" true
+          (status <> 303);
+        let* mods = Earde.Db.get_community_moderators c community in
+        let* mods = or_fail_s "mods again" mods in
+        Alcotest.(check bool) "still no new moderator" false
+          (List.exists (fun (u : Earde.Db.user) -> u.id = target) mods);
+        Lwt.return_unit)
+
+  let avatar_suite = [ avatar_theft_case; avatar_preserved_case ]
+
+  let session_suite =
+    [ session_revocation_case; password_reset_revocation_case ]
+
+  let comment_parent_suite =
+    [ parent_binding_case; parent_binding_no_side_effects_case ]
+
+  let upload_suite =
+    [ upload_authorization_ordering_case; upload_format_gate_case;
+      upload_rate_limit_case ]
+
+  let legacy_route_suite = [ legacy_mod_routes_case ]
+end
+
 let () =
   Alcotest.run "earde"
     [ ( "smoke"
@@ -78837,4 +80345,21 @@ let () =
     ; ("shared_thread_composer_partial_success", Sth_http.composer_partial_suite)
     ; ("shared_thread_composer_preinsert", Sth_http.composer_preinsert_suite)
     ; ("shared_thread_composer_idempotence", Sth_http.composer_idempotence_suite)
+      (* Pre-launch security fixes. The pure halves — output escaping, the
+         new username syntax, the image-upload accept/argv policy, the
+         session-cookie attribute rule and the client-address resolution —
+         are DB-free; the reachability of each original exploit is pinned by
+         the gated suites that follow. *)
+    ; ("security_escaping", Sec_pure.escaping_suite)
+    ; ("security_session_cookie", Sec_pure.cookie_suite)
+    ; ("security_image_upload_policy", Sec_pure.upload_suite)
+    ; ("security_client_address", Sec_pure.client_address_suite)
+      (* The gated halves: each reproduces the original attack against the
+         real handlers over the real routed pipeline, on durable SQL
+         sessions. *)
+    ; ("security_avatar_ownership", Sec_db.avatar_suite)
+    ; ("security_session_revocation", Sec_db.session_suite)
+    ; ("security_comment_parent_binding", Sec_db.comment_parent_suite)
+    ; ("security_upload_hardening", Sec_db.upload_suite)
+    ; ("security_legacy_mod_routes", Sec_db.legacy_route_suite)
     ]

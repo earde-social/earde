@@ -31,12 +31,61 @@ let safe_url url =
    community sidebar links inert). This is the dedicated check for rooted internal paths:
    require a single leading "/", reject "" / "#", and reject protocol-relative "//host" (and the
    "/\\host" backslash variant some engines normalise to it) so it can never become an open
-   redirect. javascript:/data: can't start with "/" so they're rejected implicitly. *)
+   redirect. javascript:/data: can't start with "/" so they're rejected implicitly.
+
+   It is also the gate the shared message page applies to its "Go back"
+   destination, which several handlers build from a percent-decoded route
+   parameter — so the value reaching it can be fully attacker-controlled, and
+   escaping-plus-refusal here is what makes that one call site cover ~70.
+
+   The site root "/" is a rooted internal path like any other and is accepted
+   explicitly: the length>=2 guard below exists only so path.[1] can be read,
+   and rejecting "/" would have collapsed the most common back link on the
+   shared message page (194 call sites pass exactly "/") to an inert "#". *)
 let safe_internal_path path =
-  if String.length path >= 2
-     && path.[0] = '/'
-     && path.[1] <> '/' && path.[1] <> '\\'
-  then html_escape path else "#"
+  if String.equal path "/" then path
+  else if
+    String.length path >= 2
+    && path.[0] = '/'
+    && path.[1] <> '/' && path.[1] <> '\\'
+  then html_escape path
+  else "#"
+
+(* Escaping for a value interpolated into a JavaScript single-quoted string
+   literal that itself lives inside an HTML event-handler attribute (the
+   confirmModal onsubmit hooks). html_escape alone is NOT sufficient there:
+   the HTML parser decodes entities before the JavaScript parser sees the
+   source, so &#39; becomes a real apostrophe again and terminates the
+   literal early — turning the rest of the value into executable code.
+
+   The two escapes therefore have to compose in this order:
+     1. JavaScript-escape, so the post-decode source is a valid literal;
+     2. html_escape, so the attribute delimiter itself is safe.
+   html_escape is exactly reversible, so step 2 is undone by the parser and
+   step 1's output is what JavaScript actually parses. Backslash first (else
+   it would double-escape the escapes we add), then the quote characters,
+   then the line terminators — an unescaped newline is a syntax error inside
+   a literal — then < and & as \xNN so no markup or entity survives, then
+   the remaining C0/DEL control bytes. *)
+let js_single_quoted_attr s =
+  let buf = Buffer.create (String.length s + 8) in
+  String.iter
+    (fun c ->
+      match c with
+      | '\\' -> Buffer.add_string buf "\\\\"
+      | '\'' -> Buffer.add_string buf "\\'"
+      | '"' -> Buffer.add_string buf "\\\""
+      | '\n' -> Buffer.add_string buf "\\n"
+      | '\r' -> Buffer.add_string buf "\\r"
+      | '\t' -> Buffer.add_string buf "\\t"
+      | '<' -> Buffer.add_string buf "\\x3C"
+      | '>' -> Buffer.add_string buf "\\x3E"
+      | '&' -> Buffer.add_string buf "\\x26"
+      | c when Char.code c < 0x20 || Char.code c = 0x7f ->
+          Buffer.add_string buf (Printf.sprintf "\\x%02X" (Char.code c))
+      | c -> Buffer.add_char buf c)
+    s;
+  html_escape (Buffer.contents buf)
 
 (* === IMAGES ===
    One escaping gate + a few render primitives so every image surface treats stored URLs the

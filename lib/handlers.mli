@@ -19,6 +19,16 @@ val safe_local_redirect : ?default:string -> Dream.request -> string -> string
     the result never carries a scheme or authority. *)
 
 (** === AUTHENTICATION === *)
+
+val is_valid_new_username : string -> bool
+(** Route-safe ASCII syntax required of NEW usernames at signup: one or more
+    of [A-Za-z], [0-9], ['_'], ['-'] — no quotes, angle brackets, slashes,
+    whitespace or control characters. The existing 3..30 length bound is
+    checked separately and still applies. Deliberately NOT enforced against
+    accounts that already exist: login, lookup and rendering never consult
+    it, so no current user is locked out or renamed. Escaping at each render
+    sink remains the actual XSS defence; this is the second layer. Pure. *)
+
 val signup_page : Dream.handler
 val signup_handler : Dream.handler
 val verify_email_handler : Dream.handler
@@ -102,8 +112,10 @@ val archive_channel_handler : Dream.handler
 val unarchive_channel_handler : Dream.handler
 val modlog_handler : Dream.handler
 val update_community_handler : Dream.handler
-val add_mod_handler : Dream.handler
-val remove_mod_handler : Dream.handler
+(* No add_mod_handler / remove_mod_handler: the unreferenced legacy /add-mod
+   and /remove-mod endpoints admitted any moderator (so an ordinary mod could
+   appoint moderators and unseat the Top Mod) and were removed with their
+   routes. Moderator management is the manage_mods_* surface below. *)
 val ban_community_user_handler : Dream.handler
 val unban_community_user_handler : Dream.handler
 val manage_mods_handler : Dream.handler

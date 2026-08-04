@@ -427,7 +427,20 @@ end
 
 module Comment : sig
   val get_comments : (module Caqti_lwt.CONNECTION) -> int -> (comment list, string) result Lwt.t
-  val create_comment : (module Caqti_lwt.CONNECTION) -> string -> int -> int -> int option -> (int, string) result Lwt.t
+  (** [create_comment db content post_id user_id parent_id]. A present
+      [parent_id] is accepted only when that comment belongs to the SAME
+      [post_id]; the check lives in the INSERT's own WHERE, so a concurrent
+      change cannot open a gap between validating and writing. [`Invalid_parent]
+      means nothing was inserted — the parent is missing, or lives on another
+      post (hence possibly another community, possibly a private one) — and is
+      a client error, not a storage failure. *)
+  val create_comment :
+    (module Caqti_lwt.CONNECTION) ->
+    string ->
+    int ->
+    int ->
+    int option ->
+    ([ `Created of int | `Invalid_parent ], string) result Lwt.t
   val touch_last_activity : (module Caqti_lwt.CONNECTION) -> int -> (unit, string) result Lwt.t
   val vote_comment : (module Caqti_lwt.CONNECTION) -> int -> int -> int -> (unit, string) result Lwt.t
   val get_comments_by_user : (module Caqti_lwt.CONNECTION) -> int -> ((int * string * string * int * string * int) list, string) result Lwt.t
@@ -525,6 +538,20 @@ end
 
 module Rate_limit : sig
   val check : (module Caqti_lwt.CONNECTION) -> string -> string -> ([`Allowed | `Blocked], string) result Lwt.t
+
+  (** The image-upload bucket: a constant endpoint name shared by all three
+      upload-capable routes, with its own allowance ([upload_max_attempts])
+      over the same [window_seconds] window. Separate from the authentication
+      allowance because an upload costs far more than a login attempt while a
+      member legitimately edits several images in a row. *)
+  val upload_endpoint : string
+
+  val upload_max_attempts : int
+
+  val check_upload :
+    (module Caqti_lwt.CONNECTION) ->
+    string ->
+    ([ `Allowed | `Blocked ], string) result Lwt.t
 
   (** The single enforcement window (seconds); [cleanup_after_seconds] is
       derived from it (2x), so cleanup can never remove a row a configured
@@ -738,7 +765,15 @@ val get_post_by_id : (module Caqti_lwt.CONNECTION) -> int -> (post option, strin
 val get_posts_by_user : (module Caqti_lwt.CONNECTION) -> int -> (post list, string) result Lwt.t
 val get_post_communities : (module Caqti_lwt.CONNECTION) -> int list -> ((int * int * string * bool * bool) list, string) result Lwt.t
 val soft_delete_post : (module Caqti_lwt.CONNECTION) -> int -> int -> (unit, string) result Lwt.t
-val create_comment : (module Caqti_lwt.CONNECTION) -> string -> int -> int -> int option -> (int, string) result Lwt.t
+(** See [Comment.create_comment]: a present parent_id must belong to the same
+    post, enforced inside the INSERT. [`Invalid_parent] = nothing written. *)
+val create_comment :
+  (module Caqti_lwt.CONNECTION) ->
+  string ->
+  int ->
+  int ->
+  int option ->
+  ([ `Created of int | `Invalid_parent ], string) result Lwt.t
 val touch_post_last_activity : (module Caqti_lwt.CONNECTION) -> int -> (unit, string) result Lwt.t
 val get_comments : (module Caqti_lwt.CONNECTION) -> int -> (comment list, string) result Lwt.t
 val get_comments_by_user : (module Caqti_lwt.CONNECTION) -> int -> ((int * string * string * int * string * int) list, string) result Lwt.t
@@ -849,8 +884,23 @@ val get_allows_downvotes_for_comment : (module Caqti_lwt.CONNECTION) -> int -> (
 
 val password_reset_create_token : (module Caqti_lwt.CONNECTION) -> string -> string -> (bool, string) result Lwt.t
 val password_reset_validate_token : (module Caqti_lwt.CONNECTION) -> string -> (int option, string) result Lwt.t
-(* Ok true = password updated; Ok false = token expired/invalid; Error = DB error *)
+(* Ok true = password updated; Ok false = token expired/invalid; Error = DB error.
+   Consuming the token, writing the new hash and revoking that user's Dream
+   sessions all happen in ONE transaction: a password reset is the remedy for
+   a compromised account, so it must also end whoever already holds a cookie. *)
 val password_reset_atomically : (module Caqti_lwt.CONNECTION) -> string -> string -> (bool, string) result Lwt.t
+
+val delete_user_sessions :
+  (module Caqti_lwt.CONNECTION) -> int -> (unit, string) result Lwt.t
+(** Durably revokes EVERY Dream SQL-backed session belonging to [user_id], by
+    matching the user id inside Dream's own serialized session payload — never
+    the username or email, both of which account deletion rewrites. Sessions of
+    other users are untouched. [Dream.invalidate_session] only ends the session
+    on the current request; this is what ends the others.
+
+    Already called inside [anonymize_user_and_enqueue_posthog_deletion] and
+    [password_reset_atomically]; exposed for tests and for any future flow that
+    must end a user's sessions. *)
 
 val pending_signup_hash_token : string -> string
 val pending_signup_username_elsewhere : (module Caqti_lwt.CONNECTION) -> string -> string -> (bool, string) result Lwt.t
@@ -865,6 +915,11 @@ val pending_signup_confirm :
      (* new user id, username, email, created_at, is_admin *)
    | `Invalid | `Conflict ], string) result Lwt.t
 
+(** Account deletion's one durable transaction: anonymize the users row,
+    revoke every Dream session belonging to that user, and enqueue the
+    PostHog person-deletion job. All three commit together or roll back
+    together, so there is no window with an anonymized account that another
+    browser can still authenticate as. Performs no HTTP. *)
 val anonymize_user_and_enqueue_posthog_deletion :
   (module Caqti_lwt.CONNECTION) -> int -> (int * string, string) result Lwt.t
 val claim_posthog_deletion_job :
