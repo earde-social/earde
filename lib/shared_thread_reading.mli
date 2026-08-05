@@ -47,6 +47,25 @@ val resolve_destination_context :
     rendering. One bounded point query over the active-placement unique
     index. *)
 
+val public_destinations_for_posts :
+  (module Caqti_lwt.CONNECTION) ->
+  post_ids:int list ->
+  ((int * (string * string)) list, error) result Lwt.t
+(** Origin-side provenance for a page of already-selected canonical posts:
+    [(post_id, (destination_slug, destination_name))] rows for every
+    placement that is CURRENTLY publicly renderable — accepted, origin
+    community currently public (the destination-rendering rule), and
+    destination community currently public (what an anonymous reader could
+    open right now). Pending, rejected, withdrawn, and removed placements
+    and private destinations produce no row; request notes and every actor
+    identity never leave the database. One bounded query per page (ids
+    CSV-joined — the [get_thread_sources_for_posts] idiom), never one per
+    post; non-positive ids are dropped and an empty input answers [Ok []].
+    Deterministic order: post id, lower-cased destination name, then the
+    unique slug. Callers enrich existing feed/thread view models AFTER
+    their own queries — this read changes no row selection, ordering, or
+    pagination anywhere. *)
+
 val viewer_may_comment :
   (module Caqti_lwt.CONNECTION) ->
   user_id:int ->

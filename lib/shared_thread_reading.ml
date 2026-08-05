@@ -78,6 +78,44 @@ let resolve_destination_context (module C : Caqti_lwt.CONNECTION) ~post_id
                 }))
     | Error _ -> Lwt.return (Error Storage_error)
 
+(* Origin-side provenance, batched for a page of already-selected canonical
+   post ids (CSV-joined and expanded via string_to_array — the same bounded
+   IN-list idiom as Db.get_thread_sources_for_posts, so no N+1 and no feed
+   query changes). A destination appears iff its placement is CURRENTLY
+   publicly renderable: accepted status, a currently public origin (the
+   destination feed arm's own rule — an origin turning private stops the
+   destination rendering, so the origin page must stop naming it too), and a
+   currently public destination community (an anonymous reader could open
+   /c/<slug> right now — the same can_view_community answer for a viewer
+   with no memberships). Pending, rejected, withdrawn, and removed
+   placements, and private destinations, produce no row, so nothing this
+   returns can reveal a placement state or a community the public cannot
+   already see. Ordering is deterministic: post, lower-cased destination
+   name, then unique slug. *)
+let public_destinations_query =
+  let open Caqti_request.Infix in
+  (Caqti_type.string ->* Caqti_type.(t3 int string string))
+    "SELECT stp.post_id, dc.slug, dc.name \
+     FROM shared_thread_placements stp \
+     JOIN communities dc ON dc.id = stp.destination_community_id \
+     JOIN communities oc ON oc.id = stp.origin_community_id \
+     WHERE stp.post_id = ANY(string_to_array($1, ',')::int[]) \
+       AND stp.status = 'accepted' \
+       AND dc.visibility = 'public' \
+       AND oc.visibility = 'public' \
+     ORDER BY stp.post_id, LOWER(dc.name), dc.slug"
+
+let public_destinations_for_posts (module C : Caqti_lwt.CONNECTION) ~post_ids =
+  match List.filter (fun id -> id > 0) post_ids with
+  | [] -> Lwt.return (Ok [])
+  | ids ->
+      let csv = String.concat "," (List.map string_of_int ids) in
+      C.collect_list public_destinations_query csv >>= function
+      | Ok rows ->
+          Lwt.return
+            (Ok (List.map (fun (post_id, slug, name) -> (post_id, (slug, name))) rows))
+      | Error _ -> Lwt.return (Error Storage_error)
+
 (* The one comment-participation capability, spelled entirely in SQL so the
    composer gate and the POST /comments authorization cannot drift. A
    logged-in user may comment on the canonical discussion iff:

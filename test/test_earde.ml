@@ -72143,6 +72143,240 @@ module Sth_http = struct
         Alcotest.(check int) "still exactly one placement" 1 n;
         Lwt.return_unit)
 
+  (* === Origin-side "Shared with" indicator ===
+     The reverse provenance direction: the canonical origin thread page and
+     the global-feed canonical card name the currently publicly renderable
+     accepted destinations. These cases prove the launch copy, the lifecycle
+     and current-visibility filtering, the deterministic multi-destination
+     ordering, that the destination context keeps its one "Shared from"
+     direction, and that the enrichment cannot touch global-feed selection,
+     ordering, or LIMIT/OFFSET. *)
+
+  (* The centralized copy helper is pure: exact copy for zero, one, and many
+     destinations, and everything escaped. *)
+  let shared_with_copy_case =
+    Alcotest.test_case
+      "shared_with_html: exact launch copy and escaping for 0/1/n destinations"
+      `Quick (fun () ->
+        let render = Earde.Components.shared_with_html in
+        Alcotest.(check string) "empty renders nothing" "" (render []);
+        Alcotest.(check string) "one destination"
+          "<span class='sth-shared-from'>&#8644; Shared with \
+           <a href='/c/dest-a'>Dest A</a></span>"
+          (render [ ("dest-a", "Dest A") ]);
+        Alcotest.(check string) "two destinations"
+          "<span class='sth-shared-from'>&#8644; Shared with \
+           <a href='/c/dest-a'>Dest A</a> and 1 more</span>"
+          (render [ ("dest-a", "Dest A"); ("dest-b", "Dest B") ]);
+        Alcotest.(check string) "three destinations count the tail"
+          "<span class='sth-shared-from'>&#8644; Shared with \
+           <a href='/c/dest-a'>Dest A</a> and 2 more</span>"
+          (render
+             [ ("dest-a", "Dest A"); ("dest-b", "Dest B"); ("dest-c", "Dest C") ]);
+        Alcotest.(check string) "name and slug are HTML-escaped"
+          "<span class='sth-shared-from'>&#8644; Shared with \
+           <a href='/c/x&#39;y'>Ev&lt;il&gt;&amp;</a></span>"
+          (render [ ("x'y", "Ev<il>&") ]))
+
+  let origin_indicator_case =
+    db_case "origin surfaces name only currently publicly renderable accepted \
+             destinations: lifecycle filtering, deterministic multi-destination \
+             copy, private-destination and private-origin hiding, removal, and \
+             the destination context keeps its own single direction"
+      (fun ~url conn ->
+        let* author, otop, dtop, o, d, post, _ = fixture conn "oi" in
+        (* Second flat destination whose lower-cased name sorts FIRST, so the
+           deterministic head of the copy is decided by ordering, not by
+           acceptance order. *)
+        let* d2top = insert_user conn "sth_oi_d2top" in
+        let* d2 = insert_community ~name:"Sth oi Aux" conn "sth-oi-aux" in
+        let* () = exec conn "flat d2" Stp_store.q_set_sections (d2, false) in
+        let* () = add_top_mod conn ~user:d2top ~community:d2 in
+        let* _ = Stp_store.connect conn ~actor:otop o d2 in
+        (* One post per non-accepted lifecycle state. *)
+        let* p_pending =
+          find conn "pending post" q_insert_post ("Sth oi pending", (o, author))
+        in
+        let* p_rejected =
+          find conn "rejected post" q_insert_post
+            ("Sth oi rejected", (o, author))
+        in
+        let* p_withdrawn =
+          find conn "withdrawn post" q_insert_post
+            ("Sth oi withdrawn", (o, author))
+        in
+        let* pl = seed_request conn ~actor:author ~post ~destination:d () in
+        let* () = seed_accept conn ~reviewer:dtop ~placement:pl ~destination:d () in
+        let* pl2 = seed_request conn ~actor:author ~post ~destination:d2 () in
+        let* () =
+          seed_accept conn ~reviewer:d2top ~placement:pl2 ~destination:d2 ()
+        in
+        let* _pending =
+          seed_request conn ~actor:author ~note:"STH_NOTE_OI" ~post:p_pending
+            ~destination:d ()
+        in
+        let* plr =
+          seed_request conn ~actor:author ~post:p_rejected ~destination:d ()
+        in
+        let* () = reject_seed conn ~reviewer:dtop ~placement:plr ~destination:d in
+        let* plw =
+          seed_request conn ~actor:author ~post:p_withdrawn ~destination:d ()
+        in
+        let* () = withdraw_seed conn ~actor:author ~placement:plw ~origin:o in
+        let canonical =
+          Earde.Components.canonical_thread_path "sth-oi-o" post
+            "Sth oi thread"
+        in
+        let anon = app_pipeline ~url () in
+        (* Origin canonical page: deterministic first destination + count,
+           exactly one indicator, no reverse direction, no private note. *)
+        let* response, body = get ~target:canonical anon in
+        Alcotest.(check int) "origin thread 200" 200 (status_of response);
+        must body
+          "Shared with <a href='/c/sth-oi-aux'>Sth oi Aux</a> and 1 more";
+        count "one origin indicator" body "Shared with" 1;
+        must_not body "Shared from";
+        must_not body "STH_NOTE_OI";
+        (* The view model keeps the FULL ordered list (the rendered copy is
+           only its head), and only the accepted post produces rows. *)
+        let* r =
+          Earde.Shared_thread_reading.public_destinations_for_posts conn
+            ~post_ids:[ post; p_pending; p_rejected; p_withdrawn ]
+        in
+        (match r with
+         | Ok rows ->
+             Alcotest.(check (list (pair int (pair string string))))
+               "full deterministic destination list"
+               [ (post, ("sth-oi-aux", "Sth oi Aux"));
+                 (post, ("sth-oi-d", "Sth oi Dest"))
+               ]
+               rows
+         | Error _ -> Alcotest.fail "read model: storage error");
+        (* Non-accepted lifecycle states produce no indicator on their own
+           origin pages. *)
+        let check_absent title p =
+          let* _, body =
+            get
+              ~target:(Earde.Components.canonical_thread_path "sth-oi-o" p title)
+              anon
+          in
+          must_not body "Shared with";
+          Lwt.return_unit
+        in
+        let* () = check_absent "Sth oi pending" p_pending in
+        let* () = check_absent "Sth oi rejected" p_rejected in
+        let* () = check_absent "Sth oi withdrawn" p_withdrawn in
+        (* Global feed: the one canonical card is enriched — no duplication,
+           no destination-context link, no note, and exactly one indicator
+           across the whole page. *)
+        let* _, body = get ~target:"/feed?scope=all&sort=new" anon in
+        count "one canonical card" body "Sth oi thread" 1;
+        count "one feed indicator" body "Shared with" 1;
+        must body "Sth oi Aux";
+        must_not body "STH_NOTE_OI";
+        must_not body "/c/sth-oi-d/t/";
+        must_not body "/c/sth-oi-aux/t/";
+        (* Destination context keeps its one direction. *)
+        let* _, body =
+          get
+            ~target:
+              (Earde.Components.canonical_thread_path "sth-oi-d" post
+                 "Sth oi thread")
+            anon
+        in
+        must body "Shared from";
+        must_not body "Shared with";
+        (* A destination that is no longer publicly renderable disappears
+           silently: name, slug, and count all go. *)
+        let* () = exec conn "privatize aux" Phcv.q_make_private d2 in
+        let* response, body = get ~target:canonical anon in
+        Alcotest.(check int) "origin thread still 200" 200 (status_of response);
+        must body "Shared with <a href='/c/sth-oi-d'>Sth oi Dest</a></span>";
+        must_not body "and 1 more";
+        must_not body "Sth oi Aux";
+        must_not body "sth-oi-aux";
+        (* An origin no longer public stops the public naming entirely (the
+           destination rendering itself has stopped, so the origin side must
+           not keep claiming it). *)
+        let* () = exec conn "privatize origin" Phcv.q_make_private o in
+        let* r =
+          Earde.Shared_thread_reading.public_destinations_for_posts conn
+            ~post_ids:[ post ]
+        in
+        (match r with
+         | Ok rows ->
+             Alcotest.(check (list (pair int (pair string string))))
+               "private origin names nothing" [] rows
+         | Error _ -> Alcotest.fail "read model: storage error");
+        let* () = exec conn "restore origin" Stp_store.q_make_eligible o in
+        let* () = exec conn "restore aux" Stp_store.q_make_eligible d2 in
+        (* Removal ends exactly its own indicator entry; removing the last
+           accepted placement ends the indicator everywhere. *)
+        let* () = remove_seed conn ~actor:d2top ~placement:pl2 ~acting:d2 in
+        let* _, body = get ~target:canonical anon in
+        must body "Shared with";
+        must body "Sth oi Dest";
+        must_not body "Sth oi Aux";
+        must_not body "and 1 more";
+        let* () = remove_seed conn ~actor:dtop ~placement:pl ~acting:d in
+        let* _, body = get ~target:canonical anon in
+        must_not body "Shared with";
+        let* _, body = get ~target:"/feed?scope=all&sort=new" anon in
+        must_not body "Shared with";
+        Lwt.return_unit)
+
+  let origin_feed_invariance_case =
+    db_case "global-feed selection, ordering, and LIMIT/OFFSET are unchanged \
+             by origin-side enrichment: identical ids before and after \
+             acceptance, one row per canonical post, relative order intact"
+      (fun ~url conn ->
+        let* author, _otop, dtop, o, d, post, _ = fixture conn "ov" in
+        let* pa = find conn "pa" q_insert_post ("Sth ov alpha", (o, author)) in
+        let* pb = find conn "pb" q_insert_post ("Sth ov beta", (o, author)) in
+        (* Distinct ages decide sort=new deterministically among the
+           fixtures: beta (2h) before shared (3h) before alpha (4h). *)
+        let* () = exec conn "age pa" q_age_post (pa, 4) in
+        let* () = exec conn "age shared" q_age_post (post, 3) in
+        let* () = exec conn "age pb" q_age_post (pb, 2) in
+        let ids_of limit offset =
+          let* r = Earde.Db.get_all_posts conn Earde.Db.Newest limit offset in
+          Lwt.return
+            (List.map
+               (fun (p : Earde.Db.post) -> p.Earde.Db.id)
+               (ok "get_all_posts" r))
+        in
+        (* The same fixtures WITHOUT enrichment: capture the exact feed
+           windows before any placement exists... *)
+        let* before_full = ids_of 50 0 in
+        let* before_window = ids_of 2 1 in
+        let* pl = seed_request conn ~actor:author ~post ~destination:d () in
+        let* () = seed_accept conn ~reviewer:dtop ~placement:pl ~destination:d () in
+        (* ...and prove the accepted placement changed neither the selected
+           ids, nor their order, nor what a LIMIT/OFFSET window selects. *)
+        let* after_full = ids_of 50 0 in
+        let* after_window = ids_of 2 1 in
+        Alcotest.(check (list int)) "same ids, same order" before_full
+          after_full;
+        Alcotest.(check (list int)) "same LIMIT/OFFSET window" before_window
+          after_window;
+        (* HTTP: each fixture row renders exactly once, in the canonical
+           relative order, with the enriched card carrying the indicator. *)
+        let anon = app_pipeline ~url () in
+        let* _, body = get ~target:"/feed?scope=all&sort=new" anon in
+        count "alpha once" body "Sth ov alpha" 1;
+        count "beta once" body "Sth ov beta" 1;
+        count "shared once" body "Sth ov thread" 1;
+        count "one indicator" body "Shared with" 1;
+        let idx label =
+          match ps_index_of body label 0 with
+          | Some i -> i
+          | None -> Alcotest.failf "feed row %S missing" label
+        in
+        Alcotest.(check bool) "canonical relative order intact" true
+          (idx "Sth ov beta" < idx "Sth ov thread"
+           && idx "Sth ov thread" < idx "Sth ov alpha");
+        Lwt.return_unit)
+
   let composer_candidate_suite = [ candidate_query_case ]
   let composer_render_suite = [ composer_page_case ]
   let composer_creation_suite = [ normal_creation_case ]
@@ -72188,6 +72422,10 @@ module Sth_http = struct
   let participation_suite = [ comment_participation_case ]
   let moderation_suite = [ moderation_boundary_case ]
   let boundary_suite = [ boundary_case ]
+
+  let origin_indicator_suite =
+    [ shared_with_copy_case; origin_indicator_case
+    ; origin_feed_invariance_case ]
 end
 
 (* === PRE-LAUNCH SECURITY FIXES: the DB-free half ===
@@ -80328,6 +80566,12 @@ let () =
     ; ("shared_thread_comment_participation", Sth_http.participation_suite)
     ; ("shared_thread_moderation_boundary", Sth_http.moderation_suite)
     ; ("shared_thread_read_side_boundary", Sth_http.boundary_suite)
+      (* Origin-side "Shared with" indicator: the pure centralized copy
+         helper, then database-gated: the origin thread page and canonical
+         global-feed card naming only currently publicly renderable accepted
+         destinations, and the proof that enrichment leaves global-feed
+         selection, ordering, and LIMIT/OFFSET untouched. *)
+    ; ("shared_thread_origin_indicator", Sth_http.origin_indicator_suite)
       (* Slice 4 — Create Shared Thread from the durable composer. The pure
          note rule and the DB-free composer form; then, database-gated: the
          composer-shaped candidate read model, the real GET /new-post

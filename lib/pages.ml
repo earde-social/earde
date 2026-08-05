@@ -912,6 +912,7 @@ let community_section_shell_page ?user ?(noindex=false) ?thread_count ?last_acti
    + the founder, never a fake Browse-communities link (no such route). *)
 let feed_page ?user ~scope ~sort_mode ~is_logged_in ~admin_usernames
     ~(rail_communities : community list) ~user_votes ~current_page
+    ?(shared_destinations : (int * (string * string) list) list = [])
     (posts : post list) request =
   let esc = Components.html_escape in
 
@@ -955,7 +956,14 @@ let feed_page ?user ~scope ~sort_mode ~is_logged_in ~admin_usernames
      threads + the pilot mailto) under the launch .empty idiom. *)
   let posts_html =
     if posts <> [] then
-      String.concat "\n" (List.map (Components.render_forum_row ~admin_usernames ~show_context:true request user_votes) posts)
+      (* Origin-side enrichment only: each card is still the one canonical
+         row the feed query selected — [shared_destinations] adds a
+         provenance span and can neither add, drop, nor reorder cards. *)
+      String.concat "\n" (List.map (fun (p : post) ->
+        let shared_with =
+          Option.value ~default:[] (List.assoc_opt p.id shared_destinations) in
+        Components.render_forum_row ~admin_usernames ~show_context:true
+          ~shared_with request user_votes p) posts)
     else if scope = "following" && is_logged_in then
       Printf.sprintf
         "<div class='empty'>\
@@ -1497,7 +1505,8 @@ type thread_creation_notice =
    launch accents in earde.css) is preserved exactly. *)
 let thread_shell_page ?user ?(noindex=false) ?(can_share=false) ?(can_comment=false)
     ?(creation_notice : thread_creation_notice option)
-    ?(shared_context : shared_thread_page_context option) ~is_member ~is_current_user_mod ~mod_usernames ~admin_usernames
+    ?(shared_context : shared_thread_page_context option)
+    ?(shared_with : (string * string) list = []) ~is_member ~is_current_user_mod ~mod_usernames ~admin_usernames
     ~banned_usernames ~(rail_communities : community list) ~(channels : channel list)
     ~(sections : community_section list) ~(community : community)
     ?(thread_source : thread_source_view option)
@@ -1742,7 +1751,12 @@ let thread_shell_page ?user ?(noindex=false) ?(can_share=false) ?(can_comment=fa
     | Some sc ->
         Printf.sprintf "<span class='sth-shared-from'>&#8644; Shared from <a href='/c/%s'>%s</a></span>"
           (esc post.community_slug) (esc sc.stc_origin_name)
-    | None -> "" in
+    | None ->
+        (* Origin-side provenance: only the ORIGIN rendering may say where
+           the discussion also lives, so the two directions can never share
+           a page — a destination context keeps its "Shared from" line and
+           ignores [shared_with] entirely. *)
+        Components.shared_with_html shared_with in
   let meta = Printf.sprintf "<div class='th-meta'>%s<span>by %s</span><span>%s</span><span>%d comments</span>%s</div>"
     domain_html (Components.render_author ~mod_usernames ~admin_usernames post.username)
     (esc (Components.time_ago post.created_at)) post.comment_count shared_from_label in

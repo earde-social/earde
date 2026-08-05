@@ -1514,6 +1514,27 @@ let shared_from_html (post : post) (ctx : Db.feed_shared_context) =
     "<span class='sth-shared-from'>&#8644; Shared from <a href='/c/%s'>%s</a></span>"
     (html_escape post.community_slug) (html_escape ctx.fs_origin_name)
 
+(* Origin-side provenance, the reverse direction of [shared_from_html]: the
+   one centralized copy for "this canonical discussion also lives in an
+   accepted destination". The destinations are (slug, name) pairs the read
+   model already restricted to currently publicly renderable placements
+   (accepted, public origin, public destination), so naming and linking the
+   first one is safe by construction. Launch copy lives only here: one
+   destination reads "Shared with <name>", several read
+   "Shared with <first> and <n> more" — the caller keeps the full list in
+   its view model, so changing this wording later touches no data path. *)
+let shared_with_html (destinations : (string * string) list) =
+  match destinations with
+  | [] -> ""
+  | (slug, name) :: rest ->
+      let more = match List.length rest with
+        | 0 -> ""
+        | n -> Printf.sprintf " and %d more" n
+      in
+      Printf.sprintf
+        "<span class='sth-shared-from'>&#8644; Shared with <a href='/c/%s'>%s</a>%s</span>"
+        (html_escape slug) (html_escape name) more
+
 let render_post ?(is_current_user_mod=false) ?(mod_usernames=[]) ?(admin_usernames=[]) ?(banned_usernames=[]) ?(shared : feed_shared option) request user_votes (post : post) =
   let csrf_token = Dream.csrf_tag request in
   let content_preview = Option.value ~default:"" post.content in
@@ -1824,7 +1845,7 @@ let mod_action_controls ~is_current_user_mod ~admin_usernames ~banned_usernames 
    the upvote form, the score <span>, and the downvote form, with the same Tailwind colour classes
    the JS toggles. The body is intentionally lighter than the card: strong title, an optional
    single-line preview, a compact monospace meta row, and moderation tucked into a ⋯ menu. *)
-let render_forum_row ?(is_current_user_mod=false) ?(mod_usernames=[]) ?(admin_usernames=[]) ?(banned_usernames=[]) ?(show_context=false) ?(shared : feed_shared option) request user_votes (post : post) =
+let render_forum_row ?(is_current_user_mod=false) ?(mod_usernames=[]) ?(admin_usernames=[]) ?(banned_usernames=[]) ?(show_context=false) ?(shared : feed_shared option) ?(shared_with=[]) request user_votes (post : post) =
   let csrf_token = Dream.csrf_tag request in
   let current_user = Dream.session_field request "username" in
   let current_vote = Option.value ~default:0 (List.assoc_opt post.id user_votes) in
@@ -1892,8 +1913,17 @@ let render_forum_row ?(is_current_user_mod=false) ?(mod_usernames=[]) ?(admin_us
               (html_escape post.community_slug) (html_escape slug) (html_escape name)
         | _ -> ""
       in
-      Printf.sprintf "<div class='ft-ctx'>%s<a class='ft-ctx-c' href='/c/%s'>/c/%s</a></div>"
+      (* Origin-side provenance rides the same context line the global feed
+         already renders; the destination direction (shared = Some) above
+         never combines with it — one card, one provenance direction. An
+         empty [shared_with] leaves the line byte-identical. *)
+      let shared_with_span = match shared_with_html shared_with with
+        | "" -> ""
+        | span -> " <span class='ft-ctx-dot'>·</span> " ^ span
+      in
+      Printf.sprintf "<div class='ft-ctx'>%s<a class='ft-ctx-c' href='/c/%s'>/c/%s</a>%s</div>"
         section_html (html_escape post.community_slug) (html_escape post.community_slug)
+        shared_with_span
   in
   Printf.sprintf "
   <div class='cs-thread'>

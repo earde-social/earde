@@ -250,9 +250,23 @@ val post_admin_actions : ?is_current_user_mod:bool -> ?admin_usernames:string li
 type feed_shared = string * Db.feed_shared_context
 
 val render_post : ?is_current_user_mod:bool -> ?mod_usernames:string list -> ?admin_usernames:string list -> ?banned_usernames:string list -> ?shared:feed_shared -> Dream.request -> (int * int) list -> Db.post -> string
+
+(** Origin-side provenance label, the one centralized copy helper for
+    "Shared with <destination>": one [(slug, name)] pair renders
+    "⇄ Shared with <name>" linking /c/<slug>; several render
+    "Shared with <first> and <n> more"; [] renders "". Every value is
+    HTML-escaped here. Callers pass only destinations a read model already
+    restricted to currently publicly renderable accepted placements, in its
+    deterministic order — this helper decides no visibility. *)
+val shared_with_html : (string * string) list -> string
+
 (** Thread-first section-feed row (cool-grey shell idiom). Same call shape as [render_post];
-    used by [Pages.community_section_shell_page]. Preserves the optimistic-vote DOM contract. *)
-val render_forum_row : ?is_current_user_mod:bool -> ?mod_usernames:string list -> ?admin_usernames:string list -> ?banned_usernames:string list -> ?show_context:bool -> ?shared:feed_shared -> Dream.request -> (int * int) list -> Db.post -> string
+    used by [Pages.community_section_shell_page]. Preserves the optimistic-vote DOM contract.
+    [shared_with] (default []) appends the origin-side [shared_with_html] provenance to the
+    [show_context] context line — the global feed's origin-card enrichment. It never combines
+    with [shared] (a destination-context row keeps its one "Shared from" direction), and []
+    leaves every existing caller's markup byte-identical. *)
+val render_forum_row : ?is_current_user_mod:bool -> ?mod_usernames:string list -> ?admin_usernames:string list -> ?banned_usernames:string list -> ?show_context:bool -> ?shared:feed_shared -> ?shared_with:(string * string) list -> Dream.request -> (int * int) list -> Db.post -> string
 
 (** [slugify title] → a URL-safe, descriptive thread slug (lowercase, non-alphanumerics
     collapsed to single dashes, trimmed, length-capped). Descriptive only — [post_id] is

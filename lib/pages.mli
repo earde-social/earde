@@ -25,8 +25,12 @@ val community_section_shell_page : ?user:string -> ?noindex:bool -> ?thread_coun
 (** [/feed] — global Feed surface. [scope] is "following" | "all"; logged-out callers must pass
     [~scope:"all"] [~is_logged_in:false] (no toggle, no personalized feed). [sort_mode] is the
     string form (hot/new/top/active). [rail_communities] drives both the icon rail and the
-    Following mini-list. *)
-val feed_page : ?user:string -> scope:string -> sort_mode:string -> is_logged_in:bool -> admin_usernames:string list -> rail_communities:Db.community list -> user_votes:(int * int) list -> current_page:int -> Db.post list -> Dream.request -> string
+    Following mini-list. [shared_destinations] (default []) maps a canonical post id to its
+    currently publicly renderable accepted shared-thread destinations as [(slug, name)] pairs,
+    already restricted and ordered by {!Shared_thread_reading.public_destinations_for_posts};
+    it only appends the "Shared with" provenance span to the matching cards — it can never
+    add, drop, or reorder the rows the feed query selected. *)
+val feed_page : ?user:string -> scope:string -> sort_mode:string -> is_logged_in:bool -> admin_usernames:string list -> rail_communities:Db.community list -> user_votes:(int * int) list -> current_page:int -> ?shared_destinations:(int * (string * string) list) list -> Db.post list -> Dream.request -> string
 (** [source_focus] = (promoted post id, post title, chronological highlight message ids):
     renders the reverse-navigation state — SSR context notice, anchor/highlight data
     attributes, canonical link to the clean channel URL. Omitted → normal channel page. *)
@@ -77,8 +81,15 @@ type thread_creation_notice =
     (callers must also pass [~noindex:true] for destination contexts). The
     moderator-facing arguments ([is_current_user_mod], [mod_usernames],
     [banned_usernames]) are ALWAYS the canonical origin community's:
-    destination standing grants no canonical-content controls. *)
-val thread_shell_page : ?user:string -> ?noindex:bool -> ?can_share:bool -> ?can_comment:bool -> ?creation_notice:thread_creation_notice -> ?shared_context:shared_thread_page_context -> is_member:bool -> is_current_user_mod:bool -> mod_usernames:string list -> admin_usernames:string list -> banned_usernames:string list -> rail_communities:Db.community list -> channels:Db.channel list -> sections:Db.community_section list -> community:Db.community -> ?thread_source:thread_source_view -> user_post_votes:(int * int) list -> user_comment_votes:(int * int) list -> post:Db.post -> comments:Db.comment list -> Dream.request -> string
+    destination standing grants no canonical-content controls.
+    [shared_with] (default []) is the ORIGIN rendering's own provenance —
+    the post's currently publicly renderable accepted destinations as
+    [(slug, name)] pairs from
+    {!Shared_thread_reading.public_destinations_for_posts} — rendered as the
+    "Shared with" label in the thread meta. A destination-context rendering
+    ([shared_context = Some _]) ignores it entirely, so the two provenance
+    directions can never appear on one page. *)
+val thread_shell_page : ?user:string -> ?noindex:bool -> ?can_share:bool -> ?can_comment:bool -> ?creation_notice:thread_creation_notice -> ?shared_context:shared_thread_page_context -> ?shared_with:(string * string) list -> is_member:bool -> is_current_user_mod:bool -> mod_usernames:string list -> admin_usernames:string list -> banned_usernames:string list -> rail_communities:Db.community list -> channels:Db.channel list -> sections:Db.community_section list -> community:Db.community -> ?thread_source:thread_source_view -> user_post_votes:(int * int) list -> user_comment_votes:(int * int) list -> post:Db.post -> comments:Db.comment list -> Dream.request -> string
 (** [connected_projects_count] and [connected_communities_count] are how many records the
     two public connected-* read models returned for this community — the sizes of exactly
     the lists [/c/:slug/network] renders. The home carries the compact Network entry point

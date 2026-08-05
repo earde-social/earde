@@ -943,8 +943,34 @@ let feed_handler request =
 
     match posts, user_votes, user_communities with
     | Ok p, Ok v, Ok rail ->
+        (* Origin-side Shared Threads provenance for exactly the page of
+           canonical posts the feed query already selected: ONE bounded
+           batch read (never per-post), grouped here into a
+           post_id -> destinations map. Purely additive enrichment — the
+           feed's selection, ordering, and pagination above are untouched —
+           and a failure degrades to no indicators, never a failed page
+           (the chat-provenance pattern). *)
+        let%lwt shared_destinations =
+          match%lwt
+            Shared_thread_reading.public_destinations_for_posts db
+              ~post_ids:(List.map (fun (post : Db.post) -> post.id) p)
+          with
+          | Ok rows ->
+              let grouped =
+                List.fold_left
+                  (fun acc (post_id, dest) ->
+                    let existing =
+                      Option.value ~default:[] (List.assoc_opt post_id acc) in
+                    (post_id, existing @ [ dest ])
+                    :: List.remove_assoc post_id acc)
+                  [] rows
+              in
+              Lwt.return grouped
+          | Error _ -> Lwt.return []
+        in
         Dream.html (Pages.feed_page ?user ~scope ~sort_mode:sort_str ~is_logged_in
-                      ~admin_usernames ~rail_communities:rail ~user_votes:v ~current_page:page p request)
+                      ~admin_usernames ~rail_communities:rail ~user_votes:v ~current_page:page
+                      ~shared_destinations p request)
     | Error e, _, _ | _, Error e, _ | _, _, Error e ->
         Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:("Database error: " ^ e) ~alert_type:"error" ~return_url:"/" request)
   )
@@ -3690,11 +3716,24 @@ let view_thread_handler request =
             | Some "requested" -> Some Pages.Creation_share_requested
             | Some "failed" -> Some Pages.Creation_share_failed
             | _ -> None in
+          (* Origin-side provenance for THIS canonical rendering only (the
+             destination-context branch above never computes it): the post's
+             currently publicly renderable accepted destinations, from the
+             same batch read the global feed uses — one bounded query, and a
+             failure degrades to no indicator, never an error page. *)
+          let%lwt shared_with =
+            match%lwt
+              Shared_thread_reading.public_destinations_for_posts db
+                ~post_ids:[ post.id ]
+            with
+            | Ok rows -> Lwt.return (List.map snd rows)
+            | Error _ -> Lwt.return []
+          in
           match comments_result, is_member_result with
           | Ok comments, Ok is_member ->
               let is_mod = match is_mod_res with Ok b -> b | _ -> false in
               let mod_usernames = match mods_res with Ok ms -> List.map (fun (u : Db.user) -> u.username) ms | _ -> [] in
-              Dream.html (Pages.thread_shell_page ?user:user_sess ~noindex ~can_share ~can_comment ?creation_notice ~is_member ~is_current_user_mod:is_mod
+              Dream.html (Pages.thread_shell_page ?user:user_sess ~noindex ~can_share ~can_comment ?creation_notice ~shared_with ~is_member ~is_current_user_mod:is_mod
                 ~mod_usernames ~admin_usernames ~banned_usernames ~rail_communities ~channels ~sections
                 ~community:community_for_page ?thread_source ~user_post_votes ~user_comment_votes ~post ~comments request)
           | _ -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user:user_sess ~title:"Error" ~message:"Failed to load thread data. Please try again later." ~alert_type:"error" ~return_url:("/c/" ^ community_slug) request)
