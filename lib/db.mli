@@ -464,6 +464,13 @@ module Membership : sig
   val get_user_communities : (module Caqti_lwt.CONNECTION) -> int -> (community list, string) result Lwt.t
 end
 
+(** Promotion failures classified at the database boundary. [Promotion_refused]
+    carries a fixed user-facing domain message; [Promotion_storage_error]
+    carries driver detail that must never reach a client. *)
+type promote_error =
+  | Promotion_refused of string
+  | Promotion_storage_error of string
+
 module Moderator : sig
   val add_moderator : (module Caqti_lwt.CONNECTION) -> int -> int -> (unit, string) result Lwt.t
   val add_top_moderator : (module Caqti_lwt.CONNECTION) -> int -> int -> (unit, string) result Lwt.t
@@ -473,7 +480,7 @@ module Moderator : sig
   val get_community_mods_with_roles : (module Caqti_lwt.CONNECTION) -> int -> (moderator_entry list, string) result Lwt.t
   val remove_moderator : (module Caqti_lwt.CONNECTION) -> int -> int -> (unit, string) result Lwt.t
   val get_moderated_communities : (module Caqti_lwt.CONNECTION) -> int -> (community list, string) result Lwt.t
-  val promote_to_top_mod : (module Caqti_lwt.CONNECTION) -> int -> int -> (unit, string) result Lwt.t
+  val promote_to_top_mod : (module Caqti_lwt.CONNECTION) -> int -> int -> (unit, promote_error) result Lwt.t
   val demote_inactive_mods : (module Caqti_lwt.CONNECTION) -> (unit, string) result Lwt.t
 end
 
@@ -855,7 +862,7 @@ val is_globally_banned : (module Caqti_lwt.CONNECTION) -> int -> (bool, string) 
 val unban_user_global : (module Caqti_lwt.CONNECTION) -> int -> (unit, string) result Lwt.t
 val get_globally_banned_users : (module Caqti_lwt.CONNECTION) -> (user list, string) result Lwt.t
 
-val promote_to_top_mod : (module Caqti_lwt.CONNECTION) -> int -> int -> (unit, string) result Lwt.t
+val promote_to_top_mod : (module Caqti_lwt.CONNECTION) -> int -> int -> (unit, promote_error) result Lwt.t
 val get_moderator_role : (module Caqti_lwt.CONNECTION) -> int -> int -> (string option, string) result Lwt.t
 val get_community_mods_with_roles : (module Caqti_lwt.CONNECTION) -> int -> (moderator_entry list, string) result Lwt.t
 val demote_inactive_mods : (module Caqti_lwt.CONNECTION) -> (unit, string) result Lwt.t

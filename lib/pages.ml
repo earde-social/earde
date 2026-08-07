@@ -5570,13 +5570,18 @@ let notifications_page ?user ?(rail_communities = []) (notifs : Db.notification 
 (* user_votes is part of the stable positional API (vote state for the old card renderer); the
    compact search rows show score but no vote arrows, so it is intentionally unused here. *)
 let search_results_page ?user ~admin_usernames ?(chat_sources=[]) ?(rail_communities=[]) _user_votes current_page active_tab query (communities: community list) users (posts: post list) comments request =
-  (* Escape the raw query once — reused in HTML text, the input value, the <title>, and href
-     attributes. HTML-encoding in href is correct: browsers decode entities before navigating. *)
+  (* Two escaping contexts, applied separately: [eq]/[et] are HTML-escaped for
+     text and form-value positions. URLs built for href attributes first
+     percent-encode the value as a query parameter (so '&', '=', '#', spaces
+     and non-ASCII survive URL parsing intact), and the finished URL is then
+     HTML-escaped because it lands inside an attribute. *)
   let q = String.trim query in
   let has_query = q <> "" in
   let eq = Components.html_escape q in
+  let url_q = Components.html_escape (Uri.pct_encode ~component:`Query_value q) in
   let csrf_token = Dream.csrf_tag request in
   let et = Components.html_escape active_tab in
+  let url_t = Components.html_escape (Uri.pct_encode ~component:`Query_value active_tab) in
 
   let chat_source_for id =
     List.find_opt (fun (pid, _, _, _) -> pid = id) chat_sources
@@ -5695,7 +5700,7 @@ let search_results_page ?user ~admin_usernames ?(chat_sources=[]) ?(rail_communi
 
   let tab label tab_value =
     let cls = if tab_value = active_tab then "sr-tab is-active" else "sr-tab" in
-    Printf.sprintf "<a class='%s' href='/search?q=%s&t=%s'>%s</a>" cls eq tab_value label
+    Printf.sprintf "<a class='%s' href='/search?q=%s&t=%s'>%s</a>" cls url_q tab_value label
   in
   (* Visible "Threads" maps to the internal tab value "posts" (unchanged route semantics). *)
   let tabs_html = Printf.sprintf "<nav class='sr-tabs'>%s%s%s%s</nav>"
@@ -5729,9 +5734,9 @@ let search_results_page ?user ~admin_usernames ?(chat_sources=[]) ?(rail_communi
   in
 
   let prev_btn = if current_page <= 1 then "" else
-    Printf.sprintf "<a class='sr-page' href='/search?q=%s&t=%s&page=%d'>&larr; Prev</a>" eq et (current_page - 1) in
+    Printf.sprintf "<a class='sr-page' href='/search?q=%s&t=%s&page=%d'>&larr; Prev</a>" url_q url_t (current_page - 1) in
   let next_btn = if not has_next then "" else
-    Printf.sprintf "<a class='sr-page' href='/search?q=%s&t=%s&page=%d'>Next &rarr;</a>" eq et (current_page + 1) in
+    Printf.sprintf "<a class='sr-page' href='/search?q=%s&t=%s&page=%d'>Next &rarr;</a>" url_q url_t (current_page + 1) in
 
   (* The search header (label + input) is always present; tabs/results only when a query exists. *)
   let header_html = Printf.sprintf "

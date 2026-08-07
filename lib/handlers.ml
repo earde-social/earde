@@ -80,6 +80,16 @@ let safe_local_redirect ?(default = "/") request target =
     | None -> (
         match same_origin_path target with Some p -> p | None -> default)
 
+(* Database failures must never reach a response body: the strings produced
+   by Caqti_error.show may contain internal driver details, connection
+   metadata, and SQL text (including constraint and relation names). Log the
+   detail server-side and render this stable generic message instead. *)
+let generic_db_error = "A database error occurred. Please try again later."
+
+let db_error_message err =
+  Logs.err (fun m -> m "database error: %s" err);
+  generic_db_error
+
 (* Scan body text for @username tokens without external library deps.
    Only ASCII-alphanumeric + underscore is valid; deduped via sort_uniq to avoid
    sending the same user multiple notifications from repeated mentions. *)
@@ -518,7 +528,7 @@ let signup_handler request =
       ) in
       (match precheck with
       | Error err ->
-          Dream.html (Pages.msg_page ~auth:true ~title:"Registration Failed" ~message:("Registration failed: " ^ err) ~alert_type:"error" ~return_url:"/signup" request)
+          Dream.html (Pages.msg_page ~auth:true ~title:"Registration Failed" ~message:(db_error_message err) ~alert_type:"error" ~return_url:"/signup" request)
       | Ok `User_taken ->
           let user = Dream.session_field request "username" in
           Dream.html (Pages.signup_form ?user ?turnstile_site_key ~error:"This username or email is already taken." request)
@@ -550,7 +560,7 @@ let signup_handler request =
               let%lwt () = Email.send_pending_signup_confirmation_email ~to_email:email ~token in
               Dream.html (check_your_email_page request)
           | Error err ->
-              Dream.html (Pages.msg_page ~auth:true ~title:"Registration Failed" ~message:("Registration failed: " ^ err) ~alert_type:"error" ~return_url:"/signup" request))
+              Dream.html (Pages.msg_page ~auth:true ~title:"Registration Failed" ~message:(db_error_message err) ~alert_type:"error" ~return_url:"/signup" request))
       | Error err -> Dream.html (Pages.msg_page ~auth:true ~title:"Security Error" ~message:("Security error: " ^ err) ~alert_type:"error" ~return_url:"/signup" request))))
 
   | _ -> Dream.html (Pages.msg_page ~auth:true ~title:"Form Error" ~message:"Your form submission failed. The CSRF token was invalid or your session expired. Please try again." ~alert_type:"error" ~return_url:"/signup" request)
@@ -565,7 +575,7 @@ let verify_email_handler request =
             Dream.html (Pages.msg_page ~auth:true ~title:"Email Verified!" ~message:(Printf.sprintf "Your account u/%s is now verified. You can log in." username) ~alert_type:"success" ~return_url:"/login" request)
         | Ok None ->
             Dream.html (Pages.msg_page ~auth:true ~title:"Verification Failed" ~message:"This link is invalid or your email has already been verified." ~alert_type:"error" ~return_url:"/signup" request)
-        | Error err -> Dream.html (Pages.msg_page ~auth:true ~title:"Error" ~message:("A database error occurred: " ^ err) ~alert_type:"error" ~return_url:"/" request)
+        | Error err -> Dream.html (Pages.msg_page ~auth:true ~title:"Error" ~message:(db_error_message err) ~alert_type:"error" ~return_url:"/" request)
       )
 
 (* Pending-signup confirmation: hashing the URL token and matching it is what creates the
@@ -759,7 +769,7 @@ let confirm_email_handler request =
         | Ok `Conflict ->
             Dream.html (Pages.msg_page ~auth:true ~title:"Already Registered" ~message:"An account with this username or email already exists. Please log in." ~alert_type:"error" ~return_url:"/login" request)
         | Error err ->
-            Dream.html (Pages.msg_page ~auth:true ~title:"Error" ~message:("A database error occurred: " ^ err) ~alert_type:"error" ~return_url:"/" request))
+            Dream.html (Pages.msg_page ~auth:true ~title:"Error" ~message:(db_error_message err) ~alert_type:"error" ~return_url:"/" request))
 
 let login_page request =
   let user = Dream.session_field request "username" in
@@ -812,7 +822,7 @@ let login_handler request =
                   Dream.redirect request "/"
               | _ -> Dream.html (Pages.msg_page ~auth:true ~title:"Login Failed" ~message:"Invalid username or password." ~alert_type:"error" ~return_url:"/login" request))
         | Ok None -> Dream.html (Pages.msg_page ~auth:true ~title:"Login Failed" ~message:"Invalid username or password." ~alert_type:"error" ~return_url:"/login" request)
-        | Error err -> Dream.html (Pages.msg_page ~auth:true ~title:"Error" ~message:("Database error: " ^ err) ~alert_type:"error" ~return_url:"/login" request))
+        | Error err -> Dream.html (Pages.msg_page ~auth:true ~title:"Error" ~message:(db_error_message err) ~alert_type:"error" ~return_url:"/login" request))
   | _ -> Dream.html (Pages.msg_page ~auth:true ~title:"Form Error" ~message:"There was a problem with your form submission. Your session may have expired." ~alert_type:"error" ~return_url:"/login" request)
 
 let logout_handler request =
@@ -972,7 +982,7 @@ let feed_handler request =
                       ~admin_usernames ~rail_communities:rail ~user_votes:v ~current_page:page
                       ~shared_destinations p request)
     | Error e, _, _ | _, Error e, _ | _, _, Error e ->
-        Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:("Database error: " ^ e) ~alert_type:"error" ~return_url:"/" request)
+        Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:"/" request)
   )
 
 let search_handler request =
@@ -1422,7 +1432,7 @@ let community_page_handler request =
                Dream.html (Pages.community_page ?user ~noindex:(community_noindex community) ~connected_projects ~connected_communities ~is_member:m ~is_current_user_mod:is_mod ~is_current_user_top_mod:is_top_mod ~mod_usernames ~admin_usernames ~banned_usernames ~user_communities ~moderated_communities v page sort_str community p request)))
          | _ -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:"Failed to load community data." ~alert_type:"error" ~return_url:"/" request))
     | Ok None -> Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"Not Found" ~message:"This community does not exist." ~alert_type:"error" ~return_url:"/" request)
-    | Error err -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:("Database error: " ^ err) ~alert_type:"error" ~return_url:"/" request)
+    | Error err -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message err) ~alert_type:"error" ~return_url:"/" request)
   )
 
 (* === Public Network page: GET /c/:slug/network ===
@@ -1498,7 +1508,7 @@ let community_network_handler request =
                     ~communities)
                ~can_connect:(is_top_mod || is_admin) request)))
     | Ok None -> Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"Not Found" ~message:"This community does not exist." ~alert_type:"error" ~return_url:"/" request)
-    | Error err -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:("Database error: " ^ err) ~alert_type:"error" ~return_url:"/" request)
+    | Error err -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message err) ~alert_type:"error" ~return_url:"/" request)
   )
 
 (* Section feed at /c/:slug/s/:section_slug — pretty URL replaces the old ?section=id param. *)
@@ -1517,7 +1527,7 @@ let community_section_handler request =
     let%lwt _ = Db.demote_inactive_mods db in
     match%lwt Db.get_community_by_slug db community_slug with
     | Ok None -> Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"Not Found" ~message:"This community does not exist." ~alert_type:"error" ~return_url:"/" request)
-    | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:("Database error: " ^ e) ~alert_type:"error" ~return_url:"/" request)
+    | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:"/" request)
     | Ok (Some community) ->
         let%lwt authorized = can_view_community db ~user_id ~is_admin community in
         if not authorized then community_not_found ?user request
@@ -1593,7 +1603,7 @@ let community_section_handler request =
         end else begin
           match%lwt Db.get_section_by_slug db section_slug community.id with
           | Ok None -> Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"Not Found" ~message:"This section does not exist." ~alert_type:"error" ~return_url:("/c/" ^ community_slug) request)
-          | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:("Database error: " ^ e) ~alert_type:"error" ~return_url:"/" request)
+          | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:"/" request)
           | Ok (Some section) ->
               let sort_mode =
                 let from_query = match sort_str_opt with
@@ -1624,14 +1634,14 @@ let community_channel_handler request =
   Dream.sql request (fun db ->
     match%lwt Db.get_community_by_slug db community_slug with
     | Ok None -> Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"Not Found" ~message:"This community does not exist." ~alert_type:"error" ~return_url:"/" request)
-    | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:("Database error: " ^ e) ~alert_type:"error" ~return_url:"/" request)
+    | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:"/" request)
     | Ok (Some community) ->
         let%lwt authorized = can_view_community db ~user_id ~is_admin community in
         if not authorized then community_not_found ?user request
         else
         match%lwt Db.get_channel_by_slug db channel_slug community.id with
         | Ok None -> Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"Not Found" ~message:"This channel does not exist." ~alert_type:"error" ~return_url:("/c/" ^ community_slug) request)
-        | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:("Database error: " ^ e) ~alert_type:"error" ~return_url:"/" request)
+        | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:"/" request)
         | Ok (Some channel) ->
             let%lwt channels = match%lwt Db.get_channels_by_community db community.id with Ok cs -> Lwt.return cs | Error _ -> Lwt.return [] in
             let%lwt sections = match%lwt Db.get_sections_by_community db community.id with Ok ss -> Lwt.return ss | Error _ -> Lwt.return [] in
@@ -1954,7 +1964,7 @@ let send_message_handler request =
             if respond_json then
               Dream.json ~status:`Internal_Server_Error Chat_api.internal_error_json
             else
-              Dream.html (Pages.msg_page ?user:uname ~title:"Error" ~message:("Database error: " ^ e) ~alert_type:"error" ~return_url:"/" request)
+              Dream.html (Pages.msg_page ?user:uname ~title:"Error" ~message:generic_db_error ~alert_type:"error" ~return_url:"/" request)
           in
           with_analytics_after_sql (fun record ->
           Dream.sql request (fun db ->
@@ -2045,7 +2055,7 @@ let send_message_handler request =
                                        else Dream.redirect request (safe_local_redirect request back_url)
                                    | Error e ->
                                        if respond_json then internal_error e
-                                       else Dream.html (Pages.msg_page ?user:uname ~title:"Error" ~message:("Could not send message: " ^ e) ~alert_type:"error" ~return_url:back_url request))))
+                                       else Dream.html (Pages.msg_page ?user:uname ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:back_url request))))
                        | Ok false ->
                            if respond_json then
                              json_error `Forbidden ~code:"not_member" ~message:"Join this community to chat."
@@ -2134,7 +2144,7 @@ let start_thread_form_handler request =
            Dream.sql request (fun db ->
              match%lwt Db.get_community_by_slug db community_slug with
              | Ok None -> Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"Not Found" ~message:"This community does not exist." ~alert_type:"error" ~return_url:"/" request)
-             | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:("Database error: " ^ e) ~alert_type:"error" ~return_url:"/" request)
+             | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:"/" request)
              | Ok (Some community) ->
                  (* Slice C: a private community is hidden — a non-authorized viewer gets the
                     same 404 as a missing community, BEFORE any membership-specific 403 below.
@@ -2145,10 +2155,10 @@ let start_thread_form_handler request =
                  else
                  (match%lwt Db.get_channel_by_slug db channel_slug community.id with
                   | Ok None -> Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"Not Found" ~message:"This channel does not exist." ~alert_type:"error" ~return_url:("/c/" ^ community_slug) request)
-                  | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:("Database error: " ^ e) ~alert_type:"error" ~return_url:"/" request)
+                  | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:"/" request)
                   | Ok (Some channel) ->
                       (match%lwt Db.get_message_by_id db message_id with
-                       | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:("Database error: " ^ e) ~alert_type:"error" ~return_url:channel_url request)
+                       | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:channel_url request)
                        | Ok None -> Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"Not Found" ~message:"That message does not exist." ~alert_type:"error" ~return_url:channel_url request)
                        | Ok (Some (seed : Db.chat_message)) ->
                            if seed.channel_id <> channel.id || seed.deleted_at <> None then
@@ -2157,10 +2167,10 @@ let start_thread_form_handler request =
                              (match%lwt check_start_permission db ~user_id ~is_admin ~community_id:community.id with
                               | Start_banned -> Dream.respond ~status:`Forbidden (Pages.msg_page ?user ~title:"Not Allowed" ~message:"You cannot start threads in this community." ~alert_type:"error" ~return_url:channel_url request)
                               | Start_not_member -> Dream.respond ~status:`Forbidden (Pages.msg_page ?user ~title:"Join to start a thread" ~message:"You must be a member of this community to start a thread." ~alert_type:"error" ~return_url:("/c/" ^ community_slug) request)
-                              | Start_error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:("Database error: " ^ e) ~alert_type:"error" ~return_url:channel_url request)
+                              | Start_error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:channel_url request)
                               | Start_allowed ->
                                   (match%lwt Db.get_seed_thread_for_message db message_id with
-                                   | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:("Database error: " ^ e) ~alert_type:"error" ~return_url:channel_url request)
+                                   | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:channel_url request)
                                    | Ok (Some (post_id, title, cslug)) ->
                                        Dream.html (Pages.msg_page ?user ~title:"Thread already started" ~message:"This message has already been made into a thread." ~alert_type:"info" ~return_url:(Components.canonical_thread_path cslug post_id title) request)
                                    | Ok None ->
@@ -2214,7 +2224,7 @@ let start_thread_create_handler request =
                 Dream.sql request (fun db ->
                   match%lwt Db.get_community_by_slug db community_slug with
                   | Ok None -> Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"Not Found" ~message:"This community does not exist." ~alert_type:"error" ~return_url:"/" request)
-                  | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:("Database error: " ^ e) ~alert_type:"error" ~return_url:"/" request)
+                  | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:"/" request)
                   | Ok (Some community) ->
                       (* Slice C: private community hidden — non-authorized viewer gets 404, not
                          the membership 403 below. check_start_permission still gates creation. *)
@@ -2223,10 +2233,10 @@ let start_thread_create_handler request =
                       else
                       (match%lwt Db.get_channel_by_slug db channel_slug community.id with
                        | Ok None -> Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"Not Found" ~message:"This channel does not exist." ~alert_type:"error" ~return_url:("/c/" ^ community_slug) request)
-                       | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:("Database error: " ^ e) ~alert_type:"error" ~return_url:"/" request)
+                       | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:"/" request)
                        | Ok (Some channel) ->
                            (match%lwt Db.get_message_by_id db message_id with
-                            | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:("Database error: " ^ e) ~alert_type:"error" ~return_url:channel_url request)
+                            | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:channel_url request)
                             | Ok None -> Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"Not Found" ~message:"That message does not exist." ~alert_type:"error" ~return_url:channel_url request)
                             | Ok (Some (seed : Db.chat_message)) ->
                                 if seed.channel_id <> channel.id || seed.deleted_at <> None then
@@ -2235,10 +2245,10 @@ let start_thread_create_handler request =
                                   (match%lwt check_start_permission db ~user_id ~is_admin ~community_id:community.id with
                                    | Start_banned -> Dream.respond ~status:`Forbidden (Pages.msg_page ?user ~title:"Not Allowed" ~message:"You cannot start threads in this community." ~alert_type:"error" ~return_url:channel_url request)
                                    | Start_not_member -> Dream.respond ~status:`Forbidden (Pages.msg_page ?user ~title:"Join to start a thread" ~message:"You must be a member of this community to start a thread." ~alert_type:"error" ~return_url:("/c/" ^ community_slug) request)
-                                   | Start_error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:("Database error: " ^ e) ~alert_type:"error" ~return_url:channel_url request)
+                                   | Start_error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:channel_url request)
                                    | Start_allowed ->
                                        (match%lwt Db.get_seed_thread_for_message db message_id with
-                                        | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:("Database error: " ^ e) ~alert_type:"error" ~return_url:channel_url request)
+                                        | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:channel_url request)
                                         | Ok (Some (pid, ttl, cslug)) ->
                                             Dream.html (Pages.msg_page ?user ~title:"Thread already started" ~message:"This message has already been made into a thread." ~alert_type:"info" ~return_url:(Components.canonical_thread_path cslug pid ttl) request)
                                         | Ok None ->
@@ -2286,7 +2296,7 @@ let start_thread_create_handler request =
                                               match section_result with
                                               | Error "section_required" -> rerender ~error:"Please select a section." ()
                                               | Error "section_invalid" -> rerender ~error:"The selected section is not valid for this community." ()
-                                              | Error e -> rerender ~error:("Database error: " ^ e) ()
+                                              | Error e -> rerender ~error:(db_error_message e) ()
                                               | Ok section_id ->
                                                   (match%lwt Db.start_thread_from_chat db ~title ~content ~section_id ~community_id:community.id ~user_id ~channel_id:channel.id ~seed_message_id:message_id ~context_message_ids:context with
                                                    | Ok post_id ->
@@ -2410,7 +2420,7 @@ let leave_community_handler request =
                         ~distinct_id:(Analytics.distinct_id_of_user_id user_id)
                         (Analytics.Community_left { user_id; community_id }));
                 Dream.redirect request (safe_local_redirect request redirect_to)
-            | Error err -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Error" ~message:("Database error: " ^ err) ~alert_type:"error" ~return_url:"/" request)
+            | Error err -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Error" ~message:(db_error_message err) ~alert_type:"error" ~return_url:"/" request)
           ))
       | _ -> Dream.respond ~status:`Bad_Request (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Form Error" ~message:"Invalid form submission." ~alert_type:"error" ~return_url:"/" request)
 
@@ -2498,10 +2508,10 @@ let community_settings_handler request =
                              && community.onboarding_state = Db.Community_draft))
                         (fun connected_projects ->
                       Dream.html (Pages.community_settings_page ?user ~connected_projects ~rail_communities ~is_admin ~is_top_mod ~open_reports_count ~community ~mods ~banned_users ~members ~sections ~channels request))
-                  | Error e -> Dream.html ("DB Error: " ^ e))
-              | Error e -> Dream.html ("DB Error: " ^ e))
+                  | Error e -> Dream.html (db_error_message e))
+              | Error e -> Dream.html (db_error_message e))
         | Ok None -> Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"Not Found" ~message:"This community does not exist." ~alert_type:"error" ~return_url:"/" request)
-        | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:("Database error: " ^ e) ~alert_type:"error" ~return_url:"/" request)
+        | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:"/" request)
       )
 
 let add_section_handler request =
@@ -2525,7 +2535,7 @@ let add_section_handler request =
           Dream.sql request (fun db ->
             match%lwt Db.get_community_by_slug db slug with
             | Ok None -> Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"Not Found" ~message:"Community not found." ~alert_type:"error" ~return_url:"/" request)
-            | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:e ~alert_type:"error" ~return_url:"/" request)
+            | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:"/" request)
             | Ok (Some community) ->
                 let%lwt is_auth = if is_admin then Lwt.return true
                   else (match%lwt Db.is_moderator db user_id community.id with Ok b -> Lwt.return b | _ -> Lwt.return false) in
@@ -2534,7 +2544,7 @@ let add_section_handler request =
                 else
                   (match%lwt Db.create_section db community.id name description position default_sort false with
                    | Ok () -> Dream.redirect request ("/c/" ^ slug ^ "/settings?panel=channels")
-                   | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:e ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/settings") request)))
+                   | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/settings") request)))
       | _ -> Dream.respond ~status:`Bad_Request (Pages.msg_page ?user ~title:"Form Error" ~message:"Invalid form submission." ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/settings") request)
 
 let update_section_handler request =
@@ -2562,7 +2572,7 @@ let update_section_handler request =
           Dream.sql request (fun db ->
             match%lwt Db.get_community_by_slug db slug with
             | Ok None -> Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"Not Found" ~message:"Community not found." ~alert_type:"error" ~return_url:"/" request)
-            | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:e ~alert_type:"error" ~return_url:"/" request)
+            | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:"/" request)
             | Ok (Some community) ->
                 let%lwt is_auth = if is_admin then Lwt.return true
                   else (match%lwt Db.is_moderator db user_id community.id with Ok b -> Lwt.return b | _ -> Lwt.return false) in
@@ -2572,11 +2582,11 @@ let update_section_handler request =
                   (* Validate section belongs to this community before updating *)
                   (match%lwt Db.get_section_by_id db section_id community.id with
                    | Ok None -> Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"Not Found" ~message:"Section not found." ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/settings") request)
-                   | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:e ~alert_type:"error" ~return_url:"/" request)
+                   | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:"/" request)
                    | Ok (Some _) ->
                        (match%lwt Db.update_section db section_id name description default_sort with
                         | Ok () -> Dream.redirect request ("/c/" ^ slug ^ "/settings?panel=channels")
-                        | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:e ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/settings") request))))
+                        | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/settings") request))))
       | _ -> Dream.respond ~status:`Bad_Request (Pages.msg_page ?user ~title:"Form Error" ~message:"Invalid form submission." ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/settings") request)
 
 let delete_section_handler request =
@@ -2597,7 +2607,7 @@ let delete_section_handler request =
           Dream.sql request (fun db ->
             match%lwt Db.get_community_by_slug db slug with
             | Ok None -> Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"Not Found" ~message:"Community not found." ~alert_type:"error" ~return_url:"/" request)
-            | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:e ~alert_type:"error" ~return_url:"/" request)
+            | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:"/" request)
             | Ok (Some community) ->
                 let%lwt is_auth = if is_admin then Lwt.return true
                   else (match%lwt Db.is_moderator db user_id community.id with Ok b -> Lwt.return b | _ -> Lwt.return false) in
@@ -2606,7 +2616,7 @@ let delete_section_handler request =
                 else
                   (match%lwt Db.delete_section db section_id community.id with
                    | Ok () -> Dream.redirect request ("/c/" ^ slug ^ "/settings?panel=channels")
-                   | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:e ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/settings") request)))
+                   | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/settings") request)))
       | _ -> Dream.respond ~status:`Bad_Request (Pages.msg_page ?user ~title:"Form Error" ~message:"Invalid form submission." ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/settings") request)
 
 (* === Live chat channel management ===
@@ -2636,7 +2646,7 @@ let add_channel_handler request =
           Dream.sql request (fun db ->
             match%lwt Db.get_community_by_slug db slug with
             | Ok None -> Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"Not Found" ~message:"Community not found." ~alert_type:"error" ~return_url:"/" request)
-            | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:e ~alert_type:"error" ~return_url:"/" request)
+            | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:"/" request)
             | Ok (Some community) ->
                 let%lwt is_auth = if is_admin then Lwt.return true
                   else (match%lwt Db.is_moderator db user_id community.id with Ok b -> Lwt.return b | _ -> Lwt.return false) in
@@ -2648,7 +2658,7 @@ let add_channel_handler request =
                     | Ok cs -> Lwt.return (List.length cs) | Error _ -> Lwt.return 0 in
                   (match%lwt Db.create_channel db community.id name topic position with
                    | Ok _slug -> Dream.redirect request ("/c/" ^ slug ^ "/settings?panel=channels")
-                   | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:e ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/settings") request)))
+                   | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/settings") request)))
       | _ -> Dream.respond ~status:`Bad_Request (Pages.msg_page ?user ~title:"Form Error" ~message:"Invalid form submission." ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/settings") request)
 
 let update_channel_handler request =
@@ -2675,7 +2685,7 @@ let update_channel_handler request =
           Dream.sql request (fun db ->
             match%lwt Db.get_community_by_slug db slug with
             | Ok None -> Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"Not Found" ~message:"Community not found." ~alert_type:"error" ~return_url:"/" request)
-            | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:e ~alert_type:"error" ~return_url:"/" request)
+            | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:"/" request)
             | Ok (Some community) ->
                 let%lwt is_auth = if is_admin then Lwt.return true
                   else (match%lwt Db.is_moderator db user_id community.id with Ok b -> Lwt.return b | _ -> Lwt.return false) in
@@ -2686,11 +2696,11 @@ let update_channel_handler request =
                      untouched — only display name + topic change. *)
                   (match%lwt Db.get_channel_by_id db channel_id community.id with
                    | Ok None -> Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"Not Found" ~message:"Channel not found." ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/settings") request)
-                   | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:e ~alert_type:"error" ~return_url:"/" request)
+                   | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:"/" request)
                    | Ok (Some _) ->
                        (match%lwt Db.update_channel db channel_id community.id name topic with
                         | Ok () -> Dream.redirect request ("/c/" ^ slug ^ "/settings?panel=channels")
-                        | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:e ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/settings") request))))
+                        | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/settings") request))))
       | _ -> Dream.respond ~status:`Bad_Request (Pages.msg_page ?user ~title:"Form Error" ~message:"Invalid form submission." ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/settings") request)
 
 let archive_channel_handler request =
@@ -2711,7 +2721,7 @@ let archive_channel_handler request =
           Dream.sql request (fun db ->
             match%lwt Db.get_community_by_slug db slug with
             | Ok None -> Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"Not Found" ~message:"Community not found." ~alert_type:"error" ~return_url:"/" request)
-            | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:e ~alert_type:"error" ~return_url:"/" request)
+            | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:"/" request)
             | Ok (Some community) ->
                 let%lwt is_auth = if is_admin then Lwt.return true
                   else (match%lwt Db.is_moderator db user_id community.id with Ok b -> Lwt.return b | _ -> Lwt.return false) in
@@ -2722,7 +2732,7 @@ let archive_channel_handler request =
                      invariants — the default `general` channel and the last active channel
                      must never be archived (a community always keeps somewhere to chat). *)
                   (match%lwt Db.get_channels_by_community db community.id with
-                   | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:e ~alert_type:"error" ~return_url:"/" request)
+                   | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:"/" request)
                    | Ok channels ->
                        (match List.find_opt (fun (c : Db.channel) -> c.id = channel_id) channels with
                         | None -> Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"Not Found" ~message:"Channel not found." ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/settings") request)
@@ -2735,7 +2745,7 @@ let archive_channel_handler request =
                             else
                               (match%lwt Db.set_channel_archived db channel_id community.id true with
                                | Ok () -> Dream.redirect request ("/c/" ^ slug ^ "/settings?panel=channels")
-                               | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:e ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/settings") request)))))
+                               | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/settings") request)))))
       | _ -> Dream.respond ~status:`Bad_Request (Pages.msg_page ?user ~title:"Form Error" ~message:"Invalid form submission." ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/settings") request)
 
 let unarchive_channel_handler request =
@@ -2756,7 +2766,7 @@ let unarchive_channel_handler request =
           Dream.sql request (fun db ->
             match%lwt Db.get_community_by_slug db slug with
             | Ok None -> Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"Not Found" ~message:"Community not found." ~alert_type:"error" ~return_url:"/" request)
-            | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:e ~alert_type:"error" ~return_url:"/" request)
+            | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:"/" request)
             | Ok (Some community) ->
                 let%lwt is_auth = if is_admin then Lwt.return true
                   else (match%lwt Db.is_moderator db user_id community.id with Ok b -> Lwt.return b | _ -> Lwt.return false) in
@@ -2766,11 +2776,11 @@ let unarchive_channel_handler request =
                   (* Validate ownership before flipping the flag. Unarchive is always safe. *)
                   (match%lwt Db.get_channel_by_id db channel_id community.id with
                    | Ok None -> Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"Not Found" ~message:"Channel not found." ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/settings") request)
-                   | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:e ~alert_type:"error" ~return_url:"/" request)
+                   | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:"/" request)
                    | Ok (Some _) ->
                        (match%lwt Db.set_channel_archived db channel_id community.id false with
                         | Ok () -> Dream.redirect request ("/c/" ^ slug ^ "/settings?panel=channels")
-                        | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:e ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/settings") request))))
+                        | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/settings") request))))
       | _ -> Dream.respond ~status:`Bad_Request (Pages.msg_page ?user ~title:"Form Error" ~message:"Invalid form submission." ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/settings") request)
 
 let modlog_handler request =
@@ -2815,9 +2825,9 @@ let modlog_handler request =
         in
         (match%lwt Db.get_modlog db community.id with
          | Ok actions -> Dream.html (Pages.mod_log_page ?user ~noindex:(community_noindex community) ~rail_communities ~can_access_settings ~channels ~sections ~community actions request)
-         | Error err -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:("Database error: " ^ err) ~alert_type:"error" ~return_url:("/c/" ^ slug) request))
+         | Error err -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message err) ~alert_type:"error" ~return_url:("/c/" ^ slug) request))
     | Ok None -> Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"Not Found" ~message:"This community does not exist." ~alert_type:"error" ~return_url:"/" request)
-    | Error err -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:("Database error: " ^ err) ~alert_type:"error" ~return_url:"/" request)
+    | Error err -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message err) ~alert_type:"error" ~return_url:"/" request)
   )
 
 (* === NETWORK-COMMUNITY LEGACY MUTATION GUARDS ===
@@ -2873,7 +2883,6 @@ let update_community_handler request =
             | _ -> ""
           in
           let community_id = try int_of_string (get_field "community_id") with _ -> 0 in
-          let community_slug = get_field "community_slug" in
           if community_id = 0 then Dream.respond ~status:`Bad_Request (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Form Error" ~message:"Invalid community reference." ~alert_type:"error" ~return_url:"/" request)
           else
           (* Empty string → None: lets mods clear a field without sending NULL hacks. *)
@@ -2897,6 +2906,18 @@ let update_community_handler request =
             if not authorized then
               Dream.respond ~status:`Forbidden (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Access Denied" ~message:"You must be a moderator to perform this action." ~alert_type:"error" ~return_url:"/" request)
             else
+            (* The community record is loaded up front because every redirect
+               and return URL below must be built from the authoritative
+               database slug — the submitted community_slug field is
+               attacker-controlled and reached the Location header. *)
+            match%lwt Db.get_community_by_id db community_id with
+            | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:"/" request)
+            | Ok loaded ->
+            let settings_url =
+              match loaded with
+              | Some c -> "/c/" ^ c.slug ^ "/settings"
+              | None -> "/"
+            in
             (* Image processing runs only AFTER the moderator check. It used
                to run before it, so any authenticated user could force two
                full ImageMagick conversions and leave two files in
@@ -2912,7 +2933,7 @@ let update_community_handler request =
             in
             match avatar_result, banner_result with
             | Error e, _ | _, Error e ->
-                Dream.html (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Image Error" ~message:e ~alert_type:"error" ~return_url:("/c/" ^ community_slug ^ "/settings") request)
+                Dream.html (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Image Error" ~message:e ~alert_type:"error" ~return_url:settings_url request)
             | Ok new_avatar, Ok new_banner ->
               (* new_avatar/new_banner are None when no file was submitted; fall back to existing. *)
               let avatar_url = if new_avatar <> None then new_avatar else existing_avatar in
@@ -2925,14 +2946,13 @@ let update_community_handler request =
                  CHECK. A legacy community keeps exactly its previous
                  behaviour, including the untouched no-op path when the id
                  matches nothing. *)
-              (match%lwt Db.get_community_by_id db community_id with
-               | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Error" ~message:("Database error: " ^ e) ~alert_type:"error" ~return_url:("/c/" ^ community_slug ^ "/settings") request)
-               | Ok (Some target) when is_network_setup_draft target ->
+              (match loaded with
+               | Some target when is_network_setup_draft target ->
                    (* The generic community 404: nothing about the draft's
                       lifecycle, identity, or authorization is disclosed, and
                       nothing is written. *)
                    community_not_found ?user:(Dream.session_field request "username") request
-               | Ok loaded ->
+               | loaded ->
                  let network_description =
                    match loaded with
                    | Some target when target.is_network_community ->
@@ -2944,7 +2964,7 @@ let update_community_handler request =
                  | Error () ->
                      (* Fail closed: no write, and no constraint name, SQL, or
                         submitted value in the response. *)
-                     Dream.respond ~status:`Bad_Request (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Form Error" ~message:"There was a problem with your submission. Please try again." ~alert_type:"error" ~return_url:("/c/" ^ community_slug ^ "/settings") request)
+                     Dream.respond ~status:`Bad_Request (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Form Error" ~message:"There was a problem with your submission. Please try again." ~alert_type:"error" ~return_url:settings_url request)
                  | Ok description ->
               (match%lwt Db.update_community_details db community_id description rules avatar_url banner_url with
               | Ok (Some community) ->
@@ -2955,13 +2975,13 @@ let update_community_handler request =
                       Analytics.identify_community_if_consented request
                         ~distinct_id:(Analytics.distinct_id_of_user_id user_id)
                         (community_group_of community));
-                  Dream.redirect request ("/c/" ^ community_slug ^ "/settings")
+                  Dream.redirect request settings_url
               | Ok None ->
                   (* No community matched the id: previously a silent no-op
                      UPDATE with the same redirect; keep the response, emit
                      nothing. *)
-                  Dream.redirect request ("/c/" ^ community_slug ^ "/settings")
-              | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Error" ~message:("Database error: " ^ e) ~alert_type:"error" ~return_url:("/c/" ^ community_slug ^ "/settings") request)))
+                  Dream.redirect request settings_url
+              | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:settings_url request)))
           ))
       | _ -> Dream.respond ~status:`Bad_Request (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Form Error" ~message:"Invalid form submission." ~alert_type:"error" ~return_url:"/" request)
 
@@ -3021,7 +3041,7 @@ let ban_community_user_handler request =
                     Dream.redirect request target
                   end
               | Ok None -> Dream.html (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"User Not Found" ~message:("No user was found with the username u/" ^ target_username ^ ".") ~alert_type:"error" ~return_url:"/" request)
-              | Error e -> Dream.html (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Error" ~message:("A database error occurred: " ^ e) ~alert_type:"error" ~return_url:"/" request))
+              | Error e -> Dream.html (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:"/" request))
           )
       | _ -> Dream.html (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Form Error" ~message:"There was a problem with your form submission. Please try again." ~alert_type:"error" ~return_url:"/" request)
 
@@ -3034,7 +3054,6 @@ let unban_community_user_handler request =
       match%lwt Dream.form request with
       | `Ok form_data ->
           let community_id = try int_of_string (List.assoc_opt "community_id" form_data |> Option.value ~default:"") with _ -> 0 in
-          let community_slug = List.assoc_opt "community_slug" form_data |> Option.value ~default:"" in
           let target_user_id = try int_of_string (List.assoc_opt "target_user_id" form_data |> Option.value ~default:"") with _ -> 0 in
           if community_id = 0 || target_user_id = 0 then
             Dream.respond ~status:`Bad_Request (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Form Error" ~message:"Invalid form data." ~alert_type:"error" ~return_url:"/" request)
@@ -3049,10 +3068,23 @@ let unban_community_user_handler request =
             in
             if not is_authorized then
               Dream.respond ~status:`Forbidden (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Access Denied" ~message:"You are not a moderator of this community." ~alert_type:"error" ~return_url:"/" request)
-            else begin
-              let%lwt _ = Db.community_unban_user db target_user_id community_id in
-              Dream.redirect request ("/c/" ^ community_slug ^ "/settings?panel=bans")
-            end
+            else
+              (* The authoritative record is loaded BEFORE mutating: the
+                 Location header must come from the database slug, never the
+                 submitted community_slug field (redirect/header injection),
+                 and a failed lookup or unban must surface as an error rather
+                 than a success-shaped redirect. *)
+              match%lwt Db.get_community_by_id db community_id with
+              | Error e ->
+                  Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:"/" request)
+              | Ok None ->
+                  Dream.respond ~status:`Not_Found (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Not Found" ~message:"Community not found." ~alert_type:"error" ~return_url:"/" request)
+              | Ok (Some community) ->
+                  let settings_url = "/c/" ^ community.Db.slug ^ "/settings?panel=bans" in
+                  (match%lwt Db.community_unban_user db target_user_id community_id with
+                   | Error e ->
+                       Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:settings_url request)
+                   | Ok () -> Dream.redirect request settings_url)
           )
       | _ -> Dream.html (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Form Error" ~message:"There was a problem with your form submission. Please try again." ~alert_type:"error" ~return_url:"/" request)
 
@@ -3134,10 +3166,10 @@ let new_post_page request =
                 | Ok false ->
                     let%lwt rail_communities = load_rail db in
                     Dream.html (Pages.join_to_post_page ?user ~rail_communities community request)
-                | Error err -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:("Database error: " ^ err) ~alert_type:"error" ~return_url:"/" request))
+                | Error err -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message err) ~alert_type:"error" ~return_url:"/" request))
 
             | Ok None -> community_not_found ?user request
-            | Error err -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:("Database error: " ^ err) ~alert_type:"error" ~return_url:"/" request)
+            | Error err -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message err) ~alert_type:"error" ~return_url:"/" request)
           )
       | None ->
           Dream.sql request (fun db ->
@@ -3155,7 +3187,7 @@ let new_post_page request =
                 in
                 let%lwt rail_communities = load_rail db in
                 Dream.html (Pages.choose_community_page ?user ~request ~rail_communities visible)
-            | Error err -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:("Database error: " ^ err) ~alert_type:"error" ~return_url:"/" request)
+            | Error err -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message err) ~alert_type:"error" ~return_url:"/" request)
           )
 
 let create_post_handler request =
@@ -3275,7 +3307,7 @@ let create_post_handler request =
                       | Error "section_invalid" ->
                           Dream.respond ~status:`Bad_Request (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Invalid Section" ~message:"The selected section does not belong to this community." ~alert_type:"error" ~return_url:"/" request)
                       | Error e ->
-                          Dream.html (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Error" ~message:("Database error: " ^ e) ~alert_type:"error" ~return_url:"/" request)
+                          Dream.html (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:"/" request)
                       | Ok section_id ->
                           (match%lwt Db.create_post db title url content image_url section_id community_id user_id with
                           | Ok new_post_id ->
@@ -3373,10 +3405,10 @@ let create_post_handler request =
                                         (Components.canonical_thread_path comm.Db.slug new_post_id title
                                          ^ "?shared=" ^ notice)
                                   | _ -> Dream.redirect request ("/p/" ^ string_of_int new_post_id)))
-                          | Error err -> Dream.html (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Error" ~message:("Error: " ^ err) ~alert_type:"error" ~return_url:"/" request)))))
+                          | Error err -> Dream.html (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Error" ~message:(db_error_message err) ~alert_type:"error" ~return_url:"/" request)))))
               | Ok false ->
                   Dream.html (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Not a Member" ~message:"You must join this community before you can post in it." ~alert_type:"error" ~return_url:"/" request)
-              | Error err -> Dream.html (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Error" ~message:("Database error: " ^ err) ~alert_type:"error" ~return_url:"/" request)
+              | Error err -> Dream.html (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Error" ~message:(db_error_message err) ~alert_type:"error" ~return_url:"/" request)
           ))
       | _ -> Dream.html (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Form Error" ~message:"There was a problem with your form submission. Please try again." ~alert_type:"error" ~return_url:"/" request)
 
@@ -3463,7 +3495,7 @@ let view_post_handler request =
         end
 
     | Ok None -> Dream.respond ~status:`Not_Found (Pages.msg_page ?user:user_sess ~title:"Not Found" ~message:"This post does not exist or has been deleted." ~alert_type:"error" ~return_url:"/" request)
-    | Error err -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user:user_sess ~title:"Error" ~message:("Database error: " ^ err) ~alert_type:"error" ~return_url:"/" request)
+    | Error err -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user:user_sess ~title:"Error" ~message:(db_error_message err) ~alert_type:"error" ~return_url:"/" request)
   )
 
 (* GET /c/:slug/t/:thread — canonical thread view inside the shell. ":thread" is "post_id-post_slug";
@@ -3485,7 +3517,7 @@ let view_thread_handler request =
   Dream.sql request (fun db ->
     match%lwt Db.get_post_by_id db post_id with
     | Ok None -> Dream.respond ~status:`Not_Found (Pages.msg_page ?user:user_sess ~title:"Not Found" ~message:"This thread does not exist or has been deleted." ~alert_type:"error" ~return_url:("/c/" ^ community_slug) request)
-    | Error err -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user:user_sess ~title:"Error" ~message:("Database error: " ^ err) ~alert_type:"error" ~return_url:"/" request)
+    | Error err -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user:user_sess ~title:"Error" ~message:(db_error_message err) ~alert_type:"error" ~return_url:"/" request)
     | Ok (Some post) ->
         let viewer_id = match user_id_opt with Some s -> (try int_of_string s with _ -> 0) | None -> 0 in
         let is_admin = Dream.session_field request "is_admin" = Some "true" in
@@ -3806,7 +3838,7 @@ let delete_post_handler request =
             | Ok () ->
                 let target = safe_local_redirect request (match Dream.header request "Referer" with Some r -> r | None -> "/") in
                 Dream.redirect request target
-            | Error err -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Error" ~message:("Database error: " ^ err) ~alert_type:"error" ~return_url:"/" request)
+            | Error err -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Error" ~message:(db_error_message err) ~alert_type:"error" ~return_url:"/" request)
           )
       | _ -> Dream.respond ~status:`Bad_Request (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Form Error" ~message:"Invalid form submission." ~alert_type:"error" ~return_url:"/" request)
 
@@ -3833,7 +3865,7 @@ let mod_delete_post_handler request =
           Dream.sql request (fun db ->
             match%lwt Db.get_community_by_slug db slug with
             | Error err ->
-                Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Error" ~message:("Database error: " ^ err) ~alert_type:"error" ~return_url:"/" request)
+                Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Error" ~message:(db_error_message err) ~alert_type:"error" ~return_url:"/" request)
             | Ok None ->
                 Dream.respond ~status:`Not_Found (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Not Found" ~message:"Community not found." ~alert_type:"error" ~return_url:"/" request)
             | Ok (Some community) ->
@@ -3857,7 +3889,7 @@ let mod_delete_post_handler request =
                     in
                     (match%lwt Db.get_post_by_id db post_id with
                     | Error err ->
-                        Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Error" ~message:("Database error: " ^ err) ~alert_type:"error" ~return_url:("/c/" ^ slug) request)
+                        Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Error" ~message:(db_error_message err) ~alert_type:"error" ~return_url:("/c/" ^ slug) request)
                     | Ok None -> not_found_here ()
                     | Ok (Some post) when post.community_id <> community.id -> not_found_here ()
                     | Ok (Some post) ->
@@ -3867,7 +3899,7 @@ let mod_delete_post_handler request =
                            still zero side effects. *)
                         (match%lwt Db.mod_delete_post db ~community_id:community.id post_id with
                         | Error err ->
-                            Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Error" ~message:("Database error: " ^ err) ~alert_type:"error" ~return_url:("/c/" ^ slug) request)
+                            Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Error" ~message:(db_error_message err) ~alert_type:"error" ~return_url:("/c/" ^ slug) request)
                         | Ok false -> not_found_here ()
                         | Ok true ->
                             (* Disk cleanup only after the scoped mutation confirmed the
@@ -3921,7 +3953,7 @@ let mod_delete_comment_handler request =
           Dream.sql request (fun db ->
             match%lwt Db.get_community_by_slug db slug with
             | Error err ->
-                Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Error" ~message:("Database error: " ^ err) ~alert_type:"error" ~return_url:"/" request)
+                Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Error" ~message:(db_error_message err) ~alert_type:"error" ~return_url:"/" request)
             | Ok None ->
                 Dream.respond ~status:`Not_Found (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Not Found" ~message:"Community not found." ~alert_type:"error" ~return_url:"/" request)
             | Ok (Some community) ->
@@ -3963,7 +3995,7 @@ let mod_delete_comment_handler request =
                        still a neutral 404, still zero side effects. *)
                     (match%lwt Db.mod_delete_comment db ~community_id:community.id comment_id with
                     | Error err ->
-                        Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Error" ~message:("Database error: " ^ err) ~alert_type:"error" ~return_url:("/c/" ^ slug) request)
+                        Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Error" ~message:(db_error_message err) ~alert_type:"error" ~return_url:("/c/" ^ slug) request)
                     | Ok None -> not_found_here ()
                     | Ok (Some post_id) ->
                         (* Admin acting without mod role: flag action_type and prefix reason
@@ -4032,7 +4064,7 @@ let report_form_handler request =
        | Some ((Db.Report_post | Db.Report_comment) as target_type) when target_id > 0 ->
            Dream.sql request (fun db ->
              match%lwt Db.get_community_by_slug db slug with
-             | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:("Database error: " ^ e) ~alert_type:"error" ~return_url:"/" request)
+             | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:"/" request)
              | Ok None -> community_not_found ?user request
              | Ok (Some community) ->
                  (* Private-community read gate BEFORE any ban check or target
@@ -4052,7 +4084,7 @@ let report_form_handler request =
                    Dream.respond ~status:`Forbidden (Pages.msg_page ?user ~title:"Banned from Community" ~message:"You are banned from this community." ~alert_type:"error" ~return_url:("/c/" ^ community.slug) request)
                  else
                  (match%lwt resolve_report_target db community.id target_type target_id with
-                  | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:("Database error: " ^ e) ~alert_type:"error" ~return_url:"/" request)
+                  | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:"/" request)
                   | Ok None -> bad ()
                   | Ok (Some (author_id, target_title, return_url)) ->
                       if author_id = user_id then
@@ -4113,7 +4145,7 @@ let create_report_handler request =
            | Some ((Db.Report_post | Db.Report_comment) as target_type), Some reason when target_id > 0 ->
                Dream.sql request (fun db ->
                  match%lwt Db.get_community_by_slug db slug with
-                 | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:("Database error: " ^ e) ~alert_type:"error" ~return_url:"/" request)
+                 | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:"/" request)
                  | Ok None -> community_not_found ?user request
                  | Ok (Some community) ->
                      (* Same private-community read gate as the GET form, re-proved
@@ -4135,7 +4167,7 @@ let create_report_handler request =
                      else
                      (* Re-resolve from the trusted slug — never trust a client-supplied community_id. *)
                      (match%lwt resolve_report_target db community.id target_type target_id with
-                      | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:("Database error: " ^ e) ~alert_type:"error" ~return_url:("/c/" ^ community.slug) request)
+                      | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:("/c/" ^ community.slug) request)
                       | Ok None ->
                           Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"Not Found" ~message:"That content is no longer available." ~alert_type:"error" ~return_url:("/c/" ^ community.slug) request)
                       | Ok (Some (author_id, _title, return_url)) ->
@@ -4154,7 +4186,7 @@ let create_report_handler request =
                                  Dream.html (Pages.msg_page ?user ~title:"Already reported"
                                    ~message:"You've already reported this item. A moderator will review it." ~alert_type:"info" ~return_url request)
                              | Error e ->
-                                 Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:("Database error: " ^ e) ~alert_type:"error" ~return_url request))))
+                                 Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url request))))
            | _ ->
                Dream.respond ~status:`Bad_Request (Pages.msg_page ?user ~title:"Invalid Report" ~message:"That report could not be processed." ~alert_type:"error" ~return_url:("/c/" ^ slug) request))
       | _ ->
@@ -4177,7 +4209,7 @@ let reports_queue_handler request =
         | None -> Db.Report_open in
       Dream.sql request (fun db ->
         match%lwt Db.get_community_by_slug db slug with
-        | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:("Database error: " ^ e) ~alert_type:"error" ~return_url:"/" request)
+        | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:"/" request)
         | Ok None -> Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"Not Found" ~message:"This community does not exist." ~alert_type:"error" ~return_url:"/" request)
         | Ok (Some community) ->
             let%lwt is_authorized =
@@ -4217,7 +4249,7 @@ let reports_queue_handler request =
                 | _ -> Lwt.return false
               in
               (match%lwt Db.get_reports_by_community db community.id ~status with
-               | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:("Database error: " ^ e) ~alert_type:"error" ~return_url:("/c/" ^ slug) request)
+               | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:("/c/" ^ slug) request)
                | Ok reports ->
                    (* Bounded per-row context+preview lookup (read-only MVP): reuse
                       resolve_report_target so deleted / foreign / chat targets degrade to no
@@ -4265,7 +4297,7 @@ let resolve_report_action request ~new_status ~action_kind ~action_type ~default
            in
            Dream.sql request (fun db ->
              match%lwt Db.get_community_by_slug db slug with
-             | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:("Database error: " ^ e) ~alert_type:"error" ~return_url:"/" request)
+             | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:"/" request)
              | Ok None -> Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"Not Found" ~message:"This community does not exist." ~alert_type:"error" ~return_url:"/" request)
              | Ok (Some community) ->
                  let%lwt is_authorized =
@@ -4276,7 +4308,7 @@ let resolve_report_action request ~new_status ~action_kind ~action_type ~default
                    Dream.respond ~status:`Forbidden (Pages.msg_page ?user ~title:"Access Denied" ~message:"You must be a moderator to resolve reports." ~alert_type:"error" ~return_url:("/c/" ^ slug) request)
                  else
                    (match%lwt Db.get_report_by_id db report_id with
-                    | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:("Database error: " ^ e) ~alert_type:"error" ~return_url:reports_url request)
+                    | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:reports_url request)
                     | Ok None -> Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"Not Found" ~message:"That report does not exist." ~alert_type:"error" ~return_url:reports_url request)
                     | Ok (Some report) ->
                         (* Bind to the slug's community: a report_id from another community must not
@@ -4289,7 +4321,7 @@ let resolve_report_action request ~new_status ~action_kind ~action_type ~default
                           Dream.redirect request (reports_url ^ "?status=" ^ Db.report_status_to_string report.status)
                         else
                           (match%lwt Db.resolve_report db report_id ~resolver_user_id:user_id ~status:new_status ~action_kind ~note with
-                           | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:("Database error: " ^ e) ~alert_type:"error" ~return_url:reports_url request)
+                           | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:reports_url request)
                            | Ok () ->
                                let reason = match note with Some n -> n | None -> default_reason report_id in
                                let%lwt _ = Db.log_mod_action db community.id user_id action_type (Some report_id) reason in
@@ -4470,9 +4502,9 @@ let create_comment_handler request =
                           | _ -> Lwt.return ("/p/" ^ string_of_int post_id)
                         in
                         Dream.redirect request redirect_target
-                    | Error err -> Dream.html (Pages.msg_page ~user:username ~title:"Error" ~message:("Database error: " ^ err) ~alert_type:"error" ~return_url:("/p/" ^ string_of_int post_id) request))))
+                    | Error err -> Dream.html (Pages.msg_page ~user:username ~title:"Error" ~message:(db_error_message err) ~alert_type:"error" ~return_url:("/p/" ^ string_of_int post_id) request))))
             | Ok None -> Dream.html (Pages.msg_page ~user:username ~title:"Post Not Found" ~message:"The post you tried to comment on could not be found." ~alert_type:"error" ~return_url:"/" request)
-            | Error err -> Dream.html (Pages.msg_page ~user:username ~title:"Error" ~message:("Database error: " ^ err) ~alert_type:"error" ~return_url:"/" request)
+            | Error err -> Dream.html (Pages.msg_page ~user:username ~title:"Error" ~message:(db_error_message err) ~alert_type:"error" ~return_url:"/" request)
           ))
       | _ -> Dream.html (Pages.msg_page ~user:username ~title:"Form Error" ~message:"There was a problem with your form submission. Please try again." ~alert_type:"error" ~return_url:"/" request)
 
@@ -4535,14 +4567,14 @@ let delete_comment_handler request =
                 | Comment_delete.Admin_delete ->
                     (match%lwt Db.admin_delete_comment db ~label:"[removed by admin]" comment_id with
                     | Ok () -> Dream.redirect request redirect_target
-                    | Error err -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Error" ~message:("Database error: " ^ err) ~alert_type:"error" ~return_url:redirect_target request))
+                    | Error err -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Error" ~message:(db_error_message err) ~alert_type:"error" ~return_url:redirect_target request))
                 | Comment_delete.Author_delete ->
                     (* The SQL is also ownership-scoped (id AND user_id), so even a
                        race with an ownership change cannot delete someone else's
                        comment. *)
                     (match%lwt Db.soft_delete_comment db comment_id user_id with
                     | Ok () -> Dream.redirect request redirect_target
-                    | Error err -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Error" ~message:("Database error: " ^ err) ~alert_type:"error" ~return_url:redirect_target request)))
+                    | Error err -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Error" ~message:(db_error_message err) ~alert_type:"error" ~return_url:redirect_target request)))
           )
       | _ -> Dream.respond ~status:`Bad_Request (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Form Error" ~message:"Invalid form submission." ~alert_type:"error" ~return_url:"/" request)
 
@@ -4582,7 +4614,7 @@ let vote_handler request =
             | Ok () ->
                 let referer = safe_local_redirect request (match Dream.header request "Referer" with Some r -> r | None -> "/") in
                 Dream.redirect request referer
-            | Error err -> Dream.respond ~status:`Internal_Server_Error ("DB Error: " ^ err)
+            | Error err -> Dream.respond ~status:`Internal_Server_Error (db_error_message err)
           )
       | _ -> Dream.respond ~status:`Bad_Request "Invalid form submission."
 
@@ -4619,7 +4651,7 @@ let vote_comment_handler request =
             | Ok () ->
                 let referer = safe_local_redirect request (match Dream.header request "Referer" with Some r -> r | None -> "/") in
                 Dream.redirect request referer
-            | Error err -> Dream.respond ~status:`Internal_Server_Error ("DB Error: " ^ err)
+            | Error err -> Dream.respond ~status:`Internal_Server_Error (db_error_message err)
           )
       | _ -> Dream.respond ~status:`Bad_Request "Invalid form submission."
 
@@ -4638,7 +4670,7 @@ let toggle_downvotes_handler request =
           Dream.sql request (fun db ->
             match%lwt Db.get_community_by_slug db slug with
             | Ok None -> Dream.respond ~status:`Not_Found "Community not found."
-            | Error err -> Dream.respond ~status:`Internal_Server_Error ("DB Error: " ^ err)
+            | Error err -> Dream.respond ~status:`Internal_Server_Error (db_error_message err)
             | Ok (Some community) ->
                 let%lwt role_res = Db.get_moderator_role db user_id community.id in
                 let is_top_mod = match role_res with Ok (Some "top_mod") -> true | _ -> false in
@@ -4647,7 +4679,7 @@ let toggle_downvotes_handler request =
                 else
                   match%lwt Db.toggle_community_downvotes db community.id new_val with
                   | Ok () -> Dream.redirect request ("/c/" ^ slug ^ "/settings?panel=moderation")
-                  | Error err -> Dream.respond ~status:`Internal_Server_Error ("DB Error: " ^ err)
+                  | Error err -> Dream.respond ~status:`Internal_Server_Error (db_error_message err)
           )
       | _ -> Dream.respond ~status:`Bad_Request "Invalid form submission."
 
@@ -4695,7 +4727,7 @@ let update_community_visibility_handler request =
                 Dream.sql request (fun db ->
                   match%lwt Db.get_community_by_slug db slug with
                   | Ok None -> Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"Not Found" ~message:"Community not found." ~alert_type:"error" ~return_url:"/" request)
-                  | Error err -> Dream.respond ~status:`Internal_Server_Error ("DB Error: " ^ err)
+                  | Error err -> Dream.respond ~status:`Internal_Server_Error (db_error_message err)
                   | Ok (Some community) when is_network_setup_draft community ->
                       (* A setup draft's visibility is not an independent
                          switch: publication sets visibility, indexability,
@@ -4749,7 +4781,7 @@ let update_community_visibility_handler request =
                                old code's silent no-op — same redirect, no
                                emission. *)
                             Dream.redirect request ("/c/" ^ slug ^ "/settings?panel=visibility")
-                        | Error err -> Dream.respond ~status:`Internal_Server_Error ("DB Error: " ^ err))))
+                        | Error err -> Dream.respond ~status:`Internal_Server_Error (db_error_message err))))
        | _ -> Dream.respond ~status:`Bad_Request "Invalid form submission.")
 
 let update_community_indexability_handler request =
@@ -4768,7 +4800,7 @@ let update_community_indexability_handler request =
            Dream.sql request (fun db ->
              match%lwt Db.get_community_by_slug db slug with
              | Ok None -> Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"Not Found" ~message:"Community not found." ~alert_type:"error" ~return_url:"/" request)
-             | Error err -> Dream.respond ~status:`Internal_Server_Error ("DB Error: " ^ err)
+             | Error err -> Dream.respond ~status:`Internal_Server_Error (db_error_message err)
              | Ok (Some community) when community.is_network_community ->
                  (* Indexing on a network community is never independent: a
                     setup draft must stay non-indexable, and a published one
@@ -4789,7 +4821,7 @@ let update_community_indexability_handler request =
                  else
                    match%lwt Db.update_community_indexable db community.id indexable with
                    | Ok () -> Dream.redirect request ("/c/" ^ slug ^ "/settings?panel=visibility")
-                   | Error err -> Dream.respond ~status:`Internal_Server_Error ("DB Error: " ^ err))
+                   | Error err -> Dream.respond ~status:`Internal_Server_Error (db_error_message err))
        | _ -> Dream.respond ~status:`Bad_Request "Invalid form submission.")
 
 (* Slice H: per-channel / per-section indexability toggles from /c/:slug/settings. Same TM/A gate
@@ -4819,7 +4851,7 @@ let update_channel_indexability_handler request =
            Dream.sql request (fun db ->
              match%lwt Db.get_community_by_slug db slug with
              | Ok None -> Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"Not Found" ~message:"Community not found." ~alert_type:"error" ~return_url:"/" request)
-             | Error err -> Dream.respond ~status:`Internal_Server_Error ("DB Error: " ^ err)
+             | Error err -> Dream.respond ~status:`Internal_Server_Error (db_error_message err)
              | Ok (Some community) ->
                  let%lwt role_res = Db.get_moderator_role db user_id community.id in
                  let is_top_mod = match role_res with Ok (Some "top_mod") -> true | _ -> false in
@@ -4828,11 +4860,11 @@ let update_channel_indexability_handler request =
                  else
                    (match%lwt Db.get_channel_by_id db channel_id community.id with
                     | Ok None -> Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"Not Found" ~message:"Channel not found." ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/settings") request)
-                    | Error err -> Dream.respond ~status:`Internal_Server_Error ("DB Error: " ^ err)
+                    | Error err -> Dream.respond ~status:`Internal_Server_Error (db_error_message err)
                     | Ok (Some _) ->
                         match%lwt Db.update_channel_indexable db channel_id community.id indexable with
                         | Ok () -> Dream.redirect request ("/c/" ^ slug ^ "/settings?panel=channels")
-                        | Error err -> Dream.respond ~status:`Internal_Server_Error ("DB Error: " ^ err)))
+                        | Error err -> Dream.respond ~status:`Internal_Server_Error (db_error_message err)))
        | _ -> Dream.respond ~status:`Bad_Request "Invalid form submission.")
 
 let update_section_indexability_handler request =
@@ -4854,7 +4886,7 @@ let update_section_indexability_handler request =
            Dream.sql request (fun db ->
              match%lwt Db.get_community_by_slug db slug with
              | Ok None -> Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"Not Found" ~message:"Community not found." ~alert_type:"error" ~return_url:"/" request)
-             | Error err -> Dream.respond ~status:`Internal_Server_Error ("DB Error: " ^ err)
+             | Error err -> Dream.respond ~status:`Internal_Server_Error (db_error_message err)
              | Ok (Some community) ->
                  let%lwt role_res = Db.get_moderator_role db user_id community.id in
                  let is_top_mod = match role_res with Ok (Some "top_mod") -> true | _ -> false in
@@ -4863,11 +4895,11 @@ let update_section_indexability_handler request =
                  else
                    (match%lwt Db.get_section_by_id db section_id community.id with
                     | Ok None -> Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"Not Found" ~message:"Section not found." ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/settings") request)
-                    | Error err -> Dream.respond ~status:`Internal_Server_Error ("DB Error: " ^ err)
+                    | Error err -> Dream.respond ~status:`Internal_Server_Error (db_error_message err)
                     | Ok (Some _) ->
                         match%lwt Db.update_section_indexable db section_id community.id indexable with
                         | Ok () -> Dream.redirect request ("/c/" ^ slug ^ "/settings?panel=channels")
-                        | Error err -> Dream.respond ~status:`Internal_Server_Error ("DB Error: " ^ err)))
+                        | Error err -> Dream.respond ~status:`Internal_Server_Error (db_error_message err)))
        | _ -> Dream.respond ~status:`Bad_Request "Invalid form submission.")
 
 (* Slice F: minimal member-management (the allow-list for private communities). Same TM/A gate as
@@ -4892,7 +4924,7 @@ let add_member_handler request =
            Dream.sql request (fun db ->
              match%lwt Db.get_community_by_slug db slug with
              | Ok None -> Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"Not Found" ~message:"Community not found." ~alert_type:"error" ~return_url:"/" request)
-             | Error err -> Dream.respond ~status:`Internal_Server_Error ("DB Error: " ^ err)
+             | Error err -> Dream.respond ~status:`Internal_Server_Error (db_error_message err)
              | Ok (Some community) ->
                  let%lwt role_res = Db.get_moderator_role db user_id community.id in
                  let is_top_mod = match role_res with Ok (Some "top_mod") -> true | _ -> false in
@@ -4904,14 +4936,14 @@ let add_member_handler request =
                    (* Add only EXISTING users — never create. Unknown username is a friendly 404
                       message, not a 500. *)
                    (match%lwt Db.get_user_by_username db target_username with
-                    | Error err -> Dream.respond ~status:`Internal_Server_Error ("DB Error: " ^ err)
+                    | Error err -> Dream.respond ~status:`Internal_Server_Error (db_error_message err)
                     | Ok None ->
                         Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"User Not Found" ~message:(Printf.sprintf "No user named \"%s\" exists." target_username) ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/settings") request)
                     | Ok (Some target) ->
                         (* Idempotent: re-adding an existing member is a no-op (ON CONFLICT DO NOTHING). *)
                         match%lwt Db.join_community db target.id community.id with
                         | Ok () -> Dream.redirect request ("/c/" ^ slug ^ "/settings?panel=members")
-                        | Error err -> Dream.respond ~status:`Internal_Server_Error ("DB Error: " ^ err)))
+                        | Error err -> Dream.respond ~status:`Internal_Server_Error (db_error_message err)))
        | _ -> Dream.respond ~status:`Bad_Request "Invalid form submission.")
 
 let remove_member_handler request =
@@ -4933,7 +4965,7 @@ let remove_member_handler request =
                 Dream.sql request (fun db ->
                   match%lwt Db.get_community_by_slug db slug with
                   | Ok None -> Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"Not Found" ~message:"Community not found." ~alert_type:"error" ~return_url:"/" request)
-                  | Error err -> Dream.respond ~status:`Internal_Server_Error ("DB Error: " ^ err)
+                  | Error err -> Dream.respond ~status:`Internal_Server_Error (db_error_message err)
                   | Ok (Some community) ->
                       let%lwt role_res = Db.get_moderator_role db user_id community.id in
                       let is_top_mod = match role_res with Ok (Some "top_mod") -> true | _ -> false in
@@ -4946,7 +4978,7 @@ let remove_member_handler request =
                            user's membership, not that user leaving. *)
                         match%lwt Db.leave_community db target_user_id community.id with
                         | Ok _deleted -> Dream.redirect request ("/c/" ^ slug ^ "/settings?panel=members")
-                        | Error err -> Dream.respond ~status:`Internal_Server_Error ("DB Error: " ^ err)))
+                        | Error err -> Dream.respond ~status:`Internal_Server_Error (db_error_message err)))
        | _ -> Dream.respond ~status:`Bad_Request "Invalid form submission.")
 
 (* === USER === *)
@@ -5057,13 +5089,13 @@ let view_profile_handler request =
                   let%lwt blocked = blocked_post_ids post_ids in
                   let user_comments = List.filter (fun (_, _, _, pid, _, _) -> not (List.mem pid blocked)) user_comments in
                   Dream.html (Pages.user_profile_page ?user:current_user ~is_admin ~is_globally_banned ~profile_id:uid ~admin_usernames ~moderated_communities ~active_tab ~rail_communities user_votes username_param joined_at bio avatar_url karma [] user_comments [] request)
-              | Error err -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user:current_user ~title:"Error" ~message:("Database error: " ^ err) ~alert_type:"error" ~return_url:"/" request))
+              | Error err -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user:current_user ~title:"Error" ~message:(db_error_message err) ~alert_type:"error" ~return_url:"/" request))
             else if active_tab = "communities" then
               (match%lwt Db.get_user_community_stats db uid with
               | Ok community_stats ->
                   let%lwt community_stats = Lwt_list.filter_s stat_is_readable community_stats in
                   Dream.html (Pages.user_profile_page ?user:current_user ~is_admin ~is_globally_banned ~profile_id:uid ~admin_usernames ~moderated_communities ~active_tab ~rail_communities user_votes username_param joined_at bio avatar_url karma [] [] community_stats request)
-              | Error err -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user:current_user ~title:"Error" ~message:("Database error: " ^ err) ~alert_type:"error" ~return_url:"/" request))
+              | Error err -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user:current_user ~title:"Error" ~message:(db_error_message err) ~alert_type:"error" ~return_url:"/" request))
             else
               (match%lwt Db.get_posts_by_user db uid with
               | Ok posts ->
@@ -5071,12 +5103,12 @@ let view_profile_handler request =
                   let%lwt blocked = blocked_post_ids post_ids in
                   let posts = List.filter (fun (p : Db.post) -> not (List.mem p.id blocked)) posts in
                   Dream.html (Pages.user_profile_page ?user:current_user ~is_admin ~is_globally_banned ~profile_id:uid ~admin_usernames ~moderated_communities ~active_tab ~rail_communities user_votes username_param joined_at bio avatar_url karma posts [] [] request)
-              | Error err -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user:current_user ~title:"Error" ~message:("Database error: " ^ err) ~alert_type:"error" ~return_url:"/" request))
+              | Error err -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user:current_user ~title:"Error" ~message:(db_error_message err) ~alert_type:"error" ~return_url:"/" request))
 
-        | Error err -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user:current_user ~title:"Error" ~message:("Database error: " ^ err) ~alert_type:"error" ~return_url:"/" request))
+        | Error err -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user:current_user ~title:"Error" ~message:(db_error_message err) ~alert_type:"error" ~return_url:"/" request))
 
     | Ok None -> Dream.respond ~status:`Not_Found (Pages.msg_page ?user:current_user ~title:"Not Found" ~message:"This user does not exist." ~alert_type:"error" ~return_url:"/" request)
-    | Error err -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user:current_user ~title:"Error" ~message:("Database error: " ^ err) ~alert_type:"error" ~return_url:"/" request)
+    | Error err -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user:current_user ~title:"Error" ~message:(db_error_message err) ~alert_type:"error" ~return_url:"/" request)
   )
 
 let settings_page_handler request =
@@ -5141,11 +5173,11 @@ let update_profile_handler request =
               | None -> Db.get_user_avatar_url db user_id
             in
             match stored_avatar with
-            | Error err -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Error" ~message:("Database error: " ^ err) ~alert_type:"error" ~return_url:"/settings" request)
+            | Error err -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Error" ~message:(db_error_message err) ~alert_type:"error" ~return_url:"/settings" request)
             | Ok avatar_url ->
             match%lwt Db.update_user_profile db bio avatar_url user_id with
             | Ok () -> Dream.redirect request "/settings"
-            | Error err -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Error" ~message:("Database error: " ^ err) ~alert_type:"error" ~return_url:"/settings" request)
+            | Error err -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Error" ~message:(db_error_message err) ~alert_type:"error" ~return_url:"/settings" request)
           )
       | _ -> Dream.respond ~status:`Bad_Request (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Form Error" ~message:"Invalid form submission." ~alert_type:"error" ~return_url:"/settings" request)
 
@@ -5175,7 +5207,7 @@ let change_password_handler request =
                       | Ok new_hash ->
                           (match%lwt Db.update_password db user_id new_hash with
                           | Ok () -> Dream.redirect request "/settings"
-                          | Error err -> Dream.html (Pages.msg_page ~user:username ~title:"Error" ~message:("Database error: " ^ err) ~alert_type:"error" ~return_url:"/settings" request))
+                          | Error err -> Dream.html (Pages.msg_page ~user:username ~title:"Error" ~message:(db_error_message err) ~alert_type:"error" ~return_url:"/settings" request))
                       | Error err -> Dream.html (Pages.msg_page ~user:username ~title:"Error" ~message:("Hashing error: " ^ err) ~alert_type:"error" ~return_url:"/settings" request))
                   | _ -> Dream.html (Pages.msg_page ~user:username ~title:"Wrong Password" ~message:"The current password you entered is incorrect. Please go back and try again." ~alert_type:"error" ~return_url:"/settings" request))
               | _ -> Dream.html (Pages.msg_page ~user:username ~title:"Error" ~message:"User not found in the database." ~alert_type:"error" ~return_url:"/settings" request)
@@ -5240,7 +5272,10 @@ let export_data_handler request =
             Dream.respond
               ~headers:[
                 ("Content-Type", "application/json");
-                ("Content-Disposition", Printf.sprintf "attachment; filename=\"%s_earde_export.json\"" username)
+                (* The filename is derived from the numeric user id, never the
+                   username: a header value must stay within a conservative
+                   ASCII alphabet (no quotes, control bytes, or separators). *)
+                ("Content-Disposition", Printf.sprintf "attachment; filename=\"earde_export_user_%d.json\"" user_id)
               ]
               json_str
 
@@ -5343,7 +5378,7 @@ let delete_account_handler request =
                     attempt_posthog_deletion_job request ~job_id);
                 let%lwt () = Dream.invalidate_session request in
                 Dream.redirect request "/"
-            | Error err -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Error" ~message:("Error during account deletion: " ^ err) ~alert_type:"error" ~return_url:"/settings" request))
+            | Error err -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Error" ~message:(db_error_message err) ~alert_type:"error" ~return_url:"/settings" request))
       | _ -> Dream.respond ~status:`Bad_Request (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Form Error" ~message:"Invalid form submission." ~alert_type:"error" ~return_url:"/settings" request)
 
 (* === NOTIFICATIONS === *)
@@ -5366,7 +5401,7 @@ let notifications_handler request =
         let rail_communities = match rail_communities_res with Ok cs -> cs | Error _ -> [] in
         match notifs with
         | Ok n -> Dream.html (Pages.notifications_page ?user ~rail_communities n request)
-        | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:("Database error: " ^ e) ~alert_type:"error" ~return_url:"/" request)
+        | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:"/" request)
       )
 
 (* GET /api/unread-notifs is gone with the client-side badge it existed to
@@ -5406,7 +5441,7 @@ let ban_user_handler request =
                immediately sees the updated 🚫 badge and the Unban button. *)
             let target = safe_local_redirect request (match Dream.header request "Referer" with Some r -> r | None -> "/") in
             Dream.redirect request target
-        | Error err -> Dream.html (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Error" ~message:("Error banning user: " ^ err) ~alert_type:"error" ~return_url:"/admin" request)
+        | Error err -> Dream.html (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Error" ~message:(db_error_message err) ~alert_type:"error" ~return_url:"/admin" request)
       )
       | _ -> Dream.respond ~status:`Bad_Request (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Form Error" ~message:"Invalid form submission." ~alert_type:"error" ~return_url:"/" request))
   | _ -> Dream.html (Pages.msg_page ~title:"Access Denied" ~message:"You are not an Admin." ~alert_type:"error" ~return_url:"/" request)
@@ -5425,7 +5460,7 @@ let unban_user_global_handler request =
         | Ok () ->
             let target = safe_local_redirect ~default:"/admin" request (match Dream.header request "Referer" with Some r -> r | None -> "/admin") in
             Dream.redirect request target
-        | Error err -> Dream.html (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Error" ~message:("Error unbanning user: " ^ err) ~alert_type:"error" ~return_url:"/admin" request)
+        | Error err -> Dream.html (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Error" ~message:(db_error_message err) ~alert_type:"error" ~return_url:"/admin" request)
       )
       | _ -> Dream.respond ~status:`Bad_Request (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Form Error" ~message:"Invalid form submission." ~alert_type:"error" ~return_url:"/admin" request))
   | _ -> Dream.html (Pages.msg_page ~title:"Access Denied" ~message:"You are not an Admin." ~alert_type:"error" ~return_url:"/" request)
@@ -5463,7 +5498,7 @@ let admin_dashboard_handler request =
             Dream.html (Pages.admin_dashboard_page ?user ~rail_communities ~signups_enabled ~turnstile
               ~brevo_configured ~recent_users ~pending ~banned_users request)
         | (Error e, _, _) | (_, Error e, _) | (_, _, Error e) ->
-            Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:("Database error: " ^ e) ~alert_type:"error" ~return_url:"/" request)
+            Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:"/" request)
       )
   | _ -> Dream.respond ~status:`Forbidden (Pages.msg_page ~title:"Access Denied" ~message:"You are not an Admin." ~alert_type:"error" ~return_url:"/" request)
 
@@ -5543,9 +5578,9 @@ let manage_mods_handler request =
               (match%lwt Db.get_community_mods_with_roles db community.id with
                | Ok mods ->
                    Dream.html (Pages.manage_mods_page ?user ~rail_communities ~is_admin ~current_user_role ~channels ~sections ~community ~mods request)
-               | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:("Database error: " ^ e) ~alert_type:"error" ~return_url:("/c/" ^ slug) request))
+               | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:("/c/" ^ slug) request))
         | Ok None -> Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"Not Found" ~message:"This community does not exist." ~alert_type:"error" ~return_url:"/" request)
-        | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:("Database error: " ^ e) ~alert_type:"error" ~return_url:"/" request)
+        | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:"/" request)
       )
 
 let manage_mods_add_handler request =
@@ -5576,9 +5611,9 @@ let manage_mods_add_handler request =
                        let%lwt _ = Db.add_moderator db target_user.id community.id in
                        Dream.redirect request ("/c/" ^ slug ^ "/manage-mods")
                    | Ok None -> Dream.html (Pages.msg_page ?user ~title:"User Not Found" ~message:("No user found: u/" ^ target_username) ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/manage-mods") request)
-                   | Error e -> Dream.html (Pages.msg_page ?user ~title:"Error" ~message:("Database error: " ^ e) ~alert_type:"error" ~return_url:"/" request))
+                   | Error e -> Dream.html (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:"/" request))
             | Ok None -> Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"Not Found" ~message:"Community not found." ~alert_type:"error" ~return_url:"/" request)
-            | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:("Database error: " ^ e) ~alert_type:"error" ~return_url:"/" request)
+            | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:"/" request)
           )
       | _ -> Dream.respond ~status:`Bad_Request (Pages.msg_page ?user ~title:"Form Error" ~message:"Invalid form submission." ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/manage-mods") request)
 
@@ -5607,9 +5642,14 @@ let manage_mods_promote_handler request =
                 else
                   (match%lwt Db.promote_to_top_mod db target_user_id community.id with
                    | Ok () -> Dream.redirect request ("/c/" ^ slug ^ "/manage-mods")
-                   | Error msg -> Dream.html (Pages.msg_page ?user ~title:"Promotion Failed" ~message:msg ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/manage-mods") request))
+                   | Error (Db.Promotion_refused msg) ->
+                       (* Fixed domain refusals (not a moderator, already Top
+                          Mod, seat cap) stay user-visible verbatim. *)
+                       Dream.html (Pages.msg_page ?user ~title:"Promotion Failed" ~message:msg ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/manage-mods") request)
+                   | Error (Db.Promotion_storage_error e) ->
+                       Dream.html (Pages.msg_page ?user ~title:"Promotion Failed" ~message:(db_error_message e) ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/manage-mods") request))
             | Ok None -> Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"Not Found" ~message:"Community not found." ~alert_type:"error" ~return_url:"/" request)
-            | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:("Database error: " ^ e) ~alert_type:"error" ~return_url:"/" request)
+            | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:"/" request)
           )
       | _ -> Dream.respond ~status:`Bad_Request (Pages.msg_page ?user ~title:"Form Error" ~message:"Invalid form submission." ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/manage-mods") request)
 
@@ -5650,10 +5690,10 @@ let manage_mods_remove_handler request =
                             Dream.redirect request ("/c/" ^ slug ^ "/manage-mods")
                         | Ok _ ->
                             Dream.html (Pages.msg_page ?user ~title:"Cannot Remove" ~message:"You cannot remove the last moderator of a community." ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/manage-mods") request)
-                        | Error e -> Dream.html (Pages.msg_page ?user ~title:"Error" ~message:("Database error: " ^ e) ~alert_type:"error" ~return_url:"/" request))
-                   | Error e -> Dream.html (Pages.msg_page ?user ~title:"Error" ~message:("Database error: " ^ e) ~alert_type:"error" ~return_url:"/" request))
+                        | Error e -> Dream.html (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:"/" request))
+                   | Error e -> Dream.html (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:"/" request))
             | Ok None -> Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"Not Found" ~message:"Community not found." ~alert_type:"error" ~return_url:"/" request)
-            | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:("Database error: " ^ e) ~alert_type:"error" ~return_url:"/" request)
+            | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:"/" request)
           )
       | _ -> Dream.respond ~status:`Bad_Request (Pages.msg_page ?user ~title:"Form Error" ~message:"Invalid form submission." ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/manage-mods") request)
 

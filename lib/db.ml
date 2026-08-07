@@ -2343,6 +2343,15 @@ module Membership = struct
     | Error err -> Lwt.return (Error (Caqti_error.show err))
 end
 
+(* Promotion failures are classified at this boundary, where each error site
+   knows its own provenance: [Promotion_refused] carries a fixed user-facing
+   domain message, [Promotion_storage_error] carries driver detail that must
+   stay server-side. Callers can then route the two without inspecting
+   strings. *)
+type promote_error =
+  | Promotion_refused of string
+  | Promotion_storage_error of string
+
 module Moderator = struct
   (* ON CONFLICT DO NOTHING: idempotent — re-promoting the same user is a no-op
      rather than an error; safe for re-runs and concurrent create_community calls. *)
@@ -2467,19 +2476,19 @@ module Moderator = struct
      when count happens to equal the cap and the target is already counted in it. *)
   let promote_to_top_mod (module C : Caqti_lwt.CONNECTION) user_id community_id =
     C.find_opt get_moderator_role_query (user_id, community_id) >>= function
-    | Error e -> Lwt.return (Error (Caqti_error.show e))
-    | Ok None -> Lwt.return (Error "User is not a moderator of this community")
-    | Ok (Some "top_mod") -> Lwt.return (Error "User is already a Top Mod")
-    | Ok (Some "legacy_mod") -> Lwt.return (Error "Cannot promote a legacy moderator; reinstate as mod first")
+    | Error e -> Lwt.return (Error (Promotion_storage_error (Caqti_error.show e)))
+    | Ok None -> Lwt.return (Error (Promotion_refused "User is not a moderator of this community"))
+    | Ok (Some "top_mod") -> Lwt.return (Error (Promotion_refused "User is already a Top Mod"))
+    | Ok (Some "legacy_mod") -> Lwt.return (Error (Promotion_refused "Cannot promote a legacy moderator; reinstate as mod first"))
     | Ok (Some _) ->
         C.find count_top_mods_query community_id >>= function
-        | Error e -> Lwt.return (Error (Caqti_error.show e))
+        | Error e -> Lwt.return (Error (Promotion_storage_error (Caqti_error.show e)))
         | Ok count ->
-            if count >= 3 then Lwt.return (Error "Maximum of 3 Top Mods reached for this community")
+            if count >= 3 then Lwt.return (Error (Promotion_refused "Maximum of 3 Top Mods reached for this community"))
             else
               C.exec promote_to_top_mod_query (user_id, community_id) >>= function
               | Ok () -> Lwt.return (Ok ())
-              | Error e -> Lwt.return (Error (Caqti_error.show e))
+              | Error e -> Lwt.return (Error (Promotion_storage_error (Caqti_error.show e)))
 
   (* Single UPDATE across all communities: triggered on community page load to lazily
      enforce inactivity without a background job. UPDATE FROM ... WHERE is standard
