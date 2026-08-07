@@ -9,10 +9,14 @@
   caqti-lwt.unix
   caqti-driver-postgresql
   argon2
+  base64
   yojson
   logs
   unix
+  lwt
   lwt.unix
+  cohttp
+  cohttp-lwt
   cohttp-lwt-unix
   uri
   digestif)

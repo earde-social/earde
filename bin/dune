@@ -13,7 +13,7 @@
 (executable
  (name retry_posthog_deletions)
  (modules retry_posthog_deletions)
- (libraries earde uri lwt.unix caqti-lwt.unix caqti-driver-postgresql)
+ (libraries earde uri lwt lwt.unix caqti caqti-lwt.unix caqti-driver-postgresql)
  (link_flags
   (:standard -cclib -largon2))
  (preprocess
