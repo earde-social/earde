@@ -192,8 +192,11 @@ let post_thumbnail ?(alt="Post image") ~img_class image_url =
    responsive, a phone-width viewport gets a centered "open on desktop" panel instead of the
    app. Pure CSS + SSR — no JS, no user-agent sniffing, no separate route. mobile-gate.css hides
    the app chrome and reveals this panel under the breakpoint; on wide screens the panel is
-   display:none and nothing changes. Injected only on `App surfaces (see layout); auth/legal/
-   marketing pages are left usable. The HTML always renders, so crawlers/SSR are unaffected. *)
+   display:none and nothing changes. Injected on `App surfaces (see layout) and, opt-in via
+   [launch_entry_page ~desktop_only:true], on /bring — the project-onboarding funnel is a
+   desktop flow, so a phone-width visitor gets the gate instead of an entry point into it.
+   Auth/legal/marketing pages (including /privacy) are left usable. The HTML always renders,
+   so crawlers/SSR are unaffected. *)
 let mobile_gate_css_link = "<link rel='stylesheet' href='/static/css/mobile-gate.css'>"
 let mobile_desktop_gate =
   "<div class='mobile-gate' role='dialog' aria-label='Desktop only'>\
@@ -354,13 +357,23 @@ type entry_topbar =
    Analytics behavior is the shared [analytics_assets] (script + consent
    banner); the scoped integration CSS at the end of earde.css positions the
    banner, whose utility classes are inert without Tailwind. [page_class] is the route-specific scoping root for
-   that integration CSS (e.g. "launch-bring"), stamped on <body>. *)
+   that integration CSS (e.g. "launch-bring"), stamped on <body>.
+
+   [desktop_only] (default false) opts the document into the shared desktop-only gate — the
+   same [mobile_gate_css_link] + [mobile_desktop_gate] pair the `App wrappers ship, plus a
+   per-route `body.<page_class> > .app` hide rule in earde.css. /bring sets it because the
+   project-onboarding funnel it opens is desktop-only; /privacy leaves it off and stays
+   readable at every width, byte-identically to before this option existed. *)
 let launch_entry_page ?(noindex = false) ?request ?(topbar = Entry_connect_cta)
-    ~page_class ~title ~content () =
+    ?(desktop_only = false) ~page_class ~title ~content () =
   let analytics_head, analytics_banner = analytics_assets ?request () in
   let robots_meta =
     if noindex then "<meta name='robots' content='noindex'>" else ""
   in
+  (* Both halves of the gate carry their own trailing newline, so a document
+     that opts out is byte-identical to the pre-option rendering. *)
+  let gate_css = if desktop_only then mobile_gate_css_link ^ "\n" else "" in
+  let gate_panel = if desktop_only then mobile_desktop_gate ^ "\n" else "" in
   let house_icon =
     "<svg width='18' height='18' viewBox='0 0 24 24' fill='none' \
      stroke='currentColor' stroke-width='1.7' stroke-linecap='round' \
@@ -405,7 +418,7 @@ let launch_entry_page ?(noindex = false) ?request ?(topbar = Entry_connect_cta)
      <title>%s - Earde</title>\n\
      %s\n\
      <link rel='stylesheet' href='/static/css/earde.css'>\n\
-     %s\n\
+     %s%s\n\
      </head>\n\
      <body class='%s'>\n\
      <div class='app'>\n\
@@ -433,11 +446,11 @@ let launch_entry_page ?(noindex = false) ?request ?(topbar = Entry_connect_cta)
      </div>\n\
      %s\n\
      </div>\n\
-     %s\n\
+     %s%s\n\
      </body>\n\
      </html>"
-    (html_escape title) robots_meta analytics_head page_class
-    actions house_icon content launch_footer analytics_banner
+    (html_escape title) robots_meta gate_css analytics_head page_class
+    actions house_icon content launch_footer gate_panel analytics_banner
 
 (* Cartographic Civic launch auth document (pass 2: /login and /signup only).
    Like [launch_entry_page], a complete self-contained document that loads only
