@@ -167,8 +167,17 @@ let bring_page ?user ?request ~access ~feedback () =
   (* noindex: a session- and rollout-dependent onboarding surface — not
      worth putting in search indexes. Entry_viewer: this page IS /bring, so
      the compact topbar Connect CTA would self-link; the topbar carries the
-     viewer's auth controls instead (form-free in both arms). *)
+     viewer's auth controls instead (form-free in both arms).
+
+     desktop_only: everything this page opens — GitHub App installation,
+     repository selection, project setup — is a desktop flow, and the
+     downstream surfaces (/projects/new and the rest) already carry the
+     canonical gate. Gating the entry point too means a phone-width visitor
+     never enters the funnel at all, in every access state and whether they
+     arrive cold, from the landing CTA, or back from login/signup: the state
+     lives in the session and the query string, never in the viewport, so
+     authenticating changes nothing about which document the width shows. *)
   Components.launch_entry_page ?request ~noindex:true
-    ~topbar:(Components.Entry_viewer user)
+    ~topbar:(Components.Entry_viewer user) ~desktop_only:true
     ~page_class:"launch-bring" ~title:"Bring your open-source community"
     ~content ()

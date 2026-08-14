@@ -1126,6 +1126,14 @@ ol, ul { margin: 0; padding: 0; list-style: none; }
   margin-top: var(--sp-3);
 }
 
+/* Desktop-only gate: hide this route's launch app under the shared
+   breakpoint; the gate panel itself is styled by mobile-gate.css. The
+   project-onboarding funnel /bring opens is desktop-only, so the entry
+   point is gated exactly like the downstream /projects/new document. */
+@media (max-width: 800px) {
+  body.launch-bring > .app { display: none !important; }
+}
+
 /* Analytics consent banner (markup shared with the legacy layout). */
 .launch-bring #analytics-consent {
   position: fixed; bottom: var(--sp-8); left: 50%; transform: translateX(-50%);

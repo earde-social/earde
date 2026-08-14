@@ -96,8 +96,17 @@ type entry_topbar =
     emits) and, under [Entry_viewer], the server-rendered notification badge.
     [page_class] is the route-specific scoping root stamped on <body>
     (e.g. "launch-bring") that the integration CSS at the end of earde.css
-    keys on. *)
-val launch_entry_page : ?noindex:bool -> ?request:Dream.request -> ?topbar:entry_topbar -> page_class:string -> title:string -> content:string -> unit -> string
+    keys on.
+
+    [desktop_only] (default false) adds the shared desktop-only gate — the
+    same mobile-gate.css link and gate panel the application wrappers ship,
+    working with the per-route [body.<page_class> > .app] hide rule in
+    earde.css: under the 800px breakpoint the document's app column is
+    hidden and the canonical "Desktop only for now" panel takes the
+    viewport. /bring opts in (the project-onboarding funnel is desktop
+    only); /privacy does not, and its document is byte-identical to the
+    rendering from before this option existed. *)
+val launch_entry_page : ?noindex:bool -> ?request:Dream.request -> ?topbar:entry_topbar -> ?desktop_only:bool -> page_class:string -> title:string -> content:string -> unit -> string
 
 (** Cartographic Civic launch auth document (pass 2: /login and /signup only).
     A complete, self-contained document loading only /static/css/earde.css — no
