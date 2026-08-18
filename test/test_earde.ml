@@ -73399,6 +73399,50 @@ module Sec_db = struct
     (Caqti_type.int ->? Caqti_type.bool)
     "SELECT is_banned FROM users WHERE id = $1"
 
+  (* === vote ban-enforcement fixtures === *)
+
+  let q_community_ban =
+    (Caqti_type.(t2 int int) ->. Caqti_type.unit)
+    "INSERT INTO community_bans (user_id, community_id) VALUES ($1, $2)
+     ON CONFLICT DO NOTHING"
+
+  (* Sets the DURABLE global-ban flag without going through
+     ban_user_handler. The production handler deliberately revokes every
+     session of the banned user in the same transaction, which would leave
+     nothing to test with: these cases exist precisely to prove the vote
+     mutation boundary refuses on its own, so authorization never depends on
+     session revocation having happened. The production invariant is asserted
+     elsewhere, by global_ban_revocation_case. *)
+  let q_global_ban =
+    (Caqti_type.int ->. Caqti_type.unit)
+    "UPDATE users SET is_banned = TRUE WHERE id = $1"
+
+  let q_post_vote =
+    (Caqti_type.(t2 int int) ->? Caqti_type.int)
+    "SELECT direction FROM post_votes WHERE user_id = $1 AND post_id = $2"
+
+  let q_comment_vote =
+    (Caqti_type.(t2 int int) ->? Caqti_type.int)
+    "SELECT direction FROM comment_votes WHERE user_id = $1 AND comment_id = $2"
+
+  (* Scores are derived, not stored: the same SUM the feed and post pages read. *)
+  let q_post_score =
+    (Caqti_type.int ->! Caqti_type.int)
+    "SELECT COALESCE(SUM(direction), 0)::int FROM post_votes WHERE post_id = $1"
+
+  let q_comment_score =
+    (Caqti_type.int ->! Caqti_type.int)
+    "SELECT COALESCE(SUM(direction), 0)::int FROM comment_votes
+      WHERE comment_id = $1"
+
+  (* local_karma IS stored — the vote SQL denormalizes it onto the AUTHOR's
+     community_user_stats row, so a partial mutation would show up here even
+     if the vote row itself looked untouched. *)
+  let q_local_karma =
+    (Caqti_type.(t2 int int) ->? Caqti_type.int)
+    "SELECT local_karma FROM community_user_stats
+      WHERE user_id = $1 AND community_id = $2"
+
   let avatar_url_of name = "/static/uploads/" ^ name
 
   let make_upload_file name =
@@ -73485,7 +73529,12 @@ module Sec_db = struct
                  Dream.post "/admin/ban/user/:id"
                    Earde.Handlers.ban_user_handler;
                  Dream.get "/c/:slug/ch/:channel_slug/realtime-token"
-                   Earde.Handlers.realtime_token_handler
+                   Earde.Handlers.realtime_token_handler;
+                 (* Vote ban-enforcement slice: the two production vote
+                    mutation boundaries, at their bin/main.ml paths. *)
+                 Dream.post "/vote" Earde.Handlers.vote_handler;
+                 Dream.post "/vote-comment"
+                   Earde.Handlers.vote_comment_handler
                  (* No /add-mod and no /remove-mod: their absence from this
                     router mirrors bin/main.ml, and the legacy-route case
                     asserts the real app answers 404 for them. *)
@@ -74444,6 +74493,432 @@ module Sec_db = struct
           (List.exists (fun (u : Earde.Db.user) -> u.id = target) mods);
         Lwt.return_unit)
 
+  (* ------------------------------------------------------------------ *)
+  (* Fix 9 — voting is a ban-enforced mutation boundary                  *)
+  (* ------------------------------------------------------------------ *)
+
+  (* Every durable effect a post vote has: the vote row itself, the derived
+     score, the AUTHOR's stored local_karma and their derived global karma.
+     A refused vote must move none of them — asserting all four is what makes
+     a partial mutation visible rather than merely a missing vote row. *)
+  let check_post_vote_state label c ~voter ~post ~author ~community ~vote
+      ~score ~local ~karma =
+    let (module C : Caqti_lwt.CONNECTION) = c in
+    let* actual_vote = C.find_opt q_post_vote (voter, post) in
+    let* actual_vote = or_fail "post vote row" actual_vote in
+    Alcotest.(check (option int)) (label ^ ": vote row") vote actual_vote;
+    let* actual_score = C.find q_post_score post in
+    let* actual_score = or_fail "post score" actual_score in
+    Alcotest.(check int) (label ^ ": post score") score actual_score;
+    let* actual_local = C.find_opt q_local_karma (author, community) in
+    let* actual_local = or_fail "local karma" actual_local in
+    Alcotest.(check (option int))
+      (label ^ ": author local karma") local actual_local;
+    let* actual_karma = Earde.Db.get_user_karma c author in
+    let* actual_karma = or_fail_s "karma" actual_karma in
+    Alcotest.(check int) (label ^ ": author karma") karma actual_karma;
+    Lwt.return_unit
+
+  let check_comment_vote_state label c ~voter ~comment ~author ~community ~vote
+      ~score ~local ~karma =
+    let (module C : Caqti_lwt.CONNECTION) = c in
+    let* actual_vote = C.find_opt q_comment_vote (voter, comment) in
+    let* actual_vote = or_fail "comment vote row" actual_vote in
+    Alcotest.(check (option int)) (label ^ ": vote row") vote actual_vote;
+    let* actual_score = C.find q_comment_score comment in
+    let* actual_score = or_fail "comment score" actual_score in
+    Alcotest.(check int) (label ^ ": comment score") score actual_score;
+    let* actual_local = C.find_opt q_local_karma (author, community) in
+    let* actual_local = or_fail "local karma" actual_local in
+    Alcotest.(check (option int))
+      (label ^ ": author local karma") local actual_local;
+    let* actual_karma = Earde.Db.get_user_karma c author in
+    let* actual_karma = or_fail_s "karma" actual_karma in
+    Alcotest.(check int) (label ^ ": author karma") karma actual_karma;
+    Lwt.return_unit
+
+  let vote ~url ~cookie ~post ~direction =
+    let* token = token_in ~url ~cookie in
+    do_post ~url ~cookie ~target:"/vote" ~token
+      [ ("post_id", string_of_int post);
+        ("direction", string_of_int direction)
+      ]
+
+  let vote_comment ~url ~cookie ~comment ~direction =
+    let* token = token_in ~url ~cookie in
+    do_post ~url ~cookie ~target:"/vote-comment" ~token
+      [ ("comment_id", string_of_int comment);
+        ("direction", string_of_int direction)
+      ]
+
+  (* A — a community-banned user cannot create or change a post vote. *)
+  let post_vote_community_ban_case =
+    db_case
+      "post vote: a community ban stops the vote, the score and the author's \
+       karma from moving"
+      (fun ~url _conn c ->
+        let (module C : Caqti_lwt.CONNECTION) = c in
+        let* author = C.find q_user "sec_vauthor" in
+        let* author = or_fail "author" author in
+        let* voter = C.find q_user "sec_voter" in
+        let* voter = or_fail "voter" voter in
+        let* community = C.find q_community ("sec-votes", "public") in
+        let* community = or_fail "community" community in
+        let* r = C.exec q_member (author, community) in
+        let* () = or_fail "author member" r in
+        let* r = C.exec q_member (voter, community) in
+        let* () = or_fail "voter member" r in
+        let* post = C.find q_post ("sec vote post", community, author) in
+        let* post = or_fail "post" post in
+
+        let* cookie, _ = login ~url voter in
+        (* Accepted before the ban: this is the baseline every later assertion
+           is measured against, and it proves the case would notice a vote
+           that did go through. *)
+        let* status, _, _ = vote ~url ~cookie ~post ~direction:1 in
+        Alcotest.(check int) "upvote accepted before the ban" 303 status;
+        let* () =
+          check_post_vote_state "baseline" c ~voter ~post ~author ~community
+            ~vote:(Some 1) ~score:1 ~local:(Some 1) ~karma:1
+        in
+
+        let* r = C.exec q_community_ban (voter, community) in
+        let* () = or_fail "community ban" r in
+
+        (* Flipping to a downvote is refused... *)
+        let* status, _, body = vote ~url ~cookie ~post ~direction:(-1) in
+        Alcotest.(check int) "downvote refused" 403 status;
+        Alcotest.(check bool) "refused on the community ban, by name" true
+          (contains body "banned from this community");
+        let* () =
+          check_post_vote_state "after refused downvote" c ~voter ~post ~author
+            ~community ~vote:(Some 1) ~score:1 ~local:(Some 1) ~karma:1
+        in
+
+        (* ...and so is re-submitting the SAME direction, which the upsert
+           would otherwise absorb as a no-op: the gate sits on the boundary,
+           not on the delta. *)
+        let* status, _, _ = vote ~url ~cookie ~post ~direction:1 in
+        Alcotest.(check int) "re-upvote refused" 403 status;
+        let* () =
+          check_post_vote_state "after refused re-upvote" c ~voter ~post ~author
+            ~community ~vote:(Some 1) ~score:1 ~local:(Some 1) ~karma:1
+        in
+
+        (* An unbanned bystander is unaffected — the ban is about the voter,
+           not about the post. *)
+        let* bystander = C.find q_user "sec_vbystander" in
+        let* bystander = or_fail "bystander" bystander in
+        let* cookie_b, _ = login ~url bystander in
+        let* status, _, _ = vote ~url ~cookie:cookie_b ~post ~direction:1 in
+        Alcotest.(check int) "an unbanned voter still votes" 303 status;
+        let* () =
+          check_post_vote_state "bystander vote landed" c ~voter:bystander ~post
+            ~author ~community ~vote:(Some 1) ~score:2 ~local:(Some 2) ~karma:2
+        in
+        Lwt.return_unit)
+
+  (* B — removal (direction=0) is a mutation too, so it is refused as well and
+     the pre-ban vote survives. *)
+  let post_vote_removal_community_ban_case =
+    db_case
+      "post vote removal: a community-banned user cannot withdraw a vote cast \
+       before the ban"
+      (fun ~url _conn c ->
+        let (module C : Caqti_lwt.CONNECTION) = c in
+        let* author = C.find q_user "sec_vrauthor" in
+        let* author = or_fail "author" author in
+        let* voter = C.find q_user "sec_vrvoter" in
+        let* voter = or_fail "voter" voter in
+        let* community = C.find q_community ("sec-vote-removal", "public") in
+        let* community = or_fail "community" community in
+        let* post = C.find q_post ("sec removal post", community, author) in
+        let* post = or_fail "post" post in
+
+        let* cookie, _ = login ~url voter in
+        let* status, _, _ = vote ~url ~cookie ~post ~direction:1 in
+        Alcotest.(check int) "vote cast before the ban" 303 status;
+        let* () =
+          check_post_vote_state "baseline" c ~voter ~post ~author ~community
+            ~vote:(Some 1) ~score:1 ~local:(Some 1) ~karma:1
+        in
+
+        let* r = C.exec q_community_ban (voter, community) in
+        let* () = or_fail "community ban" r in
+
+        let* status, _, body = vote ~url ~cookie ~post ~direction:0 in
+        Alcotest.(check int) "removal refused" 403 status;
+        Alcotest.(check bool) "refused on the community ban" true
+          (contains body "banned from this community");
+        let* () =
+          check_post_vote_state "vote survives the refused removal" c ~voter
+            ~post ~author ~community ~vote:(Some 1) ~score:1 ~local:(Some 1)
+            ~karma:1
+        in
+        Lwt.return_unit)
+
+  (* C — the same rule on the comment path, where the community has to be
+     resolved through the comment's canonical parent post. *)
+  let comment_vote_community_ban_case =
+    db_case
+      "comment vote: a community ban stops the vote, the score and the \
+       author's karma from moving"
+      (fun ~url _conn c ->
+        let (module C : Caqti_lwt.CONNECTION) = c in
+        let* author = C.find q_user "sec_cvauthor" in
+        let* author = or_fail "author" author in
+        let* voter = C.find q_user "sec_cvvoter" in
+        let* voter = or_fail "voter" voter in
+        let* community = C.find q_community ("sec-comment-votes", "public") in
+        let* community = or_fail "community" community in
+        let* post = C.find q_post ("sec comment vote post", community, author) in
+        let* post = or_fail "post" post in
+        let* comment = C.find q_comment ("sec comment body", post, author) in
+        let* comment = or_fail "comment" comment in
+
+        let* cookie, _ = login ~url voter in
+        let* status, _, _ = vote_comment ~url ~cookie ~comment ~direction:1 in
+        Alcotest.(check int) "upvote accepted before the ban" 303 status;
+        let* () =
+          check_comment_vote_state "baseline" c ~voter ~comment ~author
+            ~community ~vote:(Some 1) ~score:1 ~local:(Some 1) ~karma:1
+        in
+
+        let* r = C.exec q_community_ban (voter, community) in
+        let* () = or_fail "community ban" r in
+
+        let* status, _, body =
+          vote_comment ~url ~cookie ~comment ~direction:(-1)
+        in
+        Alcotest.(check int) "downvote refused" 403 status;
+        Alcotest.(check bool) "refused on the community ban" true
+          (contains body "banned from this community");
+        let* () =
+          check_comment_vote_state "after refused downvote" c ~voter ~comment
+            ~author ~community ~vote:(Some 1) ~score:1 ~local:(Some 1) ~karma:1
+        in
+        Lwt.return_unit)
+
+  (* D — comment vote removal under a community ban. *)
+  let comment_vote_removal_community_ban_case =
+    db_case
+      "comment vote removal: a community-banned user cannot withdraw a comment \
+       vote cast before the ban"
+      (fun ~url _conn c ->
+        let (module C : Caqti_lwt.CONNECTION) = c in
+        let* author = C.find q_user "sec_cvrauthor" in
+        let* author = or_fail "author" author in
+        let* voter = C.find q_user "sec_cvrvoter" in
+        let* voter = or_fail "voter" voter in
+        let* community = C.find q_community ("sec-cvote-removal", "public") in
+        let* community = or_fail "community" community in
+        let* post = C.find q_post ("sec cvote removal post", community, author) in
+        let* post = or_fail "post" post in
+        let* comment = C.find q_comment ("sec cvote body", post, author) in
+        let* comment = or_fail "comment" comment in
+
+        let* cookie, _ = login ~url voter in
+        let* status, _, _ = vote_comment ~url ~cookie ~comment ~direction:1 in
+        Alcotest.(check int) "vote cast before the ban" 303 status;
+        let* () =
+          check_comment_vote_state "baseline" c ~voter ~comment ~author
+            ~community ~vote:(Some 1) ~score:1 ~local:(Some 1) ~karma:1
+        in
+
+        let* r = C.exec q_community_ban (voter, community) in
+        let* () = or_fail "community ban" r in
+
+        let* status, _, _ = vote_comment ~url ~cookie ~comment ~direction:0 in
+        Alcotest.(check int) "removal refused" 403 status;
+        let* () =
+          check_comment_vote_state "vote survives the refused removal" c ~voter
+            ~comment ~author ~community ~vote:(Some 1) ~score:1 ~local:(Some 1)
+            ~karma:1
+        in
+        Lwt.return_unit)
+
+  (* E — defence in depth against the GLOBAL ban.
+
+     The fixture flips users.is_banned directly and keeps the session alive.
+     That is not how production bans a user — ban_user_handler revokes every
+     session of the target in the same transaction, and
+     global_ban_revocation_case asserts exactly that. This case deliberately
+     constructs the state that revocation is supposed to make unreachable, to
+     prove the vote boundary refuses on its own durable read rather than
+     inheriting its safety from the session layer. *)
+  let vote_global_ban_defense_in_depth_case =
+    db_case
+      "global ban: an authenticated session that survived the ban still \
+       cannot vote on a post or a comment"
+      (fun ~url _conn c ->
+        let (module C : Caqti_lwt.CONNECTION) = c in
+        let* author = C.find q_user "sec_gvauthor" in
+        let* author = or_fail "author" author in
+        let* voter = C.find q_user "sec_gvvoter" in
+        let* voter = or_fail "voter" voter in
+        let* community = C.find q_community ("sec-global-votes", "public") in
+        let* community = or_fail "community" community in
+        let* post = C.find q_post ("sec global vote post", community, author) in
+        let* post = or_fail "post" post in
+        let* comment = C.find q_comment ("sec global body", post, author) in
+        let* comment = or_fail "comment" comment in
+
+        let* cookie, _ = login ~url voter in
+        (* No community ban anywhere: the only thing standing between this
+           session and the vote is the global flag. *)
+        let* r = C.exec q_global_ban voter in
+        let* () = or_fail "global ban" r in
+        let* banned = C.find_opt q_is_banned voter in
+        let* banned = or_fail "banned flag" banned in
+        Alcotest.(check (option bool)) "durably banned" (Some true) banned;
+        (* The session really is still usable — otherwise this case would pass
+           for the wrong reason. *)
+        let* status, _, _ = do_get ~url ~cookie ~target:"/whoami" in
+        Alcotest.(check int) "the stale session still authenticates" 200 status;
+
+        let* status, _, body = vote ~url ~cookie ~post ~direction:1 in
+        Alcotest.(check int) "post vote refused" 403 status;
+        Alcotest.(check bool) "refused on the global ban, by name" true
+          (contains body "permanently banned");
+        let* () =
+          check_post_vote_state "no post vote written" c ~voter ~post ~author
+            ~community ~vote:None ~score:0 ~local:None ~karma:0
+        in
+
+        let* status, _, body = vote_comment ~url ~cookie ~comment ~direction:1 in
+        Alcotest.(check int) "comment vote refused" 403 status;
+        Alcotest.(check bool) "refused on the global ban" true
+          (contains body "permanently banned");
+        let* () =
+          check_comment_vote_state "no comment vote written" c ~voter ~comment
+            ~author ~community ~vote:None ~score:0 ~local:None ~karma:0
+        in
+
+        (* Removal is refused too, so the flag cannot be used as a one-way
+           door out of an existing vote either. *)
+        let* status, _, _ = vote ~url ~cookie ~post ~direction:0 in
+        Alcotest.(check int) "post vote removal refused" 403 status;
+        let* status, _, _ = vote_comment ~url ~cookie ~comment ~direction:0 in
+        Alcotest.(check int) "comment vote removal refused" 403 status;
+        Lwt.return_unit)
+
+  (* F — the control: nothing about ordinary voting changed. *)
+  let vote_unbanned_control_case =
+    db_case
+      "unbanned control: add, change and remove still work on both post and \
+       comment votes"
+      (fun ~url _conn c ->
+        let (module C : Caqti_lwt.CONNECTION) = c in
+        let* author = C.find q_user "sec_okauthor" in
+        let* author = or_fail "author" author in
+        let* voter = C.find q_user "sec_okvoter" in
+        let* voter = or_fail "voter" voter in
+        let* community = C.find q_community ("sec-ok-votes", "public") in
+        let* community = or_fail "community" community in
+        let* post = C.find q_post ("sec ok post", community, author) in
+        let* post = or_fail "post" post in
+        let* comment = C.find q_comment ("sec ok body", post, author) in
+        let* comment = or_fail "comment" comment in
+
+        let* cookie, _ = login ~url voter in
+
+        let* status, _, _ = vote ~url ~cookie ~post ~direction:1 in
+        Alcotest.(check int) "post upvote accepted" 303 status;
+        let* () =
+          check_post_vote_state "post upvote" c ~voter ~post ~author ~community
+            ~vote:(Some 1) ~score:1 ~local:(Some 1) ~karma:1
+        in
+        (* A flip is a delta of 2, and the karma columns must follow it. *)
+        let* status, _, _ = vote ~url ~cookie ~post ~direction:(-1) in
+        Alcotest.(check int) "post vote changed to a downvote" 303 status;
+        let* () =
+          check_post_vote_state "post downvote" c ~voter ~post ~author
+            ~community ~vote:(Some (-1)) ~score:(-1) ~local:(Some (-1))
+            ~karma:(-1)
+        in
+        let* status, _, _ = vote ~url ~cookie ~post ~direction:0 in
+        Alcotest.(check int) "post vote removed" 303 status;
+        let* () =
+          check_post_vote_state "post vote removed" c ~voter ~post ~author
+            ~community ~vote:None ~score:0 ~local:(Some 0) ~karma:0
+        in
+
+        let* status, _, _ = vote_comment ~url ~cookie ~comment ~direction:1 in
+        Alcotest.(check int) "comment upvote accepted" 303 status;
+        let* () =
+          check_comment_vote_state "comment upvote" c ~voter ~comment ~author
+            ~community ~vote:(Some 1) ~score:1 ~local:(Some 1) ~karma:1
+        in
+        let* status, _, _ = vote_comment ~url ~cookie ~comment ~direction:0 in
+        Alcotest.(check int) "comment vote removed" 303 status;
+        let* () =
+          check_comment_vote_state "comment vote removed" c ~voter ~comment
+            ~author ~community ~vote:None ~score:0 ~local:(Some 0) ~karma:0
+        in
+        Lwt.return_unit)
+
+  (* G — the decision comes from the TARGET's community, never from anything
+     the client sends. The voter is banned in beta and not in alpha; a forged
+     community_id field pointing the other way changes nothing either way. *)
+  let vote_target_community_binding_case =
+    db_case
+      "vote target ownership: the ban decision follows the post's own \
+       community, not a submitted community_id"
+      (fun ~url _conn c ->
+        let (module C : Caqti_lwt.CONNECTION) = c in
+        let* author = C.find q_user "sec_tbauthor" in
+        let* author = or_fail "author" author in
+        let* voter = C.find q_user "sec_tbvoter" in
+        let* voter = or_fail "voter" voter in
+        let* alpha = C.find q_community ("sec-target-alpha", "public") in
+        let* alpha = or_fail "alpha" alpha in
+        let* beta = C.find q_community ("sec-target-beta", "public") in
+        let* beta = or_fail "beta" beta in
+        let* post_alpha = C.find q_post ("sec alpha target", alpha, author) in
+        let* post_alpha = or_fail "alpha post" post_alpha in
+        let* post_beta = C.find q_post ("sec beta target", beta, author) in
+        let* post_beta = or_fail "beta post" post_beta in
+        (* Banned in beta only. *)
+        let* r = C.exec q_community_ban (voter, beta) in
+        let* () = or_fail "beta ban" r in
+
+        let* cookie, _ = login ~url voter in
+        let forged_vote ~post ~claimed =
+          let* token = token_in ~url ~cookie in
+          do_post ~url ~cookie ~target:"/vote" ~token
+            [ ("post_id", string_of_int post);
+              ("direction", "1");
+              (* Not a field the handler reads — the point is that adding it
+                 cannot move the decision. *)
+              ("community_id", string_of_int claimed)
+            ]
+        in
+
+        (* Voting in alpha, while claiming to be in beta (where they ARE
+           banned): allowed, because the post lives in alpha. *)
+        let* status, _, _ = forged_vote ~post:post_alpha ~claimed:beta in
+        Alcotest.(check int) "alpha vote accepted despite the beta claim" 303
+          status;
+        let* () =
+          check_post_vote_state "alpha vote landed" c ~voter ~post:post_alpha
+            ~author ~community:alpha ~vote:(Some 1) ~score:1 ~local:(Some 1)
+            ~karma:1
+        in
+
+        (* Voting in beta, while claiming to be in alpha (where they are NOT
+           banned): refused, because the post lives in beta. *)
+        let* status, _, body = forged_vote ~post:post_beta ~claimed:alpha in
+        Alcotest.(check int) "beta vote refused despite the alpha claim" 403
+          status;
+        Alcotest.(check bool) "refused on the community ban" true
+          (contains body "banned from this community");
+        let* () =
+          check_post_vote_state "nothing written in beta" c ~voter
+            ~post:post_beta ~author ~community:beta ~vote:None ~score:0
+            ~local:None ~karma:1
+        in
+        Lwt.return_unit)
+
   let avatar_suite = [ avatar_theft_case; avatar_preserved_case ]
 
   let session_suite =
@@ -74459,6 +74934,13 @@ module Sec_db = struct
       upload_rate_limit_case ]
 
   let legacy_route_suite = [ legacy_mod_routes_case ]
+
+  let vote_ban_suite =
+    [ post_vote_community_ban_case; post_vote_removal_community_ban_case;
+      comment_vote_community_ban_case;
+      comment_vote_removal_community_ban_case;
+      vote_global_ban_defense_in_depth_case; vote_unbanned_control_case;
+      vote_target_community_binding_case ]
 end
 
 (* Correctness-boundary invariants: /search links must percent-encode their
@@ -81822,6 +82304,7 @@ let () =
     ; ("security_comment_parent_binding", Sec_db.comment_parent_suite)
     ; ("security_upload_hardening", Sec_db.upload_suite)
     ; ("security_legacy_mod_routes", Sec_db.legacy_route_suite)
+    ; ("security_vote_ban_enforcement", Sec_db.vote_ban_suite)
       (* Correctness boundaries: /search link URL encoding (DB-free),
          untrusted header values, forced-database-failure disclosure, and the
          typed promotion error contract (gated). *)
