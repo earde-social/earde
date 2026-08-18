@@ -539,7 +539,11 @@ module Presence : sig
 end
 
 module Security : sig
-  val update_password : (module Caqti_lwt.CONNECTION) -> int -> string -> (unit, string) result Lwt.t
+  (* Writes the new hash AND revokes every Dream session of that user in one
+     transaction (same invariant as password_reset_atomically) — a password
+     change must end any session an attacker may already hold. Hash before
+     calling; the handler must still explicitly log the changing browser out. *)
+  val update_password_revoking_sessions : (module Caqti_lwt.CONNECTION) -> int -> string -> (unit, string) result Lwt.t
   val verify_email : (module Caqti_lwt.CONNECTION) -> string -> (string option, string) result Lwt.t
 end
 
@@ -589,6 +593,10 @@ module Admin : sig
      Ok None = no such comment under that community's posts. *)
   val mod_delete_post : (module Caqti_lwt.CONNECTION) -> community_id:int -> int -> (bool, string) result Lwt.t
   val mod_delete_comment : (module Caqti_lwt.CONNECTION) -> community_id:int -> int -> (int option, string) result Lwt.t
+  (* GLOBAL ban. Flips users.is_banned AND revokes every Dream session of the
+     banned user in one transaction, so an already-authenticated browser can
+     neither keep browsing nor mint fresh realtime tokens. Fail-closed: a
+     revocation failure rolls the ban back. unban does not resurrect sessions. *)
   val ban_user : (module Caqti_lwt.CONNECTION) -> int -> (unit, string) result Lwt.t
   val is_globally_banned : (module Caqti_lwt.CONNECTION) -> int -> (bool, string) result Lwt.t
   val unban_user_global : (module Caqti_lwt.CONNECTION) -> int -> (unit, string) result Lwt.t
@@ -735,7 +743,8 @@ val get_user_analytics_props : (module Caqti_lwt.CONNECTION) -> int -> ((string 
 val update_user_profile : (module Caqti_lwt.CONNECTION) -> string option -> string option -> int -> (unit, string) result Lwt.t
 val get_user_karma : (module Caqti_lwt.CONNECTION) -> int -> (int, string) result Lwt.t
 val verify_email : (module Caqti_lwt.CONNECTION) -> string -> (string option, string) result Lwt.t
-val update_password : (module Caqti_lwt.CONNECTION) -> int -> string -> (unit, string) result Lwt.t
+(* See module Security: hash write + full session revocation, one transaction. *)
+val update_password_revoking_sessions : (module Caqti_lwt.CONNECTION) -> int -> string -> (unit, string) result Lwt.t
 val get_user_by_username : (module Caqti_lwt.CONNECTION) -> string -> (user option, string) result Lwt.t
 val get_admin_usernames : (module Caqti_lwt.CONNECTION) -> (string list, string) result Lwt.t
 val is_user_admin : (module Caqti_lwt.CONNECTION) -> int -> (bool, string) result Lwt.t
@@ -857,6 +866,7 @@ val admin_delete_comment : (module Caqti_lwt.CONNECTION) -> label:string -> int 
    mod deletion: community moderation must always prove route-to-target scope. *)
 val mod_delete_post : (module Caqti_lwt.CONNECTION) -> community_id:int -> int -> (bool, string) result Lwt.t
 val mod_delete_comment : (module Caqti_lwt.CONNECTION) -> community_id:int -> int -> (int option, string) result Lwt.t
+(* See module Admin: global ban + full session revocation, one transaction. *)
 val ban_user : (module Caqti_lwt.CONNECTION) -> int -> (unit, string) result Lwt.t
 val is_globally_banned : (module Caqti_lwt.CONNECTION) -> int -> (bool, string) result Lwt.t
 val unban_user_global : (module Caqti_lwt.CONNECTION) -> int -> (unit, string) result Lwt.t
@@ -905,9 +915,10 @@ val delete_user_sessions :
     other users are untouched. [Dream.invalidate_session] only ends the session
     on the current request; this is what ends the others.
 
-    Already called inside [anonymize_user_and_enqueue_posthog_deletion] and
-    [password_reset_atomically]; exposed for tests and for any future flow that
-    must end a user's sessions. *)
+    Already called inside [anonymize_user_and_enqueue_posthog_deletion],
+    [password_reset_atomically], [update_password_revoking_sessions] and
+    [ban_user]; exposed for tests and for any future flow that must end a
+    user's sessions. *)
 
 val pending_signup_hash_token : string -> string
 val pending_signup_username_elsewhere : (module Caqti_lwt.CONNECTION) -> string -> string -> (bool, string) result Lwt.t

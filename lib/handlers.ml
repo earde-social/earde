@@ -5198,20 +5198,35 @@ let change_password_handler request =
           else if String.length new_password < 8 then
             Dream.html (Pages.msg_page ~user:username ~title:"Password Too Short" ~message:"Your new password must be at least 8 characters long." ~alert_type:"error" ~return_url:"/settings" request)
           else
-            Dream.sql request (fun db ->
-              match%lwt Db.get_user_for_login db username with
-              | Ok (Some (_, (hash, _, _))) ->
-                  (match%lwt Auth.verify_password ~password:old_password ~hash with
-                  | Ok true ->
-                      (match%lwt Auth.hash_password new_password with
-                      | Ok new_hash ->
-                          (match%lwt Db.update_password db user_id new_hash with
-                          | Ok () -> Dream.redirect request "/settings"
-                          | Error err -> Dream.html (Pages.msg_page ~user:username ~title:"Error" ~message:(db_error_message err) ~alert_type:"error" ~return_url:"/settings" request))
-                      | Error err -> Dream.html (Pages.msg_page ~user:username ~title:"Error" ~message:("Hashing error: " ^ err) ~alert_type:"error" ~return_url:"/settings" request))
-                  | _ -> Dream.html (Pages.msg_page ~user:username ~title:"Wrong Password" ~message:"The current password you entered is incorrect. Please go back and try again." ~alert_type:"error" ~return_url:"/settings" request))
-              | _ -> Dream.html (Pages.msg_page ~user:username ~title:"Error" ~message:"User not found in the database." ~alert_type:"error" ~return_url:"/settings" request)
-            )
+            (* Argon2 verify/hash run OUTSIDE Dream.sql — CPU-bound work must
+               not hold a pool connection (same rule as login_handler), and
+               invalidate_session below needs its own connection. *)
+            let%lwt lookup =
+              Dream.sql request (fun db -> Db.get_user_for_login db username)
+            in
+            (match lookup with
+            | Ok (Some (_, (hash, _, _))) ->
+                (match%lwt Auth.verify_password ~password:old_password ~hash with
+                | Ok true ->
+                    (match%lwt Auth.hash_password new_password with
+                    | Ok new_hash ->
+                        let%lwt updated =
+                          Dream.sql request (fun db ->
+                              Db.update_password_revoking_sessions db user_id new_hash)
+                        in
+                        (match updated with
+                        | Ok () ->
+                            (* Every server-side session of this user is gone,
+                               including the one behind this request's cookie;
+                               invalidate_session resets THIS request's session
+                               too, so the response carries a fresh anonymous
+                               cookie instead of a stale authenticated one. *)
+                            let%lwt () = Dream.invalidate_session request in
+                            Dream.html (Pages.msg_page ~auth:true ~title:"Password Changed" ~message:"Your password has been updated. For security, all of your sessions have been signed out — please log in again with your new password." ~alert_type:"success" ~return_url:"/login" request)
+                        | Error err -> Dream.html (Pages.msg_page ~user:username ~title:"Error" ~message:(db_error_message err) ~alert_type:"error" ~return_url:"/settings" request))
+                    | Error err -> Dream.html (Pages.msg_page ~user:username ~title:"Error" ~message:("Hashing error: " ^ err) ~alert_type:"error" ~return_url:"/settings" request))
+                | _ -> Dream.html (Pages.msg_page ~user:username ~title:"Wrong Password" ~message:"The current password you entered is incorrect. Please go back and try again." ~alert_type:"error" ~return_url:"/settings" request))
+            | _ -> Dream.html (Pages.msg_page ~user:username ~title:"Error" ~message:"User not found in the database." ~alert_type:"error" ~return_url:"/settings" request))
       | _ -> Dream.html (Pages.msg_page ~user:username ~title:"Form Error" ~message:"There was a problem with your form submission. Please try again." ~alert_type:"error" ~return_url:"/settings" request))
   | _ -> Dream.redirect request "/login"
 
