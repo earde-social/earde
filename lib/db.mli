@@ -328,6 +328,10 @@ module Post : sig
      communities (Slice D), and non-indexable forum sections (Slice G) from public discovery.
      The 5th flag is TRUE only when the post sits in a section flagged indexable=false. Empty -> []. *)
   val get_post_communities : (module Caqti_lwt.CONNECTION) -> int list -> ((int * int * string * bool * bool) list, string) result Lwt.t
+  (* The community that owns a post, derived from the post itself — the
+     authoritative input to the vote ban gate, which must never trust a
+     community id from the request. [None] = no such post. *)
+  val get_post_community_id : (module Caqti_lwt.CONNECTION) -> int -> (int option, string) result Lwt.t
   val vote_post : (module Caqti_lwt.CONNECTION) -> int -> int -> int -> (unit, string) result Lwt.t
   val remove_post_vote : (module Caqti_lwt.CONNECTION) -> int -> int -> (unit, string) result Lwt.t
   val soft_delete_post : (module Caqti_lwt.CONNECTION) -> int -> int -> (unit, string) result Lwt.t
@@ -442,6 +446,10 @@ module Comment : sig
     int option ->
     ([ `Created of int | `Invalid_parent ], string) result Lwt.t
   val touch_last_activity : (module Caqti_lwt.CONNECTION) -> int -> (unit, string) result Lwt.t
+  (* The community that owns a comment, via its CANONICAL parent post — the
+     same binding create_comment_handler authorizes against. A shared thread's
+     destination community never enters into it. [None] = no such comment. *)
+  val get_comment_community_id : (module Caqti_lwt.CONNECTION) -> int -> (int option, string) result Lwt.t
   val vote_comment : (module Caqti_lwt.CONNECTION) -> int -> int -> int -> (unit, string) result Lwt.t
   val get_comments_by_user : (module Caqti_lwt.CONNECTION) -> int -> ((int * string * string * int * string * int) list, string) result Lwt.t
   val remove_comment_vote : (module Caqti_lwt.CONNECTION) -> int -> int -> (unit, string) result Lwt.t
@@ -837,6 +845,11 @@ val start_thread_from_chat :
   community_id:int -> user_id:int -> channel_id:int ->
   seed_message_id:int64 -> context_message_ids:int64 list ->
   (int, string) result Lwt.t
+
+(* See the Post/Comment modules: the owning community of a vote target, read
+   from the target itself. The vote handlers gate on these before any mutation. *)
+val get_post_community_id : (module Caqti_lwt.CONNECTION) -> int -> (int option, string) result Lwt.t
+val get_comment_community_id : (module Caqti_lwt.CONNECTION) -> int -> (int option, string) result Lwt.t
 
 val vote_post : (module Caqti_lwt.CONNECTION) -> int -> int -> int -> (unit, string) result Lwt.t
 val remove_post_vote : (module Caqti_lwt.CONNECTION) -> int -> int -> (unit, string) result Lwt.t

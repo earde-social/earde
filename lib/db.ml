@@ -1131,6 +1131,21 @@ module Post = struct
             Lwt.return (Ok (List.map (fun ((id, cid, vis, ix), sec_excluded) -> (id, cid, vis, ix, sec_excluded)) rows))
         | Error err -> Lwt.return (Error (Caqti_error.show err))
 
+  (* The community that OWNS a post, read from the post itself. Vote
+     authorization needs this: a community id supplied by the browser would let
+     a banned user point the ban check at a community they are not banned in.
+     Ok None = no such post — the caller decides what that means. *)
+  let get_post_community_id_query =
+    let open Caqti_request.Infix in
+    (Caqti_type.int ->? Caqti_type.int)
+    "SELECT community_id FROM posts WHERE id = $1"
+
+  let get_post_community_id (module C : Caqti_lwt.CONNECTION) post_id =
+    C.find_opt get_post_community_id_query post_id
+    >>= function
+    | Ok row -> Lwt.return (Ok row)
+    | Error err -> Lwt.return (Error (Caqti_error.show err))
+
   (* CTE captures old direction before upsert so the delta is exact even on flip (e.g. -1→+1 = +2).
      The final INSERT upserts community_user_stats for the post AUTHOR, not the voter. *)
   let vote_post_query =
@@ -1343,6 +1358,23 @@ module Comment = struct
     C.exec touch_last_activity_query post_id
     >>= function
     | Ok () -> Lwt.return (Ok ())
+    | Error err -> Lwt.return (Error (Caqti_error.show err))
+
+  (* The community that owns a comment, resolved through its CANONICAL parent
+     post — the same binding create_comment_handler authorizes against, and the
+     same one the vote SQL below credits karma to. A shared thread is readable
+     from a destination community, but the comment never leaves the origin, so
+     the destination context a browser happens to be in must not decide ban
+     state. Ok None = no such comment (or its post is gone). *)
+  let get_comment_community_id_query =
+    let open Caqti_request.Infix in
+    (Caqti_type.int ->? Caqti_type.int)
+    "SELECT p.community_id FROM comments c JOIN posts p ON p.id = c.post_id WHERE c.id = $1"
+
+  let get_comment_community_id (module C : Caqti_lwt.CONNECTION) comment_id =
+    C.find_opt get_comment_community_id_query comment_id
+    >>= function
+    | Ok row -> Lwt.return (Ok row)
     | Error err -> Lwt.return (Error (Caqti_error.show err))
 
   (* Same CTE pattern as vote_post: captures old direction, upserts vote, updates author local karma.
@@ -3871,6 +3903,7 @@ let get_personalized_feed = Post.get_personalized_feed
 let get_posts_by_community = Post.get_posts_by_community
 let get_posts_by_user = Post.get_posts_by_user
 let get_post_communities = Post.get_post_communities
+let get_post_community_id = Post.get_post_community_id
 let vote_post = Post.vote_post
 let remove_post_vote = Post.remove_post_vote
 let soft_delete_post = Post.soft_delete_post
@@ -3879,6 +3912,7 @@ let search_posts = Post.search_posts
 let get_comments = Comment.get_comments
 let create_comment = Comment.create_comment
 let touch_post_last_activity = Comment.touch_last_activity
+let get_comment_community_id = Comment.get_comment_community_id
 let vote_comment = Comment.vote_comment
 let get_comments_by_user = Comment.get_comments_by_user
 let remove_comment_vote = Comment.remove_comment_vote
