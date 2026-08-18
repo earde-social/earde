@@ -2811,10 +2811,27 @@ module Security = struct
     (Caqti_type.(t2 string int) ->. Caqti_type.unit)
     "UPDATE users SET password_hash = $1 WHERE id = $2"
 
-  let update_password (module C: Caqti_lwt.CONNECTION) user_id new_hash =
-    C.exec update_password_query (new_hash, user_id) >>= function
-    | Ok () -> Lwt.return (Ok ())
+  (* An authenticated password change carries the same invariant as
+     reset_password_atomically: the new password must end every session the
+     user already has — otherwise a hijacked browser survives the change.
+     Hash write and session revocation commit together or not at all, so
+     there is no window with a new password but a live stolen session (nor
+     the reverse). Argon2 hashing must be done BEFORE calling this so no CPU
+     work stalls the transaction. *)
+  let update_password_revoking_sessions (module C: Caqti_lwt.CONNECTION) user_id new_hash =
+    C.start () >>= function
     | Error e -> Lwt.return (Error (Caqti_error.show e))
+    | Ok () ->
+      (C.exec update_password_query (new_hash, user_id) >>= function
+      | Error e ->
+          C.rollback () >>= fun _ -> Lwt.return (Error (Caqti_error.show e))
+      | Ok () ->
+          (Session_store.delete_for_user (module C) user_id >>= function
+           | Error e -> C.rollback () >>= fun _ -> Lwt.return (Error e)
+           | Ok () ->
+               C.commit () >>= function
+               | Error e -> Lwt.return (Error (Caqti_error.show e))
+               | Ok () -> Lwt.return (Ok ())))
 
   (* UPDATE+RETURNING atomically consumes the token — avoids TOCTOU race of a separate
      SELECT then UPDATE, and prevents replay on concurrent verification attempts. *)
@@ -2893,10 +2910,26 @@ module Admin = struct
     (Caqti_type.int ->. Caqti_type.unit)
     "UPDATE users SET is_banned = TRUE WHERE id = $1"
 
+  (* A global ban revokes every session of the banned user in the SAME
+     transaction as the is_banned flip: leaving the rows behind would let an
+     already-authenticated browser keep using the site — and keep minting
+     fresh realtime tokens — until natural session expiry. Fail-closed: if
+     revocation fails the ban rolls back and the caller sees the error, never
+     a silent half-success that looks banned but stays logged in. *)
   let ban_user (module C: Caqti_lwt.CONNECTION) user_id =
-    C.exec ban_user_query user_id >>= function
-    | Ok () -> Lwt.return (Ok ())
+    C.start () >>= function
     | Error e -> Lwt.return (Error (Caqti_error.show e))
+    | Ok () ->
+      (C.exec ban_user_query user_id >>= function
+      | Error e ->
+          C.rollback () >>= fun _ -> Lwt.return (Error (Caqti_error.show e))
+      | Ok () ->
+          (Session_store.delete_for_user (module C) user_id >>= function
+           | Error e -> C.rollback () >>= fun _ -> Lwt.return (Error e)
+           | Ok () ->
+               C.commit () >>= function
+               | Error e -> Lwt.return (Error (Caqti_error.show e))
+               | Ok () -> Lwt.return (Ok ())))
 
   (* SELECT rather than comparing a boolean param — Caqti bool binding is driver-
      dependent; SELECT the column and let OCaml own the bool conversion. *)
@@ -3922,7 +3955,7 @@ let log_page_view = Analytics.log_page_view
 
 let touch_user_active = Presence.touch_user_active
 
-let update_password = Security.update_password
+let update_password_revoking_sessions = Security.update_password_revoking_sessions
 let verify_email = Security.verify_email
 
 let password_reset_create_token = PasswordReset.create_token

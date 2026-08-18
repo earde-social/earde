@@ -73379,6 +73379,26 @@ module Sec_db = struct
     "SELECT local_comment_count FROM community_user_stats
       WHERE user_id = $1 AND community_id = $2"
 
+  (* Like q_user but with a REAL argon2 hash — the password-change cases go
+     through the production handler, which verifies the old password. *)
+  let q_user_hashed =
+    (Caqti_type.(t2 string string) ->! Caqti_type.int)
+    "INSERT INTO users (username, email, password_hash, is_email_verified)
+     VALUES ($1, $1 || '@sec.invalid', $2, TRUE) RETURNING id"
+
+  let q_channel =
+    (Caqti_type.(t2 string int) ->! Caqti_type.int)
+    "INSERT INTO channels (slug, name, community_id) VALUES ($1, $1, $2)
+     RETURNING id"
+
+  let q_password_hash =
+    (Caqti_type.int ->? Caqti_type.string)
+    "SELECT password_hash FROM users WHERE id = $1"
+
+  let q_is_banned =
+    (Caqti_type.int ->? Caqti_type.bool)
+    "SELECT is_banned FROM users WHERE id = $1"
+
   let avatar_url_of name = "/static/uploads/" ^ name
 
   let make_upload_file name =
@@ -73401,8 +73421,11 @@ module Sec_db = struct
   let sec_secret = "sec-test-secret-value"
   let shared_pipeline = ref None
 
-  (* Set by the /session route: which identity the NEXT minted session gets. *)
-  let next_identity = ref (None : int option)
+  (* Set by the /session route: which identity the NEXT minted session gets —
+     (user_id, optional username, admin claim). username/is_admin ride along
+     because change_password_handler keys off the username session field and
+     ban_user_handler off the is_admin claim, exactly like a real login. *)
+  let next_identity = ref (None : (int * string option * bool) option)
 
   let pipeline_for ~url =
     match !shared_pipeline with
@@ -73423,19 +73446,20 @@ module Sec_db = struct
                      let* () =
                        match !next_identity with
                        | None -> Lwt.return_unit
-                       | Some uid ->
+                       | Some (uid, username, admin) ->
                            let* () =
                              Dream.set_session_field req "user_id"
                                (string_of_int uid)
                            in
-                           let* name =
-                             Lwt.return
-                               (Option.value
-                                  (Dream.session_field req "username")
-                                  ~default:"")
+                           let* () =
+                             match username with
+                             | None -> Lwt.return_unit
+                             | Some u ->
+                                 Dream.set_session_field req "username" u
                            in
-                           ignore name;
-                           Lwt.return_unit
+                           if admin then
+                             Dream.set_session_field req "is_admin" "true"
+                           else Lwt.return_unit
                      in
                      Dream.respond (Dream.csrf_token req));
                  Dream.get "/whoami" (fun req ->
@@ -73451,7 +73475,17 @@ module Sec_db = struct
                  Dream.post "/comments" Earde.Handlers.create_comment_handler;
                  Dream.post "/posts" Earde.Handlers.create_post_handler;
                  Dream.post "/update-community"
-                   Earde.Handlers.update_community_handler
+                   Earde.Handlers.update_community_handler;
+                 (* Session-revocation slice: the routed production handlers
+                    for authenticated password change, global ban and
+                    realtime-token refresh, mounted at their bin/main.ml
+                    paths. *)
+                 Dream.post "/settings/password"
+                   Earde.Handlers.change_password_handler;
+                 Dream.post "/admin/ban/user/:id"
+                   Earde.Handlers.ban_user_handler;
+                 Dream.get "/c/:slug/ch/:channel_slug/realtime-token"
+                   Earde.Handlers.realtime_token_handler
                  (* No /add-mod and no /remove-mod: their absence from this
                     router mirrors bin/main.ml, and the legacy-route case
                     asserts the real app answers 404 for them. *)
@@ -73473,8 +73507,8 @@ module Sec_db = struct
         | None -> v)
 
   (* One live session for [uid], plus a CSRF token minted inside it. *)
-  let login ~url uid =
-    next_identity := Some uid;
+  let login ~url ?username ?(admin = false) uid =
+    next_identity := Some (uid, username, admin);
     let p = pipeline_for ~url in
     let* response = p (Dream.request ~method_:`GET ~target:"/session" "") in
     let cookie = session_cookie "session" response in
@@ -73776,6 +73810,229 @@ module Sec_db = struct
         Alcotest.(check int) "every session of that user is gone" 0 n;
         let* status, _, _ = do_get ~url ~cookie:cookie_c ~target:"/whoami" in
         Alcotest.(check int) "another user's session is unaffected" 200 status;
+        Lwt.return_unit)
+
+  (* ------------------------------------------------------------------ *)
+  (* Session-revocation slice — authenticated password change            *)
+  (* ------------------------------------------------------------------ *)
+
+  let pw_old = "sec-old-password-1"
+  let pw_new = "sec-new-password-9"
+
+  (* Auth.hash_password pads the encoded hash to encoded_len with trailing
+     NULs, which the text-typed Postgres roundtrip strips; trim them so the
+     fixture compares equal to what the users table actually stores. *)
+  let strip_nuls s =
+    let n = ref (String.length s) in
+    while !n > 0 && s.[!n - 1] = '\000' do
+      decr n
+    done;
+    String.sub s 0 !n
+
+  let password_change_revocation_case =
+    db_case
+      "password change: every session is revoked, the changing browser is \
+       logged out, and the hash really rotates"
+      (fun ~url _conn c ->
+        let (module C : Caqti_lwt.CONNECTION) = c in
+        let* hash = Earde.Auth.hash_password pw_old in
+        let* hash = or_fail_s "hash fixture" hash in
+        let hash = strip_nuls hash in
+        let* uid = C.find q_user_hashed ("sec_pwchanger", hash) in
+        let* uid = or_fail "user" uid in
+        let* other = C.find q_user "sec_pw_bystander" in
+        let* other = or_fail "bystander" other in
+
+        (* Browser A performs the change; browser B stands in for a stolen
+           cookie that must not survive it. *)
+        let* cookie_a, token_a = login ~url ~username:"sec_pwchanger" uid in
+        let* cookie_b, _ = login ~url uid in
+        let* cookie_c, _ = login ~url other in
+        let* n = C.find q_count_sessions (string_of_int uid) in
+        let* n = or_fail "sessions before" n in
+        Alcotest.(check int) "two sessions before the change" 2 n;
+
+        let* status, _, body =
+          do_post ~url ~cookie:cookie_a ~target:"/settings/password"
+            ~token:token_a
+            [ ("old_password", pw_old);
+              ("new_password", pw_new);
+              ("confirm_password", pw_new)
+            ]
+        in
+        Alcotest.(check int) "change accepted" 200 status;
+        Alcotest.(check bool) "re-auth copy, not an error page" true
+          (contains body "Password Changed");
+
+        (* The hash really rotated: old no longer verifies, new does. *)
+        let* stored = C.find_opt q_password_hash uid in
+        let* stored = or_fail "stored hash" stored in
+        let stored = Option.get stored in
+        Alcotest.(check bool) "hash rotated" true (stored <> hash);
+        let* old_ok =
+          Earde.Auth.verify_password ~password:pw_old ~hash:stored
+        in
+        Alcotest.(check bool) "old password no longer authenticates" false
+          (old_ok = Ok true);
+        let* new_ok =
+          Earde.Auth.verify_password ~password:pw_new ~hash:stored
+        in
+        Alcotest.(check bool) "new password authenticates" true
+          (new_ok = Ok true);
+
+        (* BOTH previously issued sessions are dead — as durable rows and
+           over HTTP, including the very browser that made the change. *)
+        let* n = C.find q_count_sessions (string_of_int uid) in
+        let* n = or_fail "sessions after" n in
+        Alcotest.(check int) "no session row survives" 0 n;
+        let* status, _, _ = do_get ~url ~cookie:cookie_a ~target:"/whoami" in
+        Alcotest.(check int) "the changing browser is logged out" 401 status;
+        let* status, _, _ = do_get ~url ~cookie:cookie_b ~target:"/whoami" in
+        Alcotest.(check int) "the other (stolen) session is logged out" 401
+          status;
+
+        let* status, _, _ = do_get ~url ~cookie:cookie_c ~target:"/whoami" in
+        Alcotest.(check int) "another user's session is unaffected" 200 status;
+        let* n = C.find q_count_sessions (string_of_int other) in
+        let* n = or_fail "bystander sessions" n in
+        Alcotest.(check int) "bystander session row survives" 1 n;
+        Lwt.return_unit)
+
+  let password_change_wrong_old_case =
+    db_case
+      "password change with the wrong current password revokes nothing and \
+       leaves the hash untouched"
+      (fun ~url _conn c ->
+        let (module C : Caqti_lwt.CONNECTION) = c in
+        let* hash = Earde.Auth.hash_password pw_old in
+        let* hash = or_fail_s "hash fixture" hash in
+        let hash = strip_nuls hash in
+        let* uid = C.find q_user_hashed ("sec_pwwrong", hash) in
+        let* uid = or_fail "user" uid in
+        let* cookie_a, token_a = login ~url ~username:"sec_pwwrong" uid in
+        let* cookie_b, _ = login ~url uid in
+
+        let* status, _, body =
+          do_post ~url ~cookie:cookie_a ~target:"/settings/password"
+            ~token:token_a
+            [ ("old_password", "sec-not-the-password");
+              ("new_password", pw_new);
+              ("confirm_password", pw_new)
+            ]
+        in
+        Alcotest.(check int) "refused" 200 status;
+        Alcotest.(check bool) "wrong-password copy" true
+          (contains body "Wrong Password");
+
+        let* n = C.find q_count_sessions (string_of_int uid) in
+        let* n = or_fail "sessions" n in
+        Alcotest.(check int) "both sessions survive" 2 n;
+        let* status, _, _ = do_get ~url ~cookie:cookie_a ~target:"/whoami" in
+        Alcotest.(check int) "changing browser still authenticated" 200 status;
+        let* status, _, _ = do_get ~url ~cookie:cookie_b ~target:"/whoami" in
+        Alcotest.(check int) "second session still authenticated" 200 status;
+        let* stored = C.find_opt q_password_hash uid in
+        let* stored = or_fail "stored hash" stored in
+        Alcotest.(check (option string)) "hash unchanged" (Some hash) stored;
+        Lwt.return_unit)
+
+  (* ------------------------------------------------------------------ *)
+  (* Session-revocation slice — global ban                               *)
+  (* ------------------------------------------------------------------ *)
+
+  let global_ban_revocation_case =
+    db_case
+      "global ban: the target's sessions are revoked and the stale session \
+       can no longer mint a realtime token"
+      (fun ~url _conn c ->
+        let (module C : Caqti_lwt.CONNECTION) = c in
+        let* admin = C.find q_user "sec_banadmin" in
+        let* admin = or_fail "admin" admin in
+        let* target = C.find q_user "sec_bantarget" in
+        let* target = or_fail "target" target in
+        let* other = C.find q_user "sec_ban_bystander" in
+        let* other = or_fail "bystander" other in
+        let* community = C.find q_community ("sec-banchat", "public") in
+        let* community = or_fail "community" community in
+        let* chan = C.find q_channel ("sec-banchan", community) in
+        let* _ = or_fail "channel" chan in
+
+        let* cookie_t, _ = login ~url ~username:"sec_bantarget" target in
+        let* cookie_t2, _ = login ~url target in
+        let* cookie_c, _ = login ~url other in
+        let* n = C.find q_count_sessions (string_of_int target) in
+        let* n = or_fail "before" n in
+        Alcotest.(check int) "two live sessions before the ban" 2 n;
+
+        (* The session can reach the token endpoint before the ban: anything
+           but 401 proves it authenticated (200 with a configured signing
+           secret, 503 without one). *)
+        let token_target = "/c/sec-banchat/ch/sec-banchan/realtime-token" in
+        let* status, _, _ =
+          do_get ~url ~cookie:cookie_t ~target:token_target
+        in
+        Alcotest.(check bool) "token endpoint authenticates before the ban"
+          true (status <> 401);
+
+        (* The ban goes through the real routed admin handler. *)
+        let* cookie_ad, token_ad = login ~url ~admin:true admin in
+        let* status, _, _ =
+          do_post ~url ~cookie:cookie_ad
+            ~target:("/admin/ban/user/" ^ string_of_int target)
+            ~token:token_ad []
+        in
+        Alcotest.(check int) "ban accepted" 303 status;
+        let* banned = C.find_opt q_is_banned target in
+        let* banned = or_fail "banned flag" banned in
+        Alcotest.(check (option bool)) "durably banned" (Some true) banned;
+
+        (* Every session of the banned user is dead... *)
+        let* n = C.find q_count_sessions (string_of_int target) in
+        let* n = or_fail "after" n in
+        Alcotest.(check int) "no session row survives the ban" 0 n;
+        let* status, _, _ = do_get ~url ~cookie:cookie_t ~target:"/whoami" in
+        Alcotest.(check int) "session one is logged out" 401 status;
+        let* status, _, _ = do_get ~url ~cookie:cookie_t2 ~target:"/whoami" in
+        Alcotest.(check int) "session two is logged out" 401 status;
+        (* ...so the stale cookie can no longer mint a fresh realtime token. *)
+        let* status, _, _ =
+          do_get ~url ~cookie:cookie_t ~target:token_target
+        in
+        Alcotest.(check int) "realtime token refresh refused" 401 status;
+
+        (* Admin and bystander sessions survive. *)
+        let* status, _, _ = do_get ~url ~cookie:cookie_ad ~target:"/whoami" in
+        Alcotest.(check int) "the admin stays logged in" 200 status;
+        let* status, _, _ = do_get ~url ~cookie:cookie_c ~target:"/whoami" in
+        Alcotest.(check int) "another user's session is unaffected" 200 status;
+        Lwt.return_unit)
+
+  let ban_requires_admin_case =
+    db_case "global ban by a non-admin is refused and revokes nothing"
+      (fun ~url _conn c ->
+        let (module C : Caqti_lwt.CONNECTION) = c in
+        let* attacker = C.find q_user "sec_bannonadmin" in
+        let* attacker = or_fail "attacker" attacker in
+        let* target = C.find q_user "sec_bansafe" in
+        let* target = or_fail "target" target in
+        let* cookie_t, _ = login ~url target in
+        let* cookie_a, token_a = login ~url attacker in
+
+        let* _status, _, body =
+          do_post ~url ~cookie:cookie_a
+            ~target:("/admin/ban/user/" ^ string_of_int target)
+            ~token:token_a []
+        in
+        Alcotest.(check bool) "refused as non-admin" true
+          (contains body "not an Admin");
+        let* banned = C.find_opt q_is_banned target in
+        let* banned = or_fail "banned flag" banned in
+        Alcotest.(check (option bool)) "target not banned" (Some false) banned;
+        let* n = C.find q_count_sessions (string_of_int target) in
+        let* n = or_fail "sessions" n in
+        Alcotest.(check int) "target's session survives" 1 n;
+        let* status, _, _ = do_get ~url ~cookie:cookie_t ~target:"/whoami" in
+        Alcotest.(check int) "target still authenticated" 200 status;
         Lwt.return_unit)
 
   (* ------------------------------------------------------------------ *)
@@ -74190,7 +74447,9 @@ module Sec_db = struct
   let avatar_suite = [ avatar_theft_case; avatar_preserved_case ]
 
   let session_suite =
-    [ session_revocation_case; password_reset_revocation_case ]
+    [ session_revocation_case; password_reset_revocation_case;
+      password_change_revocation_case; password_change_wrong_old_case;
+      global_ban_revocation_case; ban_requires_admin_case ]
 
   let comment_parent_suite =
     [ parent_binding_case; parent_binding_no_side_effects_case ]
