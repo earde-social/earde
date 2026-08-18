@@ -1972,14 +1972,18 @@ let send_message_handler request =
             | Ok (Some community) ->
                 (match%lwt Db.get_channel_by_slug db channel_slug community.id with
                  | Ok (Some channel) ->
-                     let%lwt is_gb = match%lwt Db.is_globally_banned db user_id with Ok b -> Lwt.return b | Error _ -> Lwt.return false in
-                     if is_gb then
+                     (* Fail closed: an unreadable global-ban state is a storage
+                        failure, never "not banned" — no message is persisted
+                        and nothing is published to the gateway. *)
+                     (match%lwt Db.is_globally_banned db user_id with
+                     | Error e -> internal_error e
+                     | Ok true ->
                        (if respond_json then
                           json_error `Forbidden ~code:"forbidden"
                             ~message:"Your account has been permanently banned from Earde."
                         else
                           Dream.respond ~status:`Forbidden (Pages.msg_page ?user:uname ~title:"Account Banned" ~message:"Your account has been permanently banned from Earde." ~alert_type:"error" ~return_url:"/" request))
-                     else begin
+                     | Ok false -> begin
                        match%lwt Db.is_member db user_id community.id with
                        | Ok true ->
                            (match%lwt Db.community_is_banned db user_id community.id with
@@ -1989,7 +1993,10 @@ let send_message_handler request =
                                     ~message:"You are banned from this community."
                                 else
                                   Dream.respond ~status:`Forbidden (Pages.msg_page ?user:uname ~title:"Banned from Community" ~message:"You are banned from this community." ~alert_type:"error" ~return_url:("/c/" ^ community_slug) request)
-                            | _ ->
+                            (* Same fail-closed rule as the global gate above:
+                               the local-ban read failing is not permission. *)
+                            | Error e -> internal_error e
+                            | Ok false ->
                                 (match Chat_api.validate_content raw_content with
                                  | Error `Empty ->
                                      if respond_json then
@@ -2062,7 +2069,7 @@ let send_message_handler request =
                            else
                              Dream.respond ~status:`Forbidden (Pages.msg_page ?user:uname ~title:"Not a Member" ~message:"You must join this community to chat." ~alert_type:"error" ~return_url:("/c/" ^ community_slug) request)
                        | Error e -> internal_error e
-                     end
+                     end)
                  | Ok None ->
                      if respond_json then
                        json_error `Not_Found ~code:"not_found" ~message:"This channel does not exist."
@@ -2105,9 +2112,13 @@ let default_thread_section_id sections =
 type start_perm = Start_allowed | Start_not_member | Start_banned | Start_error of string
 
 let check_start_permission db ~user_id ~is_admin ~community_id =
-  let%lwt is_gb = match%lwt Db.is_globally_banned db user_id with Ok b -> Lwt.return b | Error _ -> Lwt.return false in
-  if is_gb then Lwt.return Start_banned
-  else begin
+  (* Every storage failure in this gate — global ban included — is Start_error,
+     never a silent "not banned": callers turn Start_error into a generic 500
+     before any thread is created. *)
+  match%lwt Db.is_globally_banned db user_id with
+  | Error e -> Lwt.return (Start_error e)
+  | Ok true -> Lwt.return Start_banned
+  | Ok false -> begin
     match%lwt Db.community_is_banned db user_id community_id with
     | Ok true -> Lwt.return Start_banned
     | Error e -> Lwt.return (Start_error e)
@@ -3250,21 +3261,26 @@ let create_post_handler request =
           with_analytics_after_sql (fun record ->
           Dream.sql request (fun db ->
             (* Global ban gate: checked first — a globally banned user's session may
-               still be active if they were banned after logging in. *)
-            let%lwt is_gb =
-              match%lwt Db.is_globally_banned db user_id with
-              | Ok b -> Lwt.return b | Error _ -> Lwt.return false
-            in
-            if is_gb then
+               still be active if they were banned after logging in. Failing to
+               READ that state is a storage failure, not permission: it stops
+               here, ahead of image processing and the post insert. *)
+            match%lwt Db.is_globally_banned db user_id with
+            | Error err -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Error" ~message:(db_error_message err) ~alert_type:"error" ~return_url:"/" request)
+            | Ok true ->
               Dream.respond ~status:`Forbidden (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Account Banned" ~message:"Your account has been permanently banned from Earde." ~alert_type:"error" ~return_url:"/" request)
-            else
-              match%lwt Db.is_member db user_id community_id with
+            | Ok false ->
+              (match%lwt Db.is_member db user_id community_id with
               | Ok true ->
                   (* Local ban check: evaluated only for members. *)
                   (match%lwt Db.community_is_banned db user_id community_id with
                   | Ok true ->
                       Dream.respond ~status:`Forbidden (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Banned from Community" ~message:"You are banned from posting in this community." ~alert_type:"error" ~return_url:"/" request)
-                  | _ ->
+                  (* Fail closed BEFORE process_image_upload: an unreadable local
+                     ban must not buy a full ImageMagick conversion, let alone a
+                     post row. *)
+                  | Error err ->
+                      Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Error" ~message:(db_error_message err) ~alert_type:"error" ~return_url:"/" request)
+                  | Ok false ->
                   (* Image processing runs here, after the global-ban,
                      membership and community-ban gates. It used to run before
                      all three, so a banned user or a non-member could force a
@@ -3408,7 +3424,7 @@ let create_post_handler request =
                           | Error err -> Dream.html (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Error" ~message:(db_error_message err) ~alert_type:"error" ~return_url:"/" request)))))
               | Ok false ->
                   Dream.html (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Not a Member" ~message:"You must join this community before you can post in it." ~alert_type:"error" ~return_url:"/" request)
-              | Error err -> Dream.html (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Error" ~message:(db_error_message err) ~alert_type:"error" ~return_url:"/" request)
+              | Error err -> Dream.html (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Error" ~message:(db_error_message err) ~alert_type:"error" ~return_url:"/" request))
           ))
       | _ -> Dream.html (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Form Error" ~message:"There was a problem with your form submission. Please try again." ~alert_type:"error" ~return_url:"/" request)
 
@@ -4075,14 +4091,22 @@ let report_form_handler request =
                  let%lwt authorized = can_view_community db ~user_id ~is_admin community in
                  if not authorized then community_not_found ?user request
                  else
-                 let%lwt is_gb = match%lwt Db.is_globally_banned db user_id with Ok b -> Lwt.return b | Error _ -> Lwt.return false in
-                 if is_gb then
+                 (* Both ban reads sit AFTER the privacy gate above and fail
+                    closed: the viewer is already authorized to see this
+                    community, so a storage failure can safely be a generic
+                    500 — and the form, whose policy requires a non-banned
+                    reporter, is not rendered on an unknown ban state. Keeps
+                    GET coherent with the POST that follows it. *)
+                 (match%lwt Db.is_globally_banned db user_id with
+                  | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:"/" request)
+                  | Ok true ->
                    Dream.respond ~status:`Forbidden (Pages.msg_page ?user ~title:"Account Banned" ~message:"Your account has been permanently banned from Earde." ~alert_type:"error" ~return_url:"/" request)
-                 else
-                 let%lwt is_cb = match%lwt Db.community_is_banned db user_id community.id with Ok b -> Lwt.return b | Error _ -> Lwt.return false in
-                 if is_cb then
+                  | Ok false ->
+                 match%lwt Db.community_is_banned db user_id community.id with
+                 | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:"/" request)
+                 | Ok true ->
                    Dream.respond ~status:`Forbidden (Pages.msg_page ?user ~title:"Banned from Community" ~message:"You are banned from this community." ~alert_type:"error" ~return_url:("/c/" ^ community.slug) request)
-                 else
+                 | Ok false ->
                  (match%lwt resolve_report_target db community.id target_type target_id with
                   | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:"/" request)
                   | Ok None -> bad ()
@@ -4121,7 +4145,7 @@ let report_form_handler request =
                           | Ok cs -> Lwt.return cs | Error _ -> Lwt.return []
                         in
                         Dream.html (Pages.report_form_page ?user ~rail_communities ~channels ~sections
-                          ~can_manage ~community ~target_type ~target_id ~target_title ~return_url request)))
+                          ~can_manage ~community ~target_type ~target_id ~target_title ~return_url request))))
        | _ -> bad ())
 
 let create_report_handler request =
@@ -4157,14 +4181,19 @@ let create_report_handler request =
                      let%lwt authorized = can_view_community db ~user_id ~is_admin community in
                      if not authorized then community_not_found ?user request
                      else
-                     let%lwt is_gb = match%lwt Db.is_globally_banned db user_id with Ok b -> Lwt.return b | Error _ -> Lwt.return false in
-                     if is_gb then
+                     (* Ban gates, still after the privacy gate above and now
+                        fail-closed: no report row may be inserted while the
+                        reporter's ban state is unknown. *)
+                     (match%lwt Db.is_globally_banned db user_id with
+                      | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:"/" request)
+                      | Ok true ->
                        Dream.respond ~status:`Forbidden (Pages.msg_page ?user ~title:"Account Banned" ~message:"Your account has been permanently banned from Earde." ~alert_type:"error" ~return_url:"/" request)
-                     else
-                     let%lwt is_cb = match%lwt Db.community_is_banned db user_id community.id with Ok b -> Lwt.return b | Error _ -> Lwt.return false in
-                     if is_cb then
+                      | Ok false ->
+                     match%lwt Db.community_is_banned db user_id community.id with
+                     | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:"/" request)
+                     | Ok true ->
                        Dream.respond ~status:`Forbidden (Pages.msg_page ?user ~title:"Banned from Community" ~message:"You are banned from this community." ~alert_type:"error" ~return_url:("/c/" ^ community.slug) request)
-                     else
+                     | Ok false ->
                      (* Re-resolve from the trusted slug — never trust a client-supplied community_id. *)
                      (match%lwt resolve_report_target db community.id target_type target_id with
                       | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:("/c/" ^ community.slug) request)
@@ -4186,7 +4215,7 @@ let create_report_handler request =
                                  Dream.html (Pages.msg_page ?user ~title:"Already reported"
                                    ~message:"You've already reported this item. A moderator will review it." ~alert_type:"info" ~return_url request)
                              | Error e ->
-                                 Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url request))))
+                                 Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url request)))))
            | _ ->
                Dream.respond ~status:`Bad_Request (Pages.msg_page ?user ~title:"Invalid Report" ~message:"That report could not be processed." ~alert_type:"error" ~return_url:("/c/" ^ slug) request))
       | _ ->
@@ -4379,17 +4408,17 @@ let create_comment_handler request =
           with_analytics_after_sql (fun record ->
           Dream.sql request (fun db ->
             (* Global ban gate: same reasoning as create_post_handler — active sessions
-               survive a ban until the next login, so we must check on every write. *)
-            let%lwt is_gb =
-              match%lwt Db.is_globally_banned db user_id with
-              | Ok b -> Lwt.return b | Error _ -> Lwt.return false
-            in
-            if is_gb then
+               survive a ban until the next login, so we must check on every write.
+               An unreadable ban state fails closed here, before the comment
+               insert, its notifications, karma and last-activity bump. *)
+            match%lwt Db.is_globally_banned db user_id with
+            | Error err -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ~user:username ~title:"Error" ~message:(db_error_message err) ~alert_type:"error" ~return_url:"/" request)
+            | Ok true ->
               Dream.respond ~status:`Forbidden (Pages.msg_page ~user:username ~title:"Account Banned" ~message:"Your account has been permanently banned from Earde." ~alert_type:"error" ~return_url:"/" request)
-            else
+            | Ok false ->
             (* Lookup post to get community_id for the ban check — avoids adding a hidden
                form field that a client could forge to bypass their own community ban. *)
-            match%lwt Db.get_post_by_id db post_id with
+            (match%lwt Db.get_post_by_id db post_id with
             | Ok (Some post) ->
                 let is_tombstone = match post.content with
                   | Some "[deleted]" | Some "[removed by admin]" | Some "[removed by moderator]" -> true
@@ -4398,10 +4427,15 @@ let create_comment_handler request =
                 if is_tombstone then
                   Dream.respond ~status:`Forbidden "⛔ You cannot comment on a deleted post."
                 else
+                (* The canonical binding is unchanged: the community comes from
+                   the loaded post, never from the form. Only the Error arm
+                   changes — it no longer falls through to the comment insert. *)
                 (match%lwt Db.community_is_banned db user_id post.community_id with
                 | Ok true ->
                     Dream.respond ~status:`Forbidden (Pages.msg_page ~user:username ~title:"Banned from Community" ~message:"You are banned from commenting in this community." ~alert_type:"error" ~return_url:("/p/" ^ string_of_int post_id) request)
-                | _ ->
+                | Error err ->
+                    Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ~user:username ~title:"Error" ~message:(db_error_message err) ~alert_type:"error" ~return_url:("/p/" ^ string_of_int post_id) request)
+                | Ok false ->
                     (* Shared Threads: the server-side participation rule.
                        One SQL capability (the same one that gates the
                        composer) requires a CURRENT path onto the canonical
@@ -4504,7 +4538,7 @@ let create_comment_handler request =
                         Dream.redirect request redirect_target
                     | Error err -> Dream.html (Pages.msg_page ~user:username ~title:"Error" ~message:(db_error_message err) ~alert_type:"error" ~return_url:("/p/" ^ string_of_int post_id) request))))
             | Ok None -> Dream.html (Pages.msg_page ~user:username ~title:"Post Not Found" ~message:"The post you tried to comment on could not be found." ~alert_type:"error" ~return_url:"/" request)
-            | Error err -> Dream.html (Pages.msg_page ~user:username ~title:"Error" ~message:(db_error_message err) ~alert_type:"error" ~return_url:"/" request)
+            | Error err -> Dream.html (Pages.msg_page ~user:username ~title:"Error" ~message:(db_error_message err) ~alert_type:"error" ~return_url:"/" request))
           ))
       | _ -> Dream.html (Pages.msg_page ~user:username ~title:"Form Error" ~message:"There was a problem with your form submission. Please try again." ~alert_type:"error" ~return_url:"/" request)
 
@@ -5148,6 +5182,10 @@ let view_profile_handler request =
                communities, plus private ones the viewer can read. *)
             let%lwt moderated_communities =
               Lwt_list.filter_s community_surfaceable moderated_communities in
+            (* Presentation only: the profile SUBJECT's ban badge and which of
+               the admin Ban/Unban forms is drawn. It authorizes nothing — both
+               forms re-check admin server-side — so degrading to false on a
+               read failure is a display fallback, not a permission decision. *)
             let%lwt is_gb_res = Db.is_globally_banned db uid in
             let is_globally_banned = match is_gb_res with Ok b -> b | Error _ -> false in
 
