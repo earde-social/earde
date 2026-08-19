@@ -334,14 +334,121 @@ let get_current_user_comment_votes db request =
       | Error _ -> Lwt.return [])
   | None -> Lwt.return []
 
+(* === CURRENT GLOBAL-ADMIN AUTHORITY ===
+
+   Dream's session caches [is_admin] at login and is never refreshed, so an
+   operator demoted in [users.is_admin] kept every legacy admin power for the
+   remaining life of an open session. Durable authority is the [users] row, and
+   that is what every admin boundary below now asks.
+
+   The resolution is deliberately asymmetric, and the asymmetry is the whole
+   point of it being affordable: a session that does NOT claim admin cannot be
+   an admin under the current claim-writing rules, so ordinary traffic performs
+   no extra query at all. Only a request that already claims admin pays one
+   primary-key read, and only where admin authority is actually about to be
+   used. The accepted cost is the other direction: a freshly PROMOTED admin
+   whose session still says [is_admin=false] must log in again before the claim
+   opens the durable check. That is the documented behaviour, not an oversight.
+
+   The durable answer is never written back into the session — the goal is
+   fresh authority on each privileged request, not a second cache to go
+   stale. *)
+type current_admin =
+  | Current_admin
+  | Current_non_admin
+  | Current_admin_storage_error of string
+
+(* Session read that also behaves where no session middleware is installed:
+   no middleware simply means no authenticated session, never an exception
+   escaping an authorization decision. *)
+let session_field_safe request name =
+  match Dream.session_field request name with
+  | exception _ -> None
+  | value -> value
+
+(* The session user the durable lookup would be about, and [None] whenever
+   there is nothing worth looking up: no admin claim, or a claim carried by a
+   session with no valid positive user id — which identifies nobody, so it can
+   authorize nobody, and must not become a lookup against some coincidental
+   row id either. [None] is therefore also what keeps ordinary traffic free of
+   any new query. *)
+let admin_claimant request =
+  if session_field_safe request "is_admin" <> Some "true" then None
+  else
+    match Option.bind (session_field_safe request "user_id") int_of_string_opt with
+    | Some uid when uid > 0 -> Some uid
+    | _ -> None
+
+let current_admin db request =
+  match admin_claimant request with
+  | None -> Lwt.return Current_non_admin
+  | Some uid -> (
+      match%lwt Db.is_user_admin db uid with
+      | Ok true -> Lwt.return Current_admin
+      | Ok false -> Lwt.return Current_non_admin
+      | Error e -> Lwt.return (Current_admin_storage_error e))
+
+(* The settled answer, for boundaries whose remaining code only needs the
+   boolean. [Error] carries the generic-message payload only: the caller owns
+   the safe failure response and must grant nothing on that path. *)
+let current_admin_bool db request =
+  match%lwt current_admin db request with
+  | Current_admin -> Lwt.return (Ok true)
+  | Current_non_admin -> Lwt.return (Ok false)
+  | Current_admin_storage_error e -> Lwt.return (Error e)
+
+(* READ gates only. An unanswerable admin lookup is not admin authority, so it
+   collapses to "not an admin" and the caller's own member/moderator policy
+   still decides — deliberately NOT a distinguishable failure response, which
+   on a private community would be a brand-new existence oracle. A stale
+   demoted admin who is also a legitimate member or moderator still passes,
+   through that independent policy. *)
+let current_admin_read_override db request =
+  match%lwt current_admin db request with
+  | Current_admin -> Lwt.return true
+  | Current_non_admin -> Lwt.return false
+  | Current_admin_storage_error e ->
+      (* Silent by design towards the client — and therefore invisible to the
+         operator unless it is logged here. [db_error_message] is the canonical
+         server-side log; the generic string it returns has no reader on this
+         path. The [current_admin_bool] callers log the same way through their
+         own response, which is why the log does not live in [current_admin]
+         itself: that would report every failure twice. *)
+      ignore (db_error_message e : string);
+      Lwt.return false
+
+(* Admin-only boundaries that decide before they would otherwise touch the
+   database at all: a session that does not claim admin is refused without so
+   much as a pool checkout.
+
+   These callers answer from [generic_db_error] (or a fixed JSON/redirect)
+   rather than from the error payload, so the log belongs here for the same
+   reason as above. *)
+let current_admin_of_request request =
+  match admin_claimant request with
+  | None -> Lwt.return Current_non_admin
+  | Some _ ->
+      let%lwt state = Dream.sql request (fun db -> current_admin db request) in
+      (match state with
+       | Current_admin_storage_error e -> ignore (db_error_message e : string)
+       | Current_admin | Current_non_admin -> ());
+      Lwt.return state
+
 (* === PRIVATE-COMMUNITY READ GATE (Slice C) ===
    Privacy is a server-side permission and is decided HERE, in the handler (the security
    boundary) — never trusted from the client. Public communities are readable by everyone; a
    private community is readable only by a global admin, a community moderator, or a member.
    The pure Db.can_read_community encodes the decision; this wrapper gathers the booleans from
    real DB/session checks. Fails CLOSED: a membership/mod DB error denies access, unless the
-   viewer is a global admin (whose authority does not depend on a per-community row). *)
-let can_view_community db ~user_id ~is_admin (community : Db.community) =
+   viewer is a global admin (whose authority does not depend on a per-community row).
+
+   [admin_override] must be CURRENT durable admin authority — the value of
+   [current_admin_read_override] for this request — never the raw session
+   claim. The label is spelled differently from the session field on purpose:
+   passing [Dream.session_field request "is_admin" = Some "true"] here is the
+   stale-admin bug this boundary exists to refuse. *)
+let can_view_community db ~user_id ~admin_override (community : Db.community) =
+  let is_admin = admin_override in
   match community.Db.visibility with
   | Db.Community_public -> Lwt.return true
   | Db.Community_private ->
@@ -1053,10 +1160,16 @@ let search_handler request =
 
 let new_community_page request =
   (* Legacy generic creation is global-admin only; everyone else lands on the
-     onboarding explainer. Admins keep the pre-existing flow untouched. *)
+     onboarding explainer. Admins keep the pre-existing flow untouched. The
+     decision rule is unchanged — only its input is now CURRENT durable
+     authority, with an unanswerable lookup landing on the same explainer
+     rather than opening the form. *)
+  match%lwt current_admin_of_request request with
+  | Current_admin_storage_error _ -> Dream.redirect request "/bring"
+  | admin_state ->
   match
     Project_onboarding.legacy_creation_get_decision
-      ~is_admin:(Dream.session_field request "is_admin" = Some "true")
+      ~is_admin:(admin_state = Current_admin)
   with
   | Project_onboarding.Redirect_to_bring | Project_onboarding.Forbid ->
       Dream.redirect request "/bring"
@@ -1082,10 +1195,15 @@ let new_community_page request =
 
 let create_community_handler request =
   (* Server-side admin gate before any form parsing, so a forged form from a
-     non-admin session (or no session) is rejected outright. *)
+     non-admin session (or no session) is rejected outright. The authority is
+     CURRENT durable users.is_admin; an unanswerable lookup creates nothing. *)
+  match%lwt current_admin_of_request request with
+  | Current_admin_storage_error _ ->
+      Dream.respond ~status:`Internal_Server_Error generic_db_error
+  | admin_state ->
   match
     Project_onboarding.legacy_creation_post_decision
-      ~is_admin:(Dream.session_field request "is_admin" = Some "true")
+      ~is_admin:(admin_state = Current_admin)
   with
   | Project_onboarding.Forbid | Project_onboarding.Redirect_to_bring ->
       Dream.respond ~status:`Forbidden
@@ -1336,7 +1454,6 @@ let community_page_handler request =
   let slug = Dream.param request "slug" in
   let user = Dream.session_field request "username" in
   let user_id = match Dream.session_field request "user_id" with Some id -> int_of_string id | None -> 0 in
-  let is_admin = Dream.session_field request "is_admin" = Some "true" in
   let sort_str_opt = Dream.query request "sort" in
   let page = match Dream.query request "page" with Some p -> (try int_of_string p with _ -> 1) | None -> 1 in
   let limit = 20 in
@@ -1357,10 +1474,13 @@ let community_page_handler request =
   in
 
   Dream.sql request (fun db ->
+    (* CURRENT durable admin authority, resolved once for both branches' read
+       gates. A viewer whose session does not claim admin costs no query. *)
+    let%lwt is_admin = current_admin_read_override db request in
     let%lwt _ = Db.demote_inactive_mods db in
     match%lwt Db.get_community_by_slug db slug with
     | Ok (Some community) when community.sections_enabled ->
-        let%lwt authorized = can_view_community db ~user_id ~is_admin community in
+        let%lwt authorized = can_view_community db ~user_id ~admin_override:is_admin community in
         if not authorized then community_not_found ?user request
         else
         (* Structured community: /c/:slug always shows the sections overview.
@@ -1397,7 +1517,7 @@ let community_page_handler request =
                Dream.html (Pages.community_overview_page ?user ~noindex:(community_noindex community) ~connected_projects_count:(List.length projects) ~connected_communities_count:(List.length communities) ~is_member:m ~is_current_user_mod:is_mod ~is_current_user_top_mod:is_top_mod ~mod_usernames ~orphaned ~rail_communities:user_communities ~channels ~recent_posts community section_stats request)))
          | _ -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:"Failed to load community sections." ~alert_type:"error" ~return_url:"/" request))
     | Ok (Some community) ->
-        let%lwt authorized = can_view_community db ~user_id ~is_admin community in
+        let%lwt authorized = can_view_community db ~user_id ~admin_override:is_admin community in
         if not authorized then community_not_found ?user request
         else
         (* Simple community feed *)
@@ -1455,11 +1575,14 @@ let community_network_handler request =
   let user = Dream.session_field request "username" in
   let user_id = match Dream.session_field request "user_id" with
     | Some id -> (try int_of_string id with _ -> 0) | None -> 0 in
-  let is_admin = Dream.session_field request "is_admin" = Some "true" in
   Dream.sql request (fun db ->
+    (* CURRENT durable admin authority: the read gate below, and the two
+       management affordances further down, all take this value rather than
+       the session's cached claim. *)
+    let%lwt is_admin = current_admin_read_override db request in
     match%lwt Db.get_community_by_slug db slug with
     | Ok (Some community) ->
-        let%lwt authorized = can_view_community db ~user_id ~is_admin community in
+        let%lwt authorized = can_view_community db ~user_id ~admin_override:is_admin community in
         if not authorized then community_not_found ?user request
         else
         (* Launch-chrome data, loaded only after the authorization decision above:
@@ -1517,19 +1640,20 @@ let community_section_handler request =
   let section_slug = Dream.param request "section_slug" in
   let user = Dream.session_field request "username" in
   let user_id = match Dream.session_field request "user_id" with Some id -> int_of_string id | None -> 0 in
-  let is_admin = Dream.session_field request "is_admin" = Some "true" in
   let sort_str_opt = Dream.query request "sort" in
   let page = match Dream.query request "page" with Some p -> (try int_of_string p with _ -> 1) | None -> 1 in
   let limit = 20 in
   let offset = (max 1 page - 1) * limit in
 
   Dream.sql request (fun db ->
+    (* CURRENT durable admin authority for the private-community read gate. *)
+    let%lwt is_admin = current_admin_read_override db request in
     let%lwt _ = Db.demote_inactive_mods db in
     match%lwt Db.get_community_by_slug db community_slug with
     | Ok None -> Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"Not Found" ~message:"This community does not exist." ~alert_type:"error" ~return_url:"/" request)
     | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:"/" request)
     | Ok (Some community) ->
-        let%lwt authorized = can_view_community db ~user_id ~is_admin community in
+        let%lwt authorized = can_view_community db ~user_id ~admin_override:is_admin community in
         if not authorized then community_not_found ?user request
         else
         let render_section_feed (section : Db.community_section) sort_mode sort_str fetch_posts =
@@ -1630,13 +1754,16 @@ let community_channel_handler request =
   let channel_slug = Dream.param request "channel_slug" in
   let user = Dream.session_field request "username" in
   let user_id = match Dream.session_field request "user_id" with Some id -> (try int_of_string id with _ -> 0) | None -> 0 in
-  let is_admin = Dream.session_field request "is_admin" = Some "true" in
   Dream.sql request (fun db ->
+    (* CURRENT durable admin authority for the private-community read gate.
+       The channel page mints a realtime token further down, so this gate is
+       also what stands between a stale claim and a live socket. *)
+    let%lwt is_admin = current_admin_read_override db request in
     match%lwt Db.get_community_by_slug db community_slug with
     | Ok None -> Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"Not Found" ~message:"This community does not exist." ~alert_type:"error" ~return_url:"/" request)
     | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:"/" request)
     | Ok (Some community) ->
-        let%lwt authorized = can_view_community db ~user_id ~is_admin community in
+        let%lwt authorized = can_view_community db ~user_id ~admin_override:is_admin community in
         if not authorized then community_not_found ?user request
         else
         match%lwt Db.get_channel_by_slug db channel_slug community.id with
@@ -1808,9 +1935,10 @@ let channel_messages_json_handler request =
     | Some id -> (try int_of_string id with _ -> 0)
     | None -> 0
   in
-  let is_admin = Dream.session_field request "is_admin" = Some "true" in
 
   Dream.sql request (fun db ->
+  (* CURRENT durable admin authority for the private-community read gate. *)
+  let%lwt is_admin = current_admin_read_override db request in
   match%lwt Db.get_community_by_slug db slug with
   | Error e ->
       Logs.err (fun m -> m "channel_messages_json: community lookup failed: %s" e);
@@ -1823,7 +1951,7 @@ let channel_messages_json_handler request =
   | Ok None -> community_not_found ?user request
 
   | Ok (Some community) ->
-      let%lwt can_view = can_view_community db ~user_id ~is_admin community in
+      let%lwt can_view = can_view_community db ~user_id ~admin_override:is_admin community in
       if not can_view then community_not_found ?user request
       else (
         match%lwt Db.get_channel_by_slug db channel_slug community.id with
@@ -1888,19 +2016,21 @@ let realtime_token_handler request =
     | Some id -> (try int_of_string id with _ -> 0)
     | None -> 0
   in
-  let is_admin = Dream.session_field request "is_admin" = Some "true" in
   match user, user_id > 0 with
   | None, _ | _, false ->
       Dream.json ~status:`Unauthorized {|{"error":"unauthorized"}|}
   | Some username, true ->
       Dream.sql request (fun db ->
+        (* CURRENT durable admin authority: a stale demoted-admin claim must
+           not be able to mint a token for a private community's channel. *)
+        let%lwt is_admin = current_admin_read_override db request in
         match%lwt Db.get_community_by_slug db slug with
         | Error e ->
             Logs.err (fun m -> m "realtime_token: community lookup failed: %s" e);
             Dream.respond ~status:`Internal_Server_Error "Internal server error"
         | Ok None -> community_not_found ?user request
         | Ok (Some community) ->
-            let%lwt can_view = can_view_community db ~user_id ~is_admin community in
+            let%lwt can_view = can_view_community db ~user_id ~admin_override:is_admin community in
             if not can_view then community_not_found ?user request
             else (
               match%lwt Db.get_channel_by_slug db channel_slug community.id with
@@ -2111,7 +2241,11 @@ let default_thread_section_id sections =
    too). Mirrors send_message's order: global ban -> local ban -> membership -> mod/admin. *)
 type start_perm = Start_allowed | Start_not_member | Start_banned | Start_error of string
 
-let check_start_permission db ~user_id ~is_admin ~community_id =
+(* [admin_override] must be CURRENT durable admin authority, never the raw
+   session claim — same contract, and same deliberately different spelling, as
+   can_view_community. *)
+let check_start_permission db ~user_id ~admin_override ~community_id =
+  let is_admin = admin_override in
   (* Every storage failure in this gate — global ban included — is Start_error,
      never a silent "not banned": callers turn Start_error into a generic 500
      before any thread is created. *)
@@ -2148,11 +2282,13 @@ let start_thread_form_handler request =
   | Some uid_str ->
       let user_id = try int_of_string uid_str with _ -> 0 in
       let user = Dream.session_field request "username" in
-      let is_admin = Dream.session_field request "is_admin" = Some "true" in
       (match Int64.of_string_opt message_id_str with
        | None -> Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"Not Found" ~message:"Invalid message reference." ~alert_type:"error" ~return_url:channel_url request)
        | Some message_id ->
            Dream.sql request (fun db ->
+             (* CURRENT durable admin authority: feeds the private read gate,
+                the start-permission override and the sidebar affordance. *)
+             let%lwt is_admin = current_admin_read_override db request in
              match%lwt Db.get_community_by_slug db community_slug with
              | Ok None -> Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"Not Found" ~message:"This community does not exist." ~alert_type:"error" ~return_url:"/" request)
              | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:"/" request)
@@ -2161,7 +2297,7 @@ let start_thread_form_handler request =
                     same 404 as a missing community, BEFORE any membership-specific 403 below.
                     This does not broaden who may create a thread (check_start_permission still
                     runs for authorized viewers). *)
-                 let%lwt authorized = can_view_community db ~user_id ~is_admin community in
+                 let%lwt authorized = can_view_community db ~user_id ~admin_override:is_admin community in
                  if not authorized then community_not_found ?user request
                  else
                  (match%lwt Db.get_channel_by_slug db channel_slug community.id with
@@ -2175,7 +2311,7 @@ let start_thread_form_handler request =
                            if seed.channel_id <> channel.id || seed.deleted_at <> None then
                              Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"Not Found" ~message:"That message is not available to start a thread from." ~alert_type:"error" ~return_url:channel_url request)
                            else
-                             (match%lwt check_start_permission db ~user_id ~is_admin ~community_id:community.id with
+                             (match%lwt check_start_permission db ~user_id ~admin_override:is_admin ~community_id:community.id with
                               | Start_banned -> Dream.respond ~status:`Forbidden (Pages.msg_page ?user ~title:"Not Allowed" ~message:"You cannot start threads in this community." ~alert_type:"error" ~return_url:channel_url request)
                               | Start_not_member -> Dream.respond ~status:`Forbidden (Pages.msg_page ?user ~title:"Join to start a thread" ~message:"You must be a member of this community to start a thread." ~alert_type:"error" ~return_url:("/c/" ^ community_slug) request)
                               | Start_error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:channel_url request)
@@ -2225,7 +2361,6 @@ let start_thread_create_handler request =
   | Some uid_str ->
       let user_id = try int_of_string uid_str with _ -> 0 in
       let user = Dream.session_field request "username" in
-      let is_admin = Dream.session_field request "is_admin" = Some "true" in
       (match%lwt Dream.form request with
        | `Ok form_data ->
            (match Int64.of_string_opt message_id_str with
@@ -2233,13 +2368,16 @@ let start_thread_create_handler request =
             | Some message_id ->
                 with_analytics_after_sql (fun record ->
                 Dream.sql request (fun db ->
+                  (* CURRENT durable admin authority: feeds the private read
+                     gate and the start-permission override. *)
+                  let%lwt is_admin = current_admin_read_override db request in
                   match%lwt Db.get_community_by_slug db community_slug with
                   | Ok None -> Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"Not Found" ~message:"This community does not exist." ~alert_type:"error" ~return_url:"/" request)
                   | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:"/" request)
                   | Ok (Some community) ->
                       (* Slice C: private community hidden — non-authorized viewer gets 404, not
                          the membership 403 below. check_start_permission still gates creation. *)
-                      let%lwt authorized = can_view_community db ~user_id ~is_admin community in
+                      let%lwt authorized = can_view_community db ~user_id ~admin_override:is_admin community in
                       if not authorized then community_not_found ?user request
                       else
                       (match%lwt Db.get_channel_by_slug db channel_slug community.id with
@@ -2253,7 +2391,7 @@ let start_thread_create_handler request =
                                 if seed.channel_id <> channel.id || seed.deleted_at <> None then
                                   Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"Not Found" ~message:"That message is not available to start a thread from." ~alert_type:"error" ~return_url:channel_url request)
                                 else
-                                  (match%lwt check_start_permission db ~user_id ~is_admin ~community_id:community.id with
+                                  (match%lwt check_start_permission db ~user_id ~admin_override:is_admin ~community_id:community.id with
                                    | Start_banned -> Dream.respond ~status:`Forbidden (Pages.msg_page ?user ~title:"Not Allowed" ~message:"You cannot start threads in this community." ~alert_type:"error" ~return_url:channel_url request)
                                    | Start_not_member -> Dream.respond ~status:`Forbidden (Pages.msg_page ?user ~title:"Join to start a thread" ~message:"You must be a member of this community to start a thread." ~alert_type:"error" ~return_url:("/c/" ^ community_slug) request)
                                    | Start_error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:channel_url request)
@@ -2442,9 +2580,13 @@ let community_settings_handler request =
   | Some uid_str ->
       let user_id = int_of_string uid_str in
       let user = Dream.session_field request "username" in
-      (* Read admin flag outside sql block — session is per-request, no DB cost. *)
-      let is_admin = Dream.session_field request "is_admin" = Some "true" in
       Dream.sql request (fun db ->
+        (* The admin disjunct of the gate below is CURRENT durable authority,
+           never the session's cached claim. An unanswerable lookup is the
+           generic failure — it never falls through as "admin". *)
+        match%lwt current_admin_bool db request with
+        | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:"/" request)
+        | Ok is_admin ->
         match%lwt Db.get_community_by_slug db slug with
         | Ok (Some community) ->
             (* Admins bypass the mod check — they have global authority over settings.
@@ -2532,7 +2674,6 @@ let add_section_handler request =
   | None -> Dream.redirect request "/login"
   | Some uid_str ->
       let user_id = int_of_string uid_str in
-      let is_admin = Dream.session_field request "is_admin" = Some "true" in
       match%lwt Dream.form request with
       | `Ok form_data ->
           let get = fun name -> Option.value ~default:"" (List.assoc_opt name form_data) in
@@ -2548,6 +2689,12 @@ let add_section_handler request =
             | Ok None -> Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"Not Found" ~message:"Community not found." ~alert_type:"error" ~return_url:"/" request)
             | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:"/" request)
             | Ok (Some community) ->
+                (* The admin disjunct is CURRENT durable authority; an
+                   unanswerable lookup is the generic failure, never a
+                   silently granted override. The moderator arm is untouched. *)
+                match%lwt current_admin_bool db request with
+                | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:"/" request)
+                | Ok is_admin ->
                 let%lwt is_auth = if is_admin then Lwt.return true
                   else (match%lwt Db.is_moderator db user_id community.id with Ok b -> Lwt.return b | _ -> Lwt.return false) in
                 if not is_auth then
@@ -2566,7 +2713,6 @@ let update_section_handler request =
   | None -> Dream.redirect request "/login"
   | Some uid_str ->
       let user_id = int_of_string uid_str in
-      let is_admin = Dream.session_field request "is_admin" = Some "true" in
       let section_id = try int_of_string section_id_str with _ -> 0 in
       if section_id = 0 then
         Dream.respond ~status:`Bad_Request (Pages.msg_page ?user ~title:"Bad Request" ~message:"Invalid section ID." ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/settings") request)
@@ -2585,6 +2731,12 @@ let update_section_handler request =
             | Ok None -> Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"Not Found" ~message:"Community not found." ~alert_type:"error" ~return_url:"/" request)
             | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:"/" request)
             | Ok (Some community) ->
+                (* The admin disjunct is CURRENT durable authority; an
+                   unanswerable lookup is the generic failure, never a
+                   silently granted override. The moderator arm is untouched. *)
+                match%lwt current_admin_bool db request with
+                | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:"/" request)
+                | Ok is_admin ->
                 let%lwt is_auth = if is_admin then Lwt.return true
                   else (match%lwt Db.is_moderator db user_id community.id with Ok b -> Lwt.return b | _ -> Lwt.return false) in
                 if not is_auth then
@@ -2608,7 +2760,6 @@ let delete_section_handler request =
   | None -> Dream.redirect request "/login"
   | Some uid_str ->
       let user_id = int_of_string uid_str in
-      let is_admin = Dream.session_field request "is_admin" = Some "true" in
       let section_id = try int_of_string section_id_str with _ -> 0 in
       if section_id = 0 then
         Dream.respond ~status:`Bad_Request (Pages.msg_page ?user ~title:"Bad Request" ~message:"Invalid section ID." ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/settings") request)
@@ -2620,6 +2771,12 @@ let delete_section_handler request =
             | Ok None -> Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"Not Found" ~message:"Community not found." ~alert_type:"error" ~return_url:"/" request)
             | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:"/" request)
             | Ok (Some community) ->
+                (* The admin disjunct is CURRENT durable authority; an
+                   unanswerable lookup is the generic failure, never a
+                   silently granted override. The moderator arm is untouched. *)
+                match%lwt current_admin_bool db request with
+                | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:"/" request)
+                | Ok is_admin ->
                 let%lwt is_auth = if is_admin then Lwt.return true
                   else (match%lwt Db.is_moderator db user_id community.id with Ok b -> Lwt.return b | _ -> Lwt.return false) in
                 if not is_auth then
@@ -2645,7 +2802,6 @@ let add_channel_handler request =
   | None -> Dream.redirect request "/login"
   | Some uid_str ->
       let user_id = int_of_string uid_str in
-      let is_admin = Dream.session_field request "is_admin" = Some "true" in
       match%lwt Dream.form request with
       | `Ok form_data ->
           let get = fun name -> Option.value ~default:"" (List.assoc_opt name form_data) in
@@ -2659,6 +2815,12 @@ let add_channel_handler request =
             | Ok None -> Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"Not Found" ~message:"Community not found." ~alert_type:"error" ~return_url:"/" request)
             | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:"/" request)
             | Ok (Some community) ->
+                (* The admin disjunct is CURRENT durable authority; an
+                   unanswerable lookup is the generic failure, never a
+                   silently granted override. The moderator arm is untouched. *)
+                match%lwt current_admin_bool db request with
+                | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:"/" request)
+                | Ok is_admin ->
                 let%lwt is_auth = if is_admin then Lwt.return true
                   else (match%lwt Db.is_moderator db user_id community.id with Ok b -> Lwt.return b | _ -> Lwt.return false) in
                 if not is_auth then
@@ -2680,7 +2842,6 @@ let update_channel_handler request =
   | None -> Dream.redirect request "/login"
   | Some uid_str ->
       let user_id = int_of_string uid_str in
-      let is_admin = Dream.session_field request "is_admin" = Some "true" in
       let channel_id = try int_of_string channel_id_str with _ -> 0 in
       if channel_id = 0 then
         Dream.respond ~status:`Bad_Request (Pages.msg_page ?user ~title:"Bad Request" ~message:"Invalid channel ID." ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/settings") request)
@@ -2698,6 +2859,12 @@ let update_channel_handler request =
             | Ok None -> Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"Not Found" ~message:"Community not found." ~alert_type:"error" ~return_url:"/" request)
             | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:"/" request)
             | Ok (Some community) ->
+                (* The admin disjunct is CURRENT durable authority; an
+                   unanswerable lookup is the generic failure, never a
+                   silently granted override. The moderator arm is untouched. *)
+                match%lwt current_admin_bool db request with
+                | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:"/" request)
+                | Ok is_admin ->
                 let%lwt is_auth = if is_admin then Lwt.return true
                   else (match%lwt Db.is_moderator db user_id community.id with Ok b -> Lwt.return b | _ -> Lwt.return false) in
                 if not is_auth then
@@ -2722,7 +2889,6 @@ let archive_channel_handler request =
   | None -> Dream.redirect request "/login"
   | Some uid_str ->
       let user_id = int_of_string uid_str in
-      let is_admin = Dream.session_field request "is_admin" = Some "true" in
       let channel_id = try int_of_string channel_id_str with _ -> 0 in
       if channel_id = 0 then
         Dream.respond ~status:`Bad_Request (Pages.msg_page ?user ~title:"Bad Request" ~message:"Invalid channel ID." ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/settings") request)
@@ -2734,6 +2900,12 @@ let archive_channel_handler request =
             | Ok None -> Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"Not Found" ~message:"Community not found." ~alert_type:"error" ~return_url:"/" request)
             | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:"/" request)
             | Ok (Some community) ->
+                (* The admin disjunct is CURRENT durable authority; an
+                   unanswerable lookup is the generic failure, never a
+                   silently granted override. The moderator arm is untouched. *)
+                match%lwt current_admin_bool db request with
+                | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:"/" request)
+                | Ok is_admin ->
                 let%lwt is_auth = if is_admin then Lwt.return true
                   else (match%lwt Db.is_moderator db user_id community.id with Ok b -> Lwt.return b | _ -> Lwt.return false) in
                 if not is_auth then
@@ -2767,7 +2939,6 @@ let unarchive_channel_handler request =
   | None -> Dream.redirect request "/login"
   | Some uid_str ->
       let user_id = int_of_string uid_str in
-      let is_admin = Dream.session_field request "is_admin" = Some "true" in
       let channel_id = try int_of_string channel_id_str with _ -> 0 in
       if channel_id = 0 then
         Dream.respond ~status:`Bad_Request (Pages.msg_page ?user ~title:"Bad Request" ~message:"Invalid channel ID." ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/settings") request)
@@ -2779,6 +2950,12 @@ let unarchive_channel_handler request =
             | Ok None -> Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"Not Found" ~message:"Community not found." ~alert_type:"error" ~return_url:"/" request)
             | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:"/" request)
             | Ok (Some community) ->
+                (* The admin disjunct is CURRENT durable authority; an
+                   unanswerable lookup is the generic failure, never a
+                   silently granted override. The moderator arm is untouched. *)
+                match%lwt current_admin_bool db request with
+                | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:"/" request)
+                | Ok is_admin ->
                 let%lwt is_auth = if is_admin then Lwt.return true
                   else (match%lwt Db.is_moderator db user_id community.id with Ok b -> Lwt.return b | _ -> Lwt.return false) in
                 if not is_auth then
@@ -2798,11 +2975,13 @@ let modlog_handler request =
   let slug = Dream.param request "slug" in
   let user = Dream.session_field request "username" in
   let user_id = match Dream.session_field request "user_id" with Some id -> (try int_of_string id with _ -> 0) | None -> 0 in
-  let is_admin = Dream.session_field request "is_admin" = Some "true" in
   Dream.sql request (fun db ->
+    (* CURRENT durable admin authority for the private-community read gate
+       (and, below, for the presentation-only settings back-link). *)
+    let%lwt is_admin = current_admin_read_override db request in
     match%lwt Db.get_community_by_slug db slug with
     | Ok (Some community) ->
-        let%lwt authorized = can_view_community db ~user_id ~is_admin community in
+        let%lwt authorized = can_view_community db ~user_id ~admin_override:is_admin community in
         if not authorized then community_not_found ?user request
         else
         (* Settings access mirrors community_settings_handler's gate (admin || moderator); it only
@@ -2885,7 +3064,6 @@ let update_community_handler request =
   | None -> Dream.redirect request "/login"
   | Some uid_str ->
       let user_id = int_of_string uid_str in
-      let is_admin = Dream.session_field request "is_admin" = Some "true" in
       match%lwt Dream.multipart request with
       | `Ok form_data ->
           let get_field name =
@@ -2907,7 +3085,12 @@ let update_community_handler request =
           let existing_banner = str_opt (get_field "existing_banner_url") in
           with_analytics_after_sql (fun record ->
           Dream.sql request (fun db ->
-            (* Re-verify authority on every mutation — same TOCTOU guard as add_mod. *)
+            (* Re-verify authority on every mutation — same TOCTOU guard as add_mod.
+               The admin disjunct is CURRENT durable authority; an unanswerable
+               lookup refuses before any image work or write. *)
+            match%lwt current_admin_bool db request with
+            | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:"/" request)
+            | Ok is_admin ->
             let%lwt authorized =
               if is_admin then Lwt.return true
               else (match%lwt Db.is_moderator db user_id community_id with
@@ -3010,7 +3193,6 @@ let ban_community_user_handler request =
   | None -> Dream.redirect request "/login"
   | Some uid_str ->
       let user_id = int_of_string uid_str in
-      let is_admin = Dream.session_field request "is_admin" = Some "true" in
       match%lwt Dream.form request with
       | `Ok form_data ->
           let community_id = try int_of_string (List.assoc_opt "community_id" form_data |> Option.value ~default:"") with _ -> 0 in
@@ -3021,7 +3203,13 @@ let ban_community_user_handler request =
           else
           Dream.sql request (fun db ->
             (* TOCTOU guard: re-verify authorization at mutation time, not just at render.
-               Separate is_community_mod from is_admin so we can log admin overrides distinctly. *)
+               Separate is_community_mod from is_admin so we can log admin overrides distinctly.
+               is_admin is CURRENT durable authority, so a stale demoted-admin
+               session is evaluated exactly as a plain user — including for the
+               admin-immunity and mod-log-attribution decisions below. *)
+            match%lwt current_admin_bool db request with
+            | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:"/" request)
+            | Ok is_admin ->
             let%lwt is_community_mod = match%lwt Db.is_moderator db user_id community_id with
               | Ok b -> Lwt.return b | _ -> Lwt.return false
             in
@@ -3061,7 +3249,6 @@ let unban_community_user_handler request =
   | None -> Dream.redirect request "/login"
   | Some uid_str ->
       let user_id = int_of_string uid_str in
-      let is_admin = Dream.session_field request "is_admin" = Some "true" in
       match%lwt Dream.form request with
       | `Ok form_data ->
           let community_id = try int_of_string (List.assoc_opt "community_id" form_data |> Option.value ~default:"") with _ -> 0 in
@@ -3070,7 +3257,12 @@ let unban_community_user_handler request =
             Dream.respond ~status:`Bad_Request (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Form Error" ~message:"Invalid form data." ~alert_type:"error" ~return_url:"/" request)
           else
           Dream.sql request (fun db ->
-            (* Admins bypass mod-check for unban, symmetric with ban_community_user_handler. *)
+            (* Admins bypass mod-check for unban, symmetric with ban_community_user_handler —
+               on CURRENT durable authority, and refusing generically when it
+               cannot be established. *)
+            match%lwt current_admin_bool db request with
+            | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:"/" request)
+            | Ok is_admin ->
             let%lwt is_authorized =
               if is_admin then Lwt.return true
               else (match%lwt Db.is_moderator db user_id community_id with
@@ -3107,7 +3299,6 @@ let new_post_page request =
   | Some uid_str ->
       let user_id = int_of_string uid_str in
       let user = Dream.session_field request "username" in
-      let is_admin = Dream.session_field request "is_admin" = Some "true" in
       let community_slug_opt = Dream.query request "community" in
       let section_slug_opt = Dream.query request "section" in
 
@@ -3123,6 +3314,8 @@ let new_post_page request =
       match community_slug_opt with
       | Some slug ->
           Dream.sql request (fun db ->
+            (* CURRENT durable admin authority for the private read gate. *)
+            let%lwt is_admin = current_admin_read_override db request in
             match%lwt Db.get_community_by_slug db slug with
             | Ok (Some community) ->
                 (* Privacy gate: a private community must be indistinguishable
@@ -3131,7 +3324,7 @@ let new_post_page request =
                    route answered a non-member's ?community=<private-slug>
                    with the join gate, confirming existence and leaking the
                    community name in the title. *)
-                let%lwt authorized = can_view_community db ~user_id ~is_admin community in
+                let%lwt authorized = can_view_community db ~user_id ~admin_override:is_admin community in
                 if not authorized then community_not_found ?user request
                 else
                 (match%lwt Db.is_member db user_id community.id with
@@ -3184,6 +3377,9 @@ let new_post_page request =
           )
       | None ->
           Dream.sql request (fun db ->
+            (* One durable resolution for the whole chooser: the per-community
+               filter below must not turn into one admin lookup per row. *)
+            let%lwt is_admin = current_admin_read_override db request in
             match%lwt Db.get_all_communities db with
             | Ok communities ->
                 (* The chooser must never list a community the viewer cannot
@@ -3193,7 +3389,7 @@ let new_post_page request =
                    authorization the content surfaces use. *)
                 let%lwt visible =
                   Lwt_list.filter_s
-                    (fun c -> can_view_community db ~user_id ~is_admin c)
+                    (fun c -> can_view_community db ~user_id ~admin_override:is_admin c)
                     communities
                 in
                 let%lwt rail_communities = load_rail db in
@@ -3446,10 +3642,11 @@ let view_post_handler request =
            input); deny with the SAME 404 as a missing community. Fail closed if the community
            can't be resolved. *)
         let viewer_id = match user_id_opt with Some s -> (try int_of_string s with _ -> 0) | None -> 0 in
-        let is_admin = Dream.session_field request "is_admin" = Some "true" in
+        (* CURRENT durable admin authority for the private read gate. *)
+        let%lwt is_admin = current_admin_read_override db request in
         let%lwt gate_ok =
           match%lwt Db.get_community_by_id db post.community_id with
-          | Ok (Some community) -> can_view_community db ~user_id:viewer_id ~is_admin community
+          | Ok (Some community) -> can_view_community db ~user_id:viewer_id ~admin_override:is_admin community
           | _ -> Lwt.return false
         in
         if not gate_ok then community_not_found ?user:user_sess request
@@ -3536,7 +3733,11 @@ let view_thread_handler request =
     | Error err -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user:user_sess ~title:"Error" ~message:(db_error_message err) ~alert_type:"error" ~return_url:"/" request)
     | Ok (Some post) ->
         let viewer_id = match user_id_opt with Some s -> (try int_of_string s with _ -> 0) | None -> 0 in
-        let is_admin = Dream.session_field request "is_admin" = Some "true" in
+        (* CURRENT durable admin authority: every read gate on this page —
+           destination context, origin thread, promotion provenance — takes
+           this one value, and so does the Share affordance's own
+           claim-plus-durable-SQL probe, which it can only make stricter. *)
+        let%lwt is_admin = current_admin_read_override db request in
         (* Shared Threads: a route slug that is NOT the post's own community
            may be an accepted destination context. One bounded read-model
            point query answers the placement facts (accepted, bound to this
@@ -3563,7 +3764,7 @@ let view_thread_handler request =
                 with
                 | Ok (Some destination) ->
                     let%lwt viewable =
-                      can_view_community db ~user_id:viewer_id ~is_admin destination
+                      can_view_community db ~user_id:viewer_id ~admin_override:is_admin destination
                     in
                     Lwt.return (if viewable then Some (ctx, destination) else None)
                 | _ -> Lwt.return None)
@@ -3624,7 +3825,7 @@ let view_thread_handler request =
                          else
                            (match%lwt Db.get_community_by_id db src_community_id with
                             | Ok (Some src_community) ->
-                                let%lwt src_ok = can_view_community db ~user_id:viewer_id ~is_admin src_community in
+                                let%lwt src_ok = can_view_community db ~user_id:viewer_id ~admin_override:is_admin src_community in
                                 Lwt.return (Some (if src_ok then Pages.Ts_visible (Some (cslug, cname), msgs) else Pages.Ts_private))
                             | _ -> Lwt.return (Some Pages.Ts_private))) in
               (* The one comment-participation capability — the same SQL the
@@ -3661,7 +3862,7 @@ let view_thread_handler request =
            post's community_id and deny with the SAME 404 as a missing thread. Fail closed. *)
         let%lwt gate_ok =
           match%lwt Db.get_community_by_id db post.community_id with
-          | Ok (Some community) -> can_view_community db ~user_id:viewer_id ~is_admin community
+          | Ok (Some community) -> can_view_community db ~user_id:viewer_id ~admin_override:is_admin community
           | _ -> Lwt.return false
         in
         if not gate_ok then
@@ -3716,7 +3917,7 @@ let view_thread_handler request =
                      else
                        (match%lwt Db.get_community_by_id db src_community_id with
                         | Ok (Some src_community) ->
-                            let%lwt src_ok = can_view_community db ~user_id:viewer_id ~is_admin src_community in
+                            let%lwt src_ok = can_view_community db ~user_id:viewer_id ~admin_override:is_admin src_community in
                             Lwt.return (Some (if src_ok then Pages.Ts_visible (Some (cslug, cname), msgs) else Pages.Ts_private))
                         | _ -> Lwt.return (Some Pages.Ts_private))) in
           (* Fallback community kept for parity with view_post_handler; in practice the record exists. *)
@@ -3793,7 +3994,6 @@ let delete_post_handler request =
   | None -> Dream.redirect request "/login"
   | Some uid_str ->
       let user_id = int_of_string uid_str in
-      let is_admin = Dream.session_field request "is_admin" = Some "true" in
 
       match%lwt Dream.form request with
       | `Ok form_data ->
@@ -3802,6 +4002,13 @@ let delete_post_handler request =
           else
 
           Dream.sql request (fun db ->
+            (* Only the AUTHORITY source changes here: a stale demoted-admin
+               session is now evaluated exactly as a non-admin (author
+               self-delete and the moderator path still decide on their own),
+               and an unanswerable admin lookup deletes nothing at all. *)
+            match%lwt current_admin_bool db request with
+            | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:"/" request)
+            | Ok is_admin ->
             (* Fetch post upfront — needed for both mod-check and admin immunity. *)
             let%lwt post_opt =
               match%lwt Db.get_post_by_id db post_id with
@@ -3887,8 +4094,13 @@ let mod_delete_post_handler request =
             | Ok (Some community) ->
                 (* Always query is_moderator even for admins — we need the distinction
                    to write the correct action_type in the audit log (admin_delete_post
-                   vs delete_post), preventing admin spoofing via the community mod log. *)
-                let is_admin = Dream.session_field request "is_admin" = Some "true" in
+                   vs delete_post), preventing admin spoofing via the community mod log.
+                   is_admin is CURRENT durable authority: a stale demoted admin
+                   is not a moderator here either, and an unanswerable lookup
+                   removes nothing and logs nothing. *)
+                match%lwt current_admin_bool db request with
+                | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:("/c/" ^ slug) request)
+                | Ok is_admin ->
                 let%lwt is_community_mod_res = Db.is_moderator db user_id community.id in
                 let is_community_mod = match is_community_mod_res with Ok true -> true | _ -> false in
                 if not (is_admin || is_community_mod) then
@@ -3975,8 +4187,13 @@ let mod_delete_comment_handler request =
             | Ok (Some community) ->
                 (* Always query is_moderator even for admins — we need the distinction
                    to write the correct action_type in the audit log (admin_delete_comment
-                   vs delete_comment), preventing admin spoofing via the community mod log. *)
-                let is_admin = Dream.session_field request "is_admin" = Some "true" in
+                   vs delete_comment), preventing admin spoofing via the community mod log.
+                   is_admin is CURRENT durable authority: a stale demoted admin
+                   is not a moderator here either, and an unanswerable lookup
+                   removes nothing and logs nothing. *)
+                match%lwt current_admin_bool db request with
+                | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:("/c/" ^ slug) request)
+                | Ok is_admin ->
                 let%lwt is_community_mod_res = Db.is_moderator db user_id community.id in
                 let is_community_mod = match is_community_mod_res with Ok true -> true | _ -> false in
                 if not (is_admin || is_community_mod) then
@@ -4087,8 +4304,8 @@ let report_form_handler request =
                     resolution: an outsider must get the same 404 as a missing
                     community — a ban page or target-dependent response here
                     would confirm the community (or target) exists. *)
-                 let is_admin = Dream.session_field request "is_admin" = Some "true" in
-                 let%lwt authorized = can_view_community db ~user_id ~is_admin community in
+                 let%lwt is_admin = current_admin_read_override db request in
+                 let%lwt authorized = can_view_community db ~user_id ~admin_override:is_admin community in
                  if not authorized then community_not_found ?user request
                  else
                  (* Both ban reads sit AFTER the privacy gate above and fail
@@ -4177,8 +4394,8 @@ let create_report_handler request =
                         viewer ever loaded the form. Denial happens before target
                         resolution so valid and invalid private target ids are
                         indistinguishable and no report row is ever inserted. *)
-                     let is_admin = Dream.session_field request "is_admin" = Some "true" in
-                     let%lwt authorized = can_view_community db ~user_id ~is_admin community in
+                     let%lwt is_admin = current_admin_read_override db request in
+                     let%lwt authorized = can_view_community db ~user_id ~admin_override:is_admin community in
                      if not authorized then community_not_found ?user request
                      else
                      (* Ban gates, still after the privacy gate above and now
@@ -4231,7 +4448,6 @@ let reports_queue_handler request =
   | None -> Dream.redirect request "/login"
   | Some uid_str ->
       let user_id = int_of_string uid_str in
-      let is_admin = Dream.session_field request "is_admin" = Some "true" in
       (* Default open; an unknown ?status= falls back to open (least surprising). *)
       let status = match Dream.query request "status" with
         | Some s -> (match Db.report_status_of_string s with Some st -> st | None -> Db.Report_open)
@@ -4241,6 +4457,12 @@ let reports_queue_handler request =
         | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:"/" request)
         | Ok None -> Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"Not Found" ~message:"This community does not exist." ~alert_type:"error" ~return_url:"/" request)
         | Ok (Some community) ->
+            (* Reporter identities are private data: the admin disjunct is
+               CURRENT durable authority, and an unanswerable lookup is the
+               generic failure rather than a granted override. *)
+            (match%lwt current_admin_bool db request with
+            | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:("/c/" ^ slug) request)
+            | Ok is_admin ->
             let%lwt is_authorized =
               if is_admin then Lwt.return true
               else (match%lwt Db.is_moderator db user_id community.id with Ok b -> Lwt.return b | _ -> Lwt.return false)
@@ -4293,7 +4515,7 @@ let reports_queue_handler request =
                        | _ -> Lwt.return None)
                        (take preview_cap reports)
                    in
-                   Dream.html (Pages.reports_queue_page ?user ~rail_communities ~is_admin ~is_top_mod ~channels ~sections ~community ~status ~reports ~previews request)))
+                   Dream.html (Pages.reports_queue_page ?user ~rail_communities ~is_admin ~is_top_mod ~channels ~sections ~community ~status ~reports ~previews request))))
 
 (* Slice E: resolve an open report (dismiss / mark action-taken) and write a modlog entry.
    Shared by dismiss_report_handler and action_report_handler. Both gate exactly like the
@@ -4311,7 +4533,6 @@ let resolve_report_action request ~new_status ~action_kind ~action_type ~default
   | Some uid_str ->
       let user_id = int_of_string uid_str in
       let report_id = try int_of_string (Dream.param request "report_id") with _ -> 0 in
-      let is_admin = Dream.session_field request "is_admin" = Some "true" in
       let reports_url = "/c/" ^ slug ^ "/reports" in
       (match%lwt Dream.form request with
        | `Ok form_data ->
@@ -4329,6 +4550,12 @@ let resolve_report_action request ~new_status ~action_kind ~action_type ~default
              | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:"/" request)
              | Ok None -> Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"Not Found" ~message:"This community does not exist." ~alert_type:"error" ~return_url:"/" request)
              | Ok (Some community) ->
+                 (* Same M/TM/A gate as the queue, on CURRENT durable admin
+                    authority; an unanswerable lookup resolves no report and
+                    writes no modlog entry. *)
+                 (match%lwt current_admin_bool db request with
+                 | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:reports_url request)
+                 | Ok is_admin ->
                  let%lwt is_authorized =
                    if is_admin then Lwt.return true
                    else (match%lwt Db.is_moderator db user_id community.id with Ok b -> Lwt.return b | _ -> Lwt.return false)
@@ -4354,7 +4581,7 @@ let resolve_report_action request ~new_status ~action_kind ~action_type ~default
                            | Ok () ->
                                let reason = match note with Some n -> n | None -> default_reason report_id in
                                let%lwt _ = Db.log_mod_action db community.id user_id action_type (Some report_id) reason in
-                               Dream.redirect request (reports_url ^ "?status=" ^ Db.report_status_to_string new_status))))
+                               Dream.redirect request (reports_url ^ "?status=" ^ Db.report_status_to_string new_status)))))
        | _ ->
            Dream.respond ~status:`Bad_Request (Pages.msg_page ?user ~title:"Form Error" ~message:"Invalid form submission." ~alert_type:"error" ~return_url:reports_url request))
 
@@ -4526,8 +4753,8 @@ let create_comment_handler request =
                               | Ok (Some ctx) -> (
                                   match%lwt Db.get_community_by_id db ctx.Shared_thread_reading.destination_community_id with
                                   | Ok (Some destination) ->
-                                      let is_admin = Dream.session_field request "is_admin" = Some "true" in
-                                      let%lwt viewable = can_view_community db ~user_id ~is_admin destination in
+                                      let%lwt is_admin = current_admin_read_override db request in
+                                      let%lwt viewable = can_view_community db ~user_id ~admin_override:is_admin destination in
                                       if viewable then
                                         Lwt.return (Components.canonical_thread_path destination.Db.slug post_id post.title)
                                       else Lwt.return ("/p/" ^ string_of_int post_id)
@@ -4564,7 +4791,6 @@ let delete_comment_handler request =
   | None -> Dream.redirect request "/login"
   | Some uid_str ->
       let user_id = int_of_string uid_str in
-      let is_admin = Dream.session_field request "is_admin" = Some "true" in
       match%lwt Dream.form request with
       | `Ok form_data ->
           let comment_id = try int_of_string (List.assoc_opt "comment_id" form_data |> Option.value ~default:"") with _ -> 0 in
@@ -4572,6 +4798,12 @@ let delete_comment_handler request =
           else
 
           Dream.sql request (fun db ->
+            (* The pure decision is unchanged; only its admin input is. A stale
+               demoted-admin session now decides as an ordinary user (author
+               self-delete only), and an unanswerable lookup deletes nothing. *)
+            match%lwt current_admin_bool db request with
+            | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:"/" request)
+            | Ok is_admin ->
             (* Resolve the target server-side: comment -> owner and parent post.
                A missing comment and a comment whose parent post is gone get the
                same neutral 404 with no mutation. *)
@@ -4767,7 +4999,6 @@ let toggle_downvotes_handler request =
   | None -> Dream.redirect request "/login"
   | Some uid_str ->
       let user_id = int_of_string uid_str in
-      let is_admin = Dream.session_field request "is_admin" = Some "true" in
       match%lwt Dream.form request with
       | `Ok form_data ->
           let new_val = List.assoc_opt "allow_downvotes" form_data = Some "true" in
@@ -4776,6 +5007,12 @@ let toggle_downvotes_handler request =
             | Ok None -> Dream.respond ~status:`Not_Found "Community not found."
             | Error err -> Dream.respond ~status:`Internal_Server_Error (db_error_message err)
             | Ok (Some community) ->
+                (* Only the admin disjunct changes: CURRENT durable authority,
+                   and a generic failure rather than an override when it cannot
+                   be established. The top-mod arm is untouched. *)
+                (match%lwt current_admin_bool db request with
+                | Error e -> Dream.respond ~status:`Internal_Server_Error (db_error_message e)
+                | Ok is_admin ->
                 let%lwt role_res = Db.get_moderator_role db user_id community.id in
                 let is_top_mod = match role_res with Ok (Some "top_mod") -> true | _ -> false in
                 if not (is_top_mod || is_admin) then
@@ -4783,7 +5020,7 @@ let toggle_downvotes_handler request =
                 else
                   match%lwt Db.toggle_community_downvotes db community.id new_val with
                   | Ok () -> Dream.redirect request ("/c/" ^ slug ^ "/settings?panel=moderation")
-                  | Error err -> Dream.respond ~status:`Internal_Server_Error (db_error_message err)
+                  | Error err -> Dream.respond ~status:`Internal_Server_Error (db_error_message err))
           )
       | _ -> Dream.respond ~status:`Bad_Request "Invalid form submission."
 
@@ -4818,7 +5055,6 @@ let update_community_visibility_handler request =
   | None -> Dream.redirect request "/login"
   | Some uid_str ->
       let user_id = int_of_string uid_str in
-      let is_admin = Dream.session_field request "is_admin" = Some "true" in
       (match%lwt Dream.form request with
        | `Ok form_data ->
            (* Closed-variant parse: anything other than public/private is a validation error,
@@ -4842,6 +5078,12 @@ let update_community_visibility_handler request =
                          authorization branch or write. *)
                       Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"Not Found" ~message:"Community not found." ~alert_type:"error" ~return_url:"/" request)
                   | Ok (Some community) ->
+                      (* Only the admin disjunct changes: CURRENT durable
+                         authority, and a generic failure — never an override —
+                         when it cannot be established. *)
+                      (match%lwt current_admin_bool db request with
+                      | Error e -> Dream.respond ~status:`Internal_Server_Error (db_error_message e)
+                      | Ok is_admin ->
                       let%lwt role_res = Db.get_moderator_role db user_id community.id in
                       let is_top_mod = match role_res with Ok (Some "top_mod") -> true | _ -> false in
                       if not (is_top_mod || is_admin) then
@@ -4885,7 +5127,7 @@ let update_community_visibility_handler request =
                                old code's silent no-op — same redirect, no
                                emission. *)
                             Dream.redirect request ("/c/" ^ slug ^ "/settings?panel=visibility")
-                        | Error err -> Dream.respond ~status:`Internal_Server_Error (db_error_message err))))
+                        | Error err -> Dream.respond ~status:`Internal_Server_Error (db_error_message err)))))
        | _ -> Dream.respond ~status:`Bad_Request "Invalid form submission.")
 
 let update_community_indexability_handler request =
@@ -4895,7 +5137,6 @@ let update_community_indexability_handler request =
   | None -> Dream.redirect request "/login"
   | Some uid_str ->
       let user_id = int_of_string uid_str in
-      let is_admin = Dream.session_field request "is_admin" = Some "true" in
       (match%lwt Dream.form request with
        | `Ok form_data ->
            (* Hidden input carries the explicit next state ("true"/"false"); a missing/garbage
@@ -4918,6 +5159,12 @@ let update_community_indexability_handler request =
                     pair. *)
                  Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"Not Found" ~message:"Community not found." ~alert_type:"error" ~return_url:"/" request)
              | Ok (Some community) ->
+                 (* Only the admin disjunct changes: CURRENT durable authority,
+                    and a generic failure — never an override — when it cannot
+                    be established. *)
+                 match%lwt current_admin_bool db request with
+                 | Error e -> Dream.respond ~status:`Internal_Server_Error (db_error_message e)
+                 | Ok is_admin ->
                  let%lwt role_res = Db.get_moderator_role db user_id community.id in
                  let is_top_mod = match role_res with Ok (Some "top_mod") -> true | _ -> false in
                  if not (is_top_mod || is_admin) then
@@ -4944,7 +5191,6 @@ let update_channel_indexability_handler request =
   | None -> Dream.redirect request "/login"
   | Some uid_str ->
       let user_id = int_of_string uid_str in
-      let is_admin = Dream.session_field request "is_admin" = Some "true" in
       let channel_id = try int_of_string channel_id_str with _ -> 0 in
       if channel_id = 0 then
         Dream.respond ~status:`Bad_Request (Pages.msg_page ?user ~title:"Bad Request" ~message:"Invalid channel ID." ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/settings") request)
@@ -4957,6 +5203,12 @@ let update_channel_indexability_handler request =
              | Ok None -> Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"Not Found" ~message:"Community not found." ~alert_type:"error" ~return_url:"/" request)
              | Error err -> Dream.respond ~status:`Internal_Server_Error (db_error_message err)
              | Ok (Some community) ->
+                 (* Only the admin disjunct changes: CURRENT durable authority,
+                    and a generic failure — never an override — when it cannot
+                    be established. *)
+                 match%lwt current_admin_bool db request with
+                 | Error e -> Dream.respond ~status:`Internal_Server_Error (db_error_message e)
+                 | Ok is_admin ->
                  let%lwt role_res = Db.get_moderator_role db user_id community.id in
                  let is_top_mod = match role_res with Ok (Some "top_mod") -> true | _ -> false in
                  if not (is_top_mod || is_admin) then
@@ -4979,7 +5231,6 @@ let update_section_indexability_handler request =
   | None -> Dream.redirect request "/login"
   | Some uid_str ->
       let user_id = int_of_string uid_str in
-      let is_admin = Dream.session_field request "is_admin" = Some "true" in
       let section_id = try int_of_string section_id_str with _ -> 0 in
       if section_id = 0 then
         Dream.respond ~status:`Bad_Request (Pages.msg_page ?user ~title:"Bad Request" ~message:"Invalid section ID." ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/settings") request)
@@ -4992,6 +5243,12 @@ let update_section_indexability_handler request =
              | Ok None -> Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"Not Found" ~message:"Community not found." ~alert_type:"error" ~return_url:"/" request)
              | Error err -> Dream.respond ~status:`Internal_Server_Error (db_error_message err)
              | Ok (Some community) ->
+                 (* Only the admin disjunct changes: CURRENT durable authority,
+                    and a generic failure — never an override — when it cannot
+                    be established. *)
+                 match%lwt current_admin_bool db request with
+                 | Error e -> Dream.respond ~status:`Internal_Server_Error (db_error_message e)
+                 | Ok is_admin ->
                  let%lwt role_res = Db.get_moderator_role db user_id community.id in
                  let is_top_mod = match role_res with Ok (Some "top_mod") -> true | _ -> false in
                  if not (is_top_mod || is_admin) then
@@ -5021,7 +5278,6 @@ let add_member_handler request =
   | None -> Dream.redirect request "/login"
   | Some uid_str ->
       let user_id = int_of_string uid_str in
-      let is_admin = Dream.session_field request "is_admin" = Some "true" in
       (match%lwt Dream.form request with
        | `Ok form_data ->
            let target_username = String.trim (Option.value ~default:"" (List.assoc_opt "username" form_data)) in
@@ -5030,6 +5286,14 @@ let add_member_handler request =
              | Ok None -> Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"Not Found" ~message:"Community not found." ~alert_type:"error" ~return_url:"/" request)
              | Error err -> Dream.respond ~status:`Internal_Server_Error (db_error_message err)
              | Ok (Some community) ->
+                 (* Only the admin disjunct changes: CURRENT durable authority,
+                    and a generic failure — never an override — when it cannot
+                    be established. Membership controls who can read a private
+                    community, so this gate must not be reachable on a stale
+                    claim. *)
+                 match%lwt current_admin_bool db request with
+                 | Error e -> Dream.respond ~status:`Internal_Server_Error (db_error_message e)
+                 | Ok is_admin ->
                  let%lwt role_res = Db.get_moderator_role db user_id community.id in
                  let is_top_mod = match role_res with Ok (Some "top_mod") -> true | _ -> false in
                  if not (is_top_mod || is_admin) then
@@ -5057,7 +5321,6 @@ let remove_member_handler request =
   | None -> Dream.redirect request "/login"
   | Some uid_str ->
       let user_id = int_of_string uid_str in
-      let is_admin = Dream.session_field request "is_admin" = Some "true" in
       (match%lwt Dream.form request with
        | `Ok form_data ->
            (* The member to remove is identified by user_id from the server-rendered member list.
@@ -5071,6 +5334,12 @@ let remove_member_handler request =
                   | Ok None -> Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"Not Found" ~message:"Community not found." ~alert_type:"error" ~return_url:"/" request)
                   | Error err -> Dream.respond ~status:`Internal_Server_Error (db_error_message err)
                   | Ok (Some community) ->
+                      (* Only the admin disjunct changes: CURRENT durable
+                         authority, and a generic failure — never an override —
+                         when it cannot be established. *)
+                      match%lwt current_admin_bool db request with
+                      | Error e -> Dream.respond ~status:`Internal_Server_Error (db_error_message e)
+                      | Ok is_admin ->
                       let%lwt role_res = Db.get_moderator_role db user_id community.id in
                       let is_top_mod = match role_res with Ok (Some "top_mod") -> true | _ -> false in
                       if not (is_top_mod || is_admin) then
@@ -5090,11 +5359,14 @@ let remove_member_handler request =
 let view_profile_handler request =
   let username_param = Dream.param request "username" in
   let current_user = Dream.session_field request "username" in
-  let is_admin = Dream.session_field request "is_admin" = Some "true" in
   let viewer_id = match Dream.session_field request "user_id" with Some s -> (try int_of_string s with _ -> 0) | None -> 0 in
   let active_tab = Option.value ~default:"posts" (Dream.query request "tab") in
 
   Dream.sql request (fun db ->
+    (* CURRENT durable admin authority, resolved once for the whole page: the
+       private-activity filter below runs per distinct community, and must not
+       become one admin lookup per community. *)
+    let%lwt is_admin = current_admin_read_override db request in
     let%lwt user_votes = get_current_user_votes db request in
     (* Joined communities feed the launch rail only (viewer's own memberships,
        same source/order as every other launch surface); a failure degrades to
@@ -5160,7 +5432,7 @@ let view_profile_handler request =
     let community_surfaceable (c : Db.community) =
       match c.Db.visibility with
       | Db.Community_public -> Lwt.return c.Db.indexable
-      | Db.Community_private -> can_view_community db ~user_id:viewer_id ~is_admin c
+      | Db.Community_private -> can_view_community db ~user_id:viewer_id ~admin_override:is_admin c
     in
     let stat_is_readable (s : Db.community_user_stat) =
       match%lwt Db.get_community_by_slug db s.community_slug with
@@ -5545,9 +5817,17 @@ let privacy_page_handler request =
    two exclusive aggregate queries. Nothing replaced it and no route redirects
    to PostHog — /admin stays the operational admin surface. *)
 
+(* Authority here is CURRENT durable users.is_admin, resolved before the form
+   is even parsed: the session claim only decides whether the lookup is worth
+   making. A demoted operator's live session lands on the same "not an Admin"
+   response an ordinary user gets, and a lookup that cannot be answered is a
+   generic failure with no ban written. *)
 let ban_user_handler request =
-  match Dream.session_field request "is_admin" with
-  | Some "true" -> (
+  match%lwt current_admin_of_request request with
+  | Current_admin_storage_error _ ->
+      Dream.respond ~status:`Internal_Server_Error
+        (Pages.msg_page ~title:"Error" ~message:generic_db_error ~alert_type:"error" ~return_url:"/" request)
+  | Current_admin -> (
       (* The ban form carries only Dream's CSRF field; parsing the body is
          what actually validates the session-bound token, and it must happen
          before any mutation. Path ids never grant authority on their own. *)
@@ -5567,11 +5847,15 @@ let ban_user_handler request =
         | Error err -> Dream.html (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Error" ~message:(db_error_message err) ~alert_type:"error" ~return_url:"/admin" request)
       )
       | _ -> Dream.respond ~status:`Bad_Request (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Form Error" ~message:"Invalid form submission." ~alert_type:"error" ~return_url:"/" request))
-  | _ -> Dream.html (Pages.msg_page ~title:"Access Denied" ~message:"You are not an Admin." ~alert_type:"error" ~return_url:"/" request)
+  | Current_non_admin -> Dream.html (Pages.msg_page ~title:"Access Denied" ~message:"You are not an Admin." ~alert_type:"error" ~return_url:"/" request)
 
+(* Same current-authority contract as ban_user_handler. *)
 let unban_user_global_handler request =
-  match Dream.session_field request "is_admin" with
-  | Some "true" -> (
+  match%lwt current_admin_of_request request with
+  | Current_admin_storage_error _ ->
+      Dream.respond ~status:`Internal_Server_Error
+        (Pages.msg_page ~title:"Error" ~message:generic_db_error ~alert_type:"error" ~return_url:"/" request)
+  | Current_admin -> (
       (* Same contract as ban_user_handler: the unban form has no application
          fields, but Dream.form must still run — it is the CSRF validation. *)
       match%lwt Dream.form request with
@@ -5586,11 +5870,17 @@ let unban_user_global_handler request =
         | Error err -> Dream.html (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Error" ~message:(db_error_message err) ~alert_type:"error" ~return_url:"/admin" request)
       )
       | _ -> Dream.respond ~status:`Bad_Request (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Form Error" ~message:"Invalid form submission." ~alert_type:"error" ~return_url:"/admin" request))
-  | _ -> Dream.html (Pages.msg_page ~title:"Access Denied" ~message:"You are not an Admin." ~alert_type:"error" ~return_url:"/" request)
+  | Current_non_admin -> Dream.html (Pages.msg_page ~title:"Access Denied" ~message:"You are not an Admin." ~alert_type:"error" ~return_url:"/" request)
 
+(* The dashboard is admin-only PII (recent users, pending signups, the global
+   ban list), so it is gated on CURRENT durable authority; an unanswerable
+   lookup renders none of it. *)
 let admin_dashboard_handler request =
-  match Dream.session_field request "is_admin" with
-  | Some "true" ->
+  match%lwt current_admin_of_request request with
+  | Current_admin_storage_error _ ->
+      Dream.respond ~status:`Internal_Server_Error
+        (Pages.msg_page ~title:"Error" ~message:generic_db_error ~alert_type:"error" ~return_url:"/" request)
+  | Current_admin ->
       let user = Dream.session_field request "username" in
       (* Safe config status only — the Turnstile site-key payload in [Configured] is
          discarded here so no secret/key reaches the page; Email.is_configured returns a
@@ -5623,13 +5913,19 @@ let admin_dashboard_handler request =
         | (Error e, _, _) | (_, Error e, _) | (_, _, Error e) ->
             Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:"/" request)
       )
-  | _ -> Dream.respond ~status:`Forbidden (Pages.msg_page ~title:"Access Denied" ~message:"You are not an Admin." ~alert_type:"error" ~return_url:"/" request)
+  | Current_non_admin -> Dream.respond ~status:`Forbidden (Pages.msg_page ~title:"Access Denied" ~message:"You are not an Admin." ~alert_type:"error" ~return_url:"/" request)
 
 (* Admin-only: GC stats expose heap pressure without a profiler attachment.
-   Cheaper than pprof; useful for spotting minor-GC spikes on staging. *)
+   Cheaper than pprof; useful for spotting minor-GC spikes on staging.
+   It also echoes the caller's own session dictionary, so it is gated on
+   CURRENT durable authority like every other admin-only surface. *)
 let debug_state_handler request =
-  match Dream.session_field request "is_admin" with
-  | Some "true" ->
+  match%lwt current_admin_of_request request with
+  | Current_admin_storage_error _ ->
+      Dream.respond ~status:`Internal_Server_Error
+        ~headers:[("Content-Type", "application/json")]
+        {|{"error":"unavailable"}|}
+  | Current_admin ->
       let gc = Gc.stat () in
       let sess_field k =
         match Dream.session_field request k with Some s -> `String s | None -> `Null
@@ -5655,7 +5951,7 @@ let debug_state_handler request =
         ("session", session_json);
       ]) in
       Dream.respond ~headers:[("Content-Type", "application/json")] body
-  | _ ->
+  | Current_non_admin ->
       Dream.respond ~status:`Forbidden
         ~headers:[("Content-Type", "application/json")]
         {|{"error":"forbidden"}|}
@@ -5665,12 +5961,17 @@ let debug_state_handler request =
 let manage_mods_handler request =
   let slug = Dream.param request "slug" in
   let user = Dream.session_field request "username" in
-  let is_admin = Dream.session_field request "is_admin" = Some "true" in
   match Dream.session_field request "user_id" with
   | None -> Dream.redirect request "/login"
   | Some uid_str ->
       let user_id = int_of_string uid_str in
       Dream.sql request (fun db ->
+        (* Only the admin disjunct changes: CURRENT durable authority, and a
+           generic failure — never an override — when it cannot be
+           established. The top-mod arm is untouched. *)
+        match%lwt current_admin_bool db request with
+        | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:"/" request)
+        | Ok is_admin ->
         match%lwt Db.get_community_by_slug db slug with
         | Ok (Some community) ->
             let%lwt role_res = Db.get_moderator_role db user_id community.id in
@@ -5709,7 +6010,6 @@ let manage_mods_handler request =
 let manage_mods_add_handler request =
   let slug = Dream.param request "slug" in
   let user = Dream.session_field request "username" in
-  let is_admin = Dream.session_field request "is_admin" = Some "true" in
   match Dream.session_field request "user_id" with
   | None -> Dream.redirect request "/login"
   | Some uid_str ->
@@ -5721,6 +6021,12 @@ let manage_mods_add_handler request =
             Dream.respond ~status:`Bad_Request (Pages.msg_page ?user ~title:"Form Error" ~message:"Username is required." ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/manage-mods") request)
           else
           Dream.sql request (fun db ->
+            (* Only the admin disjunct changes: CURRENT durable authority, and
+               a generic failure — never an override — when it cannot be
+               established. *)
+            match%lwt current_admin_bool db request with
+            | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:"/" request)
+            | Ok is_admin ->
             match%lwt Db.get_community_by_slug db slug with
             | Ok (Some community) ->
                 let%lwt role_res = Db.get_moderator_role db user_id community.id in
@@ -5743,7 +6049,6 @@ let manage_mods_add_handler request =
 let manage_mods_promote_handler request =
   let slug = Dream.param request "slug" in
   let user = Dream.session_field request "username" in
-  let is_admin = Dream.session_field request "is_admin" = Some "true" in
   match Dream.session_field request "user_id" with
   | None -> Dream.redirect request "/login"
   | Some uid_str ->
@@ -5755,6 +6060,12 @@ let manage_mods_promote_handler request =
             Dream.respond ~status:`Bad_Request (Pages.msg_page ?user ~title:"Form Error" ~message:"Invalid user reference." ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/manage-mods") request)
           else
           Dream.sql request (fun db ->
+            (* Only the admin disjunct changes: CURRENT durable authority, and
+               a generic failure — never an override — when it cannot be
+               established. *)
+            match%lwt current_admin_bool db request with
+            | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:"/" request)
+            | Ok is_admin ->
             match%lwt Db.get_community_by_slug db slug with
             | Ok (Some community) ->
                 let%lwt role_res = Db.get_moderator_role db user_id community.id in
@@ -5779,7 +6090,6 @@ let manage_mods_promote_handler request =
 let manage_mods_remove_handler request =
   let slug = Dream.param request "slug" in
   let user = Dream.session_field request "username" in
-  let is_admin = Dream.session_field request "is_admin" = Some "true" in
   match Dream.session_field request "user_id" with
   | None -> Dream.redirect request "/login"
   | Some uid_str ->
@@ -5791,6 +6101,13 @@ let manage_mods_remove_handler request =
             Dream.respond ~status:`Bad_Request (Pages.msg_page ?user ~title:"Form Error" ~message:"Invalid user reference." ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/manage-mods") request)
           else
           Dream.sql request (fun db ->
+            (* Only the admin disjunct changes: CURRENT durable authority, and
+               a generic failure — never an override — when it cannot be
+               established. It also governs the top-mod-cannot-remove-a-top-mod
+               guard below, so a stale claim cannot unseat a Top Mod. *)
+            match%lwt current_admin_bool db request with
+            | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:"/" request)
+            | Ok is_admin ->
             match%lwt Db.get_community_by_slug db slug with
             | Ok (Some community) ->
                 let%lwt role_res = Db.get_moderator_role db user_id community.id in
