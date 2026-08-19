@@ -1280,6 +1280,13 @@ module Step6_events = struct
     "INSERT INTO users (username, email, password_hash, is_email_verified)
      VALUES ($1, $1 || '@test.invalid', $2, TRUE) RETURNING id"
 
+  (* The admin-gated handlers below authorize on the DURABLE users.is_admin
+     row, so a session that merely claims is_admin is not enough to reach the
+     analytics behaviour under test: the fixture user has to really be one. *)
+  let q_make_admin =
+    (Caqti_type.int ->. Caqti_type.unit)
+    "UPDATE users SET is_admin = TRUE WHERE id = $1"
+
   let q_insert_community =
     (Caqti_type.(t3 string bool string) ->! Caqti_type.int)
     "INSERT INTO communities (slug, name, sections_enabled, visibility)
@@ -1618,6 +1625,8 @@ module Step6_events = struct
         let (module C : Caqti_lwt.CONNECTION) = c in
         let* uid = C.find q_insert_user ("step6_visadmin", "x") in
         let* uid = or_fail "user" uid in
+        let* r = C.exec q_make_admin uid in
+        let* () = or_fail "durable admin" r in
         let* cid = C.find q_insert_community ("step6-vis", true, "public") in
         let* cid = or_fail "community" cid in
         let router =
@@ -1927,9 +1936,12 @@ module Step6_events = struct
         let (module C : Caqti_lwt.CONNECTION) = c in
         let* uid = C.find q_insert_user ("step6_founder", "x") in
         let* uid = or_fail "user" uid in
-        (* Legacy community creation is admin-gated (server-side session
-           check); the founder must carry the authoritative admin field to
-           reach the analytics behavior under test. *)
+        let* r = C.exec q_make_admin uid in
+        let* () = or_fail "durable admin" r in
+        (* Legacy community creation is admin-gated on the DURABLE
+           users.is_admin row, which the session claim only enables the lookup
+           for; the founder must really be an admin to reach the analytics
+           behavior under test. *)
         let session =
           [ ("user_id", string_of_int uid); ("username", "step6_founder");
             ("is_admin", "true") ]
@@ -1968,6 +1980,8 @@ module Step6_events = struct
         let (module C : Caqti_lwt.CONNECTION) = c in
         let* uid = C.find q_insert_user ("step6_moddy", "x") in
         let* uid = or_fail "user" uid in
+        let* r = C.exec q_make_admin uid in
+        let* () = or_fail "durable admin" r in
         let* cid = C.find q_insert_community ("step6-upd", true, "public") in
         let* cid = or_fail "community" cid in
         let form =
@@ -3263,6 +3277,10 @@ module Group_cleanup = struct
         let (module C : Caqti_lwt.CONNECTION) = c in
         let* uid = C.find Step6_events.q_insert_user ("grpclean_admin", "x") in
         let* uid = or_fail "user" uid in
+        (* The visibility route authorizes on the DURABLE users.is_admin
+           row; the session claim only enables that lookup. *)
+        let* r = C.exec Step6_events.q_make_admin uid in
+        let* () = or_fail "durable admin" r in
         let* cid =
           C.find q_insert_community ("grpclean-flow", secret_name, "public")
         in
@@ -3328,6 +3346,10 @@ module Group_cleanup = struct
         let (module C : Caqti_lwt.CONNECTION) = c in
         let* uid = C.find Step6_events.q_insert_user ("grpclean_admin2", "x") in
         let* uid = or_fail "user" uid in
+        (* The visibility route authorizes on the DURABLE users.is_admin
+           row; the session claim only enables that lookup. *)
+        let* r = C.exec Step6_events.q_make_admin uid in
+        let* () = or_fail "durable admin" r in
         let* cid =
           C.find q_insert_community ("grpclean-down", secret_name, "public")
         in
@@ -3428,6 +3450,10 @@ module Group_cleanup = struct
         let (module C : Caqti_lwt.CONNECTION) = c in
         let* uid = C.find Step6_events.q_insert_user ("grpclean_admin3", "x") in
         let* uid = or_fail "user" uid in
+        (* The visibility route authorizes on the DURABLE users.is_admin
+           row; the session claim only enables that lookup. *)
+        let* r = C.exec Step6_events.q_make_admin uid in
+        let* () = or_fail "durable admin" r in
         let* cid =
           C.find q_insert_community ("grpclean-back", secret_name, "private")
         in
@@ -43997,7 +44023,12 @@ module Ncpg = struct
         let* after = state conn community in
         Alcotest.(check bool) "legacy value stored verbatim" true
           (contains after "legacy\x01body");
-        (* A nonexistent community id keeps the old silent no-op redirect. *)
+        (* A nonexistent community id keeps the old silent no-op redirect —
+           for an actor who really carries global authority. No per-community
+           moderator row can exist for an id that does not, so the durable
+           users.is_admin row (not the session claim) is what admits this
+           request at all. *)
+        let* () = exec conn "grant admin" Phrv.q_set_admin (actor, true) in
         let* response, _body =
           post ~url ~target:"/update-community" ~multipart:true ~user:actor
             ~admin_session:true
@@ -54701,6 +54732,12 @@ module Report_private_authz = struct
     (Caqti_type.(t2 int int) ->. Caqti_type.unit)
       "INSERT INTO community_moderators (user_id, community_id, role) VALUES ($1, $2, 'mod')"
 
+  (* The admin override is decided on the DURABLE users.is_admin row, which
+     the session claim only enables the lookup for. *)
+  let q_make_admin =
+    (Caqti_type.int ->. Caqti_type.unit)
+      "UPDATE users SET is_admin = TRUE WHERE id = $1"
+
   let q_add_community_ban =
     (Caqti_type.(t2 int int) ->. Caqti_type.unit)
       "INSERT INTO community_bans (user_id, community_id) VALUES ($1, $2)"
@@ -54748,6 +54785,8 @@ module Report_private_authz = struct
     let* member = user "rpta_member" in
     let* moderator = user "rpta_moderator" in
     let* admin = user "rpta_admin" in
+    let* r = C.exec q_make_admin admin in
+    let* () = or_fail "durable admin" r in
     let* pub_author = user "rpta_pubauthor" in
     let* priv_author = user "rpta_privauthor" in
     let* pub = C.find q_insert_community ("rpta-pub", "public") in
@@ -55576,6 +55615,10 @@ module New_post_private_authz = struct
     (Caqti_type.(t2 int int) ->. Caqti_type.unit)
       "INSERT INTO community_moderators (user_id, community_id, role) VALUES ($1, $2, 'mod')"
 
+  let q_make_admin =
+    (Caqti_type.int ->. Caqti_type.unit)
+      "UPDATE users SET is_admin = TRUE WHERE id = $1"
+
   (* Distinctive markers that must NEVER appear in a denied or filtered
      response: the private community's display name is deliberately distinct
      from its slug so both leak channels are asserted independently. *)
@@ -55588,7 +55631,7 @@ module New_post_private_authz = struct
     pmember : int;       (* member of nppa-pub only *)
     smember : int;       (* member of nppa-struct ONLY — no private rows *)
     moderator : int;     (* moderator row ONLY on nppa-priv, no membership *)
-    admin : int;         (* no rows at all; session is_admin=true *)
+    admin : int;         (* no community rows; durable users.is_admin + claim *)
     pub : int;
     struct_ : int;
     priv : int;
@@ -55608,6 +55651,11 @@ module New_post_private_authz = struct
     let* smember = user "nppa_smember" in
     let* moderator = user "nppa_moderator" in
     let* admin = user "nppa_admin" in
+    (* The admin override is decided on the DURABLE users.is_admin row, which
+       the session claim only enables the lookup for — so the admin fixture
+       carries the real flag as well as the claim. *)
+    let* r = C.exec q_make_admin admin in
+    let* () = or_fail "durable admin" r in
     (* Insertion order pins the chooser's pass-through ordering below. *)
     let* pub = C.find q_insert_community ("nppa-pub", "NPPA Public Flat", false, "public") in
     let* pub = or_fail "pub" pub in
@@ -57143,13 +57191,20 @@ module Final_create_page = struct
         Alcotest.(check (option string)) "location" (Some "/bring") location;
         check_denied_clean "ordinary user" body)
 
+  (* A session field that claims admin but carries no user id names nobody, so
+     there is no durable row to confirm it against and no lookup to make: the
+     claim is refused outright, on the ordinary-user path. It used to reach the
+     admin branch on the strength of the claim alone and only then fall out to
+     /login for want of a user id — the same denial, but reached by granting
+     admin first. Both then and now, nothing of the form is rendered. *)
   let stale_admin_gate_case =
-    case "admin flag without a user id keeps the /login redirect" (fun () ->
+    case "admin flag without a user id is refused as an ordinary visitor"
+      (fun () ->
         let status, location, body =
           run_get ~session:[ ("is_admin", "true") ] "/new-community"
         in
         Alcotest.(check bool) "redirects" true (is_redirect status);
-        Alcotest.(check (option string)) "location" (Some "/login") location;
+        Alcotest.(check (option string)) "location" (Some "/bring") location;
         check_denied_clean "stale admin" body)
 
   let gate_suite =
@@ -57219,6 +57274,20 @@ module Final_create_page = struct
     (Caqti_type.(t2 int int) ->. Caqti_type.unit)
       "INSERT INTO community_moderators (user_id, community_id, role) \
        VALUES ($1, $2, 'top_mod')"
+
+  (* Legacy creation authorizes on the DURABLE users.is_admin row; the session
+     claim only decides whether that lookup is worth making. An admin fixture
+     must therefore really be an admin. *)
+  let q_make_admin =
+    (Caqti_type.int ->. Caqti_type.unit)
+      "UPDATE users SET is_admin = TRUE WHERE id = $1"
+
+  let insert_admin (module C : Caqti_lwt.CONNECTION) username =
+    let* uid = C.find q_insert_user username in
+    let* uid = or_fail "admin" uid in
+    let* r = C.exec q_make_admin uid in
+    let* () = or_fail "durable admin" r in
+    Lwt.return uid
 
   let q_community_id =
     (Caqti_type.string ->? Caqti_type.int)
@@ -57310,8 +57379,7 @@ module Final_create_page = struct
   let admin_get_case =
     db_case "global admin gets the real form with the real joined rail"
       (fun ~url (module C : Caqti_lwt.CONNECTION) ->
-        let* uid = C.find q_insert_user "ncl_admin" in
-        let* uid = or_fail "admin" uid in
+        let* uid = insert_admin (module C) "ncl_admin" in
         let* cid = C.find q_insert_community ("ncl-joined", "NCL Joined", true, "public") in
         let* cid = or_fail "community" cid in
         let* r = C.exec q_add_member (uid, cid) in
@@ -57377,8 +57445,7 @@ module Final_create_page = struct
   let post_validation_case =
     db_case "missing name keeps the Validation Error message page" (fun ~url
         (module C : Caqti_lwt.CONNECTION) ->
-        let* uid = C.find q_insert_user "ncl_admin2" in
-        let* uid = or_fail "admin" uid in
+        let* uid = insert_admin (module C) "ncl_admin2" in
         let* _status, _, body =
           run_post ~url ~session:(admin_session uid "ncl_admin2")
             [ ("name", ""); ("slug", "ncl-noname"); ("section_count", "0") ]
@@ -57396,8 +57463,7 @@ module Final_create_page = struct
     db_case "admin POST without the framework token keeps the Form Error \
              answer"
       (fun ~url (module C : Caqti_lwt.CONNECTION) ->
-        let* uid = C.find q_insert_user "ncl_admin3" in
-        let* uid = or_fail "admin" uid in
+        let* uid = insert_admin (module C) "ncl_admin3" in
         let* status, _, body =
           run_post ~url ~with_csrf:false
             ~session:(admin_session uid "ncl_admin3")
@@ -57416,8 +57482,7 @@ module Final_create_page = struct
     db_case "successful creation keeps its database state, redirect and \
              duplicate-slug answer"
       (fun ~url (module C : Caqti_lwt.CONNECTION) ->
-        let* uid = C.find q_insert_user "ncl_admin4" in
-        let* uid = or_fail "admin" uid in
+        let* uid = insert_admin (module C) "ncl_admin4" in
         let session = admin_session uid "ncl_admin4" in
         let* status, location, _ =
           run_post ~url ~session
@@ -73417,6 +73482,12 @@ module Sec_db = struct
     (Caqti_type.int ->. Caqti_type.unit)
     "UPDATE users SET is_banned = TRUE WHERE id = $1"
 
+  (* Durable global-admin authority for an acting admin in the routed cases:
+     the session claim alone no longer grants any of it. *)
+  let q_make_admin =
+    (Caqti_type.int ->. Caqti_type.unit)
+    "UPDATE users SET is_admin = TRUE WHERE id = $1"
+
   let q_post_vote =
     (Caqti_type.(t2 int int) ->? Caqti_type.int)
     "SELECT direction FROM post_votes WHERE user_id = $1 AND post_id = $2"
@@ -73997,6 +74068,10 @@ module Sec_db = struct
         let (module C : Caqti_lwt.CONNECTION) = c in
         let* admin = C.find q_user "sec_banadmin" in
         let* admin = or_fail "admin" admin in
+        (* The route authorizes on the DURABLE users.is_admin row (the session
+           claim only enables that lookup), so the acting admin must be one. *)
+        let* r = C.exec q_make_admin admin in
+        let* () = or_fail "durable admin" r in
         let* target = C.find q_user "sec_bantarget" in
         let* target = or_fail "target" target in
         let* other = C.find q_user "sec_ban_bystander" in
@@ -75095,15 +75170,21 @@ module Oss_boundaries = struct
 
   open Caqti_request.Infix
 
-  (* Cleanup uses the exact fixed test identity: in SQL LIKE, '_' is a
+  (* Cleanup uses the exact fixed test identities: in SQL LIKE, '_' is a
      single-character wildcard, so 'osshard_%' would also match unrelated
-     usernames such as 'osshardX...'. The only user these tests create is
-     'osshard_admin'. *)
+     usernames such as 'osshardX...'. The only users these tests create are
+     'osshard_admin' and the ban target 'osshard_target'. *)
+  let test_usernames = "('osshard_admin', 'osshard_target')"
+
   let q_cleanup =
     List.map
       (fun sql -> (Caqti_type.unit ->. Caqti_type.unit) sql)
       [ "DROP SCHEMA IF EXISTS osshard_half CASCADE"
-      ; "DELETE FROM notifications WHERE user_id IN (SELECT id FROM users WHERE username = 'osshard_admin')"
+      ; "DROP SCHEMA IF EXISTS osshard_nosessions CASCADE"
+      ; "DROP SCHEMA IF EXISTS osshard_frozen CASCADE"
+      ; "DELETE FROM dream_session WHERE id LIKE 'osshard-%'"
+      ; "DELETE FROM notifications WHERE user_id IN (SELECT id FROM users WHERE username IN "
+        ^ test_usernames ^ ")"
       ; "DELETE FROM posts WHERE community_id IN (SELECT id FROM communities WHERE slug LIKE 'osshard-%')"
       ; "DELETE FROM community_members WHERE community_id IN (SELECT id FROM communities WHERE slug LIKE 'osshard-%')"
       ; "DELETE FROM community_moderators WHERE community_id IN (SELECT id FROM communities WHERE slug LIKE 'osshard-%')"
@@ -75111,7 +75192,7 @@ module Oss_boundaries = struct
       ; "DELETE FROM community_sections WHERE community_id IN (SELECT id FROM communities WHERE slug LIKE 'osshard-%')"
       ; "DELETE FROM posthog_group_cleanup_jobs WHERE group_key IN (SELECT 'community:' || c.id::text FROM communities c WHERE c.slug LIKE 'osshard-%')"
       ; "DELETE FROM communities WHERE slug LIKE 'osshard-%'"
-      ; "DELETE FROM users WHERE username = 'osshard_admin'"
+      ; "DELETE FROM users WHERE username IN " ^ test_usernames
       ]
 
   let or_fail label = function
@@ -75200,6 +75281,19 @@ module Oss_boundaries = struct
     in
     pipeline (Dream.request ~method_:`GET ~target "")
 
+  (* The admin overrides these routes take are decided on the DURABLE
+     users.is_admin row; the session claim only enables the lookup. *)
+  let q_make_admin =
+    (Caqti_type.int ->. Caqti_type.unit)
+    "UPDATE users SET is_admin = TRUE WHERE id = $1"
+
+  let insert_admin (module C : Caqti_lwt.CONNECTION) username =
+    let* uid = C.find q_insert_user username in
+    let* uid = or_fail "user" uid in
+    let* r = C.exec q_make_admin uid in
+    let* () = or_fail "durable admin" r in
+    Lwt.return uid
+
   let admin_session uid =
     [ ("user_id", string_of_int uid); ("username", "osshard_admin");
       ("is_admin", "true") ]
@@ -75228,8 +75322,7 @@ module Oss_boundaries = struct
   let unban_location_case =
     db_case "unban: Location comes from the database slug, never the form"
       (fun ~url (module C : Caqti_lwt.CONNECTION) ->
-        let* uid = C.find q_insert_user "osshard_admin" in
-        let* uid = or_fail "user" uid in
+        let* uid = insert_admin (module C) "osshard_admin" in
         let* cid = C.find q_insert_community "osshard-real" in
         let* cid = or_fail "community" cid in
         Lwt_list.iter_s
@@ -75255,8 +75348,7 @@ module Oss_boundaries = struct
     db_case
       "update-community: redirect and return URLs use the database slug"
       (fun ~url (module C : Caqti_lwt.CONNECTION) ->
-        let* uid = C.find q_insert_user "osshard_admin" in
-        let* uid = or_fail "user" uid in
+        let* uid = insert_admin (module C) "osshard_admin" in
         let* cid = C.find q_insert_community "osshard-real" in
         let* cid = or_fail "community" cid in
         Lwt_list.iter_s
@@ -75287,8 +75379,7 @@ module Oss_boundaries = struct
     db_case
       "update-community: a nonexistent id falls back to / without echoing"
       (fun ~url (module C : Caqti_lwt.CONNECTION) ->
-        let* uid = C.find q_insert_user "osshard_admin" in
-        let* uid = or_fail "user" uid in
+        let* uid = insert_admin (module C) "osshard_admin" in
         let* response =
           run_post ~url ~multipart:true ~session:(admin_session uid)
             ~target:"/update-community"
@@ -75312,8 +75403,7 @@ module Oss_boundaries = struct
   let export_disposition_case =
     db_case "export: Content-Disposition filename derives from the user id"
       (fun ~url (module C : Caqti_lwt.CONNECTION) ->
-        let* uid = C.find q_insert_user "osshard_admin" in
-        let* uid = or_fail "user" uid in
+        let* uid = insert_admin (module C) "osshard_admin" in
         let* response =
           run_get ~url ~session:(admin_session uid) ~target:"/export-data"
             Earde.Handlers.export_data_handler
@@ -75351,6 +75441,12 @@ module Oss_boundaries = struct
       [ "DROP SCHEMA IF EXISTS osshard_half CASCADE"
       ; "CREATE SCHEMA osshard_half"
       ; "CREATE VIEW osshard_half.communities AS SELECT * FROM public.communities"
+        (* users rides along so the handlers' CURRENT-admin lookup succeeds and
+           the failure stays where each case wants it — the promote role/write
+           and the community-ban write. Without it every admin-gated handler
+           would fail at the authority lookup instead, and these cases would
+           stop covering the arms they name. *)
+      ; "CREATE VIEW osshard_half.users AS SELECT * FROM public.users"
       ]
 
   let make_half_schema (module C : Caqti_lwt.CONNECTION) =
@@ -75393,8 +75489,7 @@ module Oss_boundaries = struct
   let add_section_disclosure_case =
     db_case "add-section: a database failure renders only the generic message"
       (fun ~url (module C : Caqti_lwt.CONNECTION) ->
-        let* uid = C.find q_insert_user "osshard_admin" in
-        let* uid = or_fail "user" uid in
+        let* uid = insert_admin (module C) "osshard_admin" in
         let* response =
           run_post ~url:(poison url) ~session:(admin_session uid)
             ~target:"/c/osshard-real/add-section"
@@ -75415,8 +75510,7 @@ module Oss_boundaries = struct
     db_case
       "update-community: a database failure renders only the generic message"
       (fun ~url (module C : Caqti_lwt.CONNECTION) ->
-        let* uid = C.find q_insert_user "osshard_admin" in
-        let* uid = or_fail "user" uid in
+        let* uid = insert_admin (module C) "osshard_admin" in
         let* response =
           run_post ~url:(poison url) ~multipart:true
             ~session:(admin_session uid) ~target:"/update-community"
@@ -75447,7 +75541,13 @@ module Oss_boundaries = struct
                [ Dream.post "/admin/ban/user/:id"
                    Earde.Handlers.ban_user_handler ])
         in
-        Alcotest.(check int) "200" 200 (status_int response);
+        (* The current-admin lookup is the first query this route makes, so a
+           pool where nothing resolves fails there — one query earlier than the
+           ban write it used to fail at. This case now covers the
+           AUTHORIZATION-lookup failure; the ban write's own failure is covered
+           separately by global_ban_mutation_failure_case. Either way: the
+           generic message, no driver text, and no ban performed. *)
+        Alcotest.(check int) "500" 500 (status_int response);
         let* body = Dream.body response in
         must body generic;
         List.iter (must_not body) db_needles;
@@ -75464,10 +75564,148 @@ module Oss_boundaries = struct
                [ Dream.post "/admin/unban/user/:id"
                    Earde.Handlers.unban_user_global_handler ])
         in
-        Alcotest.(check int) "200" 200 (status_int response);
+        (* Authorization-lookup failure, as above; the unban write's own
+           failure is covered by global_unban_mutation_failure_case. *)
+        Alcotest.(check int) "500" 500 (status_int response);
         let* body = Dream.body response in
         must body generic;
         List.iter (must_not body) db_needles;
+        Lwt.return_unit)
+
+  (* --- authorized mutations whose OWN storage fails ---
+
+     The two cases above break the FIRST query these admin routes make — the
+     durable current-admin lookup — so what they prove is that the
+     authorization boundary fails closed. They can no longer reach the ban and
+     unban writes, so the mutation boundary needs its own injection: a schema
+     where the admin lookup SUCCEEDS and the intended write is the only thing
+     that fails.
+
+     Each schema is written out by hand rather than mirroring every public
+     relation, because these two routes touch one table each (plus
+     dream_session), and naming exactly what is present is what makes the
+     failure point unambiguous. *)
+
+  let make_schema (module C : Caqti_lwt.CONNECTION) statements =
+    Lwt_list.iter_s
+      (fun sql ->
+        let* r = C.exec ((Caqti_type.unit ->. Caqti_type.unit) sql) () in
+        let* () = or_fail "schema" r in
+        Lwt.return_unit)
+      statements
+
+  (* [users] is a plain SELECT * view and therefore auto-updatable: the
+     current-admin SELECT and Db.ban_user's own "UPDATE users SET is_banned"
+     both succeed. What is missing is dream_session, so the session revocation
+     inside the ban transaction fails and the ban must roll back. *)
+  let q_no_sessions_schema =
+    [ "DROP SCHEMA IF EXISTS osshard_nosessions CASCADE"
+    ; "CREATE SCHEMA osshard_nosessions"
+    ; "CREATE VIEW osshard_nosessions.users AS SELECT * FROM public.users"
+    ]
+
+  (* SELECT DISTINCT is the narrowest way to make a view non-auto-updatable:
+     reading is_admin still works, every UPDATE against it is refused. *)
+  let q_frozen_users_schema =
+    [ "DROP SCHEMA IF EXISTS osshard_frozen CASCADE"
+    ; "CREATE SCHEMA osshard_frozen"
+    ; "CREATE VIEW osshard_frozen.users AS SELECT DISTINCT * FROM public.users"
+    ]
+
+  let q_set_banned =
+    (Caqti_type.(t2 int bool) ->. Caqti_type.unit)
+    "UPDATE users SET is_banned = $2 WHERE id = $1"
+
+  let q_is_banned =
+    (Caqti_type.int ->! Caqti_type.bool)
+    "SELECT is_banned FROM users WHERE id = $1"
+
+  (* A durable session row for the target, written directly. Db.ban_user
+     deletes exactly the rows whose payload names this user_id, so the row
+     surviving is what proves the rolled-back ban revoked nothing either. *)
+  let q_insert_session =
+    (Caqti_type.(t2 string string) ->. Caqti_type.unit)
+    "INSERT INTO dream_session (id, label, expires_at, payload)
+     VALUES ($1, $1, 9999999999, '{\"user_id\":\"' || $2 || '\"}')"
+
+  let q_count_sessions =
+    (Caqti_type.string ->! Caqti_type.int)
+    "SELECT COUNT(*)::int FROM dream_session
+      WHERE payload::jsonb ->> 'user_id' = $1"
+
+  let global_ban_mutation_failure_case =
+    db_case
+      "global ban: a failed session revocation rolls the ban back and answers \
+       generically"
+      (fun ~url (module C : Caqti_lwt.CONNECTION) ->
+        let* uid = insert_admin (module C) "osshard_admin" in
+        let* target = C.find q_insert_user "osshard_target" in
+        let* target = or_fail "target" target in
+        let* r =
+          C.exec q_insert_session
+            ("osshard-target-session", string_of_int target)
+        in
+        let* () = or_fail "target session" r in
+        let* () = make_schema (module C) q_no_sessions_schema in
+        let* response =
+          run_post
+            ~url:(with_search_path url "osshard_nosessions")
+            ~session:(admin_session uid)
+            ~target:(Printf.sprintf "/admin/ban/user/%d" target)
+            ~form:[]
+            (Dream.router
+               [ Dream.post "/admin/ban/user/:id"
+                   Earde.Handlers.ban_user_handler ])
+        in
+        (* Neither the refusal of a failed authority check nor a redirect: the
+           durable admin lookup succeeded, the ban was attempted, and its own
+           write failed. The route renders that at 200 — its shape before 02d
+           and after it. *)
+        Alcotest.(check int) "200" 200 (status_int response);
+        let* body = Dream.body response in
+        must body generic;
+        must_not body "not an Admin";
+        List.iter (must_not body) db_needles;
+        let* banned = C.find q_is_banned target in
+        let* banned = or_fail "target banned" banned in
+        Alcotest.(check bool) "no durable ban survives the rollback" false
+          banned;
+        let* n = C.find q_count_sessions (string_of_int target) in
+        let* n = or_fail "target sessions" n in
+        Alcotest.(check int) "the target's session survives" 1 n;
+        Lwt.return_unit)
+
+  let global_unban_mutation_failure_case =
+    db_case
+      "global unban: a failed unban write leaves the target banned and answers \
+       generically"
+      (fun ~url (module C : Caqti_lwt.CONNECTION) ->
+        let* uid = insert_admin (module C) "osshard_admin" in
+        let* target = C.find q_insert_user "osshard_target" in
+        let* target = or_fail "target" target in
+        let* r = C.exec q_set_banned (target, true) in
+        let* () = or_fail "pre-ban" r in
+        let* () = make_schema (module C) q_frozen_users_schema in
+        let* response =
+          run_post
+            ~url:(with_search_path url "osshard_frozen")
+            ~session:(admin_session uid)
+            ~target:(Printf.sprintf "/admin/unban/user/%d" target)
+            ~form:[]
+            (Dream.router
+               [ Dream.post "/admin/unban/user/:id"
+                   Earde.Handlers.unban_user_global_handler ])
+        in
+        Alcotest.(check int) "200" 200 (status_int response);
+        Alcotest.(check (option string)) "no Location" None
+          (Dream.header response "Location");
+        let* body = Dream.body response in
+        must body generic;
+        must_not body "not an Admin";
+        List.iter (must_not body) db_needles;
+        let* still = C.find q_is_banned target in
+        let* still = or_fail "target still banned" still in
+        Alcotest.(check bool) "the target stays banned" true still;
         Lwt.return_unit)
 
   let unban_lookup_failure_case =
@@ -75495,8 +75733,7 @@ module Oss_boundaries = struct
     db_case
       "community unban: a failed unban write errors, never fakes success"
       (fun ~url (module C : Caqti_lwt.CONNECTION) ->
-        let* uid = C.find q_insert_user "osshard_admin" in
-        let* uid = or_fail "user" uid in
+        let* uid = insert_admin (module C) "osshard_admin" in
         let* cid = C.find q_insert_community "osshard-real" in
         let* cid = or_fail "community" cid in
         (* Half-visible schema: the authoritative community loads, then the
@@ -75524,7 +75761,8 @@ module Oss_boundaries = struct
   let disclosure_suite =
     [ verify_email_disclosure_case; add_section_disclosure_case;
       update_community_disclosure_case; global_ban_disclosure_case;
-      global_unban_disclosure_case; unban_lookup_failure_case;
+      global_unban_disclosure_case; global_ban_mutation_failure_case;
+      global_unban_mutation_failure_case; unban_lookup_failure_case;
       unban_mutation_failure_case ]
 
   (* --- typed Top Mod promotion error contract --- *)
@@ -75536,8 +75774,7 @@ module Oss_boundaries = struct
     db_case
       "promote_to_top_mod classifies storage vs domain failures at the boundary"
       (fun ~url:_ (module C : Caqti_lwt.CONNECTION) ->
-        let* uid = C.find q_insert_user "osshard_admin" in
-        let* uid = or_fail "user" uid in
+        let* uid = insert_admin (module C) "osshard_admin" in
         let* cid = C.find q_insert_community "osshard-real" in
         let* cid = or_fail "community" cid in
         (* An emptied search_path makes the role SELECT itself fail: the
@@ -75574,15 +75811,17 @@ module Oss_boundaries = struct
   let promote_storage_disclosure_case =
     db_case "promote: a storage failure renders only the generic message"
       (fun ~url (module C : Caqti_lwt.CONNECTION) ->
+        let* uid = insert_admin (module C) "osshard_admin" in
         let* _cid = C.find q_insert_community "osshard-real" in
         let* _cid = or_fail "community" _cid in
-        (* Half-visible schema: the community lookup succeeds, the promote
-           role query fails — exercising the handler's storage arm. *)
+        (* Half-visible schema: the current-admin and community lookups
+           succeed, the promote role query fails — exercising the handler's
+           storage arm. *)
         let* () = make_half_schema (module C) in
         let* response =
           run_post
             ~url:(with_search_path url "osshard_half")
-            ~session:(admin_session 42)
+            ~session:(admin_session uid)
             ~target:"/c/osshard-real/manage-mods/promote"
             ~form:[ ("target_user_id", "1") ]
             promote_router
@@ -75597,8 +75836,7 @@ module Oss_boundaries = struct
   let promote_domain_message_case =
     db_case "promote: friendly domain refusals stay user-visible"
       (fun ~url (module C : Caqti_lwt.CONNECTION) ->
-        let* uid = C.find q_insert_user "osshard_admin" in
-        let* uid = or_fail "user" uid in
+        let* uid = insert_admin (module C) "osshard_admin" in
         let* _cid = C.find q_insert_community "osshard-real" in
         let* _cid = or_fail "community" _cid in
         let* response =
@@ -76314,6 +76552,700 @@ module Ban_fail_closed = struct
   let ban_fail_closed_suite =
     [ create_post_case; create_comment_case; send_message_case; report_case;
       start_thread_case; real_bans_case ]
+end
+
+(* Stale global-admin session boundary (02d).
+
+   Dream's session caches [is_admin] at login and never refreshes it, so an
+   operator demoted in users.is_admin kept every legacy admin power for the
+   remaining life of an open session. Every case below builds that exact
+   state through the REAL routes — a real POST /login writing a durable
+   dream_session row, then a direct UPDATE that clears users.is_admin without
+   touching the session — and replays the very same cookie against one
+   authorization-boundary family per case.
+
+   The families, not the individual textual call sites, are what these cases
+   cover: an admin-only page, an admin-only mutation, admin content removal,
+   the private-community read gate, the realtime token that inherits it, the
+   admin-or-moderator settings gate, and an admin-or-top-mod management
+   mutation. Each carries its own durable-admin control, so a case can only
+   pass by distinguishing current authority from a cached claim.
+
+   Database-gated (EARDE_TEST_DATABASE_URL). *)
+module Stale_admin = struct
+  let ( let* ) = Lwt.bind
+
+  open Caqti_request.Infix
+
+  let contains hay needle = Sec_pure.contains hay needle
+
+  let or_fail label = function
+    | Ok v -> Lwt.return v
+    | Error e -> Alcotest.failf "%s: %s" label (Caqti_error.show e)
+
+  let or_fail_s label = function
+    | Ok v -> Lwt.return v
+    | Error e -> Alcotest.failf "%s: %s" label e
+
+  let shadow = "stad_shadow"
+
+  let q_cleanup =
+    List.map
+      (fun sql -> (Caqti_type.unit ->. Caqti_type.unit) sql)
+      [ "DROP SCHEMA IF EXISTS stad_shadow CASCADE"
+      ; "DELETE FROM notifications WHERE user_id IN (SELECT id FROM users WHERE username LIKE 'stad\\_%')"
+      ; "DELETE FROM comments WHERE post_id IN (SELECT id FROM posts WHERE community_id IN (SELECT id FROM communities WHERE slug LIKE 'stad-%'))"
+      ; "DELETE FROM posts WHERE community_id IN (SELECT id FROM communities WHERE slug LIKE 'stad-%')"
+      ; "DELETE FROM chat_messages WHERE channel_id IN (SELECT id FROM channels WHERE community_id IN (SELECT id FROM communities WHERE slug LIKE 'stad-%'))"
+      ; "DELETE FROM channels WHERE community_id IN (SELECT id FROM communities WHERE slug LIKE 'stad-%')"
+      ; "DELETE FROM community_sections WHERE community_id IN (SELECT id FROM communities WHERE slug LIKE 'stad-%')"
+      ; "DELETE FROM community_bans WHERE community_id IN (SELECT id FROM communities WHERE slug LIKE 'stad-%')"
+      ; "DELETE FROM community_members WHERE community_id IN (SELECT id FROM communities WHERE slug LIKE 'stad-%')"
+      ; "DELETE FROM community_moderators WHERE community_id IN (SELECT id FROM communities WHERE slug LIKE 'stad-%')"
+      ; "DELETE FROM community_user_stats WHERE community_id IN (SELECT id FROM communities WHERE slug LIKE 'stad-%')"
+      ; "DELETE FROM posthog_group_cleanup_jobs WHERE group_key IN (SELECT 'community:' || c.id::text FROM communities c WHERE c.slug LIKE 'stad-%')"
+      ; "DELETE FROM communities WHERE slug LIKE 'stad-%'"
+      ; "DELETE FROM dream_session WHERE payload LIKE '%stad\\_%'"
+      ; "DELETE FROM users WHERE username LIKE 'stad\\_%'"
+      ]
+
+  let db_case name f =
+    Alcotest.test_case name `Quick (fun () ->
+        match Sys.getenv_opt "EARDE_TEST_DATABASE_URL" with
+        | None | Some "" -> Alcotest.skip ()
+        | Some url ->
+            Lwt_main.run
+              (let* conn = Caqti_lwt_unix.connect (Uri.of_string url) in
+               let* conn = or_fail "connect" conn in
+               let (module C : Caqti_lwt.CONNECTION) = conn in
+               let cleanup () =
+                 Lwt_list.iter_s
+                   (fun q ->
+                     let* r = C.exec q () in
+                     let* _ = or_fail "cleanup" r in
+                     Lwt.return_unit)
+                   q_cleanup
+               in
+               let* () = cleanup () in
+               Lwt.finalize
+                 (fun () -> f ~url (module C : Caqti_lwt.CONNECTION))
+                 (fun () -> Lwt.finalize cleanup (fun () -> C.disconnect ()))))
+
+  (* === fixtures === *)
+
+  let password = "stad password"
+
+  let q_user =
+    (Caqti_type.(t3 string string bool) ->! Caqti_type.int)
+    "INSERT INTO users (username, email, password_hash, is_email_verified, is_admin)
+     VALUES ($1, $1 || '@stad.invalid', $2, TRUE, $3) RETURNING id"
+
+  let q_set_admin =
+    (Caqti_type.(t2 int bool) ->. Caqti_type.unit)
+    "UPDATE users SET is_admin = $2 WHERE id = $1"
+
+  let q_is_admin = (Caqti_type.int ->! Caqti_type.bool)
+    "SELECT is_admin FROM users WHERE id = $1"
+
+  let q_is_banned = (Caqti_type.int ->! Caqti_type.bool)
+    "SELECT is_banned FROM users WHERE id = $1"
+
+  let q_community =
+    (Caqti_type.(t2 string string) ->! Caqti_type.int)
+    "INSERT INTO communities (slug, name, visibility, sections_enabled)
+     VALUES ($1, $1, $2, FALSE) RETURNING id"
+
+  let q_channel =
+    (Caqti_type.(t2 string int) ->! Caqti_type.int)
+    "INSERT INTO channels (slug, name, community_id) VALUES ($1, $1, $2)
+     RETURNING id"
+
+  let q_member =
+    (Caqti_type.(t2 int int) ->. Caqti_type.unit)
+    "INSERT INTO community_members (user_id, community_id) VALUES ($1, $2)
+     ON CONFLICT DO NOTHING"
+
+  let q_moderator =
+    (Caqti_type.(t3 int int string) ->. Caqti_type.unit)
+    "INSERT INTO community_moderators (user_id, community_id, role)
+     VALUES ($1, $2, $3) ON CONFLICT DO NOTHING"
+
+  let q_post =
+    (Caqti_type.(t3 string int int) ->! Caqti_type.int)
+    "INSERT INTO posts (title, content, community_id, user_id)
+     VALUES ($1, 'stad body', $2, $3) RETURNING id"
+
+  let q_post_state = (Caqti_type.int ->! Caqti_type.(t2 string (option string)))
+    "SELECT title, content FROM posts WHERE id = $1"
+
+  let q_count_mods = (Caqti_type.int ->! Caqti_type.int)
+    "SELECT COUNT(*)::int FROM community_moderators WHERE community_id = $1"
+
+  let q_count_sessions = (Caqti_type.string ->! Caqti_type.int)
+    "SELECT COUNT(*)::int FROM dream_session
+      WHERE payload::jsonb ->> 'user_id' = $1"
+
+  (* Argon2 is deliberately expensive, so the fixture password is hashed once
+     for the whole module rather than once per user. *)
+  let shared_hash = ref None
+
+  let password_hash () =
+    match !shared_hash with
+    | Some h -> Lwt.return h
+    | None ->
+        let* hash = Earde.Auth.hash_password password in
+        let* hash = or_fail_s "hash" hash in
+        (* Argon2 hands back a NUL-padded buffer; the trailing bytes must not
+           reach the column or the login lookup compares the wrong string. *)
+        let hash =
+          let n = ref (String.length hash) in
+          while !n > 0 && hash.[!n - 1] = '\000' do decr n done;
+          String.sub hash 0 !n
+        in
+        shared_hash := Some hash;
+        Lwt.return hash
+
+  let make_user (module C : Caqti_lwt.CONNECTION) ~admin username =
+    let* hash = password_hash () in
+    let* uid = C.find q_user (username, hash, admin) in
+    or_fail username uid
+
+  (* === the routed pipeline === *)
+
+  let secret = "stad-test-secret-value"
+
+  (* Every route here is mounted at its bin/main.ml path. Real SQL sessions,
+     because a case's whole point is that the durable session row survives the
+     demotion untouched. /probe exists only to read the session dictionary
+     back; it authorizes nothing. *)
+  let build_pipeline ~url pending_form =
+    let with_form handler req =
+      (match !pending_form with
+       | None -> ()
+       | Some fields ->
+           pending_form := None;
+           let csrf = Dream.csrf_token req in
+           Dream.set_body req
+             (String.concat "&"
+                (List.map
+                   (fun (k, v) ->
+                     Dream.to_percent_encoded k ^ "="
+                     ^ Dream.to_percent_encoded v)
+                   (("dream.csrf", csrf) :: fields))));
+      handler req
+    in
+    Dream.sql_pool ~size:4 url @@ Dream.set_secret secret @@ Dream.sql_sessions
+    @@ Dream.router
+         [ Dream.post "/login" (with_form Earde.Handlers.login_handler)
+         ; Dream.get "/admin" Earde.Handlers.admin_dashboard_handler
+         ; Dream.post "/admin/ban/user/:id"
+             (with_form Earde.Handlers.ban_user_handler)
+         ; Dream.get "/debug-state" Earde.Handlers.debug_state_handler
+         ; Dream.post "/delete-post" (with_form Earde.Handlers.delete_post_handler)
+         ; Dream.get "/c/:slug" Earde.Handlers.community_page_handler
+         ; Dream.get "/c/:slug/ch/:channel_slug/realtime-token"
+             Earde.Handlers.realtime_token_handler
+         ; Dream.get "/c/:slug/settings" Earde.Handlers.community_settings_handler
+         ; Dream.post "/c/:slug/manage-mods/add"
+             (with_form Earde.Handlers.manage_mods_add_handler)
+         ; Dream.get "/probe" (fun req ->
+               match Dream.session_field req "user_id" with
+               | Some uid ->
+                   Dream.respond
+                     (uid ^ "|"
+                     ^ (match Dream.session_field req "is_admin" with
+                        | Some v -> v
+                        | None -> "-"))
+               | None -> Dream.respond ~status:`Unauthorized "anon")
+         ]
+
+  (* One [client] models one browser: its own pipeline instance plus a cookie
+     jar, so a cookie minted before a demotion can be replayed verbatim after
+     it. *)
+  type client = {
+    pipeline : Dream.request -> Dream.response Dream.promise;
+    jar : (string * string) list ref;
+    pending_form : (string * string) list option ref;
+  }
+
+  let make_client ~url =
+    let pending_form = ref None in
+    { pipeline = build_pipeline ~url pending_form; jar = ref [];
+      pending_form }
+
+  let update_jar jar response =
+    List.iter
+      (fun header ->
+        match String.split_on_char ';' header with
+        | pair :: _ -> (
+            match String.index_opt pair '=' with
+            | Some i ->
+                let name = String.sub pair 0 i in
+                let value = String.sub pair (i + 1) (String.length pair - i - 1) in
+                jar := (name, value) :: List.remove_assoc name !jar
+            | None -> ())
+        | [] -> ())
+      (Dream.headers response "Set-Cookie")
+
+  let send client ?(method_ = `GET) ?form target =
+    client.pending_form := form;
+    let headers =
+      (match !(client.jar) with
+       | [] -> []
+       | pairs ->
+           [ ("Cookie",
+              String.concat "; " (List.map (fun (n, v) -> n ^ "=" ^ v) pairs)) ])
+      @ (match form with
+         | Some _ -> [ ("Content-Type", "application/x-www-form-urlencoded") ]
+         | None -> [])
+    in
+    let* response =
+      client.pipeline (Dream.request ~method_ ~target ~headers "")
+    in
+    update_jar client.jar response;
+    let* body = Dream.body response in
+    Lwt.return (Dream.status_to_int (Dream.status response), response, body)
+
+  let login client username =
+    send client ~method_:`POST
+      ~form:[ ("identifier", username); ("password", password) ]
+      "/login"
+
+  (* A logged-in browser whose session carries is_admin=true because the
+     durable row really said so at login time. *)
+  let logged_in_admin ~url username =
+    let client = make_client ~url in
+    let* status, _, _ = login client username in
+    Alcotest.(check bool) (username ^ ": login redirects") true (status / 100 = 3);
+    let* _, _, probe = send client "/probe" in
+    Alcotest.(check bool) (username ^ ": session claims admin") true
+      (contains probe "|true");
+    Lwt.return client
+
+  let demote (module C : Caqti_lwt.CONNECTION) uid =
+    (* The session row is deliberately NOT touched: this is the stale state. *)
+    let* r = C.exec q_set_admin (uid, false) in
+    let* () = or_fail "demote" r in
+    let* durable = C.find q_is_admin uid in
+    let* durable = or_fail "durable" durable in
+    Alcotest.(check bool) "durably demoted" false durable;
+    Lwt.return_unit
+
+  let still_claims_admin client =
+    let* _, _, probe = send client "/probe" in
+    Alcotest.(check bool) "the stale session still claims admin" true
+      (contains probe "|true");
+    Lwt.return_unit
+
+  (* === A — GET /admin === *)
+
+  let admin_dashboard_case =
+    db_case
+      "stale admin: GET /admin is refused and returns none of its protected \
+       data"
+      (fun ~url (module C : Caqti_lwt.CONNECTION) ->
+        let* admin = make_user (module C) ~admin:true "stad_dashadmin" in
+        (* A distinctive row the dashboard would list if it rendered. *)
+        let* _victim = make_user (module C) ~admin:false "stad_dashlisted" in
+        let* client = logged_in_admin ~url "stad_dashadmin" in
+        let* status, _, body = send client "/admin" in
+        Alcotest.(check int) "durable admin sees the dashboard" 200 status;
+        Alcotest.(check bool) "control: the dashboard really lists users" true
+          (contains body "stad_dashlisted");
+
+        let* () = demote (module C) admin in
+        let* () = still_claims_admin client in
+        let* status, _, body = send client "/admin" in
+        Alcotest.(check int) "stale claim is forbidden" 403 status;
+        Alcotest.(check bool) "denial copy" true (contains body "not an Admin");
+        Alcotest.(check bool) "no listed username" false
+          (contains body "stad_dashlisted");
+        Alcotest.(check bool) "no address column" false
+          (contains body "@stad.invalid");
+        (* The sibling admin-only JSON route answers the same way. *)
+        let* status, _, body = send client "/debug-state" in
+        Alcotest.(check int) "debug-state forbidden" 403 status;
+        Alcotest.(check bool) "no session echo" false (contains body "user_id");
+        Lwt.return_unit)
+
+  (* === B — global ban === *)
+
+  let global_ban_case =
+    db_case
+      "stale admin: the global ban writes nothing and leaves the target's \
+       session alive"
+      (fun ~url (module C : Caqti_lwt.CONNECTION) ->
+        let* admin = make_user (module C) ~admin:true "stad_banadmin" in
+        let* victim = make_user (module C) ~admin:false "stad_banvictim" in
+        let* control = make_user (module C) ~admin:false "stad_bancontrol" in
+        (* The victim's own live browser: a real ban revokes it (02a), so its
+           survival is evidence that no ban happened. *)
+        let victim_browser = make_client ~url in
+        let* status, _, _ = login victim_browser "stad_banvictim" in
+        Alcotest.(check bool) "victim login redirects" true (status / 100 = 3);
+        let* n = C.find q_count_sessions (string_of_int victim) in
+        let* n = or_fail "victim sessions" n in
+        Alcotest.(check int) "one live victim session" 1 n;
+
+        let* client = logged_in_admin ~url "stad_banadmin" in
+        (* Control: while the durable row still says admin, the ban works. *)
+        let* status, _, _ =
+          send client ~method_:`POST ~form:[]
+            (Printf.sprintf "/admin/ban/user/%d" control)
+        in
+        Alcotest.(check bool) "durable admin ban redirects" true
+          (status / 100 = 3);
+        let* banned = C.find q_is_banned control in
+        let* banned = or_fail "control banned" banned in
+        Alcotest.(check bool) "control really banned" true banned;
+
+        let* () = demote (module C) admin in
+        let* () = still_claims_admin client in
+        let* status, _, body =
+          send client ~method_:`POST ~form:[]
+            (Printf.sprintf "/admin/ban/user/%d" victim)
+        in
+        Alcotest.(check int) "stale ban is refused" 200 status;
+        Alcotest.(check bool) "denial copy" true (contains body "not an Admin");
+        let* banned = C.find q_is_banned victim in
+        let* banned = or_fail "victim banned" banned in
+        Alcotest.(check bool) "victim is NOT banned" false banned;
+        let* n = C.find q_count_sessions (string_of_int victim) in
+        let* n = or_fail "victim sessions after" n in
+        Alcotest.(check int) "victim's session survives" 1 n;
+        let* status, _, _ = send victim_browser "/probe" in
+        Alcotest.(check int) "victim still authenticated" 200 status;
+        Lwt.return_unit)
+
+  (* === C — admin removal of another user's post === *)
+
+  let admin_delete_case =
+    db_case
+      "stale admin: /delete-post on a foreign post leaves the content \
+       untouched"
+      (fun ~url (module C : Caqti_lwt.CONNECTION) ->
+        let* admin = make_user (module C) ~admin:true "stad_deladmin" in
+        let* author = make_user (module C) ~admin:false "stad_delauthor" in
+        let* cid = C.find q_community ("stad-del", "public") in
+        let* cid = or_fail "community" cid in
+        let* control_post = C.find q_post ("stad control post", cid, author) in
+        let* control_post = or_fail "control post" control_post in
+        let* target_post = C.find q_post ("stad target post", cid, author) in
+        let* target_post = or_fail "target post" target_post in
+
+        let* client = logged_in_admin ~url "stad_deladmin" in
+        (* Control: a durable admin's removal tombstones the row. *)
+        let* status, _, _ =
+          send client ~method_:`POST
+            ~form:[ ("post_id", string_of_int control_post) ]
+            "/delete-post"
+        in
+        Alcotest.(check bool) "durable admin removal redirects" true
+          (status / 100 = 3);
+        let* state = C.find q_post_state control_post in
+        let* _title, content = or_fail "control state" state in
+        Alcotest.(check (option string)) "control tombstoned"
+          (Some "[removed by admin]") content;
+
+        let* () = demote (module C) admin in
+        let* () = still_claims_admin client in
+        let* status, _, _ =
+          send client ~method_:`POST
+            ~form:[ ("post_id", string_of_int target_post) ]
+            "/delete-post"
+        in
+        (* The response family matters as much as the row: /delete-post has no
+           separate "not an admin" answer, it simply falls through to the
+           AUTHOR-scoped soft delete, which matches nothing here and redirects
+           — exactly what any ordinary logged-in user gets. Asserting 3xx is
+           what stops this case passing on an unrelated 500 raised before the
+           delete was ever attempted. *)
+        Alcotest.(check bool)
+          "stale claim gets the ordinary non-admin redirect, not an error" true
+          (status / 100 = 3);
+        let* state = C.find q_post_state target_post in
+        let* title, content = or_fail "target state" state in
+        Alcotest.(check string) "title unchanged" "stad target post" title;
+        Alcotest.(check (option string)) "body unchanged" (Some "stad body")
+          content;
+        Lwt.return_unit)
+
+  (* === D + E — the private-community read gate and the token that
+         inherits it === *)
+
+  let private_read_case =
+    db_case
+      "stale admin: a private community stays hidden and mints no realtime \
+       token"
+      (fun ~url (module C : Caqti_lwt.CONNECTION) ->
+        let* admin = make_user (module C) ~admin:true "stad_readadmin" in
+        let* cid = C.find q_community ("stad-secret", "private") in
+        let* cid = or_fail "community" cid in
+        let* _chan = C.find q_channel ("stad-secretchan", cid) in
+        let* _chan = or_fail "channel" _chan in
+
+        let* client = logged_in_admin ~url "stad_readadmin" in
+        let* status, _, body = send client "/c/stad-secret" in
+        Alcotest.(check int) "durable admin reads the private community" 200
+          status;
+        Alcotest.(check bool) "control: the page really names it" true
+          (contains body "stad-secret");
+        let* status, _, body =
+          send client "/c/stad-secret/ch/stad-secretchan/realtime-token"
+        in
+        Alcotest.(check bool) "durable admin gets a token answer" true
+          (status = 200 || status = 503);
+        if status = 200 then
+          Alcotest.(check bool) "control: a token was minted" true
+            (contains body "\"token\"");
+
+        let* () = demote (module C) admin in
+        let* () = still_claims_admin client in
+        let* status, _, denied = send client "/c/stad-secret" in
+        Alcotest.(check int) "hidden from the stale claim" 404 status;
+        Alcotest.(check bool) "no community name" false
+          (contains denied "stad-secret");
+        (* Anti-oracle: the refusal is the route's existing hidden answer, so
+           it is byte-identical to a slug that never existed. *)
+        let* _, _, missing = send client "/c/stad-nothing-here" in
+        Alcotest.(check string) "hidden reads exactly like nonexistent"
+          (ps_without_csrf_inputs missing)
+          (ps_without_csrf_inputs denied);
+        let* status, _, body =
+          send client "/c/stad-secret/ch/stad-secretchan/realtime-token"
+        in
+        Alcotest.(check int) "no token for the stale claim" 404 status;
+        Alcotest.(check bool) "no token in the body" false
+          (contains body "\"token\"");
+        Lwt.return_unit)
+
+  (* A stale demoted admin who is ALSO a legitimate member keeps reading the
+     private community — through the membership policy, which the admin
+     override never replaced. *)
+  let private_member_fallback_case =
+    db_case
+      "stale admin who is also a member still reads the private community"
+      (fun ~url (module C : Caqti_lwt.CONNECTION) ->
+        let* admin = make_user (module C) ~admin:true "stad_memberadmin" in
+        let* cid = C.find q_community ("stad-memberpriv", "private") in
+        let* cid = or_fail "community" cid in
+        let* r = C.exec q_member (admin, cid) in
+        let* () = or_fail "membership" r in
+        let* client = logged_in_admin ~url "stad_memberadmin" in
+        let* () = demote (module C) admin in
+        let* status, _, body = send client "/c/stad-memberpriv" in
+        Alcotest.(check int) "membership still admits" 200 status;
+        Alcotest.(check bool) "the page renders" true
+          (contains body "stad-memberpriv");
+        Lwt.return_unit)
+
+  (* === F — the admin-or-moderator settings gate === *)
+
+  let settings_case =
+    db_case "stale admin: community settings are refused"
+      (fun ~url (module C : Caqti_lwt.CONNECTION) ->
+        let* admin = make_user (module C) ~admin:true "stad_setadmin" in
+        let* cid = C.find q_community ("stad-settings", "public") in
+        let* cid = or_fail "community" cid in
+        let* banned = make_user (module C) ~admin:false "stad_setbanned" in
+        let* r = C.exec q_member (banned, cid) in
+        let* () = or_fail "member row" r in
+
+        let* client = logged_in_admin ~url "stad_setadmin" in
+        let* status, _, body =
+          send client "/c/stad-settings/settings?panel=members"
+        in
+        Alcotest.(check int) "durable admin opens settings" 200 status;
+        Alcotest.(check bool) "control: the member roster rendered" true
+          (contains body "stad_setbanned");
+
+        let* () = demote (module C) admin in
+        let* () = still_claims_admin client in
+        let* status, _, body =
+          send client "/c/stad-settings/settings?panel=members"
+        in
+        Alcotest.(check int) "stale claim is forbidden" 403 status;
+        Alcotest.(check bool) "denial copy" true
+          (contains body "You must be a moderator");
+        Alcotest.(check bool) "no member roster" false
+          (contains body "stad_setbanned");
+        Lwt.return_unit)
+
+  (* === G — an admin-or-top-mod management mutation === *)
+
+  let manage_mods_case =
+    db_case "stale admin: adding a moderator makes no durable change"
+      (fun ~url (module C : Caqti_lwt.CONNECTION) ->
+        let* admin = make_user (module C) ~admin:true "stad_modadmin" in
+        let* control = make_user (module C) ~admin:false "stad_modcontrol" in
+        let* _target = make_user (module C) ~admin:false "stad_modtarget" in
+        let* cid = C.find q_community ("stad-mods", "public") in
+        let* cid = or_fail "community" cid in
+        let* r = C.exec q_moderator (control, cid, "mod") in
+        let* () = or_fail "seed mod" r in
+        let* before = C.find q_count_mods cid in
+        let* before = or_fail "mods before" before in
+
+        let* client = logged_in_admin ~url "stad_modadmin" in
+        (* Control: the durable admin really can appoint a moderator. *)
+        let* status, _, _ =
+          send client ~method_:`POST ~form:[ ("username", "stad_modcontrol") ]
+            "/c/stad-mods/manage-mods/add"
+        in
+        Alcotest.(check bool) "durable admin add redirects" true
+          (status / 100 = 3);
+
+        let* () = demote (module C) admin in
+        let* () = still_claims_admin client in
+        let* status, _, body =
+          send client ~method_:`POST ~form:[ ("username", "stad_modtarget") ]
+            "/c/stad-mods/manage-mods/add"
+        in
+        Alcotest.(check int) "stale claim is forbidden" 403 status;
+        Alcotest.(check bool) "denial copy" true
+          (contains body "Only Top Mods and Admins");
+        let* after = C.find q_count_mods cid in
+        let* after = or_fail "mods after" after in
+        Alcotest.(check int) "no moderator row added" before after;
+        Lwt.return_unit)
+
+  (* === stale FALSE after promotion: documented, and it requires re-login === *)
+
+  let promotion_requires_relogin_case =
+    db_case
+      "promoted admin with an old non-admin session stays refused until a \
+       fresh login"
+      (fun ~url (module C : Caqti_lwt.CONNECTION) ->
+        let* uid = make_user (module C) ~admin:false "stad_promoted" in
+        let client = make_client ~url in
+        let* status, _, _ = login client "stad_promoted" in
+        Alcotest.(check bool) "login redirects" true (status / 100 = 3);
+        let* status, _, _ = send client "/admin" in
+        Alcotest.(check int) "not an admin yet" 403 status;
+        (* Durable promotion, session untouched. The resolver deliberately
+           short-circuits a claim that is not "true", so this session keeps no
+           admin authority — that is the price of ordinary traffic making no
+           admin query at all, and re-login is the documented remedy. *)
+        let* r = C.exec q_set_admin (uid, true) in
+        let* () = or_fail "promote" r in
+        let* status, _, _ = send client "/admin" in
+        Alcotest.(check int) "old session is still refused" 403 status;
+        let* status, _, _ = login client "stad_promoted" in
+        Alcotest.(check bool) "re-login redirects" true (status / 100 = 3);
+        let* status, _, _ = send client "/admin" in
+        Alcotest.(check int) "granted after re-login" 200 status;
+        Lwt.return_unit)
+
+  (* === the current-admin lookup itself failing === *)
+
+  (* Same partial-schema injection Ban_fail_closed uses: [shadow] mirrors
+     every public relation as an auto-updatable view EXCEPT the ones named, so
+     a handler runs normally until it reaches a query against an omitted
+     table. Omitting `users` breaks exactly the durable admin lookup while the
+     session store, the community and the membership rows all still resolve.
+     No production failpoint exists or is added. *)
+  let make_shadow (module C : Caqti_lwt.CONNECTION) ~omit =
+    let exec sql =
+      let* r = C.exec ((Caqti_type.unit ->. Caqti_type.unit) sql) () in
+      let* _ = or_fail "shadow" r in
+      Lwt.return_unit
+    in
+    let* () = exec ("DROP SCHEMA IF EXISTS " ^ shadow ^ " CASCADE") in
+    let* () = exec ("CREATE SCHEMA " ^ shadow) in
+    let* relations =
+      C.collect_list
+        ((Caqti_type.unit ->* Caqti_type.string)
+           "SELECT c.relname FROM pg_class c
+             JOIN pg_namespace n ON n.oid = c.relnamespace
+            WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p', 'v', 'm', 'f')
+            ORDER BY c.relname")
+        ()
+    in
+    let* relations = or_fail "public relations" relations in
+    List.iter
+      (fun t ->
+        if not (List.mem t relations) then
+          Alcotest.failf "omit names a relation that does not exist: %S" t)
+      omit;
+    Lwt_list.iter_s
+      (fun t ->
+        if List.mem t omit then Lwt.return_unit
+        else
+          exec
+            (Printf.sprintf "CREATE VIEW %s.\"%s\" AS SELECT * FROM public.\"%s\""
+               shadow t t))
+      relations
+
+  let with_shadow url =
+    Uri.to_string
+      (Uri.add_query_param' (Uri.of_string url)
+         ("options", "-csearch_path=" ^ shadow))
+
+  let generic = "A database error occurred. Please try again later."
+
+  (* Driver/schema vocabulary only: "does not exist" is deliberately absent,
+     because the community 404 the anti-oracle assertion depends on says
+     exactly that in its own product copy. *)
+  let db_needles =
+    [ "stad_shadow"; "search_path"; "postgresql"; "caqti"; "relation";
+      "select "; "pg_" ]
+
+  let no_leak label body =
+    List.iter
+      (fun s ->
+        if contains (String.lowercase_ascii body) (String.lowercase_ascii s)
+        then Alcotest.failf "%s: body leaks %S" label s)
+      db_needles
+
+  let storage_failure_case =
+    db_case
+      "a current-admin lookup that cannot be answered grants nothing and \
+       opens no existence oracle"
+      (fun ~url (module C : Caqti_lwt.CONNECTION) ->
+        let* _admin = make_user (module C) ~admin:true "stad_failadmin" in
+        let* victim = make_user (module C) ~admin:false "stad_failvictim" in
+        let* cid = C.find q_community ("stad-failpriv", "private") in
+        let* _cid = or_fail "community" cid in
+
+        (* The session is minted on the intact pool; the replay happens
+           against the broken one, so the cookie is real either way. *)
+        let* client = logged_in_admin ~url "stad_failadmin" in
+        let cookies = !(client.jar) in
+        let* () = make_shadow (module C) ~omit:[ "users" ] in
+        let broken = make_client ~url:(with_shadow url) in
+        broken.jar := cookies;
+
+        (* The admin-only mutation refuses generically and bans nobody. *)
+        let* status, _, body =
+          send broken ~method_:`POST ~form:[]
+            (Printf.sprintf "/admin/ban/user/%d" victim)
+        in
+        Alcotest.(check int) "ban answers the generic failure" 500 status;
+        Alcotest.(check bool) "generic copy" true (contains body generic);
+        no_leak "ban" body;
+        let* banned = C.find q_is_banned victim in
+        let* banned = or_fail "victim banned" banned in
+        Alcotest.(check bool) "nothing was banned" false banned;
+
+        (* The private read keeps the route's existing hidden answer: no new
+           response shape, so no way to tell the community apart from one that
+           never existed. *)
+        let* status, _, denied = send broken "/c/stad-failpriv" in
+        Alcotest.(check int) "private read stays a 404" 404 status;
+        Alcotest.(check bool) "no community name" false
+          (contains denied "stad-failpriv");
+        no_leak "private read" denied;
+        let* _, _, missing = send broken "/c/stad-nothing-here" in
+        Alcotest.(check string) "still byte-identical to nonexistent"
+          (ps_without_csrf_inputs missing)
+          (ps_without_csrf_inputs denied);
+        Lwt.return_unit)
+
+  let suite =
+    [ admin_dashboard_case; global_ban_case; admin_delete_case;
+      private_read_case; private_member_fallback_case; settings_case;
+      manage_mods_case; promotion_requires_relogin_case;
+      storage_failure_case ]
 end
 
 let () =
@@ -83013,4 +83945,14 @@ let () =
       (* Fail-closed ban checks: a ban lookup that cannot be answered from
          storage must not authorize the mutation it guards. *)
     ; ("security_ban_check_fail_closed", Ban_fail_closed.ban_fail_closed_suite)
+      (* Stale global-admin sessions: a cached is_admin claim, replayed after
+         the durable users.is_admin row was cleared, no longer grants an
+         admin-only page, an admin-only mutation, admin content removal, the
+         private-community read gate (or the realtime token that inherits
+         it), the admin-or-moderator settings gate, or an admin-or-top-mod
+         management mutation. Each family carries its durable-admin control;
+         stale-false-after-promotion is pinned as requiring re-login, and a
+         failing current-admin lookup grants nothing and opens no existence
+         oracle. *)
+    ; ("security_stale_admin_boundary", Stale_admin.suite)
     ]
