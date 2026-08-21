@@ -3219,12 +3219,25 @@ let ban_community_user_handler request =
             else
               (match%lwt Db.get_user_by_username db target_username with
               | Ok (Some target_user) ->
-                  (* Admin immunity: local mods cannot ban global admins. *)
-                  let%lwt target_is_admin = match%lwt Db.is_user_admin db target_user.id with
-                    | Ok b -> Lwt.return b | Error _ -> Lwt.return false in
-                  if target_is_admin && not is_admin then
+                  (* Admin immunity: local mods cannot ban global admins.
+                     The lookup decides ONLY the local moderator's case — a
+                     current global admin overrides the immunity either way —
+                     so an admin actor never makes it, and the immunity keeps
+                     three distinct outcomes rather than a boolean: immune,
+                     not immune, and unanswerable. Unanswerable is an internal
+                     failure, not evidence that the target is bannable, so it
+                     ends the request before the ban, the mod-log row and the
+                     notification below. *)
+                  let%lwt target_immunity =
+                    if is_admin then Lwt.return (Ok false)
+                    else Db.is_user_admin db target_user.id
+                  in
+                  (match target_immunity with
+                  | Error e ->
+                      Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:"/" request)
+                  | Ok true ->
                     Dream.html (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Action Denied" ~message:"You cannot ban a Global Administrator." ~alert_type:"error" ~return_url:"/" request)
-                  else begin
+                  | Ok false -> begin
                     (* Fetch community slug before the ban so we can redirect to /c/slug after. *)
                     let%lwt community_res = Db.get_community_by_id db community_id in
                     let%lwt _ = Db.community_ban_user db target_user.id community_id in
@@ -3238,7 +3251,7 @@ let ban_community_user_handler request =
                     let%lwt _ = Db.create_notif db target_user.id None "mod_action" ban_msg in
                     let target = match community_res with Ok (Some c) -> "/c/" ^ c.slug ^ "/settings?panel=bans" | _ -> "/" in
                     Dream.redirect request target
-                  end
+                  end)
               | Ok None -> Dream.html (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"User Not Found" ~message:("No user was found with the username u/" ^ target_username ^ ".") ~alert_type:"error" ~return_url:"/" request)
               | Error e -> Dream.html (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:"/" request))
           )
@@ -4023,18 +4036,27 @@ let delete_post_handler request =
                     | _ -> Lwt.return false)
                 | None -> Lwt.return false
             in
-            (* Admin immunity: mods cannot delete content authored by global admins. *)
-            let%lwt blocked_by_immunity =
+            (* Admin immunity: mods cannot delete content authored by global
+               admins. [is_mod] is already false for a current global admin
+               and for a plain author self-deleting, so only the moderator
+               path pays this query — and only that path can be refused by it.
+               The three outcomes stay distinct: immune, not immune, and
+               unanswerable. Unanswerable is an internal failure rather than
+               proof the author is an ordinary user, and it is settled HERE,
+               above the image unlink and the delete below, so a failed lookup
+               removes no file from disk and mutates no row. *)
+            let%lwt target_immunity =
               if is_mod then match post_opt with
-                | Some post ->
-                    (match%lwt Db.is_user_admin db post.user_id with
-                    | Ok true -> Lwt.return true | _ -> Lwt.return false)
-                | None -> Lwt.return false
-              else Lwt.return false
+                | Some post -> Db.is_user_admin db post.user_id
+                | None -> Lwt.return (Ok false)
+              else Lwt.return (Ok false)
             in
-            if blocked_by_immunity then
+            match target_immunity with
+            | Error e ->
+                Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:"/" request)
+            | Ok true ->
               Dream.respond ~status:`Forbidden "⛔ You cannot moderate an Admin."
-            else
+            | Ok false ->
             (* Delete image from disk before nulling image_url in DB — prevents
                orphaned files that would still be served by the static file handler. *)
             let () =
