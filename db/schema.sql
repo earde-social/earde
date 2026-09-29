@@ -1,7 +1,7 @@
 \restrict dbmate
 
--- Dumped from database version 16.14 (Ubuntu 16.14-0ubuntu0.24.04.1)
--- Dumped by pg_dump version 16.14 (Ubuntu 16.14-0ubuntu0.24.04.1)
+-- Dumped from database version 16.15 (Ubuntu 16.15-0ubuntu0.24.04.1)
+-- Dumped by pg_dump version 16.15 (Ubuntu 16.15-0ubuntu0.24.04.1)
 
 SET statement_timeout = 0;
 SET lock_timeout = 0;
@@ -13,6 +13,73 @@ SET check_function_bodies = false;
 SET xmloption = content;
 SET client_min_messages = warning;
 SET row_security = off;
+
+--
+-- Name: bump_community_realtime_generation(integer); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.bump_community_realtime_generation(target integer) RETURNS void
+    LANGUAGE sql
+    AS $$
+    INSERT INTO community_realtime_generations (community_id, generation, updated_at)
+    SELECT id, 1, NOW() FROM communities WHERE id = target
+    ON CONFLICT (community_id) DO UPDATE
+       SET generation = community_realtime_generations.generation + 1,
+           updated_at = NOW();
+$$;
+
+
+--
+-- Name: community_realtime_access_row_removed(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.community_realtime_access_row_removed() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+    PERFORM bump_community_realtime_generation(OLD.community_id);
+    RETURN NULL;
+END;
+$$;
+
+
+--
+-- Name: community_realtime_visibility_narrowed(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.community_realtime_visibility_narrowed() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+    PERFORM bump_community_realtime_generation(NEW.id);
+    RETURN NULL;
+END;
+$$;
+
+
+--
+-- Name: user_realtime_access_narrowed(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.user_realtime_access_narrowed() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+    IF OLD.is_admin AND NOT NEW.is_admin THEN
+        PERFORM bump_community_realtime_generation(c.id)
+           FROM communities c WHERE c.visibility = 'private';
+    END IF;
+    IF (NEW.is_banned AND NOT OLD.is_banned)
+       OR (NEW.username LIKE '[deleted\_%' AND OLD.username NOT LIKE '[deleted\_%') THEN
+        PERFORM bump_community_realtime_generation(x.community_id)
+           FROM (SELECT community_id FROM community_members WHERE user_id = NEW.id
+                 UNION
+                 SELECT community_id FROM community_moderators WHERE user_id = NEW.id) x;
+    END IF;
+    RETURN NULL;
+END;
+$$;
+
 
 SET default_tablespace = '';
 
@@ -343,6 +410,18 @@ CREATE SEQUENCE public.community_projects_id_seq
 --
 
 ALTER SEQUENCE public.community_projects_id_seq OWNED BY public.community_projects.id;
+
+
+--
+-- Name: community_realtime_generations; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.community_realtime_generations (
+    community_id integer NOT NULL,
+    generation bigint DEFAULT 0 NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT community_realtime_generations_generation_check CHECK ((generation >= 0))
+);
 
 
 --
@@ -1565,6 +1644,14 @@ ALTER TABLE ONLY public.community_projects
 
 
 --
+-- Name: community_realtime_generations community_realtime_generations_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.community_realtime_generations
+    ADD CONSTRAINT community_realtime_generations_pkey PRIMARY KEY (community_id);
+
+
+--
 -- Name: community_sections community_sections_community_id_slug_key; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -2330,6 +2417,34 @@ CREATE UNIQUE INDEX uq_notifications_recipient_kind_relation ON public.notificat
 
 
 --
+-- Name: communities communities_realtime_access; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER communities_realtime_access AFTER UPDATE OF visibility ON public.communities FOR EACH ROW WHEN (((old.visibility IS DISTINCT FROM new.visibility) AND (new.visibility = 'private'::text))) EXECUTE FUNCTION public.community_realtime_visibility_narrowed();
+
+
+--
+-- Name: community_members community_members_realtime_access; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER community_members_realtime_access AFTER DELETE ON public.community_members FOR EACH ROW EXECUTE FUNCTION public.community_realtime_access_row_removed();
+
+
+--
+-- Name: community_moderators community_moderators_realtime_access; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER community_moderators_realtime_access AFTER DELETE ON public.community_moderators FOR EACH ROW EXECUTE FUNCTION public.community_realtime_access_row_removed();
+
+
+--
+-- Name: users users_realtime_access; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER users_realtime_access AFTER UPDATE OF is_admin, is_banned, username ON public.users FOR EACH ROW EXECUTE FUNCTION public.user_realtime_access_narrowed();
+
+
+--
 -- Name: channels channels_community_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -2543,6 +2658,14 @@ ALTER TABLE ONLY public.community_projects
 
 ALTER TABLE ONLY public.community_projects
     ADD CONSTRAINT community_projects_reviewed_by_user_id_fkey FOREIGN KEY (reviewed_by_user_id) REFERENCES public.users(id) ON DELETE SET NULL;
+
+
+--
+-- Name: community_realtime_generations community_realtime_generations_community_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.community_realtime_generations
+    ADD CONSTRAINT community_realtime_generations_community_id_fkey FOREIGN KEY (community_id) REFERENCES public.communities(id) ON DELETE CASCADE;
 
 
 --
@@ -3017,4 +3140,5 @@ INSERT INTO public.schema_migrations (version) VALUES
     ('20260727130000'),
     ('20260731120000'),
     ('20260731130000'),
-    ('20260803120000');
+    ('20260803120000'),
+    ('20260929120000');

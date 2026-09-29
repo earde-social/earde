@@ -33,7 +33,10 @@ let with_timeout seconds promise =
        Lwt.return_unit)
     ]
 
+(* [topic] carries the community's access generation (Realtime_generation),
+   read by the caller after the message committed. *)
 let publish_body
+    ~topic
     ~channel_id
     ~community_id
     ~message_id
@@ -41,7 +44,6 @@ let publish_body
     ~username
     ~content
     ~created_at =
-  let topic = Printf.sprintf "chan:%d" channel_id in
   let payload =
     `Assoc
       [ ("v", `Int 1)
@@ -81,6 +83,7 @@ let post_json ~gateway_url ~internal_secret body_json =
         m "Realtime publish failed: status=%d body=%S" status response_text)
 
 let publish_chat_message
+    ~topic
     ~channel_id
     ~community_id
     ~message_id
@@ -92,6 +95,7 @@ let publish_chat_message
   | Some gateway_url, Some internal_secret ->
       let body_json =
         publish_body
+          ~topic
           ~channel_id
           ~community_id
           ~message_id
