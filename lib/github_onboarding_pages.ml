@@ -72,8 +72,10 @@ let connecting_section =
 
 let meaning_section =
   section ~heading:"What verification means"
-    "&ldquo;Verified through GitHub&rdquo; means exactly that: a maintainer \
-     proved control of the repository. Connecting an installation does not \
+    "&ldquo;Verified through GitHub&rdquo; means exactly that: within the \
+     last 30 days, a steward proved through GitHub that they can access the \
+     repository. After that the label reads &ldquo;Verification stale&rdquo; \
+     until a steward connects the project again. Connecting an installation does not \
      automatically grant moderation rights in an existing Earde community, \
      and it does not make any community the authoritative or endorsed place \
      for a project."

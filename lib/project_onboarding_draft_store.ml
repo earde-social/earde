@@ -61,12 +61,13 @@ let upsert_draft_query =
   let open Caqti_request.Infix in
   (Caqti_type.(t2 int int64) ->! Caqti_type.int64)
   "INSERT INTO project_onboarding_drafts \
-     (user_id, github_installation_record_id, status, expires_at) \
-   VALUES ($1, $2, 'active', NOW() + INTERVAL '24 hours') \
+     (user_id, github_installation_record_id, status, expires_at, verified_at) \
+   VALUES ($1, $2, 'active', NOW() + INTERVAL '24 hours', NOW()) \
    ON CONFLICT (user_id, github_installation_record_id) \
      WHERE status = 'active' \
    DO UPDATE \
    SET expires_at = NOW() + INTERVAL '24 hours', \
+       verified_at = NOW(), \
        updated_at = GREATEST(NOW(), project_onboarding_drafts.created_at) \
    RETURNING id"
 
@@ -91,6 +92,39 @@ let insert_snapshot_row_query =
       default_branch, is_archived, is_selected, is_primary) \
    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, FALSE, FALSE)"
 
+(* Renewal of existing stewardship evidence (see
+   docs/features/github-verification-lifecycle.md). The snapshot just
+   written is this user's current, GitHub-verified view of the
+   installation, so it renews only THIS user's steward rows, and only for
+   projects in the same GitHub account whose every unreleased repository
+   appears in it. A project that lost a repository keeps its old evidence
+   and goes stale when the window passes. Nobody else's rows are read for
+   writing, and a failed verification never gets here, so one user's
+   verification can neither renew nor revoke another user's authority. *)
+let renew_steward_evidence_query =
+  let open Caqti_request.Infix in
+  (Caqti_type.(t2 int64 int) ->. Caqti_type.unit)
+  "UPDATE project_stewards s \
+   SET github_verified_at = NOW(), \
+       github_installation_record_id = d.github_installation_record_id \
+   FROM project_onboarding_drafts d, github_installations i, \
+        open_source_projects p \
+   WHERE d.id = $1 AND d.user_id = $2 \
+     AND i.id = d.github_installation_record_id \
+     AND s.user_id = d.user_id \
+     AND p.id = s.project_id \
+     AND p.forge_namespace_id = i.github_account_id \
+     AND EXISTS (SELECT 1 FROM project_repositories r \
+                 WHERE r.project_id = p.id AND r.released_at IS NULL) \
+     AND NOT EXISTS ( \
+       SELECT 1 FROM project_repositories r \
+       WHERE r.project_id = p.id AND r.released_at IS NULL \
+         AND NOT EXISTS ( \
+           SELECT 1 FROM project_onboarding_draft_repositories dr \
+           WHERE dr.draft_id = d.id \
+             AND dr.github_repository_id = r.github_repository_id \
+             AND dr.github_owner_id = i.github_account_id))"
+
 let refresh_verified (module C : Caqti_lwt.CONNECTION) ~user_id ~installation
     ~repositories =
   if not (valid_user_id user_id) then Lwt.return (Error Invalid_user_id)
@@ -110,9 +144,12 @@ let refresh_verified (module C : Caqti_lwt.CONNECTION) ~user_id ~installation
        order, positions contiguous from 1. *)
     let rec insert_snapshot draft_row_id position = function
       | [] -> (
+          C.exec renew_steward_evidence_query (draft_row_id, user_id) >>= function
+          | Error _ -> rollback_to Storage_error
+          | Ok () -> (
           C.commit () >>= function
           | Error _ -> Lwt.return (Error Storage_error)
-          | Ok () -> Lwt.return (Ok { id = draft_row_id }))
+          | Ok () -> Lwt.return (Ok { id = draft_row_id })))
       | repo :: rest -> (
           let module R = Github_user_installation_repositories in
           C.exec insert_snapshot_row_query

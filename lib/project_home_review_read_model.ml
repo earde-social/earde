@@ -241,7 +241,8 @@ let pending_requests_query =
               (t4 string string (option string) (option string)))
            (option (t2 (t4 int string string string) (t2 bool bool)))))
     "SELECT p.id, p.name, p.slug, p.kind, \
-            p.forge_namespace_login, p.verification_status, \
+            p.forge_namespace_login, \
+            project_github_verification(p.id, p.verification_status), \
             cp.request_note, u.username, \
             r.position, r.full_name, r.html_url, r.default_branch, \
             r.is_primary, r.is_archived \

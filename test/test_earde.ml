@@ -7725,7 +7725,7 @@ module Pod_schema = struct
         let (module C : Caqti_lwt.CONNECTION) = conn in
         let* n = C.find q_column_count "project_onboarding_drafts" in
         let* n = or_fail "drafts column count" n in
-        Alcotest.(check int) "project_onboarding_drafts has 9 columns" 9 n;
+        Alcotest.(check int) "project_onboarding_drafts has 10 columns" 10 n;
         let* n = C.find q_column_count "project_onboarding_draft_repositories" in
         let* n = or_fail "repositories column count" n in
         Alcotest.(check int)
@@ -11466,8 +11466,8 @@ module Osp_schema = struct
               Alcotest.(check int) (table ^ " column count") expected n;
               Lwt.return_unit)
             [ ("open_source_projects", 15)
-            ; ("project_stewards", 5)
-            ; ("project_repositories", 12)
+            ; ("project_stewards", 6)
+            ; ("project_repositories", 13)
             ]
         in
         let* offenders = C.collect_list q_credential_columns () in
@@ -19977,6 +19977,27 @@ module Pfin = struct
              'https://github.com/pfin-claim/holder', NULL, 'main', FALSE) \
      RETURNING id"
 
+  let q_insert_steward_fixture =
+    (Caqti_type.(t3 int64 int int64) ->. Caqti_type.unit)
+    "INSERT INTO project_stewards \
+       (project_id, user_id, github_installation_record_id, role) \
+     VALUES ($1, $2, $3, 'steward')"
+
+  (* A claim excludes other projects only while its project has a steward
+     with fresh GitHub evidence (a claim without one is released by the
+     next verified finalization), so conflict fixtures give the holder
+     project such a steward. The column default dates the evidence now. *)
+  let hold_actively conn ~project ~holder ~ext_id ~account_id =
+    let* inst =
+      Pod_store.insert_installation ~login:"pfin-fixture" conn ~ext_id
+        ~account_id
+    in
+    let (module C : Caqti_lwt.CONNECTION) = conn in
+    let* r = C.exec q_insert_steward_fixture (project, holder, inst) in
+    match r with
+    | Ok () -> Lwt.return_unit
+    | Error e -> Alcotest.failf "holder steward: %s" (Caqti_error.show e)
+
   (* Every text column the three permanent tables hold for one project,
      concatenated for the boolean credential-absence checks. *)
   let q_permanent_text_blob =
@@ -20905,6 +20926,11 @@ module Pfin = struct
         let* _ =
           find conn "fixture claim" q_insert_repo_claim
             (fixture_project, claimed)
+        in
+        let* holder = insert_user conn "pfin_holder" in
+        let* () =
+          hold_actively conn ~project:fixture_project ~holder
+            ~ext_id:942000952L ~account_id:942100902L
         in
         let* _, draft, _, account_id =
           make_draft conn ~user:uid ~ext_id:942000052L (fun account_id ->
@@ -23261,6 +23287,11 @@ module Pch = struct
         let* _ =
           find conn "rival claim" Pfin.q_insert_repo_claim
             (rival, 943600211L)
+        in
+        let* holder = insert_user conn "pcreate_holder" in
+        let* () =
+          Pfin.hold_actively conn ~project:rival ~holder ~ext_id:943000998L
+            ~account_id:943100998L
         in
         let pipeline = app_pipeline ~session_user_id:uid ~url () in
         let* cookie, token, _ =
@@ -42042,7 +42073,7 @@ let ncpp_copy_cases =
         ps_must html "Ncpp Alpha";
         ps_must html "Ecosystem";
         ps_must html "ncpp-org";
-        ps_must html "Connected and verified through GitHub.";
+        ps_must html "Connected through GitHub.";
         List.iter (ps_must_not html)
           [ "Official"; "official"; "GitHub-approved"; "GitHub-endorsed";
             "endorsed"; "approved by GitHub"; "sponsored"
@@ -51804,6 +51835,15 @@ module Phnt = struct
         let* rid =
           request_ok "request" conn ~user:owner ~slug:"phnt-dreq"
             ~community:cid
+        in
+        (* A co-steward with fresh GitHub evidence keeps the project
+           verified once the requester's account (and steward row) is gone;
+           acceptance needs one. Decision recipients are the requester
+           only, so the co-steward receives nothing. *)
+        let* co = insert_user conn "phnt_dreq_co" in
+        let* () =
+          exec conn "co-steward" Pfin.q_insert_steward_fixture
+            (project, co, _inst)
         in
         let* () = exec conn "delete requester" q_delete_user owner in
         let* () =
@@ -78600,6 +78640,391 @@ module Cmub = struct
       avatar_only_case; banner_only_null_avatar_case ]
 end
 
+(* GitHub verification freshness, access loss and repository-claim release
+   (docs/features/github-verification-lifecycle.md). Stored proof grants
+   new GitHub-dependent authority only while it is fresh (30 days), is
+   renewed only by the steward's own successful re-verification that still
+   lists every claimed repository, and a claim with no fresh steward yields
+   to a claimant GitHub verified within the day. Ranges: installations
+   963200001..963200999, namespaces +100000, repositories +400000; users
+   gvf_*, communities gvf-*. *)
+module Gvf = struct
+  let ( let* ) = Lwt.bind
+
+  open Caqti_request.Infix
+
+  module Rq = Earde.Project_home_request_store
+  module Rv = Earde.Project_home_review_store
+  module Pv = Earde.Project_home_provisioning_store
+  module Fin = Earde.Project_finalization_store
+
+  let or_fail = Pod_store.or_fail
+  let insert_user = Pod_store.insert_user
+  let exec = Pod_read.exec
+  let find = Pod_read.find
+  let collect = Pod_read.collect
+
+  let find_opt conn label q v =
+    let (module C : Caqti_lwt.CONNECTION) = conn in
+    let* r = C.find_opt q v in
+    or_fail label r
+
+  let q_cleanup =
+    List.map
+      (fun sql -> (Caqti_type.unit ->. Caqti_type.unit) sql)
+      [ "DELETE FROM project_home_audit_events \
+         WHERE project_id IN \
+           (SELECT id FROM open_source_projects \
+            WHERE forge_namespace_id BETWEEN 963300001 AND 963300999)"
+      ; "DELETE FROM open_source_projects \
+         WHERE forge_namespace_id BETWEEN 963300001 AND 963300999"
+      ; "DELETE FROM project_onboarding_drafts \
+         WHERE github_installation_record_id IN \
+           (SELECT id FROM github_installations \
+            WHERE github_installation_id BETWEEN 963200001 AND 963200999)"
+      ; "DELETE FROM communities WHERE slug LIKE 'gvf-%'"
+      ; "DELETE FROM users WHERE username LIKE 'gvf\\_%'"
+      ; "DELETE FROM github_installations \
+         WHERE github_installation_id BETWEEN 963200001 AND 963200999"
+      ]
+
+  let db_case name f =
+    Alcotest.test_case name `Quick (fun () ->
+        match Sys.getenv_opt "EARDE_TEST_DATABASE_URL" with
+        | None | Some "" -> Alcotest.skip ()
+        | Some url ->
+            Lwt_main.run
+              (let* conn = Caqti_lwt_unix.connect (Uri.of_string url) in
+               let* conn = or_fail "connect" conn in
+               let (module C : Caqti_lwt.CONNECTION) = conn in
+               let cleanup () =
+                 Lwt_list.iter_s
+                   (fun q ->
+                     let* r = C.exec q () in
+                     let* _ = or_fail "cleanup" r in
+                     Lwt.return_unit)
+                   q_cleanup
+               in
+               let* () = cleanup () in
+               Lwt.finalize
+                 (fun () -> f conn)
+                 (fun () -> Lwt.finalize cleanup (fun () -> C.disconnect ()))))
+
+  (* === queries === *)
+
+  let q_fresh_at_age =
+    (Caqti_type.string ->! Caqti_type.bool)
+    "SELECT github_evidence_is_fresh(NOW() - $1::interval)"
+
+  let q_age_steward =
+    (Caqti_type.(t3 int64 int string) ->. Caqti_type.unit)
+    "UPDATE project_stewards SET github_verified_at = NOW() - $3::interval \
+     WHERE project_id = $1 AND user_id = $2"
+
+  let q_effective =
+    (Caqti_type.int64 ->! Caqti_type.string)
+    "SELECT project_github_verification(id, verification_status) \
+     FROM open_source_projects WHERE id = $1"
+
+  let q_set_stored =
+    (Caqti_type.(t2 int64 string) ->. Caqti_type.unit)
+    "UPDATE open_source_projects SET verification_status = $2 WHERE id = $1"
+
+  let q_steward_fresh =
+    (Caqti_type.(t2 int64 int) ->! Caqti_type.bool)
+    "SELECT github_evidence_is_fresh(github_verified_at) \
+     FROM project_stewards WHERE project_id = $1 AND user_id = $2"
+
+  let q_steward_evidence =
+    (Caqti_type.(t2 int64 int) ->! Caqti_type.string)
+    "SELECT github_verified_at::text FROM project_stewards \
+     WHERE project_id = $1 AND user_id = $2"
+
+  let q_add_steward =
+    (Caqti_type.(t3 int64 int int64) ->. Caqti_type.unit)
+    "INSERT INTO project_stewards \
+       (project_id, user_id, github_installation_record_id, role) \
+     VALUES ($1, $2, $3, 'steward')"
+
+  let q_claims =
+    (Caqti_type.int64 ->* Caqti_type.(t2 int64 bool))
+    "SELECT github_repository_id, released_at IS NOT NULL \
+     FROM project_repositories WHERE project_id = $1 ORDER BY position"
+
+  let q_active_holder =
+    (Caqti_type.int64 ->? Caqti_type.int64)
+    "SELECT project_id FROM project_repositories \
+     WHERE github_repository_id = $1 AND released_at IS NULL"
+
+  (* === fixtures === *)
+
+  let pending () = phr_expect_ok (Phr.create_pending ~request_note:None)
+
+  (* A permanent project over [repos] (ids), through the real draft,
+     selection and finalization stores. Returns the installation record,
+     the verified installation (to re-verify later) and the project id. *)
+  let make_project conn ~user ~ext_id ~slug repo_ids =
+    let* inst, draft, v, _account =
+      Pfin.make_draft conn ~user ~ext_id (fun account_id ->
+          List.mapi
+            (fun i id -> Pfin.repo ~account_id ~id (Printf.sprintf "r%d" i))
+            repo_ids)
+    in
+    let* ids = Pfin.snapshot_ids conn draft in
+    let s1 = List.hd ids in
+    let* () =
+      Pod_select.replace_ok "select" conn ~user ~draft ~primary:s1 ids
+    in
+    let* created =
+      Pfin.finalize_ok "project" conn ~user ~draft
+        (Pfin.identity_exn ~slug ~selected:ids ~primary:s1 ())
+    in
+    Lwt.return (inst, v, Fin.project_id created)
+
+  (* The steward's own successful re-verification: the real draft store
+     with a fresh listing of [repo_ids] under the same installation. *)
+  let reverify conn ~user ~v ~ext_id repo_ids =
+    let account_id = Int64.add ext_id 100000L in
+    let* set =
+      Pod_store.repo_set ~installation:v
+        (List.mapi
+           (fun i id -> Pfin.repo ~account_id ~id (Printf.sprintf "r%d" i))
+           repo_ids)
+    in
+    let* _ = Pod_store.refresh_ok "re-verification" conn ~user v set in
+    Lwt.return_unit
+
+  let age conn ~project ~user days =
+    exec conn "age evidence" q_age_steward
+      (project, user, Printf.sprintf "%d days" days)
+
+  let effective conn project = find conn "effective" q_effective project
+
+  (* === cases === *)
+
+  (* The one window, at its edges. *)
+  let window_case =
+    db_case "freshness: evidence is fresh for exactly 30 days" (fun conn ->
+        let at age = find conn age q_fresh_at_age age in
+        let* inside = at "29 days 23 hours 59 minutes" in
+        let* edge = at "30 days" in
+        let* outside = at "30 days 1 minute" in
+        Alcotest.(check bool) "a minute inside the window" true inside;
+        Alcotest.(check bool) "exactly 30 days old is no longer fresh" false edge;
+        Alcotest.(check bool) "a minute past the window" false outside;
+        Lwt.return_unit)
+
+  (* Stored 'verified' holds only while some steward is fresh; other
+     stored states pass through. *)
+  let effective_status_case =
+    db_case "status: verified only while some steward's evidence is fresh"
+      (fun conn ->
+        let* a = insert_user conn "gvf_eff_a" in
+        let* b = insert_user conn "gvf_eff_b" in
+        let* inst, _, project =
+          make_project conn ~user:a ~ext_id:963200001L ~slug:"gvf-eff"
+            [ 963600001L ]
+        in
+        let* s = effective conn project in
+        Alcotest.(check string) "fresh from onboarding" "verified" s;
+        let* () = age conn ~project ~user:a 31 in
+        let* s = effective conn project in
+        Alcotest.(check string) "the only steward went stale" "stale" s;
+        let* () = exec conn "second steward" q_add_steward (project, b, inst) in
+        let* s = effective conn project in
+        Alcotest.(check string) "any fresh steward keeps it verified" "verified" s;
+        let* () = exec conn "revoke" q_set_stored (project, "revoked") in
+        let* s = effective conn project in
+        Alcotest.(check string) "a stored revocation stands" "revoked" s;
+        Lwt.return_unit)
+
+  (* New GitHub-dependent authority is bound to the acting steward's own
+     evidence: a stale steward cannot request a home or provision one,
+     even while a co-steward's fresh evidence keeps the project verified. *)
+  let actor_gates_case =
+    db_case "authority: request and provisioning need the actor's own fresh evidence"
+      (fun conn ->
+        let* a = insert_user conn "gvf_gate_a" in
+        let* b = insert_user conn "gvf_gate_b" in
+        let* inst, _, project =
+          make_project conn ~user:a ~ext_id:963200011L ~slug:"gvf-gate"
+            [ 963600011L ]
+        in
+        let* () = exec conn "co-steward" q_add_steward (project, b, inst) in
+        let* cid = Phrq.insert_community conn "gvf-gate-target" in
+        let* () = age conn ~project ~user:a 31 in
+        let* () =
+          Phrq.create_expect "stale steward requests" Rq.Project_unavailable
+            conn ~user:a ~slug:"gvf-gate" ~community:cid (pending ())
+        in
+        let* () =
+          Phvs.provision_expect "stale steward provisions" Pv.Project_unavailable
+            conn ~actor:a ~slug:"gvf-gate"
+            (Phvs.identity ~slug:"gvf-gate-home" ())
+        in
+        (* The fresh co-steward still can: nothing was revoked globally. *)
+        let* _ =
+          Phrq.create_ok "fresh steward requests" conn ~user:b ~slug:"gvf-gate"
+            ~community:cid (pending ())
+        in
+        Lwt.return_unit)
+
+  let provisioning_renewal_case =
+    db_case "authority: the steward's own re-verification restores it" (fun conn ->
+        let* a = insert_user conn "gvf_renew_a" in
+        let* _inst, v, project =
+          make_project conn ~user:a ~ext_id:963200021L ~slug:"gvf-renew"
+            [ 963600021L; 963600022L ]
+        in
+        let* () = age conn ~project ~user:a 31 in
+        let* () =
+          Phvs.provision_expect "stale" Pv.Project_unavailable conn ~actor:a
+            ~slug:"gvf-renew" (Phvs.identity ~slug:"gvf-renew-home" ())
+        in
+        (* A listing that lost one claimed repository renews nothing. *)
+        let* () = reverify conn ~user:a ~v ~ext_id:963200021L [ 963600021L ] in
+        let* fresh = find conn "fresh" q_steward_fresh (project, a) in
+        Alcotest.(check bool) "partial access renews nothing" false fresh;
+        (* Every claimed repository listed again: renewed. *)
+        let* () =
+          reverify conn ~user:a ~v ~ext_id:963200021L
+            [ 963600021L; 963600022L; 963600023L ]
+        in
+        let* fresh = find conn "fresh" q_steward_fresh (project, a) in
+        Alcotest.(check bool) "full access renews" true fresh;
+        let* _ =
+          Phvs.provision_ok "renewed" conn ~actor:a ~slug:"gvf-renew"
+            ~expect_slug:"gvf-renew-home" (Phvs.identity ~slug:"gvf-renew-home" ())
+        in
+        Lwt.return_unit)
+
+  (* Another user's verification of the same installation renews and
+     revokes nothing of the steward's. *)
+  let other_user_case =
+    db_case "renewal: another user's verification neither renews nor revokes a steward"
+      (fun conn ->
+        let* a = insert_user conn "gvf_other_a" in
+        let* b = insert_user conn "gvf_other_b" in
+        let* _inst, v, project =
+          make_project conn ~user:a ~ext_id:963200031L ~slug:"gvf-other"
+            [ 963600031L ]
+        in
+        let* () = age conn ~project ~user:a 10 in
+        let* before = find conn "evidence" q_steward_evidence (project, a) in
+        let* () = reverify conn ~user:b ~v ~ext_id:963200031L [ 963600031L ] in
+        let* after = find conn "evidence" q_steward_evidence (project, a) in
+        Alcotest.(check string) "the steward's evidence is untouched" before after;
+        let* fresh = find conn "fresh" q_steward_fresh (project, a) in
+        Alcotest.(check bool) "and still fresh" true fresh;
+        Lwt.return_unit)
+
+  (* A moderator can accept only while the project is currently verified;
+     rejection stays possible in every state. *)
+  let review_case =
+    db_case "review: accept needs a fresh steward, reject never does" (fun conn ->
+        let* a = insert_user conn "gvf_rev_a" in
+        let* m = insert_user conn "gvf_rev_m" in
+        let* _inst, _, project =
+          make_project conn ~user:a ~ext_id:963200041L ~slug:"gvf-rev"
+            [ 963600041L ]
+        in
+        let* cid = Phrq.insert_community conn "gvf-rev-target" in
+        let* () = Phrv.add_top_mod conn ~user:m ~community:cid in
+        let* _ =
+          Phrv.request_ok "request" conn ~user:a ~slug:"gvf-rev" ~community:cid ()
+        in
+        let* () = age conn ~project ~user:a 31 in
+        let* () =
+          Phrv.review_expect "stale accept" Rv.Project_unavailable conn
+            ~reviewer:m ~slug:"gvf-rev" ~community:"gvf-rev-target" Rv.Accept
+        in
+        Phrv.review_ok "stale reject" Phr.Rejected conn ~reviewer:m
+          ~slug:"gvf-rev" ~community:"gvf-rev-target" Rv.Reject)
+
+  (* A claim with no fresh steward yields to a claimant GitHub verified
+     within the day; the stale project's claims are released together and
+     kept as history. A fresh holder is never displaced. *)
+  let claim_release_case =
+    db_case "claims: a stale project's claims yield to a freshly verified claimant"
+      (fun conn ->
+        let* old_owner = insert_user conn "gvf_claim_old" in
+        let* claimant = insert_user conn "gvf_claim_new" in
+        let* _, _, old_project =
+          make_project conn ~user:old_owner ~ext_id:963200051L ~slug:"gvf-claim-old"
+            [ 963600051L; 963600052L ]
+        in
+        (* Fresh holder: the claimant's finalization is refused. *)
+        let attempt label slug =
+          let* _, draft, _, _ =
+            Pfin.make_draft conn ~user:claimant ~ext_id:963200052L (fun account_id ->
+                [ Pfin.repo ~account_id ~id:963600051L "shared" ])
+          in
+          let* ids = Pfin.snapshot_ids conn draft in
+          let s1 = List.hd ids in
+          let* () =
+            Pod_select.replace_ok label conn ~user:claimant ~draft ~primary:s1 ids
+          in
+          Lwt.return (draft, Pfin.identity_exn ~slug ~selected:ids ~primary:s1 ())
+        in
+        let* draft, identity = attempt "fresh holder" "gvf-claim-new" in
+        let* () =
+          Pfin.finalize_expect "fresh holder keeps the claim"
+            Fin.Repository_already_connected conn ~user:claimant ~draft identity
+        in
+        let* claims = collect conn "claims" q_claims old_project in
+        Alcotest.(check (list (pair int64 bool))) "nothing released"
+          [ (963600051L, false); (963600052L, false) ] claims;
+        (* Stale holder: released as a whole, and the claimant holds it. *)
+        let* () = age conn ~project:old_project ~user:old_owner 31 in
+        let* created = Pfin.finalize_ok "stale holder yields" conn ~user:claimant ~draft identity in
+        let new_project = Fin.project_id created in
+        let* claims = collect conn "claims" q_claims old_project in
+        Alcotest.(check (list (pair int64 bool))) "every old claim released, rows kept"
+          [ (963600051L, true); (963600052L, true) ] claims;
+        let* holder = find_opt conn "holder" q_active_holder 963600051L in
+        Alcotest.(check (option int64)) "the claimant now holds it" (Some new_project) holder;
+        let* holder = find_opt conn "holder" q_active_holder 963600052L in
+        Alcotest.(check (option int64)) "the sibling is simply free" None holder;
+        let* s = effective conn old_project in
+        Alcotest.(check string) "the old project reads stale" "stale" s;
+        (* The old steward cannot renew over released claims. *)
+        let* fresh = find conn "old fresh" q_steward_fresh (old_project, old_owner) in
+        Alcotest.(check bool) "old steward stays stale" false fresh;
+        Lwt.return_unit)
+
+  (* The release is part of the finalization transaction: a finalization
+     that fails for another reason releases nothing. *)
+  let claim_release_rollback_case =
+    db_case "claims: a failed finalization releases nothing" (fun conn ->
+        let* old_owner = insert_user conn "gvf_rb_old" in
+        let* claimant = insert_user conn "gvf_rb_new" in
+        let* _, _, old_project =
+          make_project conn ~user:old_owner ~ext_id:963200061L ~slug:"gvf-rb-old"
+            [ 963600061L ]
+        in
+        let* () = age conn ~project:old_project ~user:old_owner 31 in
+        let* _, draft, _, _ =
+          Pfin.make_draft conn ~user:claimant ~ext_id:963200062L (fun account_id ->
+              [ Pfin.repo ~account_id ~id:963600061L "shared" ])
+        in
+        let* ids = Pfin.snapshot_ids conn draft in
+        let s1 = List.hd ids in
+        let* () = Pod_select.replace_ok "select" conn ~user:claimant ~draft ~primary:s1 ids in
+        (* The old project's slug is taken: the finalization fails late. *)
+        let* () =
+          Pfin.finalize_expect "slug taken" Fin.Slug_unavailable conn ~user:claimant
+            ~draft (Pfin.identity_exn ~slug:"gvf-rb-old" ~selected:ids ~primary:s1 ())
+        in
+        let* claims = collect conn "claims" q_claims old_project in
+        Alcotest.(check (list (pair int64 bool))) "claim untouched" [ (963600061L, false) ] claims;
+        Lwt.return_unit)
+
+  let suite =
+    [ window_case; effective_status_case; actor_gates_case;
+      provisioning_renewal_case; other_user_case; review_case;
+      claim_release_case; claim_release_rollback_case ]
+end
+
 let () =
   Alcotest.run "earde"
     [ ( "smoke"
@@ -85334,6 +85759,7 @@ let () =
     ; ("b2_rate_limit_routed", B2_account_privacy.limiter_db_suite)
     ; ("realtime_generations", Realtime_generations.pure_suite)
     ; ("realtime_generations_db", Realtime_generations.db_suite)
+    ; ("github_verification_freshness", Gvf.suite)
     ; ("b2_response_comparator", B2_account_privacy.comparator_suite)
     ; ("b2_capacity_sequences", B2_account_privacy.capacity_sequence_db_suite)
     ; ("b2_cookie_session", B2_account_privacy.cookie_db_suite)

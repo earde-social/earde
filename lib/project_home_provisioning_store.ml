@@ -66,7 +66,8 @@ let lock_project_query =
    WHERE p.slug = $1 AND p.verification_status = 'verified' \
    FOR UPDATE OF p"
 
-(* Step 1b: the actor's current steward row, locked second under the held
+(* Step 1b: the actor's current steward row, with fresh GitHub evidence
+   (stewardship authorizes new homes only while it does), locked second under the held
    project lock so a concurrent stewardship revocation either lands before
    this lock (zero rows) or waits for the commit. The (project_id,
    user_id) primary key caps this at one row; role is filtered exactly and
@@ -78,6 +79,7 @@ let lock_steward_query =
   (Caqti_type.(t2 int64 int) ->? Caqti_type.string)
   "SELECT role FROM project_stewards \
    WHERE project_id = $1 AND user_id = $2 AND role = 'steward' \
+     AND github_evidence_is_fresh(github_verified_at) \
    FOR UPDATE"
 
 (* Step 2: every active home relation for the locked project, under a

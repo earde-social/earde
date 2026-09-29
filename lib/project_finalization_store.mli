@@ -68,8 +68,11 @@ type error =
           transaction is rolled back. *)
   | Repository_already_connected
       (** At least one selected GitHub repository is already claimed by
-          an existing permanent project — which one is never revealed.
-          The global unique constraint arbitrates concurrent claims. The
+          an existing permanent project that still has a steward with
+          fresh GitHub evidence — which one is never revealed. (A claim
+          without any fresh steward is released first; see
+          docs/features/github-verification-lifecycle.md.) The unique
+          index on unreleased claims arbitrates concurrent claims. The
           whole transaction is rolled back. *)
   | Inconsistent_data
       (** Durable state violates an invariant the write side promises:
@@ -122,13 +125,16 @@ val finalize :
       caller as [created_by_user_id]; a slug conflict (arbitrated by the
       unique constraint, [ON CONFLICT DO NOTHING]) is [Slug_unavailable];
     + exactly one [project_stewards] row is inserted for the caller with
-      the locked installation record id as its authorization proof;
+      the locked installation record id as its authorization proof and
+      the draft's [verified_at] as its evidence time;
     + the selected rows are copied into [project_repositories] in their
       snapshot order, renumbered contiguously from 1, carrying only
       repository identity and display metadata (no owner ids, logins,
       selection flags, or local snapshot ids); exactly the row named by
-      the identity's primary is copied primary. A global claim conflict
-      (arbitrated by the unique constraint) is
+      the identity's primary is copied primary. Before each copy, if the
+      repository is claimed by a project with no steward holding fresh
+      evidence, all of that project's claims are released. A remaining claim conflict
+      (arbitrated by the unique index on unreleased claims) is
       [Repository_already_connected];
     + the locked draft becomes [status = 'completed'] with
       [completed_at] and [updated_at] set to

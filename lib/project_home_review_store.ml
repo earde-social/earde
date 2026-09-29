@@ -67,13 +67,16 @@ let canonical_community_slug value =
    so no steward join appears anywhere in this store. Unlike the request
    store there is no verified filter here: a pending request may
    legitimately outlive verification, and moderators must still be able
-   to reject it — acceptance re-checks current verification separately,
+   to reject it — acceptance re-checks current verification separately
+   (the effective status: 'verified' only while some steward's GitHub
+   evidence is fresh),
    so a stale or revoked project can never strand its pending row in the
    active-home slot. *)
 let lock_project_query =
   let open Caqti_request.Infix in
   (Caqti_type.string ->? Caqti_type.(t3 int64 string string))
-  "SELECT p.id, p.slug, p.verification_status \
+  "SELECT p.id, p.slug, \
+          project_github_verification(p.id, p.verification_status) \
    FROM open_source_projects p \
    WHERE p.slug = $1 \
    FOR UPDATE OF p"
