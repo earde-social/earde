@@ -690,7 +690,6 @@
     return;
   }
 
-  const topic = `chan:${channelId}`;
   const socketUrl = root.dataset.socketUrl;
   const token = root.dataset.signedToken;
 
@@ -727,6 +726,23 @@
   }
 
   const initialClaims = decodeTokenClaims(currentToken);
+
+  // The topic comes from the signed token, not from the page: it names the
+  // community's access generation, and a refreshed token names a new one
+  // after anyone lost access (see switchTopic).
+  function tokenTopic(tok) {
+    const claims = decodeTokenClaims(tok);
+    return claims && typeof claims.topic === "string" && claims.topic !== ""
+      ? claims.topic
+      : null;
+  }
+
+  let topic = tokenTopic(currentToken);
+  if (!topic) {
+    console.warn("[chat_live] token names no topic");
+    setPresenceStatus("Presence unavailable");
+    return;
+  }
   const viewerId =
     initialClaims && typeof initialClaims.user_id === "number"
       ? initialClaims.user_id
@@ -739,6 +755,10 @@
 
   const tokenRefreshUrl = `${channelBasePath}/realtime-token`;
   const tokenRefreshLeadMs = 2 * 60 * 1000;
+  // Refresh at least this often even when the token is far from expiry:
+  // after someone loses access the server moves the channel to a new topic,
+  // and a refresh is how a client that still has access follows it.
+  const tokenRefreshMaxIntervalMs = 3 * 60 * 1000;
   const tokenRefreshFallbackDelayMs = 45 * 60 * 1000;
   const tokenRefreshBackoffMs = [10000, 30000, 60000, 120000, 300000];
   const maxTokenRefreshAttempts = 6;
@@ -756,6 +776,9 @@
     const expMs = tokenExpiryMs(currentToken);
     let delay =
       expMs !== null ? expMs - Date.now() - tokenRefreshLeadMs : tokenRefreshFallbackDelayMs;
+    if (delay > tokenRefreshMaxIntervalMs) {
+      delay = tokenRefreshMaxIntervalMs;
+    }
     if (delay < 30000) {
       delay = 30000;
     }
@@ -781,6 +804,7 @@
         // token will never arrive, so stop retrying until a page reload.
         tokenRefreshStopped = true;
         console.warn("[chat_live] realtime token refresh unauthorized", response.status);
+        stopLive();
         return;
       }
 
@@ -795,6 +819,10 @@
 
       currentToken = data.token;
       tokenRefreshAttempts = 0;
+      const nextTopic = tokenTopic(currentToken);
+      if (nextTopic && nextTopic !== topic) {
+        switchTopic(nextTopic);
+      }
       scheduleTokenRefresh();
     } catch (err) {
       console.warn("[chat_live] realtime token refresh failed", err);
@@ -860,26 +888,77 @@
 
   socket.connect();
 
-  const channel = socket.channel(topic, {});
+  let channel = socket.channel(topic, {});
 
-  channel
-    .join()
-    .receive("ok", () => {
-      hasJoined = true;
-      console.log("[chat_live] joined", topic);
-      root.dataset.liveStatus = "joined";
-      // Typing state is ephemeral: after a (re)join, show nothing until the
-      // gateway broadcasts a fresh snapshot.
-      clearTypingLine();
-      catchUp();
-    })
-    .receive("error", (resp) => {
-      console.warn("[chat_live] join failed", resp);
-      root.dataset.liveStatus = "error";
-      setPresenceStatus("Presence unavailable");
+  // Every handler is recorded so a topic switch can bind it to the new
+  // channel object.
+  const channelHandlers = [];
+  function onChannel(event, handler) {
+    channelHandlers.push([event, handler]);
+    channel.on(event, handler);
+  }
+
+  function joinChannel() {
+    const joined = channel;
+    joined
+      .join()
+      .receive("ok", () => {
+        if (joined !== channel) {
+          return;
+        }
+        hasJoined = true;
+        console.log("[chat_live] joined", topic);
+        root.dataset.liveStatus = "joined";
+        // Typing state is ephemeral: after a (re)join, show nothing until the
+        // gateway broadcasts a fresh snapshot.
+        clearTypingLine();
+        catchUp();
+      })
+      .receive("error", (resp) => {
+        if (joined !== channel) {
+          return;
+        }
+        console.warn("[chat_live] join failed", resp);
+        root.dataset.liveStatus = "error";
+        setPresenceStatus("Presence unavailable");
+      });
+  }
+
+  // The server publishes nothing more on the old topic once the generation
+  // moves, so join the new one and let the HTTP catch-up fill the gap. The
+  // gateway binds a connection to the topic of the token it connected with,
+  // so the socket reconnects with the refreshed token first.
+  function switchTopic(nextTopic) {
+    const previous = channel;
+    console.log("[chat_live] switching topic", nextTopic);
+    hasJoined = false;
+    topic = nextTopic;
+    previous.leave();
+    channel = socket.channel(topic, {});
+    channelHandlers.forEach(([event, handler]) => channel.on(event, handler));
+    socket.disconnect(() => {
+      socket.connect();
+      joinChannel();
     });
+  }
 
-  channel.on("new_msg", (payload) => {
+  // Access is gone: stop listening rather than linger on the old topic.
+  function stopLive() {
+    hasJoined = false;
+    root.dataset.liveStatus = "stopped";
+    try {
+      channel.leave();
+      socket.disconnect();
+    } catch (err) {
+      console.warn("[chat_live] stop failed", err);
+    }
+    clearTypingLine();
+    setPresenceStatus("Presence unavailable");
+  }
+
+  joinChannel();
+
+  onChannel("new_msg", (payload) => {
     console.log("[chat_live] new_msg", payload);
     const shouldStayAtBottom = isNearBottom(chatScroller);
     appendMessage(payload, { wasNearBottom: shouldStayAtBottom });
@@ -894,7 +973,7 @@
     }
   });
 
-  channel.on("presence_list", (payload) => {
+  onChannel("presence_list", (payload) => {
     renderPresenceList(payload);
   });
 
@@ -976,7 +1055,7 @@
     }
   }
 
-  channel.on("typing_list", (payload) => {
+  onChannel("typing_list", (payload) => {
     renderTypingList(payload);
   });
 
@@ -1311,7 +1390,7 @@
 
     window.addEventListener("pagehide", cursorTeardown);
 
-    channel.on("cursor", renderCursor);
+    onChannel("cursor", renderCursor);
     socket.onError(clearCursors);
     socket.onClose(clearCursors);
 
@@ -1322,8 +1401,12 @@
 
   window.eardeLiveChat = {
     socket,
-    channel,
-    topic,
+    get channel() {
+      return channel;
+    },
+    get topic() {
+      return topic;
+    },
     catchUp,
     getChatScroller,
     getLastMessageId: () => lastMessageId,

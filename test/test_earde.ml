@@ -85332,6 +85332,8 @@ let () =
     ; ("b2_signup_privacy", B2_account_privacy.signup_db_suite)
     ; ("b2_auth_mail_async", B2_account_privacy.mail_db_suite)
     ; ("b2_rate_limit_routed", B2_account_privacy.limiter_db_suite)
+    ; ("realtime_generations", Realtime_generations.pure_suite)
+    ; ("realtime_generations_db", Realtime_generations.db_suite)
     ; ("b2_response_comparator", B2_account_privacy.comparator_suite)
     ; ("b2_capacity_sequences", B2_account_privacy.capacity_sequence_db_suite)
     ; ("b2_cookie_session", B2_account_privacy.cookie_db_suite)

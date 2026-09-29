@@ -1855,6 +1855,10 @@ let community_channel_handler request =
     | Ok None -> Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"Not Found" ~message:"This community does not exist." ~alert_type:"error" ~return_url:"/" request)
     | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:"/" request)
     | Ok (Some community) ->
+        (* Read before the access check (see Realtime_generation): a
+           revocation committing in between either fails the check or
+           leaves the token on a topic nothing is published to anymore. *)
+        let%lwt generation = Realtime_generation.current db ~community_id:community.id in
         let%lwt authorized = can_view_community db ~user_id ~admin_override:is_admin community in
         if not authorized then community_not_found ?user request
         else
@@ -1905,17 +1909,20 @@ let community_channel_handler request =
                start-thread form re-checks every permission server-side. *)
             let%lwt thread_links = match%lwt Db.get_thread_links_for_channel db channel.id with Ok l -> Lwt.return l | Error _ -> Lwt.return [] in
             let can_start = is_member in
-            let realtime_topic = Printf.sprintf "chan:%d" channel.id in
             let realtime_token =
-              match user, user_id > 0 with
-              | Some username, true ->
+              match user, user_id > 0, generation with
+              | Some username, true, Ok generation ->
                   Realtime_token.create_for_topic
                     ~user_id
                     ~username
-                    ~topic:realtime_topic
+                    ~topic:(Realtime_generation.topic ~channel_id:channel.id ~generation)
                     ~shared_cursors:
                       (Features.shared_cursors_enabled
                          ~community_slug:community.slug)
+              | Some _, true, Error e ->
+                  (* The page stays useful without live updates. *)
+                  Logs.err (fun m -> m "realtime generation lookup failed; no token: %s" e);
+                  None
               | _ -> None
             in
             Dream.html (Pages.community_channel_shell_page ?user ?realtime_token ~noindex:(child_noindex community ~child_indexable:channel.Db.indexable) ~is_member ~can_start ~thread_links ?source_focus ~rail_communities ~channels ~sections ~channel ~messages ~community request)
@@ -2122,6 +2129,12 @@ let realtime_token_handler request =
             Dream.respond ~status:`Internal_Server_Error "Internal server error"
         | Ok None -> community_not_found ?user request
         | Ok (Some community) ->
+            (* Before the access check, as at page render. *)
+            match%lwt Realtime_generation.current db ~community_id:community.id with
+            | Error e ->
+                Logs.err (fun m -> m "realtime_token: generation lookup failed: %s" e);
+                Dream.respond ~status:`Internal_Server_Error "Internal server error"
+            | Ok generation ->
             let%lwt can_view = can_view_community db ~user_id ~admin_override:is_admin community in
             if not can_view then community_not_found ?user request
             else (
@@ -2131,7 +2144,7 @@ let realtime_token_handler request =
                   Dream.respond ~status:`Internal_Server_Error "Internal server error"
               | Ok None -> Dream.respond ~status:`Not_Found "Channel not found"
               | Ok (Some channel) ->
-                  let topic = Printf.sprintf "chan:%d" channel.id in
+                  let topic = Realtime_generation.topic ~channel_id:channel.id ~generation in
                   (* Capability recomputed from the community on every refresh —
                      never copied from the old token or any client input. *)
                   let shared_cursors =
@@ -2241,15 +2254,28 @@ let send_message_handler request =
                                           fields. Username joins from the already
                                           authenticated session. *)
                                        let username = Option.value uname ~default:"[unknown]" in
+                                       (* Read after the insert committed: a message created
+                                          after someone lost access must only reach the topic
+                                          their old token cannot join. If the read fails the
+                                          live publish is skipped; the message is durable and
+                                          clients catch up over HTTP. *)
+                                       let%lwt generation =
+                                         Realtime_generation.current db ~community_id:community.id
+                                       in
+                                       (match generation with
+                                        | Ok generation ->
                                        Lwt.async (fun () ->
                                            Realtime.publish_chat_message
+                                             ~topic:(Realtime_generation.topic ~channel_id:channel.id ~generation)
                                              ~channel_id:channel.id
                                              ~community_id:community.id
                                              ~message_id:message.Db.id
                                              ~user_id
                                              ~username
                                              ~content
-                                             ~created_at:(Pages.Start_thread.minute_of_ts message.Db.created_at));
+                                             ~created_at:(Pages.Start_thread.minute_of_ts message.Db.created_at))
+                                        | Error e ->
+                                            Logs.err (fun m -> m "realtime generation lookup failed; live publish skipped: %s" e));
                                        (* One capture point ahead of the
                                           respond_json split, so JSON and
                                           redirect modes each emit exactly
