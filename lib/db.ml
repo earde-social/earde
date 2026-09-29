@@ -636,17 +636,6 @@ module User = struct
     | Ok () -> Lwt.return (Ok ())
     | Error e -> Lwt.return (Error (Caqti_error.show e))
 
-  (* Pre-insert uniqueness check avoids leaking raw Postgres constraint errors to the UI. *)
-  let user_exists_query =
-    let open Caqti_request.Infix in
-    (Caqti_type.(t2 string string) ->! Caqti_type.bool)
-    "SELECT EXISTS (SELECT 1 FROM users WHERE username = $1 OR email = $2)"
-
-  let user_exists (module C : Caqti_lwt.CONNECTION) username email =
-    C.find user_exists_query (username, email) >>= function
-    | Ok exists -> Lwt.return (Ok exists)
-    | Error e -> Lwt.return (Error (Caqti_error.show e))
-
   (* Nested 7-column row: (id, username, email, created_at), (hash, is_admin,
      is_banned). created_at rides the same lookup so a successful login has the
      closed analytics person properties with no extra query. *)
@@ -3125,64 +3114,8 @@ end
 module PendingSignup = struct
   let hash_token raw = Digestif.SHA256.(digest_string raw |> to_hex)
 
-  (* Only NON-expired, unconsumed rows are a live claim on a username. An expired
-     row is a squatter the upsert clears, so it must not read as "taken" here — else
-     an abandoned signup would block that username forever. Same email is allowed:
-     that is the owner resubmitting, handled as a replace by [upsert]. *)
-  let username_pending_elsewhere_query =
-    let open Caqti_request.Infix in
-    (Caqti_type.(t2 string string) ->! Caqti_type.bool)
-    "SELECT EXISTS (SELECT 1 FROM pending_signups
-       WHERE consumed_at IS NULL AND expires_at > NOW()
-         AND LOWER(username) = LOWER($1) AND LOWER(email) <> LOWER($2))"
-
-  let username_pending_elsewhere (module C : Caqti_lwt.CONNECTION) username email =
-    C.find username_pending_elsewhere_query (username, email) >>= function
-    | Ok exists -> Lwt.return (Ok exists)
-    | Error e -> Lwt.return (Error (Caqti_error.show e))
-
-  (* The partial unique indexes (LOWER(email)/LOWER(username) WHERE consumed_at IS NULL)
-     still include expired-but-unconsumed rows, so before inserting we must clear any
-     row that would collide:
-       - this email's prior attempt (active OR expired) -> a clean resend/replace
-       - any EXPIRED row squatting the desired username  -> frees the username index
-     A DIFFERENT user's ACTIVE pending on the username is left intact; the handler
-     rejects that up front via [username_pending_elsewhere]. *)
-  let clear_collisions_query =
-    let open Caqti_request.Infix in
-    (Caqti_type.(t2 string string) ->. Caqti_type.unit)
-    "DELETE FROM pending_signups
-       WHERE consumed_at IS NULL
-         AND ( LOWER(email) = LOWER($1)
-            OR ( LOWER(username) = LOWER($2) AND expires_at <= NOW() ) )"
-
-  (* 24h window: long enough that users who confirm later in the day still succeed,
-     short enough that the table stays small. Hardcoded like password_resets' 2h. *)
-  let insert_query =
-    let open Caqti_request.Infix in
-    (Caqti_type.(t2 (t4 string string string string) (t2 (option string) (option string))) ->. Caqti_type.unit)
-    "INSERT INTO pending_signups (username, email, password_hash, token_hash, expires_at, ip_address, user_agent)
-     VALUES ($1, $2, $3, $4, NOW() + INTERVAL '24 hours', $5, $6)"
-
-  (* DELETE-then-INSERT in one transaction so a fresh signup atomically replaces any
-     stale/own collision. Argon2 hashing must be done BEFORE this so no CPU work
-     stalls the txn — same rule as the password-reset path. *)
-  let upsert (module C : Caqti_lwt.CONNECTION) ~username ~email ~password_hash ~token_hash ~ip ~user_agent =
-    C.start () >>= function
-    | Error e -> Lwt.return (Error (Caqti_error.show e))
-    | Ok () ->
-      (C.exec clear_collisions_query (email, username) >>= function
-       | Error e -> C.rollback () >>= fun _ -> Lwt.return (Error (Caqti_error.show e))
-       | Ok () ->
-         (C.exec insert_query ((username, email, password_hash, token_hash), (ip, user_agent)) >>= function
-          | Error e -> C.rollback () >>= fun _ -> Lwt.return (Error (Caqti_error.show e))
-          | Ok () ->
-            (C.commit () >>= function
-             | Error e -> Lwt.return (Error (Caqti_error.show e))
-             | Ok () -> Lwt.return (Ok ()))))
-
   (* Best-effort secondary cleanup only — correctness never depends on it, since
-     [upsert] already removes collisions. Bounded by the expires_at index. *)
+     Signup_submission_store.submit already removes collisions. Bounded by the expires_at index. *)
   let sweep_expired_query =
     let open Caqti_request.Infix in
     (Caqti_type.unit ->. Caqti_type.unit)
@@ -3881,7 +3814,6 @@ let search_communities = Community.search_communities
 let update_community_details = Community.update_community_details
 
 let create_user = User.create_user
-let user_exists = User.user_exists
 let get_user_for_login = User.get_user_for_login
 let anonymize_user = User.anonymize_user
 let get_user_public = User.get_user_public
@@ -3997,8 +3929,6 @@ let password_reset_validate_token = PasswordReset.validate_token
 let password_reset_atomically = PasswordReset.reset_password_atomically
 
 let pending_signup_hash_token = PendingSignup.hash_token
-let pending_signup_username_elsewhere = PendingSignup.username_pending_elsewhere
-let pending_signup_upsert = PendingSignup.upsert
 let pending_signup_sweep_expired = PendingSignup.sweep_expired
 let pending_signup_confirm = PendingSignup.confirm
 

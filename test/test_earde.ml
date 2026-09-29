@@ -40318,7 +40318,15 @@ module Phvv = struct
             in
             handler request)
 
-  let build_pipeline ~url =
+  (* Stands in for the production limiter's Allowed decision, so a case can
+     reach the handler over a pool the real limiter (which fails closed)
+     cannot query. *)
+  let allowing_limiter =
+    Earde.Handlers.Rate_limit.make_middleware
+      ~check:(fun _ ~ip:_ ~endpoint:_ -> Lwt.return (Ok `Allowed))
+      ~cleanup:ignore
+
+  let build_pipeline_with ~limit ~url =
     Dream.sql_pool ~size:2 url @@ Dream.set_secret gck_secret
     @@ Dream.memory_sessions @@ identity_middleware
     @@ Dream.router
@@ -40330,7 +40338,7 @@ module Phvv = struct
                Dream.respond (Dream.csrf_token ~valid_for:(-60.) req));
            Dream.get get_pattern (fun req -> make_get ~mode:Ob.Public req);
            Dream.post post_pattern
-             (Earde.Handlers.Rate_limit.middleware (fun req ->
+             (limit (fun req ->
                   make ~mode:Ob.Public
                     ~load_config:(fun () -> ok_loader ())
                     req));
@@ -40341,6 +40349,9 @@ module Phvv = struct
            Dream.get "/c/:slug/settings"
              Earde.Handlers.community_settings_handler
          ]
+
+  let build_pipeline ~url =
+    build_pipeline_with ~limit:Earde.Handlers.Rate_limit.middleware ~url
 
   let pipeline_for ~url =
     match !shared_pipeline with
@@ -41001,9 +41012,24 @@ module Phvv = struct
             (Uri.add_query_param' (Uri.of_string url)
                ("options", "-csearch_path=phvv_void"))
         in
-        (* A dedicated pool for this one case: the shared pipeline must keep
+        (* The production limiter fronts this route and fails closed on a
+           pool it cannot query: the request is refused before the handler
+           runs. The handler's own storage-error collapse is then exercised
+           behind an allowing limiter — the only way a request can reach it
+           over this pool. Dedicated pools: the shared pipeline must keep
            talking to the real schema. *)
-        let poison_pipe = build_pipeline ~url:poisoned in
+        let limited_pipe = build_pipeline ~url:poisoned in
+        let* cookie, token =
+          open_session ~pipeline:limited_pipe "poisoned limiter" ~url 424242
+        in
+        let* response, _ =
+          do_post ~pipeline:limited_pipe ~url ~cookie
+            ~target:(post_target "phvv-anything") ~token
+            ~body_fields:(fields ~slug:"phvv-void-home" ())
+            ()
+        in
+        Alcotest.(check int) "limiter refuses first" 503 (status_of response);
+        let poison_pipe = build_pipeline_with ~limit:allowing_limiter ~url:poisoned in
         let* cookie, token =
           open_session ~pipeline:poison_pipe "poisoned" ~url 424242
         in
@@ -46281,7 +46307,15 @@ module Ncpb = struct
 
   let limited inner = Earde.Handlers.Rate_limit.middleware inner
 
-  let build_pipeline ~url =
+  (* Stands in for the production limiter's Allowed decision, so a case can
+     reach the handler over a pool the real limiter (which fails closed)
+     cannot query. *)
+  let allowing_limiter =
+    Earde.Handlers.Rate_limit.make_middleware
+      ~check:(fun _ ~ip:_ ~endpoint:_ -> Lwt.return (Ok `Allowed))
+      ~cleanup:ignore
+
+  let build_pipeline_with ~limited ~url =
     Dream.sql_pool ~size:2 url @@ Dream.set_secret gck_secret
     @@ Dream.memory_sessions @@ identity_middleware
     @@ Dream.router
@@ -46306,6 +46340,8 @@ module Ncpb = struct
            Dream.get "/c/:slug/settings"
              Earde.Handlers.community_settings_handler
          ]
+
+  let build_pipeline ~url = build_pipeline_with ~limited ~url
 
   let pipeline_for ~url =
     match !shared_pipeline with
@@ -47288,9 +47324,25 @@ module Ncpb = struct
            talking to the real schema. *)
         let saved = !shared_pipeline in
         shared_pipeline := None;
-        let poison_pipe = build_pipeline ~url:poisoned in
+        (* The production limiter fronts this route and fails closed on a
+           pool it cannot query, refusing before the handler runs; the
+           handler's own storage-error collapse is exercised behind an
+           allowing limiter — the only way a request can reach it here. *)
+        let limited_pipe = build_pipeline ~url:poisoned in
+        let poison_pipe = build_pipeline_with ~limited:allowing_limiter ~url:poisoned in
         shared_pipeline := saved;
         as_user 424244;
+        let* response, token =
+          do_get ~pipeline:limited_pipe ~url ~target:"/mint" ()
+        in
+        let cookie = Pch.session_cookie "poisoned limiter" response in
+        let* response, _ =
+          do_post ~pipeline:limited_pipe ~url ~cookie
+            ~target:(post_target "ncpb-anything") ~token
+            ~body_fields:(fields ~slug:"ncpb-void-live" ())
+            ()
+        in
+        Alcotest.(check int) "limiter refuses first" 503 (status_of response);
         let* response, token =
           do_get ~pipeline:poison_pipe ~url ~target:"/mint" ()
         in
@@ -85147,4 +85199,17 @@ let () =
          submitted fallback URL — the hidden inputs the form no longer emits —
          must reach neither the database nor any visitor's browser. *)
     ; ("security_community_media_url_boundary", Cmub.suite)
+      (* Account privacy and fail-closed authentication boundaries. DB-free:
+         the bounded auth-mail dispatcher, the provider transport's
+         connection release, the login dummy-verification contract and the
+         fail-closed limiter decision. Gated: the real signup, login, reset
+         and limiter handlers over routed pipelines. *)
+    ; ("b2_auth_mail_dispatcher", B2_account_privacy.dispatcher_suite)
+    ; ("b2_auth_mail_transport", B2_account_privacy.transport_suite)
+    ; ("b2_login_verification", B2_account_privacy.login_pure_suite)
+    ; ("b2_rate_limit_decision", B2_account_privacy.limiter_pure_suite)
+    ; ("b2_login_equivalence", B2_account_privacy.login_db_suite)
+    ; ("b2_signup_privacy", B2_account_privacy.signup_db_suite)
+    ; ("b2_auth_mail_async", B2_account_privacy.mail_db_suite)
+    ; ("b2_rate_limit_routed", B2_account_privacy.limiter_db_suite)
     ]

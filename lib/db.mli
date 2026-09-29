@@ -288,7 +288,6 @@ end
 
 module User : sig
   val create_user : (module Caqti_lwt.CONNECTION) -> string -> string -> string -> string -> (unit, string) result Lwt.t
-  val user_exists : (module Caqti_lwt.CONNECTION) -> string -> string -> (bool, string) result Lwt.t
   (* Nested row: (id, username, email, created_at), (password_hash, is_admin,
      is_banned) — created_at rides along for the analytics person $set. *)
   val get_user_for_login : (module Caqti_lwt.CONNECTION) -> string -> (((int * string * string * string) * (string * bool * bool)) option, string) result Lwt.t
@@ -624,14 +623,8 @@ end
 
 module PendingSignup : sig
   val hash_token : string -> string
-  (* True only if a NON-expired, unconsumed pending under a DIFFERENT email holds this username. *)
-  val username_pending_elsewhere : (module Caqti_lwt.CONNECTION) -> string -> string -> (bool, string) result Lwt.t
-  (* Clears any colliding (own-email or expired-username) pending, then inserts a fresh
-     24h pending. Argon2-hash the password before calling. *)
-  val upsert :
-    (module Caqti_lwt.CONNECTION) ->
-    username:string -> email:string -> password_hash:string -> token_hash:string ->
-    ip:string option -> user_agent:string option -> (unit, string) result Lwt.t
+  (* Pending-signup creation lives in Signup_submission_store, which decides
+     every private outcome inside one transaction. *)
   val sweep_expired : (module Caqti_lwt.CONNECTION) -> (unit, string) result Lwt.t
   (* `Confirmed (user_id, username, email, created_at, is_admin) = user row
      created — id/created_at/is_admin from the insert's RETURNING, so the
@@ -737,7 +730,6 @@ module Community_user_stats : sig
 end
 
 val create_user : (module Caqti_lwt.CONNECTION) -> string -> string -> string -> string -> (unit, string) result Lwt.t
-val user_exists : (module Caqti_lwt.CONNECTION) -> string -> string -> (bool, string) result Lwt.t
 val get_user_for_login : (module Caqti_lwt.CONNECTION) -> string -> (((int * string * string * string) * (string * bool * bool)) option, string) result Lwt.t
 val anonymize_user : (module Caqti_lwt.CONNECTION) -> int -> (unit, string) result Lwt.t
 val get_user_public : (module Caqti_lwt.CONNECTION) -> string -> ((int * string * string * string option * string option) option, string) result Lwt.t
@@ -934,11 +926,6 @@ val delete_user_sessions :
     user's sessions. *)
 
 val pending_signup_hash_token : string -> string
-val pending_signup_username_elsewhere : (module Caqti_lwt.CONNECTION) -> string -> string -> (bool, string) result Lwt.t
-val pending_signup_upsert :
-  (module Caqti_lwt.CONNECTION) ->
-  username:string -> email:string -> password_hash:string -> token_hash:string ->
-  ip:string option -> user_agent:string option -> (unit, string) result Lwt.t
 val pending_signup_sweep_expired : (module Caqti_lwt.CONNECTION) -> (unit, string) result Lwt.t
 val pending_signup_confirm :
   (module Caqti_lwt.CONNECTION) -> string ->
