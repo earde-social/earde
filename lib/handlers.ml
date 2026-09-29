@@ -200,9 +200,11 @@ let process_image_upload ~db ~ip ~purpose image_bytes =
                request-path middleware (which refuses): this budget only
                meters image processing for an already-authenticated member,
                and a database problem must not make uploads impossible. *)
-            let ts = Int64.of_float (Unix.gettimeofday () *. 1000.0) in
-            let rand = Random.int 999999 in
-            let base = Printf.sprintf "earde_%Ld_%06d" ts rand in
+            let base =
+              Avatar_uploads.fresh_basename
+                ~now_ms:(Int64.of_float (Unix.gettimeofday () *. 1000.0))
+                ~random:Dream.random
+            in
             let tmp_path = Filename.concat (Filename.get_temp_dir_name ()) (base ^ ".tmp") in
             let webp_path = Filename.concat (Filename.get_temp_dir_name ()) (base ^ ".webp") in
             let dest_name = base ^ ".webp" in
@@ -214,7 +216,11 @@ let process_image_upload ~db ~ip ~purpose image_bytes =
             in
             Lwt.catch
               (fun () ->
-                let oc = open_out_bin tmp_path in
+                (* Exclusive create: never write through a file or link
+                   that already exists in the shared temp directory. *)
+                let oc =
+                  open_out_gen [ Open_wronly; Open_creat; Open_excl; Open_binary ] 0o600 tmp_path
+                in
                 output_string oc image_bytes;
                 close_out oc;
                 let argv =

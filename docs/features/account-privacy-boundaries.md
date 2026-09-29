@@ -66,8 +66,10 @@ address), then the existing single-statement token write, then the same
 neutral page for every address. A reset email is queued only when a token
 row for a real account was written. Unknown addresses get no email, but
 they occupy the same fixed service slot. Each request issues a new token.
-Earlier unexpired reset tokens stay valid until they are used or expire
-(the existing reset policy, unchanged here).
+Requesting a new link does not cancel earlier unexpired ones, but using
+any link, or changing the password while logged in, deletes every
+outstanding link for the account in the same transaction as the password
+write.
 
 ## Auth mail scheduling
 

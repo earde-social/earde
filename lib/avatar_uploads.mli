@@ -11,6 +11,14 @@
     validated path cannot contain a path separator or a [..] segment by
     construction. *)
 
+(** A new upload basename without the [.webp] suffix:
+    [earde_<now_ms>_<32 digits>]. The digits are drawn from [random], which
+    must be a cryptographic byte source ([Dream.random] in production): the
+    served URL is the only protection of an upload from a private community,
+    so it must not be guessable. The result always has the pipeline shape
+    {!local_file_of_url} accepts. *)
+val fresh_basename : now_ms:int64 -> random:(int -> string) -> string
+
 (** [Some "static/uploads/<basename>"] iff the url is exactly a
     pipeline-shaped upload reference; [None] otherwise. Pure. *)
 val local_file_of_url : string -> string option

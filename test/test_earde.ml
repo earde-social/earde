@@ -56756,7 +56756,45 @@ module Avatar_upload_paths = struct
           "absent"
           (show (Earde.Avatar_uploads.remove_local_file path)))
 
-  let suite = [ accepts; rejects; cleanup_dispatch; removal ]
+  (* Uploads are served with no access check, so a private community's post
+     image is private only while its name is unguessable. The old pipeline
+     took the name's random part from the unseeded stdlib Random, which
+     repeats the same sequence after every restart: with the same Random
+     state it minted the same suffix. *)
+  let fresh_names =
+    case "fresh upload names are unguessable and keep the pipeline shape" (fun () ->
+        let digits_of base =
+          match String.split_on_char '_' base with
+          | [ "earde"; _ms; d ] -> d
+          | _ -> Alcotest.failf "unexpected shape %S" base
+        in
+        let mint () =
+          Earde.Avatar_uploads.fresh_basename ~now_ms:1722779100123L ~random:Dream.random
+        in
+        Random.init 7;
+        let a = mint () in
+        Random.init 7;
+        let b = mint () in
+        Alcotest.(check bool) "independent of the stdlib Random state" true
+          (digits_of a <> digits_of b);
+        Alcotest.(check int) "32 random digits" 32 (String.length (digits_of a));
+        Alcotest.(check bool) "digits only" true
+          (String.for_all (fun c -> c >= '0' && c <= '9') (digits_of a));
+        Alcotest.(check (option string)) "the deletion validator accepts it"
+          (Some ("static/uploads/" ^ a ^ ".webp"))
+          (Earde.Avatar_uploads.local_file_of_url ("/static/uploads/" ^ a ^ ".webp"));
+        (* Bytes 250..255 are skipped so every digit stays uniform. *)
+        let feed = ref [ String.make 40 '\255'; String.init 40 (fun i -> Char.chr (i mod 250)) ] in
+        let scripted n =
+          match !feed with
+          | x :: rest -> feed := rest; String.sub x 0 (min n (String.length x))
+          | [] -> String.make n '\000'
+        in
+        let c = Earde.Avatar_uploads.fresh_basename ~now_ms:5L ~random:scripted in
+        Alcotest.(check string) "rejection sampling"
+          "earde_5_01234567890123456789012345678901" c)
+
+  let suite = [ accepts; rejects; cleanup_dispatch; removal; fresh_names ]
 end
 
 (* Db.Rate_limit.cleanup_expired: retention derives from the single
@@ -73986,6 +74024,58 @@ module Sec_db = struct
         Alcotest.(check int) "another user's session is unaffected" 200 status;
         Lwt.return_unit)
 
+  let q_count_reset_tokens =
+    (Caqti_type.int ->! Caqti_type.int)
+    "SELECT COUNT(*)::int FROM password_resets WHERE user_id = $1"
+
+  (* Two links issued for one account: using either must kill the other, or
+     an older link (one an attacker read from the mailbox, say) could set a
+     new password again right after the owner recovered the account. *)
+  let password_reset_kills_other_links_case =
+    db_case "password reset: using one link kills every other outstanding link"
+      (fun ~url:_ _conn c ->
+        let (module C : Caqti_lwt.CONNECTION) = c in
+        let* uid = C.find q_user "sec_twolinks" in
+        let* uid = or_fail "user" uid in
+        let* bystander = C.find q_user "sec_twolinks_bystander" in
+        let* bystander = or_fail "bystander" bystander in
+        let email = "sec_twolinks@sec.invalid" in
+        let mint token =
+          let* created = Earde.Db.password_reset_create_token c email token in
+          let* created = or_fail_s ("create " ^ token) created in
+          Alcotest.(check bool) ("created " ^ token) true created;
+          Lwt.return_unit
+        in
+        let* () = mint "sec-older-link" in
+        let* () = mint "sec-newer-link" in
+        let* created =
+          Earde.Db.password_reset_create_token c
+            "sec_twolinks_bystander@sec.invalid" "sec-bystander-link"
+        in
+        let* _ = or_fail_s "bystander token" created in
+        let* n = C.find q_count_reset_tokens uid in
+        let* n = or_fail "tokens before" n in
+        Alcotest.(check int) "two links outstanding" 2 n;
+        let* ok = Earde.Db.password_reset_atomically c "sec-newer-link" "sec-owner-hash" in
+        let* ok = or_fail_s "owner reset" ok in
+        Alcotest.(check bool) "owner's reset applied" true ok;
+        let* valid = Earde.Db.password_reset_validate_token c "sec-older-link" in
+        let* valid = or_fail_s "validate older" valid in
+        Alcotest.(check (option int)) "the older link no longer validates" None valid;
+        let* again = Earde.Db.password_reset_atomically c "sec-older-link" "sec-attacker-hash" in
+        let* again = or_fail_s "older reset" again in
+        Alcotest.(check bool) "the older link cannot reset again" false again;
+        let* stored = C.find_opt q_password_hash uid in
+        let* stored = or_fail "stored hash" stored in
+        Alcotest.(check (option string)) "the owner's password stands" (Some "sec-owner-hash") stored;
+        let* n = C.find q_count_reset_tokens uid in
+        let* n = or_fail "tokens after" n in
+        Alcotest.(check int) "no link survives for the account" 0 n;
+        let* n = C.find q_count_reset_tokens bystander in
+        let* n = or_fail "bystander tokens" n in
+        Alcotest.(check int) "another account's link is untouched" 1 n;
+        Lwt.return_unit)
+
   (* ------------------------------------------------------------------ *)
   (* Session-revocation slice — authenticated password change            *)
   (* ------------------------------------------------------------------ *)
@@ -75050,9 +75140,38 @@ module Sec_db = struct
 
   let avatar_suite = [ avatar_theft_case; avatar_preserved_case ]
 
+  let password_change_kills_reset_links_case =
+    db_case "password change: outstanding reset links die with the old password"
+      (fun ~url _conn c ->
+        let (module C : Caqti_lwt.CONNECTION) = c in
+        let* hash = Earde.Auth.hash_password pw_old in
+        let* hash = or_fail_s "hash fixture" hash in
+        let* uid = C.find q_user_hashed ("sec_pwlinks", strip_nuls hash) in
+        let* uid = or_fail "user" uid in
+        let* created =
+          Earde.Db.password_reset_create_token c "sec_pwlinks@sec.invalid" "sec-pre-change-link"
+        in
+        let* _ = or_fail_s "create" created in
+        let* cookie, token = login ~url ~username:"sec_pwlinks" uid in
+        let* status, _, body =
+          do_post ~url ~cookie ~target:"/settings/password" ~token
+            [ ("old_password", pw_old); ("new_password", pw_new); ("confirm_password", pw_new) ]
+        in
+        Alcotest.(check int) "change accepted" 200 status;
+        Alcotest.(check bool) "change applied" true (contains body "Password Changed");
+        let* again = Earde.Db.password_reset_atomically c "sec-pre-change-link" "sec-attacker-hash" in
+        let* again = or_fail_s "old link reset" again in
+        Alcotest.(check bool) "a link issued before the change cannot reset" false again;
+        let* n = C.find q_count_reset_tokens uid in
+        let* n = or_fail "tokens after" n in
+        Alcotest.(check int) "no link survives the change" 0 n;
+        Lwt.return_unit)
+
   let session_suite =
     [ session_revocation_case; password_reset_revocation_case;
+      password_reset_kills_other_links_case;
       password_change_revocation_case; password_change_wrong_old_case;
+      password_change_kills_reset_links_case;
       global_ban_revocation_case; ban_requires_admin_case ]
 
   let comment_parent_suite =
