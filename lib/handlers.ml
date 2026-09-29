@@ -196,8 +196,10 @@ let process_image_upload ~db ~ip ~purpose image_bytes =
         match%lwt Db.Rate_limit.check_upload db ip with
         | Ok `Blocked -> Lwt.return (Error Image_upload.rate_limited_message)
         | Ok `Allowed | Error _ ->
-            (* Same fail-open-on-storage-error posture as the request-path
-               limiter: a database problem must not make uploads impossible. *)
+            (* Deliberately fail-open on a storage error, unlike the
+               request-path middleware (which refuses): this budget only
+               meters image processing for an already-authenticated member,
+               and a database problem must not make uploads impossible. *)
             let ts = Int64.of_float (Unix.gettimeofday () *. 1000.0) in
             let rand = Random.int 999999 in
             let base = Printf.sprintf "earde_%Ld_%06d" ts rand in
@@ -260,6 +262,16 @@ let process_image_upload ~db ~ip ~purpose image_bytes =
 
 (* === RATE LIMITING === *)
 
+(* One generic 503 for "this protected action cannot be safely processed
+   right now": the rate limiter's storage being unavailable, and the auth
+   mail dispatcher being full. Deliberately identical for every account
+   state, and it names no cause. *)
+let temporarily_unavailable ~return_url request =
+  Dream.respond ~status:`Service_Unavailable
+    (Pages.msg_page ~auth:true ~title:"Temporarily unavailable"
+       ~message:"We can't process this request right now. Please try again in a few minutes."
+       ~alert_type:"error" ~return_url request)
+
 (* DB-backed rate limit trades a synchronous Hashtbl lookup for a round-trip to
    Postgres; the ~1ms I/O penalty is the price of crash resilience and shared
    state across replicas — unavoidable once we move beyond a single process. *)
@@ -296,15 +308,40 @@ module Rate_limit = struct
               Lwt.return_unit))
     end
 
-  let middleware inner_handler request =
+  let check_in_database request ~ip ~endpoint =
+    Dream.sql request (fun db -> Db.Rate_limit.check db ip endpoint)
+
+  (* Fail closed: only a positive [`Allowed] reaches the wrapped handler.
+     The limiter guards credential guessing and mail-sending routes, so a
+     lookup that errors, a promise that rejects, or a pool that cannot hand
+     out a connection must refuse the request rather than wave it through
+     unmetered — before this, a result error invoked the handler exactly as
+     if it were allowed. The wrapped handler runs OUTSIDE the catch: an
+     exception it raises is its own and propagates as before, never
+     relabelled as a limiter outage. *)
+  let make_middleware ~check ~cleanup inner_handler request =
     let ip = Dream.client request in
     (* Path only: the rate-limit table must never persist query values (reset
        tokens, OAuth state/code, search terms), and /login?x=y must share
        /login's bucket rather than minting a fresh one per query string. *)
     let endpoint = Request_target_redaction.path_only (Dream.target request) in
-    maybe_cleanup request;
-    match%lwt Dream.sql request (fun db -> Db.Rate_limit.check db ip endpoint) with
-    | Ok `Blocked ->
+    (* Cleanup is best effort and must not be able to change the decision
+       below, even by raising synchronously. *)
+    (try cleanup request
+     with exn -> Dream.log "rate-limit cleanup skipped: %s" (Printexc.to_string exn));
+    let%lwt decision =
+      Lwt.catch
+        (fun () ->
+          Lwt.map
+            (function Ok d -> `Decided d | Error _ -> `Unavailable)
+            (check request ~ip ~endpoint))
+        (function
+          | Lwt.Canceled -> Lwt.reraise Lwt.Canceled
+          | _ -> Lwt.return `Unavailable)
+    in
+    match decision with
+    | `Decided `Allowed -> inner_handler request
+    | `Decided `Blocked ->
         let user = Dream.session_field request "username" in
         (* The blocked page's return link reuses the path-only endpoint: echoing
            the full target would leak query secrets (OAuth code/state, reset
@@ -312,8 +349,15 @@ module Rate_limit = struct
         Dream.html (Pages.msg_page ~auth:true ?user ~title:"Too Many Attempts"
           ~message:"Too many attempts. Please try again later."
           ~alert_type:"error" ~return_url:endpoint request)
-    | Ok `Allowed -> inner_handler request
-    | Error _ -> inner_handler request
+    | `Unavailable ->
+        (* Neither the IP nor the storage error is logged: the error text can
+           carry connection and query detail, and the bucket key is an IP. *)
+        Dream.log "rate-limit enforcement unavailable; request refused";
+        temporarily_unavailable ~return_url:endpoint request
+
+  let middleware inner_handler request =
+    make_middleware ~check:check_in_database ~cleanup:maybe_cleanup
+      inner_handler request
 end
 
 (* === SHARED HELPERS === *)
@@ -539,11 +583,13 @@ let signups_closed_page request =
     ~alert_type:"info" ~return_url:"/" request
 
 (* Shown after a POST that produced (or would have produced) a pending signup. The honeypot
-   path renders the SAME page so a bot can't tell from the response that it was caught. *)
+   path renders the SAME page so a bot can't tell from the response that it was caught, and
+   so does every private signup outcome. Conditional wording: the email is queued after the
+   response, so the page must not claim it was already sent. *)
 let check_your_email_page request =
   let user = Dream.session_field request "username" in
   Pages.msg_page ~auth:true ?user ~title:"Check your email"
-    ~message:"If everything looks good, we've sent a confirmation link to your email address. Click it within 24 hours to finish creating your account."
+    ~message:"If everything checks out, we'll email you a confirmation link. Click it within 24 hours to finish creating your account. If nothing arrives, you can sign up again to get a new link."
     ~alert_type:"info" ~return_url:"/login" request
 
 (* EARDE_TURNSTILE_REQUIRED is set but the Turnstile keys are missing/empty.
@@ -581,7 +627,20 @@ let verify_turnstile form_data =
         let%lwt ok = Turnstile.verify ~response:token in
         if ok then Lwt.return (`Passed (Some site_key)) else Lwt.return (`Failed site_key)
 
-let signup_handler request =
+(* One bounded best-effort mail dispatcher for the public auth routes that
+   send mail (signup confirmation and password reset). It is shared, so the
+   64 outstanding / 2 slots / 15 s fixed-slot bounds cover both routes
+   together, and a request's private outcome never changes how long it
+   occupies them. *)
+let auth_mail : Email.message Auth_mail_dispatcher.t =
+  Auth_mail_dispatcher.create ~label:Email.label ~transport:Email.deliver ()
+
+let username_unavailable_form ?turnstile_site_key request =
+  let user = Dream.session_field request "username" in
+  Dream.html (Pages.signup_form ?user ?turnstile_site_key
+                ~error:"That username is already taken." request)
+
+let make_signup_handler ~mail request =
   (* Gate first: closed signup creates no pending row, no user, and sends no email. *)
   if not (signups_enabled ()) then Dream.html (signups_closed_page request)
   else
@@ -620,57 +679,65 @@ let signup_handler request =
         Dream.html (Pages.msg_page ~auth:true ~title:"Validation Error" ~message:"Password must be at least 8 characters long." ~alert_type:"error" ~return_url:"/signup" request)
       else
 
-      (* Pre-checks before the expensive argon2 hash (mirrors the old user_exists pattern,
-         avoiding raw constraint errors): reject a name/email already owned by a real user,
-         or a username already held by a DIFFERENT live pending signup. *)
-      let%lwt precheck = Dream.sql request (fun db ->
-        match%lwt Db.user_exists db username email with
-        | Error e -> Lwt.return (Error e)
-        | Ok true -> Lwt.return (Ok `User_taken)
-        | Ok false ->
-            (match%lwt Db.pending_signup_username_elsewhere db username email with
-             | Error e -> Lwt.return (Error e)
-             | Ok true -> Lwt.return (Ok `Username_pending)
-             | Ok false -> Lwt.return (Ok `Available))
-      ) in
-      (match precheck with
+      (* The one intentional public disclosure: a handle that belongs to a
+         real account is reported as taken, from the username alone and
+         before any hashing. Nothing about the EMAIL is looked at here. *)
+      match%lwt Dream.sql request (fun db ->
+        Signup_submission_store.username_registered db username) with
       | Error err ->
           Dream.html (Pages.msg_page ~auth:true ~title:"Registration Failed" ~message:(db_error_message err) ~alert_type:"error" ~return_url:"/signup" request)
-      | Ok `User_taken ->
-          let user = Dream.session_field request "username" in
-          Dream.html (Pages.signup_form ?user ?turnstile_site_key ~error:"This username or email is already taken." request)
-      | Ok `Username_pending ->
-          let user = Dream.session_field request "username" in
-          Dream.html (Pages.signup_form ?user ?turnstile_site_key ~error:"That username is already taken or pending confirmation." request)
-      | Ok `Available ->
+      | Ok true -> username_unavailable_form ?turnstile_site_key request
+      | Ok false ->
 
-      (match%lwt Auth.hash_password password with
-      | Ok password_hash ->
-
-          let token = Dream.to_base64url (Dream.random 32) in
-          let token_hash = Db.pending_signup_hash_token token in
-          let ip = Some (Dream.client request) in
-          let user_agent = Dream.header request "User-Agent" in
-
-          (* DB connection is returned to the pool before the Brevo HTTP call —
-             holding a pool slot for a third-party round-trip would starve concurrent
-             signups under load. No users row and no session are created here: only a
-             confirmed (link-clicked) pending becomes a real user. *)
-          let%lwt create_result = Dream.sql request (fun db ->
-            let%lwt r = Db.pending_signup_upsert db ~username ~email ~password_hash ~token_hash ~ip ~user_agent in
-            (* Best-effort secondary cleanup; correctness does not depend on it. *)
-            let%lwt _ = Db.pending_signup_sweep_expired db in
-            Lwt.return r
-          ) in
-          (match create_result with
-          | Ok () ->
-              let%lwt () = Email.send_pending_signup_confirmation_email ~to_email:email ~token in
-              Dream.html (check_your_email_page request)
-          | Error err ->
-              Dream.html (Pages.msg_page ~auth:true ~title:"Registration Failed" ~message:(db_error_message err) ~alert_type:"error" ~return_url:"/signup" request))
-      | Error err -> Dream.html (Pages.msg_page ~auth:true ~title:"Security Error" ~message:("Security error: " ^ err) ~alert_type:"error" ~return_url:"/signup" request))))
+      (* From here on every private state — new, registered or pending email,
+         own or foreign reservation, a lost uniqueness race, a storage error —
+         pays the same admission, the same argon2 hash and one transaction,
+         gets the same "check your email" answer, and occupies one fixed
+         service slot whether or not it yields mail. Admission comes first
+         so a full dispatcher refuses before anything is hashed or written. *)
+      match%lwt Auth_mail_dispatcher.admit mail (fun () ->
+        match%lwt Auth.hash_password password with
+        | Error err -> Lwt.return (`Hash_failed err, None)
+        | Ok password_hash ->
+            let token = Dream.to_base64url (Dream.random 32) in
+            let token_hash = Db.pending_signup_hash_token token in
+            let ip = Some (Dream.client request) in
+            let user_agent = Dream.header request "User-Agent" in
+            (* No users row and no session are created here: only a confirmed
+               (link-clicked) pending becomes a real user. The mail job is
+               returned only after COMMIT, and the connection is back in the
+               pool before any provider IO can start. *)
+            let%lwt submitted = Dream.sql request (fun db ->
+              let%lwt r =
+                Signup_submission_store.submit db ~username ~email ~password_hash
+                  ~token_hash ~ip ~user_agent
+              in
+              (* Best-effort secondary cleanup; correctness does not depend on it. *)
+              let%lwt _ = Db.pending_signup_sweep_expired db in
+              Lwt.return r)
+            in
+            (match submitted with
+             | Ok Signup_submission_store.Pending_created ->
+                 Lwt.return
+                   (`Neutral, Some (Email.pending_signup_confirmation ~to_email:email ~token))
+             | Ok Signup_submission_store.Username_taken ->
+                 Lwt.return (`Username_taken, None)
+             | Ok Signup_submission_store.Not_created -> Lwt.return (`Neutral, None)
+             | Error err ->
+                 (* Logged, then answered like every other private outcome: a
+                    distinct error here could single out the branch that failed. *)
+                 ignore (db_error_message err : string);
+                 Lwt.return (`Neutral, None)))
+      with
+      | `Refused -> temporarily_unavailable ~return_url:"/signup" request
+      | `Admitted `Neutral -> Dream.html (check_your_email_page request)
+      | `Admitted `Username_taken -> username_unavailable_form ?turnstile_site_key request
+      | `Admitted (`Hash_failed err) ->
+          Dream.html (Pages.msg_page ~auth:true ~title:"Security Error" ~message:("Security error: " ^ err) ~alert_type:"error" ~return_url:"/signup" request))
 
   | _ -> Dream.html (Pages.msg_page ~auth:true ~title:"Form Error" ~message:"Your form submission failed. The CSRF token was invalid or your session expired. Please try again." ~alert_type:"error" ~return_url:"/signup" request)
+
+let signup_handler = make_signup_handler ~mail:auth_mail
 
 let verify_email_handler request =
   match Dream.query request "token" with
@@ -882,11 +949,11 @@ let login_page request =
   let user = Dream.session_field request "username" in
   Dream.html (Pages.login_form ?user request)
 
-let login_handler request =
+let make_login_handler ~verify request =
   match%lwt Dream.form request with
   | `Ok form_data ->
-      let identifier = List.assoc "identifier" form_data in
-      let password = List.assoc "password" form_data in
+      let identifier = List.assoc_opt "identifier" form_data |> Option.value ~default:"" in
+      let password = List.assoc_opt "password" form_data |> Option.value ~default:"" in
 
       (* Credential check uses constant-message pattern: every failure path
          returns the same string to prevent username enumeration. Ban check
@@ -895,12 +962,20 @@ let login_handler request =
         Dream.sql request (fun db -> Db.get_user_for_login db identifier)
       in
       (match lookup with
-        | Ok (Some ((id, user, _email, created_at), (hash, is_admin, is_banned))) ->
+        | Ok row ->
             (* Argon2 verification runs after the lookup's connection is back
                in the pool — CPU-bound work must not hold a connection open
-               (same rule as reset_password_handler). *)
-            (match%lwt Auth.verify_password ~password ~hash with
-            | Ok true ->
+               (same rule as reset_password_handler). A missing account is
+               verified against the dummy hash, so both failure kinds cost
+               one full verification. *)
+            let candidate =
+              Option.map
+                (fun ((id, user, _email, created_at), (hash, is_admin, is_banned)) ->
+                  (hash, (id, user, created_at, is_admin, is_banned)))
+                row
+            in
+            (match%lwt Login_verification.authenticate ~verify ~password candidate with
+            | Some (id, user, created_at, is_admin, is_banned) ->
                 if is_banned then
                   Dream.html (Pages.msg_page ~auth:true ~title:"Account Banned" ~message:"Your account has been permanently banned from Earde." ~alert_type:"error" ~return_url:"/login" request)
                 else
@@ -927,10 +1002,11 @@ let login_handler request =
                            { Analytics.username = user; signup_date = created_at; is_admin };
                        });
                   Dream.redirect request "/"
-              | _ -> Dream.html (Pages.msg_page ~auth:true ~title:"Login Failed" ~message:"Invalid username or password." ~alert_type:"error" ~return_url:"/login" request))
-        | Ok None -> Dream.html (Pages.msg_page ~auth:true ~title:"Login Failed" ~message:"Invalid username or password." ~alert_type:"error" ~return_url:"/login" request)
+            | None -> Dream.html (Pages.msg_page ~auth:true ~title:"Login Failed" ~message:"Invalid username or password." ~alert_type:"error" ~return_url:"/login" request))
         | Error err -> Dream.html (Pages.msg_page ~auth:true ~title:"Error" ~message:(db_error_message err) ~alert_type:"error" ~return_url:"/login" request))
   | _ -> Dream.html (Pages.msg_page ~auth:true ~title:"Form Error" ~message:"There was a problem with your form submission. Your session may have expired." ~alert_type:"error" ~return_url:"/login" request)
+
+let login_handler = make_login_handler ~verify:Login_verification.argon2_verifier
 
 let logout_handler request =
   let%lwt () = Dream.invalidate_session request in
@@ -938,31 +1014,41 @@ let logout_handler request =
 
 let forgot_password_page request = Dream.html (Pages.forgot_password_page request)
 
-(* Never confirm or deny email existence — identical response hides whether the
-   address is registered, preventing account enumeration via the reset flow. *)
-let forgot_password_handler request =
+(* Never confirm or deny email existence: every account state gets the same
+   response. The reset email is never awaited, and every admitted request
+   occupies one fixed service slot whether or not it yields mail, so the
+   shared capacity does not reveal the outcome either. Admission happens
+   before the lookup and the token write, so a full dispatcher refuses
+   identically for all addresses and writes nothing. *)
+let make_forgot_password_handler ~mail request =
   match%lwt Dream.form request with
   | `Ok form_data ->
       let email = String.trim (List.assoc_opt "email" form_data |> Option.value ~default:"") in
       if email = "" then
         Dream.html (Pages.msg_page ~auth:true ~title:"Validation Error" ~message:"Email address is required." ~alert_type:"error" ~return_url:"/forgot-password" request)
-      else begin
-        let token = Dream.to_base64url (Dream.random 32) in
-        (* DB connection released before Brevo call — same pattern as signup. *)
-        let%lwt result = Dream.sql request (fun db ->
-          Db.password_reset_create_token db email token
-        ) in
-        (match result with
-        | Ok true ->
-            let%lwt () = Email.send_password_reset_email ~to_email:email ~token in
-            Dream.html (Pages.msg_page ~auth:true ~title:"Check your email" ~message:"If an account with that email exists, a reset link has been sent. Check your inbox (and spam folder)." ~alert_type:"info" ~return_url:"/login" request)
-        | Ok false ->
-            Dream.html (Pages.msg_page ~auth:true ~title:"Check your email" ~message:"If an account with that email exists, a reset link has been sent. Check your inbox (and spam folder)." ~alert_type:"info" ~return_url:"/login" request)
-        | Error err ->
-            Dream.log "forgot_password DB error: %s" err;
-            Dream.html (Pages.msg_page ~auth:true ~title:"Check your email" ~message:"If an account with that email exists, a reset link has been sent. Check your inbox (and spam folder)." ~alert_type:"info" ~return_url:"/login" request))
-      end
+      else
+        (match%lwt Auth_mail_dispatcher.admit mail (fun () ->
+          let token = Dream.to_base64url (Dream.random 32) in
+          (* The token row is committed (a single INSERT ... SELECT) before
+             the job is returned, and the connection is released before any
+             provider IO. No row, no mail: a nonexistent account gets no
+             dummy email. *)
+          let%lwt result = Dream.sql request (fun db ->
+            Db.password_reset_create_token db email token
+          ) in
+          match result with
+          | Ok true -> Lwt.return ((), Some (Email.password_reset ~to_email:email ~token))
+          | Ok false -> Lwt.return ((), None)
+          | Error err ->
+              Dream.log "forgot_password DB error: %s" err;
+              Lwt.return ((), None))
+        with
+        | `Refused -> temporarily_unavailable ~return_url:"/forgot-password" request
+        | `Admitted () ->
+            Dream.html (Pages.msg_page ~auth:true ~title:"Check your email" ~message:"If an account with that email exists, we'll email a reset link to it shortly. Check your inbox (and spam folder); if nothing arrives, you can request a new link." ~alert_type:"info" ~return_url:"/login" request))
   | _ -> Dream.html (Pages.msg_page ~auth:true ~title:"Form Error" ~message:"Your form submission failed. Please try again." ~alert_type:"error" ~return_url:"/forgot-password" request)
+
+let forgot_password_handler = make_forgot_password_handler ~mail:auth_mail
 
 let reset_password_page_handler request =
   match Dream.query request "token" with

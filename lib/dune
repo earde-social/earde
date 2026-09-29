@@ -19,6 +19,7 @@
   cohttp-lwt
   cohttp-lwt-unix
   uri
-  digestif)
+  digestif
+  mtime.clock.os)
  (preprocess
   (pps lwt_ppx)))
