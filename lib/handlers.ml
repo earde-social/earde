@@ -3078,11 +3078,11 @@ let update_community_handler request =
           let str_opt s = let t = String.trim s in if t = "" then None else Some t in
           let description = str_opt (get_field "description") in
           let rules       = str_opt (get_field "rules") in
-          (* If no new file uploaded, fall back to the existing URL submitted via hidden input. *)
+          (* Only the file parts are read here. A submitted avatar/banner URL is
+             deliberately never consulted: the no-upload fallback comes from the
+             community row loaded below. *)
           let avatar_bytes = get_field "avatar_url" in
           let banner_bytes = get_field "banner_url" in
-          let existing_avatar = str_opt (get_field "existing_avatar_url") in
-          let existing_banner = str_opt (get_field "existing_banner_url") in
           with_analytics_after_sql (fun record ->
           Dream.sql request (fun db ->
             (* Re-verify authority on every mutation — same TOCTOU guard as add_mod.
@@ -3129,9 +3129,19 @@ let update_community_handler request =
             | Error e, _ | _, Error e ->
                 Dream.html (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Image Error" ~message:e ~alert_type:"error" ~return_url:settings_url request)
             | Ok new_avatar, Ok new_banner ->
-              (* new_avatar/new_banner are None when no file was submitted; fall back to existing. *)
-              let avatar_url = if new_avatar <> None then new_avatar else existing_avatar in
-              let banner_url = if new_banner <> None then new_banner else existing_banner in
+              (* new_avatar/new_banner are None when no file was submitted. The
+                 fallback is then the community's OWN stored value, read from
+                 [loaded] above — never a URL the client sent. The form used to
+                 round-trip both through hidden inputs, which let any moderator
+                 store an arbitrary external URL: every visitor of the public
+                 community page, including anonymous ones, would then fetch it,
+                 handing a third party their IP, User-Agent and Referer. A
+                 community that matched no id has no stored value and no write
+                 to make, so [None] keeps that path the no-op it already was. *)
+              let stored_avatar = Option.bind loaded (fun (c : Db.community) -> c.avatar_url) in
+              let stored_banner = Option.bind loaded (fun (c : Db.community) -> c.banner_url) in
+              let avatar_url = if new_avatar <> None then new_avatar else stored_avatar in
+              let banner_url = if new_banner <> None then new_banner else stored_banner in
               (* Network-community guard, before any write. The description is
                  canonical community identity, so a setup draft is refused
                  outright (its identity belongs to /c/:slug/setup) and a

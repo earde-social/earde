@@ -2861,8 +2861,11 @@ let community_settings_page ?user ?(connected_projects="") ?(rail_communities=[]
   (* ---- Panel: Profile ---- *)
   (* Native file inputs can't reflect an existing upload ("No file chosen" even when an
      avatar exists), so each upload field gets an explicit current-state row: a preview via
-     the shared safe_img_src helpers when an asset exists, or a "none yet" note. Upload
-     behavior (multipart /update-community + existing_* fallbacks) is unchanged. *)
+     the shared safe_img_src helpers when an asset exists, or a "none yet" note.
+
+     The preview is display only. The form carries no avatar/banner URL of its own: when
+     no file is uploaded, /update-community keeps the values it read from the community
+     row itself, so what a client submits can never become a community's stored image. *)
   let avatar_status =
     match community.avatar_url with
     | Some u when String.trim u <> "" ->
@@ -2911,13 +2914,11 @@ let community_settings_page ?user ?(connected_projects="") ?(rail_communities=[]
             <div class='cm-field'>
               <label class='cm-label'>Avatar image</label>
               %s
-              <input type='hidden' name='existing_avatar_url' value='%s'>
               <input type='file' name='avatar_url' accept='image/*' class='cm-file'>
             </div>
             <div class='cm-field'>
               <label class='cm-label'>Banner image</label>
               %s
-              <input type='hidden' name='existing_banner_url' value='%s'>
               <input type='file' name='banner_url' accept='image/*' class='cm-file'>
             </div>
           </div>
@@ -2928,9 +2929,7 @@ let community_settings_page ?user ?(connected_projects="") ?(rail_communities=[]
       (esc (Option.value ~default:"" community.description))
       (esc (Option.value ~default:"" community.rules))
       avatar_status
-      (esc (Option.value ~default:"" community.avatar_url))
       banner_status
-      (esc (Option.value ~default:"" community.banner_url))
   in
 
   (* ---- Panel: Channels & sections ---- *)
