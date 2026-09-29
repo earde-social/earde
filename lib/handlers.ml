@@ -628,8 +628,10 @@ let verify_turnstile form_data =
         if ok then Lwt.return (`Passed (Some site_key)) else Lwt.return (`Failed site_key)
 
 (* One bounded best-effort mail dispatcher for the public auth routes that
-   send mail (signup confirmation and password reset). Shared, so the 64
-   outstanding / 2 concurrent / 15 s bounds apply to both together. *)
+   send mail (signup confirmation and password reset). It is shared, so the
+   64 outstanding / 2 slots / 15 s fixed-slot bounds cover both routes
+   together, and a request's private outcome never changes how long it
+   occupies them. *)
 let auth_mail : Email.message Auth_mail_dispatcher.t =
   Auth_mail_dispatcher.create ~label:Email.label ~transport:Email.deliver ()
 
@@ -690,8 +692,9 @@ let make_signup_handler ~mail request =
       (* From here on every private state — new, registered or pending email,
          own or foreign reservation, a lost uniqueness race, a storage error —
          pays the same admission, the same argon2 hash and one transaction,
-         and gets the same "check your email" answer. Admission comes first so
-         a full dispatcher refuses before anything is hashed or written. *)
+         gets the same "check your email" answer, and occupies one fixed
+         service slot whether or not it yields mail. Admission comes first
+         so a full dispatcher refuses before anything is hashed or written. *)
       match%lwt Auth_mail_dispatcher.admit mail (fun () ->
         match%lwt Auth.hash_password password with
         | Error err -> Lwt.return (`Hash_failed err, None)
@@ -1012,10 +1015,11 @@ let logout_handler request =
 let forgot_password_page request = Dream.html (Pages.forgot_password_page request)
 
 (* Never confirm or deny email existence: every account state gets the same
-   response, and — because the reset email is queued on the dispatcher rather
-   than awaited — the same latency. Admission happens before the lookup and
-   the token write, so a full dispatcher refuses identically for all
-   addresses and writes nothing. *)
+   response. The reset email is never awaited, and every admitted request
+   occupies one fixed service slot whether or not it yields mail, so the
+   shared capacity does not reveal the outcome either. Admission happens
+   before the lookup and the token write, so a full dispatcher refuses
+   identically for all addresses and writes nothing. *)
 let make_forgot_password_handler ~mail request =
   match%lwt Dream.form request with
   | `Ok form_data ->

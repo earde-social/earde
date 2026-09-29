@@ -24,5 +24,6 @@
   uri
   yojson
   digestif
+  (mtime (>= 2.0.0))
   (alcotest :with-test)
  ))

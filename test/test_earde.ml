@@ -85205,6 +85205,7 @@ let () =
          fail-closed limiter decision. Gated: the real signup, login, reset
          and limiter handlers over routed pipelines. *)
     ; ("b2_auth_mail_dispatcher", B2_account_privacy.dispatcher_suite)
+    ; ("b2_auth_mail_resolver", B2_account_privacy.resolver_suite)
     ; ("b2_auth_mail_transport", B2_account_privacy.transport_suite)
     ; ("b2_login_verification", B2_account_privacy.login_pure_suite)
     ; ("b2_rate_limit_decision", B2_account_privacy.limiter_pure_suite)
@@ -85212,4 +85213,7 @@ let () =
     ; ("b2_signup_privacy", B2_account_privacy.signup_db_suite)
     ; ("b2_auth_mail_async", B2_account_privacy.mail_db_suite)
     ; ("b2_rate_limit_routed", B2_account_privacy.limiter_db_suite)
+    ; ("b2_response_comparator", B2_account_privacy.comparator_suite)
+    ; ("b2_capacity_sequences", B2_account_privacy.capacity_sequence_db_suite)
+    ; ("b2_cookie_session", B2_account_privacy.cookie_db_suite)
     ]

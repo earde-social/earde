@@ -60,7 +60,9 @@ val make_signup_handler : mail:Email.message Auth_mail_dispatcher.t -> Dream.han
     whether the email is new, registered or pending, whether a reservation
     is the submitter's own or someone else's, and whether a race or storage
     error prevented the write. A confirmation job is queued only after a
-    fresh pending row commits. *)
+    fresh pending row commits. Every admitted submission, with or without
+    a job, occupies one fixed-length service slot of [mail], so later
+    admissions cannot observe which it was. *)
 val verify_email_handler : Dream.handler
 val confirm_email_handler : Dream.handler
 val login_page : Dream.handler
@@ -82,7 +84,8 @@ val make_forgot_password_handler : mail:Email.message Auth_mail_dispatcher.t -> 
     full dispatcher answers a generic 503 before any lookup or write), then
     the token write, then the same neutral response for every address. A
     reset job is queued only when a token row for a real account was
-    written; unknown addresses get no email. *)
+    written. Unknown addresses get no email, but occupy the same fixed
+    service slot. *)
 val reset_password_page_handler : Dream.handler
 val reset_password_handler : Dream.handler
 

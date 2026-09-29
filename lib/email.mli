@@ -1,10 +1,12 @@
 (** Brevo transactional email client.
 
-    Best-effort: delivery failures are logged by message kind only (never
-    the recipient, token or provider response) and never propagate into an
-    HTTP response. The public signup and password-reset routes do not call
-    the provider on the request path: they queue a {!message} on
-    {!Auth_mail_dispatcher}, whose workers run {!deliver}. *)
+    Best-effort: delivery never propagates into an HTTP response. The public
+    signup and password-reset routes do not call the provider on the request
+    path. They settle a {!message} into {!Auth_mail_dispatcher}, whose
+    service slots run {!deliver}. Delivery-failure diagnostics name only the
+    message kind and a failure class. The development path without
+    BREVO_API_KEY is different: it logs the recipient, and with the explicit
+    EARDE_LOG_TOKENS=1 opt-in it also logs the credential-bearing link. *)
 
 (* Read-only: TRUE iff a non-empty BREVO_API_KEY is configured. Never exposes the key
    value — for the admin dashboard's safe configured/missing status only. *)
@@ -34,18 +36,21 @@ val link : message -> string
 val deliver : message -> (unit, string) result Lwt.t
 (** One attempt through the configured provider (or the dev log line when
     BREVO_API_KEY is unset). Satisfies {!Auth_mail_dispatcher.transport}:
-    the promise is cancelable and cancellation closes the provider
-    connection. [Error] is a short, secret-free failure class. *)
+    the promise is cancelable, and cancelling it closes the provider
+    connection, cancels a pending connect, or drops the wait on a pending
+    name resolution. Resolution goes through a process-wide
+    {!Auth_mail_resolver} with {!Auth_mail_resolver.default_permits}
+    permits. When both are held by lookups still running (even abandoned
+    ones), the attempt fails at once with ["resolver_busy"]. [Error] is a
+    short, secret-free failure class. *)
 
 val deliver_via :
-  endpoint:Uri.t -> api_key:string -> message -> (unit, string) result Lwt.t
-(** [deliver] against an explicit endpoint — the production provider URL is
-    fixed; this exists so the connection-release contract can be exercised
-    against a local stalled server. *)
-
-(** Awaited legacy entry points, bounded by the dispatcher's timeout. They
-    never raise. The public routes use the dispatcher instead. *)
-
-val send_verification_email : to_email:string -> token:string -> unit Lwt.t
-val send_pending_signup_confirmation_email : to_email:string -> token:string -> unit Lwt.t
-val send_password_reset_email : to_email:string -> token:string -> unit Lwt.t
+  ?resolver:Cohttp_lwt_unix.Net.endp Auth_mail_resolver.t ->
+  endpoint:Uri.t ->
+  api_key:string ->
+  message ->
+  (unit, string) result Lwt.t
+(** [deliver] against an explicit endpoint. The production provider URL is
+    fixed. This exists so the connection-release and resolver-ownership
+    contracts can be exercised against local servers. [resolver] defaults to
+    the process-wide gate. *)
