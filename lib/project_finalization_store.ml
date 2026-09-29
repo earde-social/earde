@@ -173,13 +173,46 @@ let insert_project_query =
 
 (* The permanent authorization record: the caller plus the locked
    installation record as proof — never created_by_user_id and never
-   connected_by_user_id. *)
+   connected_by_user_id. Its evidence dates from the GitHub verification
+   behind the locked draft's snapshot, not from finalization. *)
 let insert_steward_query =
   let open Caqti_request.Infix in
-  (Caqti_type.(t3 int64 int int64) ->. Caqti_type.unit)
+  (Caqti_type.(t4 int64 int int64 int64) ->? Caqti_type.int64)
   "INSERT INTO project_stewards \
-     (project_id, user_id, github_installation_record_id, role) \
-   VALUES ($1, $2, $3, 'steward')"
+     (project_id, user_id, github_installation_record_id, role, \
+      github_verified_at) \
+   SELECT $1, $2, $3, 'steward', d.verified_at \
+   FROM project_onboarding_drafts d WHERE d.id = $4 \
+   RETURNING project_id"
+
+(* A claim whose project has no steward with fresh GitHub evidence no
+   longer excludes anyone: its authority depended on access nobody has
+   shown for the whole freshness window. Only this path releases it, and
+   only for a caller who is finalizing a snapshot GitHub verified within
+   the last 24 hours for the repository's own account, so a claimant
+   without current access can never take a repository over.
+
+   The stale project's claims are released together, since its authority
+   lapsed as a whole. Its rows therefore stay all-active or all-released,
+   and every reader keeps showing it one consistent repository set: the
+   released one as history, next to its stale label. The project keeps
+   its row, its homes and its communities. A claim with any fresh steward
+   is untouched and still refuses the new one below. The partial unique
+   index makes the subquery return at most one project. *)
+let release_stale_claim_query =
+  let open Caqti_request.Infix in
+  (Caqti_type.int64 ->. Caqti_type.unit)
+  "UPDATE project_repositories r \
+   SET released_at = GREATEST(NOW(), r.created_at), \
+       updated_at = GREATEST(NOW(), r.updated_at) \
+   WHERE r.released_at IS NULL \
+     AND r.project_id = ( \
+       SELECT c.project_id FROM project_repositories c \
+       WHERE c.github_repository_id = $1 AND c.released_at IS NULL) \
+     AND NOT EXISTS ( \
+       SELECT 1 FROM project_stewards s \
+       WHERE s.project_id = r.project_id \
+         AND github_evidence_is_fresh(s.github_verified_at))"
 
 (* One prepared insert reused per selected row. The global unique
    constraint on github_repository_id arbitrates concurrent claims: zero
@@ -196,7 +229,7 @@ let insert_repository_query =
      (project_id, position, github_repository_id, full_name, html_url, \
       description, default_branch, is_primary, is_archived) \
    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) \
-   ON CONFLICT (github_repository_id) DO NOTHING \
+   ON CONFLICT (github_repository_id) WHERE released_at IS NULL DO NOTHING \
    RETURNING id"
 
 (* Only lifecycle and modification move: ownership, installation record,
@@ -326,6 +359,10 @@ let finalize (module C : Caqti_lwt.CONNECTION) ~user_id ~draft_id ~identity =
             | None -> false
             | Some primary -> Int64.equal primary repo.snapshot_id
           in
+          C.exec release_stale_claim_query repo.github_repository_id
+          >>= function
+          | Error _ -> rollback_to Storage_error
+          | Ok () ->
           C.find_opt insert_repository_query
             ( ( (project_row_id, position),
                 (repo.github_repository_id, repo.full_name) ),
@@ -352,11 +389,13 @@ let finalize (module C : Caqti_lwt.CONNECTION) ~user_id ~draft_id ~identity =
       | Error _ -> rollback_to Storage_error
       | Ok None -> rollback_to Slug_unavailable
       | Ok (Some project_row_id) -> (
-          C.exec insert_steward_query
-            (project_row_id, user_id, installation_record_id)
+          C.find_opt insert_steward_query
+            (project_row_id, user_id, installation_record_id, draft_id)
           >>= function
           | Error _ -> rollback_to Storage_error
-          | Ok () -> copy_repositories project_row_id 1 selected)
+          (* The draft row is locked above; no row back is corruption. *)
+          | Ok None -> rollback_to Inconsistent_data
+          | Ok (Some _) -> copy_repositories project_row_id 1 selected)
     in
 
     C.start () >>= function

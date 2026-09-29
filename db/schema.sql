@@ -58,6 +58,35 @@ $$;
 
 
 --
+-- Name: github_evidence_is_fresh(timestamp with time zone); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.github_evidence_is_fresh(verified_at timestamp with time zone) RETURNS boolean
+    LANGUAGE sql STABLE
+    AS $$
+    SELECT verified_at > NOW() - INTERVAL '30 days';
+$$;
+
+
+--
+-- Name: project_github_verification(bigint, text); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.project_github_verification(target bigint, stored text) RETURNS text
+    LANGUAGE sql STABLE
+    AS $$
+    SELECT CASE
+             WHEN stored = 'verified' AND NOT EXISTS (
+                    SELECT 1 FROM project_stewards s
+                    WHERE s.project_id = target
+                      AND github_evidence_is_fresh(s.github_verified_at))
+             THEN 'stale'
+             ELSE stored
+           END;
+$$;
+
+
+--
 -- Name: user_realtime_access_narrowed(); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -1051,6 +1080,7 @@ CREATE TABLE public.project_onboarding_drafts (
     cancelled_at timestamp with time zone,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    verified_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT project_onboarding_drafts_expires_after_created_check CHECK ((expires_at > created_at)),
     CONSTRAINT project_onboarding_drafts_lifecycle_check CHECK ((((status = 'active'::text) AND (completed_at IS NULL) AND (cancelled_at IS NULL)) OR ((status = 'completed'::text) AND (completed_at IS NOT NULL) AND (cancelled_at IS NULL)) OR ((status = 'cancelled'::text) AND (completed_at IS NULL) AND (cancelled_at IS NOT NULL)))),
     CONSTRAINT project_onboarding_drafts_status_check CHECK ((status = ANY (ARRAY['active'::text, 'completed'::text, 'cancelled'::text]))),
@@ -1094,11 +1124,13 @@ CREATE TABLE public.project_repositories (
     is_archived boolean NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    released_at timestamp with time zone,
     CONSTRAINT project_repositories_default_branch_check CHECK ((btrim(default_branch) <> ''::text)),
     CONSTRAINT project_repositories_full_name_check CHECK ((btrim(full_name) <> ''::text)),
     CONSTRAINT project_repositories_github_repository_id_check CHECK ((github_repository_id > 0)),
     CONSTRAINT project_repositories_html_url_check CHECK ((btrim(html_url) <> ''::text)),
     CONSTRAINT project_repositories_position_check CHECK (("position" > 0)),
+    CONSTRAINT project_repositories_released_after_created_check CHECK (((released_at IS NULL) OR (released_at >= created_at))),
     CONSTRAINT project_repositories_updated_after_created_check CHECK ((updated_at >= created_at))
 );
 
@@ -1132,6 +1164,7 @@ CREATE TABLE public.project_stewards (
     github_installation_record_id bigint NOT NULL,
     role text DEFAULT 'steward'::text NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
+    github_verified_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT project_stewards_role_check CHECK ((role = 'steward'::text))
 );
 
@@ -1892,14 +1925,6 @@ ALTER TABLE ONLY public.project_onboarding_drafts
 
 
 --
--- Name: project_repositories project_repositories_github_repository_id_key; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.project_repositories
-    ADD CONSTRAINT project_repositories_github_repository_id_key UNIQUE (github_repository_id);
-
-
---
 -- Name: project_repositories project_repositories_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -2372,6 +2397,13 @@ CREATE UNIQUE INDEX uniq_project_onboarding_draft_repos_primary_per_draft ON pub
 --
 
 CREATE UNIQUE INDEX uniq_project_onboarding_drafts_active_per_user_installation ON public.project_onboarding_drafts USING btree (user_id, github_installation_record_id) WHERE (status = 'active'::text);
+
+
+--
+-- Name: uniq_project_repositories_active_claim; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX uniq_project_repositories_active_claim ON public.project_repositories USING btree (github_repository_id) WHERE (released_at IS NULL);
 
 
 --
@@ -3141,4 +3173,5 @@ INSERT INTO public.schema_migrations (version) VALUES
     ('20260731120000'),
     ('20260731130000'),
     ('20260803120000'),
-    ('20260929120000');
+    ('20260929120000'),
+    ('20260929130000');

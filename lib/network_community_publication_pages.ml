@@ -3,7 +3,8 @@
    models: no Caqti, no read-model dependency, no session access.
 
    Language rules: the connected project is described factually ("Connected
-   and verified through GitHub") — never "Official ...", "GitHub-approved",
+   through GitHub": this page does not re-check how fresh the verification
+   is) — never "Official ...", "GitHub-approved",
    or "GitHub-endorsed" — the two publication choices are named exactly as
    publication implements them, and nothing claims that publishing grants a
    project steward a permission they do not already durably hold. Every
@@ -114,7 +115,7 @@ let project_html (project : project) =
     "<section class='ncp-project'>\
      <h2 class='ncp-project-name'>%s</h2>\
      <p class='ncp-project-meta'>%s &middot; %s</p>\
-     <p class='ncp-project-note'>Connected and verified through GitHub.</p>\
+     <p class='ncp-project-note'>Connected through GitHub.</p>\
      </section>"
     (esc project.name) (kind_copy project.kind) (esc project.namespace_login)
 

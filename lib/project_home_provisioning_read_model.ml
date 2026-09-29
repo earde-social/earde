@@ -169,6 +169,7 @@ let load_query =
      JOIN project_stewards s ON s.project_id = p.id AND s.user_id = $2 \
      WHERE p.slug = $1 \
        AND p.verification_status = 'verified' \
+       AND github_evidence_is_fresh(s.github_verified_at) \
        AND NOT EXISTS ( \
          SELECT 1 FROM community_projects cp \
          WHERE cp.project_id = p.id \

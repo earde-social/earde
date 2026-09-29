@@ -63,7 +63,9 @@ let positive id = Int64.compare id 0L > 0
 
 (* Authorization and the project row lock in one statement: the project is
    never loaded and checked in OCaml, and stewardship is never queried
-   afterward. FOR UPDATE OF p locks only the project row — the lock every
+   afterward. The steward's GitHub evidence must be fresh: stored proof
+   stops authorizing new requests once the freshness window has passed.
+   FOR UPDATE OF p locks only the project row — the lock every
    sibling home operation takes first — not the steward row, whose
    (project_id, user_id) primary key also caps this join at one row. *)
 let lock_project_query =
@@ -75,6 +77,7 @@ let lock_project_query =
    WHERE p.slug = $1 \
      AND p.verification_status = 'verified' \
      AND s.user_id = $2 \
+     AND github_evidence_is_fresh(s.github_verified_at) \
    FOR UPDATE OF p"
 
 (* The exact target community, locked second under the held project lock.

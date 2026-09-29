@@ -173,7 +173,11 @@ let next_step_html project =
      <h2 class='phs-next-title'>Choose a community home</h2>\
      <p class='create-sub phs-next-copy'>Connect this project to an \
      existing Earde community, or create a community home for it.</p>\
-     %s</section>"
+     %s\
+     <p class='create-sub phs-next-freshness'>Both need a GitHub \
+     verification from the last 30 days. If yours is older, \
+     <a href='/bring'>connect the project through GitHub again</a> \
+     to renew it.</p></section>"
     links
 
 (* Launch onboarding stepper (Cartographic Civic, 04-ROUTES): the same

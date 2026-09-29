@@ -69,8 +69,14 @@ val refresh_verified :
       false (a refreshed verification is a new authoritative snapshot, so
       no previous selection state survives).
 
-    [expires_at] is always the database transaction's [NOW() + 24 hours] —
-    never the application clock, never caller-supplied.
+    + before commit, the caller's own [project_stewards] rows are renewed
+      ([github_verified_at], and the proving installation record) for
+      every project in the verified account whose unreleased repositories
+      all appear in the new snapshot. Other users' rows are never written.
+
+    [expires_at] is always the database transaction's [NOW() + 24 hours],
+    and [verified_at] its [NOW()] — never the application clock, never
+    caller-supplied.
 
     On any failure the whole transaction rolls back — the previous draft
     and snapshot remain unchanged and no partial replacement ever becomes

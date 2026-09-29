@@ -132,7 +132,8 @@ let project_query =
             p.verification_status \
      FROM open_source_projects p \
      JOIN project_stewards s ON s.project_id = p.id AND s.user_id = $2 \
-     WHERE p.slug = $1 AND p.verification_status = 'verified'"
+     WHERE p.slug = $1 AND p.verification_status = 'verified' \
+       AND github_evidence_is_fresh(s.github_verified_at)"
 
 (* The project's active home relation with its target community identity.
    Deliberately no eligibility predicate on the community side: a pending
