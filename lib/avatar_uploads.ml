@@ -21,6 +21,34 @@ let is_pipeline_middle middle =
   && String.fold_left (fun acc c -> if c = '_' then acc + 1 else acc) 0 middle
      = 1
 
+(* Uploads are served statically with no access check, and a post image may
+   belong to a private community, so the name is the only thing keeping the
+   file private: it must be unguessable. The digits come from the
+   cryptographic generator (the stdlib Random is not seeded here and repeats
+   the same sequence after every restart). Rejection sampling (bytes below
+   250) keeps each digit uniform. 32 digits carry about 106 bits. *)
+let random_digit_count = 32
+
+let random_digits ~random n =
+  let buf = Buffer.create n in
+  let rec fill () =
+    if Buffer.length buf < n then begin
+      String.iter
+        (fun c ->
+          let b = Char.code c in
+          if b < 250 && Buffer.length buf < n then
+            Buffer.add_char buf (Char.chr (Char.code '0' + (b mod 10))))
+        (random (n + 8));
+      fill ()
+    end
+  in
+  fill ();
+  Buffer.contents buf
+
+let fresh_basename ~now_ms ~random =
+  Printf.sprintf "%s%Ld_%s" base_prefix now_ms
+    (random_digits ~random random_digit_count)
+
 let is_pipeline_basename base =
   let pl = String.length base_prefix and sl = String.length base_suffix in
   let n = String.length base in

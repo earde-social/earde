@@ -2839,6 +2839,13 @@ module Security = struct
      there is no window with a new password but a live stolen session (nor
      the reverse). Argon2 hashing must be done BEFORE calling this so no CPU
      work stalls the transaction. *)
+  (* A reset link issued before the password changed must not be able to
+     change it again: the new password is the account's recovery point. *)
+  let delete_reset_tokens_query =
+    let open Caqti_request.Infix in
+    (Caqti_type.int ->. Caqti_type.unit)
+    "DELETE FROM password_resets WHERE user_id = $1"
+
   let update_password_revoking_sessions (module C: Caqti_lwt.CONNECTION) user_id new_hash =
     C.start () >>= function
     | Error e -> Lwt.return (Error (Caqti_error.show e))
@@ -2847,12 +2854,16 @@ module Security = struct
       | Error e ->
           C.rollback () >>= fun _ -> Lwt.return (Error (Caqti_error.show e))
       | Ok () ->
+          (C.exec delete_reset_tokens_query user_id >>= function
+          | Error e ->
+              C.rollback () >>= fun _ -> Lwt.return (Error (Caqti_error.show e))
+          | Ok () ->
           (Session_store.delete_for_user (module C) user_id >>= function
            | Error e -> C.rollback () >>= fun _ -> Lwt.return (Error e)
            | Ok () ->
                C.commit () >>= function
                | Error e -> Lwt.return (Error (Caqti_error.show e))
-               | Ok () -> Lwt.return (Ok ())))
+               | Ok () -> Lwt.return (Ok ()))))
 
   (* UPDATE+RETURNING atomically consumes the token — avoids TOCTOU race of a separate
      SELECT then UPDATE, and prevents replay on concurrent verification attempts. *)
@@ -3070,6 +3081,14 @@ module PasswordReset = struct
     (Caqti_type.string ->? Caqti_type.int)
     "DELETE FROM password_resets WHERE token = $1 AND expires_at > NOW() RETURNING user_id"
 
+  (* Every other outstanding link for the account dies with the one used: a
+     reset is the remedy for a compromised account, and an older link (say,
+     one an attacker read from the mailbox) must not be able to undo it. *)
+  let consume_others_query =
+    let open Caqti_request.Infix in
+    (Caqti_type.int ->. Caqti_type.unit)
+    "DELETE FROM password_resets WHERE user_id = $1"
+
   (* Separate query to avoid a cross-module reference to Security.update_password_query. *)
   let update_pw_query =
     let open Caqti_request.Infix in
@@ -3094,6 +3113,10 @@ module PasswordReset = struct
           | Error e ->
               C.rollback () >>= fun _ -> Lwt.return (Error (Caqti_error.show e))
           | Ok () ->
+          (C.exec consume_others_query user_id >>= function
+          | Error e ->
+              C.rollback () >>= fun _ -> Lwt.return (Error (Caqti_error.show e))
+          | Ok () ->
               (* A password reset is the remedy for a compromised account, so
                  it must also end the attacker's sessions — otherwise the new
                  password changes nothing for whoever already holds a cookie.
@@ -3104,7 +3127,7 @@ module PasswordReset = struct
                | Ok () ->
                    C.commit () >>= function
                    | Error e -> Lwt.return (Error (Caqti_error.show e))
-                   | Ok () -> Lwt.return (Ok true))))
+                   | Ok () -> Lwt.return (Ok true)))))
 end
 
 (* Holds unconfirmed signups so a bot/abandoned signup never reaches the users table.

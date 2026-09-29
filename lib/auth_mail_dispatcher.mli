@@ -41,8 +41,8 @@
     drops them. The pending-signup row or reset token stays in PostgreSQL
     (only its hash), and the user recovers by asking again: a signup resend
     replaces that pending signup's token, and a new reset request issues
-    another reset token (earlier unexpired reset tokens stay valid until
-    used or expired). Delivery is neither durable nor exactly-once. *)
+    another reset token (earlier unexpired reset tokens stay valid until one
+    of them is used or they expire). Delivery is neither durable nor exactly-once. *)
 
 type config = {
   capacity : int;
