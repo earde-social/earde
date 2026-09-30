@@ -19,7 +19,7 @@ let modlog_handler request =
             | Ok b -> Lwt.return b
             | _ -> Lwt.return false)
         in
-        (* Launch-chrome data (pass 14A), loaded only after the private-community
+        (* Launch-chrome data, loaded only after the private-community
            authorization decision above: sections/channels feed the shared community
            sidebar, the viewer's joined communities the global rail. Each degrades to
            an empty list on error rather than blocking the log; anonymous viewers
@@ -174,7 +174,7 @@ let unban_community_user_handler request =
 
 (* === REPORTS === *)
 
-(* Slice B: report creation for posts & comments (chat messages out of scope). The form
+(* Report creation for posts & comments (chat messages out of scope). The form
    is no-JS SSR; the POST handler — not the render-time link gate — is the security
    boundary. Both handlers gate on can_view_community first (an outsider to a private
    community gets the canonical community_not_found 404 before any ban check or target
@@ -257,7 +257,7 @@ let report_form_handler request =
                           ~message:"You cannot report your own content. You can delete it instead."
                           ~alert_type:"error" ~return_url request)
                       else
-                        (* Launch-chrome data (pass 14D), loaded only after every
+                        (* Launch-chrome data, loaded only after every
                            gate above passed — a banned viewer, a foreign or
                            deleted target and a self-report never touch sections,
                            channels or the viewer's membership. Each degrades to
@@ -394,7 +394,7 @@ let reports_queue_handler request =
             if not is_authorized then
               Dream.respond ~status:`Forbidden (Site_pages.msg_page ?user ~title:"Access Denied" ~message:"You must be a moderator to view reports." ~alert_type:"error" ~return_url:("/c/" ^ slug) request)
             else
-              (* Launch-chrome data (pass 14B), loaded only after the M/TM/A
+              (* Launch-chrome data, loaded only after the M/TM/A
                  authorization above — a denied request never touches sections,
                  channels or the viewer's membership. Each degrades to an empty
                  list on error rather than blocking the queue. Same plumbing as
@@ -441,7 +441,7 @@ let reports_queue_handler request =
                    in
                    Dream.html (Moderation_pages.reports_queue_page ?user ~rail_communities ~is_admin ~is_top_mod ~channels ~sections ~community ~status ~reports ~previews request))))
 
-(* Slice E: resolve an open report (dismiss / mark action-taken) and write a modlog entry.
+(* Resolve an open report (dismiss / mark action-taken) and write a modlog entry.
    Shared by dismiss_report_handler and action_report_handler. Both gate exactly like the
    read-only queue (M/TM/A), resolve the community from the trusted :slug (never a form field),
    verify the report belongs to THIS community, and only mutate while status=open — re-resolving
@@ -551,7 +551,7 @@ let manage_mods_handler request =
             if not is_authorized then
               Dream.respond ~status:`Forbidden (Site_pages.msg_page ?user ~title:"Access Denied" ~message:"Only Top Mods and Admins can manage moderators." ~alert_type:"error" ~return_url:("/c/" ^ slug) request)
             else
-              (* Launch-chrome data (pass 14C), loaded only after the TM/A
+              (* Launch-chrome data, loaded only after the TM/A
                  authorization above — a denied request never touches sections,
                  channels or the viewer's membership. Each degrades to an empty
                  list on error rather than blocking the roster. Same plumbing as

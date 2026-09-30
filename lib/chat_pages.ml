@@ -153,7 +153,7 @@ let community_channel_shell_page ?user ?realtime_token ?(noindex=false) ~is_memb
   let csrf_token = Csrf_field.tag request in
   let channel_url = Printf.sprintf "/c/%s/ch/%s" (community.slug) (channel.slug) in
 
-  (* Launch community sidebar (pass-8 grammar, channel variant): identity
+  (* Launch community sidebar (channel variant): identity
      head, Overview link, factual visibility marker, Live channels with the
      CURRENT channel active, Knowledge sections (this renderer has no
      per-section counts, so none are shown), and the intentionally public
@@ -351,7 +351,7 @@ let community_channel_shell_page ?user ?realtime_token ?(noindex=false) ~is_memb
   [ (Html.text (channel.slug)) ])
     | Some _ when not is_member && community.visibility = Community_types.Community_private ->
         (* Private community: a non-member viewing this is an authorized mod/admin; they still
-           can't chat without membership, but show no self-join button (Slice C). *)
+           can't chat without membership, but show no self-join button. *)
         (Html.static "<div class='cs-composer cs-composer-prompt'><span>Only members can chat in this private community.</span></div>")
     | Some _ when not is_member ->
         (Html.template "<div class='cs-composer cs-composer-prompt'><span>Join this community to chat.</span><form action='/join' method='POST'>%s<input type='hidden' name='community_id' value='%s'><input type='hidden' name='redirect_to' value='%s'><button type='submit' class='cs-send'>Join &amp; chat</button></form></div>"

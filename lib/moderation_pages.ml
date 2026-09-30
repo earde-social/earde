@@ -149,7 +149,7 @@ let manage_mods_page ?user ?(rail_communities = []) ~is_admin ~current_user_role
            ~authorized:can_manage)
       ~network_manager:can_manage ~panel:panel_body ()
   in
-  (* Cartographic launch shell (pass 14C): the same four-pane chrome as the
+  (* Cartographic launch shell: the same four-pane chrome as the
      sibling community routes, wrapping the moderator roster verbatim — the
      cm-* role sections, the add/promote/remove forms with their hidden
      target_user_id fields, the confirmModal onsubmit hooks (the shared
@@ -254,7 +254,7 @@ let report_form_page ?user ?(rail_communities = []) ~(channels : Channel_store.c
   ; reasons
   ; (Html.internal_path (return_url)) ])
   in
-  (* Cartographic launch shell (pass 14D): the same four-pane chrome as the
+  (* Cartographic launch shell: the same four-pane chrome as the
      sibling community routes, wrapping the report form verbatim — the create-*
      fields, the hidden target_type/target_id inputs, the reason <select>
      values, the details maxlength and the ph-mask excerpt class are treated
@@ -459,7 +459,7 @@ let reports_queue_page ?user ?(rail_communities = []) ~is_admin ~is_top_mod
            ~authorized:(is_top_mod || is_admin))
       ~network_manager:(is_top_mod || is_admin) ~panel:panel_body ()
   in
-  (* Cartographic launch shell (pass 14B): the same four-pane chrome as the
+  (* Cartographic launch shell: the same four-pane chrome as the
      sibling community routes, wrapping the review docket verbatim — the cm-*
      report rows, the one-form-two-formaction dismiss/action submits, the
      status tabs and the ph-mask replay classes are treated as pinned, so only
@@ -559,7 +559,7 @@ let mod_log_page ?user ?(noindex=false) ?(rail_communities = [])
   ; back_link
   ; table_body ])
   in
-  (* Cartographic launch shell (pass 14A): the same four-pane chrome as the
+  (* Cartographic launch shell: the same four-pane chrome as the
      sibling community routes, wrapping the moderation ledger verbatim — the
      cm-* event rows, empty row and .cm-table-reason replay-mask class are
      treated as pinned (analytics.js masks .cm-table-reason by name), so only

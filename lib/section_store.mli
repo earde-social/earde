@@ -8,7 +8,7 @@ val get_sections_by_community : (module Caqti_lwt.CONNECTION) -> int -> (communi
 val get_section_by_id : (module Caqti_lwt.CONNECTION) -> int -> int -> (community_section option, string) result Lwt.t
 val get_section_by_slug : (module Caqti_lwt.CONNECTION) -> string -> int -> (community_section option, string) result Lwt.t
 val update_section : (module Caqti_lwt.CONNECTION) -> int -> string -> string option -> string -> (unit, string) result Lwt.t
-(* update_section_indexable section_id community_id indexable — Slice H toggle; community-scoped. *)
+(* Update_section_indexable section_id community_id indexable — per-section toggle; community-scoped. *)
 val update_section_indexable : (module Caqti_lwt.CONNECTION) -> int -> int -> bool -> (unit, string) result Lwt.t
 val delete_section : (module Caqti_lwt.CONNECTION) -> int -> int -> (unit, string) result Lwt.t
 val get_sections_with_stats : (module Caqti_lwt.CONNECTION) -> int -> ((community_section * int * string option) list, string) result Lwt.t

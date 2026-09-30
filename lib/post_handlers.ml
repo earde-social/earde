@@ -50,7 +50,7 @@ let new_post_page request =
                            | _ -> Lwt.return None)
                     in
                     let%lwt rail_communities = load_rail db in
-                    (* Optional shared-thread destinations (slice 4): the
+                    (* Optional shared-thread destinations: the
                        eligible connected communities for THIS server-resolved
                        origin. Best-effort like the rail — a read failure
                        renders the plain composer rather than blocking post
@@ -126,7 +126,7 @@ let create_post_handler request =
           let section_id_str = get_field "section_id" in
           (* File bytes: empty string when no file is selected (browser sends empty part). *)
           let image_bytes = get_field "image" in
-          (* Optional shared-thread fields (slice 4). A blank select is the
+          (* Optional shared-thread fields. A blank select is the
              normal share-free path; a selected slug is only re-resolved
              server-side AFTER the post exists, because the canonical post
              must never depend on any destination condition. The note alone
@@ -341,7 +341,7 @@ let view_post_handler request =
   Dream.sql request (fun db ->
     match%lwt Post_store.get_post_by_id db post_id with
     | Ok (Some post) ->
-        (* Slice C: gate BEFORE the canonical redirect — a 301 to /c/:slug/t/:id-:title would
+        (* Gate BEFORE the canonical redirect — a 301 to /c/:slug/t/:id-:title would
            otherwise leak a private community's slug + thread title in the Location header to a
            non-authorized viewer. Resolve visibility from the post's community_id (never client
            input); deny with the SAME 404 as a missing community. Fail closed if the community
@@ -562,7 +562,7 @@ let view_thread_handler request =
               | _ -> Dream.respond ~status:`Internal_Server_Error (Site_pages.msg_page ?user:user_sess ~title:"Error" ~message:"Failed to load thread data. Please try again later." ~alert_type:"error" ~return_url:("/c/" ^ community_slug) request)
             end
         | None ->
-        (* Slice C: gate BEFORE the canonical 301 below — redirecting leaks the private
+        (* Gate BEFORE the canonical 301 below — redirecting leaks the private
            community's slug + thread title in the Location header. Resolve visibility from the
            post's community_id and deny with the SAME 404 as a missing thread. Fail closed. *)
         let%lwt gate_ok =
@@ -660,7 +660,7 @@ let view_thread_handler request =
               | Ok can -> Lwt.return can
               | Error _ -> Lwt.return false
           in
-          (* Closed creation-notice vocabulary (slice 4): only the two values
+          (* Closed creation-notice vocabulary: only the two values
              the composer's own redirect writes render anything; every other
              ?shared= value is ignored. Resolved here, on the ORIGIN
              rendering only — the destination-context branch above never

@@ -29,7 +29,7 @@ let looks_random_username raw =
     || (!letters >= 6 && vowel_ratio < 0.15)
   end
 
-(* Global admin dashboard on the Cartographic Civic launch shell (pass 18A):
+(* Global admin dashboard on the Cartographic Civic launch shell:
    launch_app_page under body.launch-global-admin — earde.css only, no
    legacy per-page CSS, no Tailwind, no Google Fonts. Read-only operational panels
    (status / recent users / pending signups) plus the preserved global unban

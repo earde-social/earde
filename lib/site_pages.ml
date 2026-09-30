@@ -258,7 +258,7 @@ let privacy_page ?user:_ request =
 (* Single shell for errors, successes, and info — avoids per-handler inline HTML
    fragments that diverge in style and don't inherit the shared layout/nav.
 
-   Cartographic Civic (pass 17): both historical ~auth branches — which had
+   both historical ~auth branches — which had
    already converged on one byte-identical focused panel — now render one
    neutral launch message sheet via Components.launch_message_page. The
    caller contract is untouched: same signature, [title] and [message] are

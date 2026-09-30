@@ -45,8 +45,8 @@ let get_all_posts (module C : Caqti_lwt.CONNECTION) (sort_mode : Post_types.sort
        input can reach Printf.sprintf regardless of call site.
        Public discovery surface: only public + indexable communities appear here.
        Private and public-non-indexable content is reachable only by direct URL
-       (gated in Slice C) or the membership-scoped personalized feed, never globally.
-       Slice G: also drop posts in a non-indexable forum section (cs left-joined on
+       (gated by the private-community read gate) or the membership-scoped personalized feed, never globally.
+       Also drop posts in a non-indexable forum section (cs left-joined on
        section_id; NULL section = root post, kept). The personalized feed deliberately
        does NOT apply this — it is a member's own following surface, not discovery. *)
     let order_clause = match sort_mode with
@@ -249,13 +249,13 @@ let get_posts_by_user (module C : Caqti_lwt.CONNECTION) user_id =
   | Ok rows -> Lwt.return (Ok (List.map Post_types.map_post_row rows))
   | Error err -> Lwt.return (Error (Caqti_error.show err))
 
-(* Slice C/D/G profile leak-filter: map a set of post ids to their owning community's id, raw
+(* Profile leak-filter: map a set of post ids to their owning community's id, raw
    visibility string, indexable flag AND a per-post "non-indexable section" flag in ONE bounded
    IN-list query (ids comma-joined, expanded via string_to_array to sidestep array binding — same
    idiom as get_thread_sources_for_posts).
-   Lets the profile drop private-community posts/comments for viewers who can't read them (Slice C),
-   public-but-non-indexable activity (Slice D), AND activity sitting in a non-indexable forum
-   section (Slice G) from public discovery, with no N+1; comments otherwise carry no community/
+   Lets the profile drop private-community posts/comments for viewers who can't read them,
+   public-but-non-indexable activity, AND activity sitting in a non-indexable forum
+   section from public discovery, with no N+1; comments otherwise carry no community/
    section linkage. The 5th column is TRUE only when the post is in a section flagged
    indexable=false (NULL section = root post = FALSE). Empty input short-circuits. *)
 let post_communities_query =

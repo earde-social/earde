@@ -39,7 +39,7 @@ let leave_community (module C : Caqti_lwt.CONNECTION) user_id community_id =
   | Ok None -> Lwt.return (Ok false)
   | Error err -> Lwt.return (Error (Caqti_error.show err))
 
-(* Slice F: the allow-list for a private community, rendered as the member-management list on
+(* The allow-list for a private community, rendered as the member-management list on
    /c/:slug/settings. Mirrors Ban.get_banned_users. community_members has no timestamp column,
    so order by username. Mods/admins are NOT necessarily here (they read via their role) — this
    lists membership rows only, which is exactly what add/remove manage. *)

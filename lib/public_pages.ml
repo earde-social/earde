@@ -157,7 +157,7 @@ let feed_page ?user ~scope ~sort_mode ~is_logged_in ~admin_usernames
 
 (* === SEARCH === *)
 
-(* Launch search surface (Cartographic Civic pass 12B): the same result body the cool-grey
+(* Launch search surface (Cartographic Civic): the same result body the cool-grey
    shell rendered — header form, tabs, sr-* rows, pager, analytics container, all pinned by
    the analytics suites and the replay-masking selectors — re-parented under the shared
    launch app chrome (Components.launch_app_page, body.launch-search).

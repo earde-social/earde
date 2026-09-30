@@ -1,7 +1,7 @@
 open Html.Infix
 
-(* Cartographic Civic launch community document (pass 8: the structured
-   /c/:slug overview only). Like the pass 1-7 documents, a complete
+(* Cartographic Civic launch community document (the structured
+   /c/:slug overview and channel surfaces). Like the other launch documents, a complete
    self-contained page loading only earde.css plus the shared desktop-only
    mobile gate — no Tailwind, no external fonts, no legacy per-page CSS —
    but with the approved four-pane community shell: the
@@ -24,8 +24,8 @@ open Html.Infix
    here); anonymous documents carry no script at all. [page_class]
    ("launch-community-overview") is the scoping root stamped on <body> for
    the route's integration CSS at the end of earde.css. Shared doc builder
-   behind [launch_community_page] (pass 8 overview) and
-   [launch_community_surface_page] (pass 9 channel), so the two routes'
+   behind [launch_community_page] (overview) and
+   [launch_community_surface_page] (channel), so the two routes'
    global rails can never diverge. *)
 let launch_community_doc ?(noindex = false) ?request ?user
     ?(rail_communities = []) ?(head_extra = Html.empty) ?(aside = Html.empty)
@@ -218,7 +218,7 @@ let launch_community_doc ?(noindex = false) ?request ?user
   ; analytics_banner
   ; behavior_script ])
 
-(* Public pass-8 entry point: the overview content is wrapped in the exact
+(* Public overview entry point: the overview content is wrapped in the exact
    `<main class='main'>` element (same newlines) the pre-extraction template
    emitted, with no aside. [rail_communities] carries the viewer's joined
    communities so the overview's global rail matches the feed and channel

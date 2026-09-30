@@ -1,4 +1,4 @@
-(* === PRIVATE-COMMUNITY READ GATE (Slice C) ===
+(* === PRIVATE-COMMUNITY READ GATE ===
    Privacy is a server-side permission and is decided HERE, in the handler (the security
    boundary) — never trusted from the client. Public communities are readable by everyone; a
    private community is readable only by a global admin, a community moderator, or a member.
@@ -26,14 +26,14 @@ let can_view_community db ~user_id ~admin_override (community : Community_types.
         Lwt.return (Community_types.can_read_community community.Community_types.visibility ~is_member ~is_mod ~is_admin)
       end
 
-(* SEO/discovery (Slice D), NOT access control: a community-content page renders for an
+(* SEO/discovery, NOT access control: a community-content page renders for an
    authorized viewer but must carry <meta robots noindex> when the community is private
    (always effectively non-indexable) or public-but-indexable=false ("unlisted-ish"). Mirrors
    the DB-level public-discovery filter so noindex and feed/search exclusion stay in lockstep. *)
 let community_noindex (community : Community_types.community) =
   not (Community_types.effective_indexable_community community.Community_types.visibility ~community_indexable:community.indexable)
 
-(* Slice G: noindex for a CHILD surface (a forum section page or a channel archive page).
+(* Noindex for a CHILD surface (a forum section page or a channel archive page).
    effective_indexable_child encodes the dominance order: a private community kills it outright,
    otherwise BOTH the community and the child must be indexable. A non-indexable child still
    RENDERS (this is SEO only, not access control) — the handler never gates on it. *)
@@ -41,7 +41,7 @@ let child_noindex (community : Community_types.community) ~child_indexable =
   not (Community_types.effective_indexable_child community.Community_types.visibility
          ~community_indexable:community.indexable ~child_indexable)
 
-(* Slice G: a thread inherits noindex from the forum section it lives in. A post in a
+(* A thread inherits noindex from the forum section it lives in. A post in a
    non-indexable section is noindex even inside a public/indexable community; community-level
    rules (private / community indexable=false) still dominate via child_noindex. A post with no
    section (root/legacy/uncategorized — section_slug = None) falls back to community noindex.

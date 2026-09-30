@@ -324,7 +324,7 @@ let () =
        connected communities, review incoming requests, watch outgoing ones,
        and send new ones. Every route is community-scoped under
        /c/:slug/settings/connections — distinct longer paths than the
-       /c/:slug/settings GET and the Slice E/F settings POSTs, so nothing
+       /c/:slug/settings GET and the visibility/member settings POSTs, so nothing
        shadows anything. The two GETs are informational and deliberately not
        rate-limited, matching the other private settings GETs; the four
        mutations share the sensitive-POST rate limit. Authorization is
@@ -351,7 +351,7 @@ let () =
        path than the /c/:slug/t/:thread GET, so no shadowing) and the
        community-scoped management surface under
        /c/:slug/settings/shared-threads — a distinct literal segment from
-       the /c/:slug/settings GET, the Slice E/F settings POSTs, and the
+       the /c/:slug/settings GET, the visibility/member settings POSTs, and the
        /settings/connections family, so nothing shadows anything. The two
        GETs are informational and deliberately not rate-limited, matching
        the other private settings GETs; the five mutations share the
@@ -386,7 +386,7 @@ let () =
        the community's own can_view_community, exactly like /c/:slug. *)
     Dream.get "/c/:slug/network" Earde.Community_handlers.community_network_handler;
     Dream.get "/c/:slug/modlog" Earde.Moderation_handlers.modlog_handler;
-    (* Reports: singular GET form + plural POST create (Slice B) + plural GET mod queue
+    (* Reports: singular GET form + plural POST create + plural GET mod queue
        (read-only). Distinct literal segments from settings/modlog/manage-mods, so no router
        shadowing; the queue GET and create POST share the /reports path and split by method. *)
     Dream.get "/c/:slug/report" Earde.Moderation_handlers.report_form_handler;
@@ -398,12 +398,12 @@ let () =
     Dream.post "/c/:slug/reports/:report_id/action" Earde.Moderation_handlers.action_report_handler;
     Dream.get "/c/:slug/manage-mods" Earde.Moderation_handlers.manage_mods_handler;
     Dream.post "/c/:slug/toggle_downvotes" Earde.Community_settings_handlers.toggle_downvotes_handler;
-    (* Slice E: TM/A-only visibility + discovery controls. Distinct literal sub-segments under
+    (* TM/A-only visibility + discovery controls. Distinct literal sub-segments under
        /settings/, so no shadowing of the /c/:slug/settings GET. *)
     Dream.post "/c/:slug/settings/visibility" Earde.Community_settings_handlers.update_community_visibility_handler;
     Dream.post "/c/:slug/settings/indexability" Earde.Community_settings_handlers.update_community_indexability_handler;
-    (* Slice F: TM/A-only member allow-list management (private communities). Distinct
-       /settings/members/* sub-segments, so no shadowing of the settings GET or the Slice E POSTs. *)
+    (* TM/A-only member allow-list management (private communities). Distinct
+       /settings/members/* sub-segments, so no shadowing of the settings GET or the visibility POSTs. *)
     Dream.post "/c/:slug/settings/members/add" Earde.Membership_handlers.add_member_handler;
     Dream.post "/c/:slug/settings/members/remove" Earde.Membership_handlers.remove_member_handler;
     Dream.post "/c/:slug/manage-mods/add" Earde.Moderation_handlers.manage_mods_add_handler;
@@ -411,12 +411,12 @@ let () =
     Dream.post "/c/:slug/manage-mods/remove" Earde.Moderation_handlers.manage_mods_remove_handler;
     Dream.post "/c/:slug/sections/add" Earde.Community_structure_handlers.add_section_handler;
     Dream.post "/c/:slug/sections/:section_id/update" Earde.Community_structure_handlers.update_section_handler;
-    (* Slice H: TM/A-only section indexability toggle (gated in-handler). *)
+    (* TM/A-only section indexability toggle (gated in-handler). *)
     Dream.post "/c/:slug/sections/:section_id/indexability" Earde.Community_settings_handlers.update_section_indexability_handler;
     Dream.post "/c/:slug/sections/:section_id/delete" Earde.Community_structure_handlers.delete_section_handler;
     Dream.post "/c/:slug/channels/add" Earde.Community_structure_handlers.add_channel_handler;
     Dream.post "/c/:slug/channels/:channel_id/update" Earde.Community_structure_handlers.update_channel_handler;
-    (* Slice H: TM/A-only channel indexability toggle (gated in-handler). *)
+    (* TM/A-only channel indexability toggle (gated in-handler). *)
     Dream.post "/c/:slug/channels/:channel_id/indexability" Earde.Community_settings_handlers.update_channel_indexability_handler;
     Dream.post "/c/:slug/channels/:channel_id/archive" Earde.Community_structure_handlers.archive_channel_handler;
     Dream.post "/c/:slug/channels/:channel_id/unarchive" Earde.Community_structure_handlers.unarchive_channel_handler;

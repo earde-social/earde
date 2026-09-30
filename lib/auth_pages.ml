@@ -76,7 +76,7 @@ let signup_form ?user:_ ?error ?turnstile_site_key request =
   Page_shell.launch_auth_page ~request ~page_class:"launch-signup"
     ~title:"Create an account" ~content ()
 
-(* Cartographic Civic (pass 2): /login through the same launch wrapper. The
+(* /login through the same launch wrapper. The
    form contract is unchanged — POST /login, Dream CSRF tag, 'identifier' and
    'password' names with their required flags, /forgot-password link — and no
    remember-me is added (unsupported). Failures still render through the
@@ -113,7 +113,7 @@ let login_form ?user:_ request =
   Page_shell.launch_auth_page ~request ~page_class:"launch-login"
     ~title:"Log in" ~content ()
 
-(* Cartographic Civic (pass 16B): /forgot-password through the launch auth
+(* /forgot-password through the launch auth
    wrapper. The inner form is preserved verbatim — POST /forgot-password,
    Dream CSRF tag first, single 'email' field with its id/label/placeholder/
    required flags, and the legacy auth-form/auth-field/auth-input/auth-btn
@@ -146,7 +146,7 @@ let forgot_password_page request =
   Page_shell.launch_auth_page ~noindex:true ~request
     ~page_class:"launch-forgot-password" ~title:"Forgot Password" ~content ()
 
-(* Cartographic Civic (pass 16B): /reset-password through the same launch
+(* /reset-password through the same launch
    wrapper. Form contract unchanged — POST /reset-password, Dream CSRF tag,
    hidden 'token' field, 'password'/'confirm_password' names with their
    required+minlength flags, and the renderer-owned error alert keeps its

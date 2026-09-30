@@ -55,7 +55,7 @@ let community_settings_handler request =
                         match%lwt Report_store.count_open_reports db community.id with
                         | Ok n -> Lwt.return n | Error _ -> Lwt.return 0
                       in
-                      (* Slice F: the community_members allow-list for the member-management card.
+                      (* The community_members allow-list for the member-management card.
                          A lookup failure degrades to an empty list rather than blocking settings. *)
                       let%lwt members =
                         match%lwt Membership_store.get_community_members db community.id with
@@ -294,12 +294,12 @@ let toggle_downvotes_handler request =
           )
       | _ -> Dream.respond ~status:`Bad_Request "Invalid form submission."
 
-(* Slice E: visibility + indexability writes from /c/:slug/settings.
+(* Visibility + indexability writes from /c/:slug/settings.
    Authorization is STRICTER than the settings page itself: visibility and discovery control who
    can read a private community, so only Top Mods and global admins (TM/A) may change them — a
    regular mod hitting these POSTs directly is rejected `Forbidden, mirroring toggle_downvotes
    (top_mod || is_admin). These never change read gates or noindex behavior; they only flip the
-   Slice B columns the gate/resolver already consult. *)
+   visibility/indexability columns the gate/resolver already consult. *)
 
 (* Extracted so the settings flow's lifecycle decision is unit-testable without
    Dream/DB plumbing: the handler consults exactly this, on the authoritative
@@ -445,8 +445,8 @@ let update_community_indexability_handler request =
                    | Error err -> Dream.respond ~status:`Internal_Server_Error (Handler_support.db_error_message err))
        | _ -> Dream.respond ~status:`Bad_Request "Invalid form submission.")
 
-(* Slice H: per-channel / per-section indexability toggles from /c/:slug/settings. Same TM/A gate
-   as the Slice E community visibility/indexability controls — a regular mod hitting these POSTs
+(* Per-channel / per-section indexability toggles from /c/:slug/settings. Same TM/A gate
+   as the community visibility/indexability controls — a regular mod hitting these POSTs
    directly is rejected `Forbidden. These flip ONLY the Slice-B child indexable columns the Slice-G
    resolver already consults for child noindex + discovery/provenance exclusion; they change no read
    gate and create no privacy. Ownership is validated (get_*_by_id) AND the UPDATE is community-scoped,

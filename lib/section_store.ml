@@ -131,7 +131,7 @@ let update_section (module C : Caqti_lwt.CONNECTION) section_id name description
   | Ok () -> Lwt.return (Ok ())
   | Error err -> Lwt.return (Error (Caqti_error.show err))
 
-(* Slice H: section indexability toggle. Community-scoped WHERE (id AND community_id) so a
+(* Section indexability toggle. Community-scoped WHERE (id AND community_id) so a
    forged section_id from another community cannot be flipped. The Slice-G resolver already
    reads this column to decide section/thread noindex + discovery exclusion. *)
 let update_section_indexable_query =

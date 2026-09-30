@@ -29,7 +29,7 @@ module Start_thread : sig
   val summarize_source : Thread_source_store.thread_source_msg list -> source_summary
 end
 (** GET form to start a durable thread from a seed chat message + nearby context.
-    Launch chrome (pass 16A): [rail_communities]/[channels]/[sections] feed the shared
+    Launch chrome: [rail_communities]/[channels]/[sections] feed the shared
     launch shell's global rail and community sidebar; [can_manage] is the handler's real
     admin-or-moderator check and only picks the sidebar Settings visibility. *)
 

@@ -12,10 +12,10 @@ val get_posts_by_community : (module Caqti_lwt.CONNECTION) -> int -> Post_types.
 val get_posts_by_section : (module Caqti_lwt.CONNECTION) -> int -> int -> Post_types.sort_mode -> int -> int -> (Post_types.feed_item list, string) result Lwt.t
 val get_post_by_id : (module Caqti_lwt.CONNECTION) -> int -> (Post_types.post option, string) result Lwt.t
 val get_posts_by_user : (module Caqti_lwt.CONNECTION) -> int -> (Post_types.post list, string) result Lwt.t
-(* Slice C/D/G profile leak-filter: (post_id, community_id, raw visibility, indexable,
+(* Profile leak-filter: (post_id, community_id, raw visibility, indexable,
    section_non_indexable) for a set of post ids, in one bounded query. Lets a profile drop
-   posts/comments in private communities the viewer can't read (Slice C), public-but-non-indexable
-   communities (Slice D), and non-indexable forum sections (Slice G) from public discovery.
+   posts/comments in private communities the viewer can't read, public-but-non-indexable
+   communities, and non-indexable forum sections from public discovery.
    The 5th flag is TRUE only when the post sits in a section flagged indexable=false. Empty -> []. *)
 val get_post_communities : (module Caqti_lwt.CONNECTION) -> int list -> ((int * int * string * bool * bool) list, string) result Lwt.t
 (* The community that owns a post, derived from the post itself — the

@@ -94,7 +94,7 @@ let analytics_consent_method_not_allowed _request =
     ~headers:[ ("Allow", "POST") ]
     {|{"error":"method not allowed"}|}
 
-(* Step-6 domain events: a success path inside a Dream.sql block RECORDS its
+(* Domain events: a success path inside a Dream.sql block RECORDS its
    emission; the recorded thunk runs only after the block returns and its
    pooled connection is released, so the fire-and-forget analytics HTTP never
    overlaps a checked-out DB connection. Nothing recorded ⇒ nothing emitted,

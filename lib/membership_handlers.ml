@@ -12,7 +12,7 @@ let join_community_handler request =
 
           Analytics_handlers.with_analytics_after_sql (fun record ->
           Dream.sql request (fun db ->
-            (* Slice C: no self-serve join for private communities — they are hidden and
+            (* No self-serve join for private communities — they are hidden and
                members are added by a mod/admin (later slice), not via this open endpoint.
                Resolve the community SERVER-SIDE (the form's community_id is untrusted) and deny
                private with the same 404 as a missing community. Public join is unchanged. *)
@@ -79,8 +79,8 @@ let leave_community_handler request =
           ))
       | _ -> Dream.respond ~status:`Bad_Request (Site_pages.msg_page ?user:(Dream.session_field request "username") ~title:"Form Error" ~message:"Invalid form submission." ~alert_type:"error" ~return_url:"/" request)
 
-(* Slice F: minimal member-management (the allow-list for private communities). Same TM/A gate as
-   the Slice E visibility/indexability controls — membership controls who can read a private
+(* Minimal member-management (the allow-list for private communities). Same TM/A gate as
+   the visibility/indexability controls — membership controls who can read a private
    community, so a regular mod must not add/remove members. The community is always resolved from
    the slug; the form's user_id (remove) only selects WHICH row, and the DELETE is scoped to this
    community server-side, so a forged community_id is impossible. These touch ONLY community_members

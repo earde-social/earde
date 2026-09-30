@@ -1,7 +1,7 @@
 open Html.Infix
 
 (* The three /new-post states below (community chooser, join gate, creation
-   form) moved onto the Cartographic launch shell (pass 15B). The create-*
+   form) moved onto the Cartographic launch shell. The create-*
    fragments are kept verbatim — every field name/id/value, the hidden
    community_id, the section <select>, the Dream CSRF tag and the legacy
    .create-shell marker are unchanged — and only the outer document moved onto
@@ -92,8 +92,7 @@ let join_to_post_page ?user ?(rail_communities = []) (community : Community_type
     ~content:(Html.template "<div class='create-shell'>%s</div>"
   [ content ]) ()
 
-(* GET form for "Start thread from chat", on the Cartographic launch shell
-   (pass 16A). The seed message is shown selected + locked; nearby messages are
+(* GET form for "Start thread from chat", on the Cartographic launch shell. The seed message is shown selected + locked; nearby messages are
    checkboxes; the thread body is editable notes. SSR, normal POST, CSRF; the
    only JS is the pre-existing page-scoped selection counter below. The
    create-shell fragment (candidate ledger, hidden seed input, msg_<id>
@@ -221,7 +220,7 @@ let start_thread_form ?user ?error ?(rail_communities = [])
   ; (Html.text (community.slug))
   ; (Html.text (channel.slug)) ])
   in
-  (* Cartographic launch shell (pass 16A): the same four-pane chrome as the
+  (* Cartographic launch shell: the same four-pane chrome as the
      sibling community routes, wrapping the promotion form verbatim — the
      create-* fields, the hidden seed input, the msg_<id> checkbox names and
      ordering, the section <select>, the Dream CSRF tag, the selection-count
@@ -285,7 +284,7 @@ let new_post_form ?user ?preselected_section_id ?(rail_communities = [])
   [ options ])
     end
   in
-  (* Optional Shared thread area (slice 4). Rendered only when at least one
+  (* Optional Shared thread area. Rendered only when at least one
      eligible connected destination exists — the candidates are the handler's
      server-resolved list and this markup decides nothing: POST /posts
      re-resolves the slug and the placement store revalidates connection,
@@ -374,7 +373,7 @@ let new_post_form ?user ?preselected_section_id ?(rail_communities = [])
     ~content:(Html.template "<div class='create-shell'>%s</div>"
   [ content ]) ()
 
-(* The legacy /p/:id fallback (pass 20A), reachable only for the pathological
+(* The legacy /p/:id fallback, reachable only for the pathological
    unmappable post (community_slug = "" — view_post_handler 301s every mappable
    post to its canonical thread URL before this renders). The inner warm-card
    fragment — post card, recursive comment tree, every /vote, /vote-comment,

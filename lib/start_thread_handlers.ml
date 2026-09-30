@@ -72,7 +72,7 @@ let start_thread_form_handler request =
              | Ok None -> Dream.respond ~status:`Not_Found (Site_pages.msg_page ?user ~title:"Not Found" ~message:"This community does not exist." ~alert_type:"error" ~return_url:"/" request)
              | Error e -> Dream.respond ~status:`Internal_Server_Error (Site_pages.msg_page ?user ~title:"Error" ~message:(Handler_support.db_error_message e) ~alert_type:"error" ~return_url:"/" request)
              | Ok (Some community) ->
-                 (* Slice C: a private community is hidden — a non-authorized viewer gets the
+                 (* A private community is hidden — a non-authorized viewer gets the
                     same 404 as a missing community, BEFORE any membership-specific 403 below.
                     This does not broaden who may create a thread (check_start_permission still
                     runs for authorized viewers). *)
@@ -110,7 +110,7 @@ let start_thread_form_handler request =
                                           messages render on the thread from their persisted relations; the
                                           textarea carries only text the curator deliberately writes. *)
                                        let def_section_id = default_thread_section_id sections in
-                                       (* Launch-chrome data (pass 16A), loaded only after every gate
+                                       (* Launch-chrome data, loaded only after every gate
                                           above passed — a hidden private community, a missing/foreign
                                           seed, a banned viewer and a non-member never touch the
                                           viewer's memberships or the channel list. Each degrades to an
@@ -154,7 +154,7 @@ let start_thread_create_handler request =
                   | Ok None -> Dream.respond ~status:`Not_Found (Site_pages.msg_page ?user ~title:"Not Found" ~message:"This community does not exist." ~alert_type:"error" ~return_url:"/" request)
                   | Error e -> Dream.respond ~status:`Internal_Server_Error (Site_pages.msg_page ?user ~title:"Error" ~message:(Handler_support.db_error_message e) ~alert_type:"error" ~return_url:"/" request)
                   | Ok (Some community) ->
-                      (* Slice C: private community hidden — non-authorized viewer gets 404, not
+                      (* Private community hidden — non-authorized viewer gets 404, not
                          the membership 403 below. check_start_permission still gates creation. *)
                       let%lwt authorized = Community_read_gate.can_view_community db ~user_id ~admin_override:is_admin community in
                       if not authorized then Community_read_gate.community_not_found ?user request
@@ -193,7 +193,7 @@ let start_thread_create_handler request =
                                             let selected = Chat_pages.Start_thread.parse_selected_ids form_data in
                                             let context = Chat_pages.Start_thread.normalize_selection ~seed:message_id ~max_total:start_thread_max_total ~valid selected in
                                             let rerender ?(error="") () =
-                                              (* Launch-chrome data (pass 16A), loaded only when a validation
+                                              (* Launch-chrome data, loaded only when a validation
                                                  state actually re-renders the form — the success path keeps
                                                  its exact query set. Same post-gate position and degradation
                                                  as the GET handler. *)

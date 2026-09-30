@@ -72,7 +72,7 @@ let create_channel_query =
   "INSERT INTO channels (community_id, slug, name, topic, position) VALUES ($1, $2, $3, $4, $5)"
 
 (* Returns the generated slug (not unit like create_section): the slug is
-   auto-derived, so the caller cannot know it otherwise, and the Step-3 handler
+   auto-derived, so the caller cannot know it otherwise, and the handler
    needs it to redirect to /c/:slug/chat/:channel_slug. *)
 let create_channel (module C : Caqti_lwt.CONNECTION) community_id name topic position =
   let base = slugify name in
@@ -150,9 +150,9 @@ let update_channel (module C : Caqti_lwt.CONNECTION) channel_id community_id nam
   | Ok () -> Lwt.return (Ok ())
   | Error err -> Lwt.return (Error (Caqti_error.show err))
 
-(* Slice H: channel indexability toggle. Community-scoped WHERE mirrors update_channel /
+(* Channel indexability toggle. Community-scoped WHERE mirrors update_channel /
    set_channel_archived. Flips only the archive-surface noindex + provenance-safety behavior
-   Slice G already wires; it does NOT make the channel private (readable by direct URL still). *)
+   the child-indexability resolver already wires; it does NOT make the channel private (readable by direct URL still). *)
 let update_channel_indexable_query =
   let open Caqti_request.Infix in
   (Caqti_type.(t2 bool (t2 int int)) ->. Caqti_type.unit)

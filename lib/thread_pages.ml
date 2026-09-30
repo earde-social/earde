@@ -25,7 +25,7 @@ type shared_thread_page_context = {
   stc_section : (string * string) option;
 }
 
-(* The closed post-creation notices (slice 4): the composer's PRG lands on
+(* The closed post-creation notices: the composer's PRG lands on
    the canonical origin thread with ?shared=..., the handler maps the query
    value onto this variant, and anything else renders nothing. Fixed copy
    only — no query-supplied text, no failure cause, no destination name:
@@ -86,7 +86,7 @@ let thread_shell_page ?user ?(noindex=false) ?(can_share=false) ?(can_comment=fa
   [ (Html.text (community.slug)) ])
     | None -> Html.empty in
 
-  (* Launch community sidebar (pass-8/9 grammar): the LOCAL section is active.
+  (* Launch community sidebar: the LOCAL section is active.
      Settings gate mirrors the overview: render-time visibility only, handler re-checks. *)
   let sidebar =
     Community_pages.launch_knowledge_sidebar ~community ~channels ~sections

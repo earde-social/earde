@@ -137,7 +137,7 @@ let get_source_span_for_thread (module C : Caqti_lwt.CONNECTION) post_id =
    can show "Started from #channel" without an N+1. Only rows actually started from chat
    (promoted_from_channel_id NOT NULL, channel still present) come back; callers treat a
    missing post_id as "no marker". Empty input short-circuits with no query.
-   Slice G: a marker is suppressed when its source channel is not publicly indexable (private
+   A marker is suppressed when its source channel is not publicly indexable (private
    community, community indexable=false, or channel indexable=false), so the public search
    Threads tab never names a private/non-indexable source channel. *)
 let thread_sources_for_posts_query =

@@ -88,10 +88,10 @@ let toggle_community_downvotes (module C : Caqti_lwt.CONNECTION) community_id al
   | Ok () -> Lwt.return (Ok ())
   | Error err -> Lwt.return (Error (Caqti_error.show err))
 
-(* Slice E: visibility/indexability writes (set from the settings UI). visibility is the
+(* Visibility/indexability writes (set from the settings UI). visibility is the
    stored TEXT mirrored by the CHECK constraint; we accept the closed [community_visibility]
    variant and stringify here so call sites never pass a raw, unvalidated string. The DB CHECK
-   is the backstop. These touch only the SEO/access columns added in Slice B — no other field. *)
+   is the backstop. These touch only the SEO/access columns — no other field. *)
 (* RETURNING the authoritative updated row: visibility is a closed PostHog
    group property, so the handler needs the post-update record for its
    $groupidentify without a second lookup. None = id matched no community. *)

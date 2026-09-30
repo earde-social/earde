@@ -8,7 +8,7 @@ open Html.Infix
    community is not itself connection-eligible; that decision belongs to the read model,
    not to this template. *)
 (* Launch sidebar for the flat (sections_enabled = false) community home — the
-   pass-8/9 grammar reduced to what a single-feed community really has: the
+   launch sidebar grammar reduced to what a single-feed community really has: the
    identity head, the one Feed surface (always current — /c/:slug IS the feed),
    the factual private marker, and the Network group with the intentionally
    public moderation log plus Settings under the exact mod-or-admin gate the
@@ -153,7 +153,7 @@ let community_page ?user ?(noindex=false) ?(connected_projects = Html.empty) ?(c
   [ csrf_token
   ; Html.int (community.id)
   ; (Html.text community.slug) ])
-        (* No self-serve join for private communities (Slice C): a non-member who can see this
+        (* No self-serve join for private communities: a non-member who can see this
            page is a mod/admin; show no misleading Join button (the /join route 404s anyway). *)
         else if community.visibility = Community_types.Community_private then Html.empty
         else (Html.template "<form action='/join' method='POST'>%s<input type='hidden' name='community_id' value='%s'><input type='hidden' name='redirect_to' value='/c/%s'><button type='submit' class='btn btn--primary btn--block'>Join</button></form>"
@@ -331,12 +331,12 @@ let community_page ?user ?(noindex=false) ?(connected_projects = Html.empty) ?(c
     ~page_class:"launch-flat-community" ~title:community.name ~content ()
 
 (* The forum-section feed inside a structured community, and (below) the canonical thread
-   view — the pass-10 knowledge routes, now on the Cartographic Civic launch chrome. Kept as
+   view — the knowledge routes on the Cartographic Civic launch chrome. Kept as
    separate functions (not folded into community_page) so the simple-community feed and the
    section feed can diverge in chrome without one breaking the other. SSR-only — every link
    works with JS disabled; the page JS only enhances. *)
 (* Launch community sidebar for the knowledge routes (section + thread), in the exact
-   pass-8/9 grammar: identity head, Overview link, factual visibility marker, Live channels
+   launch sidebar grammar: identity head, Overview link, factual visibility marker, Live channels
    (never active here — these are forum surfaces), Knowledge sections with the current/parent
    section active, and the intentionally public moderation log. Settings renders only under
    the is_mod-or-admin gate its handler enforces; Home requests needs the top-mod authority
@@ -353,7 +353,7 @@ let community_page ?user ?(noindex=false) ?(connected_projects = Html.empty) ?(c
    surfaces pass false because they never name an ineligibility reason
    (private/draft/legacy) anywhere in their documents.
    [moderation_log_active] marks the always-present Moderation log entry current —
-   used only by the modlog route (pass 14A), which is public by design, so the
+   used only by the modlog route, which is public by design, so the
    entry itself renders for every viewer exactly as before. *)
 let launch_knowledge_sidebar ~(community : Community_types.community) ~(channels : Channel_store.channel list)
     ~(sections : Section_store.community_section list) ?active_section_slug
@@ -458,7 +458,7 @@ let community_section_shell_page ?user ?(noindex=false) ?thread_count ?last_acti
   (* base_url drives the sort tabs, the New-thread link, and pagination — all stay on the section URL. *)
   let base_url = Printf.sprintf "/c/%s/s/%s" (community.slug) (section.slug) in
 
-  (* Launch community sidebar (pass-8/9 grammar): the current section is active; the virtual
+  (* Launch community sidebar: the current section is active; the virtual
      Uncategorized feed isn't a real section row, so it is appended (active) only when we're
      on it — keeps it highlighted without an extra orphaned-count query just to decorate the
      sidebar. Settings gate mirrors the overview: the render-time check is visibility only,
@@ -727,7 +727,7 @@ let community_overview_page ?user ?(noindex=false) ?(connected_projects_count=0)
         | Some (c : Channel_store.channel) ->
             let chat_url = Printf.sprintf "/c/%s/ch/%s" (community.slug) (c.slug) in
             (* Private community: anyone seeing this overview is authorized to read it, so link
-               straight in — never show a self-join button (Slice C). *)
+               straight in — never show a self-join button. *)
             if is_member || community.visibility = Community_types.Community_private then
               (Html.template "<a class='btn btn--primary' href='%s'>Open #%s &rarr;</a>"
   [ (Html.text chat_url)

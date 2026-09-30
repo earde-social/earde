@@ -161,7 +161,7 @@ type entry_topbar =
   | Entry_connect_cta
   | Entry_viewer of string option
 
-(* Cartographic Civic launch entry document (pass 1: /bring only). A complete,
+(* Cartographic Civic launch entry document (/bring). A complete,
    self-contained HTML document that loads only the launch stylesheet
    (earde.css) — no Tailwind, no external fonts, no legacy per-page CSS.
 
@@ -280,7 +280,7 @@ let launch_entry_page ?(noindex = false) ?request ?(topbar = Entry_connect_cta)
   ; gate_panel
   ; analytics_banner ])
 
-(* Cartographic Civic launch auth document (pass 2: /login and /signup only).
+(* Cartographic Civic launch auth document (/login and /signup).
    Like [launch_entry_page], a complete self-contained document that loads only
    earde.css — no Tailwind, no external fonts, no legacy per-page CSS, no
    mobile gate, no notification polling — but with the approved *anonymous* top bar (the shared
@@ -289,7 +289,7 @@ let launch_entry_page ?(noindex = false) ?request ?(topbar = Entry_connect_cta)
 
    The chrome is deterministic and viewer-independent: the same three real
    routes for every request, no bell, no user chip, no logout form. The
-   command field stays a styled link to /search (same trick as pass 1) so this
+   command field stays a styled link to /search (same trick as the entry document) so this
    wrapper adds no form contract beyond the page's own auth form. Analytics
    behavior is the shared [analytics_assets], identical to
    [launch_entry_page]. [page_class] ("launch-login" / "launch-signup") lands
@@ -344,8 +344,8 @@ let launch_auth_page ?(noindex = false) ?request ~page_class ~title ~content () 
   ; launch_footer
   ; analytics_banner ])
 
-(* Cartographic Civic launch message document (pass 17: the shared
-   Site_pages.msg_page only). Like the other launch documents, complete and
+(* Cartographic Civic launch message document (the shared
+   Site_pages.msg_page). Like the other launch documents, complete and
    self-contained, loading only earde.css — no Tailwind, no external fonts,
    no legacy per-page CSS, no mobile gate, no behavior script, no
    notification wiring —
@@ -555,8 +555,8 @@ let launch_behavior_script = (Html.static {js|<script>
         });
       </script>|js})
 
-(* Cartographic Civic launch app document (pass 3: /feed only). Like the pass
-   1/2 documents, a complete self-contained page loading only earde.css — no
+(* Cartographic Civic launch app document (/feed). Like the entry and
+   auth documents, a complete self-contained page loading only earde.css — no
    Tailwind, no external fonts, no legacy per-page CSS — but with the full app
    chrome: the 54px top bar (brand → /feed, a REAL /search form, viewer-state
    actions), the dark 64px icon rail (Feed active with its bleeding marker,
@@ -749,8 +749,8 @@ let launch_app_page ?(noindex = false) ?request ?user ?(rail_communities = [])
   ; analytics_banner
   ; behavior_script ])
 
-(* Cartographic Civic launch onboarding document (pass 4: /projects/new only).
-   Like the pass 1-3 documents, a complete self-contained page loading only
+(* Cartographic Civic launch onboarding document (/projects/new).
+   Like the other launch documents, a complete self-contained page loading only
    earde.css plus the shared desktop-only mobile gate — no Tailwind, no
    external fonts, no legacy per-page CSS — under the launch app chrome:
    the 54px top bar (brand → /feed, the command field as a styled LINK to

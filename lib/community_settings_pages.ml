@@ -1,6 +1,6 @@
 open Html.Infix
 
-(* Cartographic Civic (pass 19): only the outer document changes — the legacy
+(* Only the outer document changes — the legacy
    create_page wrapper becomes the launch app chrome (Components.launch_app_page:
    earde.css + the shared mobile gate only, no legacy per-page CSS, no Tailwind).
    The inner create-* fragment — the POST /communities form contract (action,
@@ -236,7 +236,7 @@ let community_settings_page ?user ?(connected_projects = Html.empty) ?(rail_comm
     Html.template "<option value='%s'%s>%s</option>" [ Html.text value; sel; Html.text label ]
   in
 
-  (* Slice H: per-child indexability state + (TM/A only) toggle. Indexability is sensitive
+  (* Per-child indexability state + (TM/A only) toggle. Indexability is sensitive
      (it governs public discovery + chat provenance leakage), so the editing form renders only
      for top_mod/admin — regular mods get the read-only badge. The matching POST handlers re-check
      TM/A regardless. The hidden field carries the explicit next state. In the compact-row layout
@@ -258,7 +258,7 @@ let community_settings_page ?user ?(connected_projects = Html.empty) ?(rail_comm
   ; (Html.text next_val)
   ; (Html.text label) ])
   in
-  (* Community-level private / non-indexable dominates child flags (Slice G effective_indexable_child):
+  (* Community-level private / non-indexable dominates child flags (effective_indexable_child):
      while dominated, a child's stored flag has no public effect. We still allow toggling so the flag
      is ready when the community becomes public+indexable; the note below says so plainly. *)
   let community_dominates_children = is_private || not community.indexable in
@@ -274,7 +274,7 @@ let community_settings_page ?user ?(connected_projects = Html.empty) ?(rail_comm
   (* Replaces the old Overview + Visibility pair. The status strip is read-only and derived
      from data the handler already passes (no fabricated metric). While private, indexability
      is never an actionable control — private communities are never indexed, so the stored
-     flag is shown only as inactive secondary copy. Slice E routes/inputs are unchanged. *)
+     flag is shown only as inactive secondary copy. The community-level routes/inputs are unchanged. *)
   let visibility_panel =
     let downvotes_row =
       if community.allow_downvotes then stat (Html.static "downvotes") (Html.static "cm-stat-val--ok") (Html.static "enabled")
@@ -678,7 +678,7 @@ let community_settings_page ?user ?(connected_projects = Html.empty) ?(rail_comm
   in
 
   (* ---- Panel: Members ---- *)
-  (* Slice F: member allow-list management. Adding/removing members is TM/A-only (same gate as
+  (* Member allow-list management. Adding/removing members is TM/A-only (same gate as
      visibility/indexability), so the controls render only for top_mod/admin; the matching POST
      handlers re-check TM/A. Regular mods see a read-only list + a note. This manages ONLY
      community_members — moderators/admins keep read access through their role, so they may not
@@ -912,7 +912,7 @@ let community_settings_page ?user ?(connected_projects = Html.empty) ?(rail_comm
       ~can_complete_setup ~network_manager:(is_top_mod || is_admin)
       ~panel:main_panel ()
   in
-  (* Cartographic launch shell (pass 11A): the same four-pane chrome as the
+  (* Cartographic launch shell: the same four-pane chrome as the
      overview/channel/section/thread routes, wrapping the settings content
      verbatim — every cm-* fragment above is test-pinned or treated as such,
      so only this outer document changed. The sidebar reuses the shared

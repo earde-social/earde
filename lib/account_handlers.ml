@@ -20,13 +20,13 @@ let view_profile_handler request =
          | Error _ -> Lwt.return [])
       else Lwt.return []
     in
-    (* Slice C + D profile leak-filter. A profile aggregates a user's activity across communities
+    (* Profile leak-filter. A profile aggregates a user's activity across communities
        and is itself a PUBLIC discovery surface, so it must not surface activity that is either
-       (a) PRIVATE and unreadable by the *viewer* (Slice C), or (b) public-but-non-indexable, i.e.
-       "unlisted" (Slice D). [blocked_post_ids] classifies a page of post ids in one bounded query
+       (a) PRIVATE and unreadable by the *viewer*, or (b) public-but-non-indexable, i.e.
+       "unlisted". [blocked_post_ids] classifies a page of post ids in one bounded query
        (visibility + indexable), drops public-non-indexable outright, and for the rare private ones
        checks the viewer's membership/mod per distinct community. Private communities the viewer CAN
-       read stay visible (Slice C — no broadening). Fails CLOSED: a classification error blocks the
+       read stay visible. Fails CLOSED: a classification error blocks the
        whole page. Public + indexable activity is unaffected. *)
     let blocked_post_ids post_ids =
       match post_ids with
@@ -41,7 +41,7 @@ let view_profile_handler request =
                   (fun (pid, _cid, vis, indexable, _sec) ->
                      if vis = "public" && not indexable then Some pid else None)
                   rows in
-              (* (c) Slice G: in a non-indexable forum section → never surfaced as public discovery,
+              (* (c) In a non-indexable forum section → never surfaced as public discovery,
                  regardless of community-level flags. *)
               let section_excluded =
                 List.filter_map
@@ -69,8 +69,8 @@ let view_profile_handler request =
     in
     (* Shared profile-surfaceable rule for community badges/stats (each carries a community record
        or slug → a discovery link): show only public+indexable communities, plus private ones the
-       viewer is authorized to read (Slice C). Public-but-non-indexable communities are hidden
-       (Slice D). Fails closed. *)
+       viewer is authorized to read. Public-but-non-indexable communities are hidden.
+       Fails closed. *)
     let community_surfaceable (c : Community_types.community) =
       match c.Community_types.visibility with
       | Community_types.Community_public -> Lwt.return c.indexable
@@ -90,9 +90,9 @@ let view_profile_handler request =
             let admin_usernames = match admin_usernames_res with Ok l -> l | Error _ -> [] in
             let%lwt moderated_communities_res = Moderator_store.get_moderated_communities db uid in
             let moderated_communities = match moderated_communities_res with Ok l -> l | Error _ -> [] in
-            (* Slice C + D: the "Mod of /c/x" badges render on every tab and are discovery links.
-               They would otherwise leak that this user moderates a PRIVATE community (Slice C) or
-               an unlisted public-non-indexable one (Slice D). Surface only public+indexable
+            (* The "Mod of /c/x" badges render on every tab and are discovery links.
+               They would otherwise leak that this user moderates a PRIVATE community or
+               an unlisted public-non-indexable one. Surface only public+indexable
                communities, plus private ones the viewer can read. *)
             let%lwt moderated_communities =
               Lwt_list.filter_s community_surfaceable moderated_communities in

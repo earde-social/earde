@@ -319,7 +319,7 @@ let project_home_review_page ?user ?request ?shell ~state ~feedback () =
   | None ->
       (* noindex: a moderator-only workflow surface — not for search
          indexes. *)
-      (* Degraded document (pass 19): [shell] is None only when the durable
+      (* Degraded document: [shell] is None only when the durable
          community record could not be re-read for launch chrome AFTER the
          read model already authorized this reviewer (a mid-request deletion
          race or a storage failure in the decorative load). Without a
