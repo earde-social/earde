@@ -28,14 +28,6 @@ let string_of_action = function
   | Placement_removed -> "shared_thread_removed"
   | Placement_withdrawn -> "shared_thread_withdrawn"
 
-let action_of_string = function
-  | "shared_thread_requested" -> Some Placement_requested
-  | "shared_thread_accepted" -> Some Placement_accepted
-  | "shared_thread_rejected" -> Some Placement_rejected
-  | "shared_thread_removed" -> Some Placement_removed
-  | "shared_thread_withdrawn" -> Some Placement_withdrawn
-  | _ -> None
-
 (* created_at rides the database default so the event timestamp comes from
    the same clock as the business row it describes. RETURNING both id and
    action lets the caller-side revalidation prove the row landed

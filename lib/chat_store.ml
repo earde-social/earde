@@ -60,21 +60,6 @@ let get_message_by_id (module C : Caqti_lwt.CONNECTION) id =
   | Ok None -> Lwt.return (Ok None)
   | Error err -> Lwt.return (Error (Caqti_error.show err))
 
-(* Initial channel-view render: newest `limit` messages. Fetched id DESC (uses the
-   (channel_id, id) index) then List.rev'd to ascending so the caller renders oldest
-   → newest top-to-bottom. *)
-let get_recent_query =
-  let open Caqti_request.Infix in
-  (Caqti_type.(t2 int int) ->* chat_message_row_type)
-  "SELECT id, channel_id, user_id, content, created_at::text, edited_at::text, deleted_at::text \
-   FROM chat_messages WHERE channel_id = $1 ORDER BY id DESC LIMIT $2"
-
-let get_recent_messages (module C : Caqti_lwt.CONNECTION) channel_id limit =
-  Query_timer.with_query_timer ~name:"chat_get_recent_messages" (fun () ->
-    C.collect_list get_recent_query (channel_id, limit) >>= function
-    | Ok rows -> Lwt.return (Ok (List.rev_map map_chat_message_row rows))
-    | Error err -> Lwt.return (Error (Caqti_error.show err)))
-
 (* SSR initial render needs the author name per message; the index-only reads above
    deliberately skip the users JOIN (author display is a render concern, the hot
    realtime path stays on the (channel_id, id) index). This separate render-oriented
@@ -103,63 +88,6 @@ let get_recent_messages_with_authors (module C : Caqti_lwt.CONNECTION) channel_i
     C.collect_list get_recent_with_authors_query (channel_id, limit) >>= function
     | Ok rows -> Lwt.return (Ok (List.rev_map map_chat_message_author_row rows))
     | Error err -> Lwt.return (Error (Caqti_error.show err)))
-
-(* Archive keyset pagination (older page): messages with id < before_id, newest
-   first then reversed to ascending. The caller passes the smallest id it has seen. *)
-let get_before_query =
-  let open Caqti_request.Infix in
-  (Caqti_type.(t3 int int64 int) ->* chat_message_row_type)
-  "SELECT id, channel_id, user_id, content, created_at::text, edited_at::text, deleted_at::text \
-   FROM chat_messages WHERE channel_id = $1 AND id < $2 ORDER BY id DESC LIMIT $3"
-
-let get_messages_before_id (module C : Caqti_lwt.CONNECTION) channel_id before_id limit =
-  Query_timer.with_query_timer ~name:"chat_get_messages_before_id" (fun () ->
-    C.collect_list get_before_query (channel_id, before_id, limit) >>= function
-    | Ok rows -> Lwt.return (Ok (List.rev_map map_chat_message_row rows))
-    | Error err -> Lwt.return (Error (Caqti_error.show err)))
-
-(* Generic realtime-resume / replay read: everything newer than after_id, already
-   ascending. A later realtime layer uses this to catch a reconnecting client up from
-   its last-seen id — Postgres is the source of truth, the bus is best-effort. limit
-   caps the replay size. *)
-let get_after_query =
-  let open Caqti_request.Infix in
-  (Caqti_type.(t3 int int64 int) ->* chat_message_row_type)
-  "SELECT id, channel_id, user_id, content, created_at::text, edited_at::text, deleted_at::text \
-   FROM chat_messages WHERE channel_id = $1 AND id > $2 ORDER BY id ASC LIMIT $3"
-
-let get_messages_after_id (module C : Caqti_lwt.CONNECTION) channel_id after_id limit =
-  Query_timer.with_query_timer ~name:"chat_get_messages_after_id" (fun () ->
-    C.collect_list get_after_query (channel_id, after_id, limit) >>= function
-    | Ok rows -> Lwt.return (Ok (List.map map_chat_message_row rows))
-    | Error err -> Lwt.return (Error (Caqti_error.show err)))
-
-(* Author-scoped: only the message's author edits, so the user_id guard prevents one
-   user editing another's message (mirrors soft_delete_comment's ownership scoping). *)
-let edit_message_query =
-  let open Caqti_request.Infix in
-  (Caqti_type.(t3 int64 int string) ->. Caqti_type.unit)
-  "UPDATE chat_messages SET content = $3, edited_at = CURRENT_TIMESTAMP WHERE id = $1 AND user_id = $2"
-
-let edit_message (module C : Caqti_lwt.CONNECTION) message_id user_id content =
-  C.exec edit_message_query (message_id, user_id, content) >>= function
-  | Ok () -> Lwt.return (Ok ())
-  | Error err -> Lwt.return (Error (Caqti_error.show err))
-
-(* By id only (no user_id guard): both the author and moderators delete through this
-   one write path, so authorization is decided by the handler, not baked into the DB
-   layer. Sets deleted_at and leaves content intact for auditability; archive reads
-   still return the row and the render layer masks it. GDPR content erasure is the
-   separate anonymize_user path. *)
-let soft_delete_message_query =
-  let open Caqti_request.Infix in
-  (Caqti_type.int64 ->. Caqti_type.unit)
-  "UPDATE chat_messages SET deleted_at = CURRENT_TIMESTAMP WHERE id = $1"
-
-let soft_delete_message (module C : Caqti_lwt.CONNECTION) message_id =
-  C.exec soft_delete_message_query message_id >>= function
-  | Ok () -> Lwt.return (Ok ())
-  | Error err -> Lwt.return (Error (Caqti_error.show err))
 
 (* Author-joined variants of the before/after keyset reads, used by the
    "start thread from chat" form to show nearby messages with their authors

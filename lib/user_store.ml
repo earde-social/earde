@@ -6,16 +6,6 @@ type user = {
   email : string;
 }
 
-let create_user_query =
-  let open Caqti_request.Infix in
-  (Caqti_type.(t4 string string string string) ->. Caqti_type.unit)
-  "INSERT INTO users (username, email, password_hash, verification_token) VALUES ($1, $2, $3, $4)"
-
-let create_user (module C: Caqti_lwt.CONNECTION) username email password_hash verification_token =
-  C.exec create_user_query (username, email, password_hash, verification_token) >>= function
-  | Ok () -> Lwt.return (Ok ())
-  | Error e -> Lwt.return (Error (Caqti_error.show e))
-
 (* Nested 7-column row: (id, username, email, created_at), (hash, is_admin,
    is_banned). created_at rides the same lookup so a successful login has the
    closed analytics person properties with no extra query. *)

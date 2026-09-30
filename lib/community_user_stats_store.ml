@@ -9,19 +9,6 @@ type community_user_stat = {
   first_active_at : string option;
 }
 
-(* Upsert-only: first_active_at is set on INSERT and never overwritten — it records
-   when the user first contributed, not when they last updated their stats. *)
-let ensure_q =
-  let open Caqti_request.Infix in
-  (Caqti_type.(t2 int int) ->. Caqti_type.unit)
-  "INSERT INTO community_user_stats (user_id, community_id) VALUES ($1, $2)
-   ON CONFLICT (user_id, community_id) DO NOTHING"
-
-let ensure_community_user_stats (module C : Caqti_lwt.CONNECTION) user_id community_id =
-  C.exec ensure_q (user_id, community_id) >>= function
-  | Ok () -> Lwt.return (Ok ())
-  | Error e -> Lwt.return (Error (Caqti_error.show e))
-
 let inc_post_q =
   let open Caqti_request.Infix in
   (Caqti_type.(t2 int int) ->. Caqti_type.unit)
@@ -45,19 +32,6 @@ let inc_comment_q =
 
 let increment_local_comment_count (module C : Caqti_lwt.CONNECTION) user_id community_id =
   C.exec inc_comment_q (user_id, community_id) >>= function
-  | Ok () -> Lwt.return (Ok ())
-  | Error e -> Lwt.return (Error (Caqti_error.show e))
-
-let update_karma_q =
-  let open Caqti_request.Infix in
-  (Caqti_type.(t3 int int int) ->. Caqti_type.unit)
-  "INSERT INTO community_user_stats (user_id, community_id, local_karma)
-   VALUES ($1, $2, $3)
-   ON CONFLICT (user_id, community_id)
-   DO UPDATE SET local_karma = community_user_stats.local_karma + $3"
-
-let update_local_karma (module C : Caqti_lwt.CONNECTION) user_id community_id delta =
-  C.exec update_karma_q (user_id, community_id, delta) >>= function
   | Ok () -> Lwt.return (Ok ())
   | Error e -> Lwt.return (Error (Caqti_error.show e))
 

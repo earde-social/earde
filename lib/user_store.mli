@@ -1,6 +1,5 @@
 type user = { id : int; username : string; email : string; }
 
-val create_user : (module Caqti_lwt.CONNECTION) -> string -> string -> string -> string -> (unit, string) result Lwt.t
 (* Nested row: (id, username, email, created_at), (password_hash, is_admin,
    is_banned) — created_at rides along for the analytics person $set. *)
 val get_user_for_login : (module Caqti_lwt.CONNECTION) -> string -> (((int * string * string * string) * (string * bool * bool)) option, string) result Lwt.t

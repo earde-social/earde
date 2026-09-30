@@ -27,10 +27,6 @@ val string_of_action : action -> string
     [shared_thread_rejected], [shared_thread_removed],
     [shared_thread_withdrawn]. *)
 
-val action_of_string : string -> action option
-(** Closed inverse of {!string_of_action}; anything else is [None]. Shared
-    with future read surfaces so the five spellings exist in exactly one
-    place. *)
 
 type error =
   | Inconsistent_data
