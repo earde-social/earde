@@ -2506,3 +2506,23 @@ let cookie_session_case =
       Lwt.return_unit)
 
 let cookie_db_suite = [ cookie_session_case ]
+
+let suites =
+    (* Account privacy and fail-closed authentication boundaries. DB-free:
+       the bounded auth-mail dispatcher, the provider transport's
+       connection release, the login dummy-verification contract and the
+       fail-closed limiter decision. Gated: the real signup, login, reset
+       and limiter handlers over routed pipelines. *)
+  [ ("b2_auth_mail_dispatcher", dispatcher_suite)
+  ; ("b2_auth_mail_resolver", resolver_suite)
+  ; ("b2_auth_mail_transport", transport_suite)
+  ; ("b2_login_verification", login_pure_suite)
+  ; ("b2_rate_limit_decision", limiter_pure_suite)
+  ; ("b2_login_equivalence", login_db_suite)
+  ; ("b2_signup_privacy", signup_db_suite)
+  ; ("b2_auth_mail_async", mail_db_suite)
+  ; ("b2_rate_limit_routed", limiter_db_suite)
+  ; ("b2_response_comparator", comparator_suite)
+  ; ("b2_capacity_sequences", capacity_sequence_db_suite)
+  ; ("b2_cookie_session", cookie_db_suite)
+  ]
