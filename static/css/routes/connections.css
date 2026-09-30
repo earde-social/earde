@@ -1,0 +1,210 @@
+/* ==========================================================================
+   EARDE INTEGRATION — community connections only
+   Scoped beneath body.launch-community-connections: the management page
+   (GET /c/:slug/settings/connections), the two-step connect flow
+   (GET /c/:slug/settings/connections/new) and every re-render the four
+   mutation POSTs produce on them (Stale_form 403, the 409 outcomes, the
+   422 note refusal). Reuses the launch chrome and create-shell recipe of
+   the sibling project-home review surface; only the ccn-* fragment is new,
+   skinned from outside so the markup stays exactly what the page module
+   emits. No relationship labels, no usernames, no map visuals.
+
+   A launch scope is only complete when it carries BOTH halves: the shared
+   chrome and anatomy rules (the chrome listed for this page class in
+   routes/chrome.css), and its feature fragment. This block shipped with the
+   fragment alone, so
+   the community shell rendered the page as unstyled markup — no main-column
+   width or gutter, no head band (the two context spans collapsed into
+   "name/c/slug"), no user menu, no mobile gate. The anatomy half below is
+   the sibling project-home review recipe, re-scoped verbatim.
+   ========================================================================== */
+
+/* ---- Page anatomy ----------------------------------------------------------- */
+
+/* Compact head band: mono community context above the create-shell marker
+   (reference .page__head--tight geometry). Without these rules the name and
+   the address render as two adjacent inline spans and read as one malformed
+   token — the "smoke/c/smoke" symptom. */
+.launch-community-connections .launch-review-context {
+  flex: none; display: flex; align-items: baseline; gap: var(--sp-4);
+  padding: 12px 28px; background: var(--surface);
+  border-bottom: var(--bw) solid var(--line2);
+  font-family: var(--mono); font-size: var(--fs-11); color: var(--muted);
+}
+.launch-community-connections .launch-review-context-name { color: var(--ink); }
+.launch-community-connections .launch-review-context-slug { color: var(--muted); }
+
+/* Legacy create.css wrappers, recast as the main scroller and its column. */
+.launch-community-connections .create-shell {
+  flex: 1; min-height: 0; overflow-y: auto; scrollbar-width: thin;
+}
+.launch-community-connections .create-wrap {
+  max-width: 760px; margin: 0 auto; padding: var(--sp-11) 30px 70px;
+}
+
+/* Serif page title over factual explanatory copy. */
+
+.launch-community-connections .create-sub {
+  color: var(--muted); font-size: var(--fs-12-5); line-height: var(--lh-prose);
+  margin-top: var(--sp-2);
+}
+
+.launch-community-connections .ccn-intro { margin-top: var(--sp-2); }
+
+/* Feedback and the generic ineligibility notice: the same restrained
+   ochre/plain-surface pair the review surface uses. */
+.launch-community-connections .ccn-alert {
+  border: var(--bw) solid var(--ochre); border-left: 3px solid var(--ochre);
+  border-radius: var(--r-2);
+  background: color-mix(in srgb, var(--ochre) 8%, var(--surface));
+  padding: var(--sp-5) var(--sp-7); margin-bottom: var(--sp-8);
+}
+.launch-community-connections .ccn-alert p { margin: 0; }
+
+.launch-community-connections .ccn-ineligible {
+  border: var(--bw) solid var(--line2); border-radius: var(--r-2);
+  background: var(--surface); padding: var(--sp-5) var(--sp-7);
+  margin-bottom: var(--sp-8); color: var(--muted);
+}
+.launch-community-connections .ccn-ineligible p { margin: 0; }
+
+/* Sections: the settings surface's panel primitive (.cm-panel geometry),
+   re-scoped onto the pinned ccn-* class names. Four panels read as four
+   distinct areas of one page; the previous plain stack separated them with
+   nothing but the rows' own full-width borders. */
+.launch-community-connections .ccn-section {
+  margin-bottom: var(--sp-9);
+  border: var(--bw) solid var(--line2); border-radius: var(--r-3);
+  background: var(--surface); padding: var(--sp-9) var(--sp-10) var(--sp-10);
+}
+.launch-community-connections .ccn-section-title {
+  font-family: var(--serif); font-weight: 600; font-size: var(--fs-19);
+  color: var(--ink); margin: 0 0 var(--sp-5);
+}
+.launch-community-connections .ccn-section-desc,
+.launch-community-connections .ccn-empty,
+.launch-community-connections .ccn-state,
+.launch-community-connections .ccn-accept-unavailable,
+.launch-community-connections .ccn-hint {
+  font-family: var(--mono); font-size: var(--fs-11); color: var(--muted);
+  margin: 0 0 var(--sp-3);
+}
+
+/* Rows are hairline-separated list rows inside the panel (.cm-list grammar),
+   not cards nested in a card. */
+.launch-community-connections .ccn-list {
+  list-style: none; margin: 0; padding: 0;
+  display: flex; flex-direction: column;
+  border: var(--bw) solid var(--line2); border-radius: var(--r-2);
+  overflow: hidden;
+}
+.launch-community-connections .ccn-row {
+  background: var(--surface); padding: var(--sp-4) var(--sp-6);
+  border-bottom: var(--bw) solid var(--line);
+  display: flex; flex-wrap: wrap; align-items: center;
+  justify-content: space-between; gap: var(--sp-3) var(--sp-5);
+}
+.launch-community-connections .ccn-row:last-child { border-bottom: 0; }
+/* A pending row is a workflow item, not a fact: the same ochre left rule
+   the review surface gives its pending requests. It stacks instead of
+   sitting on one line, because it carries the private note. */
+.launch-community-connections .ccn-row--incoming,
+.launch-community-connections .ccn-row--outgoing {
+  border-left: var(--bw-accent) solid var(--ochre);
+  background: color-mix(in srgb, var(--ochre) 6%, var(--surface));
+  display: block; padding: var(--sp-5) var(--sp-6);
+}
+
+/* Name over address, kept together and allowed to wrap: a long community
+   name must never push the row's action off the panel. */
+.launch-community-connections .ccn-identity {
+  flex: 1 1 16rem; min-width: 0;
+  display: flex; flex-direction: column; gap: var(--sp-1);
+}
+.launch-community-connections .ccn-name {
+  font-size: var(--fs-13); font-weight: 700; color: var(--ink);
+  text-decoration: none; overflow-wrap: anywhere;
+}
+.launch-community-connections a.ccn-name:hover { text-decoration: underline; }
+.launch-community-connections .ccn-slug {
+  font-family: var(--mono); font-size: var(--fs-10-5); color: var(--muted);
+  overflow-wrap: anywhere;
+}
+/* The confirmation step renders one bare identity block outside any row. */
+.launch-community-connections .create-panel > .ccn-identity {
+  margin-bottom: var(--sp-6);
+}
+
+/* Private note: inner plain box, readable but secondary — identical
+   treatment to the review surface's private request note. */
+.launch-community-connections .ccn-note {
+  border: var(--bw) solid var(--line); border-radius: var(--r-2);
+  background: var(--bg); padding: var(--sp-4) var(--sp-6);
+  margin: var(--sp-4) 0;
+}
+.launch-community-connections .ccn-note-label {
+  font-family: var(--mono); font-size: var(--fs-10-5); color: var(--muted);
+  margin: 0 0 var(--sp-2);
+}
+.launch-community-connections .ccn-note-body {
+  font-size: var(--fs-13); color: var(--ink); line-height: var(--lh-prose);
+  margin: 0; white-space: pre-wrap; overflow-wrap: anywhere;
+}
+
+.launch-community-connections .ccn-actions {
+  display: flex; flex-wrap: wrap; gap: var(--sp-4); margin-top: var(--sp-3);
+}
+.launch-community-connections .ccn-form { display: inline-block; margin: 0; }
+.launch-community-connections .ccn-btn {
+  font: inherit; font-size: var(--fs-11); font-weight: 600;
+  border: var(--bw) solid var(--line2); border-radius: var(--r-2);
+  background: var(--surface); color: var(--ink);
+  padding: var(--sp-2) var(--sp-6); cursor: pointer;
+}
+.launch-community-connections .ccn-btn:hover { border-color: var(--slate); }
+.launch-community-connections .ccn-accept .ccn-btn {
+  color: #fff; background: var(--moss); border-color: var(--moss);
+}
+
+.launch-community-connections .ccn-link {
+  font-family: var(--mono); font-size: var(--fs-11); color: var(--slate);
+}
+
+/* The panel's primary action wears the shared .btn/.btn--primary control;
+   only its standoff from the explanatory copy above belongs to this scope. */
+.launch-community-connections .ccn-cta { margin-top: var(--sp-2); }
+
+/* Search and confirmation: one field each, ordinary server-rendered forms. */
+.launch-community-connections .ccn-search-form {
+  display: flex; flex-wrap: wrap; align-items: flex-end;
+  gap: var(--sp-4); margin-bottom: var(--sp-8);
+}
+.launch-community-connections .ccn-label {
+  display: block; font-family: var(--mono); font-size: var(--fs-10-5);
+  color: var(--muted); margin-bottom: var(--sp-2);
+}
+.launch-community-connections .ccn-input,
+.launch-community-connections .ccn-textarea {
+  font: inherit; font-size: var(--fs-13); color: var(--ink);
+  border: var(--bw) solid var(--line2); border-radius: var(--r-2);
+  background: var(--surface); padding: var(--sp-3) var(--sp-5);
+}
+.launch-community-connections .ccn-input { min-width: 18rem; }
+.launch-community-connections .ccn-textarea {
+  display: block; width: 100%; max-width: 42rem; resize: vertical;
+  line-height: var(--lh-prose); margin-bottom: var(--sp-5);
+}
+.launch-community-connections .ccn-confirm-form { margin-top: var(--sp-6); }
+
+/* ---- Gate + consent --------------------------------------------------------- */
+
+/* === Shared Threads: destination-context provenance ===
+   The compact "⇄ Shared from <origin>" chip on destination feed rows, the
+   Recent-durable-knowledge rows, and the destination-context thread page.
+   Long origin/thread names must wrap safely, never overflow the row. */
+.sth-shared-from {
+  font-size: var(--fs-11); color: var(--muted);
+  overflow-wrap: anywhere; min-width: 0;
+}
+.sth-shared-from a { color: var(--moss); font-weight: 700; }
+.sth-shared-from a:hover { color: var(--ink); }

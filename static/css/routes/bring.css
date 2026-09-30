@@ -1,0 +1,74 @@
+/* ==========================================================================
+   EARDE INTEGRATION — /bring only
+   Everything above is the approved handoff stylesheet, verbatim. Everything
+   below is scoped beneath body.launch-bring and exists only because the real
+   /bring page cannot emit the reference markup exactly:
+   - the non-ready states must contain no <form> anywhere in the document,
+     so the top-bar command field is a link, not a search form;
+   - the feedback/closed-state banners must keep the test-asserted
+     auth-alert class names (auth.css is not loaded on this document);
+   - the reference page styled the hero/cards/CTA with inline style
+     attributes, converted to classes here;
+   - the analytics consent banner markup is shared with the legacy layout,
+     whose utility classes are inert without Tailwind, so it is positioned
+     and skinned here (a real floating overlay — --shadow-overlay allowed).
+   ========================================================================== */
+
+/* Hero — inline styles in reference/bring.html, as classes. */
+.launch-bring .launch-hero { text-align: center; padding: var(--sp-10) 0 var(--sp-4); }
+.launch-bring .launch-hero__title {
+  font-family: var(--serif); font-weight: 600; font-size: var(--fs-32);
+  margin-top: var(--sp-8);
+}
+.launch-bring .launch-hero__lead {
+  color: var(--muted); font-size: var(--fs-15); line-height: 1.6;
+  max-width: 56ch; margin: var(--sp-6) auto 0;
+}
+
+/* OPTION A / OPTION B explainer cards. */
+.launch-bring .launch-options { margin: 28px 0; }
+.launch-bring .launch-option { border-radius: var(--r-4); padding: var(--sp-9); }
+.launch-bring .launch-option__kicker { font-size: var(--fs-11); margin-bottom: var(--sp-4); }
+.launch-bring .launch-option__kicker--moss { color: var(--moss); }
+.launch-bring .launch-option__kicker--ochre { color: var(--ochre); }
+.launch-bring .launch-option__title { font-weight: 700; font-size: var(--fs-15); }
+.launch-bring .launch-option .card__blurb { margin-top: var(--sp-4); }
+
+/* Centred CTA stack: action (form or state banner), quiet links, footnote. */
+.launch-bring .launch-cta {
+  display: flex; flex-direction: column; align-items: center; gap: var(--sp-5);
+  margin-top: var(--sp-12);
+}
+.launch-bring .launch-footnote {
+  font-size: var(--fs-11); color: var(--muted); margin-top: var(--sp-2);
+}
+
+/* Banners keep their legacy class names (test contract); flat notice skin.
+   Base is neutral because the same class carries closed-state notices, not
+   only success feedback. */
+.launch-bring .auth-alert {
+  border: var(--bw) solid var(--line); border-radius: var(--r-2);
+  background: var(--surface2); color: var(--ink);
+  font-size: var(--fs-13); line-height: var(--lh-prose);
+  padding: 13px var(--sp-8); max-width: 56ch; margin: 0 auto; text-align: center;
+}
+.launch-bring .auth-alert--error {
+  border-color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 8%, var(--surface));
+}
+
+/* Quiet foot links (copy and hrefs are the contract; mono quiet skin). */
+.launch-bring .auth-foot {
+  text-align: center; font-family: var(--mono); font-size: var(--fs-12);
+  color: var(--muted);
+}
+.launch-bring .auth-link { color: var(--slate); }
+
+/* "What connecting means" explainer blocks below the CTA. */
+.launch-bring .launch-explain { margin: var(--sp-14) auto 0; max-width: 620px; }
+.launch-bring .launch-explain__block { padding: var(--sp-8); border-top: var(--bw) solid var(--line); }
+.launch-bring .launch-explain__block:first-child { border-top: 0; }
+.launch-bring .launch-explain__text {
+  font-size: var(--fs-13); color: var(--muted); line-height: var(--lh-prose);
+  margin-top: var(--sp-3);
+}

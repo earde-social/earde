@@ -177,21 +177,58 @@ let external_assets_case =
           "fonts.googleapis.com";
           "fonts.gstatic.com";
         ];
-      (* The two shipped stylesheets must not pull them in either. *)
+      (* No shipped stylesheet, entrypoint or partial, pulls them in either. *)
       List.iter
-        (fun sheet ->
-          let css = Source_census.read ("static/css/" ^ sheet) in
+        (fun path ->
+          let css = Source_census.read path in
           List.iter
             (fun n ->
               if Html_assert.contains css n then
-                Alcotest.failf "%s imports %S" sheet n)
+                Alcotest.failf "%s imports %S" path n)
             [
               "fonts.googleapis.com";
               "fonts.gstatic.com";
               "cdn.tailwindcss.com";
               "@import url('http";
+              "@import url(\"http";
+              "@import url(\"//";
             ])
-        approved_stylesheets)
+        ("static/css/mobile-gate.css" :: Css_census.entrypoint
+       :: Css_census.partials))
+
+(* earde.css is the one linked stylesheet; its partials load through
+   @import. Every CSS file on disk is either linked or imported exactly
+   once, so a partial cannot be orphaned or loaded twice. *)
+let partials_case =
+  lc_case "earde.css imports every stylesheet partial exactly once" (fun () ->
+      let rec css_files dir =
+        Sys.readdir (Filename.concat Source_census.root dir)
+        |> Array.to_list |> List.sort compare
+        |> List.concat_map (fun f ->
+            let path = dir ^ "/" ^ f in
+            if Sys.is_directory (Filename.concat Source_census.root path) then
+              css_files path
+            else if Filename.check_suffix f ".css" then [ path ]
+            else [])
+      in
+      let on_disk =
+        List.filter
+          (fun p ->
+            not
+              (List.mem p
+                 [ Css_census.entrypoint; "static/css/mobile-gate.css" ]))
+          (css_files "static/css")
+      in
+      Alcotest.(check bool)
+        "the stylesheet is split into partials" true
+        (List.length Css_census.partials > 10);
+      Alcotest.(check (list string))
+        "imported partials = partials on disk" on_disk
+        (List.sort compare Css_census.partials);
+      Alcotest.(check int)
+        "no partial imported twice"
+        (List.length Css_census.partials)
+        (List.length (List.sort_uniq compare Css_census.partials)))
 
 (* --- 6./13. rendered documents: approved local CSS only ---------------- *)
 let census_community ~visibility : Earde.Community_types.community =
@@ -424,6 +461,7 @@ let suite =
     deleted_css_case;
     surviving_css_case;
     external_assets_case;
+    partials_case;
     rendered_css_case;
     surviving_routes_case;
     unknown_route_case;

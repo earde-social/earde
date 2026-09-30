@@ -1,0 +1,400 @@
+/* ==========================================================================
+   EARDE INTEGRATION — live community channel only
+   Scoped beneath body.launch-community-channel: GET /c/:slug/ch/:channel_slug
+   (Pages.community_channel_shell_page). Section, thread, settings and every
+   other community surface have their own scoped sections. The live chat DOM
+   is a strict
+   JS contract (chat_live.js): #chat-live-root IS the scroller
+   (.cs-main-body), .cs-main is a flex column whose head / .cs-chat-stage /
+   typing row / composer are DIRECT children, the cursor overlay is an
+   absolutely-positioned sibling of the scroller inside the stage, and the
+   [hidden] typing row must keep its reserved height. The retired shell.css
+   no longer exists, so its load-bearing cs-* layout rules are
+   re-provided here 1:1 (same boxes, same scroll owner, same flex chain) and
+   only re-skinned onto the approved Cartographic chat grammar
+   (.chat__head/.msg/.typing/.composer from the design handoff). Other notes:
+   - the notification badge rule is scoped to the badge element only — no
+     global .hidden utility is defined;
+   - the desktop-only gate panel ships in mobile-gate.css; only this route's
+     launch-scope "hide the app" rule lives here;
+   - the analytics consent banner markup is shared with the legacy layout
+     (styled once for these routes in routes/chrome.css);
+   - the base .aside rules (width/background/border/scroll + the ≤1279px
+     collapse) come from the shared shell system above; only the presence
+     pane's inner anatomy is styled here.
+   ========================================================================== */
+
+/* ---- Chat main pane: load-bearing flex chain (from shell.css, re-skinned) -- */
+
+/* .cs-main fills the shell's flexible center column; its panes must remain
+   DIRECT children so the height chain head → stage → typing → composer
+   resolves. Never interpose a wrapper here. */
+.launch-community-channel .cs-main {
+  flex: 1; min-width: 0; display: flex; flex-direction: column;
+  overflow: hidden; background: var(--surface);
+}
+
+/* Compact channel header (approved .chat__head grammar): mono #name, quiet
+   topic, share-cursor control pushed to the right edge. */
+.launch-community-channel .cs-main-head {
+  flex-shrink: 0; display: flex; align-items: center; gap: var(--sp-6);
+  padding: 11px var(--sp-9); border-bottom: var(--bw) solid var(--line2);
+  background: var(--surface);
+  font-family: var(--mono); font-weight: 700; font-size: var(--fs-16); color: var(--ink);
+}
+.launch-community-channel .cs-hash { color: var(--moss); }
+.launch-community-channel .cs-ch-topic {
+  font-family: var(--sans); font-weight: 400; font-size: var(--fs-12-5); color: var(--muted);
+  border-left: var(--bw) solid var(--line2); padding-left: var(--sp-6);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0;
+}
+
+/* Stage wraps the scroller with the inert cursor overlay on its visible box. */
+.launch-community-channel .cs-chat-stage {
+  position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column;
+}
+.launch-community-channel .cs-chat-stage > .cs-chat-body { flex: 1; }
+
+/* #chat-live-root: the ONLY scroll owner for message history. */
+.launch-community-channel .cs-main-body { flex: 1; overflow-y: auto; scrollbar-width: thin; }
+.launch-community-channel .cs-chat-body { padding: var(--sp-5) 0; display: flex; flex-direction: column; }
+/* Pin a short stream to the bottom while keeping a long one scrollable from
+   the top (flex-end would clip it in some engines). */
+.launch-community-channel .cs-chat-body > :first-child { margin-top: auto; }
+
+/* ---- Message rows (approved .msg anatomy, flat, no shadows) ---------------- */
+
+.launch-community-channel .cs-msg {
+  display: flex; gap: 11px; padding: 5px var(--sp-9);
+  transition: background-color 1.2s ease;
+}
+.launch-community-channel .cs-msg:hover { background: var(--surface2); }
+.launch-community-channel .cs-msg-avatar {
+  width: 30px; height: 30px; flex-shrink: 0;
+  display: grid; place-items: center; border-radius: var(--r-3);
+  font-family: var(--mono); font-weight: 700; font-size: var(--fs-12);
+  background: var(--surface3); color: var(--muted); border: var(--bw) solid var(--line);
+}
+.launch-community-channel .cs-msg-body { flex: 1; min-width: 0; }
+.launch-community-channel .cs-msg-meta { display: flex; align-items: baseline; gap: var(--sp-4); }
+.launch-community-channel .cs-msg-author { font-weight: 600; font-size: var(--fs-13-5); color: var(--ink); }
+.launch-community-channel .cs-msg-time { font-family: var(--mono); font-size: var(--fs-10-5); color: var(--muted); }
+.launch-community-channel .cs-msg-time-slot { display: inline-grid; align-items: baseline; position: relative; }
+.launch-community-channel .cs-msg-time-slot .cs-msg-time,
+.launch-community-channel .cs-msg-time-slot .cs-msg-start { grid-area: 1 / 1; }
+.launch-community-channel .cs-msg-time-slot .cs-msg-time { pointer-events: none; }
+.launch-community-channel .cs-msg-time-slot .cs-msg-start { position: relative; z-index: 1; }
+.launch-community-channel .cs-msg-text {
+  font-size: var(--fs-14); line-height: var(--lh-prose); color: var(--ink);
+  white-space: pre-wrap; overflow-wrap: anywhere;
+}
+.launch-community-channel .cs-msg-deleted { font-style: italic; color: var(--muted); }
+
+/* Per-message thread provenance markers below the text (clay = promotion). */
+.launch-community-channel .cs-msg-actions {
+  display: flex; align-items: baseline; flex-wrap: wrap; gap: var(--sp-2) var(--sp-5);
+  margin-top: 3px;
+}
+.launch-community-channel .cs-msg-start,
+.launch-community-channel .cs-msg-thread,
+.launch-community-channel .cs-msg-ref {
+  font-family: var(--mono); font-size: var(--fs-10-5); text-decoration: none;
+  white-space: nowrap; max-width: 260px; overflow: hidden; text-overflow: ellipsis;
+}
+.launch-community-channel .cs-msg-thread { color: var(--clay); }
+.launch-community-channel .cs-msg-thread:hover { text-decoration: underline; }
+.launch-community-channel .cs-msg-ref { color: var(--muted); }
+.launch-community-channel .cs-msg-ref:hover { color: var(--ink); text-decoration: underline; }
+.launch-community-channel .cs-msg-refmore {
+  font-family: var(--mono); font-size: var(--fs-10-5); color: var(--muted); margin-left: -6px;
+}
+
+/* "Start thread" replaces the timestamp inside the same reserved slot. */
+.launch-community-channel .cs-msg-start { color: var(--clay); opacity: 0; pointer-events: none; cursor: pointer; transition: opacity .12s ease; }
+.launch-community-channel .cs-msg-time-slot .cs-msg-time { transition: opacity .12s ease; }
+.launch-community-channel .cs-msg:hover .cs-msg-time-slot .cs-msg-time,
+.launch-community-channel .cs-msg:focus-within .cs-msg-time-slot .cs-msg-time { opacity: 0; }
+.launch-community-channel .cs-msg:hover .cs-msg-start,
+.launch-community-channel .cs-msg:focus-within .cs-msg-start { opacity: 1; pointer-events: auto; }
+.launch-community-channel .cs-msg-start:hover { text-decoration: underline; }
+@media (hover: none) {
+  .launch-community-channel .cs-msg-time-slot .cs-msg-time { opacity: 0; }
+  .launch-community-channel .cs-msg-start { opacity: 1; pointer-events: auto; }
+}
+
+.launch-community-channel .cs-msg-empty { padding: var(--sp-11) var(--sp-9); color: var(--muted); font-size: var(--fs-14); }
+
+/* Reverse navigation from a promoted thread: SSR notice band + grouped
+   source-row tint (clay = provenance; fades when JS drops the class). */
+.launch-community-channel .cs-source-notice {
+  display: flex; align-items: baseline; justify-content: space-between; gap: var(--sp-6); flex-wrap: wrap;
+  padding: var(--sp-4) var(--sp-9); border-bottom: var(--bw) solid var(--line2);
+  background: var(--surface2);
+  font-family: var(--mono); font-size: var(--fs-11-5); color: var(--muted);
+}
+.launch-community-channel .cs-source-notice b { color: var(--ink); }
+.launch-community-channel .cs-source-notice-actions { display: flex; gap: var(--sp-7); white-space: nowrap; }
+.launch-community-channel .cs-source-notice a { color: var(--slate); text-decoration: none; }
+.launch-community-channel .cs-source-notice a:hover { text-decoration: underline; }
+.launch-community-channel .cs-msg--source-flash {
+  background-color: color-mix(in srgb, var(--clay) 10%, transparent); transition: none;
+}
+
+/* ---- Typing row: reserved height even when [hidden] (JS contract) ---------- */
+
+.launch-community-channel .cs-typing {
+  flex-shrink: 0; box-sizing: content-box; min-height: 15px; padding: 3px var(--sp-9) 0;
+  font-size: var(--fs-12); font-style: italic; color: var(--muted); background: var(--surface);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.launch-community-channel .cs-typing[hidden] { display: block; visibility: hidden; }
+
+/* ---- Composer (approved .composer grammar: inset field, moss send) --------- */
+
+.launch-community-channel .cs-composer {
+  flex-shrink: 0; border-top: var(--bw) solid var(--line2); background: var(--surface);
+  padding: var(--sp-6) var(--sp-8);
+}
+.launch-community-channel .cs-composer form { display: flex; gap: var(--sp-5); align-items: flex-end; }
+.launch-community-channel .cs-composer textarea {
+  flex: 1; border: var(--bw) solid var(--line2); border-radius: var(--r-2); background: var(--surface2);
+  font-family: var(--sans); font-size: var(--fs-14); color: var(--ink);
+  padding: 9px 12px; min-height: 22px; resize: vertical; outline: none;
+}
+.launch-community-channel .cs-composer textarea:focus { border-color: var(--moss); }
+.launch-community-channel .cs-send {
+  flex-shrink: 0; cursor: pointer; border: var(--bw) solid var(--moss); border-radius: var(--r-2);
+  background: var(--moss); color: #fff; font-family: var(--sans); font-weight: 600;
+  font-size: var(--fs-14); padding: 9px var(--sp-9);
+}
+.launch-community-channel .cs-send:hover { filter: brightness(1.05); }
+.launch-community-channel .cs-send:disabled { opacity: .6; cursor: default; }
+
+/* Anon / non-member / private-viewer prompt reuses the composer frame inline. */
+.launch-community-channel .cs-composer-prompt {
+  display: flex; align-items: center; gap: var(--sp-5); flex-wrap: wrap;
+  font-size: var(--fs-14); color: var(--muted);
+}
+.launch-community-channel .cs-composer-prompt form { display: inline-flex; }
+
+/* Inline send error under the composer (fetch submissions never navigate). */
+.launch-community-channel .cs-composer-error {
+  margin-top: var(--sp-3); font-size: var(--fs-12-5); color: var(--danger);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+/* "New messages" pill floated over the scroller (inside .cs-chat-stage),
+   above the inert cursor overlay (z-index 5) so it stays clickable. */
+.launch-community-channel .cs-new-msgs {
+  position: absolute; bottom: var(--sp-5); left: 50%; transform: translateX(-50%);
+  z-index: 6; cursor: pointer;
+  border: var(--bw) solid var(--moss); border-radius: var(--r-6);
+  background: var(--moss); color: #fff;
+  font-family: var(--sans); font-weight: 600; font-size: var(--fs-12);
+  padding: var(--sp-2) var(--sp-6);
+}
+.launch-community-channel .cs-new-msgs:hover { filter: brightness(1.05); }
+
+/* ---- Shared cursors -------------------------------------------------------- */
+
+/* Opt-in control at the right edge of the channel header. */
+.launch-community-channel .cs-cursor-share {
+  margin-left: auto; display: inline-flex; align-items: center; gap: var(--sp-3);
+  font-family: var(--mono); font-weight: 400; font-size: var(--fs-11-5); color: var(--muted);
+  cursor: pointer; user-select: none; white-space: nowrap;
+}
+.launch-community-channel .cs-cursor-share:hover { color: var(--ink); }
+.launch-community-channel .cs-cursor-share input { accent-color: var(--moss); margin: 0; }
+/* The inline-flex above would defeat the [hidden] attribute (coarse-pointer
+   devices hide the inert control via JS). */
+.launch-community-channel .cs-cursor-share[hidden] { display: none; }
+
+/* Inert overlay on the scroller's visible box; cursors never affect layout. */
+.launch-community-channel .cs-cursor-overlay {
+  position: absolute; inset: 0; overflow: hidden; pointer-events: none; z-index: 5;
+}
+.launch-community-channel .cs-cursor {
+  position: absolute; left: 0; top: 0; pointer-events: none;
+  display: flex; align-items: flex-start; gap: 3px;
+  will-change: transform; transition: transform 90ms linear;
+}
+.launch-community-channel .cs-cursor svg { display: block; color: var(--cursor-color); }
+.launch-community-channel .cs-cursor-label {
+  margin-top: 9px; padding: 1px 6px; border-radius: var(--r-2);
+  font-family: var(--mono); font-size: var(--fs-10-5); line-height: var(--lh-ui); color: var(--ink);
+  background: var(--surface); border: var(--bw) solid var(--cursor-color);
+  max-width: 120px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+/* Deterministic per-user hue (user_id % 8, computed locally — never sent
+   over the network). Same values as the legacy shell so cursor identity
+   colours stay stable across the conversion. */
+.launch-community-channel .cs-cursor[data-hue='0'] { --cursor-color: oklch(0.555 0.155 27); }
+.launch-community-channel .cs-cursor[data-hue='1'] { --cursor-color: oklch(0.555 0.13 70); }
+.launch-community-channel .cs-cursor[data-hue='2'] { --cursor-color: oklch(0.555 0.13 130); }
+.launch-community-channel .cs-cursor[data-hue='3'] { --cursor-color: oklch(0.555 0.13 165); }
+.launch-community-channel .cs-cursor[data-hue='4'] { --cursor-color: oklch(0.555 0.13 210); }
+.launch-community-channel .cs-cursor[data-hue='5'] { --cursor-color: oklch(0.555 0.13 260); }
+.launch-community-channel .cs-cursor[data-hue='6'] { --cursor-color: oklch(0.555 0.13 300); }
+.launch-community-channel .cs-cursor[data-hue='7'] { --cursor-color: oklch(0.555 0.13 340); }
+@media (prefers-reduced-motion: reduce) {
+  .launch-community-channel .cs-cursor { transition: none; }
+}
+
+/* ---- Presence pane (approved chat-aside anatomy) --------------------------- */
+
+.launch-community-channel .cs-presence { padding: 14px 16px; }
+.launch-community-channel .ca-label {
+  font-family: var(--mono); font-size: var(--fs-10-5); font-weight: 600;
+  letter-spacing: var(--ls-kicker); text-transform: uppercase; color: var(--muted);
+  margin-bottom: var(--sp-5);
+}
+.launch-community-channel .cs-presence-status { font-size: var(--fs-12-5); color: var(--muted); }
+.launch-community-channel .cs-presence-list { list-style: none; margin: 0; padding: 0; }
+.launch-community-channel .cs-presence-user {
+  display: flex; align-items: center; gap: 9px; padding: var(--sp-2) 0;
+  font-size: var(--fs-13);
+}
+.launch-community-channel .cs-presence-avatar {
+  width: 22px; height: 22px; flex: none;
+  display: grid; place-items: center; border-radius: var(--r-pill);
+  font-family: var(--mono); font-weight: 700; font-size: var(--fs-10);
+  color: var(--muted); background: var(--surface3); border: var(--bw) solid var(--line);
+}
+.launch-community-channel .cs-presence-name { color: var(--ink); }
+.launch-community-channel .cs-presence-name:hover { color: var(--slate); }
+
+/* ==========================================================================
+   EARDE INTEGRATION — start thread from chat only
+   Scoped beneath body.launch-start-thread: GET/POST
+   /c/:slug/ch/:channel_slug/messages/:message_id/start-thread
+   (Pages.start_thread_form), the contextual form that crystallizes a live
+   conversation into a durable thread. Exists only because the real promotion
+   surface cannot emit the reference markup exactly:
+   - the create-* form fragment (the hidden seed input, the msg_<id>
+     candidate checkboxes in their chronological order, the required
+     title with its 300 maxlength, the optional introduction textarea, the
+     required section <select> for structured communities and the Dream CSRF
+     tag) is treated as pinned, so the legacy markup is spliced verbatim
+     inside the .create-shell marker and skinned here onto the approved
+     community-shell anatomy: mono context crumb + page head band over one
+     restrained form column — preserving a useful live conversation as
+     durable knowledge, not copying chat into a generic posting form;
+   - no summaries, generated titles, drag selection, previews or extra
+     workflow steps are invented: every control styled here already exists
+     in the renderer, and the only script is the renderer's pre-existing
+     page-scoped selection counter;
+   - the candidate ledger keeps its flat rows: seed row locked (clay
+     provenance tag), author/time metadata in mono, moss checkboxes;
+   - renderer-owned validation states re-render this same document; the
+     .st-error notice reads ochre (pending/attention), never a red banner;
+   - the sidebar carries no permanent Start-thread entry — promotion is a
+     contextual action, so no navitem is active on this route;
+   - the notification badge is server-rendered from the request's unread
+     count and is absent entirely at zero, so this scope needs no rule for
+     it (Notification_badge);
+   - for a private community the launch shell marks .shell ph-no-capture
+     (the legacy wrapper had no inner guard on this route, so none exists
+     inside <main>);
+   - the desktop-only gate panel ships in mobile-gate.css; only the
+     launch-scope "hide the app" rule for this route lives here;
+   - the analytics consent banner markup is shared with the legacy layout
+     (styled once for these routes in routes/chrome.css).
+   ========================================================================== */
+
+/* ---- Form anatomy ----------------------------------------------------------- */
+
+/* Mono context crumb (Cartographic chrome outside the pinned fragment):
+   community / #channel / start thread. */
+.launch-start-thread .launch-st-context {
+  flex: none; font-family: var(--mono); font-size: var(--fs-11);
+  color: var(--muted); padding: var(--sp-4) 28px 0;
+}
+.launch-start-thread .launch-st-context a { color: var(--slate); text-decoration: none; }
+.launch-start-thread .launch-st-context a:hover { color: var(--ink); }
+.launch-start-thread .launch-st-context b { font-weight: 600; color: var(--ink); }
+.launch-start-thread .launch-st-context__sep { color: var(--line2); }
+
+/* Page head band: serif title over the renderer's real subtitle; the
+   #channel accent in the title reads as mono moss (live sigil). */
+
+.launch-start-thread .create-title .accent {
+  font-family: var(--mono); font-weight: 400; font-size: var(--fs-16);
+  color: var(--moss);
+}
+
+/* Renderer-owned validation notice: ochre attention, thin rule, no banner
+   theatrics. Sits between the head band and the form. */
+.launch-start-thread .st-error {
+  flex: none; font-family: var(--mono); font-size: var(--fs-12);
+  color: var(--ochre); background: var(--surface2);
+  border-left: 2px solid var(--ochre);
+  padding: var(--sp-4) 28px; margin: 0;
+}
+
+/* The form is the scroller: one restrained left-aligned column under the
+   band, capped at a reading measure. */
+.launch-start-thread .create-form {
+  flex: 1; min-height: 0; overflow-y: auto; scrollbar-width: thin;
+  padding: var(--sp-8) 28px 70px;
+}
+.launch-start-thread .create-form > * { max-width: 680px; }
+
+/* Field hints (selection guidance, introduction note): quiet mono metadata. */
+.launch-start-thread .create-hint {
+  font-family: var(--mono); font-size: var(--fs-11); color: var(--muted);
+  margin-top: var(--sp-2); margin-bottom: var(--sp-3);
+}
+
+/* ---- Candidate-message ledger ------------------------------------------------ */
+
+/* Flat hairline ledger, not chat bubbles: each row is the renderer's real
+   <label> so the whole row toggles its checkbox. */
+.launch-start-thread .st-msglist {
+  display: flex; flex-direction: column;
+  max-height: 340px; overflow-y: auto; scrollbar-width: thin;
+  border: var(--bw) solid var(--line2); border-radius: var(--r-2);
+  background: var(--surface);
+}
+.launch-start-thread .st-msg {
+  display: flex; gap: var(--sp-5); align-items: flex-start;
+  padding: var(--sp-4) var(--sp-6); cursor: pointer;
+  border-bottom: var(--bw) solid var(--line);
+}
+.launch-start-thread .st-msg:last-child { border-bottom: 0; }
+.launch-start-thread .st-msg:hover { background: var(--surface2); }
+.launch-start-thread .st-msg--seed { background: var(--surface2); cursor: default; }
+.launch-start-thread .st-check {
+  margin-top: 2px; flex: none; accent-color: var(--moss);
+  width: 13px; height: 13px;
+}
+.launch-start-thread .st-msg-body {
+  display: flex; flex-direction: column; gap: var(--sp-1); min-width: 0;
+}
+.launch-start-thread .st-msg-meta { display: flex; align-items: center; gap: var(--sp-4); }
+.launch-start-thread .st-msg-author {
+  font-family: var(--mono); font-size: var(--fs-11-5); font-weight: 600;
+  color: var(--ink);
+}
+.launch-start-thread .st-msg-time {
+  font-family: var(--mono); font-size: var(--fs-10-5); color: var(--muted);
+}
+.launch-start-thread .st-seed-tag {
+  font-family: var(--mono); font-size: var(--fs-10); text-transform: uppercase;
+  letter-spacing: var(--ls-kicker); color: var(--clay);
+  border: var(--bw) solid var(--clay); border-radius: var(--r-1);
+  padding: 0 var(--sp-2);
+}
+.launch-start-thread .st-msg-text {
+  font-size: var(--fs-13); color: var(--ink); line-height: var(--lh-prose);
+  overflow-wrap: anywhere;
+}
+
+/* Actions: moss submit (preserving knowledge is constructive) beside the
+   quiet mono cancel back to the live channel. The legacy --block modifier
+   loses its full-width meaning inside this measured column. */
+
+.launch-start-thread .st-cancel {
+  font-family: var(--mono); font-size: var(--fs-11-5); color: var(--slate);
+  text-decoration: none;
+}
+.launch-start-thread .st-cancel:hover { color: var(--ink); }

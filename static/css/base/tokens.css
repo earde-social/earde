@@ -1,0 +1,102 @@
+/* ==========================================================================
+   Earde · Cartographic Civic — design tokens
+   Source of truth: Earde.dc.html (approved mockup). Values are exact.
+   ========================================================================== */
+:root {
+  /* ---- Surfaces (warm mineral paper) ---- */
+  --paper:    #F5F1E8;  /* app background, auth surfaces */
+  --surface:  #FBF8F2;  /* cards, main column, top bar */
+  --surface2: #EEE7DA;  /* sidebars, asides, inset fields, hover fill */
+  --surface3: #E6DECE;  /* pressed/segment fill, avatar wells */
+
+  /* ---- Lines ---- */
+  --line:     #D8CFBF;  /* hairlines inside cards, table rules */
+  --line2:    #C7BBA6;  /* control borders, pane dividers */
+
+  /* ---- Ink ---- */
+  --ink:      #1F2421;  /* primary text */
+  --muted:    #59615C;  /* secondary text, mono metadata */
+
+  /* ---- Accents ---- */
+  --moss:     #556B57;  /* primary action, verified, live sigil # § */
+  --forest:   #3E5143;  /* top-bar bottom rule, member avatars */
+  --clay:     #A15E3B;  /* promotion / provenance / unread */
+  --ochre:    #B39352;  /* projects, GitHub-verified outline, pending */
+  --slate:    #4D6A73;  /* links, quiet informational actions */
+  --danger:   #A14D45;  /* destructive */
+  --rail:     #2E362F;  /* icon rail background */
+
+  /* ---- Type families ---- */
+  --sans:  'IBM Plex Sans', system-ui, sans-serif;   /* UI + body */
+  --mono:  'IBM Plex Mono', ui-monospace, monospace; /* metadata, slugs, labels */
+  --serif: 'Spectral', Georgia, serif;               /* page & community titles */
+
+  /* ---- Type scale (px, as used) ---- */
+  --fs-9:    9px;    /* MOD / seed micro badge */
+  --fs-10:   10px;   /* kickers, atlas legend */
+  --fs-10-5: 10.5px; /* section kickers, mono meta */
+  --fs-11:   11px;   /* mono meta, row meta */
+  --fs-11-5: 11.5px; /* breadcrumbs, chips */
+  --fs-12:   12px;   /* tabs, small mono UI */
+  --fs-12-5: 12.5px; /* aside body, small prose */
+  --fs-13:   13px;   /* dense body, table cells */
+  --fs-13-5: 13.5px; /* nav items, list titles, inputs (secondary) */
+  --fs-14:   14px;   /* base body, chat message, inputs */
+  --fs-15:   15px;   /* thread body, entry lead */
+  --fs-15-5: 15.5px; /* feed row title */
+  --fs-16:   16px;   /* card title, channel name */
+  --fs-19:   19px;   /* settings panel h2, section title */
+  --fs-22:   22px;   /* settings page title, inspector title */
+  --fs-23:   23px;   /* members page title */
+  --fs-24:   24px;   /* page titles (Feed, Discover, Notifications), thread h1 */
+  --fs-26:   26px;   /* auth title, onboarding home step */
+  --fs-27:   27px;   /* community name, project name, done title */
+  --fs-32:   32px;   /* Bring entry hero */
+
+  --lh-tight: 1.25;  /* h1 */
+  --lh-title: 1.35;  /* row titles */
+  --lh-ui:    1.5;   /* default */
+  --lh-prose: 1.55;  /* descriptions */
+  --lh-body:  1.62;  /* comments */
+  --lh-read:  1.72;  /* thread body */
+
+  --ls-kicker: .09em; /* uppercase mono kickers */
+  --ls-badge:  .06em;
+
+  /* ---- Spacing scale (px) ---- */
+  --sp-1: 2px;  --sp-2: 4px;  --sp-3: 6px;  --sp-4: 8px;
+  --sp-5: 10px; --sp-6: 12px; --sp-7: 14px; --sp-8: 16px;
+  --sp-9: 18px; --sp-10: 20px; --sp-11: 22px; --sp-12: 26px;
+  --sp-13: 30px; --sp-14: 34px; --sp-15: 60px;
+
+  /* ---- Radii (deliberately tight — civic, not consumer) ---- */
+  --r-1: 2px;  /* badges, outline tags */
+  --r-2: 3px;  /* buttons, inputs, nav items — the default */
+  --r-3: 4px;  /* cards, panels, avatars 26-32px */
+  --r-4: 5px;  /* onboarding cards, 44px avatars */
+  --r-5: 6px;  /* home-choice cards, GitHub tile */
+  --r-6: 8px;  /* 56-62px community avatars, pill counters */
+  --r-pill: 50%;
+
+  /* ---- Borders ---- */
+  --bw: 1px;             /* every border in the system */
+  --bw-accent: 2px;      /* provenance left rule, active tab underline */
+  --bw-accent-3: 3px;    /* pending-request left rule */
+
+  /* ---- Elevation: the system is FLAT. Depth = 1px borders + surface steps. ---- */
+  --shadow-none: none;
+  --shadow-overlay: 0 2px 6px rgba(31,36,33,.10); /* ONLY for real overlays (menus, atlas cards) */
+
+  /* ---- Fixed chrome ---- */
+  --topbar-h: 54px;
+  --rail-w: 64px;
+  --sidebar-w: 244px;
+  --aside-w: 300px;
+  --aside-w-chat: 236px;
+  --aside-w-atlas: 340px;
+  --settings-nav-w: 216px;
+  --content-feed: 1040px;
+  --content-list: 840px;
+  --content-form: 820px;
+  --content-auth: 392px;
+}

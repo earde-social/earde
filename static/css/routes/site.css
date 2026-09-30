@@ -1,0 +1,584 @@
+/* ==========================================================================
+   EARDE INTEGRATION — privacy policy only
+   Scoped beneath body.launch-privacy (GET /privacy through
+   launch_entry_page). The 2026-08-04 rewrite replaced the legacy
+   Tailwind-hook markup with semantic classes: .privacy-doc is the document
+   column, .privacy-summary the plain-English lede card, .privacy-toc the
+   anchor index, .privacy-sections the section stack, .privacy-table the
+   disclosure tables, .privacy-consent the analytics-preference control
+   (the same data-analytics-* anatomy analytics.js drives on /settings,
+   revealed only when analytics is configured). Each rule mirrors an
+   existing base rule (noted inline); no new visual vocabulary is
+   introduced.
+   ========================================================================== */
+
+/* Readable long-form measure inside the wrapper's .container--form column
+   (mirrors the capped content columns; ~65ch at base body size). */
+body.launch-privacy .privacy-doc {
+  max-width: 680px; margin: var(--sp-13) auto var(--sp-15);
+}
+
+/* Serif document title (mirrors .page__title at the community/project
+   title size). */
+body.launch-privacy .privacy-doc h1 {
+  font-family: var(--serif); font-weight: 600; font-size: var(--fs-27);
+  line-height: var(--lh-tight); color: var(--ink);
+  margin-bottom: var(--sp-4);
+}
+
+/* Last-updated line as the quiet mono context line under the title
+   (mirrors .breadcrumb / mono meta). */
+body.launch-privacy .privacy-updated {
+  font-family: var(--mono); font-size: var(--fs-11); color: var(--muted);
+  margin-bottom: var(--sp-10);
+}
+
+/* Plain-English summary: an inset aside card (mirrors the surface2 aside
+   panels — thin line, tight radius, no shadow). */
+body.launch-privacy .privacy-summary {
+  background: var(--surface2); border: var(--bw) solid var(--line);
+  border-radius: var(--r-3); padding: var(--sp-8) var(--sp-9);
+  margin-bottom: var(--sp-10);
+}
+body.launch-privacy .privacy-summary p {
+  font-size: var(--fs-13); line-height: var(--lh-prose); color: var(--muted);
+}
+body.launch-privacy .privacy-summary p + p { margin-top: var(--sp-5); }
+body.launch-privacy .privacy-summary ul {
+  list-style: disc; padding-left: var(--sp-11); margin: var(--sp-5) 0;
+}
+body.launch-privacy .privacy-summary li {
+  font-size: var(--fs-13); line-height: var(--lh-body); color: var(--ink);
+}
+body.launch-privacy .privacy-summary li + li { margin-top: var(--sp-3); }
+
+/* Table of contents: two-column mono index (mirrors the mono meta rails). */
+body.launch-privacy .privacy-toc {
+  border: var(--bw) solid var(--line); border-radius: var(--r-3);
+  padding: var(--sp-7) var(--sp-9); margin-bottom: var(--sp-13);
+}
+body.launch-privacy .privacy-toc ul {
+  columns: 2; column-gap: var(--sp-12);
+}
+body.launch-privacy .privacy-toc li {
+  font-family: var(--mono); font-size: var(--fs-12); line-height: var(--lh-ui);
+  padding: var(--sp-1) 0; break-inside: avoid;
+}
+body.launch-privacy .privacy-toc a { color: var(--slate); }
+
+/* Section rhythm. */
+body.launch-privacy .privacy-sections > section + section {
+  margin-top: var(--sp-14);
+}
+
+/* Section headings over a thin separator (mirrors .panel h2 / the fs-19
+   section-title step). scroll-margin keeps anchor jumps clear of the
+   fixed top bar. */
+body.launch-privacy .privacy-sections h2 {
+  font-family: var(--serif); font-weight: 600; font-size: var(--fs-19);
+  color: var(--ink); padding-bottom: var(--sp-3);
+  border-bottom: var(--bw) solid var(--line);
+  margin-bottom: var(--sp-6);
+}
+body.launch-privacy .privacy-sections section {
+  scroll-margin-top: calc(var(--topbar-h) + var(--sp-8));
+}
+
+/* Sub-headings inside a section: uppercase mono kicker step (mirrors the
+   section kickers elsewhere in the system). */
+body.launch-privacy .privacy-sections h3 {
+  font-family: var(--mono); font-weight: 600; font-size: var(--fs-10-5);
+  letter-spacing: var(--ls-kicker); text-transform: uppercase;
+  color: var(--muted); margin: var(--sp-9) 0 var(--sp-4);
+}
+
+/* Long-form body text (mirrors the prose line-height step). */
+body.launch-privacy .privacy-sections p {
+  font-size: var(--fs-14); line-height: var(--lh-prose); color: var(--ink);
+}
+body.launch-privacy .privacy-sections p + p { margin-top: var(--sp-6); }
+
+/* Semantic bullet lists (the global reset strips list styling). */
+body.launch-privacy .privacy-sections ul {
+  list-style: disc; padding-left: var(--sp-11);
+  margin-top: var(--sp-5);
+}
+body.launch-privacy .privacy-sections li {
+  font-size: var(--fs-13-5); line-height: var(--lh-body); color: var(--ink);
+}
+body.launch-privacy .privacy-sections li + li { margin-top: var(--sp-3); }
+body.launch-privacy .privacy-sections ul + p { margin-top: var(--sp-6); }
+
+/* Inline document links: keep the system slate but underline for in-prose
+   affordance (base `a` rule is unchanged elsewhere). */
+body.launch-privacy .privacy-sections a,
+body.launch-privacy .privacy-summary a {
+  color: var(--slate); text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+/* Disclosure tables (purpose/basis, cookies): the flat table idiom —
+   hairline rules, mono header row, no zebra. The wrap keeps a wide table
+   scrolling inside its own box on narrow viewports instead of the page. */
+body.launch-privacy .privacy-table-wrap {
+  overflow-x: auto; margin: var(--sp-6) 0;
+  border: var(--bw) solid var(--line); border-radius: var(--r-3);
+}
+body.launch-privacy .privacy-table {
+  width: 100%; border-collapse: collapse; min-width: 480px;
+}
+body.launch-privacy .privacy-table th {
+  font-family: var(--mono); font-weight: 600; font-size: var(--fs-10-5);
+  letter-spacing: var(--ls-kicker); text-transform: uppercase;
+  color: var(--muted); text-align: left;
+  padding: var(--sp-4) var(--sp-7);
+  border-bottom: var(--bw) solid var(--line2);
+  background: var(--surface2);
+}
+body.launch-privacy .privacy-table td {
+  font-size: var(--fs-13); line-height: var(--lh-body); color: var(--ink);
+  padding: var(--sp-5) var(--sp-7); vertical-align: top;
+}
+body.launch-privacy .privacy-table tbody tr + tr td {
+  border-top: var(--bw) solid var(--line);
+}
+
+/* Analytics-preference control: an inset panel matching the settings-page
+   account-panel idiom (thin line, paper surface, quiet mono state line).
+   Ships hidden; analytics.js reveals it only under a valid analytics
+   configuration, so no dead control can render. */
+body.launch-privacy .privacy-consent {
+  background: var(--surface); border: var(--bw) solid var(--line2);
+  border-radius: var(--r-3); padding: var(--sp-8) var(--sp-9);
+  margin: var(--sp-6) 0;
+}
+body.launch-privacy .privacy-consent__state {
+  display: block; font-family: var(--mono); font-size: var(--fs-12);
+  color: var(--muted); margin-bottom: var(--sp-5);
+}
+body.launch-privacy .privacy-consent__btn {
+  font-family: var(--sans); font-weight: 600; font-size: var(--fs-12);
+  border: var(--bw) solid var(--line2); border-radius: var(--r-2);
+  padding: var(--sp-3) var(--sp-7); cursor: pointer;
+  background: var(--surface); color: var(--muted); margin-right: var(--sp-4);
+}
+body.launch-privacy .privacy-consent__btn--allow {
+  color: #fff; background: var(--moss); border-color: var(--moss);
+}
+body.launch-privacy .privacy-consent__error {
+  display: block; color: var(--danger); font-size: var(--fs-11);
+  margin-top: var(--sp-4);
+}
+/* display:block above would defeat the hidden attribute analytics.js
+   toggles — restate it. */
+body.launch-privacy .privacy-consent__error[hidden] { display: none; }
+
+/* ==========================================================================
+   EARDE INTEGRATION — shared message page only
+   Scoped beneath body.launch-message-page (Pages.msg_page through
+   launch_message_page). One neutral sheet for every handler-authored
+   message document — success, info and error alike, across ~400 call
+   sites in every status family, several under byte-identity
+   anti-enumeration pins — so nothing here may key on status, route or
+   resource. The sheet reuses the base .auth / .auth__head / .auth__card
+   column (measured width, thin line, tight radius, paper surface, no
+   shadow); only the message-specific pieces are skinned here. The glyph
+   variants are the renderer's existing alert_type contract restated in
+   launch tones: moss success, slate info, clay error — quiet accents,
+   never a full-page treatment. No new visual vocabulary is introduced.
+   ========================================================================== */
+
+/* Brand mark above the sheet keeps its historical /feed recovery link. */
+body.launch-message-page .launch-msg__brand {
+  display: inline-block; line-height: 0; text-decoration: none;
+}
+
+/* Static generic context label (mirrors .section-head__kicker). */
+body.launch-message-page .launch-msg__kicker {
+  font-family: var(--mono); font-size: var(--fs-10-5); font-weight: 600;
+  letter-spacing: var(--ls-kicker); text-transform: uppercase;
+  color: var(--muted); margin: var(--sp-6) 0 0;
+}
+body.launch-message-page .auth__title { margin-top: var(--sp-4); }
+
+/* The card centres its short message column. */
+body.launch-message-page .launch-msg__card {
+  text-align: center; padding: var(--sp-11) var(--sp-10);
+}
+
+/* Alert glyph well (mirrors .notif__icon: bordered well, tight radius). */
+body.launch-message-page .launch-msg__icon {
+  width: 34px; height: 34px; margin: 0 auto;
+  display: grid; place-items: center;
+  border: var(--bw) solid var(--line2); border-radius: var(--r-3);
+  background: var(--surface2); color: var(--muted);
+}
+body.launch-message-page .launch-msg__icon svg { width: 16px; height: 16px; }
+body.launch-message-page .launch-msg__icon--success {
+  color: var(--moss); border-color: var(--moss);
+}
+body.launch-message-page .launch-msg__icon--info { color: var(--slate); }
+body.launch-message-page .launch-msg__icon--error { color: var(--clay); }
+
+/* Caller-supplied message body; long tokens (slugs, addresses) must wrap. */
+body.launch-message-page .launch-msg__text {
+  font-size: var(--fs-13-5); line-height: var(--lh-prose); color: var(--ink);
+  margin: var(--sp-7) 0 0; overflow-wrap: anywhere;
+}
+
+/* Thin rule between the message and its return-to-context action. */
+body.launch-message-page .launch-msg__foot {
+  margin-top: var(--sp-9); padding-top: var(--sp-8);
+  border-top: var(--bw) solid var(--line);
+}
+
+/* The renderer's own Go back link (mirrors .btn: quiet secondary). */
+body.launch-message-page .launch-msg__back {
+  display: inline-flex; align-items: center; justify-content: center;
+  font-family: var(--sans); font-weight: 600; font-size: var(--fs-13);
+  color: var(--ink); background: var(--surface);
+  border: var(--bw) solid var(--line2); border-radius: var(--r-2);
+  padding: 7px var(--sp-9); text-decoration: none; white-space: nowrap;
+}
+body.launch-message-page .launch-msg__back:hover { background: var(--surface2); }
+
+/* ==========================================================================
+   EARDE INTEGRATION — global admin dashboard only
+   Scoped beneath body.launch-global-admin: GET /admin
+   (Pages.admin_dashboard_page). Exists only because the real dashboard
+   cannot emit the reference markup exactly:
+   - the four operational panels (status ledger, recent users, pending
+     signups, banned users) are the legacy admin-* fragments spliced
+     verbatim — tables, badges, suspicious-signal flags and the unban POST
+     form keep their markup and are re-skinned here as a flat civic
+     registry: thin rules, no zebra, no cards beyond a hairline panel box;
+   - the unban action is restorative, not destructive, so it takes the moss
+     neutral treatment; clay/danger are reserved for the admin/banned
+     status chips whose semantics are genuinely alarming;
+   - the ph-no-capture class on each table is the replay-masking contract
+     (emails, IPs, usernames) and doubles as no CSS hook at all — masking
+     stays intact by leaving the markup alone;
+   - the confirm-modal overlay is built by the shared behavior script from
+     legacy utility class names; the stable .fixed.inset-0 pair and the
+     #cancel-btn / #confirm-btn ids are the hooks (unban confirmation);
+   - the desktop-only gate panel ships in mobile-gate.css; only the
+     launch-scope "hide the app" rule for this route lives here;
+   - the analytics consent banner markup is shared with the legacy layout
+     (styled once for these routes in routes/chrome.css).
+   ========================================================================== */
+
+/* ---- Head band -------------------------------------------------------------- */
+
+/* Serif title over a mono operational context line. */
+body.launch-global-admin .launch-admin-ctx {
+  font-family: var(--mono); font-size: var(--fs-11); color: var(--muted);
+}
+
+/* ---- Panels ----------------------------------------------------------------- */
+
+/* Registry sections: hairline box, tight radius, no shadow, no gradient. */
+body.launch-global-admin .admin-wrap {
+  display: flex; flex-direction: column; gap: var(--sp-9);
+  padding-top: var(--sp-9);
+}
+body.launch-global-admin .admin-panel {
+  background: var(--surface); border: var(--bw) solid var(--line);
+  border-radius: var(--r-2); padding: var(--sp-8) var(--sp-9) var(--sp-9);
+}
+body.launch-global-admin .admin-panel-title {
+  font-family: var(--serif); font-weight: 600; font-size: var(--fs-16);
+  color: var(--ink); margin: 0 0 var(--sp-1);
+}
+body.launch-global-admin .admin-panel-desc {
+  font-size: var(--fs-12-5); color: var(--muted); line-height: 1.5;
+  margin: 0 0 var(--sp-7);
+}
+body.launch-global-admin .admin-empty {
+  font-family: var(--mono); font-size: var(--fs-12); color: var(--muted);
+  padding: var(--sp-6) 0; text-align: center;
+}
+
+/* ---- Status ledger ---------------------------------------------------------- */
+
+/* Count-free config ledger: hairline-separated rows, mono labels, outline
+   value chips. Semantics: ok = moss, off/quiet = muted, warn = ochre,
+   misconfigured = clay. */
+body.launch-global-admin .admin-stats { display: flex; flex-direction: column; }
+body.launch-global-admin .admin-stat {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: var(--sp-8); padding: var(--sp-4) 0;
+  border-bottom: var(--bw) solid var(--line);
+}
+body.launch-global-admin .admin-stat:last-child { border-bottom: 0; }
+body.launch-global-admin .admin-stat-label {
+  font-family: var(--mono); font-size: var(--fs-12); color: var(--ink);
+}
+body.launch-global-admin .admin-stat-val {
+  font-family: var(--mono); font-size: var(--fs-10-5); font-weight: 600;
+  letter-spacing: .02em; text-transform: uppercase;
+  padding: 1px var(--sp-4); border-radius: var(--r-2);
+  border: var(--bw) solid var(--line2); color: var(--muted);
+  background: var(--surface);
+}
+body.launch-global-admin .admin-stat-val--ok   { color: var(--moss);  border-color: var(--moss); }
+body.launch-global-admin .admin-stat-val--off  { color: var(--muted); border-color: var(--line2); }
+body.launch-global-admin .admin-stat-val--warn { color: var(--ochre); border-color: var(--ochre); }
+body.launch-global-admin .admin-stat-val--bad  { color: var(--clay);  border-color: var(--clay); }
+
+/* ---- Data tables ------------------------------------------------------------ */
+
+body.launch-global-admin .admin-table-wrap { overflow-x: auto; }
+body.launch-global-admin .admin-table {
+  width: 100%; border-collapse: collapse; font-size: var(--fs-13);
+}
+body.launch-global-admin .admin-table thead th {
+  font-family: var(--mono); font-size: var(--fs-10-5); font-weight: 600;
+  text-transform: uppercase; letter-spacing: .04em; color: var(--muted);
+  text-align: left; padding: var(--sp-3) var(--sp-5);
+  border-bottom: var(--bw) solid var(--line2); white-space: nowrap;
+}
+body.launch-global-admin .admin-table tbody td {
+  padding: var(--sp-4) var(--sp-5);
+  border-bottom: var(--bw) solid var(--line);
+  color: var(--ink); vertical-align: middle;
+}
+body.launch-global-admin .admin-table tbody tr:last-child td { border-bottom: 0; }
+body.launch-global-admin .admin-user-link {
+  font-family: var(--mono); font-weight: 600; color: var(--ink);
+  text-decoration: none;
+}
+body.launch-global-admin .admin-user-link:hover {
+  color: var(--moss); text-decoration: underline;
+}
+body.launch-global-admin .admin-cell-muted { color: var(--muted); }
+body.launch-global-admin .admin-cell-mono {
+  font-family: var(--mono); font-size: var(--fs-12); color: var(--muted);
+}
+body.launch-global-admin .admin-num {
+  font-family: var(--mono); text-align: right; color: var(--ink);
+}
+body.launch-global-admin .admin-num--zero { color: var(--muted); }
+
+/* ---- Badges + suspicious-signal flags --------------------------------------- */
+
+/* Outline chips, profile idiom: admin = clay, banned = danger. */
+body.launch-global-admin .admin-badge {
+  display: inline-block; font-family: var(--mono); font-size: 10px;
+  font-weight: 600; text-transform: uppercase; letter-spacing: .03em;
+  padding: 0 var(--sp-3); border-radius: var(--r-2); margin-left: var(--sp-3);
+  border: var(--bw) solid var(--line2); color: var(--muted);
+  background: var(--surface);
+}
+body.launch-global-admin .admin-badge--admin  { color: var(--clay);   border-color: var(--clay); }
+body.launch-global-admin .admin-badge--banned { color: var(--danger); border-color: var(--danger); }
+body.launch-global-admin .admin-flag {
+  display: inline-block; font-family: var(--mono); font-size: 10px;
+  font-weight: 600; padding: 0 var(--sp-3); border-radius: var(--r-2);
+  margin: 1px var(--sp-2) 1px 0;
+  color: var(--ochre); border: var(--bw) solid var(--ochre);
+  background: var(--surface);
+}
+body.launch-global-admin .admin-flag--quiet { color: var(--muted); border-color: var(--line2); }
+
+/* ---- Unban action ----------------------------------------------------------- */
+
+/* Restorative moss action; POST /admin/unban/user/:id form kept verbatim. */
+body.launch-global-admin .admin-act-form { display: inline; margin: 0; padding: 0; }
+body.launch-global-admin .admin-btn-unban {
+  font-family: var(--mono); font-size: var(--fs-11); font-weight: 600;
+  cursor: pointer; color: var(--moss); background: var(--surface);
+  border: var(--bw) solid var(--moss); border-radius: var(--r-2);
+  padding: var(--sp-2) var(--sp-6);
+}
+body.launch-global-admin .admin-btn-unban:hover { color: #fff; background: var(--moss); }
+
+/* ==========================================================================
+   EARDE INTEGRATION — final create-page callers only
+   Pass 19: the last two legacy create_page documents.
+
+   1) body.launch-new-community — GET /new-community
+      (Pages.new_community_form through launch_app_page). A global-admin
+      administrative utility, not the onboarding flow: /bring, GitHub
+      verification and project setup remain the product path, and nothing
+      links here. The create-* fragment (the POST /communities form with its
+      Dream CSRF field, hidden section/channel counts, name/slug/description
+      fields, default #general and General chips, and the JS-managed extra
+      rows) is treated as pinned legacy markup, spliced verbatim inside the
+      .create-shell marker and skinned onto the approved anatomy: a mono
+      administrative context strip, a serif head band, one measured inset
+      form column, thin rules, a moss primary action. No new fields,
+      options, or onboarding illustration are invented.
+
+   2) body.launch-message-page .create-shell — the review queue's degraded
+      document (Project_home_review_pages, shell unavailable). The neutral
+      message wrapper owns the page; only the minimal rules needed to keep
+      the spliced queue fragment readable live here, keyed on the
+      .create-shell marker that exists in no other message document. No
+      status-, route- or resource-derived selector is introduced.
+   ========================================================================== */
+
+/* ---- Administrative context strip ------------------------------------------ */
+
+/* Mono, factual, ahead of the create-shell marker: names the utility and
+   its route, never sells it as onboarding. */
+.launch-new-community .launch-newcomm-context {
+  flex: none; display: flex; align-items: baseline; gap: var(--sp-5);
+  padding: var(--sp-4) 28px; background: var(--surface2);
+  border-bottom: var(--bw) solid var(--line);
+  font-family: var(--mono); font-size: var(--fs-10-5);
+  letter-spacing: var(--ls-kicker); text-transform: uppercase;
+}
+.launch-new-community .launch-newcomm-context-label { color: var(--muted); }
+.launch-new-community .launch-newcomm-context-path {
+  text-transform: none; letter-spacing: normal; color: var(--slate);
+}
+
+/* ---- Form anatomy ------------------------------------------------------------ */
+
+/* main is the column: context strip, head band, then the scrolling form. */
+.launch-new-community .main {
+  display: flex; flex-direction: column; min-height: 0;
+}
+
+/* Head band: compact serif title over the renderer's factual subtitle. */
+
+.launch-new-community .create-sub {
+  font-size: var(--fs-12-5); color: var(--muted); margin-top: var(--sp-1);
+  line-height: var(--lh-prose); max-width: 620px;
+}
+
+/* The form is the scroller: one measured inset column. */
+.launch-new-community .create-panel > .create-form {
+  flex: 1; min-height: 0; overflow-y: auto; scrollbar-width: thin;
+  padding: var(--sp-10) 28px 70px;
+}
+.launch-new-community .create-panel > .create-form > * { max-width: 620px; }
+
+/* Inset controls: hairline frame, tight radii, quiet slate focus. */
+
+.launch-new-community .create-textarea { resize: vertical; min-height: 84px; }
+
+/* Slug field: mono /c/ prefix welded to its input. */
+.launch-new-community .create-slug {
+  display: flex; align-items: stretch;
+}
+.launch-new-community .create-slug-prefix {
+  display: flex; align-items: center; font-family: var(--mono);
+  font-size: var(--fs-12); color: var(--muted); background: var(--surface2);
+  border: var(--bw) solid var(--line2); border-right: 0;
+  border-radius: var(--r-2) 0 0 var(--r-2); padding: 0 var(--sp-4);
+}
+.launch-new-community .create-slug .create-input {
+  border-radius: 0 var(--r-2) var(--r-2) 0; font-family: var(--mono);
+}
+
+/* Field hints: quiet mono metadata. */
+.launch-new-community .create-hint {
+  font-family: var(--mono); font-size: var(--fs-11); color: var(--muted);
+  margin-top: var(--sp-2);
+}
+
+/* Channel / section groups: thin-ruled subsections, mono sigils. */
+.launch-new-community .create-group {
+  margin-bottom: var(--sp-9); padding-top: var(--sp-7);
+  border-top: var(--bw) solid var(--line);
+}
+.launch-new-community .create-group-head { margin-bottom: var(--sp-5); }
+.launch-new-community .create-group-title {
+  font-family: var(--sans); font-weight: 600; font-size: var(--fs-13);
+  color: var(--ink);
+}
+.launch-new-community .create-group-title .sigil {
+  font-family: var(--mono); color: var(--moss); margin-right: var(--sp-2);
+}
+.launch-new-community .create-group-desc {
+  font-size: var(--fs-12); color: var(--muted); margin-top: var(--sp-1);
+  line-height: var(--lh-prose);
+}
+
+/* Default chips (#general / General): locked ledger rows, not buttons. */
+.launch-new-community .create-chip {
+  display: flex; align-items: center; gap: var(--sp-3);
+  background: var(--surface2); border: var(--bw) solid var(--line);
+  border-radius: var(--r-2); padding: var(--sp-3) var(--sp-5);
+  margin-bottom: var(--sp-3); max-width: 620px;
+}
+.launch-new-community .create-chip-sigil {
+  font-family: var(--mono); color: var(--moss);
+}
+.launch-new-community .create-chip-name {
+  font-family: var(--mono); font-size: var(--fs-12); color: var(--ink);
+}
+.launch-new-community .create-chip-lock {
+  margin-left: auto; font-family: var(--mono); font-size: var(--fs-10);
+  letter-spacing: var(--ls-kicker); text-transform: uppercase;
+  color: var(--muted);
+}
+
+/* JS-added extra rows: one hairline row per channel/section. */
+.launch-new-community .create-rows { display: block; }
+.launch-new-community .create-row {
+  display: flex; align-items: center; gap: var(--sp-3);
+  margin-bottom: var(--sp-3); max-width: 620px;
+}
+.launch-new-community .create-row-sigil {
+  flex: none; font-family: var(--mono); color: var(--muted);
+}
+.launch-new-community .create-row .create-input { flex: 1; min-width: 0; }
+.launch-new-community .create-row .create-select { flex: none; width: auto; }
+.launch-new-community .create-row-remove {
+  flex: none; cursor: pointer; font-size: var(--fs-13); line-height: 1;
+  color: var(--muted); background: var(--surface);
+  border: var(--bw) solid var(--line2); border-radius: var(--r-2);
+  padding: var(--sp-2) var(--sp-4);
+}
+.launch-new-community .create-row-remove:hover { color: var(--clay); }
+
+/* Add-row affordance: quiet secondary, never the page's primary action. */
+.launch-new-community .create-add {
+  cursor: pointer; font-family: var(--mono); font-size: var(--fs-11-5);
+  color: var(--slate); background: var(--surface);
+  border: var(--bw) solid var(--line2); border-radius: var(--r-2);
+  padding: var(--sp-2) var(--sp-6);
+}
+.launch-new-community .create-add:hover { background: var(--surface2); }
+
+/* ---- Degraded review queue inside the neutral message document -------------- */
+
+/* Keyed on the .create-shell marker, which no other message document
+   contains; nothing here derives from status, route or resource. Just
+   enough for the spliced queue fragment to read as one measured column. */
+body.launch-message-page .create-shell {
+  width: 100%; max-width: 680px; margin: 0 auto;
+  padding: var(--sp-10) var(--sp-8) var(--sp-13);
+}
+body.launch-message-page .create-shell .create-head { margin-bottom: var(--sp-8); }
+body.launch-message-page .create-shell .create-title {
+  font-family: var(--serif); font-weight: 600; font-size: var(--fs-22);
+  color: var(--ink);
+}
+body.launch-message-page .create-shell .create-sub {
+  font-size: var(--fs-12-5); color: var(--muted); margin-top: var(--sp-1);
+  line-height: var(--lh-prose);
+}
+body.launch-message-page .create-shell .phrv-request-list {
+  list-style: none; margin: 0; padding: 0;
+}
+body.launch-message-page .create-shell .phrv-request {
+  border: var(--bw) solid var(--line2); border-radius: var(--r-2);
+  background: var(--surface); padding: var(--sp-7) var(--sp-8);
+  margin-bottom: var(--sp-6);
+}
+body.launch-message-page .create-shell .phrv-actions {
+  display: flex; gap: var(--sp-4); margin-top: var(--sp-6);
+  padding-top: var(--sp-6); border-top: var(--bw) solid var(--line);
+}
+body.launch-message-page .create-shell .phrv-actions button {
+  cursor: pointer; font-family: var(--sans); font-weight: 600;
+  font-size: var(--fs-12); color: var(--ink); background: var(--surface);
+  border: var(--bw) solid var(--line2); border-radius: var(--r-2);
+  padding: var(--sp-3) var(--sp-7);
+}
+body.launch-message-page .create-shell .phrv-actions .phrv-accept button {
+  color: #fff; background: var(--moss); border-color: var(--moss);
+}

@@ -1,0 +1,121 @@
+/* ==========================================================================
+   EARDE INTEGRATION — /login and /signup only
+   Scoped beneath body.launch-auth (route roots .launch-login /
+   .launch-signup). Exists only because the real auth pages cannot emit the
+   reference markup exactly:
+   - the top-bar command field is a link, not a search form (same zero-extra-
+     form trick as /bring), so its inner cells are skinned here;
+   - the reference styled per-page margins with inline style attributes,
+     converted to launch-auth__* classes here;
+   - the privacy checkbox and its legal sentence are an application contract
+     (not in the mockup), skinned as the card's legal line;
+   - the analytics consent banner markup is shared with the legacy layout,
+     whose utility classes are inert without Tailwind (styled once for these
+     routes in routes/chrome.css — a real floating overlay, --shadow-overlay
+     allowed).
+   ========================================================================== */
+
+/* Card rhythm — inline margins in reference/login.html, as classes. */
+.launch-auth .launch-auth__field-last { margin-bottom: 0; }
+.launch-auth .launch-auth__meta {
+  display: flex; justify-content: flex-end; margin-top: 13px;
+  font-family: var(--mono); font-size: var(--fs-11-5);
+}
+.launch-auth .launch-auth__submit { margin-top: var(--sp-8); }
+.launch-auth .launch-auth__notice { margin-top: var(--sp-7); }
+.launch-auth .launch-auth__alert { margin-top: var(--sp-7); }
+
+/* u/ prefix group sits inset like its input (reference used an inline
+   background on the wrapper). */
+.launch-auth .auth__card .input-group { background: var(--surface2); }
+
+/* The privacy checkbox doubles as the card's legal line: sans 11.5, muted,
+   wrapping — the mockup's separate legal paragraph is this contract here. */
+.launch-auth .launch-auth__legal {
+  align-items: flex-start; margin-top: var(--sp-7);
+  font-family: var(--sans); font-size: var(--fs-11-5);
+  line-height: var(--lh-prose);
+}
+.launch-auth .launch-auth__legal input { margin-top: 3px; }
+
+/* Turnstile challenge keeps its slot inside the card when configured. */
+.launch-auth .auth__card .cf-turnstile { margin-top: var(--sp-7); }
+
+/* ==========================================================================
+   EARDE INTEGRATION — password recovery only
+   Scoped beneath body.launch-forgot-password / body.launch-reset-password.
+   Both routes also carry the shared .launch-auth root, so the existing
+   /login-/signup chrome rules (command-field link cells, consent banner
+   overlay) apply unchanged and are NOT restated here. This section exists
+   only because the two recovery forms keep their legacy inner markup
+   verbatim — action/method, CSRF placement, names, ids, the hidden token
+   field and the auth-form/auth-field/auth-input/auth-btn/auth-alert/
+   auth-foot classes — so those legacy classes are skinned to the launch
+   card idiom here instead of being renamed to the login/signup classes.
+   Each rule mirrors an existing base rule (noted inline); no new visual
+   vocabulary is introduced.
+   ========================================================================== */
+
+/* The preserved <form class='auth-form'> is itself the card (mirrors
+   .auth__card: thin line, tight radius, paper surface, no shadow). */
+body.launch-forgot-password .auth-form,
+body.launch-reset-password .auth-form {
+  margin-top: var(--sp-11); border: var(--bw) solid var(--line);
+  border-radius: var(--r-4); background: var(--surface); padding: var(--sp-10);
+}
+
+/* Field rhythm and mono labels (mirror .field / .label). */
+body.launch-forgot-password .auth-field,
+body.launch-reset-password .auth-field { margin-bottom: var(--sp-8); }
+body.launch-forgot-password .auth-label,
+body.launch-reset-password .auth-label {
+  display: block; font-family: var(--mono); font-size: var(--fs-11);
+  color: var(--muted); margin-bottom: 5px;
+}
+
+/* Inset inputs (mirror .input + .input--inset, moss focus ring-by-border). */
+body.launch-forgot-password .auth-input,
+body.launch-reset-password .auth-input {
+  width: 100%; font-family: var(--sans); font-size: var(--fs-14);
+  color: var(--ink); background: var(--surface2);
+  border: var(--bw) solid var(--line2); border-radius: var(--r-2);
+  padding: 9px var(--sp-6); outline: none;
+}
+body.launch-forgot-password .auth-input:focus,
+body.launch-reset-password .auth-input:focus { border-color: var(--moss); }
+body.launch-forgot-password .auth-input::placeholder,
+body.launch-reset-password .auth-input::placeholder {
+  color: var(--muted); opacity: .8;
+}
+
+/* Moss primary action (mirrors .btn + .btn--primary + .btn--block, with the
+   card's submit offset from the /login integration section). */
+body.launch-forgot-password .auth-btn,
+body.launch-reset-password .auth-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  gap: var(--sp-3); width: 100%; margin-top: var(--sp-8);
+  font-family: var(--sans); font-weight: 600; font-size: var(--fs-13);
+  border-radius: var(--r-2); border: var(--bw) solid var(--moss);
+  padding: 9px var(--sp-9); cursor: pointer; white-space: nowrap;
+  text-decoration: none; color: #fff; background: var(--moss);
+}
+body.launch-forgot-password .auth-btn:hover,
+body.launch-reset-password .auth-btn:hover { filter: brightness(1.06); }
+
+/* Renderer-owned validation alert above the reset form (mirrors
+   .notice--rejected: flat, quiet, non-alarming; scoped to both roots even
+   though only /reset-password renders it today). */
+body.launch-forgot-password .auth-alert,
+body.launch-reset-password .auth-alert {
+  border: var(--bw) solid var(--line2); border-radius: var(--r-2);
+  background: var(--surface2); padding: 13px var(--sp-8);
+  font-size: var(--fs-13); color: var(--muted); line-height: var(--lh-body);
+  margin-top: var(--sp-7);
+}
+
+/* Quiet mono foot link back to /login (mirrors .auth__foot). */
+body.launch-forgot-password .auth-foot,
+body.launch-reset-password .auth-foot {
+  text-align: center; margin-top: var(--sp-9);
+  font-family: var(--mono); font-size: var(--fs-12); color: var(--muted);
+}

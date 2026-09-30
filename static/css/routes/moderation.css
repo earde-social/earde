@@ -1,0 +1,736 @@
+/* ==========================================================================
+   EARDE INTEGRATION — project-home review only
+   Scoped beneath body.launch-project-home-review: GET
+   /c/:slug/project-home-requests (Project_home_review_pages) and every
+   re-render the accept/reject POSTs produce on this page (Stale_form 403,
+   Review_unavailable / Project_unavailable / Target_ineligible 409).
+   Exists only because the real review surface cannot emit the reference
+   markup exactly:
+   - every phrv-* fragment (request cards, the two nameless zero-field
+     forms, notes, markers, feedback and empty copy) is pinned by the
+     review suites (fragment slice = create-shell → </main>, form and
+     name= counts, exact action paths and copy) or treated as pinned, so
+     the legacy markup is spliced verbatim and skinned here from outside;
+   - the mono community context band precedes the create-shell marker, so
+     all launch chrome stays outside the sliced fragment;
+   - this surface never names an ineligibility reason, so the sidebar is
+     rendered without the private-community visibility marker (handler
+     contract, not CSS);
+   - the notification badge is server-rendered from the request's unread
+     count and is absent entirely at zero, so this scope needs no rule for
+     it (Notification_badge);
+   - the desktop-only gate panel ships in mobile-gate.css; only the
+     launch-scope "hide the app" rule for this route lives here;
+   - the analytics consent banner markup is shared with the legacy layout
+     (styled once for these routes in routes/chrome.css).
+   ========================================================================== */
+
+/* ---- Page anatomy ----------------------------------------------------------- */
+
+/* The head band, index column and scroller now come from the shared
+   .cm-wrap--settings shell; this scope keeps only the queue panel's column
+   width (spacing is owned by the shell's cm-main). */
+.launch-project-home-review .create-wrap { max-width: 760px; }
+
+/* Serif page title over factual explanatory copy. */
+
+.launch-project-home-review .create-sub {
+  color: var(--muted); font-size: var(--fs-12-5); line-height: var(--lh-prose);
+  margin-top: var(--sp-2);
+}
+
+/* ---- Feedback + page-level notices (pinned copy, styled from outside) ------- */
+
+/* Outcome feedback: flat 1px ochre-tinted notice — never a shadowed alert. */
+.launch-project-home-review .phrv-alert {
+  border: var(--bw) solid var(--ochre); border-radius: var(--r-2);
+  background: color-mix(in srgb, var(--ochre) 8%, var(--surface));
+  color: var(--ink); font-size: var(--fs-13); line-height: var(--lh-prose);
+  padding: 13px var(--sp-8); margin-bottom: var(--sp-8);
+}
+.launch-project-home-review .phrv-alert p { margin: 0; }
+
+/* Ineligible-host notice: factual, muted, no reason named. */
+.launch-project-home-review .phrv-ineligible {
+  border: var(--bw) solid var(--line2); border-radius: var(--r-2);
+  background: var(--surface2); color: var(--muted);
+  font-size: var(--fs-12-5); line-height: var(--lh-prose);
+  padding: 11px var(--sp-8); margin-bottom: var(--sp-8);
+}
+.launch-project-home-review .phrv-ineligible p { margin: 0; }
+
+/* Explicit empty queue. */
+.launch-project-home-review .phrv-empty {
+  border: var(--bw) dashed var(--line2); border-radius: var(--r-2);
+  background: var(--surface2); color: var(--muted);
+  font-size: var(--fs-13); padding: var(--sp-8) var(--sp-9);
+}
+
+/* ---- Request cards (pinned phrv-* fragment, styled from outside) ------------ */
+
+.launch-project-home-review .phrv-request-list {
+  list-style: none; margin: 0; padding: 0;
+  display: flex; flex-direction: column; gap: var(--sp-8);
+}
+
+/* Pending request frame: the reference .notice--pending recipe — 1px ochre,
+   3px left ochre rule, tight radius, computed ochre tint. Flat. */
+.launch-project-home-review .phrv-request {
+  border: var(--bw) solid var(--ochre); border-left: 3px solid var(--ochre);
+  border-radius: var(--r-2);
+  background: color-mix(in srgb, var(--ochre) 8%, var(--surface));
+  padding: var(--sp-8) var(--sp-9);
+}
+
+/* Project identity: name 16/700, mono metadata under it. */
+.launch-project-home-review .phrv-identity { margin-bottom: var(--sp-5); }
+.launch-project-home-review .phrv-project-name {
+  font-size: var(--fs-16); font-weight: 700; color: var(--ink);
+  line-height: var(--lh-title); margin: 0;
+}
+.launch-project-home-review .phrv-project-kind,
+.launch-project-home-review .phrv-namespace {
+  font-family: var(--mono); font-size: var(--fs-10-5); color: var(--muted);
+  margin: var(--sp-1) 0 0;
+}
+.launch-project-home-review .phrv-verification {
+  font-family: var(--mono); font-size: var(--fs-10-5); color: var(--ochre);
+  margin: var(--sp-2) 0 0;
+}
+.launch-project-home-review .phrv-connected {
+  font-family: var(--mono); font-size: var(--fs-10-5); color: var(--muted);
+  margin: var(--sp-1) 0 0;
+}
+
+/* Repositories: mono rows; links stay quiet slate, markers are micro pills. */
+.launch-project-home-review .phrv-repos {
+  list-style: none; margin: 0 0 var(--sp-5); padding: 0;
+  display: flex; flex-direction: column; gap: var(--sp-1);
+}
+.launch-project-home-review .phrv-repo {
+  font-family: var(--mono); font-size: var(--fs-11); color: var(--ink);
+}
+.launch-project-home-review .phrv-repo-link {
+  color: var(--slate); text-decoration: none;
+}
+.launch-project-home-review .phrv-repo-link:hover { text-decoration: underline; }
+.launch-project-home-review .phrv-repo-name { color: var(--ink); }
+.launch-project-home-review .phrv-marker {
+  display: inline-block; font-family: var(--mono); font-size: var(--fs-9);
+  font-weight: 600; letter-spacing: .06em; text-transform: uppercase;
+  border: var(--bw) solid var(--line2); border-radius: var(--r-1);
+  padding: 0 var(--sp-2); margin-left: var(--sp-2); color: var(--muted);
+  vertical-align: 1px;
+}
+.launch-project-home-review .phrv-primary {
+  color: var(--moss); border-color: var(--moss);
+}
+.launch-project-home-review .phrv-no-repos {
+  font-family: var(--mono); font-size: var(--fs-11); color: var(--muted);
+  margin: 0 0 var(--sp-5);
+}
+
+/* Requester: mono meta, secondary. */
+.launch-project-home-review .phrv-requester {
+  font-family: var(--mono); font-size: var(--fs-11); color: var(--muted);
+  margin: 0 0 var(--sp-4);
+}
+
+/* Private note: inner plain-surface box; readable but secondary. */
+.launch-project-home-review .phrv-note {
+  border: var(--bw) solid var(--line); border-radius: var(--r-2);
+  background: var(--surface); padding: var(--sp-5) var(--sp-7);
+  margin-bottom: var(--sp-6);
+}
+.launch-project-home-review .phrv-note-label {
+  font-family: var(--mono); font-size: var(--fs-10-5); color: var(--muted);
+  margin: 0 0 var(--sp-3);
+}
+.launch-project-home-review .phrv-note-body {
+  font-size: var(--fs-13); color: var(--ink); line-height: var(--lh-prose);
+  margin: 0; overflow-wrap: anywhere;
+}
+
+/* ---- Actions (two pinned nameless zero-field forms) ------------------------- */
+
+.launch-project-home-review .phrv-actions {
+  display: flex; align-items: center; gap: var(--sp-5);
+  padding-top: var(--sp-5); border-top: var(--bw) solid var(--line);
+}
+.launch-project-home-review .phrv-review-form { margin: 0; }
+.launch-project-home-review .phrv-btn {
+  cursor: pointer; font-family: var(--sans); font-weight: 600;
+  font-size: var(--fs-12); border-radius: var(--r-2);
+  padding: var(--sp-3) var(--sp-8);
+}
+/* Moss accept. */
+.launch-project-home-review .phrv-accept .phrv-btn {
+  color: #fff; background: var(--moss); border: var(--bw) solid var(--moss);
+}
+.launch-project-home-review .phrv-accept .phrv-btn:hover { background: var(--forest); }
+/* Restrained clay reject: quiet outline, clay ink. */
+.launch-project-home-review .phrv-reject .phrv-btn {
+  color: var(--clay); background: var(--surface);
+  border: var(--bw) solid var(--line2);
+}
+.launch-project-home-review .phrv-reject .phrv-btn:hover { border-color: var(--clay); }
+/* Acceptance unavailable: factual copy in the accept slot, never a
+   disabled control. */
+.launch-project-home-review .phrv-accept-unavailable {
+  font-size: var(--fs-12); color: var(--muted); margin: 0;
+}
+
+/* ==========================================================================
+   EARDE INTEGRATION — community moderation log only
+   Scoped beneath body.launch-community-modlog: GET /c/:slug/modlog
+   (Pages.mod_log_page). Exists only because the real ledger surface cannot
+   emit the reference markup exactly:
+   - the cm-* event rows (when / actor / action chip / reason cells, the
+     admin-override tag variant, the empty row) and the .cm-table-reason
+     replay-mask class are analytics/test contracts, so the legacy markup is
+     spliced verbatim and skinned here onto the approved community-shell
+     anatomy (page head band over a flat chronological ledger — an auditable
+     civic record, not a dashboard);
+   - the route is intentionally public (transparency), so nothing here may
+     imply a management surface: no action controls, no statistics, only the
+     recorded events;
+   - the notification badge is server-rendered from the request's unread
+     count and is absent entirely at zero, so this scope needs no rule for
+     it (Notification_badge);
+   - the desktop-only gate panel ships in mobile-gate.css; only the
+     launch-scope "hide the app" rule for this route lives here;
+   - the analytics consent banner markup is shared with the legacy layout
+     (styled once for these routes in routes/chrome.css).
+   ========================================================================== */
+
+/* ---- Ledger anatomy --------------------------------------------------------- */
+
+/* cm-wrap fills <main> as a column: fixed head band over the scrolling ledger. */
+.launch-community-modlog .cm-wrap {
+  flex: 1; min-height: 0; display: flex; flex-direction: column;
+}
+
+/* Page head band (reference .page__head--tight geometry): serif title,
+   mono /c/:slug context, quiet mono back link right. */
+.launch-community-modlog .cm-head {
+  flex: none; display: flex; align-items: baseline; gap: var(--sp-6);
+  padding: 15px 28px; background: var(--surface);
+  border-bottom: var(--bw) solid var(--line2);
+}
+.launch-community-modlog .cm-h1 {
+  font-family: var(--serif); font-weight: 600; font-size: var(--fs-22);
+  color: var(--ink); min-width: 0;
+}
+.launch-community-modlog .cm-h1 .accent { color: var(--moss); }
+.launch-community-modlog .launch-modlog-ctx {
+  font-size: var(--fs-11-5); color: var(--muted);
+}
+.launch-community-modlog .cm-back {
+  margin-left: auto; flex: none;
+  font-family: var(--mono); font-size: var(--fs-11-5); color: var(--muted);
+  text-decoration: none;
+}
+.launch-community-modlog .cm-back:hover { color: var(--ink); }
+
+/* The ledger column is the scroller; content stays left-set at register width. */
+.launch-community-modlog .cm-panel {
+  flex: 1; min-height: 0; overflow-y: auto; scrollbar-width: thin;
+  padding: var(--sp-10) 28px 70px;
+}
+.launch-community-modlog .cm-panel > * { max-width: 940px; }
+.launch-community-modlog .cm-panel-title {
+  font-family: var(--serif); font-weight: 600; font-size: var(--fs-19);
+  color: var(--ink); margin-bottom: var(--sp-2);
+}
+.launch-community-modlog .cm-panel-desc {
+  font-size: var(--fs-13); color: var(--muted); line-height: var(--lh-prose);
+  margin: var(--sp-2) 0 var(--sp-7);
+}
+
+/* ---- Event ledger ----------------------------------------------------------- */
+
+/* Flat chronological record: one hairline frame, thin row separators, no
+   zebra, no shadows — actor → action → target reads left to right. */
+.launch-community-modlog .cm-table-wrap {
+  border: var(--bw) solid var(--line2); border-radius: var(--r-2);
+  background: var(--surface); overflow-x: auto;
+}
+.launch-community-modlog .cm-table {
+  width: 100%; border-collapse: collapse; font-size: var(--fs-13);
+}
+.launch-community-modlog .cm-table thead th {
+  font-family: var(--mono); font-size: var(--fs-10); font-weight: 600;
+  letter-spacing: var(--ls-kicker); text-transform: uppercase;
+  color: var(--muted); text-align: left;
+  padding: var(--sp-3) var(--sp-6); background: var(--surface2);
+  border-bottom: var(--bw) solid var(--line2);
+}
+.launch-community-modlog .cm-table tbody td {
+  padding: var(--sp-4) var(--sp-6); vertical-align: baseline;
+  border-bottom: var(--bw) solid var(--line);
+}
+.launch-community-modlog .cm-table tbody tr:last-child td { border-bottom: 0; }
+
+/* Mono timestamp, quiet. */
+.launch-community-modlog .cm-table-when {
+  font-family: var(--mono); font-size: var(--fs-11); color: var(--muted);
+  white-space: nowrap;
+}
+/* Actor: the acting moderator, a real /u/ link. */
+.launch-community-modlog .cm-table-actor {
+  font-family: var(--mono); font-size: var(--fs-12); color: var(--slate);
+  text-decoration: none;
+}
+.launch-community-modlog .cm-table-actor:hover { text-decoration: underline; }
+/* Event-type marker: outline chip on the raw recorded action_type — the only
+   two real categories are community-mod and admin-override (clay: the
+   provenance of authority), so nothing else is invented. */
+.launch-community-modlog .cm-action-tag {
+  display: inline-block; font-family: var(--mono); font-size: var(--fs-10-5);
+  font-weight: 600; color: var(--ink); background: var(--surface2);
+  border: var(--bw) solid var(--line2); border-radius: var(--r-1);
+  padding: 0 var(--sp-2); white-space: nowrap;
+}
+.launch-community-modlog .cm-action-tag--admin {
+  color: var(--clay); background: transparent; border-color: var(--clay);
+}
+/* Target: the recorded id, mono metadata. */
+.launch-community-modlog .cm-table-target {
+  font-family: var(--mono); font-size: var(--fs-11); color: var(--muted);
+}
+/* Reason: readable but secondary to the actor → action → target line. */
+.launch-community-modlog .cm-table-reason {
+  font-size: var(--fs-12-5); color: var(--ink); line-height: var(--lh-prose);
+}
+/* Empty state: a mono sentence, not a poster. */
+.launch-community-modlog .cm-table-empty {
+  font-family: var(--mono); font-size: var(--fs-12); color: var(--muted);
+  text-align: center; padding: var(--sp-12) var(--sp-8);
+}
+
+/* ==========================================================================
+   EARDE INTEGRATION — community reports only
+   Scoped beneath body.launch-community-reports: GET /c/:slug/reports
+   (Pages.reports_queue_page), every ?status= tab of the same renderer.
+   Exists only because the real review surface cannot emit the reference
+   markup exactly:
+   - the cm-* report rows (id / reporter / reason+target / context /
+     resolution cells), the status badges, the one-form-two-formaction
+     dismiss / action-taken submits and the .ph-mask replay classes are
+     treated as pinned, so the legacy markup is spliced verbatim and skinned
+     here onto the approved community-shell anatomy (page head band over a
+     flat review docket — a civic queue, not a trust-and-safety dashboard);
+   - the route is M/TM/A-gated in the handler, so the docket may show the
+     real resolution controls, but nothing here adds bulk actions,
+     statistics or workflow states the backend does not have;
+   - the notification badge is server-rendered from the request's unread
+     count and is absent entirely at zero, so this scope needs no rule for
+     it (Notification_badge);
+   - for a private community the renderer keeps its inner ph-no-capture
+     guard div inside <main>; display:contents keeps it out of the flex
+     chain so both privacy shapes share one layout;
+   - the desktop-only gate panel ships in mobile-gate.css; only the
+     launch-scope "hide the app" rule for this route lives here;
+   - the analytics consent banner markup is shared with the legacy layout
+     (styled once for these routes in routes/chrome.css).
+   ========================================================================== */
+
+/* ---- Docket anatomy --------------------------------------------------------- */
+
+/* Shell structure (head band, index column, panel scroller) now comes from
+   the shared .cm-wrap--settings scope — this scope keeps only the docket's
+   own content styling. The five-column docket still gets the wide register:
+   the panel is a plain block inside the shell's scrolling cm-main. */
+.launch-community-reports .cm-panel > * { max-width: 1160px; }
+.launch-community-reports .cm-panel-title {
+  font-family: var(--serif); font-weight: 600; font-size: var(--fs-19);
+  color: var(--ink); margin-bottom: var(--sp-2);
+}
+.launch-community-reports .cm-panel-desc {
+  font-size: var(--fs-13); color: var(--muted); line-height: var(--lh-prose);
+  margin: var(--sp-2) 0 var(--sp-7);
+}
+
+/* Status tabs: the renderer's three real states (Open / Action taken /
+   Dismissed) as a flat mono tab row — thin rule under the run, the active
+   tab inked and underscored in moss. No counts (they would be fabricated). */
+.launch-community-reports .cm-nav {
+  display: flex; gap: var(--sp-2); margin: 0 0 var(--sp-7);
+  border-bottom: var(--bw) solid var(--line2);
+}
+.launch-community-reports .cm-nav-link {
+  font-family: var(--mono); font-size: var(--fs-11-5); color: var(--muted);
+  text-decoration: none; padding: var(--sp-3) var(--sp-5);
+  border-bottom: 2px solid transparent; margin-bottom: calc(-1 * var(--bw));
+}
+.launch-community-reports .cm-nav-link:hover { color: var(--ink); }
+.launch-community-reports .cm-nav-link--active {
+  color: var(--ink); font-weight: 600; border-bottom-color: var(--moss);
+}
+
+/* ---- Review docket ---------------------------------------------------------- */
+
+/* Flat review queue: one hairline frame, thin row separators, no zebra, no
+   shadows — target identity reads primary, reason secondary, reporter and
+   timestamps in restrained mono metadata. */
+.launch-community-reports .cm-table-wrap {
+  border: var(--bw) solid var(--line2); border-radius: var(--r-2);
+  background: var(--surface); overflow-x: auto;
+}
+.launch-community-reports .cm-table {
+  width: 100%; border-collapse: collapse; font-size: var(--fs-13);
+}
+.launch-community-reports .cm-table thead th {
+  font-family: var(--mono); font-size: var(--fs-10); font-weight: 600;
+  letter-spacing: var(--ls-kicker); text-transform: uppercase;
+  color: var(--muted); text-align: left;
+  padding: var(--sp-3) var(--sp-6); background: var(--surface2);
+  border-bottom: var(--bw) solid var(--line2);
+}
+.launch-community-reports .cm-table tbody td {
+  padding: var(--sp-4) var(--sp-6); vertical-align: top;
+  border-bottom: var(--bw) solid var(--line);
+}
+.launch-community-reports .cm-table tbody tr:last-child td { border-bottom: 0; }
+
+/* Report id + filed-when + status: quiet mono ledger column. */
+.launch-community-reports .cm-table-when {
+  font-family: var(--mono); font-size: var(--fs-11); color: var(--muted);
+  white-space: nowrap; line-height: 1.9;
+}
+/* Reporter / target-author / context links: real /u/ and content links. */
+.launch-community-reports .cm-table-actor {
+  font-family: var(--mono); font-size: var(--fs-12); color: var(--slate);
+  text-decoration: none;
+}
+.launch-community-reports .cm-table-actor:hover { text-decoration: underline; }
+/* Mono metadata: target authorship, masked excerpts, degraded targets. */
+.launch-community-reports .cm-table-target {
+  font-family: var(--mono); font-size: var(--fs-11); color: var(--muted);
+}
+/* Reporter's optional details: readable but secondary. */
+.launch-community-reports .cm-table-reason {
+  font-size: var(--fs-12-5); color: var(--ink); line-height: var(--lh-prose);
+}
+
+/* Status chips on the recorded report state — outline marks, tight radii:
+   open reads as pending attention (ochre), action taken as a settled moss
+   outcome, dismissed recedes to the muted archive tone. The bare cm-badge
+   also carries the target-type word (post / comment / chat message) as a
+   neutral chip. */
+.launch-community-reports .cm-badge {
+  display: inline-block; font-family: var(--mono); font-size: var(--fs-10);
+  font-weight: 600; letter-spacing: .04em; text-transform: uppercase;
+  border: var(--bw) solid var(--line2); border-radius: var(--r-1);
+  padding: 1px var(--sp-3); color: var(--muted); background: var(--surface2);
+  white-space: nowrap;
+}
+.launch-community-reports .cm-badge--active {
+  color: var(--ochre); border-color: var(--ochre);
+  background: color-mix(in srgb, var(--ochre) 9%, var(--surface));
+}
+.launch-community-reports .cm-badge--top {
+  color: var(--moss); border-color: var(--moss);
+  background: color-mix(in srgb, var(--moss) 9%, var(--surface));
+}
+.launch-community-reports .cm-badge--archived { color: var(--muted); }
+
+/* ---- Resolution controls ---------------------------------------------------- */
+
+/* One form per open row, two formaction submits (the renderer's exact
+   contract): optional note above the quiet Dismiss (slate — the report had
+   no merit) and the moss Mark-action-taken. */
+.launch-community-reports .cm-report-actions {
+  display: flex; flex-direction: column; gap: var(--sp-3); min-width: 190px;
+}
+.launch-community-reports .cm-report-note {
+  width: 100%; resize: vertical; min-height: 44px;
+  font-family: var(--sans); font-size: var(--fs-12); color: var(--ink);
+  background: var(--surface); border: var(--bw) solid var(--line2);
+  border-radius: var(--r-2); padding: var(--sp-3) var(--sp-4);
+}
+.launch-community-reports .cm-report-note::placeholder { color: var(--muted); }
+.launch-community-reports .cm-report-note:focus {
+  outline: none; border-color: var(--slate);
+}
+.launch-community-reports .cm-report-btns { display: flex; gap: var(--sp-3); }
+.launch-community-reports .cm-btn-sm {
+  cursor: pointer; font-family: var(--mono); font-size: var(--fs-11);
+  color: var(--slate); background: var(--surface);
+  border: var(--bw) solid var(--line2); border-radius: var(--r-2);
+  padding: var(--sp-2) var(--sp-6); white-space: nowrap;
+}
+.launch-community-reports .cm-btn-sm:hover {
+  background: var(--surface2); color: var(--ink);
+}
+.launch-community-reports .cm-btn-sm--ok { color: var(--moss); }
+.launch-community-reports .cm-btn-sm--ok:hover {
+  border-color: var(--moss); color: var(--moss); background: var(--surface);
+}
+
+/* Resolved rows: the recorded outcome (kind / when / optional note) as quiet
+   mono metadata — no controls, nothing re-openable is implied. */
+.launch-community-reports .cm-report-meta {
+  font-family: var(--mono); font-size: var(--fs-11); color: var(--muted);
+  line-height: 1.9;
+}
+
+/* Empty state: a mono sentence, not a poster. */
+.launch-community-reports .cm-table-empty {
+  font-family: var(--mono); font-size: var(--fs-12); color: var(--muted);
+  text-align: center; padding: var(--sp-12) var(--sp-8);
+}
+
+/* ==========================================================================
+   EARDE INTEGRATION — community moderator management only
+   Scoped beneath body.launch-community-moderators: GET /c/:slug/manage-mods
+   (Pages.manage_mods_page). Exists only because the real stewardship surface
+   cannot emit the reference markup exactly:
+   - the cm-* role sections (Top Mods / Moderators / Legacy moderators), the
+     add / promote / remove forms with their hidden target_user_id fields,
+     the confirmModal onsubmit hooks and the role badges are handler/test
+     contracts, so the legacy markup is spliced verbatim and skinned here
+     onto the approved community-shell anatomy (page head band over a flat
+     moderator ledger — stewardship administration, not enterprise IAM);
+   - the route is TM/A-gated in the handler, so the roster may show the real
+     role actions, but nothing here adds invitations, permission matrices,
+     activity metrics or bulk actions the backend does not have;
+   - the shared behavior script composes the confirm modal from legacy
+     utility class names; the stable .fixed.inset-0 pair and the
+     #cancel-btn / #confirm-btn ids are the hooks, styled route-scoped;
+   - the notification badge is server-rendered from the request's unread
+     count and is absent entirely at zero, so this scope needs no rule for
+     it (Notification_badge);
+   - for a private community the renderer keeps its inner ph-no-capture
+     guard div inside <main>; display:contents keeps it out of the flex
+     chain so both privacy shapes share one layout;
+   - the desktop-only gate panel ships in mobile-gate.css; only the
+     launch-scope "hide the app" rule for this route lives here;
+   - the analytics consent banner markup is shared with the legacy layout
+     (styled once for these routes in routes/chrome.css).
+   ========================================================================== */
+
+/* ---- Roster anatomy --------------------------------------------------------- */
+
+/* Shell structure (head band, index column, panel scroller) now comes from
+   the shared .cm-wrap--settings scope — this scope keeps only the roster's
+   own content styling. Stacked panels at register width, thin-ruled — flat
+   sections, no cards; the shell's cm-main owns outer spacing. */
+.launch-community-moderators .cm-panel {
+  margin: 0 0 var(--sp-10); max-width: 860px;
+  padding-bottom: var(--sp-9);
+  border-bottom: var(--bw) solid var(--line);
+}
+.launch-community-moderators .cm-panel:last-child { border-bottom: 0; }
+.launch-community-moderators .cm-panel-title {
+  font-family: var(--serif); font-weight: 600; font-size: var(--fs-16);
+  color: var(--ink); margin-bottom: var(--sp-2);
+}
+/* Real constraint copy only (council cap, admin-only removal, inactivity
+   demotion) — reads as the protected-role explanation, nothing invented. */
+.launch-community-moderators .cm-panel-desc {
+  font-size: var(--fs-12-5); color: var(--muted); line-height: var(--lh-prose);
+  margin: var(--sp-2) 0 var(--sp-6);
+}
+
+/* ---- Moderator ledger ------------------------------------------------------- */
+
+/* Flat roster: one hairline frame, thin row separators, no zebra, no
+   shadows — username identity primary, role marker secondary, actions quiet
+   on the right. */
+.launch-community-moderators .cm-list {
+  border: var(--bw) solid var(--line2); border-radius: var(--r-2);
+  background: var(--surface);
+}
+.launch-community-moderators .cm-list-row {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: var(--sp-6); padding: var(--sp-4) var(--sp-6);
+  border-bottom: var(--bw) solid var(--line);
+}
+.launch-community-moderators .cm-list-row:last-child { border-bottom: 0; }
+
+/* Identity: the real /u/ profile link, mono, visually primary. */
+.launch-community-moderators .cm-user-link {
+  font-family: var(--mono); font-size: var(--fs-13); font-weight: 600;
+  color: var(--ink); text-decoration: none;
+}
+.launch-community-moderators .cm-user-link:hover { text-decoration: underline; }
+.launch-community-moderators .cm-user-link--muted {
+  color: var(--muted); font-weight: 400;
+}
+
+/* Role markers: outline chips on the recorded role — Top Mod carries the
+   moss steward tone, Legacy recedes to the archive tone. Secondary to the
+   username by size and weight. */
+.launch-community-moderators .cm-badge {
+  display: inline-block; font-family: var(--mono); font-size: var(--fs-10);
+  font-weight: 600; letter-spacing: .04em; text-transform: uppercase;
+  border: var(--bw) solid var(--line2); border-radius: var(--r-1);
+  padding: 1px var(--sp-3); color: var(--muted); background: var(--surface2);
+  white-space: nowrap; margin-left: var(--sp-4); vertical-align: 1px;
+}
+.launch-community-moderators .cm-badge--top {
+  color: var(--moss); border-color: var(--moss);
+  background: color-mix(in srgb, var(--moss) 9%, var(--surface));
+}
+.launch-community-moderators .cm-badge--legacy { color: var(--muted); }
+
+/* Protected-role / no-powers notes: quiet mono statements of the real
+   constraints ("Top Mod" where only an admin may act; "No active powers"). */
+.launch-community-moderators .cm-muted-note {
+  font-family: var(--mono); font-size: var(--fs-11); color: var(--muted);
+  white-space: nowrap;
+}
+
+/* ---- Role actions ----------------------------------------------------------- */
+
+/* Per-row action run: separate promote / remove forms exactly as rendered —
+   never combined. */
+.launch-community-moderators .cm-row-actions {
+  display: flex; align-items: center; gap: var(--sp-3); flex: none;
+}
+.launch-community-moderators .cm-form-inline { display: inline-flex; margin: 0; }
+.launch-community-moderators .cm-btn-sm {
+  cursor: pointer; font-family: var(--mono); font-size: var(--fs-11);
+  color: var(--slate); background: var(--surface);
+  border: var(--bw) solid var(--line2); border-radius: var(--r-2);
+  padding: var(--sp-2) var(--sp-6); white-space: nowrap;
+}
+.launch-community-moderators .cm-btn-sm:hover {
+  background: var(--surface2); color: var(--ink);
+}
+/* Promotion: moss, the affirmative stewardship action. */
+.launch-community-moderators .cm-btn-sm--promote { color: var(--moss); }
+.launch-community-moderators .cm-btn-sm--promote:hover {
+  border-color: var(--moss); color: var(--moss); background: var(--surface);
+}
+/* Removal / demotion: quiet clay-family outline, no loud destructive block. */
+.launch-community-moderators .cm-btn-sm--danger { color: var(--danger); }
+.launch-community-moderators .cm-btn-sm--danger:hover {
+  border-color: var(--danger); color: var(--danger); background: var(--surface);
+}
+
+/* ---- Add moderator ---------------------------------------------------------- */
+
+/* Compact one-line lookup: username field + moss primary submit. The exact
+   legacy form (action, method, CSRF, `username` field, required) unchanged. */
+.launch-community-moderators .cm-inline-form {
+  display: flex; align-items: center; gap: var(--sp-4); max-width: 420px;
+}
+.launch-community-moderators .cm-input {
+  flex: 1; min-width: 0;
+  font-family: var(--mono); font-size: var(--fs-12-5); color: var(--ink);
+  background: var(--surface); border: var(--bw) solid var(--line2);
+  border-radius: var(--r-2); padding: var(--sp-3) var(--sp-5);
+}
+.launch-community-moderators .cm-input::placeholder { color: var(--muted); }
+.launch-community-moderators .cm-input:focus {
+  outline: none; border-color: var(--slate);
+}
+.launch-community-moderators .cm-btn {
+  cursor: pointer; flex: none;
+  font-family: var(--sans); font-weight: 600; font-size: var(--fs-12);
+  color: #fff; background: var(--moss);
+  border: var(--bw) solid var(--moss); border-radius: var(--r-2);
+  padding: var(--sp-3) var(--sp-7); white-space: nowrap;
+}
+.launch-community-moderators .cm-btn:hover {
+  filter: brightness(1.06);
+}
+
+/* Empty states: a mono sentence, not a poster. */
+.launch-community-moderators .cm-empty {
+  font-family: var(--mono); font-size: var(--fs-12); color: var(--muted);
+  padding: var(--sp-6) 0;
+}
+
+/* ==========================================================================
+   EARDE INTEGRATION — report submission form only
+   Scoped beneath body.launch-report-form: GET /c/:slug/report
+   (Pages.report_form_page), the member-facing report submission form.
+   Exists only because the real reporting surface cannot emit the reference
+   markup exactly:
+   - the create-* form fragment (hidden target_type/target_id inputs, the
+     required reason <select> with its five real backend values, the optional
+     details textarea with its advisory maxlength, and the .ph-mask target
+     excerpt) is treated as pinned, so the legacy markup is spliced verbatim
+     and skinned here onto the approved community-shell anatomy (page head
+     band over a single quiet form column — filing a concise civic report,
+     not opening a support ticket);
+   - no report categories, severity, attachments or workflow states are
+     invented: every control styled here already exists in the renderer;
+   - the sidebar carries no permanent Report entry — reporting is a
+     contextual action, so no navitem is active on this route;
+   - the notification badge is server-rendered from the request's unread
+     count and is absent entirely at zero, so this scope needs no rule for
+     it (Notification_badge);
+   - for a private community the renderer keeps its inner ph-no-capture
+     guard div inside <main>; display:contents keeps it out of the flex
+     chain so both privacy shapes share one layout;
+   - the desktop-only gate panel ships in mobile-gate.css; only the
+     launch-scope "hide the app" rule for this route lives here;
+   - the analytics consent banner markup is shared with the legacy layout
+     (styled once for these routes in routes/chrome.css).
+   ========================================================================== */
+
+/* ---- Form anatomy ----------------------------------------------------------- */
+
+/* Page head band (reference .page__head--tight geometry): serif title over
+   the renderer's real context sentence, its /c/:slug accent in mono moss. */
+
+.launch-report-form .create-sub .accent {
+  font-family: var(--mono); font-size: var(--fs-11-5); color: var(--moss);
+}
+
+/* The form is the scroller: one restrained left-aligned column under the
+   band, capped at a reading measure — a civic filing, not a dashboard. */
+.launch-report-form .create-form {
+  flex: 1; min-height: 0; overflow-y: auto; scrollbar-width: thin;
+  padding: var(--sp-10) 28px 70px;
+}
+.launch-report-form .create-form > * { max-width: 620px; }
+
+/* Target preview: the reported content reads primary — the renderer's real
+   trimmed excerpt behind a thin slate rule, masked from replay (.ph-mask is
+   the analytics contract; here it doubles as the excerpt hook because the
+   char-count hint is the only other create-hint on the page). */
+.launch-report-form .create-form .create-hint.ph-mask {
+  font-family: var(--serif); font-size: var(--fs-14); color: var(--ink);
+  line-height: var(--lh-prose); background: var(--surface2);
+  border-left: 2px solid var(--slate); border-radius: 0 var(--r-1) var(--r-1) 0;
+  padding: var(--sp-4) var(--sp-6); overflow-wrap: anywhere;
+}
+
+/* Inset controls: hairline frame, tight radii, quiet slate focus. */
+.launch-report-form .create-select,
+.launch-report-form .create-textarea {
+  width: 100%; font-family: var(--sans); font-size: var(--fs-13);
+  color: var(--ink); background: var(--surface);
+  border: var(--bw) solid var(--line2); border-radius: var(--r-2);
+  padding: var(--sp-3) var(--sp-4);
+}
+
+.launch-report-form .create-textarea::placeholder { color: var(--muted); }
+.launch-report-form .create-select:focus,
+.launch-report-form .create-textarea:focus {
+  outline: none; border-color: var(--slate);
+}
+
+/* Field hints (the 1000-character note): quiet mono metadata. */
+.launch-report-form .create-form .create-hint {
+  font-family: var(--mono); font-size: var(--fs-11); color: var(--muted);
+  margin-top: var(--sp-2);
+}
+
+/* Actions: moss submit (a constructive civic filing, not a destructive act)
+   beside the quiet mono cancel back to the reported content. The legacy
+   --block modifier loses its full-width meaning inside this measured column. */
+
+.launch-report-form .create-btn.create-btn--secondary {
+  color: var(--slate); background: var(--surface);
+  border-color: var(--line2); font-family: var(--mono); font-weight: 400;
+  font-size: var(--fs-11-5);
+}
+.launch-report-form .create-btn.create-btn--secondary:hover {
+  background: var(--surface2); color: var(--ink);
+}

@@ -1,0 +1,519 @@
+/* ==========================================================================
+   Launch route chrome
+   The top-bar, rail, sidebar, consent and dialog rules that every launch route
+   carries, written once for the routes that use them. Each route keeps its own
+   feature skin in routes/<area>.css; a route joins a rule here by being listed
+   in its :is(). Class-only and body-qualified scopes are listed separately so
+   every rule keeps the specificity it had when each route repeated it.
+   ========================================================================== */
+
+/* Analytics consent banner (markup shared with the legacy layout). */
+:is(.launch-bring, .launch-auth, .launch-feed, .launch-project-new,
+    .launch-project-home-setup, .launch-project-request-home,
+    .launch-project-community-home, .launch-community-publication,
+    .launch-community-overview, .launch-community-network,
+    .launch-community-channel, .launch-community-section,
+    .launch-community-thread, .launch-community-settings,
+    .launch-project-home-review, .launch-notifications, .launch-search,
+    .launch-user-profile, .launch-account-settings, .launch-community-modlog,
+    .launch-community-reports, .launch-community-moderators,
+    .launch-report-form, .launch-flat-community, .launch-post-creation,
+    .launch-start-thread, .launch-new-community, .launch-legacy-post,
+    .launch-community-connections) #analytics-consent,
+:is(body.launch-privacy, body.launch-message-page, body.launch-global-admin) #analytics-consent {
+  position: fixed; bottom: var(--sp-8); left: 50%; transform: translateX(-50%);
+  z-index: 50; width: calc(100% - 2rem); max-width: 28rem;
+  background: var(--surface); border: var(--bw) solid var(--line2);
+  border-radius: var(--r-3); padding: var(--sp-7) var(--sp-8);
+  box-shadow: var(--shadow-overlay);
+}
+:is(.launch-bring, .launch-auth, .launch-feed, .launch-project-new,
+    .launch-project-home-setup, .launch-project-request-home,
+    .launch-project-community-home, .launch-community-publication,
+    .launch-community-overview, .launch-community-network,
+    .launch-community-channel, .launch-community-section,
+    .launch-community-thread, .launch-community-settings,
+    .launch-project-home-review, .launch-notifications, .launch-search,
+    .launch-user-profile, .launch-account-settings, .launch-community-modlog,
+    .launch-community-reports, .launch-community-moderators,
+    .launch-report-form, .launch-flat-community, .launch-post-creation,
+    .launch-start-thread, .launch-new-community, .launch-legacy-post,
+    .launch-community-connections) #analytics-consent p,
+:is(body.launch-privacy, body.launch-message-page, body.launch-global-admin) #analytics-consent p {
+  font-size: var(--fs-13); color: var(--muted); margin-bottom: var(--sp-5);
+}
+:is(.launch-bring, .launch-auth, .launch-feed, .launch-project-new,
+    .launch-project-home-setup, .launch-project-request-home,
+    .launch-project-community-home, .launch-community-publication,
+    .launch-community-overview, .launch-community-network,
+    .launch-community-channel, .launch-community-section,
+    .launch-community-thread, .launch-community-settings,
+    .launch-project-home-review, .launch-notifications, .launch-search,
+    .launch-user-profile, .launch-account-settings, .launch-community-modlog,
+    .launch-community-reports, .launch-community-moderators,
+    .launch-report-form, .launch-flat-community, .launch-post-creation,
+    .launch-start-thread, .launch-new-community, .launch-legacy-post,
+    .launch-community-connections) #analytics-consent [data-analytics-accept],
+:is(.launch-bring, .launch-auth, .launch-feed, .launch-project-new,
+    .launch-project-home-setup, .launch-project-request-home,
+    .launch-project-community-home, .launch-community-publication,
+    .launch-community-overview, .launch-community-network,
+    .launch-community-channel, .launch-community-section,
+    .launch-community-thread, .launch-community-settings,
+    .launch-project-home-review, .launch-notifications, .launch-search,
+    .launch-user-profile, .launch-account-settings, .launch-community-modlog,
+    .launch-community-reports, .launch-community-moderators,
+    .launch-report-form, .launch-flat-community, .launch-post-creation,
+    .launch-start-thread, .launch-new-community, .launch-legacy-post,
+    .launch-community-connections) #analytics-consent [data-analytics-refuse],
+:is(body.launch-privacy, body.launch-message-page, body.launch-global-admin) #analytics-consent [data-analytics-accept],
+:is(body.launch-privacy, body.launch-message-page, body.launch-global-admin) #analytics-consent [data-analytics-refuse] {
+  font-family: var(--sans); font-weight: 600; font-size: var(--fs-12);
+  border: var(--bw) solid var(--line2); border-radius: var(--r-2);
+  padding: var(--sp-3) var(--sp-7); cursor: pointer;
+  background: var(--surface); color: var(--muted); margin-right: var(--sp-4);
+}
+:is(.launch-bring, .launch-auth, .launch-feed, .launch-project-new,
+    .launch-project-home-setup, .launch-project-request-home,
+    .launch-project-community-home, .launch-community-publication,
+    .launch-community-overview, .launch-community-network,
+    .launch-community-channel, .launch-community-section,
+    .launch-community-thread, .launch-community-settings,
+    .launch-project-home-review, .launch-notifications, .launch-search,
+    .launch-user-profile, .launch-account-settings, .launch-community-modlog,
+    .launch-community-reports, .launch-community-moderators,
+    .launch-report-form, .launch-flat-community, .launch-post-creation,
+    .launch-start-thread, .launch-new-community, .launch-legacy-post,
+    .launch-community-connections) #analytics-consent [data-analytics-accept],
+:is(body.launch-privacy, body.launch-message-page, body.launch-global-admin) #analytics-consent [data-analytics-accept] {
+  color: #fff; background: var(--moss); border-color: var(--moss);
+}
+:is(.launch-bring, .launch-auth, .launch-feed, .launch-project-new,
+    .launch-project-home-setup, .launch-project-request-home,
+    .launch-project-community-home, .launch-community-publication,
+    .launch-community-overview, .launch-community-network,
+    .launch-community-channel, .launch-community-section,
+    .launch-community-thread, .launch-community-settings,
+    .launch-project-home-review, .launch-notifications, .launch-search,
+    .launch-user-profile, .launch-account-settings, .launch-community-modlog,
+    .launch-community-reports, .launch-community-moderators,
+    .launch-report-form, .launch-flat-community, .launch-post-creation,
+    .launch-start-thread, .launch-new-community, .launch-legacy-post,
+    .launch-community-connections) #analytics-consent [data-analytics-error],
+:is(body.launch-privacy, body.launch-message-page, body.launch-global-admin) #analytics-consent [data-analytics-error] {
+  color: var(--danger); font-size: var(--fs-11);
+}
+
+/* Desktop-only routes: below the shared breakpoint the launch app is hidden and
+   the gate panel (mobile-gate.css) shows instead. /bring is included because
+   the project-onboarding funnel it opens is desktop-only. */
+@media (max-width: 800px) {
+  :is(body.launch-bring, body.launch-project-new,
+      body.launch-project-home-setup, body.launch-project-request-home,
+      body.launch-project-community-home, body.launch-community-publication,
+      body.launch-community-overview, body.launch-community-network,
+      body.launch-community-channel, body.launch-community-section,
+      body.launch-community-thread, body.launch-community-settings,
+      body.launch-project-home-review, body.launch-notifications,
+      body.launch-search, body.launch-user-profile,
+      body.launch-account-settings, body.launch-community-modlog,
+      body.launch-community-reports, body.launch-community-moderators,
+      body.launch-report-form, body.launch-flat-community,
+      body.launch-post-creation, body.launch-start-thread,
+      body.launch-global-admin, body.launch-new-community,
+      body.launch-legacy-post, body.launch-community-connections) > .app { display: none !important; }
+}
+
+/* Top-bar user menu: pure-CSS <details>, real logout POST form inside. */
+:is(.launch-feed, .launch-community-overview, .launch-community-network,
+    .launch-community-channel, .launch-community-section,
+    .launch-community-thread, .launch-community-settings,
+    .launch-project-home-review, .launch-notifications, .launch-search,
+    .launch-user-profile, .launch-account-settings, .launch-community-modlog,
+    .launch-community-reports, .launch-community-moderators,
+    .launch-report-form, .launch-flat-community, .launch-post-creation,
+    .launch-start-thread, .launch-new-community, .launch-legacy-post,
+    .launch-community-connections) .launch-user,
+:is(body.launch-global-admin) .launch-user { position: relative; }
+:is(.launch-feed, .launch-community-overview, .launch-community-network,
+    .launch-community-channel, .launch-community-section,
+    .launch-community-thread, .launch-community-settings,
+    .launch-project-home-review, .launch-notifications, .launch-search,
+    .launch-user-profile, .launch-account-settings, .launch-community-modlog,
+    .launch-community-reports, .launch-community-moderators,
+    .launch-report-form, .launch-flat-community, .launch-post-creation,
+    .launch-start-thread, .launch-new-community, .launch-legacy-post,
+    .launch-community-connections) .launch-user > summary,
+:is(body.launch-global-admin) .launch-user > summary { list-style: none; }
+:is(.launch-feed, .launch-community-overview, .launch-community-network,
+    .launch-community-channel, .launch-community-section,
+    .launch-community-thread, .launch-community-settings,
+    .launch-project-home-review, .launch-notifications, .launch-search,
+    .launch-user-profile, .launch-account-settings, .launch-community-modlog,
+    .launch-community-reports, .launch-community-moderators,
+    .launch-report-form, .launch-flat-community, .launch-post-creation,
+    .launch-start-thread, .launch-new-community, .launch-legacy-post,
+    .launch-community-connections) .launch-user > summary::-webkit-details-marker,
+:is(body.launch-global-admin) .launch-user > summary::-webkit-details-marker { display: none; }
+:is(.launch-feed, .launch-community-overview, .launch-community-network,
+    .launch-community-channel, .launch-community-section,
+    .launch-community-thread, .launch-community-settings,
+    .launch-project-home-review, .launch-notifications, .launch-search,
+    .launch-user-profile, .launch-account-settings, .launch-community-modlog,
+    .launch-community-reports, .launch-community-moderators,
+    .launch-report-form, .launch-flat-community, .launch-post-creation,
+    .launch-start-thread, .launch-new-community, .launch-legacy-post,
+    .launch-community-connections) .launch-user .avatar,
+:is(body.launch-global-admin) .launch-user .avatar { background: var(--moss); }
+:is(.launch-feed, .launch-community-overview, .launch-community-network,
+    .launch-community-channel, .launch-community-section,
+    .launch-community-thread, .launch-community-settings,
+    .launch-project-home-review, .launch-notifications, .launch-search,
+    .launch-user-profile, .launch-account-settings, .launch-community-modlog,
+    .launch-community-reports, .launch-community-moderators,
+    .launch-report-form, .launch-flat-community, .launch-post-creation,
+    .launch-start-thread, .launch-new-community, .launch-legacy-post,
+    .launch-community-connections) .launch-user__menu,
+:is(body.launch-global-admin) .launch-user__menu {
+  position: absolute; right: 0; top: calc(100% + 6px); z-index: 40;
+  min-width: 168px; display: flex; flex-direction: column;
+  background: var(--surface); border: var(--bw) solid var(--line2);
+  border-radius: var(--r-3); padding: var(--sp-3);
+  box-shadow: var(--shadow-overlay);
+}
+:is(.launch-feed, .launch-community-overview, .launch-community-network,
+    .launch-community-channel, .launch-community-section,
+    .launch-community-thread, .launch-community-settings,
+    .launch-project-home-review, .launch-notifications, .launch-search,
+    .launch-user-profile, .launch-account-settings, .launch-community-modlog,
+    .launch-community-reports, .launch-community-moderators,
+    .launch-report-form, .launch-flat-community, .launch-post-creation,
+    .launch-start-thread, .launch-new-community, .launch-legacy-post,
+    .launch-community-connections) .launch-user__menu a,
+:is(.launch-feed, .launch-community-overview, .launch-community-network,
+    .launch-community-channel, .launch-community-section,
+    .launch-community-thread, .launch-community-settings,
+    .launch-project-home-review, .launch-notifications, .launch-search,
+    .launch-user-profile, .launch-account-settings, .launch-community-modlog,
+    .launch-community-reports, .launch-community-moderators,
+    .launch-report-form, .launch-flat-community, .launch-post-creation,
+    .launch-start-thread, .launch-new-community, .launch-legacy-post,
+    .launch-community-connections) .launch-user__menu button,
+:is(body.launch-global-admin) .launch-user__menu a,
+:is(body.launch-global-admin) .launch-user__menu button {
+  display: block; width: 100%; text-align: left; background: none; border: 0;
+  font-family: var(--mono); font-size: var(--fs-12); color: var(--ink);
+  padding: var(--sp-3) var(--sp-5); border-radius: var(--r-2); cursor: pointer;
+}
+:is(.launch-feed, .launch-community-overview, .launch-community-network,
+    .launch-community-channel, .launch-community-section,
+    .launch-community-thread, .launch-community-settings,
+    .launch-project-home-review, .launch-notifications, .launch-search,
+    .launch-user-profile, .launch-account-settings, .launch-community-modlog,
+    .launch-community-reports, .launch-community-moderators,
+    .launch-report-form, .launch-flat-community, .launch-post-creation,
+    .launch-start-thread, .launch-new-community, .launch-legacy-post,
+    .launch-community-connections) .launch-user__menu a:hover,
+:is(.launch-feed, .launch-community-overview, .launch-community-network,
+    .launch-community-channel, .launch-community-section,
+    .launch-community-thread, .launch-community-settings,
+    .launch-project-home-review, .launch-notifications, .launch-search,
+    .launch-user-profile, .launch-account-settings, .launch-community-modlog,
+    .launch-community-reports, .launch-community-moderators,
+    .launch-report-form, .launch-flat-community, .launch-post-creation,
+    .launch-start-thread, .launch-new-community, .launch-legacy-post,
+    .launch-community-connections) .launch-user__menu button:hover,
+:is(body.launch-global-admin) .launch-user__menu a:hover,
+:is(body.launch-global-admin) .launch-user__menu button:hover { background: var(--surface2); }
+:is(.launch-feed, .launch-community-overview, .launch-community-network,
+    .launch-community-channel, .launch-community-section,
+    .launch-community-thread, .launch-community-settings,
+    .launch-project-home-review, .launch-notifications, .launch-search,
+    .launch-user-profile, .launch-account-settings, .launch-community-modlog,
+    .launch-community-reports, .launch-community-moderators,
+    .launch-report-form, .launch-flat-community, .launch-post-creation,
+    .launch-start-thread, .launch-new-community, .launch-legacy-post,
+    .launch-community-connections) .launch-user__menu form,
+:is(body.launch-global-admin) .launch-user__menu form {
+  margin: var(--sp-2) 0 0; padding-top: var(--sp-2);
+  border-top: var(--bw) solid var(--line);
+}
+
+/* Rail tiles and avatars: real images fill their fixed tile. */
+:is(.launch-community-overview, .launch-community-network,
+    .launch-community-channel, .launch-community-section,
+    .launch-community-thread, .launch-community-settings,
+    .launch-project-home-review, .launch-community-modlog,
+    .launch-community-reports, .launch-community-moderators,
+    .launch-report-form, .launch-flat-community, .launch-start-thread,
+    .launch-community-connections) .launch-rail__img,
+:is(.launch-community-overview, .launch-community-network,
+    .launch-community-channel, .launch-community-section,
+    .launch-community-thread, .launch-community-settings,
+    .launch-project-home-review, .launch-community-modlog,
+    .launch-community-reports, .launch-community-moderators,
+    .launch-report-form, .launch-flat-community, .launch-start-thread,
+    .launch-community-connections) .launch-avatar-img {
+  width: 100%; height: 100%; object-fit: cover; border-radius: inherit;
+  display: block;
+}
+:is(.launch-notifications, .launch-search, .launch-user-profile,
+    .launch-account-settings, .launch-post-creation, .launch-new-community,
+    .launch-legacy-post) .launch-rail__img,
+:is(body.launch-global-admin) .launch-rail__img {
+  width: 100%; height: 100%; object-fit: cover; border-radius: inherit;
+  display: block;
+}
+
+/* Community sidebar identity: name block and visibility label. */
+:is(.launch-community-overview, .launch-community-network,
+    .launch-community-channel, .launch-community-section,
+    .launch-community-thread, .launch-community-settings,
+    .launch-project-home-review, .launch-community-modlog,
+    .launch-community-reports, .launch-community-moderators,
+    .launch-report-form, .launch-flat-community, .launch-start-thread,
+    .launch-community-connections) .launch-side-id { min-width: 0; display: block; }
+:is(.launch-community-overview, .launch-community-channel,
+    .launch-community-section, .launch-community-thread,
+    .launch-community-settings, .launch-community-modlog,
+    .launch-community-reports, .launch-community-moderators,
+    .launch-report-form, .launch-flat-community, .launch-start-thread) .launch-side-vis {
+  font-family: var(--mono); font-size: var(--fs-10-5); color: var(--ochre);
+  padding: var(--sp-2) 9px var(--sp-1);
+}
+
+/* Command field rendered as a link to /search (zero-form contract). */
+:is(.launch-bring, .launch-auth, .launch-project-new,
+    .launch-project-home-setup, .launch-project-request-home,
+    .launch-project-community-home, .launch-community-publication) .launch-search { color: var(--ink); }
+:is(.launch-bring, .launch-auth, .launch-project-new,
+    .launch-project-home-setup, .launch-project-request-home,
+    .launch-project-community-home, .launch-community-publication) .launch-search__hint {
+  flex: 1; min-width: 0; align-self: center;
+  font-size: var(--fs-13-5); color: var(--muted); opacity: .8;
+  padding: var(--sp-4) var(--sp-5);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+:is(.launch-bring, .launch-auth, .launch-project-new,
+    .launch-project-home-setup, .launch-project-request-home,
+    .launch-project-community-home, .launch-community-publication) .launch-search__enter {
+  display: grid; place-items: center;
+  border-left: var(--bw) solid var(--line); background: var(--surface3);
+  color: var(--muted); font-family: var(--mono); font-size: var(--fs-12);
+  padding: 0 13px;
+}
+
+/* Member top-bar cluster: chip avatar tone. */
+:is(.launch-project-new, .launch-project-home-setup,
+    .launch-project-request-home, .launch-project-community-home,
+    .launch-community-publication) .userchip .avatar { background: var(--moss); }
+
+/* Replay-masking wrapper: layout-neutral inside the main column. */
+:is(.launch-community-settings, .launch-community-modlog,
+    .launch-community-reports, .launch-community-moderators,
+    .launch-report-form) .main > .ph-no-capture { display: contents; }
+
+/* Shared confirm modal (own-post delete): the script composes it from legacy
+   utility class names, inert without Tailwind, so it is styled by its stable
+   ids and class pairs. */
+:is(.launch-feed, .launch-community-section, .launch-community-thread,
+    .launch-community-settings, .launch-search, .launch-user-profile,
+    .launch-account-settings, .launch-community-moderators,
+    .launch-flat-community, .launch-legacy-post) .fixed.inset-0,
+:is(body.launch-global-admin) .fixed.inset-0 {
+  position: fixed; inset: 0; z-index: 50;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(31, 36, 33, .45); transition: opacity .2s;
+}
+:is(.launch-feed, .launch-community-section, .launch-community-thread,
+    .launch-community-settings, .launch-search, .launch-user-profile,
+    .launch-account-settings, .launch-community-moderators,
+    .launch-flat-community, .launch-legacy-post) .fixed.inset-0.opacity-0,
+:is(body.launch-global-admin) .fixed.inset-0.opacity-0 { opacity: 0; }
+:is(.launch-feed, .launch-community-section, .launch-community-thread,
+    .launch-community-settings, .launch-search, .launch-user-profile,
+    .launch-account-settings, .launch-community-moderators,
+    .launch-flat-community, .launch-legacy-post) .fixed.inset-0 > div,
+:is(body.launch-global-admin) .fixed.inset-0 > div {
+  background: var(--surface); border: var(--bw) solid var(--line2);
+  border-radius: var(--r-4); padding: var(--sp-9);
+  max-width: 24rem; width: calc(100% - 2rem);
+  box-shadow: var(--shadow-overlay);
+}
+:is(.launch-feed, .launch-community-section, .launch-community-thread,
+    .launch-community-settings, .launch-search, .launch-user-profile,
+    .launch-account-settings, .launch-community-moderators,
+    .launch-flat-community, .launch-legacy-post) .fixed.inset-0 h3,
+:is(body.launch-global-admin) .fixed.inset-0 h3 { font-size: var(--fs-15); font-weight: 700; margin-bottom: var(--sp-3); }
+:is(.launch-feed, .launch-community-section, .launch-community-thread,
+    .launch-community-settings, .launch-search, .launch-user-profile,
+    .launch-account-settings, .launch-community-moderators,
+    .launch-flat-community, .launch-legacy-post) .fixed.inset-0 p,
+:is(body.launch-global-admin) .fixed.inset-0 p { font-size: var(--fs-13); color: var(--muted); margin-bottom: var(--sp-7); }
+:is(.launch-feed, .launch-community-section, .launch-community-thread,
+    .launch-community-settings, .launch-search, .launch-user-profile,
+    .launch-account-settings, .launch-community-moderators,
+    .launch-flat-community, .launch-legacy-post) .fixed.inset-0 .flex,
+:is(body.launch-global-admin) .fixed.inset-0 .flex { display: flex; justify-content: flex-end; gap: var(--sp-4); }
+:is(.launch-feed, .launch-community-section, .launch-community-thread,
+    .launch-community-settings, .launch-search, .launch-user-profile,
+    .launch-account-settings, .launch-community-moderators,
+    .launch-flat-community, .launch-legacy-post) #cancel-btn,
+:is(.launch-feed, .launch-community-section, .launch-community-thread,
+    .launch-community-settings, .launch-search, .launch-user-profile,
+    .launch-account-settings, .launch-community-moderators,
+    .launch-flat-community, .launch-legacy-post) #confirm-btn,
+:is(body.launch-global-admin) #cancel-btn,
+:is(body.launch-global-admin) #confirm-btn {
+  cursor: pointer; border: var(--bw) solid var(--line2);
+  border-radius: var(--r-2); background: var(--surface); color: var(--ink);
+  padding: var(--sp-3) var(--sp-7); font-size: var(--fs-12); font-weight: 600;
+}
+:is(.launch-feed, .launch-community-section, .launch-community-thread,
+    .launch-community-settings, .launch-search, .launch-user-profile,
+    .launch-account-settings, .launch-community-moderators,
+    .launch-flat-community, .launch-legacy-post) #confirm-btn,
+:is(body.launch-global-admin) #confirm-btn { color: #fff; background: var(--danger); border-color: var(--danger); }
+
+/* Moderation <dialog>s (ban/remove reasons). */
+:is(.launch-feed, .launch-community-section, .launch-community-thread,
+    .launch-search, .launch-legacy-post) dialog {
+  border: var(--bw) solid var(--line2); border-radius: var(--r-4);
+  padding: var(--sp-9); max-width: 28rem; width: calc(100% - 2rem);
+  background: var(--surface); color: var(--ink);
+}
+:is(.launch-feed, .launch-community-section, .launch-community-thread,
+    .launch-search, .launch-flat-community, .launch-legacy-post) dialog::backdrop { background: rgba(31, 36, 33, .45); }
+:is(.launch-feed, .launch-community-section, .launch-community-thread,
+    .launch-search, .launch-flat-community, .launch-legacy-post) dialog form {
+  display: flex; flex-direction: column; gap: var(--sp-6);
+  margin-top: var(--sp-4);
+}
+:is(.launch-feed, .launch-community-section, .launch-community-thread,
+    .launch-search, .launch-flat-community, .launch-legacy-post) dialog textarea {
+  width: 100%; border: var(--bw) solid var(--line2); border-radius: var(--r-2);
+  background: var(--surface2); padding: var(--sp-4);
+  font-family: var(--sans); font-size: var(--fs-13); min-height: 70px;
+}
+:is(.launch-feed, .launch-community-section, .launch-community-thread,
+    .launch-search, .launch-legacy-post) dialog button {
+  cursor: pointer; border: var(--bw) solid var(--line2);
+  border-radius: var(--r-2); background: var(--surface); color: var(--ink);
+  padding: var(--sp-3) var(--sp-7); font-size: var(--fs-12); font-weight: 600;
+}
+:is(.launch-feed, .launch-community-section, .launch-community-thread,
+    .launch-search, .launch-flat-community, .launch-legacy-post) dialog button[type='submit'] {
+  color: #fff; background: var(--danger); border-color: var(--danger);
+}
+
+/* Create-page anatomy: the header, fields and actions the create forms share
+   (legacy create.css class names, flat on the launch column). */
+:is(.launch-project-new, .launch-project-home-setup,
+    .launch-project-request-home, .launch-project-community-home,
+    .launch-community-publication) .create-shell { display: block; }
+:is(.launch-project-new, .launch-project-home-setup,
+    .launch-project-request-home, .launch-project-community-home,
+    .launch-community-publication) .create-wrap { max-width: 640px; margin: 0 auto; }
+:is(.launch-project-new, .launch-project-home-setup,
+    .launch-project-request-home, .launch-project-community-home,
+    .launch-community-publication, .launch-project-home-review,
+    .launch-community-connections) .create-panel { display: block; }
+:is(.launch-project-new, .launch-project-home-setup,
+    .launch-project-home-review, .launch-community-connections) .create-head { margin-bottom: var(--sp-9); }
+:is(.launch-project-new, .launch-project-home-setup,
+    .launch-project-request-home, .launch-project-community-home,
+    .launch-community-publication) .create-title {
+  font-family: var(--serif); font-weight: 600; font-size: var(--fs-24);
+  color: var(--ink);
+}
+:is(.launch-project-new, .launch-project-home-setup,
+    .launch-project-request-home, .launch-project-community-home,
+    .launch-community-publication) .create-sub {
+  color: var(--muted); font-size: var(--fs-13-5); line-height: var(--lh-prose);
+  margin-top: var(--sp-2);
+}
+:is(.launch-project-new, .launch-project-home-setup,
+    .launch-project-request-home, .launch-project-community-home,
+    .launch-post-creation) .create-link { color: var(--slate); }
+:is(.launch-project-new, .launch-project-home-setup,
+    .launch-project-request-home, .launch-project-community-home) .create-link:hover { color: #3b525a; text-decoration: underline; }
+:is(.launch-project-new, .launch-project-request-home,
+    .launch-project-community-home, .launch-community-publication) .create-actions { margin-top: var(--sp-10); }
+:is(.launch-project-new, .launch-project-community-home,
+    .launch-community-publication) .create-btn:hover { filter: brightness(1.06); }
+:is(.launch-project-request-home, .launch-project-community-home,
+    .launch-community-publication) .create-head { margin-bottom: var(--sp-8); }
+:is(.launch-project-request-home, .launch-project-community-home,
+    .launch-community-publication, .launch-report-form, .launch-post-creation,
+    .launch-start-thread, .launch-new-community) .create-btn--block { width: auto; }
+:is(.launch-project-home-review, .launch-report-form, .launch-post-creation,
+    .launch-start-thread, .launch-new-community, .launch-community-connections) .create-title {
+  font-family: var(--serif); font-weight: 600; font-size: var(--fs-22);
+  color: var(--ink);
+}
+:is(.launch-report-form, .launch-post-creation, .launch-start-thread,
+    .launch-new-community) .create-wrap {
+  flex: 1; min-height: 0; display: flex; flex-direction: column;
+}
+:is(.launch-report-form, .launch-post-creation, .launch-start-thread,
+    .launch-new-community) .create-panel { display: contents; }
+:is(.launch-report-form, .launch-post-creation, .launch-start-thread,
+    .launch-new-community) .create-head {
+  flex: none; padding: 15px 28px; background: var(--surface);
+  border-bottom: var(--bw) solid var(--line2);
+}
+:is(.launch-report-form, .launch-post-creation, .launch-start-thread) .create-sub {
+  font-size: var(--fs-12-5); color: var(--muted); margin-top: var(--sp-1);
+  line-height: var(--lh-prose);
+}
+:is(.launch-report-form, .launch-post-creation, .launch-start-thread,
+    .launch-new-community) .create-field { margin-bottom: var(--sp-8); }
+:is(.launch-report-form, .launch-post-creation, .launch-start-thread,
+    .launch-new-community) .create-label {
+  display: block; font-family: var(--mono); font-size: var(--fs-10);
+  font-weight: 600; letter-spacing: var(--ls-kicker); text-transform: uppercase;
+  color: var(--muted); margin-bottom: var(--sp-3);
+}
+:is(.launch-report-form, .launch-post-creation, .launch-start-thread,
+    .launch-new-community) .create-label .req { color: var(--clay); }
+:is(.launch-report-form, .launch-post-creation, .launch-start-thread) .create-label .create-label-opt,
+:is(.launch-report-form, .launch-post-creation, .launch-start-thread) .create-label-opt {
+  font-weight: 400; text-transform: none; letter-spacing: normal;
+  color: var(--muted);
+}
+:is(.launch-report-form, .launch-post-creation, .launch-start-thread) .create-textarea { resize: vertical; }
+:is(.launch-report-form, .launch-post-creation, .launch-start-thread,
+    .launch-new-community) .create-actions {
+  display: flex; align-items: center; gap: var(--sp-4);
+  margin-top: var(--sp-9); padding-top: var(--sp-7);
+  border-top: var(--bw) solid var(--line);
+}
+:is(.launch-report-form, .launch-post-creation, .launch-start-thread,
+    .launch-new-community) .create-btn {
+  cursor: pointer; font-family: var(--sans); font-weight: 600;
+  font-size: var(--fs-12-5); color: #fff; background: var(--moss);
+  border: var(--bw) solid var(--moss); border-radius: var(--r-2);
+  padding: var(--sp-3) var(--sp-8); text-decoration: none;
+}
+:is(.launch-report-form, .launch-post-creation, .launch-start-thread,
+    .launch-new-community) .create-btn:hover {
+  background: color-mix(in srgb, var(--moss) 88%, #000);
+}
+:is(.launch-post-creation, .launch-start-thread, .launch-new-community) .create-shell {
+  flex: 1; min-height: 0; display: flex; flex-direction: column;
+}
+:is(.launch-post-creation, .launch-start-thread, .launch-new-community) .create-input,
+:is(.launch-post-creation, .launch-start-thread, .launch-new-community) .create-select,
+:is(.launch-post-creation, .launch-start-thread, .launch-new-community) .create-textarea {
+  width: 100%; font-family: var(--sans); font-size: var(--fs-13);
+  color: var(--ink); background: var(--surface);
+  border: var(--bw) solid var(--line2); border-radius: var(--r-2);
+  padding: var(--sp-3) var(--sp-4);
+}
+:is(.launch-post-creation, .launch-start-thread, .launch-new-community) .create-input::placeholder,
+:is(.launch-post-creation, .launch-start-thread, .launch-new-community) .create-textarea::placeholder { color: var(--muted); }
+:is(.launch-post-creation, .launch-start-thread, .launch-new-community) .create-input:focus,
+:is(.launch-post-creation, .launch-start-thread, .launch-new-community) .create-select:focus,
+:is(.launch-post-creation, .launch-start-thread, .launch-new-community) .create-textarea:focus {
+  outline: none; border-color: var(--slate);
+}

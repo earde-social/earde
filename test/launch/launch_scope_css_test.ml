@@ -1,8 +1,9 @@
 (* Every community-shell launch surface is <body class='launch-X'> over the
    SAME chrome: the dark rail, the community sidebar, the top bar's user
    menu, and the desktop-only gate. None of that has a global rule —
-   earde.css scopes each one under its own page class — so a scope that ships
-   only its feature fragment renders all of the shared chrome unstyled.
+   each rule reaches only the page classes it lists (routes/chrome.css) — so a
+   scope that ships only its feature fragment renders all of the shared chrome
+   unstyled.
 
    That is precisely what shipped for launch-community-connections: the
    management page had no main-column width or gutter (so it began against
@@ -15,7 +16,7 @@
    and stylesheet census only — no database, no server. *)
 
 let contains haystack needle = Html_assert.occurs haystack ~needle
-let css = Source_census.read "static/css/earde.css"
+let css = Css_census.stylesheet
 
 (* Page classes stamped on a document built by the community-shell doc
    builders. The literal always sits within a few lines of the call, so the
@@ -87,15 +88,14 @@ let census_case =
         ])
 
 (* The shared half of a community-shell scope. Each of these is chrome the
-   document always emits and that only this scope can style. *)
+   document always emits and that only a rule listing this scope can style;
+   a leading :is(...) counts once per page class it lists. *)
 let required page_class =
   [
     ("top-bar user menu", Printf.sprintf ".%s .launch-user__menu" page_class);
     ("rail avatar", Printf.sprintf ".%s .launch-rail__img" page_class);
     ("sidebar avatar", Printf.sprintf ".%s .launch-avatar-img" page_class);
-    ("sidebar identity", Printf.sprintf ".%s .launch-side-id" page_class)
-    (* The gate rule is sometimes shared by two sibling page classes in
-       one selector list, so only the selector itself is pinned. *);
+    ("sidebar identity", Printf.sprintf ".%s .launch-side-id" page_class);
     ("desktop-only gate", Printf.sprintf "body.%s > .app" page_class);
   ]
 
@@ -107,9 +107,9 @@ let shared_rules_case =
         (fun page_class ->
           List.iter
             (fun (label, needle) ->
-              if not (contains css needle) then
-                Alcotest.failf "earde.css has no %s rule for %s (expected %S)"
-                  label page_class needle)
+              if not (Css_census.has_selector_prefix needle) then
+                Alcotest.failf "no %s rule reaches %s (expected %S)" label
+                  page_class needle)
             (required page_class))
         community_shell_classes)
 
@@ -122,7 +122,7 @@ let no_badge_reveal_case =
       List.iter
         (fun needle ->
           if contains css needle then
-            Alcotest.failf "earde.css still contains %S" needle)
+            Alcotest.failf "the stylesheet still contains %S" needle)
         [ "#notif-badge"; "bell__count hidden" ])
 
 (* The public connected-communities block is a list, not a tile grid. It
@@ -144,29 +144,34 @@ let connected_communities_list_case =
           "launch-community-network";
         ]
       in
+      let flex_column =
+        "list-style: none; margin: 0; padding: 0; display: flex; \
+         flex-direction: column; gap: var(--bw);"
+      in
       List.iter
         (fun scope ->
           let list_rule = Printf.sprintf ".%s .ccc-communities" scope in
-          if not (contains css list_rule) then
-            Alcotest.failf "earde.css has no %s rule" list_rule;
-          List.iter
-            (fun (label, needle) ->
-              if contains css needle then
-                Alcotest.failf "%s still has a %s rule (%S)" scope label needle)
-            [
-              ( "two-column track",
-                "grid-template-columns: 1fr 1fr;\n  background: var(--line)" );
-              ( "odd-count span",
-                Printf.sprintf ".%s .ccc-community:last-child" scope );
-            ])
-        scopes;
-      (* And the rows really are a plain column in each. *)
-      Alcotest.(check int)
-        "one flex column per scope" (List.length scopes)
-        (Html_assert.count_sub css
-           ".ccc-communities {\n\
-           \  list-style: none; margin: 0; padding: 0;\n\
-           \  display: flex; flex-direction: column; gap: var(--bw);"))
+          if not (Css_census.has_selector list_rule) then
+            Alcotest.failf "no %s rule" list_rule;
+          if
+            contains css
+              "grid-template-columns: 1fr 1fr;\n  background: var(--line)"
+          then Alcotest.failf "a two-column track rule is still shipped";
+          if
+            Css_census.has_selector_prefix
+              (Printf.sprintf ".%s .ccc-community:last-child" scope)
+          then Alcotest.failf "%s still has an odd-count span rule" scope;
+          (* And the rows really are a plain column, once per scope. *)
+          Alcotest.(check int)
+            (scope ^ ": one flex column")
+            1
+            (List.length
+               (List.filter
+                  (fun (r : Css_census.rule) ->
+                    List.mem list_rule r.selectors
+                    && Html_assert.contains r.body flex_column)
+                  Css_census.rules)))
+        scopes)
 
 let suite =
   [

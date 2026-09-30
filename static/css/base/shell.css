@@ -1,0 +1,244 @@
+/* ==========================================================================
+   APP SHELL — 4 panes: rail · sidebar · main · aside
+   ========================================================================== */
+.app { height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
+.shell { flex: 1; display: flex; min-height: 0; overflow: hidden; }
+
+/* Global legal footer: the .app column's last child, below .shell, on every
+   chrome-bearing launch wrapper (the message sheet stays chrome-free). A
+   single quiet mono line — flex:none so it can never steal .shell height
+   beyond its own line box. */
+.launch-footer {
+  flex: none; display: flex; align-items: center; justify-content: center;
+  gap: var(--sp-5); padding: var(--sp-2) var(--sp-8);
+  border-top: var(--bw) solid var(--line); background: var(--paper);
+  font-family: var(--mono); font-size: var(--fs-11); color: var(--muted);
+}
+.launch-footer a { color: var(--muted); }
+.launch-footer a:hover { color: var(--slate); }
+.launch-footer__sep { color: var(--line2); }
+.main {
+  flex: 1; min-width: 0; display: flex; flex-direction: column;
+  overflow: hidden; background: var(--surface);
+}
+.main--paper { background: var(--paper); }
+.scroll { flex: 1; overflow-y: auto; scrollbar-width: thin; }
+.container { max-width: var(--content-feed); margin: 0 auto; padding: 0 var(--sp-12) var(--sp-15); }
+.container--list { max-width: var(--content-list); }
+.container--form { max-width: var(--content-form); margin: 0 auto; padding: var(--sp-13) var(--sp-13) 80px; }
+
+/* ---- Page head (sticky, non-scrolling band above the scroller) ---- */
+.page__head {
+  flex: none; background: var(--surface);
+  border-bottom: var(--bw) solid var(--line2);
+  padding: var(--sp-8) var(--sp-13) 0;
+}
+.page__head--tight { padding-bottom: var(--sp-7); }
+.page__head-inner { max-width: var(--content-feed); margin: 0 auto; }
+.page__head-inner--list { max-width: var(--content-list); }
+.page__title { font-family: var(--serif); font-weight: 600; font-size: var(--fs-24); color: var(--ink); }
+.page__title--sm { font-size: var(--fs-22); }
+.page__sub { color: var(--muted); font-size: var(--fs-13); margin-top: var(--sp-1); }
+.breadcrumb { font-family: var(--mono); font-size: var(--fs-11-5); color: var(--muted); }
+.breadcrumb b { color: var(--ink); }
+
+/* ---- Section header / kicker ---- */
+.kicker {
+  font-family: var(--mono); font-size: var(--fs-10-5); font-weight: 600;
+  letter-spacing: var(--ls-kicker); text-transform: uppercase; color: var(--muted);
+}
+.section-head {
+  display: flex; align-items: center; gap: var(--sp-5);
+  padding: var(--sp-6) var(--sp-8); border-bottom: var(--bw) solid var(--line);
+}
+.section-head__spacer { flex: 1; }
+.section-head__note { font-family: var(--mono); font-size: var(--fs-10-5); color: var(--muted); }
+.count-pill {
+  font-family: var(--mono); font-size: var(--fs-11); color: #fff;
+  background: var(--ochre); border-radius: var(--r-6); padding: 0 7px;
+}
+
+/* ==========================================================================
+   TOP BAR (application) — 54px, 3-track grid
+   ========================================================================== */
+.topbar {
+  flex: none; height: var(--topbar-h);
+  display: grid;
+  grid-template-columns: minmax(140px, .8fr) minmax(0, 380px) minmax(230px, 1fr);
+  align-items: center; gap: var(--sp-12);
+  padding: 0 var(--sp-9);
+  background: var(--surface);
+  border-bottom: var(--bw) solid var(--forest);
+}
+.topbar__brand { display: inline-flex; align-items: center; gap: 9px; justify-self: start; }
+.topbar__brand img { display: block; }
+.topbar__mark { height: 30px; width: 30px; }
+.topbar__wordmark { height: 22px; }
+
+/* command / search field */
+.search {
+  display: flex; align-items: stretch; width: 100%; min-width: 0;
+  border: var(--bw) solid var(--line2); border-radius: var(--r-2);
+  background: var(--surface2); overflow: hidden;
+}
+.search__sigil {
+  flex: none; display: grid; place-items: center; padding: 0 11px;
+  font-family: var(--mono); font-size: var(--fs-13); color: var(--muted);
+  border-right: var(--bw) solid var(--line);
+}
+.search__input {
+  flex: 1; min-width: 0; border: 0; background: transparent; outline: none;
+  font-size: var(--fs-13-5); color: var(--ink); padding: var(--sp-4) var(--sp-5);
+}
+.search__enter {
+  border: 0; border-left: var(--bw) solid var(--line); background: var(--surface3);
+  color: var(--muted); font-family: var(--mono); font-size: var(--fs-12);
+  padding: 0 13px; cursor: pointer;
+}
+.topbar__actions {
+  display: flex; align-items: center; gap: var(--sp-5);
+  justify-self: end; min-width: 0;
+}
+.topbar__actions--anon { gap: 9px; }
+
+/* Persistent GitHub-connect action. Scoped to the top bar so no generic button
+   or other topbar control inherits it. The colour treatment is .btn--dark's,
+   value for value — the same --ink fill and border, the same white foreground
+   the inlined mark picks up through fill='currentColor', the same
+   brightness-lift hover, and no focus rule of its own so the global
+   :focus-visible ring applies exactly as it does on /bring's CTA. Only the
+   *dimensions* stay compact and topbar-native: mono at --fs-11-5, the tight
+   default .btn radius, and 6px/14px padding rather than .btn--dark's larger
+   type, --r-3 radius and 11px/22px box. So the two controls read as the same
+   black GitHub action at two scales, and /bring's full-label CTA stays the
+   more prominent one. */
+.topbar__actions .btn--connect-github {
+  font-family: var(--mono); font-weight: 600; font-size: var(--fs-11-5);
+  color: #fff; background: var(--ink); border-color: var(--ink);
+  padding: var(--sp-3) var(--sp-7);
+}
+.topbar__actions .btn--connect-github svg { display: block; flex: none; }
+.topbar__actions .btn--connect-github:hover { filter: brightness(1.15); color: #fff; }
+
+/* bell */
+.bell {
+  position: relative; display: flex; align-items: center; color: var(--muted);
+  background: none; border: var(--bw) solid transparent; border-radius: var(--r-2);
+  padding: var(--sp-3) var(--sp-4); cursor: pointer;
+}
+.bell:hover { background: var(--surface2); color: var(--ink); }
+.bell__count {
+  position: absolute; top: -2px; right: -3px;
+  background: var(--clay); color: #fff;
+  font-family: var(--mono); font-size: var(--fs-9); font-weight: 700; line-height: 1;
+  padding: 2px 4px; border-radius: var(--r-6);
+}
+/* user chip */
+.userchip {
+  display: flex; align-items: center; gap: 7px;
+  padding: 3px var(--sp-4) 3px var(--sp-2);
+  border: var(--bw) solid var(--line2); border-radius: var(--r-2); cursor: pointer;
+  background: none;
+}
+.userchip:hover { background: var(--surface2); }
+.userchip__name { font-family: var(--mono); font-size: var(--fs-12-5); color: var(--muted); }
+
+/* ==========================================================================
+   ICON RAIL (col 1)
+   ========================================================================== */
+.rail {
+  flex: none; width: var(--rail-w); background: var(--rail);
+  display: flex; flex-direction: column; align-items: center;
+  gap: 7px; padding: 11px 0; overflow-y: auto;
+}
+.rail__spacer { flex: 1; }
+.rail__item {
+  position: relative; width: 42px; height: 42px; display: grid; place-items: center;
+  border-radius: var(--r-3); cursor: pointer; color: #D8D2C4;
+  background: rgba(255,255,255,.05); border: var(--bw) solid rgba(255,255,255,.09);
+  text-decoration: none;
+}
+.rail__item:hover { background: rgba(255,255,255,.10); color: #fff; }
+.rail__item--community {
+  font-family: var(--mono); font-weight: 700; font-size: var(--fs-13); color: #fff;
+  border-color: rgba(255,255,255,.12);
+}
+.rail__item--community:hover { filter: brightness(1.12); }
+.rail__item--add {
+  color: #B7B0A0; background: transparent; font-size: 20px; font-weight: 300;
+  border: var(--bw) dashed rgba(255,255,255,.22);
+}
+.rail__item--add:hover { background: rgba(255,255,255,.08); color: #fff; }
+/* active marker: 3px stub bleeding off the left edge */
+.rail__marker {
+  position: absolute; left: -11px; top: 50%; transform: translateY(-50%);
+  width: 3px; height: 24px; background: var(--moss); border-radius: 0 var(--r-1) var(--r-1) 0;
+}
+.rail__marker--community { height: 26px; background: #fff; }
+.rail__marker--atlas { background: var(--clay); }
+.rail__divider { width: 30px; height: 1px; background: rgba(255,255,255,.12); margin: var(--sp-2) 0; }
+
+/* ==========================================================================
+   COMMUNITY SIDEBAR (col 2)
+   ========================================================================== */
+.sidebar {
+  flex: none; width: var(--sidebar-w); background: var(--surface2);
+  border-right: var(--bw) solid var(--line2);
+  display: flex; flex-direction: column; overflow: hidden;
+}
+.sidebar__head {
+  padding: var(--sp-6) var(--sp-7); border-bottom: var(--bw) solid var(--line2);
+  background: var(--surface); display: flex; align-items: center; gap: var(--sp-5);
+  cursor: pointer; text-decoration: none;
+}
+.sidebar__name {
+  /* Long names get up to two lines instead of a one-line ellipsis; the clamp
+     (not free wrapping) caps the header height, and overflow-wrap keeps a
+     single over-long token from bursting the fixed sidebar width. */
+  display: -webkit-box; -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2; line-clamp: 2;
+  font-family: var(--mono); font-weight: 700; font-size: 15px; color: var(--ink);
+  overflow: hidden; overflow-wrap: anywhere;
+}
+.sidebar__slug {
+  /* The /c/slug line stays one line: an ellipsis beats wrapping mid-token. */
+  display: block; font-family: var(--mono); font-size: var(--fs-11); color: var(--muted);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.sidebar__body { flex: 1; overflow-y: auto; padding: var(--sp-5) var(--sp-4); scrollbar-width: thin; }
+.sidebar__group { padding: var(--sp-6) 9px var(--sp-2); }
+.navitem {
+  display: flex; align-items: center; gap: var(--sp-4);
+  padding: 5px 9px; border-radius: var(--r-2);
+  font-size: var(--fs-13-5); color: var(--muted);
+  border: var(--bw) solid transparent; cursor: pointer; text-decoration: none;
+}
+.navitem:hover { background: var(--surface3); color: var(--ink); }
+.navitem--pad { padding: var(--sp-3) 9px; margin-bottom: var(--sp-1); }
+.navitem--active {
+  color: var(--ink); background: var(--surface); border-color: var(--line2); font-weight: 600;
+}
+.navitem--active:hover { background: var(--surface); }
+.navitem__sigil { font-family: var(--mono); color: var(--muted); }
+.navitem--active .navitem__sigil, .navitem__sigil--live { color: var(--moss); }
+.navitem__sigil--box { width: 15px; text-align: center; font-family: inherit; }
+.navitem__sigil--project { color: var(--ochre); }
+.navitem__sigil--atlas { color: var(--clay); }
+.navitem__trail { margin-left: auto; font-family: var(--mono); font-size: var(--fs-10); color: var(--muted); }
+.navitem__lock { margin-left: auto; font-size: var(--fs-10); color: var(--ochre); }
+
+/* ==========================================================================
+   ASIDE (col 4)
+   ========================================================================== */
+.aside {
+  flex: none; width: var(--aside-w); background: var(--surface2);
+  border-left: var(--bw) solid var(--line2); overflow-y: auto; scrollbar-width: thin;
+}
+.aside--chat { width: var(--aside-w-chat); }
+.aside__block { padding: var(--sp-8) var(--sp-8); border-bottom: var(--bw) solid var(--line); }
+.aside__block:last-child { border-bottom: 0; }
+.aside__text { font-size: var(--fs-12-5); color: var(--muted); line-height: var(--lh-prose); margin: 0 0 var(--sp-6); }
+.aside__kicker { margin-bottom: 9px; }
+.kv { width: 100%; border-collapse: collapse; font-size: var(--fs-13); }
+.kv td { padding: var(--sp-2) 0; color: var(--muted); }
+.kv td + td { text-align: right; font-family: var(--mono); color: var(--ink); }

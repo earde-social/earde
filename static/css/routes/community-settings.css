@@ -1,0 +1,474 @@
+/* ==========================================================================
+   EARDE INTEGRATION — community settings only
+   Scoped beneath body.launch-community-settings: GET /c/:slug/settings
+   (Pages.community_settings_page), every ?panel=… state and every validation
+   re-render of the same renderer. Exists only because the real settings
+   surface cannot emit the reference markup exactly:
+   - every cm-* fragment (panel nav, forms, rows, badges) is pinned by the
+     settings suites (nav-link class/href ordering, control suppression,
+     exactly-one queue-link counts) or treated as pinned, so the legacy
+     markup is spliced verbatim and skinned here onto the approved
+     settings anatomy (page head band · 216px settings nav · panel column);
+   - the connected-projects management fragment (phrm-*) is byte-pinned by
+     its own fragment suites (form shape, zero application inputs, copy),
+     so it too is styled from outside only;
+   - the confirm modal is composed by the shared launch behavior script from
+     legacy utility class names; the stable .fixed.inset-0 pair and the
+     #cancel-btn / #confirm-btn ids are the hooks (same idiom as the other
+     launch routes);
+   - the notification badge is server-rendered from the request's unread
+     count and is absent entirely at zero, so this scope needs no rule for
+     it (Notification_badge);
+   - for a private community the renderer keeps its inner ph-no-capture
+     guard div inside <main>; display:contents keeps it out of the flex
+     chain so both privacy shapes share one layout;
+   - the desktop-only gate panel ships in mobile-gate.css; only the
+     launch-scope "hide the app" rule for this route lives here;
+   - the analytics consent banner markup is shared with the legacy layout
+     (styled once for these routes in routes/chrome.css).
+   ========================================================================== */
+
+/* ---- Settings anatomy ------------------------------------------------------- */
+
+/* The shared settings shell (Community_settings_shell.wrap): scoped on the
+   wrapper's own cm-wrap--settings modifier, not a body class, so every
+   settings/management surface that adopts the shell — the settings hub,
+   Connections, Shared threads, Project home requests, Manage moderators,
+   Reports — gets the identical structure with no page-class-specific
+   layout CSS. */
+
+/* cm-wrap fills <main> as a column: fixed head band over the two scrollers. */
+.cm-wrap--settings {
+  flex: 1; min-height: 0; display: flex; flex-direction: column;
+}
+
+/* Page head band (reference .page__head--tight geometry). */
+.cm-wrap--settings .cm-head {
+  flex: none; display: flex; align-items: baseline; gap: var(--sp-8);
+  padding: 15px 28px; background: var(--surface);
+  border-bottom: var(--bw) solid var(--line2);
+}
+.cm-wrap--settings .cm-h1 {
+  font-family: var(--serif); font-weight: 600; font-size: var(--fs-22);
+  color: var(--ink); min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.cm-wrap--settings .cm-h1 .accent { color: var(--moss); }
+.cm-wrap--settings .cm-back {
+  margin-left: auto; flex: none;
+  font-family: var(--mono); font-size: var(--fs-11-5); color: var(--muted);
+  text-decoration: none;
+}
+.cm-wrap--settings .cm-back:hover { color: var(--ink); }
+
+/* Two independent scrollers: the settings index and the panel column. */
+.cm-wrap--settings .cm-cols {
+  flex: 1; min-height: 0; display: flex; overflow: hidden;
+}
+.cm-wrap--settings .cm-index {
+  flex: none; width: var(--settings-nav-w);
+  border-right: var(--bw) solid var(--line);
+  overflow-y: auto; scrollbar-width: thin;
+  padding: var(--sp-7) var(--sp-6);
+}
+.cm-wrap--settings .cm-index-title {
+  font-family: var(--mono); font-size: var(--fs-10); font-weight: 600;
+  letter-spacing: var(--ls-kicker); text-transform: uppercase;
+  color: var(--muted); padding: var(--sp-2) var(--sp-4) 5px;
+}
+/* Group headings inside the index (Community / Network / Structure /
+   People): the sidebar kicker grammar at index scale. */
+.cm-wrap--settings .cm-index-group {
+  font-family: var(--mono); font-size: var(--fs-9); font-weight: 600;
+  letter-spacing: var(--ls-kicker); text-transform: uppercase;
+  color: var(--muted); opacity: .75;
+  padding: var(--sp-6) var(--sp-4) var(--sp-2);
+}
+/* Index links mirror the .navitem grammar (the markup is pinned, so the
+   class names stay cm-*). */
+.cm-wrap--settings .cm-index-link {
+  display: flex; align-items: center; gap: var(--sp-4);
+  padding: var(--sp-3) 9px; margin-bottom: var(--sp-1);
+  border: var(--bw) solid transparent; border-radius: var(--r-2);
+  font-size: var(--fs-13-5); color: var(--muted); text-decoration: none;
+}
+.cm-wrap--settings .cm-index-link:hover { background: var(--surface3); color: var(--ink); }
+.cm-wrap--settings .cm-index-link--active {
+  color: var(--ink); background: var(--surface); border-color: var(--line2);
+  font-weight: 600;
+}
+.cm-wrap--settings .cm-index-link--active:hover { background: var(--surface); }
+.cm-wrap--settings .cm-index-link--danger { color: var(--danger); }
+.cm-wrap--settings .cm-index-link--danger:hover { color: var(--danger); }
+
+/* Panel column: compact operational width on the approved panel geometry. */
+.cm-wrap--settings .cm-main {
+  flex: 1; min-width: 0; overflow-y: auto; scrollbar-width: thin;
+  padding: var(--sp-11) var(--sp-13) 70px;
+}
+
+/* Management panels (Connections / Shared threads / Project home requests)
+   keep their create-wrap ledgers, but inside the shell the panel column owns
+   spacing — no centered column, no double padding. */
+.cm-wrap--settings .cm-main .create-wrap { margin: 0; padding: 0; }
+.launch-community-settings .cm-panel {
+  max-width: 760px; margin-bottom: var(--sp-9);
+  border: var(--bw) solid var(--line2); border-radius: var(--r-3);
+  background: var(--surface); padding: var(--sp-10) var(--sp-11) var(--sp-11);
+}
+/* Destructive panel (Bans): a clay accent rule — clear, not dominating. */
+.launch-community-settings .cm-panel.cm-danger {
+  border-left: var(--bw-accent) solid var(--danger);
+}
+.launch-community-settings .cm-panel-title {
+  font-family: var(--serif); font-weight: 600; font-size: var(--fs-19);
+  color: var(--ink); margin-bottom: var(--sp-2);
+}
+.launch-community-settings .cm-panel-desc {
+  font-size: var(--fs-13); color: var(--muted); line-height: var(--lh-prose);
+  margin: var(--sp-2) 0 var(--sp-7);
+}
+.launch-community-settings .cm-panel-desc code,
+.launch-community-settings .cm-muted-note code {
+  font-family: var(--mono); font-size: var(--fs-11-5); color: var(--ink);
+  background: var(--surface2); border: var(--bw) solid var(--line);
+  border-radius: var(--r-1); padding: 0 var(--sp-2);
+}
+.launch-community-settings .cm-subhead {
+  font-family: var(--mono); font-size: var(--fs-10-5); font-weight: 600;
+  letter-spacing: .08em; text-transform: uppercase; color: var(--muted);
+  margin: var(--sp-9) 0 var(--sp-4);
+}
+.launch-community-settings .cm-muted-note {
+  font-size: var(--fs-12); color: var(--muted); line-height: var(--lh-prose);
+}
+.launch-community-settings .cm-empty {
+  font-size: var(--fs-13); color: var(--muted);
+  border: var(--bw) dashed var(--line2); border-radius: var(--r-2);
+  background: var(--surface2); padding: var(--sp-6) var(--sp-7);
+}
+
+/* ---- Status strip (Visibility & discovery) ---------------------------------- */
+
+.launch-community-settings .cm-stats {
+  display: flex; flex-wrap: wrap; gap: var(--sp-4);
+}
+.launch-community-settings .cm-stat {
+  display: flex; flex-direction: column; gap: var(--sp-1);
+  border: var(--bw) solid var(--line); border-radius: var(--r-2);
+  background: var(--surface2); padding: var(--sp-3) var(--sp-6);
+}
+.launch-community-settings .cm-stat-label {
+  font-family: var(--mono); font-size: var(--fs-10); font-weight: 600;
+  letter-spacing: var(--ls-kicker); text-transform: uppercase; color: var(--muted);
+}
+.launch-community-settings .cm-stat-val {
+  font-family: var(--mono); font-size: var(--fs-12-5); color: var(--ink);
+}
+.launch-community-settings .cm-stat-val--ok { color: var(--moss); }
+.launch-community-settings .cm-stat-val--off { color: var(--muted); }
+
+/* ---- Fields, forms, inputs -------------------------------------------------- */
+
+.launch-community-settings .cm-field { margin-bottom: var(--sp-7); }
+.launch-community-settings .cm-label {
+  display: block; font-family: var(--mono); font-size: var(--fs-11);
+  color: var(--muted); margin-bottom: 5px;
+}
+.launch-community-settings .cm-form {
+  display: flex; flex-direction: column; gap: var(--sp-5); margin: 0;
+}
+.launch-community-settings .cm-form .cm-field { margin-bottom: 0; }
+.launch-community-settings .cm-inline-form {
+  display: flex; align-items: center; gap: var(--sp-4); margin: 0;
+}
+.launch-community-settings .cm-inline-form .cm-input { flex: 1; width: auto; }
+.launch-community-settings .cm-form-inline { display: inline-flex; margin: 0; }
+
+.launch-community-settings .cm-input,
+.launch-community-settings .cm-textarea,
+.launch-community-settings .cm-select {
+  width: 100%; font-family: var(--sans); font-size: var(--fs-13-5);
+  color: var(--ink); background: var(--surface2);
+  border: var(--bw) solid var(--line2); border-radius: var(--r-2);
+  padding: var(--sp-3) var(--sp-5);
+}
+.launch-community-settings .cm-textarea { line-height: var(--lh-prose); resize: vertical; }
+.launch-community-settings .cm-input:focus,
+.launch-community-settings .cm-textarea:focus,
+.launch-community-settings .cm-select:focus {
+  outline: none; border-color: var(--moss); background: var(--surface);
+}
+.launch-community-settings .cm-file {
+  font-family: var(--mono); font-size: var(--fs-11-5); color: var(--muted);
+  margin-top: var(--sp-3);
+}
+.launch-community-settings .cm-row2 {
+  display: grid; grid-template-columns: 1fr auto; gap: var(--sp-4);
+}
+
+/* Buttons: moss primary, mono secondary, clay/danger for destructive. */
+.launch-community-settings .cm-btn {
+  align-self: flex-start; cursor: pointer;
+  font-family: var(--sans); font-weight: 600; font-size: var(--fs-12-5);
+  color: #fff; background: var(--moss);
+  border: var(--bw) solid var(--moss); border-radius: var(--r-2);
+  padding: var(--sp-3) var(--sp-8);
+}
+.launch-community-settings .cm-btn:hover { filter: brightness(1.06); }
+.launch-community-settings .cm-btn--secondary {
+  font-family: var(--mono); font-weight: 400; font-size: var(--fs-12);
+  color: var(--muted); background: var(--surface); border-color: var(--line2);
+}
+.launch-community-settings .cm-btn--secondary:hover {
+  filter: none; background: var(--surface2); color: var(--ink);
+}
+.launch-community-settings .cm-btn-sm {
+  cursor: pointer; font-family: var(--mono); font-size: var(--fs-11);
+  color: var(--muted); background: var(--surface);
+  border: var(--bw) solid var(--line2); border-radius: var(--r-2);
+  padding: var(--sp-2) var(--sp-6);
+}
+.launch-community-settings .cm-btn-sm:hover { background: var(--surface2); color: var(--ink); }
+.launch-community-settings .cm-btn-sm--danger { color: var(--danger); }
+.launch-community-settings .cm-btn-sm--danger:hover {
+  border-color: var(--danger); color: var(--danger); background: var(--surface);
+}
+.launch-community-settings .cm-btn-sm--ok { color: var(--moss); }
+.launch-community-settings .cm-btn-sm--ok:hover {
+  border-color: var(--moss); color: var(--moss); background: var(--surface);
+}
+
+/* Segmented one-form-per-segment controls (visibility / discovery / downvotes). */
+.launch-community-settings .cm-seg {
+  display: inline-flex; gap: 0;
+  border: var(--bw) solid var(--line2); border-radius: var(--r-2);
+  overflow: hidden; background: var(--surface);
+}
+.launch-community-settings .cm-seg .cm-form-inline + .cm-form-inline {
+  border-left: var(--bw) solid var(--line2);
+}
+.launch-community-settings .cm-seg-btn {
+  cursor: pointer; border: 0; background: none;
+  font-family: var(--mono); font-size: var(--fs-12); color: var(--muted);
+  padding: var(--sp-3) var(--sp-7);
+}
+.launch-community-settings .cm-seg-btn:hover { background: var(--surface2); color: var(--ink); }
+.launch-community-settings .cm-seg-btn--active {
+  color: var(--ink); font-weight: 600;
+  background: color-mix(in srgb, var(--moss) 12%, var(--surface));
+}
+
+/* ---- Badges ----------------------------------------------------------------- */
+
+.launch-community-settings .cm-badge {
+  display: inline-block; font-family: var(--mono); font-size: var(--fs-10);
+  font-weight: 600; letter-spacing: .04em; text-transform: uppercase;
+  border: var(--bw) solid var(--line2); border-radius: var(--r-1);
+  padding: 1px var(--sp-3); color: var(--muted); background: var(--surface2);
+}
+.launch-community-settings .cm-badge--active {
+  color: var(--moss); border-color: var(--moss);
+  background: color-mix(in srgb, var(--moss) 9%, var(--surface));
+}
+.launch-community-settings .cm-badge--archived { color: var(--muted); }
+
+/* ---- Profile assets --------------------------------------------------------- */
+
+.launch-community-settings .cm-assets2 {
+  display: grid; grid-template-columns: 1fr 1fr; gap: var(--sp-7);
+}
+.launch-community-settings .cm-asset {
+  display: flex; align-items: center; gap: var(--sp-5);
+  border: var(--bw) solid var(--line); border-radius: var(--r-2);
+  background: var(--surface2); padding: var(--sp-4) var(--sp-5);
+}
+.launch-community-settings .cm-asset-note {
+  font-size: var(--fs-11-5); color: var(--muted); line-height: var(--lh-prose);
+}
+.launch-community-settings img.cm-asset-avatar,
+.launch-community-settings div.cm-asset-avatar {
+  width: 40px; height: 40px; flex: none; border-radius: var(--r-2);
+  object-fit: cover; overflow: hidden;
+  display: flex; align-items: center; justify-content: center;
+  font-family: var(--mono); color: #fff; background: var(--moss);
+}
+.launch-community-settings .cm-asset-banner {
+  width: 96px; height: 40px; flex: none; border-radius: var(--r-2);
+  overflow: hidden; background: var(--surface3);
+}
+.launch-community-settings .cm-asset-banner-img {
+  width: 100%; height: 100%; object-fit: cover; display: block;
+}
+
+/* ---- Channel & section rows (compact <details> items) ----------------------- */
+
+.launch-community-settings .cm-items {
+  display: flex; flex-direction: column; gap: var(--sp-3);
+  margin-bottom: var(--sp-5);
+}
+.launch-community-settings .cm-item {
+  border: var(--bw) solid var(--line2); border-radius: var(--r-2);
+  background: var(--surface);
+}
+.launch-community-settings .cm-item > summary {
+  list-style: none; cursor: pointer;
+  display: flex; align-items: center; gap: var(--sp-5);
+  padding: var(--sp-4) var(--sp-6);
+}
+.launch-community-settings .cm-item > summary::-webkit-details-marker { display: none; }
+.launch-community-settings .cm-item > summary:hover { background: var(--surface2); }
+.launch-community-settings .cm-item-pos {
+  font-family: var(--mono); font-size: var(--fs-10-5); color: var(--muted);
+  flex: none;
+}
+.launch-community-settings .cm-item-name {
+  min-width: 0; display: flex; align-items: baseline; gap: var(--sp-3);
+}
+.launch-community-settings .cm-section-name {
+  font-weight: 600; font-size: var(--fs-13-5); color: var(--ink);
+  text-decoration: none;
+}
+.launch-community-settings a.cm-channel-link:hover { text-decoration: underline; }
+.launch-community-settings .cm-section-slug {
+  font-family: var(--mono); font-size: var(--fs-10-5); color: var(--muted);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.launch-community-settings .cm-item-badges { flex: none; }
+.launch-community-settings .cm-item-meta {
+  margin-left: auto; flex: none; display: flex; align-items: center;
+  gap: var(--sp-5);
+  font-family: var(--mono); font-size: var(--fs-10-5); color: var(--muted);
+}
+.launch-community-settings .cm-item-note {
+  font-family: var(--mono); font-size: var(--fs-10-5); color: var(--muted);
+}
+.launch-community-settings .cm-item-hint { color: var(--slate); }
+.launch-community-settings .cm-item[open] .cm-item-hint { color: var(--moss); }
+.launch-community-settings .cm-item-body {
+  border-top: var(--bw) solid var(--line);
+  padding: var(--sp-6) var(--sp-6) var(--sp-7);
+}
+.launch-community-settings .cm-item-ops {
+  display: flex; align-items: center; flex-wrap: wrap; gap: var(--sp-5);
+  margin-top: var(--sp-6); padding-top: var(--sp-5);
+  border-top: var(--bw) dashed var(--line);
+}
+.launch-community-settings .cm-item-ops .cm-muted-note { font-size: var(--fs-11); }
+
+/* + Add channel / + Add section reveal. */
+.launch-community-settings .cm-add { margin-top: var(--sp-4); }
+.launch-community-settings .cm-add > summary {
+  list-style: none; cursor: pointer; display: inline-block;
+  font-family: var(--mono); font-size: var(--fs-12); color: var(--moss);
+  border: var(--bw) dashed var(--line2); border-radius: var(--r-2);
+  padding: var(--sp-3) var(--sp-7); background: var(--surface);
+}
+.launch-community-settings .cm-add > summary::-webkit-details-marker { display: none; }
+.launch-community-settings .cm-add > summary:hover {
+  border-color: var(--moss); background: var(--surface2);
+}
+.launch-community-settings .cm-add-body {
+  margin-top: var(--sp-5); border: var(--bw) solid var(--line2);
+  border-radius: var(--r-2); background: var(--surface2);
+  padding: var(--sp-6);
+}
+
+/* ---- Member / ban / moderator lists ----------------------------------------- */
+
+.launch-community-settings .cm-list {
+  display: flex; flex-direction: column;
+  border: var(--bw) solid var(--line2); border-radius: var(--r-2);
+  overflow: hidden;
+}
+.launch-community-settings .cm-list-row {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: var(--sp-5); padding: var(--sp-4) var(--sp-6);
+  border-bottom: var(--bw) solid var(--line); background: var(--surface);
+}
+.launch-community-settings .cm-list-row:last-child { border-bottom: 0; }
+.launch-community-settings .cm-list-row:hover { background: var(--surface2); }
+.launch-community-settings .cm-user-link {
+  font-family: var(--mono); font-size: var(--fs-13); color: var(--ink);
+  text-decoration: none;
+}
+.launch-community-settings .cm-user-link:hover { text-decoration: underline; }
+
+/* ---- Moderation cardlinks --------------------------------------------------- */
+
+.launch-community-settings .cm-modlinks {
+  display: flex; flex-direction: column; gap: var(--sp-4);
+  margin-bottom: var(--sp-8);
+}
+.launch-community-settings .cm-cardlink {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: var(--sp-6); text-decoration: none;
+  border: var(--bw) solid var(--line2); border-radius: var(--r-2);
+  background: var(--surface); padding: var(--sp-5) var(--sp-7);
+}
+.launch-community-settings .cm-cardlink:hover { background: var(--surface2); }
+.launch-community-settings .cm-cardlink-title {
+  font-weight: 600; font-size: var(--fs-13-5); color: var(--ink);
+}
+.launch-community-settings .cm-cardlink-desc {
+  font-size: var(--fs-11-5); color: var(--muted); line-height: var(--lh-prose);
+  margin-top: var(--sp-1);
+}
+.launch-community-settings .cm-cardlink-go {
+  flex: none; font-family: var(--mono); color: var(--muted);
+}
+.launch-community-settings .cm-cardlink:hover .cm-cardlink-go { color: var(--moss); }
+
+/* ---- Connected projects (pinned phrm-* fragment, styled from outside) ------- */
+
+.launch-community-settings .phrm-section-title {
+  font-family: var(--mono); font-size: var(--fs-10-5); font-weight: 600;
+  letter-spacing: .08em; text-transform: uppercase; color: var(--muted);
+  margin-bottom: var(--sp-4);
+}
+.launch-community-settings .phrm-section-copy {
+  font-size: var(--fs-12); color: var(--muted); line-height: var(--lh-prose);
+  border: var(--bw) dashed var(--line2); border-radius: var(--r-2);
+  background: var(--surface); padding: var(--sp-4) var(--sp-6);
+  margin-bottom: var(--sp-5);
+}
+.launch-community-settings .phrm-none {
+  font-size: var(--fs-13); color: var(--muted);
+  border: var(--bw) dashed var(--line2); border-radius: var(--r-2);
+  background: var(--surface2); padding: var(--sp-6) var(--sp-7);
+}
+.launch-community-settings .phrm-projects {
+  list-style: none; margin: 0; padding: 0;
+  display: flex; flex-direction: column;
+  border: var(--bw) solid var(--line2); border-radius: var(--r-2);
+  overflow: hidden;
+}
+.launch-community-settings .phrm-project {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: var(--sp-6); padding: var(--sp-5) var(--sp-7);
+  border-bottom: var(--bw) solid var(--line); background: var(--surface);
+}
+.launch-community-settings .phrm-project:last-child { border-bottom: 0; }
+.launch-community-settings .phrm-project:hover { background: var(--surface2); }
+.launch-community-settings .phrm-identity { min-width: 0; }
+.launch-community-settings .phrm-project-name {
+  font-weight: 600; font-size: var(--fs-13-5); color: var(--ink);
+}
+.launch-community-settings .phrm-project-slug,
+.launch-community-settings .phrm-namespace {
+  font-family: var(--mono); font-size: var(--fs-10-5); color: var(--muted);
+  margin-top: var(--sp-1);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.launch-community-settings .phrm-verification {
+  font-family: var(--mono); font-size: var(--fs-10-5); color: var(--moss);
+  margin-top: var(--sp-1);
+}
+.launch-community-settings .phrm-removal-form { margin: 0; flex: none; }
+.launch-community-settings .phrm-btn {
+  cursor: pointer; font-family: var(--mono); font-size: var(--fs-11);
+  color: var(--danger); background: var(--surface);
+  border: var(--bw) solid var(--line2); border-radius: var(--r-2);
+  padding: var(--sp-2) var(--sp-6);
+}
+.launch-community-settings .phrm-btn:hover { border-color: var(--danger); }
