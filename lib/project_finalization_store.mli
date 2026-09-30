@@ -133,7 +133,10 @@ val finalize :
       selection flags, or local snapshot ids); exactly the row named by
       the identity's primary is copied primary. Before each copy, if the
       repository is claimed by a project with no steward holding fresh
-      evidence, all of that project's claims are released. A remaining claim conflict
+      evidence, all of that project's claims are released; the projects
+      holding any selected repository are first locked ([FOR UPDATE],
+      ascending id), so a concurrent steward renewal either commits first
+      and keeps the claims or finds them released. A remaining claim conflict
       (arbitrated by the unique index on unreleased claims) is
       [Repository_already_connected];
     + the locked draft becomes [status = 'completed'] with

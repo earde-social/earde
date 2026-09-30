@@ -92,6 +92,35 @@ let insert_snapshot_row_query =
       default_branch, is_archived, is_selected, is_primary) \
    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, FALSE, FALSE)"
 
+(* Renewal and claim release (Project_finalization_store) each decide on
+   the table the other writes, so both lock the affected project rows
+   first, in ascending id order, and decide in a later statement whose
+   snapshot then includes whatever the other committed: a release that
+   won leaves no active claim to renew over, and a renewal that won keeps
+   the claims. The installation is key-share locked before the projects,
+   matching finalization's draft, installation, projects order, because
+   the renewal below may repoint a steward row at this installation and
+   its foreign-key check would otherwise take that lock last. *)
+let lock_installation_query =
+  let open Caqti_request.Infix in
+  (Caqti_type.int64 ->* Caqti_type.int64)
+  "SELECT i.id FROM github_installations i \
+   JOIN project_onboarding_drafts d ON d.github_installation_record_id = i.id \
+   WHERE d.id = $1 \
+   FOR KEY SHARE OF i"
+
+let lock_renewal_projects_query =
+  let open Caqti_request.Infix in
+  (Caqti_type.(t2 int64 int) ->* Caqti_type.int64)
+  "SELECT p.id FROM open_source_projects p \
+   JOIN project_stewards s ON s.project_id = p.id \
+   JOIN project_onboarding_drafts d ON d.user_id = s.user_id \
+   JOIN github_installations i ON i.id = d.github_installation_record_id \
+   WHERE d.id = $1 AND d.user_id = $2 \
+     AND p.forge_namespace_id = i.github_account_id \
+   ORDER BY p.id \
+   FOR UPDATE OF p"
+
 (* Renewal of existing stewardship evidence (see
    docs/features/github-verification-lifecycle.md). The snapshot just
    written is this user's current, GitHub-verified view of the
@@ -144,12 +173,19 @@ let refresh_verified (module C : Caqti_lwt.CONNECTION) ~user_id ~installation
        order, positions contiguous from 1. *)
     let rec insert_snapshot draft_row_id position = function
       | [] -> (
+          C.collect_list lock_installation_query draft_row_id >>= function
+          | Error _ -> rollback_to Storage_error
+          | Ok _ -> (
+          C.collect_list lock_renewal_projects_query (draft_row_id, user_id)
+          >>= function
+          | Error _ -> rollback_to Storage_error
+          | Ok _ -> (
           C.exec renew_steward_evidence_query (draft_row_id, user_id) >>= function
           | Error _ -> rollback_to Storage_error
           | Ok () -> (
           C.commit () >>= function
           | Error _ -> Lwt.return (Error Storage_error)
-          | Ok () -> Lwt.return (Ok { id = draft_row_id })))
+          | Ok () -> Lwt.return (Ok { id = draft_row_id })))))
       | repo :: rest -> (
           let module R = Github_user_installation_repositories in
           C.exec insert_snapshot_row_query

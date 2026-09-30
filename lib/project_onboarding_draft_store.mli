@@ -73,6 +73,11 @@ val refresh_verified :
       ([github_verified_at], and the proving installation record) for
       every project in the verified account whose unreleased repositories
       all appear in the new snapshot. Other users' rows are never written.
+      The installation row ([FOR KEY SHARE]) and then those projects'
+      rows ([FOR UPDATE], ascending id) are locked first and the renewal
+      decided in a later statement, so it serializes with a concurrent
+      claim release in [Project_finalization_store.finalize]: renewal
+      never restores fresh evidence over claims a committed release took.
 
     [expires_at] is always the database transaction's [NOW() + 24 hours],
     and [verified_at] its [NOW()] — never the application clock, never

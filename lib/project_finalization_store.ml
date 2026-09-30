@@ -214,6 +214,26 @@ let release_stale_claim_query =
        WHERE s.project_id = r.project_id \
          AND github_evidence_is_fresh(s.github_verified_at))"
 
+(* The projects currently holding any selected repository, locked in
+   ascending id order before any release is decided, so a concurrent
+   renewal of their stewards' evidence (Project_onboarding_draft_store)
+   either commits first and is seen by release_stale_claim_query's later
+   snapshot, or waits for this transaction and then finds the claims
+   released. It runs under the draft, installation and snapshot locks,
+   in the same order renewal takes them. *)
+let lock_claim_holders_query =
+  let open Caqti_request.Infix in
+  (Caqti_type.int64 ->* Caqti_type.int64)
+  "SELECT p.id FROM open_source_projects p \
+   WHERE p.id IN ( \
+     SELECT c.project_id \
+     FROM project_repositories c \
+     JOIN project_onboarding_draft_repositories dr \
+       ON dr.github_repository_id = c.github_repository_id \
+     WHERE dr.draft_id = $1 AND dr.is_selected AND c.released_at IS NULL) \
+   ORDER BY p.id \
+   FOR UPDATE"
+
 (* One prepared insert reused per selected row. The global unique
    constraint on github_repository_id arbitrates concurrent claims: zero
    returned rows means the repository already belongs to a permanent
@@ -395,7 +415,10 @@ let finalize (module C : Caqti_lwt.CONNECTION) ~user_id ~draft_id ~identity =
           | Error _ -> rollback_to Storage_error
           (* The draft row is locked above; no row back is corruption. *)
           | Ok None -> rollback_to Inconsistent_data
-          | Ok (Some _) -> copy_repositories project_row_id 1 selected)
+          | Ok (Some _) -> (
+              C.collect_list lock_claim_holders_query draft_id >>= function
+              | Error _ -> rollback_to Storage_error
+              | Ok _ -> copy_repositories project_row_id 1 selected))
     in
 
     C.start () >>= function
