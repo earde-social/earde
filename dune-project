@@ -2,9 +2,18 @@
 (name earde)
 (generate_opam_files true)
 
+(source
+ (github earde-social/earde))
+
+(license MIT)
+
+(authors tolwiz)
+
+(maintainers tolwiz)
+
 (package
  (name earde)
- (synopsis "earde mvp")
+ (synopsis "Community platform for technical communities")
  (depends
   (ocaml (>= 5.1.1))
   (dune (>= 3.11))
