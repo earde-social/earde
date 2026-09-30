@@ -1,0 +1,11 @@
+# Secret scanning configuration for gitleaks (run in CI over the full history).
+# It extends the default ruleset. Each allowlist entry below is a reviewed test
+# fixture, never a credential; add an entry only with the same justification.
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Password-reset rendering tests: a literal, meaningless test token"
+regexTarget = "match"
+regexes = ['''AbC123_-xyz0''']
