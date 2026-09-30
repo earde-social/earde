@@ -1,7 +1,6 @@
 (** HTTP layer for the community-connections management workflow: the
     management page, the two-step connect flow, and the four community-scoped
-    mutations. Kept out of the legacy [Handlers] macro-module per the
-    feature-module guideline.
+    mutations.
 
     {b Every handler is community-scoped.} The subject community comes from
     the route and is resolved server-side; the acting user id and the session

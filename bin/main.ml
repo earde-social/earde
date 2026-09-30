@@ -83,8 +83,8 @@ let () =
   (* Inside sql_pool + sql_sessions: needs Dream.sql and the session's user_id.
      Separate from analytics_middleware so removing page-view analytics later
      cannot take last_active_at (moderator auto-demotion input) down with it. *)
-  @@ Earde.Handlers.presence_middleware
-  @@ Earde.Handlers.analytics_middleware
+  @@ Earde.Activity_middleware.presence_middleware
+  @@ Earde.Activity_middleware.analytics_middleware
   (* Inside sql_pool + sql_sessions, like presence: resolves the signed-in
      user's unread-notification count once and stashes it on the request, so
      every authenticated document renders its top-bar badge from the same
@@ -105,7 +105,7 @@ let () =
        bookmarks. Temporary redirect to match the existing /-> /feed style above;
        the repo has no permanent-redirect (301/308) pattern. *)
     Dream.get "/all" (fun request -> Dream.redirect request "/feed");
-    Dream.get "/feed" Earde.Handlers.feed_handler;
+    Dream.get "/feed" Earde.Public_handlers.feed_handler;
     (* Entry and return page for GitHub onboarding: offers the start action
        when the viewer passes the onboarding policy and shows the one-time
        connected/failed callback feedback. Informational GET, deliberately
@@ -121,7 +121,7 @@ let () =
        GitHub App configuration is loaded per request from the environment.
        No GET variant and no callback routes in this slice. *)
     Dream.post "/integrations/github/install/start"
-      (Earde.Handlers.Rate_limit.middleware (fun request ->
+      (Earde.Rate_limit_middleware.middleware (fun request ->
            Earde.Github_onboarding_handlers.make_start_installation_handler
              ~mode:(Earde.Project_onboarding.mode_from_env ())
              ~load_config:Earde.Github_app_config.from_env
@@ -173,7 +173,7 @@ let () =
           ~mode:(Earde.Project_onboarding.mode_from_env ())
           request);
     Dream.post "/projects/new/repositories"
-      (Earde.Handlers.Rate_limit.middleware (fun request ->
+      (Earde.Rate_limit_middleware.middleware (fun request ->
            Earde.Project_setup_handlers.make_repository_selection_handler
              ~mode:(Earde.Project_onboarding.mode_from_env ())
              ~load_config:Earde.Github_app_config.from_env
@@ -185,7 +185,7 @@ let () =
        deliberately not rate-limited, matching the other project-setup
        GETs. *)
     Dream.post "/projects"
-      (Earde.Handlers.Rate_limit.middleware (fun request ->
+      (Earde.Rate_limit_middleware.middleware (fun request ->
            Earde.Project_creation_handlers.make_project_creation_handler
              ~mode:(Earde.Project_onboarding.mode_from_env ())
              ~load_config:Earde.Github_app_config.from_env
@@ -205,7 +205,7 @@ let () =
           ~mode:(Earde.Project_onboarding.mode_from_env ())
           request);
     Dream.post "/projects/:slug/request-home"
-      (Earde.Handlers.Rate_limit.middleware (fun request ->
+      (Earde.Rate_limit_middleware.middleware (fun request ->
            Earde.Project_home_request_handlers
            .make_project_home_request_handler
              ~mode:(Earde.Project_onboarding.mode_from_env ())
@@ -226,7 +226,7 @@ let () =
           ~mode:(Earde.Project_onboarding.mode_from_env ())
           request);
     Dream.post "/projects/:slug/community-home"
-      (Earde.Handlers.Rate_limit.middleware (fun request ->
+      (Earde.Rate_limit_middleware.middleware (fun request ->
            Earde.Project_home_provisioning_handlers
            .make_project_home_provisioning_handler
              ~mode:(Earde.Project_onboarding.mode_from_env ())
@@ -246,13 +246,13 @@ let () =
           ~mode:(Earde.Project_onboarding.mode_from_env ())
           request);
     Dream.post "/c/:slug/projects/:project_slug/accept"
-      (Earde.Handlers.Rate_limit.middleware (fun request ->
+      (Earde.Rate_limit_middleware.middleware (fun request ->
            Earde.Project_home_review_handlers.make_project_home_accept_handler
              ~mode:(Earde.Project_onboarding.mode_from_env ())
              ~load_config:Earde.Github_app_config.from_env
              request));
     Dream.post "/c/:slug/projects/:project_slug/reject"
-      (Earde.Handlers.Rate_limit.middleware (fun request ->
+      (Earde.Rate_limit_middleware.middleware (fun request ->
            Earde.Project_home_review_handlers.make_project_home_reject_handler
              ~mode:(Earde.Project_onboarding.mode_from_env ())
              ~load_config:Earde.Github_app_config.from_env
@@ -267,33 +267,33 @@ let () =
        is the confirmation and the destination. Authorization is decided in
        the removal store's SQL, not here and not by the route shape. *)
     Dream.post "/projects/:project_slug/community-home/:community_slug/remove"
-      (Earde.Handlers.Rate_limit.middleware (fun request ->
+      (Earde.Rate_limit_middleware.middleware (fun request ->
            Earde.Project_home_removal_handlers
            .make_project_side_home_removal_handler
              ~mode:(Earde.Project_onboarding.mode_from_env ())
              ~load_config:Earde.Github_app_config.from_env
              request));
     Dream.post "/c/:community_slug/projects/:project_slug/remove-home"
-      (Earde.Handlers.Rate_limit.middleware (fun request ->
+      (Earde.Rate_limit_middleware.middleware (fun request ->
            Earde.Project_home_removal_handlers
            .make_community_side_home_removal_handler
              ~mode:(Earde.Project_onboarding.mode_from_env ())
              ~load_config:Earde.Github_app_config.from_env
              request));
-    Dream.get "/new-community" Earde.Handlers.new_community_page;
-    Dream.post "/communities" Earde.Handlers.create_community_handler;
-    Dream.post "/join" Earde.Handlers.join_community_handler;
-    Dream.post "/leave" Earde.Handlers.leave_community_handler;
-    Dream.get "/c/:slug" Earde.Handlers.community_page_handler;
-    Dream.get "/c/:slug/s/:section_slug" Earde.Handlers.community_section_handler;
-    Dream.get "/c/:slug/ch/:channel_slug" Earde.Handlers.community_channel_handler;
-    Dream.get "/c/:slug/ch/:channel_slug/messages.json" Earde.Handlers.channel_messages_json_handler;
-    Dream.get "/c/:slug/ch/:channel_slug/realtime-token" Earde.Handlers.realtime_token_handler;
-    Dream.get "/c/:slug/ch/:channel_slug/messages/:message_id/start-thread" Earde.Handlers.start_thread_form_handler;
-    Dream.post "/c/:slug/ch/:channel_slug/messages/:message_id/start-thread" Earde.Handlers.start_thread_create_handler;
-    Dream.get "/c/:slug/t/:thread" Earde.Handlers.view_thread_handler;
-    Dream.post "/messages" Earde.Handlers.send_message_handler;
-    Dream.get "/c/:slug/settings" Earde.Handlers.community_settings_handler;
+    Dream.get "/new-community" Earde.Community_handlers.new_community_page;
+    Dream.post "/communities" Earde.Community_handlers.create_community_handler;
+    Dream.post "/join" Earde.Membership_handlers.join_community_handler;
+    Dream.post "/leave" Earde.Membership_handlers.leave_community_handler;
+    Dream.get "/c/:slug" Earde.Community_handlers.community_page_handler;
+    Dream.get "/c/:slug/s/:section_slug" Earde.Community_handlers.community_section_handler;
+    Dream.get "/c/:slug/ch/:channel_slug" Earde.Chat_handlers.community_channel_handler;
+    Dream.get "/c/:slug/ch/:channel_slug/messages.json" Earde.Chat_handlers.channel_messages_json_handler;
+    Dream.get "/c/:slug/ch/:channel_slug/realtime-token" Earde.Chat_handlers.realtime_token_handler;
+    Dream.get "/c/:slug/ch/:channel_slug/messages/:message_id/start-thread" Earde.Start_thread_handlers.start_thread_form_handler;
+    Dream.post "/c/:slug/ch/:channel_slug/messages/:message_id/start-thread" Earde.Start_thread_handlers.start_thread_create_handler;
+    Dream.get "/c/:slug/t/:thread" Earde.Post_handlers.view_thread_handler;
+    Dream.post "/messages" Earde.Chat_handlers.send_message_handler;
+    Dream.get "/c/:slug/settings" Earde.Community_settings_handlers.community_settings_handler;
     (* Final setup and publication surface of a provisioned network
        community. Both are distinct literal segments from
        settings/modlog/reports, so no router shadowing. The GET is
@@ -313,7 +313,7 @@ let () =
           ~mode:(Earde.Project_onboarding.mode_from_env ())
           request);
     Dream.post "/c/:slug/publish"
-      (Earde.Handlers.Rate_limit.middleware (fun request ->
+      (Earde.Rate_limit_middleware.middleware (fun request ->
            Earde.Network_community_publication_handlers
            .make_network_community_publication_handler
              ~mode:(Earde.Project_onboarding.mode_from_env ())
@@ -336,16 +336,16 @@ let () =
     Dream.get "/c/:slug/settings/connections/new"
       Earde.Community_connections_handlers.make_connections_search_handler;
     Dream.post "/c/:slug/settings/connections/request"
-      (Earde.Handlers.Rate_limit.middleware
+      (Earde.Rate_limit_middleware.middleware
          Earde.Community_connections_handlers.make_connection_request_handler);
     Dream.post "/c/:slug/settings/connections/:id/accept"
-      (Earde.Handlers.Rate_limit.middleware
+      (Earde.Rate_limit_middleware.middleware
          Earde.Community_connections_handlers.make_connection_accept_handler);
     Dream.post "/c/:slug/settings/connections/:id/reject"
-      (Earde.Handlers.Rate_limit.middleware
+      (Earde.Rate_limit_middleware.middleware
          Earde.Community_connections_handlers.make_connection_reject_handler);
     Dream.post "/c/:slug/settings/connections/:id/remove"
-      (Earde.Handlers.Rate_limit.middleware
+      (Earde.Rate_limit_middleware.middleware
          Earde.Community_connections_handlers.make_connection_removal_handler);
     (* Shared-threads workflow: the per-thread Share page (longer literal
        path than the /c/:slug/t/:thread GET, so no shadowing) and the
@@ -362,21 +362,21 @@ let () =
     Dream.get "/c/:slug/t/:thread/share"
       Earde.Shared_thread_placement_handlers.make_share_page_handler;
     Dream.post "/c/:slug/t/:thread/share"
-      (Earde.Handlers.Rate_limit.middleware
+      (Earde.Rate_limit_middleware.middleware
          Earde.Shared_thread_placement_handlers.make_share_request_handler);
     Dream.get "/c/:slug/settings/shared-threads"
       Earde.Shared_thread_placement_handlers.make_management_page_handler;
     Dream.post "/c/:slug/settings/shared-threads/:placement_id/accept"
-      (Earde.Handlers.Rate_limit.middleware
+      (Earde.Rate_limit_middleware.middleware
          Earde.Shared_thread_placement_handlers.make_accept_handler);
     Dream.post "/c/:slug/settings/shared-threads/:placement_id/reject"
-      (Earde.Handlers.Rate_limit.middleware
+      (Earde.Rate_limit_middleware.middleware
          Earde.Shared_thread_placement_handlers.make_reject_handler);
     Dream.post "/c/:slug/settings/shared-threads/:placement_id/withdraw"
-      (Earde.Handlers.Rate_limit.middleware
+      (Earde.Rate_limit_middleware.middleware
          Earde.Shared_thread_placement_handlers.make_withdrawal_handler);
     Dream.post "/c/:slug/settings/shared-threads/:placement_id/remove"
-      (Earde.Handlers.Rate_limit.middleware
+      (Earde.Rate_limit_middleware.middleware
          Earde.Shared_thread_placement_handlers.make_removal_handler);
     (* Public Network page: the community's connected projects and connected
        communities in full, which the community home now links to instead of
@@ -384,43 +384,43 @@ let () =
        from the /settings/connections management paths, so nothing shadows
        anything. Read-only and deliberately public — its access decision is
        the community's own can_view_community, exactly like /c/:slug. *)
-    Dream.get "/c/:slug/network" Earde.Handlers.community_network_handler;
-    Dream.get "/c/:slug/modlog" Earde.Handlers.modlog_handler;
+    Dream.get "/c/:slug/network" Earde.Community_handlers.community_network_handler;
+    Dream.get "/c/:slug/modlog" Earde.Moderation_handlers.modlog_handler;
     (* Reports: singular GET form + plural POST create (Slice B) + plural GET mod queue
        (read-only). Distinct literal segments from settings/modlog/manage-mods, so no router
        shadowing; the queue GET and create POST share the /reports path and split by method. *)
-    Dream.get "/c/:slug/report" Earde.Handlers.report_form_handler;
-    Dream.get "/c/:slug/reports" Earde.Handlers.reports_queue_handler;
-    Dream.post "/c/:slug/reports" Earde.Handlers.create_report_handler;
+    Dream.get "/c/:slug/report" Earde.Moderation_handlers.report_form_handler;
+    Dream.get "/c/:slug/reports" Earde.Moderation_handlers.reports_queue_handler;
+    Dream.post "/c/:slug/reports" Earde.Moderation_handlers.create_report_handler;
     (* Resolution POSTs sit on a longer path (.../reports/:report_id/{dismiss,action}) than the
        create POST (.../reports), so they don't shadow it; M/TM/A gated in the handler. *)
-    Dream.post "/c/:slug/reports/:report_id/dismiss" Earde.Handlers.dismiss_report_handler;
-    Dream.post "/c/:slug/reports/:report_id/action" Earde.Handlers.action_report_handler;
-    Dream.get "/c/:slug/manage-mods" Earde.Handlers.manage_mods_handler;
-    Dream.post "/c/:slug/toggle_downvotes" Earde.Handlers.toggle_downvotes_handler;
+    Dream.post "/c/:slug/reports/:report_id/dismiss" Earde.Moderation_handlers.dismiss_report_handler;
+    Dream.post "/c/:slug/reports/:report_id/action" Earde.Moderation_handlers.action_report_handler;
+    Dream.get "/c/:slug/manage-mods" Earde.Moderation_handlers.manage_mods_handler;
+    Dream.post "/c/:slug/toggle_downvotes" Earde.Community_settings_handlers.toggle_downvotes_handler;
     (* Slice E: TM/A-only visibility + discovery controls. Distinct literal sub-segments under
        /settings/, so no shadowing of the /c/:slug/settings GET. *)
-    Dream.post "/c/:slug/settings/visibility" Earde.Handlers.update_community_visibility_handler;
-    Dream.post "/c/:slug/settings/indexability" Earde.Handlers.update_community_indexability_handler;
+    Dream.post "/c/:slug/settings/visibility" Earde.Community_settings_handlers.update_community_visibility_handler;
+    Dream.post "/c/:slug/settings/indexability" Earde.Community_settings_handlers.update_community_indexability_handler;
     (* Slice F: TM/A-only member allow-list management (private communities). Distinct
        /settings/members/* sub-segments, so no shadowing of the settings GET or the Slice E POSTs. *)
-    Dream.post "/c/:slug/settings/members/add" Earde.Handlers.add_member_handler;
-    Dream.post "/c/:slug/settings/members/remove" Earde.Handlers.remove_member_handler;
-    Dream.post "/c/:slug/manage-mods/add" Earde.Handlers.manage_mods_add_handler;
-    Dream.post "/c/:slug/manage-mods/promote" Earde.Handlers.manage_mods_promote_handler;
-    Dream.post "/c/:slug/manage-mods/remove" Earde.Handlers.manage_mods_remove_handler;
-    Dream.post "/c/:slug/sections/add" Earde.Handlers.add_section_handler;
-    Dream.post "/c/:slug/sections/:section_id/update" Earde.Handlers.update_section_handler;
+    Dream.post "/c/:slug/settings/members/add" Earde.Membership_handlers.add_member_handler;
+    Dream.post "/c/:slug/settings/members/remove" Earde.Membership_handlers.remove_member_handler;
+    Dream.post "/c/:slug/manage-mods/add" Earde.Moderation_handlers.manage_mods_add_handler;
+    Dream.post "/c/:slug/manage-mods/promote" Earde.Moderation_handlers.manage_mods_promote_handler;
+    Dream.post "/c/:slug/manage-mods/remove" Earde.Moderation_handlers.manage_mods_remove_handler;
+    Dream.post "/c/:slug/sections/add" Earde.Community_structure_handlers.add_section_handler;
+    Dream.post "/c/:slug/sections/:section_id/update" Earde.Community_structure_handlers.update_section_handler;
     (* Slice H: TM/A-only section indexability toggle (gated in-handler). *)
-    Dream.post "/c/:slug/sections/:section_id/indexability" Earde.Handlers.update_section_indexability_handler;
-    Dream.post "/c/:slug/sections/:section_id/delete" Earde.Handlers.delete_section_handler;
-    Dream.post "/c/:slug/channels/add" Earde.Handlers.add_channel_handler;
-    Dream.post "/c/:slug/channels/:channel_id/update" Earde.Handlers.update_channel_handler;
+    Dream.post "/c/:slug/sections/:section_id/indexability" Earde.Community_settings_handlers.update_section_indexability_handler;
+    Dream.post "/c/:slug/sections/:section_id/delete" Earde.Community_structure_handlers.delete_section_handler;
+    Dream.post "/c/:slug/channels/add" Earde.Community_structure_handlers.add_channel_handler;
+    Dream.post "/c/:slug/channels/:channel_id/update" Earde.Community_structure_handlers.update_channel_handler;
     (* Slice H: TM/A-only channel indexability toggle (gated in-handler). *)
-    Dream.post "/c/:slug/channels/:channel_id/indexability" Earde.Handlers.update_channel_indexability_handler;
-    Dream.post "/c/:slug/channels/:channel_id/archive" Earde.Handlers.archive_channel_handler;
-    Dream.post "/c/:slug/channels/:channel_id/unarchive" Earde.Handlers.unarchive_channel_handler;
-    Dream.post "/update-community" Earde.Handlers.update_community_handler;
+    Dream.post "/c/:slug/channels/:channel_id/indexability" Earde.Community_settings_handlers.update_channel_indexability_handler;
+    Dream.post "/c/:slug/channels/:channel_id/archive" Earde.Community_structure_handlers.archive_channel_handler;
+    Dream.post "/c/:slug/channels/:channel_id/unarchive" Earde.Community_structure_handlers.unarchive_channel_handler;
+    Dream.post "/update-community" Earde.Community_settings_handlers.update_community_handler;
     (* There are deliberately no /add-mod and /remove-mod routes. They were
        an unreferenced legacy pair — no form, link, script or test emitted
        them — whose authorization was strictly weaker than the surface that
@@ -429,51 +429,51 @@ let () =
        live surface is /c/:slug/manage-mods/{add,promote,remove}, which
        requires top_mod (or a durable admin) and protects top_mod targets.
        Both handlers were deleted with the routes; nothing references them. *)
-    Dream.post "/ban-community-user" Earde.Handlers.ban_community_user_handler;
-    Dream.post "/unban-community-user" Earde.Handlers.unban_community_user_handler;
-    Dream.get "/new-post" Earde.Handlers.new_post_page;
-    Dream.post "/posts" Earde.Handlers.create_post_handler;
-    Dream.get "/p/:id" Earde.Handlers.view_post_handler;
-    Dream.post "/comments" Earde.Handlers.create_comment_handler;
-    Dream.post "/vote" Earde.Handlers.vote_handler;
-    Dream.post "/vote-comment" Earde.Handlers.vote_comment_handler;
-    Dream.get "/u/:username" Earde.Handlers.view_profile_handler;
-    Dream.get "/search" Earde.Handlers.search_handler;
-    Dream.get "/settings" Earde.Handlers.settings_page_handler;
-    Dream.post "/settings" Earde.Handlers.update_profile_handler;
-    Dream.get "/notifications" Earde.Handlers.notifications_handler;
-    Dream.post "/delete-account" Earde.Handlers.delete_account_handler;
-    Dream.post "/delete-post" Earde.Handlers.delete_post_handler;
-    Dream.post "/c/:slug/posts/:id/mod_delete" Earde.Handlers.mod_delete_post_handler;
-    Dream.post "/delete-comment" Earde.Handlers.delete_comment_handler;
-    Dream.post "/c/:slug/comments/:id/mod_delete" Earde.Handlers.mod_delete_comment_handler;
-    Dream.get  "/admin" Earde.Handlers.admin_dashboard_handler;
-    Dream.post "/admin/ban/user/:id" Earde.Handlers.ban_user_handler;
-    Dream.post "/admin/unban/user/:id" Earde.Handlers.unban_user_global_handler;
-    Dream.get "/privacy" Earde.Handlers.privacy_page_handler;
-    Dream.get "/signup" Earde.Handlers.signup_page;
-    Dream.post "/signup" (Earde.Handlers.Rate_limit.middleware Earde.Handlers.signup_handler);
-    Dream.get "/verify" Earde.Handlers.verify_email_handler;
-    Dream.get "/confirm-email" Earde.Handlers.confirm_email_handler;
-    Dream.get "/login" Earde.Handlers.login_page;
-    Dream.post "/login" (Earde.Handlers.Rate_limit.middleware Earde.Handlers.login_handler);
-    Dream.post "/logout" Earde.Handlers.logout_handler;
-    Dream.post "/settings/password" Earde.Handlers.change_password_handler;
-    Dream.get "/forgot-password" Earde.Handlers.forgot_password_page;
-    Dream.post "/forgot-password" (Earde.Handlers.Rate_limit.middleware Earde.Handlers.forgot_password_handler);
-    Dream.get "/reset-password" Earde.Handlers.reset_password_page_handler;
-    Dream.post "/reset-password" Earde.Handlers.reset_password_handler;
+    Dream.post "/ban-community-user" Earde.Moderation_handlers.ban_community_user_handler;
+    Dream.post "/unban-community-user" Earde.Moderation_handlers.unban_community_user_handler;
+    Dream.get "/new-post" Earde.Post_handlers.new_post_page;
+    Dream.post "/posts" Earde.Post_handlers.create_post_handler;
+    Dream.get "/p/:id" Earde.Post_handlers.view_post_handler;
+    Dream.post "/comments" Earde.Comment_handlers.create_comment_handler;
+    Dream.post "/vote" Earde.Vote_handlers.vote_handler;
+    Dream.post "/vote-comment" Earde.Vote_handlers.vote_comment_handler;
+    Dream.get "/u/:username" Earde.Account_handlers.view_profile_handler;
+    Dream.get "/search" Earde.Public_handlers.search_handler;
+    Dream.get "/settings" Earde.Account_handlers.settings_page_handler;
+    Dream.post "/settings" Earde.Account_handlers.update_profile_handler;
+    Dream.get "/notifications" Earde.Account_handlers.notifications_handler;
+    Dream.post "/delete-account" Earde.Account_handlers.delete_account_handler;
+    Dream.post "/delete-post" Earde.Post_handlers.delete_post_handler;
+    Dream.post "/c/:slug/posts/:id/mod_delete" Earde.Post_handlers.mod_delete_post_handler;
+    Dream.post "/delete-comment" Earde.Comment_handlers.delete_comment_handler;
+    Dream.post "/c/:slug/comments/:id/mod_delete" Earde.Comment_handlers.mod_delete_comment_handler;
+    Dream.get  "/admin" Earde.Admin_handlers.admin_dashboard_handler;
+    Dream.post "/admin/ban/user/:id" Earde.Admin_handlers.ban_user_handler;
+    Dream.post "/admin/unban/user/:id" Earde.Admin_handlers.unban_user_global_handler;
+    Dream.get "/privacy" Earde.Public_handlers.privacy_page_handler;
+    Dream.get "/signup" Earde.Auth_handlers.signup_page;
+    Dream.post "/signup" (Earde.Rate_limit_middleware.middleware Earde.Auth_handlers.signup_handler);
+    Dream.get "/verify" Earde.Auth_handlers.verify_email_handler;
+    Dream.get "/confirm-email" Earde.Auth_handlers.confirm_email_handler;
+    Dream.get "/login" Earde.Auth_handlers.login_page;
+    Dream.post "/login" (Earde.Rate_limit_middleware.middleware Earde.Auth_handlers.login_handler);
+    Dream.post "/logout" Earde.Auth_handlers.logout_handler;
+    Dream.post "/settings/password" Earde.Account_handlers.change_password_handler;
+    Dream.get "/forgot-password" Earde.Auth_handlers.forgot_password_page;
+    Dream.post "/forgot-password" (Earde.Rate_limit_middleware.middleware Earde.Auth_handlers.forgot_password_handler);
+    Dream.get "/reset-password" Earde.Auth_handlers.reset_password_page_handler;
+    Dream.post "/reset-password" Earde.Auth_handlers.reset_password_handler;
     (* §9 consent endpoint: JSON-only + Origin/Sec-Fetch-Site protection
        instead of the form-CSRF used by other state-changing routes; the POST
        route matches first, every other method falls to the controlled 405.
        Inside sql_pool (person-property lookup) and sql_sessions (reads the
        authenticated user on granted). *)
-    Dream.post "/analytics/consent" Earde.Handlers.analytics_consent_handler;
-    Dream.any "/analytics/consent" Earde.Handlers.analytics_consent_method_not_allowed;
-    Dream.get "/export-data" Earde.Handlers.export_data_handler;
+    Dream.post "/analytics/consent" Earde.Analytics_handlers.analytics_consent_handler;
+    Dream.any "/analytics/consent" Earde.Analytics_handlers.analytics_consent_method_not_allowed;
+    Dream.get "/export-data" Earde.Account_handlers.export_data_handler;
     (* There is deliberately no KPI-dashboard route: PostHog is the
        authoritative analytics product, and /earde-hq-dashboard was removed
        without a replacement page and without a redirect. *)
-    Dream.get "/_debug/state" Earde.Handlers.debug_state_handler;
+    Dream.get "/_debug/state" Earde.Admin_handlers.debug_state_handler;
     Dream.get "/static/**" (Dream.static "static");
   ]

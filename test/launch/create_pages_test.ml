@@ -3,7 +3,7 @@ module Phrp = Earde.Project_home_review_pages
 (* === Final create-page callers (pass 19) ==================================
    The last two live Components.create_page documents move onto launch
    wrappers, with everything else preserved:
-   1. GET /new-community (Pages.new_community_form) → launch_app_page under
+   1. GET /new-community (Community_settings_pages.new_community_form) → launch_app_page under
       body.launch-new-community. Renderer pins (DB-free, real session
       middleware for the CSRF tag): wrapper identity, local assets only
       (earde.css + mobile-gate.css, no Tailwind / Google Fonts / shell.css /
@@ -34,7 +34,7 @@ let render_form ?user ?(rail_communities = []) () =
     Dream.set_secret Github_fixture.cookie_secret @@ Dream.memory_sessions
     @@ fun req ->
     rendered :=
-      Some (Earde.Pages.new_community_form ?user ~rail_communities req);
+      Some (Earde.Community_settings_pages.new_community_form ?user ~rail_communities req);
     Dream.html ""
   in
   ignore
@@ -141,7 +141,7 @@ let renderer_suite =
 
 let handler_router =
   Dream.router
-    [ Dream.get "/new-community" Earde.Handlers.new_community_page ]
+    [ Dream.get "/new-community" Earde.Community_handlers.new_community_page ]
 
 let run_get ?(session = []) target =
   let pipeline =
@@ -357,7 +357,7 @@ let run_post ~url ?(session = []) ?(with_csrf = true) form =
       else form
     in
     Dream.set_body req (form_body fields);
-    Earde.Handlers.create_community_handler req
+    Earde.Community_handlers.create_community_handler req
   in
   let request =
     Dream.request ~method_:`POST ~target:"/communities"

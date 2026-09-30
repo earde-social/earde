@@ -4,8 +4,8 @@
     logging, takes no locks, and never writes.
 
     This module decides nothing about who may see the community. The existing
-    community route ({!Handlers.community_page_handler}) completes its own
-    lookup and {!Handlers.can_view_community} authorization first, and only
+    community route ({!Community_handlers.community_page_handler}) completes its own
+    lookup and {!Community_read_gate.can_view_community} authorization first, and only
     then reads here — so the section can never become a side channel for a
     private or draft community. What this module does own is durable
     identity: the supplied slug must still resolve to exactly one community

@@ -1,6 +1,5 @@
 (** HTTP layer for the project-setup flow over verified GitHub drafts
-    (GET /projects/new and POST /projects/new/repositories), kept out of the
-    legacy [Handlers] macro-module. Both handlers derive access only from the
+    (GET /projects/new and POST /projects/new/repositories). Both handlers derive access only from the
     injected closed mode and the Dream session (a [user_id] counts only when
     it parses as a positive integer; [is_admin = "true"] matters only
     alongside a valid user), through the existing

@@ -26,36 +26,36 @@ let github_path = "<path d='M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59"
    (/privacy — /bring opts out below). *)
 let cta_documents () =
   [ ( "launch_entry_page (default chrome)"
-    , Earde.Components.launch_entry_page ~page_class:"launch-privacy"
+    , Earde.Page_shell.launch_entry_page ~page_class:"launch-privacy"
         ~title:"T" ~content:"B" () )
   ; ( "launch_app_page (member)"
-    , Earde.Components.launch_app_page ~user:"alice"
+    , Earde.Page_shell.launch_app_page ~user:"alice"
         ~page_class:"launch-feed" ~title:"T" ~content:"B" () )
   ; ( "launch_app_page (anonymous)"
-    , Earde.Components.launch_app_page ~page_class:"launch-feed" ~title:"T"
+    , Earde.Page_shell.launch_app_page ~page_class:"launch-feed" ~title:"T"
         ~content:"B" () )
   ; ( "launch_onboarding_page (member)"
-    , Earde.Components.launch_onboarding_page ~user:"alice"
+    , Earde.Page_shell.launch_onboarding_page ~user:"alice"
         ~page_class:"launch-project-new" ~title:"T" ~content:"B" () )
   ; ( "launch_onboarding_page (anonymous)"
-    , Earde.Components.launch_onboarding_page
+    , Earde.Page_shell.launch_onboarding_page
         ~page_class:"launch-project-new" ~title:"T" ~content:"B" () )
   ; ( "launch_community_page (member)"
-    , Earde.Components.launch_community_page ~user:"alice" ~community
+    , Earde.Community_shell.launch_community_page ~user:"alice" ~community
         ~sidebar:"S" ~page_class:"launch-community-overview" ~title:"T"
         ~content:"B" () )
   ; ( "launch_community_page (anonymous)"
-    , Earde.Components.launch_community_page ~community ~sidebar:"S"
+    , Earde.Community_shell.launch_community_page ~community ~sidebar:"S"
         ~page_class:"launch-community-overview" ~title:"T" ~content:"B" () )
   ; ( "launch_community_surface_page (member)"
-    , Earde.Components.launch_community_surface_page ~user:"alice" ~community
+    , Earde.Community_shell.launch_community_surface_page ~user:"alice" ~community
         ~sidebar:"S" ~page_class:"launch-community-channel" ~title:"T"
         ~main_el:"<main class='cs-main'>B</main>" () )
   ; ( "launch_auth_page (login)"
-    , Earde.Components.launch_auth_page ~page_class:"launch-login"
+    , Earde.Page_shell.launch_auth_page ~page_class:"launch-login"
         ~title:"T" ~content:"B" () )
   ; ( "launch_auth_page (signup)"
-    , Earde.Components.launch_auth_page ~page_class:"launch-signup"
+    , Earde.Page_shell.launch_auth_page ~page_class:"launch-signup"
         ~title:"T" ~content:"B" () )
   ]
 
@@ -134,7 +134,7 @@ let no_external_asset_case =
   cc_case "the GitHub mark is inlined, not fetched" (fun () ->
       let cta =
         cta_element
-          (Earde.Components.launch_app_page ~user:"alice"
+          (Earde.Page_shell.launch_app_page ~user:"alice"
              ~page_class:"launch-feed" ~title:"T" ~content:"B" ())
       in
       List.iter
@@ -153,11 +153,11 @@ let identical_across_viewers_case =
   cc_case "anonymous and member topbars share the byte-identical CTA"
     (fun () ->
       let anon =
-        Earde.Components.launch_app_page ~page_class:"launch-feed"
+        Earde.Page_shell.launch_app_page ~page_class:"launch-feed"
           ~title:"T" ~content:"B" ()
       in
       let member =
-        Earde.Components.launch_app_page ~user:"alice"
+        Earde.Page_shell.launch_app_page ~user:"alice"
           ~page_class:"launch-feed" ~title:"T" ~content:"B" ()
       in
       Alcotest.(check string) "same rendered element"
@@ -187,7 +187,7 @@ let chromeless_case =
   cc_case "the message document keeps no application Connect action"
     (fun () ->
       let html =
-        Earde.Components.launch_message_page ~title:"T" ~content:"B" ()
+        Earde.Page_shell.launch_message_page ~title:"T" ~content:"B" ()
       in
       List.iter
         (fun needle ->
@@ -267,24 +267,22 @@ let bring_untouched_case =
    retired anonymous "Bring a project" wording are gone from production. *)
 let single_definition_case =
   cc_case "one shared CTA definition feeds every launch topbar" (fun () ->
-      let components =
-        List.assoc "lib/components.ml" Source_census.production_sources
-      in
+      let shells = Source_census.launch_shells in
       Alcotest.(check int) "one definition" 1
-        (Html_assert.count_sub components "let launch_connect_cta");
+        (Source_census.count_everywhere "let launch_connect_cta");
       Alcotest.(check int) "definition plus five call sites" 6
-        (Html_assert.count_sub components "launch_connect_cta");
+        (Source_census.count_everywhere "launch_connect_cta");
       Alcotest.(check int) "one shared anonymous cluster" 1
-        (Html_assert.count_sub components "let topbar_anon_actions");
+        (Source_census.count_everywhere "let topbar_anon_actions");
       Alcotest.(check int) "four topbar action clusters" 4
-        (Html_assert.count_sub components "<div class='topbar__actions'>");
+        (Html_assert.count_sub shells "<div class='topbar__actions'>");
       Source_census.absent_everywhere "retired plus glyph" "&#65291; Connect";
       Source_census.absent_everywhere "retired anonymous CTA copy"
         ">Bring a project<";
       (* The generic ochre outline button survives for its own callers, but
          no launch topbar uses it any more. *)
-      Alcotest.(check int) "components.ml drops btn--outline-ochre" 0
-        (Html_assert.count_sub components "btn--outline-ochre");
+      Alcotest.(check int) "the launch shells drop btn--outline-ochre" 0
+        (Html_assert.count_sub shells "btn--outline-ochre");
       (* CSS isolation: the modifier exists and is scoped under the top bar,
          and the responsive hide rule followed the class rename. *)
       let css = Source_census.read "static/css/earde.css" in

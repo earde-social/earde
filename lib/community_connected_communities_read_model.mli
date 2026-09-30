@@ -26,7 +26,7 @@
 
     This module decides nothing about who may see the {i viewed} community —
     the existing community route completes its own lookup and
-    {!Handlers.can_view_community} decision first, and only then reads here, so
+    {!Community_read_gate.can_view_community} decision first, and only then reads here, so
     the block can never become a side channel for a page the viewer was not
     already entitled to. What this module does own is durable identity: the
     supplied slug must still resolve to exactly one community row whose stored

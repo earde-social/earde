@@ -81,9 +81,9 @@ let pipeline_for ~url =
                  in
                  handler request)
         @@ Dream.router
-             [ Dream.get "/c/:slug" Earde.Handlers.community_page_handler
+             [ Dream.get "/c/:slug" Earde.Community_handlers.community_page_handler
              ; Dream.get "/c/:slug/network"
-                 Earde.Handlers.community_network_handler ]
+                 Earde.Community_handlers.community_network_handler ]
       in
       shared_pipeline := Some pipeline;
       pipeline

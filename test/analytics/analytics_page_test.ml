@@ -17,7 +17,7 @@ let render_launch_doc ?session_user ?analytics_community () =
              | None -> Lwt.return_unit)
              (fun () ->
                rendered :=
-                 Earde.Components.launch_app_page ~request:req
+                 Earde.Page_shell.launch_app_page ~request:req
                    ?analytics_community ~page_class:"launch-feed" ~title:"T"
                    ~content:"<p>body</p>" ();
                Dream.html ""))
@@ -52,7 +52,7 @@ let render_search ?(page = 1) ?(tab = "posts") ?(communities = [])
       (Dream.memory_sessions
          (fun req ->
            rendered :=
-             Earde.Pages.search_results_page ~admin_usernames:[] [] page tab
+             Earde.Public_pages.search_results_page ~admin_usernames:[] [] page tab
                query communities users posts comments req;
            Dream.html "")
          (Dream.request ~method_:`GET ~target:"/search" ""))
@@ -143,7 +143,7 @@ let suites =
                   test_community ~id:9 ~visibility:Earde.Community_types.Community_public
                 in
                 let html =
-                  Earde.Components.launch_community_page ~community
+                  Earde.Community_shell.launch_community_page ~community
                     ~sidebar:"SIDE"
                     ~page_class:"launch-community-overview" ~title:"T"
                     ~content:"MAIN" ()
@@ -162,7 +162,7 @@ let suites =
                   test_community ~id:9 ~visibility:Earde.Community_types.Community_private
                 in
                 let html =
-                  Earde.Components.launch_community_page ~community
+                  Earde.Community_shell.launch_community_page ~community
                     ~sidebar:"SIDE"
                     ~page_class:"launch-community-overview" ~title:"T"
                     ~content:"MAIN" ()
@@ -197,7 +197,7 @@ let suites =
                 let html =
                   Http_fixture.with_session_request ~target:"/c/testc/ch/general"
                     (fun req ->
-                      Earde.Pages.community_channel_shell_page ~user:"alice"
+                      Earde.Chat_pages.community_channel_shell_page ~user:"alice"
                         ~is_member:true ~rail_communities:[ community ]
                         ~channels:[ analytics_channel ] ~sections:[]
                         ~channel:analytics_channel ~messages:[] ~community req)
@@ -224,7 +224,7 @@ let suites =
                   (Analytics_fixture.launch_doc ~analytics_community:(8, Earde.Community_types.Community_public) ());
                 (* The community documents derive it from the record. *)
                 check_attr "launch_community_page" (Some "community:5")
-                  (Earde.Components.launch_community_page
+                  (Earde.Community_shell.launch_community_page
                      ~community:
                        (test_community ~id:5
                           ~visibility:Earde.Community_types.Community_public)
@@ -232,7 +232,7 @@ let suites =
                      ~page_class:"launch-community-overview" ~title:"T"
                      ~content:"B" ());
                 check_attr "launch_community_surface_page" (Some "community:6")
-                  (Earde.Components.launch_community_surface_page
+                  (Earde.Community_shell.launch_community_surface_page
                      ~community:
                        (test_community ~id:6
                           ~visibility:Earde.Community_types.Community_public)
@@ -246,16 +246,16 @@ let suites =
                       (Html_assert.attr_value html "data-analytics-group"))
                   [ ("launch_app_page", Analytics_fixture.launch_doc ())
                   ; ( "launch_entry_page",
-                      Earde.Components.launch_entry_page
+                      Earde.Page_shell.launch_entry_page
                         ~page_class:"launch-bring" ~title:"T" ~content:"B" () )
                   ; ( "launch_auth_page",
-                      Earde.Components.launch_auth_page
+                      Earde.Page_shell.launch_auth_page
                         ~page_class:"launch-login" ~title:"T" ~content:"B" () )
                   ; ( "launch_message_page",
-                      Earde.Components.launch_message_page ~title:"T"
+                      Earde.Page_shell.launch_message_page ~title:"T"
                         ~content:"B" () )
                   ; ( "launch_onboarding_page",
-                      Earde.Components.launch_onboarding_page
+                      Earde.Page_shell.launch_onboarding_page
                         ~page_class:"launch-project-new" ~title:"T"
                         ~content:"B" () )
                   ]))

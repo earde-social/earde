@@ -7,7 +7,6 @@ let ( let* ) = Lwt.bind
 
 module D = Earde.Auth_mail_dispatcher
 module R = Earde.Auth_mail_resolver
-module H = Earde.Handlers
 module LV = Earde.Login_verification
 
 let contains = Html_assert.contains

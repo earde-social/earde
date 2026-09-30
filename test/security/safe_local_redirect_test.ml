@@ -14,7 +14,7 @@ let request ?(host = Some "earde.com") () =
 
 let check ?default ?host label target expected =
   Alcotest.(check string) label expected
-    (Earde.Handlers.safe_local_redirect ?default (request ?host ()) target)
+    (Earde.Handler_support.safe_local_redirect ?default (request ?host ()) target)
 
 let local_paths_case =
   case "local relative paths pass; query kept; fragment dropped" (fun () ->
@@ -76,7 +76,7 @@ let never_absolute_case =
       List.iter
         (fun target ->
           let out =
-            Earde.Handlers.safe_local_redirect (request ()) target
+            Earde.Handler_support.safe_local_redirect (request ()) target
           in
           Alcotest.(check bool)
             (target ^ ": starts with single /") true

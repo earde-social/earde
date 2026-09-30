@@ -51,7 +51,7 @@ let panel_of label html =
    mechanism was introduced and untouched by this change. *)
 let canonical_panel () =
   panel_of "launch_app_page"
-    (Earde.Components.launch_app_page ~page_class:"launch-feed" ~title:"T"
+    (Earde.Page_shell.launch_app_page ~page_class:"launch-feed" ~title:"T"
        ~content:"B" ())
 
 (* Every /bring document must carry exactly one canonical gate, whatever the
@@ -156,8 +156,8 @@ let remove_once label needle haystack =
           (String.length haystack - i - String.length needle)
 
 let entry_doc ?(desktop_only = false) () =
-  Earde.Components.launch_entry_page ~noindex:true ~desktop_only
-    ~topbar:(Earde.Components.Entry_viewer (Some "alice"))
+  Earde.Page_shell.launch_entry_page ~noindex:true ~desktop_only
+    ~topbar:(Earde.Page_shell.Entry_viewer (Some "alice"))
     ~page_class:"launch-bring" ~title:"T" ~content:"B" ()
 
 let desktop_unchanged_case =
@@ -236,22 +236,21 @@ let gate_test_community : Earde.Community_types.community =
    on a phone. *)
 let elsewhere_unchanged_case =
   case "the canonical gate elsewhere is unchanged" (fun () ->
-      let components = read "lib/components.ml" in
       Alcotest.(check int) "one panel definition" 1
-        (Html_assert.count_sub components "let mobile_desktop_gate");
+        (Source_census.count_everywhere "let mobile_desktop_gate");
       Alcotest.(check int) "one stylesheet-link definition" 1
-        (Html_assert.count_sub components "let mobile_gate_css_link");
+        (Source_census.count_everywhere "let mobile_gate_css_link");
       let community = gate_test_community in
       List.iter
         (fun (label, html) -> check_gated_document label html)
         [ ( "launch_app_page"
-          , Earde.Components.launch_app_page ~user:"alice"
+          , Earde.Page_shell.launch_app_page ~user:"alice"
               ~page_class:"launch-feed" ~title:"T" ~content:"B" () )
         ; ( "launch_onboarding_page"
-          , Earde.Components.launch_onboarding_page ~user:"alice"
+          , Earde.Page_shell.launch_onboarding_page ~user:"alice"
               ~page_class:"launch-project-new" ~title:"T" ~content:"B" () )
         ; ( "launch_community_page"
-          , Earde.Components.launch_community_page ~user:"alice" ~community
+          , Earde.Community_shell.launch_community_page ~user:"alice" ~community
               ~sidebar:"S" ~page_class:"launch-community-overview"
               ~title:"T" ~content:"B" () )
         ];
@@ -261,13 +260,13 @@ let elsewhere_unchanged_case =
             (label ^ ": still ungated")
             0 (Html_assert.count_sub html "mobile-gate"))
         [ ( "launch_entry_page (/privacy)"
-          , Earde.Components.launch_entry_page ~page_class:"launch-privacy"
+          , Earde.Page_shell.launch_entry_page ~page_class:"launch-privacy"
               ~title:"T" ~content:"B" () )
         ; ( "launch_auth_page"
-          , Earde.Components.launch_auth_page ~page_class:"launch-login"
+          , Earde.Page_shell.launch_auth_page ~page_class:"launch-login"
               ~title:"T" ~content:"B" () )
         ; ( "launch_message_page"
-          , Earde.Components.launch_message_page ~title:"T" ~content:"B" () )
+          , Earde.Page_shell.launch_message_page ~title:"T" ~content:"B" () )
         ])
 
 let suite =

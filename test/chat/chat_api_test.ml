@@ -1,5 +1,5 @@
-module ST = Earde.Pages.Start_thread
-module CA = Earde.Handlers.Chat_api
+module ST = Earde.Chat_pages.Start_thread
+module CA = Earde.Chat_handlers.Chat_api
 
 (* Chat composer JSON contract (Chat_api): pure negotiation/validation/shape
    helpers behind POST /messages. The form path (wants_json = false) keeps the
@@ -35,7 +35,7 @@ let check_msg_json name expected ?thread_id row author =
   Alcotest.test_case name `Quick (fun () ->
       Alcotest.(check string) name expected
         (Yojson.Safe.to_string
-           (Earde.Handlers.chat_message_json ~channel_id:14 ~community_id:24
+           (Earde.Chat_handlers.chat_message_json ~channel_id:14 ~community_id:24
               ?thread_id (row, author))))
 
 let suites =
@@ -84,7 +84,7 @@ let suites =
             in
             let json =
               Yojson.Safe.to_string
-                (Earde.Handlers.chat_message_json ~channel_id:14 ~community_id:24
+                (Earde.Chat_handlers.chat_message_json ~channel_id:14 ~community_id:24
                    (row, Some "alice"))
             in
             Alcotest.(check bool) "created_at present, minute precision" true

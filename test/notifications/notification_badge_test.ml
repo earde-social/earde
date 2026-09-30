@@ -122,7 +122,7 @@ let sql_pool url =
    badge without the page under it also needing the database. *)
 let badge_probe request =
   Dream.html
-    (Earde.Components.launch_app_page ~request ~user:"nbdg_probe"
+    (Earde.Page_shell.launch_app_page ~request ~user:"nbdg_probe"
        ~page_class:"launch-feed" ~title:"probe" ~content:"" ())
 
 let routes =
@@ -135,10 +135,10 @@ let routes =
     ; Dream.get "/probe.json" badge_probe
     ; Dream.get "/probe/realtime-token" badge_probe
     ; Dream.get "/static/probe" badge_probe
-    ; Dream.get "/c/:slug" Earde.Handlers.community_page_handler
+    ; Dream.get "/c/:slug" Earde.Community_handlers.community_page_handler
     ; Dream.get "/c/:slug/settings/connections"
         Earde.Community_connections_handlers.make_connections_page_handler
-    ; Dream.get "/notifications" Earde.Handlers.notifications_handler
+    ; Dream.get "/notifications" Earde.Account_handlers.notifications_handler
     ]
 
 let session_layer session handler request =

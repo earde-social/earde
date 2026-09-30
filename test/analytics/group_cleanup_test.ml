@@ -249,7 +249,7 @@ let run_visibility ~url ~configure ~uid ~slug ~value ~done_pred () =
       let router =
         Dream.router
           [ Dream.post "/c/:slug/settings/visibility"
-              Earde.Handlers.update_community_visibility_handler
+              Earde.Community_settings_handlers.update_community_visibility_handler
           ]
       in
       let pipeline =

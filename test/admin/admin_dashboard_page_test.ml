@@ -1,5 +1,5 @@
 (* === Global admin dashboard on the launch shell (pass 18A) =================
-   DB-free renderer pins for Pages.admin_dashboard_page: wrapper identity
+   DB-free renderer pins for Admin_pages.admin_dashboard_page: wrapper identity
    (body.launch-global-admin, local assets only, noindex), the preserved
    unban form contract (route, method, CSRF, confirm hook), escaping of the
    rendered usernames/emails, the replay-masking tables, and the
@@ -41,7 +41,7 @@ let render ?(recent_users = []) ?(pending = []) ?(banned_users = [])
            let* () = Dream.set_session_field req "username" "qa-admin" in
            let* () = Dream.set_session_field req "is_admin" "true" in
            rendered :=
-             Earde.Pages.admin_dashboard_page ~user:"qa-admin"
+             Earde.Admin_pages.admin_dashboard_page ~user:"qa-admin"
                ~signups_enabled ~turnstile ~brevo_configured ~recent_users
                ~pending ~banned_users req;
            Dream.html "")

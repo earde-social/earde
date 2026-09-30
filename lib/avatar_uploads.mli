@@ -2,7 +2,7 @@
     the one on-disk file the upload pipeline could have written, and its safe
     removal during account deletion.
 
-    The upload pipeline ([Handlers.process_image_upload]) only ever mints
+    The upload pipeline ([Image_processing.process_image_upload]) only ever mints
     [/static/uploads/earde_<digits>_<digits>.webp], so only that exact shape
     is accepted here — everything else (external URLs, legacy values, bundled
     [/static/images/...] assets, traversal attempts, encoded separators) maps

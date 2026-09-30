@@ -254,29 +254,29 @@ let pipeline_for ~url =
                    | None -> Dream.respond ~status:`Unauthorized "anon");
                Dream.get "/token" (fun req ->
                    Dream.respond (Dream.csrf_token req));
-               Dream.get "/settings" Earde.Handlers.settings_page_handler;
-               Dream.post "/settings" Earde.Handlers.update_profile_handler;
+               Dream.get "/settings" Earde.Account_handlers.settings_page_handler;
+               Dream.post "/settings" Earde.Account_handlers.update_profile_handler;
                Dream.post "/delete-account"
-                 Earde.Handlers.delete_account_handler;
-               Dream.post "/comments" Earde.Handlers.create_comment_handler;
-               Dream.post "/posts" Earde.Handlers.create_post_handler;
+                 Earde.Account_handlers.delete_account_handler;
+               Dream.post "/comments" Earde.Comment_handlers.create_comment_handler;
+               Dream.post "/posts" Earde.Post_handlers.create_post_handler;
                Dream.post "/update-community"
-                 Earde.Handlers.update_community_handler;
+                 Earde.Community_settings_handlers.update_community_handler;
                (* Session-revocation slice: the routed production handlers
                   for authenticated password change, global ban and
                   realtime-token refresh, mounted at their bin/main.ml
                   paths. *)
                Dream.post "/settings/password"
-                 Earde.Handlers.change_password_handler;
+                 Earde.Account_handlers.change_password_handler;
                Dream.post "/admin/ban/user/:id"
-                 Earde.Handlers.ban_user_handler;
+                 Earde.Admin_handlers.ban_user_handler;
                Dream.get "/c/:slug/ch/:channel_slug/realtime-token"
-                 Earde.Handlers.realtime_token_handler;
+                 Earde.Chat_handlers.realtime_token_handler;
                (* Vote ban-enforcement slice: the two production vote
                   mutation boundaries, at their bin/main.ml paths. *)
-               Dream.post "/vote" Earde.Handlers.vote_handler;
+               Dream.post "/vote" Earde.Vote_handlers.vote_handler;
                Dream.post "/vote-comment"
-                 Earde.Handlers.vote_comment_handler
+                 Earde.Vote_handlers.vote_comment_handler
                (* No /add-mod and no /remove-mod: their absence from this
                   router mirrors bin/main.ml, and the legacy-route case
                   asserts the real app answers 404 for them. *)
@@ -1232,11 +1232,11 @@ let legacy_mod_routes_case =
              [ Dream.get "/mint" (fun req ->
                    Dream.respond (Dream.csrf_token req));
                Dream.post "/update-community"
-                 Earde.Handlers.update_community_handler;
+                 Earde.Community_settings_handlers.update_community_handler;
                Dream.post "/c/:slug/manage-mods/add"
-                 Earde.Handlers.manage_mods_add_handler;
+                 Earde.Moderation_handlers.manage_mods_add_handler;
                Dream.post "/c/:slug/manage-mods/remove"
-                 Earde.Handlers.manage_mods_remove_handler
+                 Earde.Moderation_handlers.manage_mods_remove_handler
              ]
       in
       let* mint = app (Dream.request ~method_:`GET ~target:"/mint" "") in

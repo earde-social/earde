@@ -17,7 +17,7 @@ let nav_check html =
 let nav_launch_doc ?user ?rail_communities ?session () =
   match session with
   | None ->
-      Earde.Components.launch_app_page ?user ?rail_communities
+      Earde.Page_shell.launch_app_page ?user ?rail_communities
         ~page_class:"launch-feed" ~title:"Feed" ~content:"" ()
   | Some fields ->
       let rendered = ref "" in
@@ -31,7 +31,7 @@ let nav_launch_doc ?user ?rail_communities ?session () =
                     fields)
                  (fun () ->
                    rendered :=
-                     Earde.Components.launch_app_page ~request:req ?user
+                     Earde.Page_shell.launch_app_page ~request:req ?user
                        ?rail_communities ~page_class:"launch-feed"
                        ~title:"Feed" ~content:"" ();
                    Dream.html ""))
@@ -99,7 +99,7 @@ let nav_entry_cases =
         must_not "/new-community")
   ; nav_case "choose-community fallback connects a project" (fun () ->
         let html =
-          Earde.Pages.choose_community_page ~user:"alice" [ Launch_fixture.nav_test_community ] in
+          Earde.Post_pages.choose_community_page ~user:"alice" [ Launch_fixture.nav_test_community ] in
         let must, must_not = nav_check html in
         must "href='/bring'";
         must "Connect a project";
@@ -112,7 +112,7 @@ let nav_entry_cases =
            Pass 19 added the optional launch rail parameter; the renderer and
            its request-taking shape remain. *)
         ignore
-          (Earde.Pages.new_community_form
+          (Earde.Community_settings_pages.new_community_form
             : ?user:string ->
               ?rail_communities:Earde.Community_types.community list ->
               Dream.request ->

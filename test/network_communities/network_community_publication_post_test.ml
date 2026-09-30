@@ -582,13 +582,13 @@ let identity_middleware handler request =
           in
           handler request)
 
-let limited inner = Earde.Handlers.Rate_limit.middleware inner
+let limited inner = Earde.Rate_limit_middleware.middleware inner
 
 (* Stands in for the production limiter's Allowed decision, so a case can
    reach the handler over a pool the real limiter (which fails closed)
    cannot query. *)
 let allowing_limiter =
-  Earde.Handlers.Rate_limit.make_middleware
+  Earde.Rate_limit_middleware.make_middleware
     ~check:(fun _ ~ip:_ ~endpoint:_ -> Lwt.return (Ok `Allowed))
     ~cleanup:ignore
 
@@ -613,9 +613,9 @@ let build_pipeline_with ~limited ~url =
                 Rmh.make_community_side_home_removal_handler ~mode:Ob.Public
                   ~load_config:(fun () -> ok_loader ())
                   req));
-         Dream.get "/c/:slug" Earde.Handlers.community_page_handler;
+         Dream.get "/c/:slug" Earde.Community_handlers.community_page_handler;
          Dream.get "/c/:slug/settings"
-           Earde.Handlers.community_settings_handler
+           Earde.Community_settings_handlers.community_settings_handler
        ]
 
 let build_pipeline ~url = build_pipeline_with ~limited ~url

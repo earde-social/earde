@@ -1,5 +1,4 @@
-(* HTTP layer for project setup over verified GitHub drafts, kept out of the
-   legacy Handlers macro-module per the feature-module guideline. Both
+(* HTTP layer for project setup over verified GitHub drafts. Both
    handlers are factories over the closed onboarding mode (and, for the POST,
    a config loader) so tests can inject fixed values without touching the
    process environment, and disabled or rejected requests never trigger
@@ -65,13 +64,13 @@ let login_redirect () = clean_redirect "/login"
 
 let forbidden_page request =
   Dream.respond ~status:`Forbidden ~headers:page_headers
-    (Pages.msg_page ?user:(session_user request) ~title:"Not Allowed"
+    (Site_pages.msg_page ?user:(session_user request) ~title:"Not Allowed"
        ~message:"This request is not allowed." ~alert_type:"error"
        ~return_url:"/projects/new" request)
 
 let bad_request_page request =
   Dream.respond ~status:`Bad_Request ~headers:page_headers
-    (Pages.msg_page ?user:(session_user request) ~title:"Form Error"
+    (Site_pages.msg_page ?user:(session_user request) ~title:"Form Error"
        ~message:"There was a problem with your submission. Please try again."
        ~alert_type:"error" ~return_url:"/projects/new" request)
 
@@ -80,7 +79,7 @@ let bad_request_page request =
    reaches the page. *)
 let server_error_page request =
   Dream.respond ~status:`Internal_Server_Error ~headers:page_headers
-    (Pages.msg_page ?user:(session_user request) ~title:"Error"
+    (Site_pages.msg_page ?user:(session_user request) ~title:"Error"
        ~message:"Something went wrong on our side. Please try again."
        ~alert_type:"error" ~return_url:"/projects/new" request)
 
@@ -89,7 +88,7 @@ let server_error_page request =
    disguised as a user form error. *)
 let unavailable_page request =
   Dream.respond ~status:`Service_Unavailable ~headers:page_headers
-    (Pages.msg_page ?user:(session_user request)
+    (Site_pages.msg_page ?user:(session_user request)
        ~title:"Temporarily Unavailable"
        ~message:
          "Project setup is temporarily unavailable. Please try again later."

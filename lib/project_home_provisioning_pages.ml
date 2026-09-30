@@ -228,6 +228,6 @@ let project_home_provisioning_page ?user ?request ~project ~values ~feedback ()
       (actions_html ?request ~project ~values ())
   in
   (* noindex: a steward-only setup surface — not for search indexes. *)
-  Components.launch_onboarding_page ?user ?request ~noindex:true
+  Page_shell.launch_onboarding_page ?user ?request ~noindex:true
     ~stepper:stepper_html ~page_class:"launch-project-community-home"
     ~title:"Create a community home" ~content:body ()

@@ -797,7 +797,7 @@ let render_settings ~is_admin ~is_top_mod =
     @@ fun req ->
     captured :=
       Some
-        (Earde.Pages.community_settings_page ~is_admin ~is_top_mod
+        (Earde.Community_settings_pages.community_settings_page ~is_admin ~is_top_mod
            ~open_reports_count:0
            ~community:(settings_community ~is_network:false)
            ~mods:[] ~banned_users:[] ~members:[] ~sections:[] ~channels:[] req);

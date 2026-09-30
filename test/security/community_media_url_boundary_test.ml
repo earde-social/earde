@@ -73,7 +73,7 @@ let render_settings () =
     @@ fun req ->
     captured :=
       Some
-        (Earde.Pages.community_settings_page ~is_admin:false ~is_top_mod:true
+        (Earde.Community_settings_pages.community_settings_page ~is_admin:false ~is_top_mod:true
            ~open_reports_count:0 ~community:form_community ~mods:[]
            ~banned_users:[] ~members:[] ~sections:[] ~channels:[] req);
     Dream.html ""
@@ -220,8 +220,8 @@ let pipeline_for ~url =
                Dream.get "/token" (fun req ->
                    Dream.respond (Dream.csrf_token req));
                Dream.post "/update-community"
-                 Earde.Handlers.update_community_handler;
-               Dream.get "/c/:slug" Earde.Handlers.community_page_handler
+                 Earde.Community_settings_handlers.update_community_handler;
+               Dream.get "/c/:slug" Earde.Community_handlers.community_page_handler
              ]
       in
       shared_pipeline := Some p;

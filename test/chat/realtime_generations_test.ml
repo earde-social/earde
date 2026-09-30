@@ -11,8 +11,6 @@
 let ( let* ) = Lwt.bind
 
 open Caqti_request.Infix
-
-module H = Earde.Handlers
 module G = Earde.Realtime_generation
 
 let contains hay needle =
@@ -218,10 +216,10 @@ let build_pipeline url =
                    Dream.set_session_field req "username" username
              in
              Dream.respond (Dream.csrf_token req));
-         Dream.get "/c/:slug/ch/:channel_slug" H.community_channel_handler;
-         Dream.get "/c/:slug/ch/:channel_slug/realtime-token" H.realtime_token_handler;
-         Dream.post "/messages" H.send_message_handler;
-         Dream.post "/leave" H.leave_community_handler ]
+         Dream.get "/c/:slug/ch/:channel_slug" Earde.Chat_handlers.community_channel_handler;
+         Dream.get "/c/:slug/ch/:channel_slug/realtime-token" Earde.Chat_handlers.realtime_token_handler;
+         Dream.post "/messages" Earde.Chat_handlers.send_message_handler;
+         Dream.post "/leave" Earde.Membership_handlers.leave_community_handler ]
 
 let pipelines : (string, Dream.handler) Hashtbl.t = Hashtbl.create 2
 

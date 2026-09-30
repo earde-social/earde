@@ -1,5 +1,5 @@
 (* === Legacy /p/:id post fallback (pass 20A) ================================
-   The last user-reachable Components.layout `Site document — Pages.post_page,
+   The last user-reachable Components.layout `Site document — Post_pages.post_page,
    view_post_handler's safe fallback for the pathological unmappable post
    (community_slug = "") — moves onto Components.launch_app_page under
    body.launch-legacy-post, with the warm-card fragment (post card, recursive
@@ -67,7 +67,7 @@ let render ?user ?(session = []) ?(noindex = false) ?(is_member = false)
     in
     rendered :=
       Some
-        (Earde.Pages.post_page ?user ~noindex ~is_member
+        (Earde.Post_pages.post_page ?user ~noindex ~is_member
            ~is_current_user_mod ~mod_usernames ~admin_usernames
            ~banned_usernames ~community:fallback_community ~user_communities
            ~moderated_communities:[] [] [] post comments req);
@@ -391,7 +391,7 @@ let make_fixtures (module C : Caqti_lwt.CONNECTION) =
       fallback_community = fallback_c }
 
 let router =
-  Dream.router [ Dream.get "/p/:id" Earde.Handlers.view_post_handler ]
+  Dream.router [ Dream.get "/p/:id" Earde.Post_handlers.view_post_handler ]
 
 let run ~url ?(session = []) target =
   let pipeline =
@@ -426,7 +426,7 @@ let redirect_case =
       Alcotest.(check int) "301" 301 status;
       Alcotest.(check (option string)) "Location"
         (Some
-           (Earde.Components.canonical_thread_path "legpost-c"
+           (Earde.Post_cards.canonical_thread_path "legpost-c"
               fx.canonical_post "Legpost canonical post"))
         location;
       Html_assert.must_not body "launch-legacy-post";

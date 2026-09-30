@@ -1,5 +1,4 @@
-(* HTTP layer for the community-connections management workflow. Kept out of
-   the legacy Handlers macro-module per the feature-module guideline.
+(* HTTP layer for the community-connections management workflow.
 
    The shape of every handler is the same: session gate, route community,
    authorized read-model load (which is where top_mod-or-durable-admin is
@@ -76,13 +75,13 @@ let login_redirect () = clean_redirect "/login"
    pair, and a malformed route value all stay indistinguishable. *)
 let not_found_page request =
   Dream.respond ~status:`Not_Found ~headers:page_headers
-    (Pages.msg_page ?user:(session_user request) ~title:"Not Found"
+    (Site_pages.msg_page ?user:(session_user request) ~title:"Not Found"
        ~message:"This page does not exist." ~alert_type:"error"
        ~return_url:"/" request)
 
 let bad_request_page request =
   Dream.respond ~status:`Bad_Request ~headers:page_headers
-    (Pages.msg_page ?user:(session_user request) ~title:"Form Error"
+    (Site_pages.msg_page ?user:(session_user request) ~title:"Form Error"
        ~message:"There was a problem with your submission. Please try again."
        ~alert_type:"error" ~return_url:"/" request)
 
@@ -91,7 +90,7 @@ let bad_request_page request =
    page. *)
 let server_error_page request =
   Dream.respond ~status:`Internal_Server_Error ~headers:page_headers
-    (Pages.msg_page ?user:(session_user request) ~title:"Error"
+    (Site_pages.msg_page ?user:(session_user request) ~title:"Error"
        ~message:"Something went wrong on our side. Please try again."
        ~alert_type:"error" ~return_url:"/" request)
 
@@ -186,7 +185,7 @@ let load_launch_shell request ~user_id ~canonical_slug =
             | Error _ -> Lwt.return []
           in
           let sidebar =
-            Pages.launch_knowledge_sidebar ~community ~channels ~sections
+            Community_pages.launch_knowledge_sidebar ~community ~channels ~sections
               ~settings_active:true ~show_visibility_note:false
               ~can_manage:true ()
           in

@@ -64,7 +64,7 @@ let community_network_page ?user ?(noindex = false) ?(rail_communities = [])
          ~empty:Community_connected_communities_pages
                 .empty_communities_section)
   in
-  Components.launch_community_page ?user ~noindex ~request ~rail_communities
+  Community_shell.launch_community_page ?user ~noindex ~request ~rail_communities
     ~community ~sidebar ~page_class:"launch-community-network"
     ~title:(community.name ^ " — Network")
     ~content ()

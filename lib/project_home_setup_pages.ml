@@ -220,6 +220,6 @@ let project_home_setup_page ?user ?request ~project () =
       (next_step_html project)
   in
   (* noindex: a steward-only setup surface — not for search indexes. *)
-  Components.launch_onboarding_page ?user ?request ~noindex:true
+  Page_shell.launch_onboarding_page ?user ?request ~noindex:true
     ~stepper:stepper_html ~page_class:"launch-project-home-setup"
     ~title:"Project created" ~content:body ()

@@ -1,7 +1,6 @@
 (** HTTP layer for the shared-threads workflow: the per-thread Share page,
     the community Shared-threads management page, and the five
-    community-scoped mutations. Kept out of the legacy [Handlers]
-    macro-module per the feature-module guideline.
+    community-scoped mutations.
 
     {b Every handler is subject-scoped by its route.} The community comes
     from the route slug and the thread or placement from the route id;

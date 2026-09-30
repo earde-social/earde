@@ -44,7 +44,7 @@ let render ?(projects = 0) ?(communities = 0) ?(top_mod = false)
     @@ fun req ->
     captured :=
       Some
-        (Earde.Pages.community_overview_page
+        (Earde.Community_pages.community_overview_page
            ~connected_projects_count:projects
            ~connected_communities_count:communities ~is_member:false
            ~is_current_user_mod:false ~is_current_user_top_mod:top_mod

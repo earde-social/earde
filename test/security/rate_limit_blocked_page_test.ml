@@ -1,6 +1,6 @@
 (* === RATE-LIMIT BLOCKED PAGE ===
    Database-gated (EARDE_TEST_DATABASE_URL): drives the real
-   Handlers.Rate_limit.middleware past its limit over Postgres and asserts the
+   Rate_limit_middleware.middleware past its limit over Postgres and asserts the
    blocked page's return link is the path only — no query value from the
    original target may reach the rendered HTML. Fixture "secrets" are obviously
    fake, and assertions on them are boolean so a failure never prints them. *)
@@ -44,7 +44,7 @@ let db_case name ~endpoint f =
 let run_until_blocked ~url ~target =
   let handler =
     Dream.sql_pool url @@ Dream.memory_sessions
-    @@ Earde.Handlers.Rate_limit.middleware (fun _ ->
+    @@ Earde.Rate_limit_middleware.middleware (fun _ ->
            Dream.respond "rlbp-allowed")
   in
   let rec go n =
