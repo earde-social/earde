@@ -46,8 +46,14 @@ jobs:
         with:
           persist-credentials: false
 
+      # libargon2 is linked by the server; ImageMagick converts uploads at
+      # runtime and the upload tests run the real conversion.
       - name: Install system libraries
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libargon2-dev
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libargon2-dev
+          sudo apt-get install -y imagemagick
+          convert -version | head -1
 
       - uses: ocaml/setup-ocaml@93303b622b2522e4411e295f9e77411a24912ac7 # v3.9.0
         with:
