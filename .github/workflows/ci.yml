@@ -172,6 +172,9 @@ jobs:
       - name: Test
         run: gleam test
 
+      - name: Crash contract (a subsystem crash ends gleam run non-zero)
+        run: scripts/check-crash-contract.sh
+
   secrets:
     name: Secret scan (full history)
     runs-on: ubuntu-24.04
