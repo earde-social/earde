@@ -78,6 +78,15 @@ unreleased claims.
     its row, its homes and its label, which reads `stale`. Its steward can no
     longer renew evidence over released claims.
 - If the finalization fails for any other reason, nothing is released.
+- Renewal and release serialize. Each decides on the table the other
+  writes, so both lock the affected project rows first (after the draft
+  and installation rows, in ascending project id) and decide in a later
+  statement. Either the renewal commits first, and the claimant is refused
+  with the claims still active, or the release commits first, and the
+  renewal then finds no active claim and restores no fresh evidence. The
+  renewal also takes a key-share lock on its installation before the
+  projects, because repointing a steward row at a reinstalled app's new
+  installation record would otherwise take that lock last.
 - There is no manual release action and no transfer of an existing project
   to another user.
 

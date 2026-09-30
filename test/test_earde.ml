@@ -79019,10 +79019,260 @@ module Gvf = struct
         Alcotest.(check (list (pair int64 bool))) "claim untouched" [ (963600061L, false) ] claims;
         Lwt.return_unit)
 
+
+  (* === renewal vs. claim release === *)
+
+  (* Renewal decides on project_repositories and writes project_stewards;
+     release decides on project_stewards and writes project_repositories.
+     These cases force each interleaving with a third connection that holds
+     a row lock one side needs, so the first side is suspended after its
+     decision and before its commit. The steward renews either through an
+     existing active draft (no installation lock is taken) or a new one
+     (whose foreign key takes one). Only two outcomes are serializable:
+     renewal first (the claims stay active and the claimant is refused) or
+     release first (the claims are released and renewal restores no fresh
+     authority over the project). *)
+
+  let q_steward_installation =
+    (Caqti_type.(t3 int64 int int64) ->. Caqti_type.unit)
+    "UPDATE project_stewards SET github_installation_record_id = $3 \
+     WHERE project_id = $1 AND user_id = $2"
+
+  let q_backend_pid = (Caqti_type.unit ->! Caqti_type.int) "SELECT pg_backend_pid()"
+
+  let q_waiting =
+    (Caqti_type.int ->! Caqti_type.bool)
+    "SELECT EXISTS (SELECT 1 FROM pg_locks WHERE pid = $1 AND NOT granted)"
+
+  let q_statement_timeout =
+    (Caqti_type.unit ->. Caqti_type.unit) "SET statement_timeout = '20s'"
+
+  let q_hold_claims =
+    (Caqti_type.int64 ->* Caqti_type.int64)
+    "SELECT id FROM project_repositories \
+     WHERE project_id = $1 AND released_at IS NULL ORDER BY id FOR UPDATE"
+
+  let q_hold_steward =
+    (Caqti_type.(t2 int64 int) ->* Caqti_type.int)
+    "SELECT user_id FROM project_stewards \
+     WHERE project_id = $1 AND user_id = $2 FOR UPDATE"
+
+  let connect_race () =
+    match Sys.getenv_opt "EARDE_TEST_DATABASE_URL" with
+    | None | Some "" -> Alcotest.fail "gated case without a database URL"
+    | Some url ->
+        let* c = Caqti_lwt_unix.connect (Uri.of_string url) in
+        let* c = or_fail "connect" c in
+        let* () = exec c "statement timeout" q_statement_timeout () in
+        let* pid = find c "pid" q_backend_pid () in
+        Lwt.return (c, pid)
+
+  let disconnect c =
+    let (module C : Caqti_lwt.CONNECTION) = c in
+    C.disconnect ()
+
+  (* Polls until [pid] waits on a lock or [p] has finished. *)
+  let settle conn ~pid p =
+    let rec go n =
+      match Lwt.state p with
+      | Lwt.Return _ | Lwt.Fail _ -> Lwt.return `Finished
+      | Lwt.Sleep ->
+          if n = 0 then Alcotest.fail "race: neither blocked nor finished"
+          else
+            let* waiting = find conn "waiting" q_waiting pid in
+            if waiting then Lwt.return `Blocked
+            else
+              let* () = Lwt_unix.sleep 0.01 in
+              go (n - 1)
+    in
+    go 1000
+
+  let race_case ?(reinstalled = false) ?(claimant_record = false) ~tag ~ext_id ~repo_base ~existing_draft
+      ~held () =
+    let name =
+      Printf.sprintf "race: %s first, renewal through %s draft%s%s"
+        (match held with `Release -> "release" | `Renewal -> "renewal")
+        (if existing_draft then "an existing" else "a new")
+        (if reinstalled then " of a reinstalled app" else "")
+        (if claimant_record then ", claimant on another installation record"
+         else "")
+    in
+    db_case name (fun conn ->
+        let* steward = insert_user conn ("gvf_race_s_" ^ tag) in
+        let* rival = insert_user conn ("gvf_race_r_" ^ tag) in
+        let r1 = repo_base and r2 = Int64.add repo_base 1L in
+        let* inst, v, project =
+          make_project conn ~user:steward ~ext_id ~slug:("gvf-race-" ^ tag)
+            [ r1; r2 ]
+        in
+        let account_id = Int64.add ext_id 100000L in
+        (* A reinstalled app: the same account under a new installation
+           record, which renewal repoints the steward row at. *)
+        let* v =
+          if not reinstalled then Lwt.return v
+          else
+            let ext_id = Int64.succ ext_id in
+            let* _ =
+              Pod_store.insert_installation ~login:"pfin-owner" conn ~ext_id
+                ~account_id
+            in
+            Pod_store.verified ~installation_id:ext_id ~account_id
+              ~login:"pfin-owner" ~target:"User" ()
+        in
+        let listing ids =
+          Pod_store.repo_set ~installation:v
+            (List.mapi
+               (fun i id -> Pfin.repo ~account_id ~id (Printf.sprintf "r%d" i))
+               ids)
+        in
+        (* An existing active draft of the steward's, before the evidence
+           goes stale; without one the renewal below inserts a new draft. *)
+        let* () =
+          if existing_draft then reverify conn ~user:steward ~v ~ext_id [ r1; r2 ]
+          else Lwt.return_unit
+        in
+        let* () = age conn ~project ~user:steward 31 in
+        let* () =
+          if reinstalled then
+            exec conn "old installation" q_steward_installation
+              (project, steward, inst)
+          else Lwt.return_unit
+        in
+        (* The claimant's snapshot, fresh today: of the same installation
+           record, or of another active record for the same account (a
+           stale one nothing has marked revoked), which the installation
+           lock alone then does not serialize. *)
+        let* rival_v =
+          if not claimant_record then Lwt.return v
+          else
+            let ext_id = Int64.succ ext_id in
+            let* _ =
+              Pod_store.insert_installation ~login:"pfin-owner" conn ~ext_id
+                ~account_id
+            in
+            Pod_store.verified ~installation_id:ext_id ~account_id
+              ~login:"pfin-owner" ~target:"User" ()
+        in
+        let* rival_set =
+          Pod_store.repo_set ~installation:rival_v
+            [ Pfin.repo ~account_id ~id:r1 "r0" ]
+        in
+        let* rival_draft =
+          Pod_store.refresh_ok "claimant draft" conn ~user:rival rival_v rival_set
+        in
+        let rival_draft = Earde.Project_onboarding_draft_store.draft_id rival_draft in
+        let* ids = Pfin.snapshot_ids conn rival_draft in
+        let s1 = List.hd ids in
+        let* () =
+          Pod_select.replace_ok "claimant selection" conn ~user:rival
+            ~draft:rival_draft ~primary:s1 ids
+        in
+        let identity =
+          Pfin.identity_exn ~slug:("gvf-race-new-" ^ tag) ~selected:ids ~primary:s1 ()
+        in
+        let* renewal_set = listing [ r1; r2 ] in
+        let* rconn, rpid = connect_race () in
+        let* lconn, lpid = connect_race () in
+        let* bconn, _ = connect_race () in
+        let (module B : Caqti_lwt.CONNECTION) = bconn in
+        Lwt.finalize
+          (fun () ->
+            let* r = B.start () in
+            let* () = or_fail "blocker start" r in
+            let* () =
+              match held with
+              | `Release ->
+                  let* _ = collect bconn "hold claims" q_hold_claims project in
+                  Lwt.return_unit
+              | `Renewal ->
+                  let* _ =
+                    collect bconn "hold steward" q_hold_steward (project, steward)
+                  in
+                  Lwt.return_unit
+            in
+            let renewal () = Pod_store.refresh rconn ~user:steward v renewal_set in
+            let release () =
+              Pfin.finalize lconn ~user:rival ~draft:rival_draft identity
+            in
+            (* The held side must be waiting on the blocker before the
+               other side starts. *)
+            let held_waits pid p =
+              let* s = settle conn ~pid p in
+              if s <> `Blocked then Alcotest.fail "race: the held side did not wait";
+              Lwt.return_unit
+            in
+            let* renewal_p, release_p =
+              match held with
+              | `Release ->
+                  let l = release () in
+                  let* () = held_waits lpid l in
+                  let r = renewal () in
+                  let* _ = settle conn ~pid:rpid r in
+                  Lwt.return (r, l)
+              | `Renewal ->
+                  let r = renewal () in
+                  let* () = held_waits rpid r in
+                  let l = release () in
+                  let* _ = settle conn ~pid:lpid l in
+                  Lwt.return (r, l)
+            in
+            let* r = B.rollback () in
+            let* () = or_fail "blocker release" r in
+            let* renewed = renewal_p in
+            let* released = release_p in
+            (match renewed with
+             | Ok _ -> ()
+             | Error e -> Alcotest.failf "renewal failed: %s" (Pod_store.error_str e));
+            let* claims = collect conn "claims" q_claims project in
+            let* fresh = find conn "fresh" q_steward_fresh (project, steward) in
+            let* holder = find_opt conn "holder" q_active_holder r1 in
+            (* The held side is suspended after its decision, so the other
+               side must serialize behind it. *)
+            match held, released with
+            | `Renewal, Error Fin.Repository_already_connected ->
+                Alcotest.(check (list (pair int64 bool)))
+                  "renewal first: the claims stay active" [ (r1, false); (r2, false) ] claims;
+                Alcotest.(check bool) "renewal first: the steward is fresh" true fresh;
+                Alcotest.(check (option int64)) "renewal first: the holder is unchanged"
+                  (Some project) holder;
+                Lwt.return_unit
+            | `Release, Ok created ->
+                Alcotest.(check (list (pair int64 bool)))
+                  "release first: every claim released" [ (r1, true); (r2, true) ] claims;
+                Alcotest.(check bool)
+                  "release first: renewal restores no fresh authority" false fresh;
+                Alcotest.(check (option int64)) "release first: the claimant holds it"
+                  (Some (Fin.project_id created)) holder;
+                Lwt.return_unit
+            | _, Ok _ -> Alcotest.fail "the claimant took claims a renewal kept"
+            | _, Error e ->
+                Alcotest.failf "claimant: unexpected %s" (Pfin.error_str e))
+          (fun () ->
+            let* () = disconnect bconn in
+            let* () = disconnect lconn in
+            disconnect rconn))
+
+  let race_cases =
+    [ race_case ~tag:"a" ~ext_id:963200071L ~repo_base:963600071L
+        ~existing_draft:true ~held:`Release ();
+      race_case ~tag:"b" ~ext_id:963200073L ~repo_base:963600073L
+        ~existing_draft:true ~held:`Renewal ();
+      race_case ~tag:"c" ~ext_id:963200075L ~repo_base:963600075L
+        ~existing_draft:false ~held:`Release ();
+      race_case ~tag:"d" ~ext_id:963200077L ~repo_base:963600077L
+        ~existing_draft:false ~held:`Renewal ();
+      race_case ~reinstalled:true ~tag:"e" ~ext_id:963200079L
+        ~repo_base:963600079L ~existing_draft:true ~held:`Renewal ();
+      race_case ~claimant_record:true ~tag:"f" ~ext_id:963200081L
+        ~repo_base:963600081L ~existing_draft:true ~held:`Release ();
+      race_case ~claimant_record:true ~tag:"g" ~ext_id:963200083L
+        ~repo_base:963600083L ~existing_draft:true ~held:`Renewal () ]
+
   let suite =
     [ window_case; effective_status_case; actor_gates_case;
       provisioning_renewal_case; other_user_case; review_case;
       claim_release_case; claim_release_rollback_case ]
+    @ race_cases
 end
 
 let () =
