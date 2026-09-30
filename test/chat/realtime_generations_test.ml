@@ -433,3 +433,8 @@ let visibility_case =
           Lwt.return_unit))
 
 let db_suite = [ trigger_matrix_case; community_deletion_case; leave_case; visibility_case ]
+
+let suites =
+  [ ("realtime_generations", pure_suite)
+  ; ("realtime_generations_db", db_suite)
+  ]

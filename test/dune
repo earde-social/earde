@@ -1,3 +1,5 @@
+(include_subdirs unqualified)
+
 (test
  (name test_earde)
  ; caqti libs are for the opt-in EARDE_TEST_DATABASE_URL security-regression
