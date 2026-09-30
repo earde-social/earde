@@ -33,6 +33,9 @@ away.
 dune build
 dune test
 
+# Check formatting (ocamlformat 0.28.1, pinned in .ocamlformat)
+dune build @fmt
+
 # Build the realtime gateway
 cd services/realtime_gateway && gleam build
 ```
