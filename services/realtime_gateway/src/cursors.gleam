@@ -197,7 +197,11 @@ pub fn sweep(store: Store, now now: Int) -> Store {
   })
 }
 
-fn put_topic(store: Store, topic: String, sockets: Dict(String, Entry)) -> Store {
+fn put_topic(
+  store: Store,
+  topic: String,
+  sockets: Dict(String, Entry),
+) -> Store {
   case dict.size(sockets) {
     0 -> Store(dict.delete(store.topics, topic))
     _ -> Store(dict.insert(store.topics, topic, sockets))
@@ -348,7 +352,10 @@ pub fn active(
   x x: Float,
   y y: Float,
 ) -> Nil {
-  process.send(cursors.subject, Active(topic, socket_id, user_id, username, x, y))
+  process.send(
+    cursors.subject,
+    Active(topic, socket_id, user_id, username, x, y),
+  )
 }
 
 pub fn inactive(
@@ -414,7 +421,12 @@ fn mutate(
       list.each(diff(before, after), fn(change) {
         case
           safely(fn() {
-            beryl.broadcast(state.channels, topic, "cursor", change_payload(change))
+            beryl.broadcast(
+              state.channels,
+              topic,
+              "cursor",
+              change_payload(change),
+            )
           })
         {
           Ok(Nil) -> Nil

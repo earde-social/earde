@@ -1,0 +1,192 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  # Toolchain versions the project is developed and tested with.
+  OCAML_COMPILER: "5.1.1"
+  OCAMLFORMAT_VERSION: "0.28.1"
+  DBMATE_VERSION: "2.31.0"
+  DBMATE_SHA256: "a5cde18ce35ce053cecab1e15a72f8a41f7715380e9b9a8a81d065dca7201567"
+  GITLEAKS_VERSION: "8.30.1"
+  GITLEAKS_SHA256: "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb"
+
+jobs:
+  ocaml:
+    name: OCaml build and tests (DB-free and gated)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    services:
+      postgres:
+        image: postgres:16.15@sha256:1a6ab3f5345eb6dbe04a1349529caabdb0ab09293a09590fad07b2246bfa4b54
+        env:
+          # Throwaway credentials for the job's own disposable database.
+          POSTGRES_USER: earde
+          POSTGRES_PASSWORD: earde-ci
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U earde"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # libargon2 is linked by the server; ImageMagick converts uploads at
+      # runtime and the upload tests run the real conversion.
+      - name: Install system libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libargon2-dev
+          sudo apt-get install -y imagemagick
+          convert -version | head -1
+
+      - uses: ocaml/setup-ocaml@93303b622b2522e4411e295f9e77411a24912ac7 # v3.9.0
+        with:
+          ocaml-compiler: ${{ env.OCAML_COMPILER }}
+          dune-cache: true
+
+      - name: Install locked OCaml dependencies
+        run: opam install . --deps-only --with-test --locked --yes
+
+      - name: Build (warnings are errors in the dev profile)
+        run: opam exec -- dune build @install @check
+
+      - name: DB-free tests
+        run: env -u EARDE_TEST_DATABASE_URL opam exec -- dune test --force
+
+      - name: Install dbmate
+        run: |
+          curl -fsSL -o dbmate "https://github.com/amacneil/dbmate/releases/download/v${DBMATE_VERSION}/dbmate-linux-amd64"
+          echo "${DBMATE_SHA256}  dbmate" | sha256sum --check
+          sudo install -m 0755 dbmate /usr/local/bin/dbmate
+
+      - name: Migrate a fresh test database
+        env:
+          DATABASE_URL: postgres://earde:earde-ci@localhost:5432/earde_test?sslmode=disable
+        run: dbmate --no-dump-schema up
+
+      - name: Full gated suite (every registered case must run)
+        env:
+          EARDE_TEST_DATABASE_URL: postgresql://earde:earde-ci@localhost:5432/earde_test
+        run: opam exec -- scripts/test-gated.sh
+
+  format:
+    name: OCaml formatting
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # A switch holding only the formatter: installing ocamlformat next to
+      # the application's dependencies would constrain their versions.
+      - uses: ocaml/setup-ocaml@93303b622b2522e4411e295f9e77411a24912ac7 # v3.9.0
+        with:
+          ocaml-compiler: ${{ env.OCAML_COMPILER }}
+
+      - name: Install ocamlformat
+        run: opam install --yes "dune" "ocamlformat.${OCAMLFORMAT_VERSION}"
+
+      - name: Check formatting
+        run: opam exec -- dune build @fmt
+
+  schema:
+    name: Schema from migrations
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:16.15@sha256:1a6ab3f5345eb6dbe04a1349529caabdb0ab09293a09590fad07b2246bfa4b54
+        env:
+          POSTGRES_USER: earde
+          POSTGRES_PASSWORD: earde-ci
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U earde"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install dbmate and the PostgreSQL 16 client
+        run: |
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends postgresql-client-16
+          curl -fsSL -o dbmate "https://github.com/amacneil/dbmate/releases/download/v${DBMATE_VERSION}/dbmate-linux-amd64"
+          echo "${DBMATE_SHA256}  dbmate" | sha256sum --check
+          sudo install -m 0755 dbmate /usr/local/bin/dbmate
+
+      - name: Compare db/schema.sql with a freshly migrated database
+        env:
+          DATABASE_URL: postgres://earde:earde-ci@localhost:5432/earde_schema?sslmode=disable
+        run: PATH="/usr/lib/postgresql/16/bin:$PATH" scripts/check-schema.sh
+
+  gateway:
+    name: Realtime gateway (Gleam)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: services/realtime_gateway
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1.24.1
+        with:
+          otp-version: "27.3.4.13"
+          gleam-version: "1.17.0"
+          rebar3-version: "3.27.0"
+          version-type: strict
+
+      - name: Download dependencies (versions locked in manifest.toml)
+        run: gleam deps download
+
+      - name: Check formatting
+        run: gleam format --check src test
+
+      - name: Build
+        run: gleam build --warnings-as-errors
+
+      - name: Test
+        run: gleam test
+
+  secrets:
+    name: Secret scan (full history)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install gitleaks
+        run: |
+          curl -fsSL -o gitleaks.tar.gz "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          echo "${GITLEAKS_SHA256}  gitleaks.tar.gz" | sha256sum --check
+          tar -xzf gitleaks.tar.gz gitleaks
+
+      - name: Scan every commit reachable from this ref
+        run: ./gitleaks git --no-banner --redact --config .gitleaks.toml --exit-code 1 .

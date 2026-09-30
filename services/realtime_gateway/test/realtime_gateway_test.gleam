@@ -639,7 +639,15 @@ fn full_topic() -> cursors.Store {
 pub fn cursor_topic_at_capacity_ignores_new_entries_test() {
   let store =
     full_topic()
-    |> cursors.set_active("chan:1", "s-extra", 999, "eve", x: 0.5, y: 0.5, now: 1001)
+    |> cursors.set_active(
+      "chan:1",
+      "s-extra",
+      999,
+      "eve",
+      x: 0.5,
+      y: 0.5,
+      now: 1001,
+    )
 
   assert list.length(cursors.snapshot(store, "chan:1", now: 1001))
     == cursors.max_entries_per_topic
@@ -667,7 +675,16 @@ pub fn cursor_topic_at_capacity_still_processes_inactive_test() {
 
   // Freed capacity is usable again.
   let store =
-    cursors.set_active(store, "chan:1", "s-new", 999, "eve", x: 0.5, y: 0.5, now: 1001)
+    cursors.set_active(
+      store,
+      "chan:1",
+      "s-new",
+      999,
+      "eve",
+      x: 0.5,
+      y: 0.5,
+      now: 1001,
+    )
   assert list.length(cursors.snapshot(store, "chan:1", now: 1001))
     == cursors.max_entries_per_topic
 }
@@ -874,7 +891,8 @@ pub fn typing_capacity_existing_socket_still_refreshes_test() {
       username: "user1",
       now: 105,
     )
-  let swept = typing.sweep(store, now: 100 + typing.ttl_seconds, ttl: typing.ttl_seconds)
+  let swept =
+    typing.sweep(store, now: 100 + typing.ttl_seconds, ttl: typing.ttl_seconds)
   assert typing.snapshot(swept, "chan:8") == [TypingUser(1, "user1")]
 }
 

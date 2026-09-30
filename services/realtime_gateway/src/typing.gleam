@@ -117,12 +117,17 @@ pub fn topics(store: Store) -> List(String) {
 /// Drop entries whose last activity is older than `ttl` seconds.
 pub fn sweep(store: Store, now now: Int, ttl ttl: Int) -> Store {
   dict.fold(store.topics, store, fn(acc, topic, sockets) {
-    let kept = dict.filter(sockets, fn(_, entry) { now - entry.last_active < ttl })
+    let kept =
+      dict.filter(sockets, fn(_, entry) { now - entry.last_active < ttl })
     put_topic(acc, topic, kept)
   })
 }
 
-fn put_topic(store: Store, topic: String, sockets: Dict(String, Entry)) -> Store {
+fn put_topic(
+  store: Store,
+  topic: String,
+  sockets: Dict(String, Entry),
+) -> Store {
   case dict.size(sockets) {
     0 -> Store(dict.delete(store.topics, topic))
     _ -> Store(dict.insert(store.topics, topic, sockets))
@@ -208,7 +213,11 @@ pub fn active(
   process.send(typing.subject, Active(topic, socket_id, user_id, username))
 }
 
-pub fn inactive(typing: Typing, topic topic: String, socket_id socket_id: String) -> Nil {
+pub fn inactive(
+  typing: Typing,
+  topic topic: String,
+  socket_id socket_id: String,
+) -> Nil {
   process.send(typing.subject, Inactive(topic, socket_id))
 }
 
