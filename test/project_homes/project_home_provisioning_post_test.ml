@@ -1474,7 +1474,7 @@ let destination_case =
       Alcotest.(check bool) "anonymous body carries no draft identity" false
         (Html_assert.contains body "Phvv Dest Home");
       (* Public discovery: the real search query cannot see it. *)
-      let* found = Earde.Db.search_communities conn "Phvv Dest" 20 0 in
+      let* found = Earde.Community_store.search_communities conn "Phvv Dest" 20 0 in
       (match found with
       | Ok rows ->
           Alcotest.(check int) "absent from public discovery" 0

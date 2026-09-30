@@ -41,9 +41,8 @@ type removal_surface = Removal_project_route | Removal_community_route
 
 (* The committed exposure of a published network community. Kept
    analytics-local rather than reusing
-   Network_community_publication_form.publication_visibility: that module
-   sits below the legacy Db macro-module in the dependency graph, and
-   analytics must not pull it in. The publication handler maps the store's
+   Network_community_publication_form.publication_visibility, so analytics
+   does not depend on the publication domain. The publication handler maps the store's
    closed value onto this one exhaustively, so the two vocabularies cannot
    drift apart silently — and, like the domain type, there is deliberately
    no Private constructor to represent. *)

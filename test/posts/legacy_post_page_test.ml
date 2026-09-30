@@ -25,20 +25,20 @@ let ( let* ) = Lwt.bind
 (* The handler's synthesized minimal record for the unmappable post (its
    community_res is Ok None when the slug is empty), reproduced here for
    direct renderer calls. *)
-let fallback_community : Earde.Db.community =
+let fallback_community : Earde.Community_types.community =
   { id = 9107; slug = ""; name = ""; description = None; rules = None;
     avatar_url = None; banner_url = None; allow_downvotes = true;
-    sections_enabled = false; visibility = Earde.Db.Community_public;
+    sections_enabled = false; visibility = Earde.Community_types.Community_public;
     indexable = true; is_network_community = false;
-    onboarding_state = Earde.Db.Community_published; discoverable = true }
+    onboarding_state = Earde.Community_types.Community_published; discoverable = true }
 
-let rail_community : Earde.Db.community =
+let rail_community : Earde.Community_types.community =
   { fallback_community with id = 9108; slug = "qa-lgp-rail";
     name = "qa-lgp-rail" }
 
 let make_post ?(id = 9107) ?(title = "Qa fallback discussion")
     ?(content = Some "Qa fallback body") ?url ?image_url
-    ?(username = "qa_lgp_author") () : Earde.Db.post =
+    ?(username = "qa_lgp_author") () : Earde.Post_types.post =
   { id; title; url; content; community_id = 9107; user_id = 42; username;
     community_slug = ""; created_at = "2026-07-30 12:00:00"; score = 3;
     comment_count = 1; allow_downvotes = true; image_url;
@@ -48,7 +48,7 @@ let make_post ?(id = 9107) ?(title = "Qa fallback discussion")
     author_first_active_at = None }
 
 let make_comment ?(id = 501) ?(content = "Qa fallback comment")
-    ?(username = "qa_lgp_commenter") ?parent_id () : Earde.Db.comment =
+    ?(username = "qa_lgp_commenter") ?parent_id () : Earde.Comment_store.comment =
   { id; content; username; created_at = "2026-07-30 12:05:00"; score = 1;
     parent_id; avatar_url = None; author_local_karma = 1;
     author_local_post_count = 0; author_local_comment_count = 1;

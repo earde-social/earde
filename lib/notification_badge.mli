@@ -3,8 +3,8 @@
     One durable query and one renderer for every authenticated document, so
     no page can disagree with another about the same user's unread count.
 
-    Read semantics live in [Db]: a notification becomes read only when
-    [Db.mark_notifs_read] runs, and the only caller is the GET /notifications
+    Read semantics live in [Notification_store]: a notification becomes read only when
+    [Notification_store.mark_notifs_read] runs, and the only caller is the GET /notifications
     handler, which marks the whole mailbox read on load. Nothing else — no
     other page, no click on an individual notification, no visit to a
     notification's destination — changes read state. This module never

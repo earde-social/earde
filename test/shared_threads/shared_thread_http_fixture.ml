@@ -353,9 +353,9 @@ let ok label = function
   | Ok v -> v
   | Error e -> Alcotest.failf "%s: %s" label e
 
-let feed_ids (items : Earde.Db.feed_item list) =
+let feed_ids (items : Earde.Post_types.feed_item list) =
   List.map
-    (fun (it : Earde.Db.feed_item) -> it.Earde.Db.fi_post.id)
+    (fun (it : Earde.Post_types.feed_item) -> it.Earde.Post_types.fi_post.id)
     items
 
 let reject_seed conn ~reviewer ~placement ~destination =

@@ -30,8 +30,8 @@
     error channel, and no [string_of_error] or printer exists. *)
 
 val connection_eligible :
-  visibility:Db.community_visibility ->
-  onboarding_state:Db.community_onboarding_state ->
+  visibility:Community_types.community_visibility ->
+  onboarding_state:Community_types.community_onboarding_state ->
   discoverable:bool ->
   bool
 (** The single rule deciding whether a community may take part in {i creating}

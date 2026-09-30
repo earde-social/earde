@@ -8,7 +8,7 @@
     outside its enforcement. *)
 
 (** How a network community is exposed once published. [Unlisted] is not a
-    privacy state: the community stays [Db.Community_public] and reachable by
+    privacy state: the community stays [Community_types.Community_public] and reachable by
     direct URL — it is only kept out of external indexing and Earde's own
     discovery surfaces. *)
 type publication_mode =
@@ -25,10 +25,10 @@ val string_of_publication_mode : publication_mode -> string
 (** The database fields a publication writes, as one closed record so a mode
     can never be applied partially. *)
 type publication_configuration = {
-  visibility : Db.community_visibility;
+  visibility : Community_types.community_visibility;
   indexable : bool;
   discoverable : bool;
-  onboarding_state : Db.community_onboarding_state;
+  onboarding_state : Community_types.community_onboarding_state;
 }
 
 val configuration_for_publication : publication_mode -> publication_configuration
@@ -44,7 +44,7 @@ val string_of_publication_error : publication_error -> string
 
 val publish :
   is_network_community:bool ->
-  onboarding_state:Db.community_onboarding_state ->
+  onboarding_state:Community_types.community_onboarding_state ->
   publication_mode ->
   (publication_configuration, publication_error) result
 (** Pure publication decision: only a network community still in
@@ -53,8 +53,8 @@ val publish :
 
 val visibility_change_allowed :
   is_network_community:bool ->
-  onboarding_state:Db.community_onboarding_state ->
-  requested_visibility:Db.community_visibility ->
+  onboarding_state:Community_types.community_onboarding_state ->
+  requested_visibility:Community_types.community_visibility ->
   bool
 (** The one lifecycle invariant on visibility changes: a published network
     community cannot become fully private. Legacy communities and setup drafts
@@ -63,8 +63,8 @@ val visibility_change_allowed :
 
 val lifecycle_state_valid :
   is_network_community:bool ->
-  onboarding_state:Db.community_onboarding_state ->
-  visibility:Db.community_visibility ->
+  onboarding_state:Community_types.community_onboarding_state ->
+  visibility:Community_types.community_visibility ->
   indexable:bool ->
   discoverable:bool ->
   bool

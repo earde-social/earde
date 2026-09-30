@@ -108,12 +108,12 @@ let router =
     ; Dream.get "/probe/rows/:slug" (fun req ->
           Dream.sql req (fun db ->
               let slug = Dream.param req "slug" in
-              let* community = Earde.Db.get_community_by_slug db slug in
+              let* community = Earde.Community_store.get_community_by_slug db slug in
               match community with
               | Ok (Some community) ->
                   let* posts =
-                    Earde.Db.get_posts_by_community db community.Earde.Db.id
-                      Earde.Db.Hot 20 0
+                    Earde.Post_store.get_posts_by_community db community.id
+                      Earde.Post_types.Hot 20 0
                   in
                   (match posts with
                    | Ok posts ->
@@ -123,9 +123,9 @@ let router =
                        Dream.respond
                          (String.concat "\n"
                             (List.map
-                               (fun (item : Earde.Db.feed_item) ->
+                               (fun (item : Earde.Post_types.feed_item) ->
                                  Earde.Components.render_post req []
-                                   item.Earde.Db.fi_post)
+                                   item.Earde.Post_types.fi_post)
                                posts))
                    | Error _ -> Dream.respond ~status:`Internal_Server_Error "")
               | _ -> Dream.respond ~status:`Not_Found ""))

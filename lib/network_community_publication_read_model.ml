@@ -258,8 +258,8 @@ let community_of_row supplied_slug (id, stored_slug, name, description)
     ((visibility_raw, onboarding_raw, is_network), (indexable, discoverable, is_top_mod, is_admin))
     =
   match
-    ( Db.community_visibility_of_string visibility_raw,
-      Db.community_onboarding_state_of_string onboarding_raw )
+    ( Community_types.community_visibility_of_string visibility_raw,
+      Community_types.community_onboarding_state_of_string onboarding_raw )
   with
   | Some visibility, Ok onboarding_state ->
       if
@@ -270,8 +270,8 @@ let community_of_row supplied_slug (id, stored_slug, name, description)
           && valid_network_name name
           && valid_network_description description
           && is_network
-          && visibility = Db.Community_private
-          && onboarding_state = Db.Community_draft
+          && visibility = Community_types.Community_private
+          && onboarding_state = Community_types.Community_draft
           && (not indexable)
           && (not discoverable)
           (* The whole-state invariant, re-asserted through the frozen

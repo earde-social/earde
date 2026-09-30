@@ -158,7 +158,7 @@ let signup_case =
   db_case "account_signed_up once with closed $set; invalid/unconsented silent"
     (fun ~url _conn c ->
       let (module C : Caqti_lwt.CONNECTION) = c in
-      let hash tok = Earde.Db.pending_signup_hash_token tok in
+      let hash tok = Earde.Pending_signup_store.hash_token tok in
       let* r = C.exec q_insert_pending ("step6_signup", hash "step6_tok_1") in
       let* () = or_fail "pending" r in
       let* status, payloads =
@@ -325,7 +325,7 @@ let leave_case =
       let* uid = or_fail "user" uid in
       let* cid = C.find q_insert_community ("step6-leave", true, "public") in
       let* cid = or_fail "community" cid in
-      let* r = Earde.Db.join_community conn uid cid in
+      let* r = Earde.Membership_store.join_community conn uid cid in
       let* () = or_fail_s "join fixture" r in
       let session =
         [ ("user_id", string_of_int uid); ("username", "step6_leaver") ]
@@ -447,9 +447,9 @@ let chat_case =
       let* uid = or_fail "user" uid in
       let* cid = C.find q_insert_community ("step6-chat", true, "public") in
       let* cid = or_fail "community" cid in
-      let* r = Earde.Db.join_community conn uid cid in
+      let* r = Earde.Membership_store.join_community conn uid cid in
       let* () = or_fail_s "membership" r in
-      let* chslug = Earde.Db.create_channel conn cid "general" None 0 in
+      let* chslug = Earde.Channel_store.create_channel conn cid "general" None 0 in
       let* chslug = or_fail_s "channel" chslug in
       let session =
         [ ("user_id", string_of_int uid); ("username", "step6_chatter") ]
@@ -510,7 +510,7 @@ let post_case =
       let* uid = or_fail "user" uid in
       let* cid = C.find q_insert_community ("step6-post", false, "public") in
       let* cid = or_fail "community" cid in
-      let* r = Earde.Db.join_community conn uid cid in
+      let* r = Earde.Membership_store.join_community conn uid cid in
       let* () = or_fail_s "membership" r in
       let session =
         [ ("user_id", string_of_int uid); ("username", "step6_poster") ]
@@ -562,7 +562,7 @@ let comment_case =
       let* cid = or_fail "community" cid in
       (* Commenting now requires a current participation path (origin
          membership here) — the Shared Threads server-side rule. *)
-      let* r = Earde.Db.join_community conn uid cid in
+      let* r = Earde.Membership_store.join_community conn uid cid in
       let* () = or_fail_s "membership" r in
       let* pid = C.find q_insert_post (cid, uid) in
       let* pid = or_fail "post" pid in
@@ -606,18 +606,18 @@ let promote_case =
       let* uid = or_fail "user" uid in
       let* cid = C.find q_insert_community ("step6-thr", false, "public") in
       let* cid = or_fail "community" cid in
-      let* r = Earde.Db.join_community conn uid cid in
+      let* r = Earde.Membership_store.join_community conn uid cid in
       let* () = or_fail_s "membership" r in
-      let* chslug = Earde.Db.create_channel conn cid "general" None 0 in
+      let* chslug = Earde.Channel_store.create_channel conn cid "general" None 0 in
       let* chslug = or_fail_s "channel" chslug in
-      let* channel = Earde.Db.get_channel_by_slug conn chslug cid in
+      let* channel = Earde.Channel_store.get_channel_by_slug conn chslug cid in
       let* channel = or_fail_s "channel row" channel in
       let channel =
         match channel with
         | Some ch -> ch
         | None -> Alcotest.fail "channel vanished"
       in
-      let* seed = Earde.Db.send_message conn channel.Earde.Db.id uid "step6 seed" in
+      let* seed = Earde.Chat_store.send_message conn channel.id uid "step6 seed" in
       let* seed = or_fail_s "seed message" seed in
       let session =
         [ ("user_id", string_of_int uid); ("username", "step6_promoter") ]
@@ -633,7 +633,7 @@ let promote_case =
         run_handler ~url ~session
           ~target:
             (Printf.sprintf "/c/step6-thr/ch/%s/messages/%Ld/start-thread"
-               chslug seed.Earde.Db.id)
+               chslug seed.id)
           ~form:[ ("title", "step6 thread"); ("content", "") ]
           router
       in
@@ -811,7 +811,7 @@ let delete_account_case =
             (Http_fixture.is_redirect (Dream.status_to_int (Dream.status response)));
           let* () =
             Analytics_fixture.wait_until ~label:"post-deletion cleanup chain" (fun () ->
-                let* job = Earde.Db.get_posthog_deletion_job conn did in
+                let* job = Earde.Posthog_deletion_job_store.get_by_distinct_id conn did in
                 match job with
                 | Ok (Some (_, _, _, Some _)) -> Lwt.return true
                 | _ -> Lwt.return false)
@@ -830,7 +830,7 @@ let delete_account_case =
            | l ->
                Alcotest.failf "expected 1 deletion metric, got %d"
                  (List.length l));
-          let* job = Earde.Db.get_posthog_deletion_job conn did in
+          let* job = Earde.Posthog_deletion_job_store.get_by_distinct_id conn did in
           let* job = or_fail_s "job row" job in
           let* job_id =
             match job with
@@ -939,7 +939,7 @@ let delete_account_avatar_case =
       in
       let drop_job_and_user uid =
         let did = "user:" ^ string_of_int uid in
-        let* job = Earde.Db.get_posthog_deletion_job conn did in
+        let* job = Earde.Posthog_deletion_job_store.get_by_distinct_id conn did in
         let* job = or_fail_s "job row" job in
         let* () =
           match job with

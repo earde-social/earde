@@ -32,9 +32,9 @@ let block ~anchor ~fragment ~empty =
     (if fragment = "" then empty else fragment)
 
 let community_network_page ?user ?(noindex = false) ?(rail_communities = [])
-    ~(community : Db.community) ~sidebar ~projects_section
+    ~(community : Community_types.community) ~sidebar ~projects_section
     ~communities_section ~can_connect request =
-  let slug = esc community.Db.slug in
+  let slug = esc community.slug in
   (* The connect flow is the community's own existing route; the link is a
      shortcut for an authorized viewer, never an authorization. *)
   let cta =
@@ -66,5 +66,5 @@ let community_network_page ?user ?(noindex = false) ?(rail_communities = [])
   in
   Components.launch_community_page ?user ~noindex ~request ~rail_communities
     ~community ~sidebar ~page_class:"launch-community-network"
-    ~title:(community.Db.name ^ " — Network")
+    ~title:(community.name ^ " — Network")
     ~content ()

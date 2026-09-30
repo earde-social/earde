@@ -1,6 +1,6 @@
 (** Transactional persistence of a user-owned project-onboarding draft and
     its complete verified public-repository snapshot. This feature module
-    owns its SQL; nothing here belongs to the legacy [Db] macro-module.
+    owns its SQL.
 
     The only GitHub-derived inputs are two abstract proof values — the
     verified installation identity from {!Github_user_installations} and the

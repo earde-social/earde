@@ -173,8 +173,8 @@ let update_relation_query =
    are already guaranteed by structural validation. *)
 let currently_eligible ~is_network_community ~onboarding_state ~visibility =
   is_network_community
-  && onboarding_state = Db.Community_published
-  && visibility = Db.Community_public
+  && onboarding_state = Community_types.Community_published
+  && visibility = Community_types.Community_public
 
 (* Structural validity of the locked community. The shared lifecycle rule
    decides most shapes; the one drifted shape it rejects but review must
@@ -189,8 +189,8 @@ let community_structurally_valid ~is_network_community ~onboarding_state
   Network_communities.lifecycle_state_valid ~is_network_community
     ~onboarding_state ~visibility ~indexable ~discoverable
   || is_network_community
-     && onboarding_state = Db.Community_published
-     && visibility = Db.Community_private
+     && onboarding_state = Community_types.Community_published
+     && visibility = Community_types.Community_private
      && (not indexable) && not discoverable
 
 let positive id = Int64.compare id 0L > 0
@@ -243,8 +243,8 @@ let review (module C : Caqti_lwt.CONNECTION) ~reviewer_user_id ~project_slug
                   (* Closed-value validation only — a valid ineligible
                      lifecycle is not corruption at this step. *)
                   match
-                    ( Db.community_visibility_of_string visibility_raw,
-                      Db.community_onboarding_state_of_string onboarding_raw
+                    ( Community_types.community_visibility_of_string visibility_raw,
+                      Community_types.community_onboarding_state_of_string onboarding_raw
                     )
                   with
                   | None, _ | _, Error _ -> rollback_to Inconsistent_data

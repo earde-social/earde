@@ -28,10 +28,10 @@ let eligibility_case =
         Alcotest.(check bool) label expected
           (Cc.connection_eligible ~visibility ~onboarding_state ~discoverable)
       in
-      let vis = [ (Earde.Db.Community_public, "public")
-                ; (Earde.Db.Community_private, "private") ] in
-      let states = [ (Earde.Db.Community_published, "published")
-                   ; (Earde.Db.Community_draft, "draft") ] in
+      let vis = [ (Earde.Community_types.Community_public, "public")
+                ; (Earde.Community_types.Community_private, "private") ] in
+      let states = [ (Earde.Community_types.Community_published, "published")
+                   ; (Earde.Community_types.Community_draft, "draft") ] in
       List.iter
         (fun (visibility, vname) ->
           List.iter
@@ -39,8 +39,8 @@ let eligibility_case =
               List.iter
                 (fun discoverable ->
                   let expected =
-                    visibility = Earde.Db.Community_public
-                    && onboarding_state = Earde.Db.Community_published
+                    visibility = Earde.Community_types.Community_public
+                    && onboarding_state = Earde.Community_types.Community_published
                     && discoverable
                   in
                   check

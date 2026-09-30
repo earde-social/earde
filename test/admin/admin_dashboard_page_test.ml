@@ -14,17 +14,17 @@ let ( let* ) = Lwt.bind
 let mk_recent ?(id = 1) ?(username = "alice") ?(email = "alice@example.com")
     ?(created_at = "2026-01-01 00:00:00") ?(is_admin = false)
     ?(is_banned = false) ?(post_count = 0) ?(comment_count = 0)
-    ?(message_count = 0) () : Earde.Db.admin_recent_user =
+    ?(message_count = 0) () : Earde.Admin_store.admin_recent_user =
   { id; username; email; created_at; is_admin; is_banned; post_count;
     comment_count; message_count }
 
 let mk_pending ?(id = 1) ?(username = "penny")
     ?(email = "penny@example.com") ?(created_at = "2026-01-01 00:00:00")
     ?(expires_at = "2026-01-02 00:00:00") ?ip_address () :
-    Earde.Db.pending_signup_row =
+    Earde.Admin_store.pending_signup_row =
   { id; username; email; created_at; expires_at; ip_address }
 
-let mk_banned ~id ~username ~email : Earde.Db.user = { id; username; email }
+let mk_banned ~id ~username ~email : Earde.User_store.user = { id; username; email }
 
 (* Renders the real page through real session middleware (the unban forms
    embed a CSRF tag); the session carries the admin identity the topbar

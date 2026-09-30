@@ -193,7 +193,7 @@ let process_image_upload ~db ~ip ~purpose image_bytes =
            file exists and before any decoder is invoked. *)
         Lwt.return (Error Image_upload.rejected_message)
     | Some format -> (
-        match%lwt Db.Rate_limit.check_upload db ip with
+        match%lwt Rate_limit_store.check_upload db ip with
         | Ok `Blocked -> Lwt.return (Error Image_upload.rate_limited_message)
         | Ok `Allowed | Error _ ->
             (* Deliberately fail-open on a storage error, unlike the
@@ -285,7 +285,7 @@ module Rate_limit = struct
   (* Opportunistic expiry cleanup, piggybacked on rate-limited requests at a
      bounded cadence: at most one batch per [cleanup_every_seconds] per
      process, off the response path (Lwt.async, same pattern as the PostHog
-     deletion attempts). The retention rule lives in Db.Rate_limit
+     deletion attempts). The retention rule lives in Rate_limit_store
      (rows strictly older than 2x the enforcement window); a cleanup failure
      only logs a bounded, IP-free error and never affects the limiter's
      Allowed/Blocked decision. A racing double-fire between the read and the
@@ -302,7 +302,7 @@ module Rate_limit = struct
           Lwt.catch
             (fun () ->
               match%lwt
-                Dream.sql request (fun db -> Db.Rate_limit.cleanup_expired db)
+                Dream.sql request (fun db -> Rate_limit_store.cleanup_expired db)
               with
               | Ok _deleted -> Lwt.return_unit
               | Error e ->
@@ -315,7 +315,7 @@ module Rate_limit = struct
     end
 
   let check_in_database request ~ip ~endpoint =
-    Dream.sql request (fun db -> Db.Rate_limit.check db ip endpoint)
+    Dream.sql request (fun db -> Rate_limit_store.check db ip endpoint)
 
   (* Fail closed: only a positive [`Allowed] reaches the wrapped handler.
      The limiter guards credential guessing and mail-sending routes, so a
@@ -371,7 +371,7 @@ end
 let get_current_user_votes db request =
   match Dream.session_field request "user_id" with
   | Some uid_str ->
-      (match%lwt Db.get_user_post_votes db (int_of_string uid_str) with
+      (match%lwt User_store.get_user_post_votes db (int_of_string uid_str) with
       | Ok v -> Lwt.return v
       | Error _ -> Lwt.return [])
   | None -> Lwt.return []
@@ -379,7 +379,7 @@ let get_current_user_votes db request =
 let get_current_user_comment_votes db request =
   match Dream.session_field request "user_id" with
   | Some uid_str ->
-      (match%lwt Db.get_user_comment_votes db (int_of_string uid_str) with
+      (match%lwt User_store.get_user_comment_votes db (int_of_string uid_str) with
       | Ok v -> Lwt.return v
       | Error _ -> Lwt.return [])
   | None -> Lwt.return []
@@ -433,7 +433,7 @@ let current_admin db request =
   match admin_claimant request with
   | None -> Lwt.return Current_non_admin
   | Some uid -> (
-      match%lwt Db.is_user_admin db uid with
+      match%lwt User_store.is_user_admin db uid with
       | Ok true -> Lwt.return Current_admin
       | Ok false -> Lwt.return Current_non_admin
       | Error e -> Lwt.return (Current_admin_storage_error e))
@@ -488,7 +488,7 @@ let current_admin_of_request request =
    Privacy is a server-side permission and is decided HERE, in the handler (the security
    boundary) — never trusted from the client. Public communities are readable by everyone; a
    private community is readable only by a global admin, a community moderator, or a member.
-   The pure Db.can_read_community encodes the decision; this wrapper gathers the booleans from
+   The pure Community_types.can_read_community encodes the decision; this wrapper gathers the booleans from
    real DB/session checks. Fails CLOSED: a membership/mod DB error denies access, unless the
    viewer is a global admin (whose authority does not depend on a per-community row).
 
@@ -497,48 +497,48 @@ let current_admin_of_request request =
    claim. The label is spelled differently from the session field on purpose:
    passing [Dream.session_field request "is_admin" = Some "true"] here is the
    stale-admin bug this boundary exists to refuse. *)
-let can_view_community db ~user_id ~admin_override (community : Db.community) =
+let can_view_community db ~user_id ~admin_override (community : Community_types.community) =
   let is_admin = admin_override in
-  match community.Db.visibility with
-  | Db.Community_public -> Lwt.return true
-  | Db.Community_private ->
+  match community.Community_types.visibility with
+  | Community_types.Community_public -> Lwt.return true
+  | Community_types.Community_private ->
       if is_admin then Lwt.return true
       else if user_id <= 0 then Lwt.return false
       else begin
         let%lwt is_member =
-          match%lwt Db.is_member db user_id community.id with Ok b -> Lwt.return b | Error _ -> Lwt.return false in
+          match%lwt Membership_store.is_member db user_id community.id with Ok b -> Lwt.return b | Error _ -> Lwt.return false in
         let%lwt is_mod =
-          match%lwt Db.is_moderator db user_id community.id with Ok b -> Lwt.return b | Error _ -> Lwt.return false in
-        Lwt.return (Db.can_read_community community.Db.visibility ~is_member ~is_mod ~is_admin)
+          match%lwt Moderator_store.is_moderator db user_id community.id with Ok b -> Lwt.return b | Error _ -> Lwt.return false in
+        Lwt.return (Community_types.can_read_community community.Community_types.visibility ~is_member ~is_mod ~is_admin)
       end
 
 (* SEO/discovery (Slice D), NOT access control: a community-content page renders for an
    authorized viewer but must carry <meta robots noindex> when the community is private
    (always effectively non-indexable) or public-but-indexable=false ("unlisted-ish"). Mirrors
    the DB-level public-discovery filter so noindex and feed/search exclusion stay in lockstep. *)
-let community_noindex (community : Db.community) =
-  not (Db.effective_indexable_community community.Db.visibility ~community_indexable:community.Db.indexable)
+let community_noindex (community : Community_types.community) =
+  not (Community_types.effective_indexable_community community.Community_types.visibility ~community_indexable:community.indexable)
 
 (* Slice G: noindex for a CHILD surface (a forum section page or a channel archive page).
    effective_indexable_child encodes the dominance order: a private community kills it outright,
    otherwise BOTH the community and the child must be indexable. A non-indexable child still
    RENDERS (this is SEO only, not access control) — the handler never gates on it. *)
-let child_noindex (community : Db.community) ~child_indexable =
-  not (Db.effective_indexable_child community.Db.visibility
-         ~community_indexable:community.Db.indexable ~child_indexable)
+let child_noindex (community : Community_types.community) ~child_indexable =
+  not (Community_types.effective_indexable_child community.Community_types.visibility
+         ~community_indexable:community.indexable ~child_indexable)
 
 (* Slice G: a thread inherits noindex from the forum section it lives in. A post in a
    non-indexable section is noindex even inside a public/indexable community; community-level
    rules (private / community indexable=false) still dominate via child_noindex. A post with no
    section (root/legacy/uncategorized — section_slug = None) falls back to community noindex.
    Fails SAFE: if a post claims a section we cannot resolve, prefer noindex over leaking it. *)
-let thread_noindex db (community : Db.community) (post : Db.post) =
-  match post.Db.section_slug with
+let thread_noindex db (community : Community_types.community) (post : Post_types.post) =
+  match post.Post_types.section_slug with
   | None -> Lwt.return (community_noindex community)
   | Some slug ->
-      match%lwt Db.get_section_by_slug db slug community.id with
+      match%lwt Section_store.get_section_by_slug db slug community.id with
       | Ok (Some section) ->
-          Lwt.return (child_noindex community ~child_indexable:section.Db.indexable)
+          Lwt.return (child_noindex community ~child_indexable:section.indexable)
       | _ -> Lwt.return true
 
 (* Single 404 used for BOTH a missing community AND a denied private read, so a hidden private
@@ -706,7 +706,7 @@ let make_signup_handler ~mail request =
         | Error err -> Lwt.return (`Hash_failed err, None)
         | Ok password_hash ->
             let token = Dream.to_base64url (Dream.random 32) in
-            let token_hash = Db.pending_signup_hash_token token in
+            let token_hash = Pending_signup_store.hash_token token in
             let ip = Some (Dream.client request) in
             let user_agent = Dream.header request "User-Agent" in
             (* No users row and no session are created here: only a confirmed
@@ -719,7 +719,7 @@ let make_signup_handler ~mail request =
                   ~token_hash ~ip ~user_agent
               in
               (* Best-effort secondary cleanup; correctness does not depend on it. *)
-              let%lwt _ = Db.pending_signup_sweep_expired db in
+              let%lwt _ = Pending_signup_store.sweep_expired db in
               Lwt.return r)
             in
             (match submitted with
@@ -750,7 +750,7 @@ let verify_email_handler request =
   | None -> Dream.html (Pages.msg_page ~auth:true ~title:"Verification Error" ~message:"The verification token is missing from the URL." ~alert_type:"error" ~return_url:"/signup" request)
   | Some token ->
       Dream.sql request (fun db ->
-        match%lwt Db.verify_email db token with
+        match%lwt Credential_store.verify_email db token with
         | Ok (Some username) ->
             Dream.html (Pages.msg_page ~auth:true ~title:"Email Verified!" ~message:(Printf.sprintf "Your account u/%s is now verified. You can log in." username) ~alert_type:"success" ~return_url:"/login" request)
         | Ok None ->
@@ -785,7 +785,7 @@ let consent_grant_person_sync request =
           | Some user_id -> (
               let%lwt props =
                 Dream.sql request (fun db ->
-                    Db.get_user_analytics_props db user_id)
+                    User_store.get_user_analytics_props db user_id)
               in
               match props with
               | Ok (Some (username, _email, signup_date, is_admin)) ->
@@ -873,20 +873,20 @@ let with_analytics_after_sql make_response =
    below go through this ONE helper — no per-handler visibility checks. The
    visibility comes from the authoritative community record the handler
    already loaded; no analytics-only DB query exists. *)
-let analytics_public_string (community : Db.community) value =
-  if Db.community_is_private community.Db.visibility then None else Some value
+let analytics_public_string (community : Community_types.community) value =
+  if Community_types.community_is_private community.Community_types.visibility then None else Some value
 
-(* The closed $groupidentify record from an authoritative Db.community row.
+(* The closed $groupidentify record from an authoritative Community_types.community row.
    The shared community record carries no created_at column, so that optional
    group property is omitted rather than approximated. Private communities:
    slug and name are None (§13), id and closed visibility remain. *)
-let community_group_of (community : Db.community) : Analytics.community_group =
+let community_group_of (community : Community_types.community) : Analytics.community_group =
   {
-    Analytics.community_id = community.Db.id;
-    community_slug = analytics_public_string community community.Db.slug;
-    community_name = analytics_public_string community community.Db.name;
+    Analytics.community_id = community.id;
+    community_slug = analytics_public_string community community.slug;
+    community_name = analytics_public_string community community.name;
     community_visibility =
-      Db.community_visibility_to_string community.Db.visibility;
+      Community_types.community_visibility_to_string community.Community_types.visibility;
     created_at = None;
   }
 
@@ -899,7 +899,7 @@ let attempt_posthog_group_cleanup_job request ~job_id =
   Lwt.catch
     (fun () ->
       let%lwt claimed =
-        Dream.sql request (fun db -> Db.claim_posthog_group_cleanup_job db job_id)
+        Dream.sql request (fun db -> Posthog_group_cleanup_job_store.claim db job_id)
       in
       match claimed with
       | Ok (Some group_key) ->
@@ -907,10 +907,10 @@ let attempt_posthog_group_cleanup_job request ~job_id =
             Posthog_deletion.process_claimed_group_job
               ~mark_completed:(fun () ->
                 Dream.sql request (fun db ->
-                    Db.complete_posthog_group_cleanup_job db job_id))
+                    Posthog_group_cleanup_job_store.mark_completed db job_id))
               ~mark_failed:(fun err ->
                 Dream.sql request (fun db ->
-                    Db.fail_posthog_group_cleanup_job db job_id err))
+                    Posthog_group_cleanup_job_store.mark_failed db job_id err))
               ~group_key
           in
           Lwt.return_unit
@@ -925,9 +925,9 @@ let confirm_email_handler request =
   | None ->
       Dream.html (Pages.msg_page ~auth:true ~title:"Confirmation Error" ~message:"The confirmation token is missing from the URL." ~alert_type:"error" ~return_url:"/signup" request)
   | Some token ->
-      let token_hash = Db.pending_signup_hash_token token in
+      let token_hash = Pending_signup_store.hash_token token in
       let%lwt result =
-        Dream.sql request (fun db -> Db.pending_signup_confirm db token_hash)
+        Dream.sql request (fun db -> Pending_signup_store.confirm db token_hash)
       in
       (match result with
         | Ok (`Confirmed (user_id, username, _email, created_at, is_admin)) ->
@@ -965,7 +965,7 @@ let make_login_handler ~verify request =
          returns the same string to prevent username enumeration. Ban check
          happens only after password is verified to avoid leaking existence. *)
       let%lwt lookup =
-        Dream.sql request (fun db -> Db.get_user_for_login db identifier)
+        Dream.sql request (fun db -> User_store.get_user_for_login db identifier)
       in
       (match lookup with
         | Ok row ->
@@ -1040,7 +1040,7 @@ let make_forgot_password_handler ~mail request =
              provider IO. No row, no mail: a nonexistent account gets no
              dummy email. *)
           let%lwt result = Dream.sql request (fun db ->
-            Db.password_reset_create_token db email token
+            Credential_store.create_token db email token
           ) in
           match result with
           | Ok true -> Lwt.return ((), Some (Email.password_reset ~to_email:email ~token))
@@ -1061,7 +1061,7 @@ let reset_password_page_handler request =
   | None ->
       Dream.html (Pages.msg_page ~auth:true ~title:"Invalid Link" ~message:"This password reset link is missing a token. Please request a new one." ~alert_type:"error" ~return_url:"/forgot-password" request)
   | Some token ->
-      (match%lwt Dream.sql request (fun db -> Db.password_reset_validate_token db token) with
+      (match%lwt Dream.sql request (fun db -> Credential_store.validate_token db token) with
       | Ok (Some _) -> Dream.html (Pages.reset_password_page ~token request)
       | Ok None ->
           Dream.html (Pages.msg_page ~auth:true ~title:"Link Expired" ~message:"This password reset link is invalid or has expired. Please request a new one." ~alert_type:"error" ~return_url:"/forgot-password" request)
@@ -1090,7 +1090,7 @@ let reset_password_handler request =
             Dream.html (Pages.msg_page ~auth:true ~title:"Error" ~message:"An error occurred. Please try again." ~alert_type:"error" ~return_url:"/forgot-password" request)
         | Ok new_hash ->
             Dream.sql request (fun db ->
-              match%lwt Db.password_reset_atomically db token new_hash with
+              match%lwt Credential_store.reset_password_atomically db token new_hash with
               | Ok false ->
                   Dream.html (Pages.msg_page ~auth:true ~title:"Link Expired" ~message:"This reset link is invalid or has expired. Please request a new one." ~alert_type:"error" ~return_url:"/forgot-password" request)
               | Ok true ->
@@ -1121,12 +1121,12 @@ let feed_handler request =
     | None -> 1
   in
   let sort_mode = match Dream.query request "sort" with
-    | Some "new"    -> Db.Newest
-    | Some "top"    -> Db.Top
-    | Some "active" -> Db.Active
-    | _             -> Db.Hot
+    | Some "new"    -> Post_types.Newest
+    | Some "top"    -> Post_types.Top
+    | Some "active" -> Post_types.Active
+    | _             -> Post_types.Hot
   in
-  let sort_str = match sort_mode with Db.Newest -> "new" | Db.Top -> "top" | Db.Hot -> "hot" | Db.Active -> "active" in
+  let sort_str = match sort_mode with Post_types.Newest -> "new" | Post_types.Top -> "top" | Post_types.Hot -> "hot" | Post_types.Active -> "active" in
   (* Guests can't have a personalized feed, so any scope coerces to "all" for them. *)
   let scope = match Dream.query request "scope", is_logged_in with
     | Some "all", _ -> "all"
@@ -1138,16 +1138,16 @@ let feed_handler request =
 
   Dream.sql request (fun db ->
     let%lwt posts =
-      if scope = "following" then Db.get_personalized_feed db user_id sort_mode limit offset
-      else Db.get_all_posts db sort_mode limit offset
+      if scope = "following" then Post_store.get_personalized_feed db user_id sort_mode limit offset
+      else Post_store.get_all_posts db sort_mode limit offset
     in
     let%lwt user_votes =
-      if user_id > 0 then Db.get_user_post_votes db user_id else Lwt.return_ok []
+      if user_id > 0 then User_store.get_user_post_votes db user_id else Lwt.return_ok []
     in
     let%lwt user_communities =
-      if user_id > 0 then Db.get_user_communities db user_id else Lwt.return_ok []
+      if user_id > 0 then Membership_store.get_user_communities db user_id else Lwt.return_ok []
     in
-    let%lwt admin_usernames_res = Db.get_admin_usernames db in
+    let%lwt admin_usernames_res = User_store.get_admin_usernames db in
     let admin_usernames = match admin_usernames_res with Ok l -> l | Error _ -> [] in
 
     match posts, user_votes, user_communities with
@@ -1162,7 +1162,7 @@ let feed_handler request =
         let%lwt shared_destinations =
           match%lwt
             Shared_thread_reading.public_destinations_for_posts db
-              ~post_ids:(List.map (fun (post : Db.post) -> post.id) p)
+              ~post_ids:(List.map (fun (post : Post_types.post) -> post.id) p)
           with
           | Ok rows ->
               let grouped =
@@ -1201,7 +1201,7 @@ let search_handler request =
     if user_id > 0 then
       Dream.sql request (fun db ->
         let%lwt rail_communities =
-          match%lwt Db.get_user_communities db user_id with
+          match%lwt Membership_store.get_user_communities db user_id with
           | Ok cs -> Lwt.return cs
           | Error _ -> Lwt.return []
         in
@@ -1214,18 +1214,18 @@ let search_handler request =
       let offset = (max 1 page - 1) * limit in
 
       Dream.sql request (fun db ->
-        let%lwt communities_res = Db.search_communities db search_term limit offset in
-        let%lwt users_res = Db.search_users db search_term limit offset in
-        let%lwt posts_res = Db.search_posts db search_term limit offset in
-        let%lwt comments_res = Db.search_comments db search_term limit offset in
-        let%lwt user_votes = if user_id > 0 then Db.get_user_post_votes db user_id else Lwt.return_ok [] in
-        let%lwt admin_usernames_res = Db.get_admin_usernames db in
+        let%lwt communities_res = Community_store.search_communities db search_term limit offset in
+        let%lwt users_res = User_store.search_users db search_term limit offset in
+        let%lwt posts_res = Post_store.search_posts db search_term limit offset in
+        let%lwt comments_res = Comment_store.search_comments db search_term limit offset in
+        let%lwt user_votes = if user_id > 0 then User_store.get_user_post_votes db user_id else Lwt.return_ok [] in
+        let%lwt admin_usernames_res = User_store.get_admin_usernames db in
         let admin_usernames = match admin_usernames_res with Ok l -> l | Error _ -> [] in
         (* Joined communities feed the launch rail only; a failure degrades to
            an empty rail rather than failing the search. *)
         let%lwt rail_communities =
           if user_id > 0 then
-            match%lwt Db.get_user_communities db user_id with
+            match%lwt Membership_store.get_user_communities db user_id with
             | Ok cs -> Lwt.return cs
             | Error _ -> Lwt.return []
           else Lwt.return []
@@ -1239,7 +1239,7 @@ let search_handler request =
             let%lwt chat_sources =
               if active_tab = "communities" || active_tab = "people" || active_tab = "comments"
               then Lwt.return []
-              else match%lwt Db.get_thread_sources_for_posts db (List.map (fun (p : Db.post) -> p.id) posts) with
+              else match%lwt Thread_source_store.get_thread_sources_for_posts db (List.map (fun (p : Post_types.post) -> p.id) posts) with
                 | Ok l -> Lwt.return l
                 | Error _ -> Lwt.return []
             in
@@ -1279,7 +1279,7 @@ let new_community_page request =
         | None -> Lwt.return []
         | Some uid ->
             Dream.sql request (fun db ->
-                match%lwt Db.get_user_communities db uid with
+                match%lwt Membership_store.get_user_communities db uid with
                 | Ok communities -> Lwt.return communities
                 | Error _ -> Lwt.return [])
       in
@@ -1329,7 +1329,7 @@ let create_community_handler request =
 
           with_analytics_after_sql (fun record ->
           Dream.sql request (fun db ->
-            match%lwt Db.create_community db name slug description sections_enabled with
+            match%lwt Community_store.create_community db name slug description sections_enabled with
             | Ok () ->
                 (* Divine Right: creator becomes first top_mod automatically.
                    Round-trip via get_community_by_slug is necessary — INSERT does not
@@ -1337,7 +1337,7 @@ let create_community_handler request =
                    cascade through the mli and all other callers.
                    add_top_moderator (not add_moderator) so the creator can see the
                    Manage Moderators link immediately — default role is 'mod'. *)
-                (match%lwt Db.get_community_by_slug db slug with
+                (match%lwt Community_store.get_community_by_slug db slug with
                  | Ok (Some community) ->
                      (* Shell invariant: every community must have a default General forum
                         section and a default general chat channel. These two are created
@@ -1348,14 +1348,14 @@ let create_community_handler request =
                      let setup_error () =
                        Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Error" ~message:"Could not finish setting up the community. Please try again." ~alert_type:"error" ~return_url:"/new-community" request)
                      in
-                     (match%lwt Db.create_section db community.id "General" (Some "General discussion") 0 "new" false with
+                     (match%lwt Section_store.create_section db community.id "General" (Some "General discussion") 0 "new" false with
                       | Error _ -> setup_error ()
                       | Ok () ->
-                          (match%lwt Db.create_channel db community.id "general" (Some "General chat") 0 with
+                          (match%lwt Channel_store.create_channel db community.id "general" (Some "General chat") 0 with
                            | Error _ -> setup_error ()
                            | Ok _slug ->
-                               let%lwt _ = Db.add_top_moderator db user_id community.id in
-                               let%lwt _ = Db.join_community db user_id community.id in
+                               let%lwt _ = Moderator_store.add_top_moderator db user_id community.id in
+                               let%lwt _ = Membership_store.join_community db user_id community.id in
                                (* Insert any custom sections from the form, in addition to General. *)
                                let%lwt () = Lwt_list.iteri_s (fun i pos ->
                                  let idx = i + 1 in
@@ -1365,7 +1365,7 @@ let create_community_handler request =
                                    let sdesc_str = List.assoc_opt ("section_desc_" ^ string_of_int idx) form_data |> Option.value ~default:"" in
                                    let sdesc = if sdesc_str = "" then None else Some sdesc_str in
                                    let ssort = List.assoc_opt ("section_sort_" ^ string_of_int idx) form_data |> Option.value ~default:"new" in
-                                   let%lwt _ = Db.create_section db community.id sname sdesc pos ssort false in
+                                   let%lwt _ = Section_store.create_section db community.id sname sdesc pos ssort false in
                                    Lwt.return_unit
                                  end
                                ) (List.init section_count (fun i -> i + 1)) in
@@ -1373,7 +1373,7 @@ let create_community_handler request =
                                   the default #general. Best-effort like custom sections (errors
                                   ignored, no transaction). channel_count is clamped to a small
                                   max so a hand-crafted form can't force a huge insert loop;
-                                  Db.create_channel slugifies + dedupes, so blank/duplicate names
+                                  Channel_store.create_channel slugifies + dedupes, so blank/duplicate names
                                   can't violate the UNIQUE (community_id, slug) constraint. The
                                   default general channel sits at position 0, so extras start at 1. *)
                                let channel_count =
@@ -1390,7 +1390,7 @@ let create_community_handler request =
                                     slugifies to general is harmless — create_channel just dedupes. *)
                                  if cname = "" || String.lowercase_ascii cname = "general" then Lwt.return_unit
                                  else begin
-                                   let%lwt _ = Db.create_channel db community.id cname None idx in
+                                   let%lwt _ = Channel_store.create_channel db community.id cname None idx in
                                    Lwt.return_unit
                                  end
                                ) (List.init channel_count (fun i -> i + 1)) in
@@ -1551,17 +1551,17 @@ let community_page_handler request =
   let limit = 20 in
   let offset = (max 1 page - 1) * limit in
 
-  let shared_sidebar_data db (community : Db.community) =
-    let%lwt mods_res = Db.get_community_mods_with_roles db community.Db.id in
-    let%lwt admin_usernames_res = Db.get_admin_usernames db in
+  let shared_sidebar_data db (community : Community_types.community) =
+    let%lwt mods_res = Moderator_store.get_community_mods_with_roles db community.id in
+    let%lwt admin_usernames_res = User_store.get_admin_usernames db in
     let admin_usernames = match admin_usernames_res with Ok l -> l | Error _ -> [] in
-    let%lwt banned_res = Db.community_get_banned_users db community.Db.id in
-    let banned_usernames = match banned_res with Ok bs -> List.map (fun (u: Db.user) -> u.username) bs | _ -> [] in
-    let%lwt user_communities_res = if user_id > 0 then Db.get_user_communities db user_id else Lwt.return_ok [] in
+    let%lwt banned_res = Community_ban_store.get_banned_users db community.id in
+    let banned_usernames = match banned_res with Ok bs -> List.map (fun (u: User_store.user) -> u.username) bs | _ -> [] in
+    let%lwt user_communities_res = if user_id > 0 then Membership_store.get_user_communities db user_id else Lwt.return_ok [] in
     let user_communities = match user_communities_res with Ok us -> us | _ -> [] in
-    let%lwt moderated_communities_res = if user_id > 0 then Db.get_moderated_communities db user_id else Lwt.return_ok [] in
+    let%lwt moderated_communities_res = if user_id > 0 then Moderator_store.get_moderated_communities db user_id else Lwt.return_ok [] in
     let moderated_communities = match moderated_communities_res with Ok l -> l | Error _ -> [] in
-    let%lwt is_mem = if user_id > 0 then Db.is_member db user_id community.Db.id else Lwt.return_ok false in
+    let%lwt is_mem = if user_id > 0 then Membership_store.is_member db user_id community.id else Lwt.return_ok false in
     Lwt.return (mods_res, admin_usernames, banned_usernames, user_communities, moderated_communities, is_mem)
   in
 
@@ -1569,24 +1569,24 @@ let community_page_handler request =
     (* CURRENT durable admin authority, resolved once for both branches' read
        gates. A viewer whose session does not claim admin costs no query. *)
     let%lwt is_admin = current_admin_read_override db request in
-    let%lwt _ = Db.demote_inactive_mods db in
-    match%lwt Db.get_community_by_slug db slug with
+    let%lwt _ = Moderator_store.demote_inactive_mods db in
+    match%lwt Community_store.get_community_by_slug db slug with
     | Ok (Some community) when community.sections_enabled ->
         let%lwt authorized = can_view_community db ~user_id ~admin_override:is_admin community in
         if not authorized then community_not_found ?user request
         else
         (* Structured community: /c/:slug always shows the sections overview.
            Section feeds are at /c/:slug/s/:section_slug. *)
-        let%lwt sections_res = Db.get_sections_with_stats db community.id in
-        let%lwt orphaned_res = Db.get_orphaned_count_and_activity db community.id in
+        let%lwt sections_res = Section_store.get_sections_with_stats db community.id in
+        let%lwt orphaned_res = Section_store.get_orphaned_count_and_activity db community.id in
         (* One clean call each for the channels and recent-discussions blocks. Both degrade to
            an empty list on error so the overview still renders — neither is load-bearing. *)
-        let%lwt channels_res = Db.get_channels_by_community db community.id in
+        let%lwt channels_res = Channel_store.get_channels_by_community db community.id in
         let channels = match channels_res with
-          | Ok cs -> List.filter (fun (c : Db.channel) -> not c.is_archived) cs
+          | Ok cs -> List.filter (fun (c : Channel_store.channel) -> not c.is_archived) cs
           | Error _ -> []
         in
-        let%lwt recent_posts_res = Db.get_posts_by_community db community.id Db.Newest 5 0 in
+        let%lwt recent_posts_res = Post_store.get_posts_by_community db community.id Post_types.Newest 5 0 in
         let recent_posts = match recent_posts_res with Ok ps -> ps | Error _ -> [] in
         let%lwt (mods_res, _admin_usernames, _banned_usernames, user_communities, _moderated_communities, is_mem) =
           shared_sidebar_data db community
@@ -1595,9 +1595,9 @@ let community_page_handler request =
          | Ok section_stats, Ok m ->
              let orphaned = match orphaned_res with Ok o -> o | Error _ -> (0, None) in
              let mods = match mods_res with Ok ms -> ms | _ -> [] in
-             let mod_usernames = List.map (fun (e: Db.moderator_entry) -> e.username) mods in
-             let is_mod = user_id > 0 && List.exists (fun (e: Db.moderator_entry) -> e.user_id = user_id) mods in
-             let is_top_mod = user_id > 0 && List.exists (fun (e: Db.moderator_entry) -> e.user_id = user_id && e.role = "top_mod") mods in
+             let mod_usernames = List.map (fun (e: Moderator_store.moderator_entry) -> e.username) mods in
+             let is_mod = user_id > 0 && List.exists (fun (e: Moderator_store.moderator_entry) -> e.user_id = user_id) mods in
+             let is_top_mod = user_id > 0 && List.exists (fun (e: Moderator_store.moderator_entry) -> e.user_id = user_id && e.role = "top_mod") mods in
              (* Order: lookup → authorization → existing page data → connected projects →
                 connected communities → render. Never before the authorization decision
                 above. The home shows only how many of each are publicly visible and
@@ -1614,20 +1614,20 @@ let community_page_handler request =
         else
         (* Simple community feed *)
         let sort_mode = match sort_str_opt with
-          | Some "new" -> Db.Newest | Some "top" -> Db.Top | Some "hot" -> Db.Hot | _ -> Db.Hot
+          | Some "new" -> Post_types.Newest | Some "top" -> Post_types.Top | Some "hot" -> Post_types.Hot | _ -> Post_types.Hot
         in
-        let sort_str = match sort_mode with Db.Newest -> "new" | Db.Top -> "top" | Db.Hot -> "hot" | Db.Active -> "active" in
-        let%lwt posts = Db.get_posts_by_community db community.id sort_mode limit offset in
-        let%lwt user_votes = if user_id > 0 then Db.get_user_post_votes db user_id else Lwt.return_ok [] in
+        let sort_str = match sort_mode with Post_types.Newest -> "new" | Post_types.Top -> "top" | Post_types.Hot -> "hot" | Post_types.Active -> "active" in
+        let%lwt posts = Post_store.get_posts_by_community db community.id sort_mode limit offset in
+        let%lwt user_votes = if user_id > 0 then User_store.get_user_post_votes db user_id else Lwt.return_ok [] in
         let%lwt (mods_res, admin_usernames, banned_usernames, user_communities, moderated_communities, is_mem) =
           shared_sidebar_data db community
         in
         (match posts, user_votes, is_mem with
          | Ok p, Ok v, Ok m ->
              let mods = match mods_res with Ok ms -> ms | _ -> [] in
-             let mod_usernames = List.map (fun (e: Db.moderator_entry) -> e.username) mods in
-             let is_mod = user_id > 0 && List.exists (fun (e: Db.moderator_entry) -> e.user_id = user_id) mods in
-             let is_top_mod = user_id > 0 && List.exists (fun (e: Db.moderator_entry) -> e.user_id = user_id && e.role = "top_mod") mods in
+             let mod_usernames = List.map (fun (e: Moderator_store.moderator_entry) -> e.username) mods in
+             let is_mod = user_id > 0 && List.exists (fun (e: Moderator_store.moderator_entry) -> e.user_id = user_id) mods in
+             let is_top_mod = user_id > 0 && List.exists (fun (e: Moderator_store.moderator_entry) -> e.user_id = user_id && e.role = "top_mod") mods in
              (* Same order as the structured branch: both connected-* reads follow the
                 authorization decision and the existing feed load. The flat community
                 page keeps both full blocks in its side stack — the home reorganization
@@ -1672,7 +1672,7 @@ let community_network_handler request =
        management affordances further down, all take this value rather than
        the session's cached claim. *)
     let%lwt is_admin = current_admin_read_override db request in
-    match%lwt Db.get_community_by_slug db slug with
+    match%lwt Community_store.get_community_by_slug db slug with
     | Ok (Some community) ->
         let%lwt authorized = can_view_community db ~user_id ~admin_override:is_admin community in
         if not authorized then community_not_found ?user request
@@ -1683,28 +1683,28 @@ let community_network_handler request =
            blocking the page — none of it is load-bearing. *)
         let%lwt sections =
           if community.sections_enabled then
-            (match%lwt Db.get_sections_by_community db community.id with
+            (match%lwt Section_store.get_sections_by_community db community.id with
              | Ok secs -> Lwt.return secs | Error _ -> Lwt.return [])
           else Lwt.return []
         in
         let%lwt channels =
-          match%lwt Db.get_channels_by_community db community.id with
+          match%lwt Channel_store.get_channels_by_community db community.id with
           | Ok cs -> Lwt.return cs | Error _ -> Lwt.return []
         in
         let%lwt rail_communities =
           if user_id > 0 then
-            (match%lwt Db.get_user_communities db user_id with
+            (match%lwt Membership_store.get_user_communities db user_id with
              | Ok cs -> Lwt.return cs | Error _ -> Lwt.return [])
           else Lwt.return []
         in
-        let%lwt mods_res = Db.get_community_mods_with_roles db community.id in
+        let%lwt mods_res = Moderator_store.get_community_mods_with_roles db community.id in
         let mods = match mods_res with Ok ms -> ms | Error _ -> [] in
         let is_mod =
-          user_id > 0 && List.exists (fun (e : Db.moderator_entry) -> e.user_id = user_id) mods in
+          user_id > 0 && List.exists (fun (e : Moderator_store.moderator_entry) -> e.user_id = user_id) mods in
         let is_top_mod =
           user_id > 0
           && List.exists
-               (fun (e : Db.moderator_entry) -> e.user_id = user_id && e.role = "top_mod")
+               (fun (e : Moderator_store.moderator_entry) -> e.user_id = user_id && e.role = "top_mod")
                mods
         in
         let sidebar =
@@ -1740,100 +1740,100 @@ let community_section_handler request =
   Dream.sql request (fun db ->
     (* CURRENT durable admin authority for the private-community read gate. *)
     let%lwt is_admin = current_admin_read_override db request in
-    let%lwt _ = Db.demote_inactive_mods db in
-    match%lwt Db.get_community_by_slug db community_slug with
+    let%lwt _ = Moderator_store.demote_inactive_mods db in
+    match%lwt Community_store.get_community_by_slug db community_slug with
     | Ok None -> Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"Not Found" ~message:"This community does not exist." ~alert_type:"error" ~return_url:"/" request)
     | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:"/" request)
     | Ok (Some community) ->
         let%lwt authorized = can_view_community db ~user_id ~admin_override:is_admin community in
         if not authorized then community_not_found ?user request
         else
-        let render_section_feed (section : Db.community_section) sort_mode sort_str fetch_posts =
+        let render_section_feed (section : Section_store.community_section) sort_mode sort_str fetch_posts =
           let%lwt posts = fetch_posts () in
-          let%lwt user_votes = if user_id > 0 then Db.get_user_post_votes db user_id else Lwt.return_ok [] in
-          let%lwt mods_res = Db.get_community_mods_with_roles db community.id in
-          let%lwt admin_usernames_res = Db.get_admin_usernames db in
+          let%lwt user_votes = if user_id > 0 then User_store.get_user_post_votes db user_id else Lwt.return_ok [] in
+          let%lwt mods_res = Moderator_store.get_community_mods_with_roles db community.id in
+          let%lwt admin_usernames_res = User_store.get_admin_usernames db in
           let admin_usernames = match admin_usernames_res with Ok l -> l | Error _ -> [] in
-          let%lwt banned_res = Db.community_get_banned_users db community.id in
-          let banned_usernames = match banned_res with Ok bs -> List.map (fun (u: Db.user) -> u.username) bs | _ -> [] in
-          let%lwt user_communities_res = if user_id > 0 then Db.get_user_communities db user_id else Lwt.return_ok [] in
+          let%lwt banned_res = Community_ban_store.get_banned_users db community.id in
+          let banned_usernames = match banned_res with Ok bs -> List.map (fun (u: User_store.user) -> u.username) bs | _ -> [] in
+          let%lwt user_communities_res = if user_id > 0 then Membership_store.get_user_communities db user_id else Lwt.return_ok [] in
           let user_communities = match user_communities_res with Ok us -> us | _ -> [] in
-          let%lwt moderated_communities_res = if user_id > 0 then Db.get_moderated_communities db user_id else Lwt.return_ok [] in
+          let%lwt moderated_communities_res = if user_id > 0 then Moderator_store.get_moderated_communities db user_id else Lwt.return_ok [] in
           let moderated_communities = match moderated_communities_res with Ok l -> l | Error _ -> [] in
-          let%lwt is_mem = if user_id > 0 then Db.is_member db user_id community.id else Lwt.return_ok false in
+          let%lwt is_mem = if user_id > 0 then Membership_store.is_member db user_id community.id else Lwt.return_ok false in
           (* One stats query drives BOTH the col-2 sidebar and the right-rail Threads/Last-activity
              rows — same ordering as get_sections_by_community, so the sidebar is unchanged, and no
              fabricated numbers. Folded into the success match below so a DB error surfaces as the
              standard error page, never an empty sidebar. *)
-          let%lwt sections_res = Db.get_sections_with_stats db community.id in
+          let%lwt sections_res = Section_store.get_sections_with_stats db community.id in
           (* Channels feed the shell's new Channels nav group; a load error degrades to an
              empty group rather than failing the whole section page. *)
-          let%lwt channels_res = Db.get_channels_by_community db community.id in
+          let%lwt channels_res = Channel_store.get_channels_by_community db community.id in
           let channels = match channels_res with Ok cs -> cs | Error _ -> [] in
           (match posts, user_votes, is_mem, sections_res with
            | Ok p, Ok v, Ok _m, Ok section_stats ->
                let mods = match mods_res with Ok ms -> ms | _ -> [] in
-               let mod_usernames = List.map (fun (e: Db.moderator_entry) -> e.username) mods in
-               let is_mod = user_id > 0 && List.exists (fun (e: Db.moderator_entry) -> e.user_id = user_id) mods in
+               let mod_usernames = List.map (fun (e: Moderator_store.moderator_entry) -> e.username) mods in
+               let is_mod = user_id > 0 && List.exists (fun (e: Moderator_store.moderator_entry) -> e.user_id = user_id) mods in
                let _ = sort_mode in
                let _ = moderated_communities in  (* unused by the shell page; kept loaded above for parity *)
-               let sections = List.map (fun ((s : Db.community_section), _, _) -> s) section_stats in
+               let sections = List.map (fun ((s : Section_store.community_section), _, _) -> s) section_stats in
                (* Real Threads/Last-activity for the rail: find this section in the stats. The virtual
                   Uncategorized feed isn't a community_sections row, so fall back to the orphaned-posts
                   aggregate. Any miss → None → the rail just omits that row (never faked). *)
                let%lwt (thread_count, last_activity) =
-                 match List.find_opt (fun ((s : Db.community_section), _, _) -> s.section_id = section.Db.section_id) section_stats with
+                 match List.find_opt (fun ((s : Section_store.community_section), _, _) -> s.section_id = section.Section_store.section_id) section_stats with
                  | Some (_, cnt, act) -> Lwt.return (Some cnt, act)
-                 | None when section.Db.slug = "uncategorized" ->
-                     (match%lwt Db.get_orphaned_count_and_activity db community.id with
+                 | None when section.slug = "uncategorized" ->
+                     (match%lwt Section_store.get_orphaned_count_and_activity db community.id with
                       | Ok (cnt, act) -> Lwt.return (Some cnt, act)
                       | Error _ -> Lwt.return (None, None))
                  | None -> Lwt.return (None, None)
                in
                (* rail shows the communities the user belongs to; the shell wraps layout itself. *)
-               Dream.html (Pages.community_section_shell_page ?user ~noindex:(child_noindex community ~child_indexable:section.Db.indexable) ?thread_count ?last_activity ~is_current_user_mod:is_mod ~mod_usernames ~admin_usernames ~banned_usernames ~rail_communities:user_communities ~channels ~sections ~section ~user_votes:v ~current_page:page ~sort_mode:sort_str ~community ~posts:p request)
+               Dream.html (Pages.community_section_shell_page ?user ~noindex:(child_noindex community ~child_indexable:section.indexable) ?thread_count ?last_activity ~is_current_user_mod:is_mod ~mod_usernames ~admin_usernames ~banned_usernames ~rail_communities:user_communities ~channels ~sections ~section ~user_votes:v ~current_page:page ~sort_mode:sort_str ~community ~posts:p request)
            | _ -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:"Failed to load section." ~alert_type:"error" ~return_url:("/c/" ^ community_slug) request))
         in
         if section_slug = "uncategorized" then begin
           (* Virtual section: shows posts orphaned by deleted sections. *)
           let sort_mode =
             match sort_str_opt with
-            | Some "top" -> Db.Top | Some "hot" -> Db.Hot | Some "active" -> Db.Active
-            | _ -> Db.Newest
+            | Some "top" -> Post_types.Top | Some "hot" -> Post_types.Hot | Some "active" -> Post_types.Active
+            | _ -> Post_types.Newest
           in
-          let sort_str = match sort_mode with Db.Newest -> "new" | Db.Top -> "top" | Db.Hot -> "hot" | Db.Active -> "active" in
-          let%lwt orphaned_count_res = Db.get_orphaned_count_and_activity db community.id in
+          let sort_str = match sort_mode with Post_types.Newest -> "new" | Post_types.Top -> "top" | Post_types.Hot -> "hot" | Post_types.Active -> "active" in
+          let%lwt orphaned_count_res = Section_store.get_orphaned_count_and_activity db community.id in
           let orphaned_count = match orphaned_count_res with Ok (c, _) -> c | Error _ -> 0 in
           if orphaned_count = 0 then
             Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"Not Found" ~message:"No uncategorized posts in this community." ~alert_type:"error" ~return_url:("/c/" ^ community_slug) request)
           else
             let virtual_section = {
-              Db.section_id = -1; community_id = community.id;
+              Section_store.section_id = -1; community_id = community.id;
               name = "Uncategorized"; slug = "uncategorized";
               description = Some "Posts from deleted sections";
               position = 9999; default_sort = "new"; is_introduction_section = false;
               indexable = true;
             } in
             render_section_feed virtual_section sort_mode sort_str
-              (fun () -> Db.get_orphaned_posts db community.id sort_mode limit offset)
+              (fun () -> Section_store.get_orphaned_posts db community.id sort_mode limit offset)
         end else begin
-          match%lwt Db.get_section_by_slug db section_slug community.id with
+          match%lwt Section_store.get_section_by_slug db section_slug community.id with
           | Ok None -> Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"Not Found" ~message:"This section does not exist." ~alert_type:"error" ~return_url:("/c/" ^ community_slug) request)
           | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:"/" request)
           | Ok (Some section) ->
               let sort_mode =
                 let from_query = match sort_str_opt with
-                  | Some "new" -> Some Db.Newest | Some "top" -> Some Db.Top
-                  | Some "active" -> Some Db.Active | Some "hot" -> Some Db.Hot | _ -> None
+                  | Some "new" -> Some Post_types.Newest | Some "top" -> Some Post_types.Top
+                  | Some "active" -> Some Post_types.Active | Some "hot" -> Some Post_types.Hot | _ -> None
                 in
                 match from_query with
                 | Some sm -> sm
-                | None -> (match section.Db.default_sort with
-                    | "new" -> Db.Newest | "top" -> Db.Top | "active" -> Db.Active | _ -> Db.Hot)
+                | None -> (match section.Section_store.default_sort with
+                    | "new" -> Post_types.Newest | "top" -> Post_types.Top | "active" -> Post_types.Active | _ -> Post_types.Hot)
               in
-              let sort_str = match sort_mode with Db.Newest -> "new" | Db.Top -> "top" | Db.Hot -> "hot" | Db.Active -> "active" in
+              let sort_str = match sort_mode with Post_types.Newest -> "new" | Post_types.Top -> "top" | Post_types.Hot -> "hot" | Post_types.Active -> "active" in
               render_section_feed section sort_mode sort_str
-                (fun () -> Db.get_posts_by_section db community.id section.Db.section_id sort_mode limit offset)
+                (fun () -> Post_store.get_posts_by_section db community.id section.Section_store.section_id sort_mode limit offset)
         end
   )
 
@@ -1851,7 +1851,7 @@ let community_channel_handler request =
        The channel page mints a realtime token further down, so this gate is
        also what stands between a stale claim and a live socket. *)
     let%lwt is_admin = current_admin_read_override db request in
-    match%lwt Db.get_community_by_slug db community_slug with
+    match%lwt Community_store.get_community_by_slug db community_slug with
     | Ok None -> Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"Not Found" ~message:"This community does not exist." ~alert_type:"error" ~return_url:"/" request)
     | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:"/" request)
     | Ok (Some community) ->
@@ -1862,12 +1862,12 @@ let community_channel_handler request =
         let%lwt authorized = can_view_community db ~user_id ~admin_override:is_admin community in
         if not authorized then community_not_found ?user request
         else
-        match%lwt Db.get_channel_by_slug db channel_slug community.id with
+        match%lwt Channel_store.get_channel_by_slug db channel_slug community.id with
         | Ok None -> Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"Not Found" ~message:"This channel does not exist." ~alert_type:"error" ~return_url:("/c/" ^ community_slug) request)
         | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:"/" request)
         | Ok (Some channel) ->
-            let%lwt channels = match%lwt Db.get_channels_by_community db community.id with Ok cs -> Lwt.return cs | Error _ -> Lwt.return [] in
-            let%lwt sections = match%lwt Db.get_sections_by_community db community.id with Ok ss -> Lwt.return ss | Error _ -> Lwt.return [] in
+            let%lwt channels = match%lwt Channel_store.get_channels_by_community db community.id with Ok cs -> Lwt.return cs | Error _ -> Lwt.return [] in
+            let%lwt sections = match%lwt Section_store.get_sections_by_community db community.id with Ok ss -> Lwt.return ss | Error _ -> Lwt.return [] in
             (* Reverse navigation (?source_thread=<post_id>): instead of the last-50 tail,
                SSR a bounded window anchored on the promoted thread's earliest surviving
                source message. Promotion only ever selects from a ±10-message window
@@ -1877,21 +1877,21 @@ let community_channel_handler request =
                sources) falls back silently to the normal page. *)
             let%lwt source_focus, messages =
               let normal () =
-                let%lwt ms = match%lwt Db.get_recent_messages_with_authors db channel.id 50 with Ok ms -> Lwt.return ms | Error _ -> Lwt.return [] in
+                let%lwt ms = match%lwt Chat_store.get_recent_messages_with_authors db channel.id 50 with Ok ms -> Lwt.return ms | Error _ -> Lwt.return [] in
                 Lwt.return (None, ms) in
               match Pages.Start_thread.parse_source_thread (Dream.query request "source_thread") with
               | None -> normal ()
               | Some post_id ->
-                  (match%lwt Db.get_source_span_for_thread db post_id with
+                  (match%lwt Thread_source_store.get_source_span_for_thread db post_id with
                    | Ok (Some (source_channel_id, post_title, (first :: _ as ids))) when source_channel_id = channel.id ->
                        let latest = List.fold_left (fun _ id -> id) first ids in
-                       let%lwt before = match%lwt Db.get_messages_before_id_with_authors db channel.id first 25 with Ok l -> Lwt.return l | Error _ -> Lwt.return [] in
-                       let%lwt after = match%lwt Db.get_messages_after_id_with_authors db channel.id (Int64.sub first 1L) 60 with Ok l -> Lwt.return l | Error _ -> Lwt.return [] in
+                       let%lwt before = match%lwt Chat_store.get_messages_before_id_with_authors db channel.id first 25 with Ok l -> Lwt.return l | Error _ -> Lwt.return [] in
+                       let%lwt after = match%lwt Chat_store.get_messages_after_id_with_authors db channel.id (Int64.sub first 1L) 60 with Ok l -> Lwt.return l | Error _ -> Lwt.return [] in
                        (* Trim the tail to ~25 rows past the last source message so the
                           window stays tight even when the span sits deep in history. *)
                        let rec trim_after kept = function
                          | [] -> List.rev kept
-                         | ((m : Db.chat_message), _) as row :: rest ->
+                         | ((m : Chat_store.chat_message), _) as row :: rest ->
                              if m.id <= latest then trim_after (row :: kept) rest
                              else
                                let rec take n acc = function
@@ -1901,13 +1901,13 @@ let community_channel_handler request =
                                List.rev_append kept (row :: take 24 [] rest) in
                        Lwt.return (Some (post_id, post_title, ids), before @ trim_after [] after)
                    | _ -> normal ()) in
-            let%lwt is_member = if user_id > 0 then (match%lwt Db.is_member db user_id community.id with Ok b -> Lwt.return b | Error _ -> Lwt.return false) else Lwt.return false in
-            let%lwt rail_communities = if user_id > 0 then (match%lwt Db.get_user_communities db user_id with Ok cs -> Lwt.return cs | Error _ -> Lwt.return []) else Lwt.return [] in
+            let%lwt is_member = if user_id > 0 then (match%lwt Membership_store.is_member db user_id community.id with Ok b -> Lwt.return b | Error _ -> Lwt.return false) else Lwt.return false in
+            let%lwt rail_communities = if user_id > 0 then (match%lwt Membership_store.get_user_communities db user_id with Ok cs -> Lwt.return cs | Error _ -> Lwt.return []) else Lwt.return [] in
             (* All thread-source links for the channel -> the renderer marks seeds
                ("Thread ->") and context references ("Referenced in ->") per message in
                one query. can_start mirrors the composer's gate (a member); the
                start-thread form re-checks every permission server-side. *)
-            let%lwt thread_links = match%lwt Db.get_thread_links_for_channel db channel.id with Ok l -> Lwt.return l | Error _ -> Lwt.return [] in
+            let%lwt thread_links = match%lwt Thread_source_store.get_thread_links_for_channel db channel.id with Ok l -> Lwt.return l | Error _ -> Lwt.return [] in
             let can_start = is_member in
             let realtime_token =
               match user, user_id > 0, generation with
@@ -1925,7 +1925,7 @@ let community_channel_handler request =
                   None
               | _ -> None
             in
-            Dream.html (Pages.community_channel_shell_page ?user ?realtime_token ~noindex:(child_noindex community ~child_indexable:channel.Db.indexable) ~is_member ~can_start ~thread_links ?source_focus ~rail_communities ~channels ~sections ~channel ~messages ~community request)
+            Dream.html (Pages.community_channel_shell_page ?user ?realtime_token ~noindex:(child_noindex community ~child_indexable:channel.indexable) ~is_member ~can_start ~thread_links ?source_focus ~rail_communities ~channels ~sections ~channel ~messages ~community request)
   )
 
 let int64_param_default name default request =
@@ -1947,7 +1947,7 @@ let chat_message_json
     ~(channel_id : int)
     ~(community_id : int)
     ?(thread_id : int option)
-    ((message : Db.chat_message), (author : string option)) =
+    ((message : Chat_store.chat_message), (author : string option)) =
   let username =
     match author with
     | Some username -> username
@@ -2038,7 +2038,7 @@ let channel_messages_json_handler request =
   Dream.sql request (fun db ->
   (* CURRENT durable admin authority for the private-community read gate. *)
   let%lwt is_admin = current_admin_read_override db request in
-  match%lwt Db.get_community_by_slug db slug with
+  match%lwt Community_store.get_community_by_slug db slug with
   | Error e ->
       Logs.err (fun m -> m "channel_messages_json: community lookup failed: %s" e);
       Dream.respond ~status:`Internal_Server_Error "Internal server error"
@@ -2053,7 +2053,7 @@ let channel_messages_json_handler request =
       let%lwt can_view = can_view_community db ~user_id ~admin_override:is_admin community in
       if not can_view then community_not_found ?user request
       else (
-        match%lwt Db.get_channel_by_slug db channel_slug community.id with
+        match%lwt Channel_store.get_channel_by_slug db channel_slug community.id with
         | Error e ->
             Logs.err (fun m -> m "channel_messages_json: channel lookup failed: %s" e);
             Dream.respond ~status:`Internal_Server_Error "Internal server error"
@@ -2062,7 +2062,7 @@ let channel_messages_json_handler request =
             Dream.respond ~status:`Not_Found "Channel not found"
 
         | Ok (Some channel) ->
-            match%lwt Db.get_messages_after_id_with_authors db channel.id after_id 100 with
+            match%lwt Chat_store.get_messages_after_id_with_authors db channel.id after_id 100 with
             | Error e ->
                 Logs.err (fun m -> m "channel_messages_json: messages lookup failed: %s" e);
                 Dream.respond ~status:`Internal_Server_Error "Internal server error"
@@ -2072,7 +2072,7 @@ let channel_messages_json_handler request =
                    Best-effort: on error we fall back to [] (no thread_id), i.e. Start thread may
                    briefly reappear on a promoted message until reload — never a wrong link. *)
                 let%lwt thread_links =
-                  match%lwt Db.get_thread_links_for_channel db channel.id with
+                  match%lwt Thread_source_store.get_thread_links_for_channel db channel.id with
                   | Ok l -> Lwt.return l
                   | Error _ -> Lwt.return []
                 in
@@ -2087,7 +2087,7 @@ let channel_messages_json_handler request =
                     [ ("messages",
                         `List
                           (List.map
-                             (fun ((m : Db.chat_message), _ as row) ->
+                             (fun ((m : Chat_store.chat_message), _ as row) ->
                                 chat_message_json
                                   ~channel_id:channel.id
                                   ~community_id:community.id
@@ -2123,7 +2123,7 @@ let realtime_token_handler request =
         (* CURRENT durable admin authority: a stale demoted-admin claim must
            not be able to mint a token for a private community's channel. *)
         let%lwt is_admin = current_admin_read_override db request in
-        match%lwt Db.get_community_by_slug db slug with
+        match%lwt Community_store.get_community_by_slug db slug with
         | Error e ->
             Logs.err (fun m -> m "realtime_token: community lookup failed: %s" e);
             Dream.respond ~status:`Internal_Server_Error "Internal server error"
@@ -2138,7 +2138,7 @@ let realtime_token_handler request =
             let%lwt can_view = can_view_community db ~user_id ~admin_override:is_admin community in
             if not can_view then community_not_found ?user request
             else (
-              match%lwt Db.get_channel_by_slug db channel_slug community.id with
+              match%lwt Channel_store.get_channel_by_slug db channel_slug community.id with
               | Error e ->
                   Logs.err (fun m -> m "realtime_token: channel lookup failed: %s" e);
                   Dream.respond ~status:`Internal_Server_Error "Internal server error"
@@ -2203,14 +2203,14 @@ let send_message_handler request =
           in
           with_analytics_after_sql (fun record ->
           Dream.sql request (fun db ->
-            match%lwt Db.get_community_by_slug db community_slug with
+            match%lwt Community_store.get_community_by_slug db community_slug with
             | Ok (Some community) ->
-                (match%lwt Db.get_channel_by_slug db channel_slug community.id with
+                (match%lwt Channel_store.get_channel_by_slug db channel_slug community.id with
                  | Ok (Some channel) ->
                      (* Fail closed: an unreadable global-ban state is a storage
                         failure, never "not banned" — no message is persisted
                         and nothing is published to the gateway. *)
-                     (match%lwt Db.is_globally_banned db user_id with
+                     (match%lwt Admin_store.is_globally_banned db user_id with
                      | Error e -> internal_error e
                      | Ok true ->
                        (if respond_json then
@@ -2219,9 +2219,9 @@ let send_message_handler request =
                         else
                           Dream.respond ~status:`Forbidden (Pages.msg_page ?user:uname ~title:"Account Banned" ~message:"Your account has been permanently banned from Earde." ~alert_type:"error" ~return_url:"/" request))
                      | Ok false -> begin
-                       match%lwt Db.is_member db user_id community.id with
+                       match%lwt Membership_store.is_member db user_id community.id with
                        | Ok true ->
-                           (match%lwt Db.community_is_banned db user_id community.id with
+                           (match%lwt Community_ban_store.is_banned db user_id community.id with
                             | Ok true ->
                                 if respond_json then
                                   json_error `Forbidden ~code:"forbidden"
@@ -2244,7 +2244,7 @@ let send_message_handler request =
                                      else
                                        Dream.html (Pages.msg_page ?user:uname ~title:"Message too long" ~message:"Messages cannot exceed 4000 characters." ~alert_type:"error" ~return_url:back_url request)
                                  | Ok content ->
-                                  (match%lwt Db.send_message db channel.id user_id content with
+                                  (match%lwt Chat_store.send_message db channel.id user_id content with
                                    | Ok message ->
                                        (* INSERT ... RETURNING hands back the canonical
                                           persisted row (Postgres id and created_at) in
@@ -2269,11 +2269,11 @@ let send_message_handler request =
                                              ~topic:(Realtime_generation.topic ~channel_id:channel.id ~generation)
                                              ~channel_id:channel.id
                                              ~community_id:community.id
-                                             ~message_id:message.Db.id
+                                             ~message_id:message.id
                                              ~user_id
                                              ~username
                                              ~content
-                                             ~created_at:(Pages.Start_thread.minute_of_ts message.Db.created_at))
+                                             ~created_at:(Pages.Start_thread.minute_of_ts message.created_at))
                                         | Error e ->
                                             Logs.err (fun m -> m "realtime generation lookup failed; live publish skipped: %s" e));
                                        (* One capture point ahead of the
@@ -2286,15 +2286,15 @@ let send_message_handler request =
                                              (Analytics.Chat_message_sent
                                                 {
                                                   user_id;
-                                                  community_id = community.Db.id;
+                                                  community_id = community.id;
                                                   community_slug =
                                                     analytics_public_string
-                                                      community community.Db.slug;
-                                                  channel_id = channel.Db.id;
+                                                      community community.slug;
+                                                  channel_id = channel.id;
                                                   channel_slug =
                                                     analytics_public_string
-                                                      community channel.Db.slug;
-                                                  message_id = message.Db.id;
+                                                      community channel.slug;
+                                                  message_id = message.id;
                                                   content_length = String.length content;
                                                   response_mode =
                                                     (if respond_json then Analytics.Response_json
@@ -2351,9 +2351,9 @@ let start_thread_max_total = 10
 (* Default section: the community's 'general' section (guaranteed present by the
    default-structure invariant) else the first in query order; 0 when sectionless. *)
 let default_thread_section_id sections =
-  match List.find_opt (fun (s : Db.community_section) -> s.slug = "general") sections with
+  match List.find_opt (fun (s : Section_store.community_section) -> s.slug = "general") sections with
   | Some s -> s.section_id
-  | None -> (match sections with (s : Db.community_section) :: _ -> s.section_id | [] -> 0)
+  | None -> (match sections with (s : Section_store.community_section) :: _ -> s.section_id | [] -> 0)
 
 (* Permission gate (decision: any logged-in, non-banned community member; mods/admins
    too). Mirrors send_message's order: global ban -> local ban -> membership -> mod/admin. *)
@@ -2367,21 +2367,21 @@ let check_start_permission db ~user_id ~admin_override ~community_id =
   (* Every storage failure in this gate — global ban included — is Start_error,
      never a silent "not banned": callers turn Start_error into a generic 500
      before any thread is created. *)
-  match%lwt Db.is_globally_banned db user_id with
+  match%lwt Admin_store.is_globally_banned db user_id with
   | Error e -> Lwt.return (Start_error e)
   | Ok true -> Lwt.return Start_banned
   | Ok false -> begin
-    match%lwt Db.community_is_banned db user_id community_id with
+    match%lwt Community_ban_store.is_banned db user_id community_id with
     | Ok true -> Lwt.return Start_banned
     | Error e -> Lwt.return (Start_error e)
     | Ok false ->
-        (match%lwt Db.is_member db user_id community_id with
+        (match%lwt Membership_store.is_member db user_id community_id with
          | Ok true -> Lwt.return Start_allowed
          | Error e -> Lwt.return (Start_error e)
          | Ok false ->
              if is_admin then Lwt.return Start_allowed
              else
-               (match%lwt Db.is_moderator db user_id community_id with
+               (match%lwt Moderator_store.is_moderator db user_id community_id with
                 | Ok true -> Lwt.return Start_allowed
                 | Ok false -> Lwt.return Start_not_member
                 | Error e -> Lwt.return (Start_error e)))
@@ -2407,7 +2407,7 @@ let start_thread_form_handler request =
              (* CURRENT durable admin authority: feeds the private read gate,
                 the start-permission override and the sidebar affordance. *)
              let%lwt is_admin = current_admin_read_override db request in
-             match%lwt Db.get_community_by_slug db community_slug with
+             match%lwt Community_store.get_community_by_slug db community_slug with
              | Ok None -> Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"Not Found" ~message:"This community does not exist." ~alert_type:"error" ~return_url:"/" request)
              | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:"/" request)
              | Ok (Some community) ->
@@ -2418,14 +2418,14 @@ let start_thread_form_handler request =
                  let%lwt authorized = can_view_community db ~user_id ~admin_override:is_admin community in
                  if not authorized then community_not_found ?user request
                  else
-                 (match%lwt Db.get_channel_by_slug db channel_slug community.id with
+                 (match%lwt Channel_store.get_channel_by_slug db channel_slug community.id with
                   | Ok None -> Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"Not Found" ~message:"This channel does not exist." ~alert_type:"error" ~return_url:("/c/" ^ community_slug) request)
                   | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:"/" request)
                   | Ok (Some channel) ->
-                      (match%lwt Db.get_message_by_id db message_id with
+                      (match%lwt Chat_store.get_message_by_id db message_id with
                        | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:channel_url request)
                        | Ok None -> Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"Not Found" ~message:"That message does not exist." ~alert_type:"error" ~return_url:channel_url request)
-                       | Ok (Some (seed : Db.chat_message)) ->
+                       | Ok (Some (seed : Chat_store.chat_message)) ->
                            if seed.channel_id <> channel.id || seed.deleted_at <> None then
                              Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"Not Found" ~message:"That message is not available to start a thread from." ~alert_type:"error" ~return_url:channel_url request)
                            else
@@ -2434,16 +2434,16 @@ let start_thread_form_handler request =
                               | Start_not_member -> Dream.respond ~status:`Forbidden (Pages.msg_page ?user ~title:"Join to start a thread" ~message:"You must be a member of this community to start a thread." ~alert_type:"error" ~return_url:("/c/" ^ community_slug) request)
                               | Start_error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:channel_url request)
                               | Start_allowed ->
-                                  (match%lwt Db.get_seed_thread_for_message db message_id with
+                                  (match%lwt Thread_source_store.get_seed_thread_for_message db message_id with
                                    | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:channel_url request)
                                    | Ok (Some (post_id, title, cslug)) ->
                                        Dream.html (Pages.msg_page ?user ~title:"Thread already started" ~message:"This message has already been made into a thread." ~alert_type:"info" ~return_url:(Components.canonical_thread_path cslug post_id title) request)
                                    | Ok None ->
-                                       let%lwt before = (match%lwt Db.get_messages_before_id_with_authors db channel.id message_id start_thread_window with Ok l -> Lwt.return l | Error _ -> Lwt.return []) in
-                                       let%lwt seed_and_after = (match%lwt Db.get_messages_after_id_with_authors db channel.id (Int64.sub message_id 1L) (start_thread_window + 1) with Ok l -> Lwt.return l | Error _ -> Lwt.return []) in
-                                       let%lwt sections = (match%lwt Db.get_sections_by_community db community.id with Ok ss -> Lwt.return ss | Error _ -> Lwt.return []) in
+                                       let%lwt before = (match%lwt Chat_store.get_messages_before_id_with_authors db channel.id message_id start_thread_window with Ok l -> Lwt.return l | Error _ -> Lwt.return []) in
+                                       let%lwt seed_and_after = (match%lwt Chat_store.get_messages_after_id_with_authors db channel.id (Int64.sub message_id 1L) (start_thread_window + 1) with Ok l -> Lwt.return l | Error _ -> Lwt.return []) in
+                                       let%lwt sections = (match%lwt Section_store.get_sections_by_community db community.id with Ok ss -> Lwt.return ss | Error _ -> Lwt.return []) in
                                        (* Exclude soft-deleted from context; the seed is guaranteed non-deleted above. *)
-                                       let candidates = List.filter (fun ((m : Db.chat_message), _) -> m.deleted_at = None) (before @ seed_and_after) in
+                                       let candidates = List.filter (fun ((m : Chat_store.chat_message), _) -> m.deleted_at = None) (before @ seed_and_after) in
                                        let default_title = Pages.Start_thread.derive_title seed.content in
                                        (* The introduction starts EMPTY — no generated transcript. The selected
                                           messages render on the thread from their persisted relations; the
@@ -2457,11 +2457,11 @@ let start_thread_form_handler request =
                                           mirrors the report form's gate (admin || moderator) and only
                                           picks the sidebar Settings visibility; the settings handler
                                           re-checks. *)
-                                       let%lwt channels = (match%lwt Db.get_channels_by_community db community.id with Ok cs -> Lwt.return cs | Error _ -> Lwt.return []) in
-                                       let%lwt rail_communities = (match%lwt Db.get_user_communities db user_id with Ok cs -> Lwt.return cs | Error _ -> Lwt.return []) in
+                                       let%lwt channels = (match%lwt Channel_store.get_channels_by_community db community.id with Ok cs -> Lwt.return cs | Error _ -> Lwt.return []) in
+                                       let%lwt rail_communities = (match%lwt Membership_store.get_user_communities db user_id with Ok cs -> Lwt.return cs | Error _ -> Lwt.return []) in
                                        let%lwt can_manage =
                                          if is_admin then Lwt.return true
-                                         else (match%lwt Db.is_moderator db user_id community.id with
+                                         else (match%lwt Moderator_store.is_moderator db user_id community.id with
                                            | Ok b -> Lwt.return b
                                            | _ -> Lwt.return false)
                                        in
@@ -2489,7 +2489,7 @@ let start_thread_create_handler request =
                   (* CURRENT durable admin authority: feeds the private read
                      gate and the start-permission override. *)
                   let%lwt is_admin = current_admin_read_override db request in
-                  match%lwt Db.get_community_by_slug db community_slug with
+                  match%lwt Community_store.get_community_by_slug db community_slug with
                   | Ok None -> Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"Not Found" ~message:"This community does not exist." ~alert_type:"error" ~return_url:"/" request)
                   | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:"/" request)
                   | Ok (Some community) ->
@@ -2498,14 +2498,14 @@ let start_thread_create_handler request =
                       let%lwt authorized = can_view_community db ~user_id ~admin_override:is_admin community in
                       if not authorized then community_not_found ?user request
                       else
-                      (match%lwt Db.get_channel_by_slug db channel_slug community.id with
+                      (match%lwt Channel_store.get_channel_by_slug db channel_slug community.id with
                        | Ok None -> Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"Not Found" ~message:"This channel does not exist." ~alert_type:"error" ~return_url:("/c/" ^ community_slug) request)
                        | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:"/" request)
                        | Ok (Some channel) ->
-                           (match%lwt Db.get_message_by_id db message_id with
+                           (match%lwt Chat_store.get_message_by_id db message_id with
                             | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:channel_url request)
                             | Ok None -> Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"Not Found" ~message:"That message does not exist." ~alert_type:"error" ~return_url:channel_url request)
-                            | Ok (Some (seed : Db.chat_message)) ->
+                            | Ok (Some (seed : Chat_store.chat_message)) ->
                                 if seed.channel_id <> channel.id || seed.deleted_at <> None then
                                   Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"Not Found" ~message:"That message is not available to start a thread from." ~alert_type:"error" ~return_url:channel_url request)
                                 else
@@ -2514,16 +2514,16 @@ let start_thread_create_handler request =
                                    | Start_not_member -> Dream.respond ~status:`Forbidden (Pages.msg_page ?user ~title:"Join to start a thread" ~message:"You must be a member of this community to start a thread." ~alert_type:"error" ~return_url:("/c/" ^ community_slug) request)
                                    | Start_error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:channel_url request)
                                    | Start_allowed ->
-                                       (match%lwt Db.get_seed_thread_for_message db message_id with
+                                       (match%lwt Thread_source_store.get_seed_thread_for_message db message_id with
                                         | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:channel_url request)
                                         | Ok (Some (pid, ttl, cslug)) ->
                                             Dream.html (Pages.msg_page ?user ~title:"Thread already started" ~message:"This message has already been made into a thread." ~alert_type:"info" ~return_url:(Components.canonical_thread_path cslug pid ttl) request)
                                         | Ok None ->
-                                            let%lwt before = (match%lwt Db.get_messages_before_id_with_authors db channel.id message_id start_thread_window with Ok l -> Lwt.return l | Error _ -> Lwt.return []) in
-                                            let%lwt seed_and_after = (match%lwt Db.get_messages_after_id_with_authors db channel.id (Int64.sub message_id 1L) (start_thread_window + 1) with Ok l -> Lwt.return l | Error _ -> Lwt.return []) in
-                                            let%lwt sections = (match%lwt Db.get_sections_by_community db community.id with Ok ss -> Lwt.return ss | Error _ -> Lwt.return []) in
-                                            let candidates = List.filter (fun ((m : Db.chat_message), _) -> m.deleted_at = None) (before @ seed_and_after) in
-                                            let valid = List.map (fun ((m : Db.chat_message), _) -> m.id) candidates in
+                                            let%lwt before = (match%lwt Chat_store.get_messages_before_id_with_authors db channel.id message_id start_thread_window with Ok l -> Lwt.return l | Error _ -> Lwt.return []) in
+                                            let%lwt seed_and_after = (match%lwt Chat_store.get_messages_after_id_with_authors db channel.id (Int64.sub message_id 1L) (start_thread_window + 1) with Ok l -> Lwt.return l | Error _ -> Lwt.return []) in
+                                            let%lwt sections = (match%lwt Section_store.get_sections_by_community db community.id with Ok ss -> Lwt.return ss | Error _ -> Lwt.return []) in
+                                            let candidates = List.filter (fun ((m : Chat_store.chat_message), _) -> m.deleted_at = None) (before @ seed_and_after) in
+                                            let valid = List.map (fun ((m : Chat_store.chat_message), _) -> m.id) candidates in
                                             let def_section_id = default_thread_section_id sections in
                                             let title = String.trim (Option.value (List.assoc_opt "title" form_data) ~default:"") in
                                             let content_raw = String.trim (Option.value (List.assoc_opt "content" form_data) ~default:"") in
@@ -2536,11 +2536,11 @@ let start_thread_create_handler request =
                                                  state actually re-renders the form — the success path keeps
                                                  its exact query set. Same post-gate position and degradation
                                                  as the GET handler. *)
-                                              let%lwt channels = (match%lwt Db.get_channels_by_community db community.id with Ok cs -> Lwt.return cs | Error _ -> Lwt.return []) in
-                                              let%lwt rail_communities = (match%lwt Db.get_user_communities db user_id with Ok cs -> Lwt.return cs | Error _ -> Lwt.return []) in
+                                              let%lwt channels = (match%lwt Channel_store.get_channels_by_community db community.id with Ok cs -> Lwt.return cs | Error _ -> Lwt.return []) in
+                                              let%lwt rail_communities = (match%lwt Membership_store.get_user_communities db user_id with Ok cs -> Lwt.return cs | Error _ -> Lwt.return []) in
                                               let%lwt can_manage =
                                                 if is_admin then Lwt.return true
-                                                else (match%lwt Db.is_moderator db user_id community.id with
+                                                else (match%lwt Moderator_store.is_moderator db user_id community.id with
                                                   | Ok b -> Lwt.return b
                                                   | _ -> Lwt.return false)
                                               in
@@ -2554,7 +2554,7 @@ let start_thread_create_handler request =
                                                 else begin
                                                   let sid = try int_of_string section_id_str with _ -> 0 in
                                                   if sid = 0 then Lwt.return (Error "section_required")
-                                                  else match%lwt Db.get_section_by_id db sid community.id with
+                                                  else match%lwt Section_store.get_section_by_id db sid community.id with
                                                     | Ok (Some _) -> Lwt.return (Ok (Some sid))
                                                     | Ok None -> Lwt.return (Error "section_invalid")
                                                     | Error e -> Lwt.return (Error e)
@@ -2565,17 +2565,17 @@ let start_thread_create_handler request =
                                               | Error "section_invalid" -> rerender ~error:"The selected section is not valid for this community." ()
                                               | Error e -> rerender ~error:(db_error_message e) ()
                                               | Ok section_id ->
-                                                  (match%lwt Db.start_thread_from_chat db ~title ~content ~section_id ~community_id:community.id ~user_id ~channel_id:channel.id ~seed_message_id:message_id ~context_message_ids:context with
+                                                  (match%lwt Thread_source_store.start_thread_from_chat db ~title ~content ~section_id ~community_id:community.id ~user_id ~channel_id:channel.id ~seed_message_id:message_id ~context_message_ids:context with
                                                    | Ok post_id ->
-                                                       let%lwt _ = Db.increment_local_post_count db user_id community.id in
+                                                       let%lwt _ = Community_user_stats_store.increment_local_post_count db user_id community.id in
                                                        (* Participant count from the candidate rows the selection was
                                                           already validated against — distinct non-tombstoned author ids
                                                           across the promoted messages; no extra query, no guessing. *)
                                                        let promoted_ids = message_id :: context in
                                                        let participant_count =
                                                          candidates
-                                                         |> List.filter (fun ((m : Db.chat_message), _) -> List.mem m.id promoted_ids)
-                                                         |> List.filter_map (fun ((m : Db.chat_message), _) -> m.user_id)
+                                                         |> List.filter (fun ((m : Chat_store.chat_message), _) -> List.mem m.id promoted_ids)
+                                                         |> List.filter_map (fun ((m : Chat_store.chat_message), _) -> m.user_id)
                                                          |> List.sort_uniq compare
                                                          |> List.length
                                                        in
@@ -2585,14 +2585,14 @@ let start_thread_create_handler request =
                                                              (Analytics.Conversation_promoted
                                                                 {
                                                                   user_id;
-                                                                  community_id = community.Db.id;
+                                                                  community_id = community.id;
                                                                   community_slug =
                                                                     analytics_public_string
-                                                                      community community.Db.slug;
-                                                                  channel_id = channel.Db.id;
+                                                                      community community.slug;
+                                                                  channel_id = channel.id;
                                                                   channel_slug =
                                                                     analytics_public_string
-                                                                      community channel.Db.slug;
+                                                                      community channel.slug;
                                                                   section_id;
                                                                   post_id;
                                                                   message_id;
@@ -2603,7 +2603,7 @@ let start_thread_create_handler request =
                                                    | Error _ ->
                                                        (* A racing double-submit trips the seed unique index. Re-check and
                                                           link the existing thread; otherwise a generic error (no raw DB text). *)
-                                                       (match%lwt Db.get_seed_thread_for_message db message_id with
+                                                       (match%lwt Thread_source_store.get_seed_thread_for_message db message_id with
                                                         | Ok (Some (pid, ttl, cslug)) ->
                                                             Dream.html (Pages.msg_page ?user ~title:"Thread already started" ~message:"This message has already been made into a thread." ~alert_type:"info" ~return_url:(Components.canonical_thread_path cslug pid ttl) request)
                                                         | _ -> rerender ~error:"Could not start the thread. Please try again." ()))
@@ -2628,13 +2628,13 @@ let join_community_handler request =
                members are added by a mod/admin (later slice), not via this open endpoint.
                Resolve the community SERVER-SIDE (the form's community_id is untrusted) and deny
                private with the same 404 as a missing community. Public join is unchanged. *)
-            match%lwt Db.get_community_by_id db community_id with
-            | Ok (Some community) when community.Db.visibility = Db.Community_private ->
+            match%lwt Community_store.get_community_by_id db community_id with
+            | Ok (Some community) when community.Community_types.visibility = Community_types.Community_private ->
                 community_not_found ?user:(Dream.session_field request "username") request
             | Ok None -> community_not_found ?user:(Dream.session_field request "username") request
             | Error _ -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Error" ~message:"Failed to join community. Please try again." ~alert_type:"error" ~return_url:"/" request)
             | Ok (Some community) ->
-                (match%lwt Db.join_community db (int_of_string uid) community_id with
+                (match%lwt Membership_store.join_community db (int_of_string uid) community_id with
                  | Ok () ->
                      let user_id = int_of_string uid in
                      let distinct_id = Analytics.distinct_id_of_user_id user_id in
@@ -2643,13 +2643,13 @@ let join_community_handler request =
                            (Analytics.Community_joined
                               {
                                 user_id;
-                                community_id = community.Db.id;
+                                community_id = community.id;
                                 community_slug =
                                   analytics_public_string community
-                                    community.Db.slug;
+                                    community.slug;
                                 community_visibility =
-                                  Db.community_visibility_to_string
-                                    community.Db.visibility;
+                                  Community_types.community_visibility_to_string
+                                    community.Community_types.visibility;
                               });
                          (* Full authoritative record in scope after a
                             successful join ⇒ also refresh the community group
@@ -2674,7 +2674,7 @@ let leave_community_handler request =
           else
           with_analytics_after_sql (fun record ->
           Dream.sql request (fun db ->
-            match%lwt Db.leave_community db user_id community_id with
+            match%lwt Membership_store.leave_community db user_id community_id with
             | Ok deleted ->
                 (* Only when a membership row was actually deleted — a
                    non-member "leave" keeps the same redirect but is a no-op,
@@ -2705,32 +2705,32 @@ let community_settings_handler request =
         match%lwt current_admin_bool db request with
         | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:"/" request)
         | Ok is_admin ->
-        match%lwt Db.get_community_by_slug db slug with
+        match%lwt Community_store.get_community_by_slug db slug with
         | Ok (Some community) ->
             (* Admins bypass the mod check — they have global authority over settings.
                is_moderator is still consulted for non-admins to keep the ACL simple. *)
             let%lwt is_authorized =
               if is_admin then Lwt.return true
-              else (match%lwt Db.is_moderator db user_id community.id with
+              else (match%lwt Moderator_store.is_moderator db user_id community.id with
                 | Ok b -> Lwt.return b
                 | _ -> Lwt.return false)
             in
             if not is_authorized then
               Dream.respond ~status:`Forbidden (Pages.msg_page ?user ~title:"Access Denied" ~message:"You must be a moderator to access this page." ~alert_type:"error" ~return_url:"/" request)
             else
-              (match%lwt Db.get_community_moderators db community.id with
+              (match%lwt Moderator_store.get_community_moderators db community.id with
               | Ok mods ->
-                  (match%lwt Db.community_get_banned_users db community.id with
+                  (match%lwt Community_ban_store.get_banned_users db community.id with
                   | Ok banned_users ->
                       let%lwt sections =
                         if community.sections_enabled then
-                          (match%lwt Db.get_sections_by_community db community.id with
+                          (match%lwt Section_store.get_sections_by_community db community.id with
                            | Ok secs -> Lwt.return secs | Error _ -> Lwt.return [])
                         else Lwt.return []
                       in
                       (* Live chat channels (incl. archived) so the hub can list + manage them. *)
                       let%lwt channels =
-                        match%lwt Db.get_channels_by_community db community.id with
+                        match%lwt Channel_store.get_channels_by_community db community.id with
                         | Ok cs -> Lwt.return cs | Error _ -> Lwt.return []
                       in
                       (* Read-only role lookup: display-gates the Moderation tools (downvote toggle)
@@ -2738,20 +2738,20 @@ let community_settings_handler request =
                          the old public home. Authorization is still enforced by
                          toggle_downvotes_handler — this changes no settings-view permission. *)
                       let%lwt is_top_mod =
-                        match%lwt Db.get_moderator_role db user_id community.id with
+                        match%lwt Moderator_store.get_moderator_role db user_id community.id with
                         | Ok (Some "top_mod") -> Lwt.return true
                         | _ -> Lwt.return false
                       in
                       (* Cheap COUNT for the settings hub "Reports (N open)" affordance; a
                          failure degrades to 0 rather than blocking the whole settings page. *)
                       let%lwt open_reports_count =
-                        match%lwt Db.count_open_reports db community.id with
+                        match%lwt Report_store.count_open_reports db community.id with
                         | Ok n -> Lwt.return n | Error _ -> Lwt.return 0
                       in
                       (* Slice F: the community_members allow-list for the member-management card.
                          A lookup failure degrades to an empty list rather than blocking settings. *)
                       let%lwt members =
-                        match%lwt Db.get_community_members db community.id with
+                        match%lwt Membership_store.get_community_members db community.id with
                         | Ok m -> Lwt.return m | Error _ -> Lwt.return []
                       in
                       (* Global-rail parity: the viewer's joined communities, in the same
@@ -2762,7 +2762,7 @@ let community_settings_handler request =
                          than blocking settings. Ordering, dedup, and the active marker
                          stay owned by the shared launch doc builder. *)
                       let%lwt rail_communities =
-                        match%lwt Db.get_user_communities db user_id with
+                        match%lwt Membership_store.get_user_communities db user_id with
                         | Ok cs -> Lwt.return cs | Error _ -> Lwt.return []
                       in
                       (* Connected-project management: loaded only after the settings
@@ -2776,7 +2776,7 @@ let community_settings_handler request =
                         ~removal_allowed:
                           (not
                              (community.is_network_community
-                             && community.onboarding_state = Db.Community_draft))
+                             && community.onboarding_state = Community_types.Community_draft))
                         (fun connected_projects ->
                       Dream.html (Pages.community_settings_page ?user ~connected_projects ~rail_communities ~is_admin ~is_top_mod ~open_reports_count ~community ~mods ~banned_users ~members ~sections ~channels request))
                   | Error e -> Dream.html (db_error_message e))
@@ -2803,7 +2803,7 @@ let add_section_handler request =
             Dream.respond ~status:`Bad_Request (Pages.msg_page ?user ~title:"Validation Error" ~message:"Section name cannot be empty." ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/settings") request)
           else
           Dream.sql request (fun db ->
-            match%lwt Db.get_community_by_slug db slug with
+            match%lwt Community_store.get_community_by_slug db slug with
             | Ok None -> Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"Not Found" ~message:"Community not found." ~alert_type:"error" ~return_url:"/" request)
             | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:"/" request)
             | Ok (Some community) ->
@@ -2814,11 +2814,11 @@ let add_section_handler request =
                 | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:"/" request)
                 | Ok is_admin ->
                 let%lwt is_auth = if is_admin then Lwt.return true
-                  else (match%lwt Db.is_moderator db user_id community.id with Ok b -> Lwt.return b | _ -> Lwt.return false) in
+                  else (match%lwt Moderator_store.is_moderator db user_id community.id with Ok b -> Lwt.return b | _ -> Lwt.return false) in
                 if not is_auth then
                   Dream.respond ~status:`Forbidden (Pages.msg_page ?user ~title:"Access Denied" ~message:"Moderators only." ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/settings") request)
                 else
-                  (match%lwt Db.create_section db community.id name description position default_sort false with
+                  (match%lwt Section_store.create_section db community.id name description position default_sort false with
                    | Ok () -> Dream.redirect request ("/c/" ^ slug ^ "/settings?panel=channels")
                    | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/settings") request)))
       | _ -> Dream.respond ~status:`Bad_Request (Pages.msg_page ?user ~title:"Form Error" ~message:"Invalid form submission." ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/settings") request)
@@ -2845,7 +2845,7 @@ let update_section_handler request =
             Dream.respond ~status:`Bad_Request (Pages.msg_page ?user ~title:"Validation Error" ~message:"Section name cannot be empty." ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/settings") request)
           else
           Dream.sql request (fun db ->
-            match%lwt Db.get_community_by_slug db slug with
+            match%lwt Community_store.get_community_by_slug db slug with
             | Ok None -> Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"Not Found" ~message:"Community not found." ~alert_type:"error" ~return_url:"/" request)
             | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:"/" request)
             | Ok (Some community) ->
@@ -2856,16 +2856,16 @@ let update_section_handler request =
                 | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:"/" request)
                 | Ok is_admin ->
                 let%lwt is_auth = if is_admin then Lwt.return true
-                  else (match%lwt Db.is_moderator db user_id community.id with Ok b -> Lwt.return b | _ -> Lwt.return false) in
+                  else (match%lwt Moderator_store.is_moderator db user_id community.id with Ok b -> Lwt.return b | _ -> Lwt.return false) in
                 if not is_auth then
                   Dream.respond ~status:`Forbidden (Pages.msg_page ?user ~title:"Access Denied" ~message:"Moderators only." ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/settings") request)
                 else
                   (* Validate section belongs to this community before updating *)
-                  (match%lwt Db.get_section_by_id db section_id community.id with
+                  (match%lwt Section_store.get_section_by_id db section_id community.id with
                    | Ok None -> Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"Not Found" ~message:"Section not found." ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/settings") request)
                    | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:"/" request)
                    | Ok (Some _) ->
-                       (match%lwt Db.update_section db section_id name description default_sort with
+                       (match%lwt Section_store.update_section db section_id name description default_sort with
                         | Ok () -> Dream.redirect request ("/c/" ^ slug ^ "/settings?panel=channels")
                         | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/settings") request))))
       | _ -> Dream.respond ~status:`Bad_Request (Pages.msg_page ?user ~title:"Form Error" ~message:"Invalid form submission." ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/settings") request)
@@ -2885,7 +2885,7 @@ let delete_section_handler request =
       match%lwt Dream.form request with
       | `Ok _ ->
           Dream.sql request (fun db ->
-            match%lwt Db.get_community_by_slug db slug with
+            match%lwt Community_store.get_community_by_slug db slug with
             | Ok None -> Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"Not Found" ~message:"Community not found." ~alert_type:"error" ~return_url:"/" request)
             | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:"/" request)
             | Ok (Some community) ->
@@ -2896,11 +2896,11 @@ let delete_section_handler request =
                 | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:"/" request)
                 | Ok is_admin ->
                 let%lwt is_auth = if is_admin then Lwt.return true
-                  else (match%lwt Db.is_moderator db user_id community.id with Ok b -> Lwt.return b | _ -> Lwt.return false) in
+                  else (match%lwt Moderator_store.is_moderator db user_id community.id with Ok b -> Lwt.return b | _ -> Lwt.return false) in
                 if not is_auth then
                   Dream.respond ~status:`Forbidden (Pages.msg_page ?user ~title:"Access Denied" ~message:"Moderators only." ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/settings") request)
                 else
-                  (match%lwt Db.delete_section db section_id community.id with
+                  (match%lwt Section_store.delete_section db section_id community.id with
                    | Ok () -> Dream.redirect request ("/c/" ^ slug ^ "/settings?panel=channels")
                    | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/settings") request)))
       | _ -> Dream.respond ~status:`Bad_Request (Pages.msg_page ?user ~title:"Form Error" ~message:"Invalid form submission." ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/settings") request)
@@ -2929,7 +2929,7 @@ let add_channel_handler request =
             Dream.respond ~status:`Bad_Request (Pages.msg_page ?user ~title:"Validation Error" ~message:"Channel name cannot be empty." ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/settings") request)
           else
           Dream.sql request (fun db ->
-            match%lwt Db.get_community_by_slug db slug with
+            match%lwt Community_store.get_community_by_slug db slug with
             | Ok None -> Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"Not Found" ~message:"Community not found." ~alert_type:"error" ~return_url:"/" request)
             | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:"/" request)
             | Ok (Some community) ->
@@ -2940,14 +2940,14 @@ let add_channel_handler request =
                 | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:"/" request)
                 | Ok is_admin ->
                 let%lwt is_auth = if is_admin then Lwt.return true
-                  else (match%lwt Db.is_moderator db user_id community.id with Ok b -> Lwt.return b | _ -> Lwt.return false) in
+                  else (match%lwt Moderator_store.is_moderator db user_id community.id with Ok b -> Lwt.return b | _ -> Lwt.return false) in
                 if not is_auth then
                   Dream.respond ~status:`Forbidden (Pages.msg_page ?user ~title:"Access Denied" ~message:"Moderators only." ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/settings") request)
                 else
                   (* New channel goes after the existing ones; create_channel slugifies + dedupes. *)
-                  let%lwt position = match%lwt Db.get_channels_by_community db community.id with
+                  let%lwt position = match%lwt Channel_store.get_channels_by_community db community.id with
                     | Ok cs -> Lwt.return (List.length cs) | Error _ -> Lwt.return 0 in
-                  (match%lwt Db.create_channel db community.id name topic position with
+                  (match%lwt Channel_store.create_channel db community.id name topic position with
                    | Ok _slug -> Dream.redirect request ("/c/" ^ slug ^ "/settings?panel=channels")
                    | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/settings") request)))
       | _ -> Dream.respond ~status:`Bad_Request (Pages.msg_page ?user ~title:"Form Error" ~message:"Invalid form submission." ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/settings") request)
@@ -2973,7 +2973,7 @@ let update_channel_handler request =
             Dream.respond ~status:`Bad_Request (Pages.msg_page ?user ~title:"Validation Error" ~message:"Channel name cannot be empty." ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/settings") request)
           else
           Dream.sql request (fun db ->
-            match%lwt Db.get_community_by_slug db slug with
+            match%lwt Community_store.get_community_by_slug db slug with
             | Ok None -> Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"Not Found" ~message:"Community not found." ~alert_type:"error" ~return_url:"/" request)
             | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:"/" request)
             | Ok (Some community) ->
@@ -2984,17 +2984,17 @@ let update_channel_handler request =
                 | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:"/" request)
                 | Ok is_admin ->
                 let%lwt is_auth = if is_admin then Lwt.return true
-                  else (match%lwt Db.is_moderator db user_id community.id with Ok b -> Lwt.return b | _ -> Lwt.return false) in
+                  else (match%lwt Moderator_store.is_moderator db user_id community.id with Ok b -> Lwt.return b | _ -> Lwt.return false) in
                 if not is_auth then
                   Dream.respond ~status:`Forbidden (Pages.msg_page ?user ~title:"Access Denied" ~message:"Moderators only." ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/settings") request)
                 else
                   (* Validate the channel belongs to this community before updating. Slug is left
                      untouched — only display name + topic change. *)
-                  (match%lwt Db.get_channel_by_id db channel_id community.id with
+                  (match%lwt Channel_store.get_channel_by_id db channel_id community.id with
                    | Ok None -> Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"Not Found" ~message:"Channel not found." ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/settings") request)
                    | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:"/" request)
                    | Ok (Some _) ->
-                       (match%lwt Db.update_channel db channel_id community.id name topic with
+                       (match%lwt Channel_store.update_channel db channel_id community.id name topic with
                         | Ok () -> Dream.redirect request ("/c/" ^ slug ^ "/settings?panel=channels")
                         | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/settings") request))))
       | _ -> Dream.respond ~status:`Bad_Request (Pages.msg_page ?user ~title:"Form Error" ~message:"Invalid form submission." ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/settings") request)
@@ -3014,7 +3014,7 @@ let archive_channel_handler request =
       match%lwt Dream.form request with
       | `Ok _ ->
           Dream.sql request (fun db ->
-            match%lwt Db.get_community_by_slug db slug with
+            match%lwt Community_store.get_community_by_slug db slug with
             | Ok None -> Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"Not Found" ~message:"Community not found." ~alert_type:"error" ~return_url:"/" request)
             | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:"/" request)
             | Ok (Some community) ->
@@ -3025,26 +3025,26 @@ let archive_channel_handler request =
                 | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:"/" request)
                 | Ok is_admin ->
                 let%lwt is_auth = if is_admin then Lwt.return true
-                  else (match%lwt Db.is_moderator db user_id community.id with Ok b -> Lwt.return b | _ -> Lwt.return false) in
+                  else (match%lwt Moderator_store.is_moderator db user_id community.id with Ok b -> Lwt.return b | _ -> Lwt.return false) in
                 if not is_auth then
                   Dream.respond ~status:`Forbidden (Pages.msg_page ?user ~title:"Access Denied" ~message:"Moderators only." ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/settings") request)
                 else
                   (* Load all channels once: validates ownership AND lets us guard the two
                      invariants — the default `general` channel and the last active channel
                      must never be archived (a community always keeps somewhere to chat). *)
-                  (match%lwt Db.get_channels_by_community db community.id with
+                  (match%lwt Channel_store.get_channels_by_community db community.id with
                    | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:"/" request)
                    | Ok channels ->
-                       (match List.find_opt (fun (c : Db.channel) -> c.id = channel_id) channels with
+                       (match List.find_opt (fun (c : Channel_store.channel) -> c.id = channel_id) channels with
                         | None -> Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"Not Found" ~message:"Channel not found." ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/settings") request)
                         | Some channel ->
-                            let active_count = List.length (List.filter (fun (c : Db.channel) -> not c.is_archived) channels) in
+                            let active_count = List.length (List.filter (fun (c : Channel_store.channel) -> not c.is_archived) channels) in
                             if channel.slug = "general" then
                               Dream.respond ~status:`Bad_Request (Pages.msg_page ?user ~title:"Not Allowed" ~message:"The default #general channel cannot be archived." ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/settings") request)
                             else if (not channel.is_archived) && active_count <= 1 then
                               Dream.respond ~status:`Bad_Request (Pages.msg_page ?user ~title:"Not Allowed" ~message:"You cannot archive the last active channel — a community needs at least one." ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/settings") request)
                             else
-                              (match%lwt Db.set_channel_archived db channel_id community.id true with
+                              (match%lwt Channel_store.set_channel_archived db channel_id community.id true with
                                | Ok () -> Dream.redirect request ("/c/" ^ slug ^ "/settings?panel=channels")
                                | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/settings") request)))))
       | _ -> Dream.respond ~status:`Bad_Request (Pages.msg_page ?user ~title:"Form Error" ~message:"Invalid form submission." ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/settings") request)
@@ -3064,7 +3064,7 @@ let unarchive_channel_handler request =
       match%lwt Dream.form request with
       | `Ok _ ->
           Dream.sql request (fun db ->
-            match%lwt Db.get_community_by_slug db slug with
+            match%lwt Community_store.get_community_by_slug db slug with
             | Ok None -> Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"Not Found" ~message:"Community not found." ~alert_type:"error" ~return_url:"/" request)
             | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:"/" request)
             | Ok (Some community) ->
@@ -3075,16 +3075,16 @@ let unarchive_channel_handler request =
                 | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:"/" request)
                 | Ok is_admin ->
                 let%lwt is_auth = if is_admin then Lwt.return true
-                  else (match%lwt Db.is_moderator db user_id community.id with Ok b -> Lwt.return b | _ -> Lwt.return false) in
+                  else (match%lwt Moderator_store.is_moderator db user_id community.id with Ok b -> Lwt.return b | _ -> Lwt.return false) in
                 if not is_auth then
                   Dream.respond ~status:`Forbidden (Pages.msg_page ?user ~title:"Access Denied" ~message:"Moderators only." ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/settings") request)
                 else
                   (* Validate ownership before flipping the flag. Unarchive is always safe. *)
-                  (match%lwt Db.get_channel_by_id db channel_id community.id with
+                  (match%lwt Channel_store.get_channel_by_id db channel_id community.id with
                    | Ok None -> Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"Not Found" ~message:"Channel not found." ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/settings") request)
                    | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:"/" request)
                    | Ok (Some _) ->
-                       (match%lwt Db.set_channel_archived db channel_id community.id false with
+                       (match%lwt Channel_store.set_channel_archived db channel_id community.id false with
                         | Ok () -> Dream.redirect request ("/c/" ^ slug ^ "/settings?panel=channels")
                         | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/settings") request))))
       | _ -> Dream.respond ~status:`Bad_Request (Pages.msg_page ?user ~title:"Form Error" ~message:"Invalid form submission." ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/settings") request)
@@ -3097,7 +3097,7 @@ let modlog_handler request =
     (* CURRENT durable admin authority for the private-community read gate
        (and, below, for the presentation-only settings back-link). *)
     let%lwt is_admin = current_admin_read_override db request in
-    match%lwt Db.get_community_by_slug db slug with
+    match%lwt Community_store.get_community_by_slug db slug with
     | Ok (Some community) ->
         let%lwt authorized = can_view_community db ~user_id ~admin_override:is_admin community in
         if not authorized then community_not_found ?user request
@@ -3106,7 +3106,7 @@ let modlog_handler request =
            picks the back-link target, so a failed lookup safely degrades to "Back to community". *)
         let%lwt can_access_settings =
           if is_admin then Lwt.return true
-          else (match%lwt Db.is_moderator db user_id community.id with
+          else (match%lwt Moderator_store.is_moderator db user_id community.id with
             | Ok b -> Lwt.return b
             | _ -> Lwt.return false)
         in
@@ -3117,21 +3117,21 @@ let modlog_handler request =
            never touch membership data. *)
         let%lwt sections =
           if community.sections_enabled then
-            (match%lwt Db.get_sections_by_community db community.id with
+            (match%lwt Section_store.get_sections_by_community db community.id with
              | Ok secs -> Lwt.return secs | Error _ -> Lwt.return [])
           else Lwt.return []
         in
         let%lwt channels =
-          match%lwt Db.get_channels_by_community db community.id with
+          match%lwt Channel_store.get_channels_by_community db community.id with
           | Ok cs -> Lwt.return cs | Error _ -> Lwt.return []
         in
         let%lwt rail_communities =
           if user_id > 0 then
-            (match%lwt Db.get_user_communities db user_id with
+            (match%lwt Membership_store.get_user_communities db user_id with
              | Ok cs -> Lwt.return cs | Error _ -> Lwt.return [])
           else Lwt.return []
         in
-        (match%lwt Db.get_modlog db community.id with
+        (match%lwt Mod_log_store.get_modlog db community.id with
          | Ok actions -> Dream.html (Pages.mod_log_page ?user ~noindex:(community_noindex community) ~rail_communities ~can_access_settings ~channels ~sections ~community actions request)
          | Error err -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message err) ~alert_type:"error" ~return_url:("/c/" ^ slug) request))
     | Ok None -> Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"Not Found" ~message:"This community does not exist." ~alert_type:"error" ~return_url:"/" request)
@@ -3154,9 +3154,9 @@ let modlog_handler request =
    never write, and a legacy (non-network) community reaches exactly the code
    it always did. *)
 
-let is_network_setup_draft (community : Db.community) =
+let is_network_setup_draft (community : Community_types.community) =
   community.is_network_community
-  && community.onboarding_state = Db.Community_draft
+  && community.onboarding_state = Community_types.Community_draft
 
 (* The canonical community-identity policy, applied to a *published* network
    community's proposed description before the legacy detail write. The
@@ -3165,7 +3165,7 @@ let is_network_setup_draft (community : Db.community) =
    provisioning store persisted them. [Error] means fail closed — the write
    never happens — and a canonical [Ok] value is what gets stored, so the
    scoped database CHECK is a backstop rather than the enforcement point. *)
-let canonical_network_description (community : Db.community) ~raw_description =
+let canonical_network_description (community : Community_types.community) ~raw_description =
   match
     Project_home_provisioning_form.of_fields
       [ ("community_name", community.name);
@@ -3211,7 +3211,7 @@ let update_community_handler request =
             | Ok is_admin ->
             let%lwt authorized =
               if is_admin then Lwt.return true
-              else (match%lwt Db.is_moderator db user_id community_id with
+              else (match%lwt Moderator_store.is_moderator db user_id community_id with
                 | Ok b -> Lwt.return b
                 | _ -> Lwt.return false)
             in
@@ -3222,7 +3222,7 @@ let update_community_handler request =
                and return URL below must be built from the authoritative
                database slug — the submitted community_slug field is
                attacker-controlled and reached the Location header. *)
-            match%lwt Db.get_community_by_id db community_id with
+            match%lwt Community_store.get_community_by_id db community_id with
             | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:"/" request)
             | Ok loaded ->
             let settings_url =
@@ -3256,8 +3256,8 @@ let update_community_handler request =
                  handing a third party their IP, User-Agent and Referer. A
                  community that matched no id has no stored value and no write
                  to make, so [None] keeps that path the no-op it already was. *)
-              let stored_avatar = Option.bind loaded (fun (c : Db.community) -> c.avatar_url) in
-              let stored_banner = Option.bind loaded (fun (c : Db.community) -> c.banner_url) in
+              let stored_avatar = Option.bind loaded (fun (c : Community_types.community) -> c.avatar_url) in
+              let stored_banner = Option.bind loaded (fun (c : Community_types.community) -> c.banner_url) in
               let avatar_url = if new_avatar <> None then new_avatar else stored_avatar in
               let banner_url = if new_banner <> None then new_banner else stored_banner in
               (* Network-community guard, before any write. The description is
@@ -3288,7 +3288,7 @@ let update_community_handler request =
                         submitted value in the response. *)
                      Dream.respond ~status:`Bad_Request (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Form Error" ~message:"There was a problem with your submission. Please try again." ~alert_type:"error" ~return_url:settings_url request)
                  | Ok description ->
-              (match%lwt Db.update_community_details db community_id description rules avatar_url banner_url with
+              (match%lwt Community_store.update_community_details db community_id description rules avatar_url banner_url with
               | Ok (Some community) ->
                   (* UPDATE ... RETURNING supplied the authoritative updated
                      record — refresh the group profile (§5.3), attributed to
@@ -3338,14 +3338,14 @@ let ban_community_user_handler request =
             match%lwt current_admin_bool db request with
             | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:"/" request)
             | Ok is_admin ->
-            let%lwt is_community_mod = match%lwt Db.is_moderator db user_id community_id with
+            let%lwt is_community_mod = match%lwt Moderator_store.is_moderator db user_id community_id with
               | Ok b -> Lwt.return b | _ -> Lwt.return false
             in
             let is_authorized = is_admin || is_community_mod in
             if not is_authorized then
               Dream.respond ~status:`Forbidden (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Access Denied" ~message:"You are not a moderator of this community." ~alert_type:"error" ~return_url:"/" request)
             else
-              (match%lwt Db.get_user_by_username db target_username with
+              (match%lwt User_store.get_user_by_username db target_username with
               | Ok (Some target_user) ->
                   (* Admin immunity: local mods cannot ban global admins.
                      The lookup decides ONLY the local moderator's case — a
@@ -3358,7 +3358,7 @@ let ban_community_user_handler request =
                      notification below. *)
                   let%lwt target_immunity =
                     if is_admin then Lwt.return (Ok false)
-                    else Db.is_user_admin db target_user.id
+                    else User_store.is_user_admin db target_user.id
                   in
                   (match target_immunity with
                   | Error e ->
@@ -3367,16 +3367,16 @@ let ban_community_user_handler request =
                     Dream.html (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Action Denied" ~message:"You cannot ban a Global Administrator." ~alert_type:"error" ~return_url:"/" request)
                   | Ok false -> begin
                     (* Fetch community slug before the ban so we can redirect to /c/slug after. *)
-                    let%lwt community_res = Db.get_community_by_id db community_id in
-                    let%lwt _ = Db.community_ban_user db target_user.id community_id in
+                    let%lwt community_res = Community_store.get_community_by_id db community_id in
+                    let%lwt _ = Community_ban_store.ban_user db target_user.id community_id in
                     (* Admin acting without mod role logged distinctly to prevent spoofing the mod log. *)
                     let is_admin_override = is_admin && not is_community_mod in
                     let action_type = if is_admin_override then "admin_ban_user" else "ban_user" in
                     let logged_reason = if is_admin_override then "Admin Intervention: " ^ reason else reason in
-                    let%lwt _ = Db.log_mod_action db community_id user_id action_type (Some target_user.id) logged_reason in
+                    let%lwt _ = Mod_log_store.log_action db community_id user_id action_type (Some target_user.id) logged_reason in
                     (* Notify banned user — no post_id since a ban is not tied to a single post. *)
                     let ban_msg = "You have been banned from a community. Reason: " ^ reason in
-                    let%lwt _ = Db.create_notif db target_user.id None "mod_action" ban_msg in
+                    let%lwt _ = Notification_store.create_notif db target_user.id None "mod_action" ban_msg in
                     let target = match community_res with Ok (Some c) -> "/c/" ^ c.slug ^ "/settings?panel=bans" | _ -> "/" in
                     Dream.redirect request target
                   end)
@@ -3406,7 +3406,7 @@ let unban_community_user_handler request =
             | Ok is_admin ->
             let%lwt is_authorized =
               if is_admin then Lwt.return true
-              else (match%lwt Db.is_moderator db user_id community_id with
+              else (match%lwt Moderator_store.is_moderator db user_id community_id with
                 | Ok b -> Lwt.return b
                 | _ -> Lwt.return false)
             in
@@ -3418,14 +3418,14 @@ let unban_community_user_handler request =
                  submitted community_slug field (redirect/header injection),
                  and a failed lookup or unban must surface as an error rather
                  than a success-shaped redirect. *)
-              match%lwt Db.get_community_by_id db community_id with
+              match%lwt Community_store.get_community_by_id db community_id with
               | Error e ->
                   Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:"/" request)
               | Ok None ->
                   Dream.respond ~status:`Not_Found (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Not Found" ~message:"Community not found." ~alert_type:"error" ~return_url:"/" request)
               | Ok (Some community) ->
-                  let settings_url = "/c/" ^ community.Db.slug ^ "/settings?panel=bans" in
-                  (match%lwt Db.community_unban_user db target_user_id community_id with
+                  let settings_url = "/c/" ^ community.slug ^ "/settings?panel=bans" in
+                  (match%lwt Community_ban_store.unban_user db target_user_id community_id with
                    | Error e ->
                        Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:settings_url request)
                    | Ok () -> Dream.redirect request settings_url)
@@ -3447,7 +3447,7 @@ let new_post_page request =
          an empty rail rather than blocking the composer. Called only after
          the viewer is authorized for the requested state. *)
       let load_rail db =
-        match%lwt Db.get_user_communities db user_id with
+        match%lwt Membership_store.get_user_communities db user_id with
         | Ok cs -> Lwt.return cs
         | Error _ -> Lwt.return []
       in
@@ -3457,7 +3457,7 @@ let new_post_page request =
           Dream.sql request (fun db ->
             (* CURRENT durable admin authority for the private read gate. *)
             let%lwt is_admin = current_admin_read_override db request in
-            match%lwt Db.get_community_by_slug db slug with
+            match%lwt Community_store.get_community_by_slug db slug with
             | Ok (Some community) ->
                 (* Privacy gate: a private community must be indistinguishable
                    from a missing one for outsiders — the same rule as the
@@ -3468,11 +3468,11 @@ let new_post_page request =
                 let%lwt authorized = can_view_community db ~user_id ~admin_override:is_admin community in
                 if not authorized then community_not_found ?user request
                 else
-                (match%lwt Db.is_member db user_id community.id with
+                (match%lwt Membership_store.is_member db user_id community.id with
                 | Ok true ->
                     let%lwt sections =
                       if community.sections_enabled then
-                        (match%lwt Db.get_sections_by_community db community.id with
+                        (match%lwt Section_store.get_sections_by_community db community.id with
                          | Ok secs -> Lwt.return secs
                          | Error _ -> Lwt.return [])
                       else Lwt.return []
@@ -3481,8 +3481,8 @@ let new_post_page request =
                     let%lwt preselected_section_id_opt = match section_slug_opt with
                       | None -> Lwt.return None
                       | Some sec_slug ->
-                          (match%lwt Db.get_section_by_slug db sec_slug community.id with
-                           | Ok (Some s) -> Lwt.return (Some s.Db.section_id)
+                          (match%lwt Section_store.get_section_by_slug db sec_slug community.id with
+                           | Ok (Some s) -> Lwt.return (Some s.Section_store.section_id)
                            | _ -> Lwt.return None)
                     in
                     let%lwt rail_communities = load_rail db in
@@ -3521,7 +3521,7 @@ let new_post_page request =
             (* One durable resolution for the whole chooser: the per-community
                filter below must not turn into one admin lookup per row. *)
             let%lwt is_admin = current_admin_read_override db request in
-            match%lwt Db.get_all_communities db with
+            match%lwt Community_store.get_all_communities db with
             | Ok communities ->
                 (* The chooser must never list a community the viewer cannot
                    see: get_all_communities returns every row, and the legacy
@@ -3601,15 +3601,15 @@ let create_post_handler request =
                still be active if they were banned after logging in. Failing to
                READ that state is a storage failure, not permission: it stops
                here, ahead of image processing and the post insert. *)
-            match%lwt Db.is_globally_banned db user_id with
+            match%lwt Admin_store.is_globally_banned db user_id with
             | Error err -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Error" ~message:(db_error_message err) ~alert_type:"error" ~return_url:"/" request)
             | Ok true ->
               Dream.respond ~status:`Forbidden (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Account Banned" ~message:"Your account has been permanently banned from Earde." ~alert_type:"error" ~return_url:"/" request)
             | Ok false ->
-              (match%lwt Db.is_member db user_id community_id with
+              (match%lwt Membership_store.is_member db user_id community_id with
               | Ok true ->
                   (* Local ban check: evaluated only for members. *)
-                  (match%lwt Db.community_is_banned db user_id community_id with
+                  (match%lwt Community_ban_store.is_banned db user_id community_id with
                   | Ok true ->
                       Dream.respond ~status:`Forbidden (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Banned from Community" ~message:"You are banned from posting in this community." ~alert_type:"error" ~return_url:"/" request)
                   (* Fail closed BEFORE process_image_upload: an unreadable local
@@ -3635,7 +3635,7 @@ let create_post_handler request =
                          sharing path, the canonical redirect target after
                          creation. The Error/Ok None outcomes keep their
                          exact pre-slice-4 behavior. *)
-                      let%lwt community_record = Db.get_community_by_id db community_id in
+                      let%lwt community_record = Community_store.get_community_by_id db community_id in
                       let%lwt section_result =
                         match community_record with
                         | Error e -> Lwt.return (Error e)
@@ -3648,7 +3648,7 @@ let create_post_handler request =
                               if sid = 0 then
                                 Lwt.return (Error "section_required")
                               else
-                                match%lwt Db.get_section_by_id db sid community_id with
+                                match%lwt Section_store.get_section_by_id db sid community_id with
                                 | Ok (Some _) -> Lwt.return (Ok (Some sid))
                                 | Ok None    -> Lwt.return (Error "section_invalid")
                                 | Error e    -> Lwt.return (Error e)
@@ -3662,9 +3662,9 @@ let create_post_handler request =
                       | Error e ->
                           Dream.html (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:"/" request)
                       | Ok section_id ->
-                          (match%lwt Db.create_post db title url content image_url section_id community_id user_id with
+                          (match%lwt Post_store.create_post db title url content image_url section_id community_id user_id with
                           | Ok new_post_id ->
-                              let%lwt _ = Db.increment_local_post_count db user_id community_id in
+                              let%lwt _ = Community_user_stats_store.increment_local_post_count db user_id community_id in
                               (* Fan-out @mention notifications — best-effort, skips self-mentions. *)
                               let text = title ^ " " ^ (Option.value ~default:"" content) in
                               (* Closed derived flags only — never the title,
@@ -3689,10 +3689,10 @@ let create_post_handler request =
                                      }) in
                               record capture_creation;
                               let%lwt () = Lwt_list.iter_s (fun uname ->
-                                match%lwt Db.get_user_by_username db uname with
+                                match%lwt User_store.get_user_by_username db uname with
                                 | Ok (Some mentioned) when mentioned.id <> user_id ->
                                     let msg = username ^ " mentioned you in a post." in
-                                    let%lwt _ = Db.create_notif db mentioned.id (Some new_post_id) "mention" msg in
+                                    let%lwt _ = Notification_store.create_notif db mentioned.id (Some new_post_id) "mention" msg in
                                     Lwt.return_unit
                                 | _ -> Lwt.return_unit
                               ) (extract_mentions text) in
@@ -3755,7 +3755,7 @@ let create_post_handler request =
                                   (match community_record with
                                   | Ok (Some comm) ->
                                       Dream.redirect request
-                                        (Components.canonical_thread_path comm.Db.slug new_post_id title
+                                        (Components.canonical_thread_path comm.slug new_post_id title
                                          ^ "?shared=" ^ notice)
                                   | _ -> Dream.redirect request ("/p/" ^ string_of_int new_post_id)))
                           | Error err -> Dream.html (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Error" ~message:(db_error_message err) ~alert_type:"error" ~return_url:"/" request)))))
@@ -3775,7 +3775,7 @@ let view_post_handler request =
   | Some post_id ->
 
   Dream.sql request (fun db ->
-    match%lwt Db.get_post_by_id db post_id with
+    match%lwt Post_store.get_post_by_id db post_id with
     | Ok (Some post) ->
         (* Slice C: gate BEFORE the canonical redirect — a 301 to /c/:slug/t/:id-:title would
            otherwise leak a private community's slug + thread title in the Location header to a
@@ -3786,7 +3786,7 @@ let view_post_handler request =
         (* CURRENT durable admin authority for the private read gate. *)
         let%lwt is_admin = current_admin_read_override db request in
         let%lwt gate_ok =
-          match%lwt Db.get_community_by_id db post.community_id with
+          match%lwt Community_store.get_community_by_id db post.community_id with
           | Ok (Some community) -> can_view_community db ~user_id:viewer_id ~admin_override:is_admin community
           | _ -> Lwt.return false
         in
@@ -3799,11 +3799,11 @@ let view_post_handler request =
         else begin
         (* Safe fallback for the pathological unmappable post (no community slug): render the
            legacy warm-card page rather than 500. In practice community_slug is always set. *)
-        let%lwt comments_result = Db.get_comments db post.id in
+        let%lwt comments_result = Comment_store.get_comments db post.id in
 
         let%lwt is_member_result =
           match user_id_opt with
-          | Some uid -> Db.is_member db (int_of_string uid) post.community_id
+          | Some uid -> Membership_store.is_member db (int_of_string uid) post.community_id
           | None -> Lwt.return (Ok false)
         in
 
@@ -3811,39 +3811,39 @@ let view_post_handler request =
         let%lwt user_comment_votes = get_current_user_comment_votes db request in
         let%lwt is_mod_res =
           match user_id_opt with
-          | Some uid -> Db.is_moderator db (int_of_string uid) post.community_id
+          | Some uid -> Moderator_store.is_moderator db (int_of_string uid) post.community_id
           | None -> Lwt.return_ok false
         in
-        let%lwt mods_res = Db.get_community_moderators db post.community_id in
+        let%lwt mods_res = Moderator_store.get_community_moderators db post.community_id in
 
-        let%lwt admin_usernames_res = Db.get_admin_usernames db in
+        let%lwt admin_usernames_res = User_store.get_admin_usernames db in
         let admin_usernames = match admin_usernames_res with Ok l -> l | Error _ -> [] in
-        let%lwt banned_res = Db.community_get_banned_users db post.community_id in
-        let banned_usernames = match banned_res with Ok bs -> List.map (fun (u: Db.user) -> u.username) bs | _ -> [] in
-        let%lwt community_res = Db.get_community_by_slug db post.community_slug in
+        let%lwt banned_res = Community_ban_store.get_banned_users db post.community_id in
+        let banned_usernames = match banned_res with Ok bs -> List.map (fun (u: User_store.user) -> u.username) bs | _ -> [] in
+        let%lwt community_res = Community_store.get_community_by_slug db post.community_slug in
         let%lwt user_communities_res = match user_id_opt with
-          | Some uid -> Db.get_user_communities db (int_of_string uid)
+          | Some uid -> Membership_store.get_user_communities db (int_of_string uid)
           | None -> Lwt.return_ok []
         in
         let user_communities = match user_communities_res with Ok us -> us | _ -> [] in
         let%lwt moderated_communities_res = match user_id_opt with
-          | Some uid -> Db.get_moderated_communities db (int_of_string uid)
+          | Some uid -> Moderator_store.get_moderated_communities db (int_of_string uid)
           | None -> Lwt.return_ok []
         in
         let moderated_communities = match moderated_communities_res with Ok l -> l | Error _ -> [] in
         (* Fallback community: if the record is somehow missing, construct a minimal one
            from post fields so the page can still render without a 500. *)
-        let community_for_page : Db.community = match community_res with
+        let community_for_page : Community_types.community = match community_res with
           | Ok (Some a) -> a
           | _ -> { id = post.community_id; slug = post.community_slug; name = post.community_slug;
-                   description = None; rules = None; avatar_url = None; banner_url = None; allow_downvotes = true; sections_enabled = false; visibility = Db.Community_public; indexable = true;
-                   is_network_community = false; onboarding_state = Db.Community_published; discoverable = true }
+                   description = None; rules = None; avatar_url = None; banner_url = None; allow_downvotes = true; sections_enabled = false; visibility = Community_types.Community_public; indexable = true;
+                   is_network_community = false; onboarding_state = Community_types.Community_published; discoverable = true }
         in
         let%lwt noindex = thread_noindex db community_for_page post in
         (match comments_result, is_member_result with
         | Ok comments, Ok is_member ->
             let is_mod = match is_mod_res with Ok b -> b | _ -> false in
-            let mod_usernames = match mods_res with Ok ms -> List.map (fun (u: Db.user) -> u.username) ms | _ -> [] in
+            let mod_usernames = match mods_res with Ok ms -> List.map (fun (u: User_store.user) -> u.username) ms | _ -> [] in
             Dream.html (Pages.post_page ?user:user_sess ~noindex ~is_member ~is_current_user_mod:is_mod ~mod_usernames ~admin_usernames ~banned_usernames ~community:community_for_page ~user_communities ~moderated_communities user_post_votes user_comment_votes post comments request)
         | _ -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user:user_sess ~title:"Error" ~message:"Failed to load post data. Please try again later." ~alert_type:"error" ~return_url:"/" request))
         end
@@ -3869,7 +3869,7 @@ let view_thread_handler request =
   | None -> Dream.respond ~status:`Not_Found (Pages.msg_page ?user:user_sess ~title:"Not Found" ~message:"Invalid thread URL." ~alert_type:"error" ~return_url:("/c/" ^ community_slug) request)
   | Some post_id ->
   Dream.sql request (fun db ->
-    match%lwt Db.get_post_by_id db post_id with
+    match%lwt Post_store.get_post_by_id db post_id with
     | Ok None -> Dream.respond ~status:`Not_Found (Pages.msg_page ?user:user_sess ~title:"Not Found" ~message:"This thread does not exist or has been deleted." ~alert_type:"error" ~return_url:("/c/" ^ community_slug) request)
     | Error err -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user:user_sess ~title:"Error" ~message:(db_error_message err) ~alert_type:"error" ~return_url:"/" request)
     | Ok (Some post) ->
@@ -3900,7 +3900,7 @@ let view_thread_handler request =
             with
             | Ok (Some ctx) -> (
                 match%lwt
-                  Db.get_community_by_id db
+                  Community_store.get_community_by_id db
                     ctx.Shared_thread_reading.destination_community_id
                 with
                 | Ok (Some destination) ->
@@ -3917,12 +3917,12 @@ let view_thread_handler request =
                slug 301s within the destination context, mirroring the
                canonical redirect. Server-built path — never a stored URL. *)
             let destination_path =
-              Components.canonical_thread_path destination.Db.slug post.id post.title in
+              Components.canonical_thread_path destination.slug post.id post.title in
             let current_path = "/c/" ^ community_slug ^ "/t/" ^ thread_param in
             if current_path <> destination_path then
               Dream.redirect ~status:`Moved_Permanently request destination_path
             else begin
-              let%lwt comments_result = Db.get_comments db post.id in
+              let%lwt comments_result = Comment_store.get_comments db post.id in
               (* Membership here is the DESTINATION's (it feeds the join
                  CTA), but every canonical-content moderation input — the
                  mod flag, the moderator badges, the ban list — stays
@@ -3930,32 +3930,32 @@ let view_thread_handler request =
                  controls, so a destination top mod reads as a plain
                  viewer. *)
               let%lwt is_member_result = match user_id_opt with
-                | Some uid -> Db.is_member db (int_of_string uid) destination.Db.id
+                | Some uid -> Membership_store.is_member db (int_of_string uid) destination.id
                 | None -> Lwt.return (Ok false) in
               let%lwt user_post_votes = get_current_user_votes db request in
               let%lwt user_comment_votes = get_current_user_comment_votes db request in
               let%lwt is_mod_res = match user_id_opt with
-                | Some uid -> Db.is_moderator db (int_of_string uid) post.community_id
+                | Some uid -> Moderator_store.is_moderator db (int_of_string uid) post.community_id
                 | None -> Lwt.return_ok false in
-              let%lwt mods_res = Db.get_community_moderators db post.community_id in
-              let%lwt admin_usernames_res = Db.get_admin_usernames db in
+              let%lwt mods_res = Moderator_store.get_community_moderators db post.community_id in
+              let%lwt admin_usernames_res = User_store.get_admin_usernames db in
               let admin_usernames = match admin_usernames_res with Ok l -> l | Error _ -> [] in
-              let%lwt banned_res = Db.community_get_banned_users db post.community_id in
-              let banned_usernames = match banned_res with Ok bs -> List.map (fun (u : Db.user) -> u.username) bs | _ -> [] in
+              let%lwt banned_res = Community_ban_store.get_banned_users db post.community_id in
+              let banned_usernames = match banned_res with Ok bs -> List.map (fun (u : User_store.user) -> u.username) bs | _ -> [] in
               let%lwt rail_communities = match user_id_opt with
-                | Some uid -> (match%lwt Db.get_user_communities db (int_of_string uid) with Ok cs -> Lwt.return cs | Error _ -> Lwt.return [])
+                | Some uid -> (match%lwt Membership_store.get_user_communities db (int_of_string uid) with Ok cs -> Lwt.return cs | Error _ -> Lwt.return [])
                 | None -> Lwt.return [] in
               (* The destination shell's own navigation data. *)
-              let%lwt channels = match%lwt Db.get_channels_by_community db destination.Db.id with Ok cs -> Lwt.return cs | Error _ -> Lwt.return [] in
-              let%lwt sections = match%lwt Db.get_sections_with_stats db destination.Db.id with
-                | Ok stats -> Lwt.return (List.map (fun ((s : Db.community_section), _, _) -> s) stats)
+              let%lwt channels = match%lwt Channel_store.get_channels_by_community db destination.id with Ok cs -> Lwt.return cs | Error _ -> Lwt.return [] in
+              let%lwt sections = match%lwt Section_store.get_sections_with_stats db destination.id with
+                | Ok stats -> Lwt.return (List.map (fun ((s : Section_store.community_section), _, _) -> s) stats)
                 | Error _ -> Lwt.return [] in
               (* Promoted-conversation provenance, viewer-scoped exactly as
                  on the origin page. The source community IS the post's own
                  (promotion never crosses communities), which this context
                  guarantees is public — so the same rule admits it here. *)
               let%lwt thread_source =
-                match%lwt Db.get_thread_source db post.id with
+                match%lwt Thread_source_store.get_thread_source db post.id with
                 | Error _ | Ok (None, []) -> Lwt.return None
                 | Ok (channel_opt, msgs) ->
                     (match channel_opt with
@@ -3964,7 +3964,7 @@ let view_thread_handler request =
                          if src_community_id = post.community_id then
                            Lwt.return (Some (Pages.Ts_visible (Some (cslug, cname), msgs)))
                          else
-                           (match%lwt Db.get_community_by_id db src_community_id with
+                           (match%lwt Community_store.get_community_by_id db src_community_id with
                             | Ok (Some src_community) ->
                                 let%lwt src_ok = can_view_community db ~user_id:viewer_id ~admin_override:is_admin src_community in
                                 Lwt.return (Some (if src_ok then Pages.Ts_visible (Some (cslug, cname), msgs) else Pages.Ts_private))
@@ -3985,7 +3985,7 @@ let view_thread_handler request =
               match comments_result, is_member_result with
               | Ok comments, Ok is_member ->
                   let is_mod = match is_mod_res with Ok b -> b | _ -> false in
-                  let mod_usernames = match mods_res with Ok ms -> List.map (fun (u : Db.user) -> u.username) ms | _ -> [] in
+                  let mod_usernames = match mods_res with Ok ms -> List.map (fun (u : User_store.user) -> u.username) ms | _ -> [] in
                   (* noindex always: the canonical <link> points at the
                      immutable origin URL and this page must never compete
                      with it in search engines (it stays followable — no
@@ -4002,7 +4002,7 @@ let view_thread_handler request =
            community's slug + thread title in the Location header. Resolve visibility from the
            post's community_id and deny with the SAME 404 as a missing thread. Fail closed. *)
         let%lwt gate_ok =
-          match%lwt Db.get_community_by_id db post.community_id with
+          match%lwt Community_store.get_community_by_id db post.community_id with
           | Ok (Some community) -> can_view_community db ~user_id:viewer_id ~admin_override:is_admin community
           | _ -> Lwt.return false
         in
@@ -4015,27 +4015,27 @@ let view_thread_handler request =
           (* Wrong community slug, or wrong/missing descriptive slug → 301 to canonical. *)
           Dream.redirect ~status:`Moved_Permanently request canonical
         else begin
-          let%lwt comments_result = Db.get_comments db post.id in
+          let%lwt comments_result = Comment_store.get_comments db post.id in
           let%lwt is_member_result = match user_id_opt with
-            | Some uid -> Db.is_member db (int_of_string uid) post.community_id
+            | Some uid -> Membership_store.is_member db (int_of_string uid) post.community_id
             | None -> Lwt.return (Ok false) in
           let%lwt user_post_votes = get_current_user_votes db request in
           let%lwt user_comment_votes = get_current_user_comment_votes db request in
           let%lwt is_mod_res = match user_id_opt with
-            | Some uid -> Db.is_moderator db (int_of_string uid) post.community_id
+            | Some uid -> Moderator_store.is_moderator db (int_of_string uid) post.community_id
             | None -> Lwt.return_ok false in
-          let%lwt mods_res = Db.get_community_moderators db post.community_id in
-          let%lwt admin_usernames_res = Db.get_admin_usernames db in
+          let%lwt mods_res = Moderator_store.get_community_moderators db post.community_id in
+          let%lwt admin_usernames_res = User_store.get_admin_usernames db in
           let admin_usernames = match admin_usernames_res with Ok l -> l | Error _ -> [] in
-          let%lwt banned_res = Db.community_get_banned_users db post.community_id in
-          let banned_usernames = match banned_res with Ok bs -> List.map (fun (u : Db.user) -> u.username) bs | _ -> [] in
-          let%lwt community_res = Db.get_community_by_slug db post.community_slug in
+          let%lwt banned_res = Community_ban_store.get_banned_users db post.community_id in
+          let banned_usernames = match banned_res with Ok bs -> List.map (fun (u : User_store.user) -> u.username) bs | _ -> [] in
+          let%lwt community_res = Community_store.get_community_by_slug db post.community_slug in
           let%lwt rail_communities = match user_id_opt with
-            | Some uid -> (match%lwt Db.get_user_communities db (int_of_string uid) with Ok cs -> Lwt.return cs | Error _ -> Lwt.return [])
+            | Some uid -> (match%lwt Membership_store.get_user_communities db (int_of_string uid) with Ok cs -> Lwt.return cs | Error _ -> Lwt.return [])
             | None -> Lwt.return [] in
-          let%lwt channels = match%lwt Db.get_channels_by_community db post.community_id with Ok cs -> Lwt.return cs | Error _ -> Lwt.return [] in
-          let%lwt sections = match%lwt Db.get_sections_with_stats db post.community_id with
-            | Ok stats -> Lwt.return (List.map (fun ((s : Db.community_section), _, _) -> s) stats)
+          let%lwt channels = match%lwt Channel_store.get_channels_by_community db post.community_id with Ok cs -> Lwt.return cs | Error _ -> Lwt.return [] in
+          let%lwt sections = match%lwt Section_store.get_sections_with_stats db post.community_id with
+            | Ok stats -> Lwt.return (List.map (fun ((s : Section_store.community_section), _, _) -> s) stats)
             | Error _ -> Lwt.return [] in
           (* Promoted-conversation provenance, viewer-scoped. The DB returns raw rows; the
              VIEWER-visibility decision happens here: the source conversation is shown iff
@@ -4047,7 +4047,7 @@ let view_thread_handler request =
              crosses communities), and this viewer already passed that gate — the
              cross-community branch is defensive and fails closed to Ts_private. *)
           let%lwt thread_source =
-            match%lwt Db.get_thread_source db post.id with
+            match%lwt Thread_source_store.get_thread_source db post.id with
             | Error _ | Ok (None, []) -> Lwt.return None
             | Ok (channel_opt, msgs) ->
                 (match channel_opt with
@@ -4056,17 +4056,17 @@ let view_thread_handler request =
                      if src_community_id = post.community_id then
                        Lwt.return (Some (Pages.Ts_visible (Some (cslug, cname), msgs)))
                      else
-                       (match%lwt Db.get_community_by_id db src_community_id with
+                       (match%lwt Community_store.get_community_by_id db src_community_id with
                         | Ok (Some src_community) ->
                             let%lwt src_ok = can_view_community db ~user_id:viewer_id ~admin_override:is_admin src_community in
                             Lwt.return (Some (if src_ok then Pages.Ts_visible (Some (cslug, cname), msgs) else Pages.Ts_private))
                         | _ -> Lwt.return (Some Pages.Ts_private))) in
           (* Fallback community kept for parity with view_post_handler; in practice the record exists. *)
-          let community_for_page : Db.community = match community_res with
+          let community_for_page : Community_types.community = match community_res with
             | Ok (Some a) -> a
             | _ -> { id = post.community_id; slug = post.community_slug; name = post.community_slug;
-                     description = None; rules = None; avatar_url = None; banner_url = None; allow_downvotes = true; sections_enabled = false; visibility = Db.Community_public; indexable = true;
-                     is_network_community = false; onboarding_state = Db.Community_published; discoverable = true } in
+                     description = None; rules = None; avatar_url = None; banner_url = None; allow_downvotes = true; sections_enabled = false; visibility = Community_types.Community_public; indexable = true;
+                     is_network_community = false; onboarding_state = Community_types.Community_published; discoverable = true } in
           let%lwt noindex = thread_noindex db community_for_page post in
           (* Share entry point: decided in the shared-threads read model's SQL
              (author while member and unbanned, origin top_mod, or durable
@@ -4122,7 +4122,7 @@ let view_thread_handler request =
           match comments_result, is_member_result with
           | Ok comments, Ok is_member ->
               let is_mod = match is_mod_res with Ok b -> b | _ -> false in
-              let mod_usernames = match mods_res with Ok ms -> List.map (fun (u : Db.user) -> u.username) ms | _ -> [] in
+              let mod_usernames = match mods_res with Ok ms -> List.map (fun (u : User_store.user) -> u.username) ms | _ -> [] in
               Dream.html (Pages.thread_shell_page ?user:user_sess ~noindex ~can_share ~can_comment ?creation_notice ~shared_with ~is_member ~is_current_user_mod:is_mod
                 ~mod_usernames ~admin_usernames ~banned_usernames ~rail_communities ~channels ~sections
                 ~community:community_for_page ?thread_source ~user_post_votes ~user_comment_votes ~post ~comments request)
@@ -4152,14 +4152,14 @@ let delete_post_handler request =
             | Ok is_admin ->
             (* Fetch post upfront — needed for both mod-check and admin immunity. *)
             let%lwt post_opt =
-              match%lwt Db.get_post_by_id db post_id with
+              match%lwt Post_store.get_post_by_id db post_id with
               | Ok p -> Lwt.return p | _ -> Lwt.return None
             in
             let%lwt is_mod =
               if is_admin then Lwt.return false
               else match post_opt with
                 | Some post ->
-                    (match%lwt Db.is_moderator db user_id post.community_id with
+                    (match%lwt Moderator_store.is_moderator db user_id post.community_id with
                     | Ok b -> Lwt.return b
                     | _ -> Lwt.return false)
                 | None -> Lwt.return false
@@ -4175,7 +4175,7 @@ let delete_post_handler request =
                removes no file from disk and mutates no row. *)
             let%lwt target_immunity =
               if is_mod then match post_opt with
-                | Some post -> Db.is_user_admin db post.user_id
+                | Some post -> User_store.is_user_admin db post.user_id
                 | None -> Lwt.return (Ok false)
               else Lwt.return (Ok false)
             in
@@ -4204,8 +4204,8 @@ let delete_post_handler request =
               | _ -> ()
             in
             let%lwt db_action =
-              if is_admin || is_mod then Db.admin_delete_post db ~label:"[removed by admin]" post_id
-              else Db.soft_delete_post db post_id user_id
+              if is_admin || is_mod then Admin_store.admin_delete_post db ~label:"[removed by admin]" post_id
+              else Post_store.soft_delete_post db post_id user_id
             in
             match db_action with
             | Ok () ->
@@ -4236,7 +4236,7 @@ let mod_delete_post_handler request =
             Dream.respond ~status:`Bad_Request (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Validation Error" ~message:"A reason is required for moderation actions." ~alert_type:"error" ~return_url:("/c/" ^ slug) request)
           else
           Dream.sql request (fun db ->
-            match%lwt Db.get_community_by_slug db slug with
+            match%lwt Community_store.get_community_by_slug db slug with
             | Error err ->
                 Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Error" ~message:(db_error_message err) ~alert_type:"error" ~return_url:"/" request)
             | Ok None ->
@@ -4251,7 +4251,7 @@ let mod_delete_post_handler request =
                 match%lwt current_admin_bool db request with
                 | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:("/c/" ^ slug) request)
                 | Ok is_admin ->
-                let%lwt is_community_mod_res = Db.is_moderator db user_id community.id in
+                let%lwt is_community_mod_res = Moderator_store.is_moderator db user_id community.id in
                 let is_community_mod = match is_community_mod_res with Ok true -> true | _ -> false in
                 if not (is_admin || is_community_mod) then
                     Dream.respond ~status:`Forbidden (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Forbidden" ~message:"You are not a moderator of this community." ~alert_type:"error" ~return_url:("/c/" ^ slug) request)
@@ -4265,7 +4265,7 @@ let mod_delete_post_handler request =
                     let not_found_here () =
                       Dream.respond ~status:`Not_Found (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Not Found" ~message:"This post does not exist in this community." ~alert_type:"error" ~return_url:("/c/" ^ slug) request)
                     in
-                    (match%lwt Db.get_post_by_id db post_id with
+                    (match%lwt Post_store.get_post_by_id db post_id with
                     | Error err ->
                         Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Error" ~message:(db_error_message err) ~alert_type:"error" ~return_url:("/c/" ^ slug) request)
                     | Ok None -> not_found_here ()
@@ -4275,7 +4275,7 @@ let mod_delete_post_handler request =
                            RETURNING as the match evidence. Ok false means the post
                            vanished or moved since the read above — still a neutral 404,
                            still zero side effects. *)
-                        (match%lwt Db.mod_delete_post db ~community_id:community.id post_id with
+                        (match%lwt Admin_store.mod_delete_post db ~community_id:community.id post_id with
                         | Error err ->
                             Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Error" ~message:(db_error_message err) ~alert_type:"error" ~return_url:("/c/" ^ slug) request)
                         | Ok false -> not_found_here ()
@@ -4296,12 +4296,12 @@ let mod_delete_post_handler request =
                             let is_admin_override = is_admin && not is_community_mod in
                             let action_type = if is_admin_override then "admin_delete_post" else "delete_post" in
                             let logged_reason = if is_admin_override then "Admin Intervention: " ^ reason else reason in
-                            let%lwt _ = Db.log_mod_action db community.id user_id action_type (Some post_id) logged_reason in
+                            let%lwt _ = Mod_log_store.log_action db community.id user_id action_type (Some post_id) logged_reason in
                             (* Notify the author from the row validated above — no re-query
                                of the tombstoned row. *)
                             let%lwt _ =
                               let msg = "Your post was removed by a moderator. Reason: " ^ reason in
-                              Db.create_notif db post.user_id (Some post_id) "mod_action" msg
+                              Notification_store.create_notif db post.user_id (Some post_id) "mod_action" msg
                             in
                             Dream.redirect request ("/c/" ^ slug)))
           )
@@ -4329,7 +4329,7 @@ let mod_delete_comment_handler request =
             Dream.respond ~status:`Bad_Request (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Validation Error" ~message:"A reason is required for moderation actions." ~alert_type:"error" ~return_url:("/c/" ^ slug) request)
           else
           Dream.sql request (fun db ->
-            match%lwt Db.get_community_by_slug db slug with
+            match%lwt Community_store.get_community_by_slug db slug with
             | Error err ->
                 Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Error" ~message:(db_error_message err) ~alert_type:"error" ~return_url:"/" request)
             | Ok None ->
@@ -4344,7 +4344,7 @@ let mod_delete_comment_handler request =
                 match%lwt current_admin_bool db request with
                 | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:("/c/" ^ slug) request)
                 | Ok is_admin ->
-                let%lwt is_community_mod_res = Db.is_moderator db user_id community.id in
+                let%lwt is_community_mod_res = Moderator_store.is_moderator db user_id community.id in
                 let is_community_mod = match is_community_mod_res with Ok true -> true | _ -> false in
                 if not (is_admin || is_community_mod) then
                     Dream.respond ~status:`Forbidden (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Forbidden" ~message:"You are not a moderator of this community." ~alert_type:"error" ~return_url:("/c/" ^ slug) request)
@@ -4360,10 +4360,10 @@ let mod_delete_comment_handler request =
                       Dream.respond ~status:`Not_Found (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Not Found" ~message:"This comment does not exist in this community." ~alert_type:"error" ~return_url:("/c/" ^ slug) request)
                     in
                     let%lwt in_this_community =
-                      match%lwt Db.get_comment_post_id db comment_id with
+                      match%lwt Notification_store.get_comment_post_id db comment_id with
                       | Error _ -> Lwt.return false
                       | Ok pid ->
-                          (match%lwt Db.get_post_by_id db pid with
+                          (match%lwt Post_store.get_post_by_id db pid with
                           | Ok (Some post) -> Lwt.return (post.community_id = community.id)
                           | _ -> Lwt.return false)
                     in
@@ -4371,12 +4371,12 @@ let mod_delete_comment_handler request =
                     else
                     (* Author read while the row is intact (the tombstone keeps user_id,
                        but the notification must never depend on that detail). *)
-                    let%lwt author_res = Db.get_comment_owner db comment_id in
+                    let%lwt author_res = Notification_store.get_comment_owner db comment_id in
                     (* The mutation re-proves comment -> post -> community atomically;
                        RETURNING c.post_id is both the match evidence and the redirect
                        target. Ok None means the comment vanished since the check above —
                        still a neutral 404, still zero side effects. *)
-                    (match%lwt Db.mod_delete_comment db ~community_id:community.id comment_id with
+                    (match%lwt Admin_store.mod_delete_comment db ~community_id:community.id comment_id with
                     | Error err ->
                         Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Error" ~message:(db_error_message err) ~alert_type:"error" ~return_url:("/c/" ^ slug) request)
                     | Ok None -> not_found_here ()
@@ -4386,11 +4386,11 @@ let mod_delete_comment_handler request =
                         let is_admin_override = is_admin && not is_community_mod in
                         let action_type = if is_admin_override then "admin_delete_comment" else "delete_comment" in
                         let logged_reason = if is_admin_override then "Admin Intervention: " ^ reason else reason in
-                        let%lwt _ = Db.log_mod_action db community.id user_id action_type (Some comment_id) logged_reason in
+                        let%lwt _ = Mod_log_store.log_action db community.id user_id action_type (Some comment_id) logged_reason in
                         let%lwt _ = match author_res with
                           | Ok author_id ->
                               let msg = "Your comment was removed by a moderator. Reason: " ^ reason in
-                              Db.create_notif db author_id (Some post_id) "mod_action" msg
+                              Notification_store.create_notif db author_id (Some post_id) "mod_action" msg
                           | Error _ -> Lwt.return (Ok ())
                         in
                         Dream.redirect request ("/p/" ^ string_of_int post_id))
@@ -4411,23 +4411,23 @@ let mod_delete_comment_handler request =
 (* Shared post/comment target resolution. Returns the target's author id and the canonical
    return URL, or None when the target is missing / hard-deleted / not in this community.
    chat_message is rejected before this is ever called, but is handled for exhaustiveness. *)
-let resolve_report_target db community_id (target_type : Db.report_target) target_id =
+let resolve_report_target db community_id (target_type : Report_store.report_target) target_id =
   match target_type with
-  | Db.Report_post ->
-      (match%lwt Db.get_post_by_id db target_id with
+  | Report_store.Report_post ->
+      (match%lwt Post_store.get_post_by_id db target_id with
        | Ok (Some post) when post.community_id = community_id ->
            Lwt.return (Ok (Some (post.user_id, post.title,
              Components.canonical_thread_path post.community_slug post.id post.title)))
        | Ok _ -> Lwt.return (Ok None)
        | Error e -> Lwt.return (Error e))
-  | Db.Report_comment ->
-      (match%lwt Db.get_comment_report_target db target_id with
+  | Report_store.Report_comment ->
+      (match%lwt Comment_store.get_comment_report_target db target_id with
        | Ok (Some crt) when crt.crt_community_id = community_id ->
            Lwt.return (Ok (Some (crt.crt_author_user_id, crt.crt_content,
              Components.canonical_thread_path crt.crt_community_slug crt.crt_post_id crt.crt_post_title)))
        | Ok _ -> Lwt.return (Ok None)
        | Error e -> Lwt.return (Error e))
-  | Db.Report_chat_message -> Lwt.return (Ok None)
+  | Report_store.Report_chat_message -> Lwt.return (Ok None)
 
 let report_form_handler request =
   let slug = Dream.param request "slug" in
@@ -4437,16 +4437,16 @@ let report_form_handler request =
   | Some uid_str ->
       let user_id = int_of_string uid_str in
       let target_type_opt = match Dream.query request "type" with
-        | Some s -> Db.report_target_of_string s | None -> None in
+        | Some s -> Report_store.report_target_of_string s | None -> None in
       let target_id = match Dream.query request "id" with
         | Some s -> (try int_of_string s with _ -> 0) | None -> 0 in
       let bad () =
         Dream.respond ~status:`Bad_Request (Pages.msg_page ?user ~title:"Invalid Report"
           ~message:"That report link is not valid." ~alert_type:"error" ~return_url:("/c/" ^ slug) request) in
       (match target_type_opt with
-       | Some ((Db.Report_post | Db.Report_comment) as target_type) when target_id > 0 ->
+       | Some ((Report_store.Report_post | Report_store.Report_comment) as target_type) when target_id > 0 ->
            Dream.sql request (fun db ->
-             match%lwt Db.get_community_by_slug db slug with
+             match%lwt Community_store.get_community_by_slug db slug with
              | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:"/" request)
              | Ok None -> community_not_found ?user request
              | Ok (Some community) ->
@@ -4464,12 +4464,12 @@ let report_form_handler request =
                     500 — and the form, whose policy requires a non-banned
                     reporter, is not rendered on an unknown ban state. Keeps
                     GET coherent with the POST that follows it. *)
-                 (match%lwt Db.is_globally_banned db user_id with
+                 (match%lwt Admin_store.is_globally_banned db user_id with
                   | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:"/" request)
                   | Ok true ->
                    Dream.respond ~status:`Forbidden (Pages.msg_page ?user ~title:"Account Banned" ~message:"Your account has been permanently banned from Earde." ~alert_type:"error" ~return_url:"/" request)
                   | Ok false ->
-                 match%lwt Db.community_is_banned db user_id community.id with
+                 match%lwt Community_ban_store.is_banned db user_id community.id with
                  | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:"/" request)
                  | Ok true ->
                    Dream.respond ~status:`Forbidden (Pages.msg_page ?user ~title:"Banned from Community" ~message:"You are banned from this community." ~alert_type:"error" ~return_url:("/c/" ^ community.slug) request)
@@ -4493,22 +4493,22 @@ let report_form_handler request =
                            Settings visibility; the settings handler re-checks. *)
                         let%lwt can_manage =
                           if is_admin then Lwt.return true
-                          else (match%lwt Db.is_moderator db user_id community.id with
+                          else (match%lwt Moderator_store.is_moderator db user_id community.id with
                             | Ok b -> Lwt.return b
                             | _ -> Lwt.return false)
                         in
                         let%lwt sections =
                           if community.sections_enabled then
-                            (match%lwt Db.get_sections_by_community db community.id with
+                            (match%lwt Section_store.get_sections_by_community db community.id with
                              | Ok secs -> Lwt.return secs | Error _ -> Lwt.return [])
                           else Lwt.return []
                         in
                         let%lwt channels =
-                          match%lwt Db.get_channels_by_community db community.id with
+                          match%lwt Channel_store.get_channels_by_community db community.id with
                           | Ok cs -> Lwt.return cs | Error _ -> Lwt.return []
                         in
                         let%lwt rail_communities =
-                          match%lwt Db.get_user_communities db user_id with
+                          match%lwt Membership_store.get_user_communities db user_id with
                           | Ok cs -> Lwt.return cs | Error _ -> Lwt.return []
                         in
                         Dream.html (Pages.report_form_page ?user ~rail_communities ~channels ~sections
@@ -4525,17 +4525,17 @@ let create_report_handler request =
       match%lwt Dream.form request with
       | `Ok form_data ->
           let get n = Option.value ~default:"" (List.assoc_opt n form_data) in
-          let target_type_opt = Db.report_target_of_string (get "target_type") in
-          let reason_opt = Db.report_reason_of_string (get "reason") in
+          let target_type_opt = Report_store.report_target_of_string (get "target_type") in
+          let reason_opt = Report_store.report_reason_of_string (get "reason") in
           let target_id = try int_of_string (get "target_id") with _ -> 0 in
           (* Cap details server-side; the form's maxlength is advisory only. *)
           let details = match String.trim (get "details") with
             | "" -> None
             | d -> Some (if String.length d > 1000 then String.sub d 0 1000 else d) in
           (match target_type_opt, reason_opt with
-           | Some ((Db.Report_post | Db.Report_comment) as target_type), Some reason when target_id > 0 ->
+           | Some ((Report_store.Report_post | Report_store.Report_comment) as target_type), Some reason when target_id > 0 ->
                Dream.sql request (fun db ->
-                 match%lwt Db.get_community_by_slug db slug with
+                 match%lwt Community_store.get_community_by_slug db slug with
                  | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:"/" request)
                  | Ok None -> community_not_found ?user request
                  | Ok (Some community) ->
@@ -4551,12 +4551,12 @@ let create_report_handler request =
                      (* Ban gates, still after the privacy gate above and now
                         fail-closed: no report row may be inserted while the
                         reporter's ban state is unknown. *)
-                     (match%lwt Db.is_globally_banned db user_id with
+                     (match%lwt Admin_store.is_globally_banned db user_id with
                       | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:"/" request)
                       | Ok true ->
                        Dream.respond ~status:`Forbidden (Pages.msg_page ?user ~title:"Account Banned" ~message:"Your account has been permanently banned from Earde." ~alert_type:"error" ~return_url:"/" request)
                       | Ok false ->
-                     match%lwt Db.community_is_banned db user_id community.id with
+                     match%lwt Community_ban_store.is_banned db user_id community.id with
                      | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:"/" request)
                      | Ok true ->
                        Dream.respond ~status:`Forbidden (Pages.msg_page ?user ~title:"Banned from Community" ~message:"You are banned from this community." ~alert_type:"error" ~return_url:("/c/" ^ community.slug) request)
@@ -4572,7 +4572,7 @@ let create_report_handler request =
                               ~message:"You cannot report your own content. You can delete it instead."
                               ~alert_type:"error" ~return_url request)
                           else
-                            (match%lwt Db.create_report db ~community_id:community.id ~reporter_user_id:user_id
+                            (match%lwt Report_store.create_report db ~community_id:community.id ~reporter_user_id:user_id
                                        ~target_type ~target_id:(Int64.of_int target_id)
                                        ~target_author_user_id:(Some author_id) ~reason ~details with
                              | Ok (`Created _) ->
@@ -4600,10 +4600,10 @@ let reports_queue_handler request =
       let user_id = int_of_string uid_str in
       (* Default open; an unknown ?status= falls back to open (least surprising). *)
       let status = match Dream.query request "status" with
-        | Some s -> (match Db.report_status_of_string s with Some st -> st | None -> Db.Report_open)
-        | None -> Db.Report_open in
+        | Some s -> (match Report_store.report_status_of_string s with Some st -> st | None -> Report_store.Report_open)
+        | None -> Report_store.Report_open in
       Dream.sql request (fun db ->
-        match%lwt Db.get_community_by_slug db slug with
+        match%lwt Community_store.get_community_by_slug db slug with
         | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:"/" request)
         | Ok None -> Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"Not Found" ~message:"This community does not exist." ~alert_type:"error" ~return_url:"/" request)
         | Ok (Some community) ->
@@ -4615,7 +4615,7 @@ let reports_queue_handler request =
             | Ok is_admin ->
             let%lwt is_authorized =
               if is_admin then Lwt.return true
-              else (match%lwt Db.is_moderator db user_id community.id with Ok b -> Lwt.return b | _ -> Lwt.return false)
+              else (match%lwt Moderator_store.is_moderator db user_id community.id with Ok b -> Lwt.return b | _ -> Lwt.return false)
             in
             if not is_authorized then
               Dream.respond ~status:`Forbidden (Pages.msg_page ?user ~title:"Access Denied" ~message:"You must be a moderator to view reports." ~alert_type:"error" ~return_url:("/c/" ^ slug) request)
@@ -4627,16 +4627,16 @@ let reports_queue_handler request =
                  the sibling converted management routes. *)
               let%lwt sections =
                 if community.sections_enabled then
-                  (match%lwt Db.get_sections_by_community db community.id with
+                  (match%lwt Section_store.get_sections_by_community db community.id with
                    | Ok secs -> Lwt.return secs | Error _ -> Lwt.return [])
                 else Lwt.return []
               in
               let%lwt channels =
-                match%lwt Db.get_channels_by_community db community.id with
+                match%lwt Channel_store.get_channels_by_community db community.id with
                 | Ok cs -> Lwt.return cs | Error _ -> Lwt.return []
               in
               let%lwt rail_communities =
-                match%lwt Db.get_user_communities db user_id with
+                match%lwt Membership_store.get_user_communities db user_id with
                 | Ok cs -> Lwt.return cs | Error _ -> Lwt.return []
               in
               (* Read-only role lookup for the shared settings shell's nav:
@@ -4645,11 +4645,11 @@ let reports_queue_handler request =
                  linked route still reauthorizes — this changes no
                  permission. *)
               let%lwt is_top_mod =
-                match%lwt Db.get_moderator_role db user_id community.id with
+                match%lwt Moderator_store.get_moderator_role db user_id community.id with
                 | Ok (Some "top_mod") -> Lwt.return true
                 | _ -> Lwt.return false
               in
-              (match%lwt Db.get_reports_by_community db community.id ~status with
+              (match%lwt Report_store.get_reports_by_community db community.id ~status with
                | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:("/c/" ^ slug) request)
                | Ok reports ->
                    (* Bounded per-row context+preview lookup (read-only MVP): reuse
@@ -4659,7 +4659,7 @@ let reports_queue_handler request =
                    let rec take n = function
                      | [] -> [] | _ when n <= 0 -> [] | x :: xs -> x :: take (n - 1) xs in
                    let%lwt previews =
-                     Lwt_list.filter_map_s (fun (r : Db.report_row) ->
+                     Lwt_list.filter_map_s (fun (r : Report_store.report_row) ->
                        match%lwt resolve_report_target db community.id r.target_type (Int64.to_int r.target_id) with
                        | Ok (Some (_author, preview, url)) -> Lwt.return (Some (r.id, (url, preview)))
                        | _ -> Lwt.return None)
@@ -4696,7 +4696,7 @@ let resolve_report_action request ~new_status ~action_kind ~action_type ~default
              | None -> None
            in
            Dream.sql request (fun db ->
-             match%lwt Db.get_community_by_slug db slug with
+             match%lwt Community_store.get_community_by_slug db slug with
              | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:"/" request)
              | Ok None -> Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"Not Found" ~message:"This community does not exist." ~alert_type:"error" ~return_url:"/" request)
              | Ok (Some community) ->
@@ -4708,12 +4708,12 @@ let resolve_report_action request ~new_status ~action_kind ~action_type ~default
                  | Ok is_admin ->
                  let%lwt is_authorized =
                    if is_admin then Lwt.return true
-                   else (match%lwt Db.is_moderator db user_id community.id with Ok b -> Lwt.return b | _ -> Lwt.return false)
+                   else (match%lwt Moderator_store.is_moderator db user_id community.id with Ok b -> Lwt.return b | _ -> Lwt.return false)
                  in
                  if not is_authorized then
                    Dream.respond ~status:`Forbidden (Pages.msg_page ?user ~title:"Access Denied" ~message:"You must be a moderator to resolve reports." ~alert_type:"error" ~return_url:("/c/" ^ slug) request)
                  else
-                   (match%lwt Db.get_report_by_id db report_id with
+                   (match%lwt Report_store.get_report_by_id db report_id with
                     | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:reports_url request)
                     | Ok None -> Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"Not Found" ~message:"That report does not exist." ~alert_type:"error" ~return_url:reports_url request)
                     | Ok (Some report) ->
@@ -4721,24 +4721,24 @@ let resolve_report_action request ~new_status ~action_kind ~action_type ~default
                            be mutable under this community's mod authority. *)
                         if report.community_id <> community.id then
                           Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"Not Found" ~message:"That report does not belong to this community." ~alert_type:"error" ~return_url:reports_url request)
-                        else if report.status <> Db.Report_open then
+                        else if report.status <> Report_store.Report_open then
                           (* Already resolved (possibly by another mod): no mutation, bounce to the
                              tab it now lives in. *)
-                          Dream.redirect request (reports_url ^ "?status=" ^ Db.report_status_to_string report.status)
+                          Dream.redirect request (reports_url ^ "?status=" ^ Report_store.report_status_to_string report.status)
                         else
-                          (match%lwt Db.resolve_report db report_id ~resolver_user_id:user_id ~status:new_status ~action_kind ~note with
+                          (match%lwt Report_store.resolve_report db report_id ~resolver_user_id:user_id ~status:new_status ~action_kind ~note with
                            | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:reports_url request)
                            | Ok () ->
                                let reason = match note with Some n -> n | None -> default_reason report_id in
-                               let%lwt _ = Db.log_mod_action db community.id user_id action_type (Some report_id) reason in
-                               Dream.redirect request (reports_url ^ "?status=" ^ Db.report_status_to_string new_status)))))
+                               let%lwt _ = Mod_log_store.log_action db community.id user_id action_type (Some report_id) reason in
+                               Dream.redirect request (reports_url ^ "?status=" ^ Report_store.report_status_to_string new_status)))))
        | _ ->
            Dream.respond ~status:`Bad_Request (Pages.msg_page ?user ~title:"Form Error" ~message:"Invalid form submission." ~alert_type:"error" ~return_url:reports_url request))
 
 (* Dismiss: report had no actionable merit. No content action, so action_kind stays None. *)
 let dismiss_report_handler request =
   resolve_report_action request
-    ~new_status:Db.Report_dismissed
+    ~new_status:Report_store.Report_dismissed
     ~action_kind:None
     ~action_type:"dismiss_report"
     ~default_reason:(fun id -> Printf.sprintf "Dismissed report #%d" id)
@@ -4748,8 +4748,8 @@ let dismiss_report_handler request =
    which would claim an action that did not happen. Content removal is a later slice. *)
 let action_report_handler request =
   resolve_report_action request
-    ~new_status:Db.Report_action_taken
-    ~action_kind:(Some Db.Report_other_action)
+    ~new_status:Report_store.Report_action_taken
+    ~action_kind:(Some Report_store.Report_other_action)
     ~action_type:"resolve_report"
     ~default_reason:(fun id -> Printf.sprintf "Marked report #%d as action taken" id)
 
@@ -4788,14 +4788,14 @@ let create_comment_handler request =
                survive a ban until the next login, so we must check on every write.
                An unreadable ban state fails closed here, before the comment
                insert, its notifications, karma and last-activity bump. *)
-            match%lwt Db.is_globally_banned db user_id with
+            match%lwt Admin_store.is_globally_banned db user_id with
             | Error err -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ~user:username ~title:"Error" ~message:(db_error_message err) ~alert_type:"error" ~return_url:"/" request)
             | Ok true ->
               Dream.respond ~status:`Forbidden (Pages.msg_page ~user:username ~title:"Account Banned" ~message:"Your account has been permanently banned from Earde." ~alert_type:"error" ~return_url:"/" request)
             | Ok false ->
             (* Lookup post to get community_id for the ban check — avoids adding a hidden
                form field that a client could forge to bypass their own community ban. *)
-            (match%lwt Db.get_post_by_id db post_id with
+            (match%lwt Post_store.get_post_by_id db post_id with
             | Ok (Some post) ->
                 let is_tombstone = match post.content with
                   | Some "[deleted]" | Some "[removed by admin]" | Some "[removed by moderator]" -> true
@@ -4807,7 +4807,7 @@ let create_comment_handler request =
                 (* The canonical binding is unchanged: the community comes from
                    the loaded post, never from the form. Only the Error arm
                    changes — it no longer falls through to the comment insert. *)
-                (match%lwt Db.community_is_banned db user_id post.community_id with
+                (match%lwt Community_ban_store.is_banned db user_id post.community_id with
                 | Ok true ->
                     Dream.respond ~status:`Forbidden (Pages.msg_page ~user:username ~title:"Banned from Community" ~message:"You are banned from commenting in this community." ~alert_type:"error" ~return_url:("/p/" ^ string_of_int post_id) request)
                 | Error err ->
@@ -4833,7 +4833,7 @@ let create_comment_handler request =
                     | Ok false ->
                         Dream.respond ~status:`Forbidden (Pages.msg_page ~user:username ~title:"Membership required" ~message:"Only current members of a community this thread belongs to can comment." ~alert_type:"error" ~return_url:("/p/" ^ string_of_int post_id) request)
                     | Ok true ->
-                    (match%lwt Db.create_comment db content post_id user_id parent_id_opt with
+                    (match%lwt Comment_store.create_comment db content post_id user_id parent_id_opt with
                     | Ok `Invalid_parent ->
                         (* The submitted parent does not exist, or belongs to a
                            different post — and therefore possibly a different
@@ -4862,25 +4862,25 @@ let create_comment_handler request =
                                    content_length = String.length content;
                                    has_mention = extract_mentions content <> [];
                                  }));
-                        let%lwt _ = Db.increment_local_comment_count db user_id post.community_id in
+                        let%lwt _ = Community_user_stats_store.increment_local_comment_count db user_id post.community_id in
                         (* Bump last_activity_at so the post rises in "active" sorted feeds. *)
-                        let%lwt _ = Db.touch_post_last_activity db post_id in
+                        let%lwt _ = Comment_store.touch_last_activity db post_id in
                         let%lwt target_user = match parent_id_opt with
-                          | Some cid -> Db.get_comment_owner db cid
-                          | None -> Db.get_post_owner db post_id
+                          | Some cid -> Notification_store.get_comment_owner db cid
+                          | None -> Notification_store.get_post_owner db post_id
                         in
                         let%lwt _ = match target_user with
                           | Ok target_id when target_id <> user_id ->
                               let msg = if parent_id_opt = None then username ^ " replied to your post." else username ^ " replied to your comment." in
-                              Db.create_notif db target_id (Some post_id) "comment_reply" msg
+                              Notification_store.create_notif db target_id (Some post_id) "comment_reply" msg
                           | _ -> Lwt.return (Ok ())
                         in
                         (* Fan-out @mention notifications for comment body — best-effort, skips self. *)
                         let%lwt () = Lwt_list.iter_s (fun uname ->
-                          match%lwt Db.get_user_by_username db uname with
+                          match%lwt User_store.get_user_by_username db uname with
                           | Ok (Some mentioned) when mentioned.id <> user_id ->
                               let msg = username ^ " mentioned you in a comment." in
-                              let%lwt _ = Db.create_notif db mentioned.id (Some post_id) "mention" msg in
+                              let%lwt _ = Notification_store.create_notif db mentioned.id (Some post_id) "mention" msg in
                               Lwt.return_unit
                           | _ -> Lwt.return_unit
                         ) (extract_mentions content) in
@@ -4901,12 +4901,12 @@ let create_comment_handler request =
                           | Some slug when slug <> "" && slug <> post.community_slug -> (
                               match%lwt Shared_thread_reading.resolve_destination_context db ~post_id ~destination_slug:slug with
                               | Ok (Some ctx) -> (
-                                  match%lwt Db.get_community_by_id db ctx.Shared_thread_reading.destination_community_id with
+                                  match%lwt Community_store.get_community_by_id db ctx.Shared_thread_reading.destination_community_id with
                                   | Ok (Some destination) ->
                                       let%lwt is_admin = current_admin_read_override db request in
                                       let%lwt viewable = can_view_community db ~user_id ~admin_override:is_admin destination in
                                       if viewable then
-                                        Lwt.return (Components.canonical_thread_path destination.Db.slug post_id post.title)
+                                        Lwt.return (Components.canonical_thread_path destination.slug post_id post.title)
                                       else Lwt.return ("/p/" ^ string_of_int post_id)
                                   | _ -> Lwt.return ("/p/" ^ string_of_int post_id))
                               | _ -> Lwt.return ("/p/" ^ string_of_int post_id))
@@ -4961,13 +4961,13 @@ let delete_comment_handler request =
               Dream.respond ~status:`Not_Found (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Not Found" ~message:"This comment does not exist." ~alert_type:"error" ~return_url:"/" request)
             in
             let%lwt target =
-              match%lwt Db.get_comment_owner db comment_id with
+              match%lwt Notification_store.get_comment_owner db comment_id with
               | Error _ -> Lwt.return None
               | Ok owner_id ->
-                  (match%lwt Db.get_comment_post_id db comment_id with
+                  (match%lwt Notification_store.get_comment_post_id db comment_id with
                   | Error _ -> Lwt.return None
                   | Ok pid ->
-                      (match%lwt Db.get_post_by_id db pid with
+                      (match%lwt Post_store.get_post_by_id db pid with
                       | Ok (Some _) -> Lwt.return (Some (owner_id, pid))
                       | _ -> Lwt.return None))
             in
@@ -4981,14 +4981,14 @@ let delete_comment_handler request =
                        mod_delete flow (required reason, public modlog). *)
                     Dream.respond ~status:`Forbidden (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Forbidden" ~message:"You can only delete your own comments. Community moderation goes through the Mod Remove flow." ~alert_type:"error" ~return_url:redirect_target request)
                 | Comment_delete.Admin_delete ->
-                    (match%lwt Db.admin_delete_comment db ~label:"[removed by admin]" comment_id with
+                    (match%lwt Admin_store.admin_delete_comment db ~label:"[removed by admin]" comment_id with
                     | Ok () -> Dream.redirect request redirect_target
                     | Error err -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Error" ~message:(db_error_message err) ~alert_type:"error" ~return_url:redirect_target request))
                 | Comment_delete.Author_delete ->
                     (* The SQL is also ownership-scoped (id AND user_id), so even a
                        race with an ownership change cannot delete someone else's
                        comment. *)
-                    (match%lwt Db.soft_delete_comment db comment_id user_id with
+                    (match%lwt Comment_store.soft_delete_comment db comment_id user_id with
                     | Ok () -> Dream.redirect request redirect_target
                     | Error err -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Error" ~message:(db_error_message err) ~alert_type:"error" ~return_url:redirect_target request)))
           )
@@ -5020,7 +5020,7 @@ type vote_gate =
    target, and it refuses a globally banned caller without touching — or
    revealing anything about — the id they submitted. *)
 let vote_ban_gate db ~user_id ~resolve =
-  match%lwt Db.is_globally_banned db user_id with
+  match%lwt Admin_store.is_globally_banned db user_id with
   | Error err -> Lwt.return (Vote_gate_error err)
   | Ok true -> Lwt.return Vote_globally_banned
   | Ok false -> (
@@ -5028,7 +5028,7 @@ let vote_ban_gate db ~user_id ~resolve =
       | Error err -> Lwt.return (Vote_gate_error err)
       | Ok None -> Lwt.return Vote_target_missing
       | Ok (Some community_id) -> (
-          match%lwt Db.community_is_banned db user_id community_id with
+          match%lwt Community_ban_store.is_banned db user_id community_id with
           | Error err -> Lwt.return (Vote_gate_error err)
           | Ok true -> Lwt.return Vote_community_banned
           | Ok false -> Lwt.return Vote_allowed))
@@ -5066,14 +5066,14 @@ let vote_handler request =
                the post row, never from the submitted form. *)
             let%lwt gate =
               vote_ban_gate db ~user_id
-                ~resolve:(fun db -> Db.get_post_community_id db post_id)
+                ~resolve:(fun db -> Post_store.get_post_community_id db post_id)
             in
             match vote_gate_refusal gate with
             | Some refusal -> refusal
             | None ->
             (* Guard downvote at the handler boundary — community may have disabled them. *)
             let%lwt downvotes_ok =
-              if direction = -1 then Db.get_allows_downvotes_for_post db post_id
+              if direction = -1 then Community_store.get_allows_downvotes_for_post db post_id
               else Lwt.return (Ok true)
             in
             match downvotes_ok with
@@ -5081,8 +5081,8 @@ let vote_handler request =
             | Ok false -> Dream.respond ~status:`Forbidden "Downvotes are disabled in this community."
             | Ok true ->
             let%lwt db_action =
-              if direction = 0 then Db.remove_post_vote db user_id post_id
-              else Db.vote_post db user_id post_id direction
+              if direction = 0 then Post_store.remove_post_vote db user_id post_id
+              else Post_store.vote_post db user_id post_id direction
             in
 
             match db_action with
@@ -5115,13 +5115,13 @@ let vote_comment_handler request =
                from. *)
             let%lwt gate =
               vote_ban_gate db ~user_id
-                ~resolve:(fun db -> Db.get_comment_community_id db comment_id)
+                ~resolve:(fun db -> Comment_store.get_comment_community_id db comment_id)
             in
             match vote_gate_refusal gate with
             | Some refusal -> refusal
             | None ->
             let%lwt downvotes_ok =
-              if direction = -1 then Db.get_allows_downvotes_for_comment db comment_id
+              if direction = -1 then Community_store.get_allows_downvotes_for_comment db comment_id
               else Lwt.return (Ok true)
             in
             match downvotes_ok with
@@ -5129,8 +5129,8 @@ let vote_comment_handler request =
             | Ok false -> Dream.respond ~status:`Forbidden "Downvotes are disabled in this community."
             | Ok true ->
             let%lwt db_action =
-              if direction = 0 then Db.remove_comment_vote db user_id comment_id
-              else Db.vote_comment db user_id comment_id direction
+              if direction = 0 then Comment_store.remove_comment_vote db user_id comment_id
+              else Comment_store.vote_comment db user_id comment_id direction
             in
 
             match db_action with
@@ -5153,7 +5153,7 @@ let toggle_downvotes_handler request =
       | `Ok form_data ->
           let new_val = List.assoc_opt "allow_downvotes" form_data = Some "true" in
           Dream.sql request (fun db ->
-            match%lwt Db.get_community_by_slug db slug with
+            match%lwt Community_store.get_community_by_slug db slug with
             | Ok None -> Dream.respond ~status:`Not_Found "Community not found."
             | Error err -> Dream.respond ~status:`Internal_Server_Error (db_error_message err)
             | Ok (Some community) ->
@@ -5163,12 +5163,12 @@ let toggle_downvotes_handler request =
                 (match%lwt current_admin_bool db request with
                 | Error e -> Dream.respond ~status:`Internal_Server_Error (db_error_message e)
                 | Ok is_admin ->
-                let%lwt role_res = Db.get_moderator_role db user_id community.id in
+                let%lwt role_res = Moderator_store.get_moderator_role db user_id community.id in
                 let is_top_mod = match role_res with Ok (Some "top_mod") -> true | _ -> false in
                 if not (is_top_mod || is_admin) then
                   Dream.respond ~status:`Forbidden "Only the Top Moderator can change this setting."
                 else
-                  match%lwt Db.toggle_community_downvotes db community.id new_val with
+                  match%lwt Community_store.toggle_community_downvotes db community.id new_val with
                   | Ok () -> Dream.redirect request ("/c/" ^ slug ^ "/settings?panel=moderation")
                   | Error err -> Dream.respond ~status:`Internal_Server_Error (db_error_message err))
           )
@@ -5186,7 +5186,7 @@ let toggle_downvotes_handler request =
    record it just loaded, before any write. The rule itself lives in
    Network_communities — this only maps the record's fields onto it and picks
    the user-facing rejection copy. *)
-let visibility_update_rejection (community : Db.community) ~requested_visibility =
+let visibility_update_rejection (community : Community_types.community) ~requested_visibility =
   if
     Network_communities.visibility_change_allowed
       ~is_network_community:community.is_network_community
@@ -5209,13 +5209,13 @@ let update_community_visibility_handler request =
        | `Ok form_data ->
            (* Closed-variant parse: anything other than public/private is a validation error,
               not a 500. _of_string returns None for off-enum input. *)
-           (match Db.community_visibility_of_string (Option.value ~default:"" (List.assoc_opt "visibility" form_data)) with
+           (match Community_types.community_visibility_of_string (Option.value ~default:"" (List.assoc_opt "visibility" form_data)) with
             | None ->
                 Dream.respond ~status:`Bad_Request (Pages.msg_page ?user ~title:"Invalid setting" ~message:"Visibility must be either public or private." ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/settings") request)
             | Some visibility ->
                 with_analytics_after_sql (fun record ->
                 Dream.sql request (fun db ->
-                  match%lwt Db.get_community_by_slug db slug with
+                  match%lwt Community_store.get_community_by_slug db slug with
                   | Ok None -> Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"Not Found" ~message:"Community not found." ~alert_type:"error" ~return_url:"/" request)
                   | Error err -> Dream.respond ~status:`Internal_Server_Error (db_error_message err)
                   | Ok (Some community) when is_network_setup_draft community ->
@@ -5234,7 +5234,7 @@ let update_community_visibility_handler request =
                       (match%lwt current_admin_bool db request with
                       | Error e -> Dream.respond ~status:`Internal_Server_Error (db_error_message e)
                       | Ok is_admin ->
-                      let%lwt role_res = Db.get_moderator_role db user_id community.id in
+                      let%lwt role_res = Moderator_store.get_moderator_role db user_id community.id in
                       let is_top_mod = match role_res with Ok (Some "top_mod") -> true | _ -> false in
                       if not (is_top_mod || is_admin) then
                         Dream.respond ~status:`Forbidden (Pages.msg_page ?user ~title:"Access Denied" ~message:"Only Top Mods and admins can change visibility." ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/settings") request)
@@ -5246,7 +5246,7 @@ let update_community_visibility_handler request =
                                transition is refused, never silently dropped. *)
                             Dream.respond ~status:`Conflict (Pages.msg_page ?user ~title:"Visibility unavailable" ~message ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/settings") request)
                         | None ->
-                        match%lwt Db.update_community_visibility_and_enqueue_group_cleanup db community.id visibility with
+                        match%lwt Posthog_group_cleanup_job_store.update_visibility_and_enqueue db community.id visibility with
                         | Ok (Some updated, cleanup_job) ->
                             (* Visibility is a closed group property: refresh
                                the group profile from the UPDATE ... RETURNING
@@ -5293,7 +5293,7 @@ let update_community_indexability_handler request =
               value is treated as false (non-indexable) — fail toward LESS exposure, never a 500. *)
            let indexable = List.assoc_opt "indexable" form_data = Some "true" in
            Dream.sql request (fun db ->
-             match%lwt Db.get_community_by_slug db slug with
+             match%lwt Community_store.get_community_by_slug db slug with
              | Ok None -> Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"Not Found" ~message:"Community not found." ~alert_type:"error" ~return_url:"/" request)
              | Error err -> Dream.respond ~status:`Internal_Server_Error (db_error_message err)
              | Ok (Some community) when community.is_network_community ->
@@ -5315,12 +5315,12 @@ let update_community_indexability_handler request =
                  match%lwt current_admin_bool db request with
                  | Error e -> Dream.respond ~status:`Internal_Server_Error (db_error_message e)
                  | Ok is_admin ->
-                 let%lwt role_res = Db.get_moderator_role db user_id community.id in
+                 let%lwt role_res = Moderator_store.get_moderator_role db user_id community.id in
                  let is_top_mod = match role_res with Ok (Some "top_mod") -> true | _ -> false in
                  if not (is_top_mod || is_admin) then
                    Dream.respond ~status:`Forbidden (Pages.msg_page ?user ~title:"Access Denied" ~message:"Only Top Mods and admins can change discovery settings." ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/settings") request)
                  else
-                   match%lwt Db.update_community_indexable db community.id indexable with
+                   match%lwt Community_store.update_community_indexable db community.id indexable with
                    | Ok () -> Dream.redirect request ("/c/" ^ slug ^ "/settings?panel=visibility")
                    | Error err -> Dream.respond ~status:`Internal_Server_Error (db_error_message err))
        | _ -> Dream.respond ~status:`Bad_Request "Invalid form submission.")
@@ -5349,7 +5349,7 @@ let update_channel_indexability_handler request =
        | `Ok form_data ->
            let indexable = List.assoc_opt "indexable" form_data = Some "true" in
            Dream.sql request (fun db ->
-             match%lwt Db.get_community_by_slug db slug with
+             match%lwt Community_store.get_community_by_slug db slug with
              | Ok None -> Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"Not Found" ~message:"Community not found." ~alert_type:"error" ~return_url:"/" request)
              | Error err -> Dream.respond ~status:`Internal_Server_Error (db_error_message err)
              | Ok (Some community) ->
@@ -5359,16 +5359,16 @@ let update_channel_indexability_handler request =
                  match%lwt current_admin_bool db request with
                  | Error e -> Dream.respond ~status:`Internal_Server_Error (db_error_message e)
                  | Ok is_admin ->
-                 let%lwt role_res = Db.get_moderator_role db user_id community.id in
+                 let%lwt role_res = Moderator_store.get_moderator_role db user_id community.id in
                  let is_top_mod = match role_res with Ok (Some "top_mod") -> true | _ -> false in
                  if not (is_top_mod || is_admin) then
                    Dream.respond ~status:`Forbidden (Pages.msg_page ?user ~title:"Access Denied" ~message:"Only Top Mods and admins can change discovery settings." ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/settings") request)
                  else
-                   (match%lwt Db.get_channel_by_id db channel_id community.id with
+                   (match%lwt Channel_store.get_channel_by_id db channel_id community.id with
                     | Ok None -> Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"Not Found" ~message:"Channel not found." ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/settings") request)
                     | Error err -> Dream.respond ~status:`Internal_Server_Error (db_error_message err)
                     | Ok (Some _) ->
-                        match%lwt Db.update_channel_indexable db channel_id community.id indexable with
+                        match%lwt Channel_store.update_channel_indexable db channel_id community.id indexable with
                         | Ok () -> Dream.redirect request ("/c/" ^ slug ^ "/settings?panel=channels")
                         | Error err -> Dream.respond ~status:`Internal_Server_Error (db_error_message err)))
        | _ -> Dream.respond ~status:`Bad_Request "Invalid form submission.")
@@ -5389,7 +5389,7 @@ let update_section_indexability_handler request =
        | `Ok form_data ->
            let indexable = List.assoc_opt "indexable" form_data = Some "true" in
            Dream.sql request (fun db ->
-             match%lwt Db.get_community_by_slug db slug with
+             match%lwt Community_store.get_community_by_slug db slug with
              | Ok None -> Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"Not Found" ~message:"Community not found." ~alert_type:"error" ~return_url:"/" request)
              | Error err -> Dream.respond ~status:`Internal_Server_Error (db_error_message err)
              | Ok (Some community) ->
@@ -5399,16 +5399,16 @@ let update_section_indexability_handler request =
                  match%lwt current_admin_bool db request with
                  | Error e -> Dream.respond ~status:`Internal_Server_Error (db_error_message e)
                  | Ok is_admin ->
-                 let%lwt role_res = Db.get_moderator_role db user_id community.id in
+                 let%lwt role_res = Moderator_store.get_moderator_role db user_id community.id in
                  let is_top_mod = match role_res with Ok (Some "top_mod") -> true | _ -> false in
                  if not (is_top_mod || is_admin) then
                    Dream.respond ~status:`Forbidden (Pages.msg_page ?user ~title:"Access Denied" ~message:"Only Top Mods and admins can change discovery settings." ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/settings") request)
                  else
-                   (match%lwt Db.get_section_by_id db section_id community.id with
+                   (match%lwt Section_store.get_section_by_id db section_id community.id with
                     | Ok None -> Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"Not Found" ~message:"Section not found." ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/settings") request)
                     | Error err -> Dream.respond ~status:`Internal_Server_Error (db_error_message err)
                     | Ok (Some _) ->
-                        match%lwt Db.update_section_indexable db section_id community.id indexable with
+                        match%lwt Section_store.update_section_indexable db section_id community.id indexable with
                         | Ok () -> Dream.redirect request ("/c/" ^ slug ^ "/settings?panel=channels")
                         | Error err -> Dream.respond ~status:`Internal_Server_Error (db_error_message err)))
        | _ -> Dream.respond ~status:`Bad_Request "Invalid form submission.")
@@ -5432,7 +5432,7 @@ let add_member_handler request =
        | `Ok form_data ->
            let target_username = String.trim (Option.value ~default:"" (List.assoc_opt "username" form_data)) in
            Dream.sql request (fun db ->
-             match%lwt Db.get_community_by_slug db slug with
+             match%lwt Community_store.get_community_by_slug db slug with
              | Ok None -> Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"Not Found" ~message:"Community not found." ~alert_type:"error" ~return_url:"/" request)
              | Error err -> Dream.respond ~status:`Internal_Server_Error (db_error_message err)
              | Ok (Some community) ->
@@ -5444,7 +5444,7 @@ let add_member_handler request =
                  match%lwt current_admin_bool db request with
                  | Error e -> Dream.respond ~status:`Internal_Server_Error (db_error_message e)
                  | Ok is_admin ->
-                 let%lwt role_res = Db.get_moderator_role db user_id community.id in
+                 let%lwt role_res = Moderator_store.get_moderator_role db user_id community.id in
                  let is_top_mod = match role_res with Ok (Some "top_mod") -> true | _ -> false in
                  if not (is_top_mod || is_admin) then
                    Dream.respond ~status:`Forbidden (Pages.msg_page ?user ~title:"Access Denied" ~message:"Only Top Mods and admins can manage members." ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/settings") request)
@@ -5453,13 +5453,13 @@ let add_member_handler request =
                  else
                    (* Add only EXISTING users — never create. Unknown username is a friendly 404
                       message, not a 500. *)
-                   (match%lwt Db.get_user_by_username db target_username with
+                   (match%lwt User_store.get_user_by_username db target_username with
                     | Error err -> Dream.respond ~status:`Internal_Server_Error (db_error_message err)
                     | Ok None ->
                         Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"User Not Found" ~message:(Printf.sprintf "No user named \"%s\" exists." target_username) ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/settings") request)
                     | Ok (Some target) ->
                         (* Idempotent: re-adding an existing member is a no-op (ON CONFLICT DO NOTHING). *)
-                        match%lwt Db.join_community db target.id community.id with
+                        match%lwt Membership_store.join_community db target.id community.id with
                         | Ok () -> Dream.redirect request ("/c/" ^ slug ^ "/settings?panel=members")
                         | Error err -> Dream.respond ~status:`Internal_Server_Error (db_error_message err)))
        | _ -> Dream.respond ~status:`Bad_Request "Invalid form submission.")
@@ -5480,7 +5480,7 @@ let remove_member_handler request =
                 Dream.respond ~status:`Bad_Request (Pages.msg_page ?user ~title:"Validation Error" ~message:"Invalid member selection." ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/settings") request)
             | Some target_user_id ->
                 Dream.sql request (fun db ->
-                  match%lwt Db.get_community_by_slug db slug with
+                  match%lwt Community_store.get_community_by_slug db slug with
                   | Ok None -> Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"Not Found" ~message:"Community not found." ~alert_type:"error" ~return_url:"/" request)
                   | Error err -> Dream.respond ~status:`Internal_Server_Error (db_error_message err)
                   | Ok (Some community) ->
@@ -5490,7 +5490,7 @@ let remove_member_handler request =
                       match%lwt current_admin_bool db request with
                       | Error e -> Dream.respond ~status:`Internal_Server_Error (db_error_message e)
                       | Ok is_admin ->
-                      let%lwt role_res = Db.get_moderator_role db user_id community.id in
+                      let%lwt role_res = Moderator_store.get_moderator_role db user_id community.id in
                       let is_top_mod = match role_res with Ok (Some "top_mod") -> true | _ -> false in
                       if not (is_top_mod || is_admin) then
                         Dream.respond ~status:`Forbidden (Pages.msg_page ?user ~title:"Access Denied" ~message:"Only Top Mods and admins can manage members." ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/settings") request)
@@ -5499,7 +5499,7 @@ let remove_member_handler request =
                            community_members row is touched — moderator/admin rows are untouched.
                            No community_left analytics here: this is a moderator acting on ANOTHER
                            user's membership, not that user leaving. *)
-                        match%lwt Db.leave_community db target_user_id community.id with
+                        match%lwt Membership_store.leave_community db target_user_id community.id with
                         | Ok _deleted -> Dream.redirect request ("/c/" ^ slug ^ "/settings?panel=members")
                         | Error err -> Dream.respond ~status:`Internal_Server_Error (db_error_message err)))
        | _ -> Dream.respond ~status:`Bad_Request "Invalid form submission.")
@@ -5523,7 +5523,7 @@ let view_profile_handler request =
        an empty rail rather than blocking the profile. *)
     let%lwt rail_communities =
       if viewer_id > 0 then
-        (match%lwt Db.get_user_communities db viewer_id with
+        (match%lwt Membership_store.get_user_communities db viewer_id with
          | Ok cs -> Lwt.return cs
          | Error _ -> Lwt.return [])
       else Lwt.return []
@@ -5540,7 +5540,7 @@ let view_profile_handler request =
       match post_ids with
       | [] -> Lwt.return []
       | _ ->
-          match%lwt Db.get_post_communities db post_ids with
+          match%lwt Post_store.get_post_communities db post_ids with
           | Error _ -> Lwt.return post_ids
           | Ok rows ->
               (* (b) public + non-indexable → never surfaced as public discovery. *)
@@ -5564,9 +5564,9 @@ let view_profile_handler request =
                   if is_admin then Lwt.return true
                   else if viewer_id <= 0 then Lwt.return false
                   else
-                    let%lwt m = match%lwt Db.is_member db viewer_id cid with Ok b -> Lwt.return b | Error _ -> Lwt.return false in
+                    let%lwt m = match%lwt Membership_store.is_member db viewer_id cid with Ok b -> Lwt.return b | Error _ -> Lwt.return false in
                     if m then Lwt.return true
-                    else (match%lwt Db.is_moderator db viewer_id cid with Ok b -> Lwt.return b | Error _ -> Lwt.return false))
+                    else (match%lwt Moderator_store.is_moderator db viewer_id cid with Ok b -> Lwt.return b | Error _ -> Lwt.return false))
                   distinct_cids
               in
               let blocked_private =
@@ -5579,24 +5579,24 @@ let view_profile_handler request =
        or slug → a discovery link): show only public+indexable communities, plus private ones the
        viewer is authorized to read (Slice C). Public-but-non-indexable communities are hidden
        (Slice D). Fails closed. *)
-    let community_surfaceable (c : Db.community) =
-      match c.Db.visibility with
-      | Db.Community_public -> Lwt.return c.Db.indexable
-      | Db.Community_private -> can_view_community db ~user_id:viewer_id ~admin_override:is_admin c
+    let community_surfaceable (c : Community_types.community) =
+      match c.Community_types.visibility with
+      | Community_types.Community_public -> Lwt.return c.indexable
+      | Community_types.Community_private -> can_view_community db ~user_id:viewer_id ~admin_override:is_admin c
     in
-    let stat_is_readable (s : Db.community_user_stat) =
-      match%lwt Db.get_community_by_slug db s.community_slug with
+    let stat_is_readable (s : Community_user_stats_store.community_user_stat) =
+      match%lwt Community_store.get_community_by_slug db s.community_slug with
       | Ok (Some community) -> community_surfaceable community
       | _ -> Lwt.return false
     in
-    match%lwt Db.get_user_public db username_param with
+    match%lwt User_store.get_user_public db username_param with
     | Ok (Some (uid, _, joined_at, bio, avatar_url)) ->
 
-        (match%lwt Db.get_user_karma db uid with
+        (match%lwt User_store.get_user_karma db uid with
         | Ok karma ->
-            let%lwt admin_usernames_res = Db.get_admin_usernames db in
+            let%lwt admin_usernames_res = User_store.get_admin_usernames db in
             let admin_usernames = match admin_usernames_res with Ok l -> l | Error _ -> [] in
-            let%lwt moderated_communities_res = Db.get_moderated_communities db uid in
+            let%lwt moderated_communities_res = Moderator_store.get_moderated_communities db uid in
             let moderated_communities = match moderated_communities_res with Ok l -> l | Error _ -> [] in
             (* Slice C + D: the "Mod of /c/x" badges render on every tab and are discovery links.
                They would otherwise leak that this user moderates a PRIVATE community (Slice C) or
@@ -5608,12 +5608,12 @@ let view_profile_handler request =
                the admin Ban/Unban forms is drawn. It authorizes nothing — both
                forms re-check admin server-side — so degrading to false on a
                read failure is a display fallback, not a permission decision. *)
-            let%lwt is_gb_res = Db.is_globally_banned db uid in
+            let%lwt is_gb_res = Admin_store.is_globally_banned db uid in
             let is_globally_banned = match is_gb_res with Ok b -> b | Error _ -> false in
 
             (* Fetch only the data the active tab needs — avoids double DB round-trips. *)
             if active_tab = "comments" then
-              (match%lwt Db.get_comments_by_user db uid with
+              (match%lwt Comment_store.get_comments_by_user db uid with
               | Ok user_comments ->
                   let post_ids = List.map (fun (_, _, _, pid, _, _) -> pid) user_comments in
                   let%lwt blocked = blocked_post_ids post_ids in
@@ -5621,17 +5621,17 @@ let view_profile_handler request =
                   Dream.html (Pages.user_profile_page ?user:current_user ~is_admin ~is_globally_banned ~profile_id:uid ~admin_usernames ~moderated_communities ~active_tab ~rail_communities user_votes username_param joined_at bio avatar_url karma [] user_comments [] request)
               | Error err -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user:current_user ~title:"Error" ~message:(db_error_message err) ~alert_type:"error" ~return_url:"/" request))
             else if active_tab = "communities" then
-              (match%lwt Db.get_user_community_stats db uid with
+              (match%lwt Community_user_stats_store.get_user_community_stats db uid with
               | Ok community_stats ->
                   let%lwt community_stats = Lwt_list.filter_s stat_is_readable community_stats in
                   Dream.html (Pages.user_profile_page ?user:current_user ~is_admin ~is_globally_banned ~profile_id:uid ~admin_usernames ~moderated_communities ~active_tab ~rail_communities user_votes username_param joined_at bio avatar_url karma [] [] community_stats request)
               | Error err -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user:current_user ~title:"Error" ~message:(db_error_message err) ~alert_type:"error" ~return_url:"/" request))
             else
-              (match%lwt Db.get_posts_by_user db uid with
+              (match%lwt Post_store.get_posts_by_user db uid with
               | Ok posts ->
-                  let post_ids = List.map (fun (p : Db.post) -> p.id) posts in
+                  let post_ids = List.map (fun (p : Post_types.post) -> p.id) posts in
                   let%lwt blocked = blocked_post_ids post_ids in
-                  let posts = List.filter (fun (p : Db.post) -> not (List.mem p.id blocked)) posts in
+                  let posts = List.filter (fun (p : Post_types.post) -> not (List.mem p.id blocked)) posts in
                   Dream.html (Pages.user_profile_page ?user:current_user ~is_admin ~is_globally_banned ~profile_id:uid ~admin_usernames ~moderated_communities ~active_tab ~rail_communities user_votes username_param joined_at bio avatar_url karma posts [] [] request)
               | Error err -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user:current_user ~title:"Error" ~message:(db_error_message err) ~alert_type:"error" ~return_url:"/" request))
 
@@ -5646,7 +5646,7 @@ let settings_page_handler request =
   | None -> Dream.redirect request "/login"
   | Some username ->
       Dream.sql request (fun db ->
-        match%lwt Db.get_user_public db username with
+        match%lwt User_store.get_user_public db username with
         | Ok (Some (_, _, _, bio, avatar_url)) ->
             (* Joined communities feed the launch rail only; a failure (or a
                missing/garbled user_id session field) degrades to an empty
@@ -5657,7 +5657,7 @@ let settings_page_handler request =
                   int_of_string_opt
               with
               | Some uid -> (
-                  match%lwt Db.get_user_communities db uid with
+                  match%lwt Membership_store.get_user_communities db uid with
                   | Ok cs -> Lwt.return cs
                   | Error _ -> Lwt.return [])
               | None -> Lwt.return []
@@ -5700,12 +5700,12 @@ let update_profile_handler request =
             let%lwt stored_avatar =
               match new_avatar with
               | Some _ -> Lwt.return (Ok new_avatar)
-              | None -> Db.get_user_avatar_url db user_id
+              | None -> User_store.get_user_avatar_url db user_id
             in
             match stored_avatar with
             | Error err -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Error" ~message:(db_error_message err) ~alert_type:"error" ~return_url:"/settings" request)
             | Ok avatar_url ->
-            match%lwt Db.update_user_profile db bio avatar_url user_id with
+            match%lwt User_store.update_user_profile db bio avatar_url user_id with
             | Ok () -> Dream.redirect request "/settings"
             | Error err -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user:(Dream.session_field request "username") ~title:"Error" ~message:(db_error_message err) ~alert_type:"error" ~return_url:"/settings" request)
           )
@@ -5732,7 +5732,7 @@ let change_password_handler request =
                not hold a pool connection (same rule as login_handler), and
                invalidate_session below needs its own connection. *)
             let%lwt lookup =
-              Dream.sql request (fun db -> Db.get_user_for_login db username)
+              Dream.sql request (fun db -> User_store.get_user_for_login db username)
             in
             (match lookup with
             | Ok (Some (_, (hash, _, _))) ->
@@ -5742,7 +5742,7 @@ let change_password_handler request =
                     | Ok new_hash ->
                         let%lwt updated =
                           Dream.sql request (fun db ->
-                              Db.update_password_revoking_sessions db user_id new_hash)
+                              Credential_store.update_password_revoking_sessions db user_id new_hash)
                         in
                         (match updated with
                         | Ok () ->
@@ -5770,9 +5770,9 @@ let export_data_handler request =
       let username = Option.value (Dream.session_field request "username") ~default:"unknown" in
 
       Dream.sql request (fun db ->
-        let%lwt profile_res = Db.get_user_public db username in
-        let%lwt posts_res = Db.get_posts_by_user db user_id in
-        let%lwt comments_res = Db.get_comments_by_user db user_id in
+        let%lwt profile_res = User_store.get_user_public db username in
+        let%lwt posts_res = Post_store.get_posts_by_user db user_id in
+        let%lwt comments_res = Comment_store.get_comments_by_user db user_id in
 
         match profile_res, posts_res, comments_res with
         | Ok (Some (_, _, joined_at, bio, avatar)), Ok posts, Ok comments ->
@@ -5784,7 +5784,7 @@ let export_data_handler request =
               ("avatar_url", match avatar with Some a -> `String a | None -> `Null);
             ] in
 
-            let posts_json = `List (List.map (fun (p: Db.post) ->
+            let posts_json = `List (List.map (fun (p: Post_types.post) ->
               `Assoc [
                 ("id", `Int p.id);
                 ("title", `String p.title);
@@ -5836,7 +5836,7 @@ let attempt_posthog_deletion_job request ~job_id =
   Lwt.catch
     (fun () ->
       let%lwt claimed =
-        Dream.sql request (fun db -> Db.claim_posthog_deletion_job db job_id)
+        Dream.sql request (fun db -> Posthog_deletion_job_store.claim db job_id)
       in
       match claimed with
       | Ok (Some distinct_id) ->
@@ -5844,10 +5844,10 @@ let attempt_posthog_deletion_job request ~job_id =
             Posthog_deletion.process_claimed_job
               ~mark_completed:(fun () ->
                 Dream.sql request (fun db ->
-                    Db.complete_posthog_deletion_job db job_id))
+                    Posthog_deletion_job_store.mark_completed db job_id))
               ~mark_failed:(fun err ->
                 Dream.sql request (fun db ->
-                    Db.fail_posthog_deletion_job db job_id err))
+                    Posthog_deletion_job_store.mark_failed db job_id err))
               ~distinct_id
           in
           Lwt.return_unit
@@ -5874,7 +5874,7 @@ let delete_account_handler request =
               (fun () ->
                 let%lwt res =
                   Dream.sql request (fun db ->
-                      Db.get_user_avatar_url db user_id)
+                      User_store.get_user_avatar_url db user_id)
                 in
                 match res with
                 | Ok v -> Lwt.return v
@@ -5887,7 +5887,7 @@ let delete_account_handler request =
              performs HTTP. *)
           let%lwt result =
             Dream.sql request (fun db ->
-                Db.anonymize_user_and_enqueue_posthog_deletion db user_id)
+                Posthog_deletion_job_store.anonymize_and_enqueue db user_id)
           in
           (match result with
             | Ok (job_id, _distinct_id) ->
@@ -5938,11 +5938,11 @@ let notifications_handler request =
          inside the capability columns, never replaces it. *)
       let session_admin = Dream.session_field request "is_admin" = Some "true" in
       Dream.sql request (fun db ->
-        let%lwt notifs = Db.get_notifications db ~session_admin user_id in
-        let%lwt _ = Db.mark_notifs_read db user_id in
+        let%lwt notifs = Notification_store.get_notifications db ~session_admin user_id in
+        let%lwt _ = Notification_store.mark_notifs_read db user_id in
         (* Joined communities feed the launch rail only; a failure degrades to
            an empty rail rather than blocking the notification list. *)
-        let%lwt rail_communities_res = Db.get_user_communities db user_id in
+        let%lwt rail_communities_res = Membership_store.get_user_communities db user_id in
         let rail_communities = match rail_communities_res with Ok cs -> cs | Error _ -> [] in
         match notifs with
         | Ok n -> Dream.html (Pages.notifications_page ?user ~rail_communities n request)
@@ -5986,10 +5986,10 @@ let ban_user_handler request =
       let user_id_to_ban = try int_of_string (Dream.param request "id") with _ -> 0 in
       if user_id_to_ban = 0 then Dream.respond ~status:`Bad_Request "Invalid user ID." else
       Dream.sql request (fun db ->
-        match%lwt Db.ban_user db user_id_to_ban with
+        match%lwt Admin_store.ban_user db user_id_to_ban with
         | Ok () ->
             (* Notify banned user — best-effort; no post to link to. *)
-            let%lwt _ = Db.create_notif db user_id_to_ban None "mod_action" "You have been globally banned by an administrator." in
+            let%lwt _ = Notification_store.create_notif db user_id_to_ban None "mod_action" "You have been globally banned by an administrator." in
             (* Redirect back to the profile page rather than "/" so the admin
                immediately sees the updated 🚫 badge and the Unban button. *)
             let target = safe_local_redirect request (match Dream.header request "Referer" with Some r -> r | None -> "/") in
@@ -6013,7 +6013,7 @@ let unban_user_global_handler request =
       let user_id_to_unban = try int_of_string (Dream.param request "id") with _ -> 0 in
       if user_id_to_unban = 0 then Dream.respond ~status:`Bad_Request "Invalid user ID." else
       Dream.sql request (fun db ->
-        match%lwt Db.unban_user_global db user_id_to_unban with
+        match%lwt Admin_store.unban_user_global db user_id_to_unban with
         | Ok () ->
             let target = safe_local_redirect ~default:"/admin" request (match Dream.header request "Referer" with Some r -> r | None -> "/admin") in
             Dream.redirect request target
@@ -6043,16 +6043,16 @@ let admin_dashboard_handler request =
       in
       let brevo_configured = Email.is_configured () in
       Dream.sql request (fun db ->
-        let%lwt banned_res  = Db.get_globally_banned_users db in
-        let%lwt recent_res  = Db.Admin.list_recent_users db ~limit:50 in
-        let%lwt pending_res = Db.Admin.list_recent_pending db ~limit:50 in
+        let%lwt banned_res  = Admin_store.get_globally_banned_users db in
+        let%lwt recent_res  = Admin_store.list_recent_users db ~limit:50 in
+        let%lwt pending_res = Admin_store.list_recent_pending db ~limit:50 in
         (* Joined communities feed the shared launch rail only; loaded here —
            after the admin gate — so denied requests never touch membership
            data, and a failure degrades to an empty rail rather than blocking
            the dashboard. *)
         let%lwt rail_res =
           match Option.bind (Dream.session_field request "user_id") int_of_string_opt with
-          | Some uid -> Db.get_user_communities db uid
+          | Some uid -> Membership_store.get_user_communities db uid
           | None -> Lwt.return (Ok [])
         in
         let rail_communities = match rail_res with Ok cs -> cs | Error _ -> [] in
@@ -6122,9 +6122,9 @@ let manage_mods_handler request =
         match%lwt current_admin_bool db request with
         | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:"/" request)
         | Ok is_admin ->
-        match%lwt Db.get_community_by_slug db slug with
+        match%lwt Community_store.get_community_by_slug db slug with
         | Ok (Some community) ->
-            let%lwt role_res = Db.get_moderator_role db user_id community.id in
+            let%lwt role_res = Moderator_store.get_moderator_role db user_id community.id in
             let current_user_role = match role_res with Ok r -> r | _ -> None in
             let is_authorized = is_admin || current_user_role = Some "top_mod" in
             if not is_authorized then
@@ -6137,19 +6137,19 @@ let manage_mods_handler request =
                  the sibling converted management routes. *)
               let%lwt sections =
                 if community.sections_enabled then
-                  (match%lwt Db.get_sections_by_community db community.id with
+                  (match%lwt Section_store.get_sections_by_community db community.id with
                    | Ok secs -> Lwt.return secs | Error _ -> Lwt.return [])
                 else Lwt.return []
               in
               let%lwt channels =
-                match%lwt Db.get_channels_by_community db community.id with
+                match%lwt Channel_store.get_channels_by_community db community.id with
                 | Ok cs -> Lwt.return cs | Error _ -> Lwt.return []
               in
               let%lwt rail_communities =
-                match%lwt Db.get_user_communities db user_id with
+                match%lwt Membership_store.get_user_communities db user_id with
                 | Ok cs -> Lwt.return cs | Error _ -> Lwt.return []
               in
-              (match%lwt Db.get_community_mods_with_roles db community.id with
+              (match%lwt Moderator_store.get_community_mods_with_roles db community.id with
                | Ok mods ->
                    Dream.html (Pages.manage_mods_page ?user ~rail_communities ~is_admin ~current_user_role ~channels ~sections ~community ~mods request)
                | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:("/c/" ^ slug) request))
@@ -6177,17 +6177,17 @@ let manage_mods_add_handler request =
             match%lwt current_admin_bool db request with
             | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:"/" request)
             | Ok is_admin ->
-            match%lwt Db.get_community_by_slug db slug with
+            match%lwt Community_store.get_community_by_slug db slug with
             | Ok (Some community) ->
-                let%lwt role_res = Db.get_moderator_role db user_id community.id in
+                let%lwt role_res = Moderator_store.get_moderator_role db user_id community.id in
                 let current_user_role = match role_res with Ok r -> r | _ -> None in
                 let is_authorized = is_admin || current_user_role = Some "top_mod" in
                 if not is_authorized then
                   Dream.respond ~status:`Forbidden (Pages.msg_page ?user ~title:"Access Denied" ~message:"Only Top Mods and Admins can add moderators." ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/manage-mods") request)
                 else
-                  (match%lwt Db.get_user_by_username db target_username with
+                  (match%lwt User_store.get_user_by_username db target_username with
                    | Ok (Some target_user) ->
-                       let%lwt _ = Db.add_moderator db target_user.id community.id in
+                       let%lwt _ = Moderator_store.add_moderator db target_user.id community.id in
                        Dream.redirect request ("/c/" ^ slug ^ "/manage-mods")
                    | Ok None -> Dream.html (Pages.msg_page ?user ~title:"User Not Found" ~message:("No user found: u/" ^ target_username) ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/manage-mods") request)
                    | Error e -> Dream.html (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:"/" request))
@@ -6216,21 +6216,21 @@ let manage_mods_promote_handler request =
             match%lwt current_admin_bool db request with
             | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:"/" request)
             | Ok is_admin ->
-            match%lwt Db.get_community_by_slug db slug with
+            match%lwt Community_store.get_community_by_slug db slug with
             | Ok (Some community) ->
-                let%lwt role_res = Db.get_moderator_role db user_id community.id in
+                let%lwt role_res = Moderator_store.get_moderator_role db user_id community.id in
                 let current_user_role = match role_res with Ok r -> r | _ -> None in
                 let is_authorized = is_admin || current_user_role = Some "top_mod" in
                 if not is_authorized then
                   Dream.respond ~status:`Forbidden (Pages.msg_page ?user ~title:"Access Denied" ~message:"Only Top Mods and Admins can promote moderators." ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/manage-mods") request)
                 else
-                  (match%lwt Db.promote_to_top_mod db target_user_id community.id with
+                  (match%lwt Moderator_store.promote_to_top_mod db target_user_id community.id with
                    | Ok () -> Dream.redirect request ("/c/" ^ slug ^ "/manage-mods")
-                   | Error (Db.Promotion_refused msg) ->
+                   | Error (Moderator_store.Promotion_refused msg) ->
                        (* Fixed domain refusals (not a moderator, already Top
                           Mod, seat cap) stay user-visible verbatim. *)
                        Dream.html (Pages.msg_page ?user ~title:"Promotion Failed" ~message:msg ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/manage-mods") request)
-                   | Error (Db.Promotion_storage_error e) ->
+                   | Error (Moderator_store.Promotion_storage_error e) ->
                        Dream.html (Pages.msg_page ?user ~title:"Promotion Failed" ~message:(db_error_message e) ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/manage-mods") request))
             | Ok None -> Dream.respond ~status:`Not_Found (Pages.msg_page ?user ~title:"Not Found" ~message:"Community not found." ~alert_type:"error" ~return_url:"/" request)
             | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:"/" request)
@@ -6258,9 +6258,9 @@ let manage_mods_remove_handler request =
             match%lwt current_admin_bool db request with
             | Error e -> Dream.respond ~status:`Internal_Server_Error (Pages.msg_page ?user ~title:"Error" ~message:(db_error_message e) ~alert_type:"error" ~return_url:"/" request)
             | Ok is_admin ->
-            match%lwt Db.get_community_by_slug db slug with
+            match%lwt Community_store.get_community_by_slug db slug with
             | Ok (Some community) ->
-                let%lwt role_res = Db.get_moderator_role db user_id community.id in
+                let%lwt role_res = Moderator_store.get_moderator_role db user_id community.id in
                 let current_user_role = match role_res with Ok r -> r | _ -> None in
                 let is_authorized = is_admin || current_user_role = Some "top_mod" in
                 if not is_authorized then
@@ -6268,15 +6268,15 @@ let manage_mods_remove_handler request =
                 else
                   (* Re-fetch target role server-side: prevents a top_mod from removing
                      another top_mod by manipulating the form — TOCTOU guard. *)
-                  (match%lwt Db.get_moderator_role db target_user_id community.id with
+                  (match%lwt Moderator_store.get_moderator_role db target_user_id community.id with
                    | Ok (Some "top_mod") when not is_admin ->
                        Dream.html (Pages.msg_page ?user ~title:"Action Denied" ~message:"Top Mods cannot remove other Top Mods. Only an admin can do this." ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/manage-mods") request)
                    | Ok None ->
                        Dream.html (Pages.msg_page ?user ~title:"Not a Moderator" ~message:"That user is not a moderator of this community." ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/manage-mods") request)
                    | Ok _ ->
-                       (match%lwt Db.get_community_mods_with_roles db community.id with
+                       (match%lwt Moderator_store.get_community_mods_with_roles db community.id with
                         | Ok mods when List.length mods > 1 ->
-                            let%lwt _ = Db.remove_moderator db target_user_id community.id in
+                            let%lwt _ = Moderator_store.remove_moderator db target_user_id community.id in
                             Dream.redirect request ("/c/" ^ slug ^ "/manage-mods")
                         | Ok _ ->
                             Dream.html (Pages.msg_page ?user ~title:"Cannot Remove" ~message:"You cannot remove the last moderator of a community." ~alert_type:"error" ~return_url:("/c/" ^ slug ^ "/manage-mods") request)
@@ -6344,7 +6344,7 @@ let is_tracked_request ~path ~user_agent =
   not (is_admin_route || path = "/api/unread-notifs" || is_static || is_bot)
 
 (* Presence, not analytics: sole writer of users.last_active_at, which moderator
-   auto-demotion (Db.demote_inactive_mods) reads. Kept separate from
+   auto-demotion (Moderator_store.demote_inactive_mods) reads. Kept separate from
    analytics_middleware so replacing the page-view system cannot break it, but
    gated on the same is_tracked_request decision so the touch fires exactly
    where the old in-analytics touch did (never on polling/asset/bot requests).
@@ -6357,7 +6357,7 @@ let presence_middleware inner_handler request =
       when is_tracked_request ~path:(Dream.target request)
              ~user_agent:(Dream.header request "User-Agent") ->
         Dream.sql request (fun db ->
-          let%lwt _ = Db.touch_user_active db (int_of_string uid_str) in
+          let%lwt _ = User_store.touch_user_active db (int_of_string uid_str) in
           Lwt.return_unit)
     | _ -> Lwt.return_unit
   in
@@ -6393,7 +6393,7 @@ let analytics_middleware inner_handler request =
       in
       let session_hash = Digest.to_hex (Digest.string (ip ^ ua ^ date)) in
       Dream.sql request (fun db ->
-        let%lwt _ = Db.log_page_view db path referer session_hash in
+        let%lwt _ = Page_view_store.log_page_view db path referer session_hash in
         Lwt.return_unit
       )
     end

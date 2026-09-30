@@ -1,6 +1,6 @@
 (** Atomic finalization of one available project-onboarding draft into a
     permanent verified open-source project. This feature module owns its
-    SQL; nothing here belongs to the legacy [Db] macro-module.
+    SQL.
 
     In one explicit PostgreSQL transaction the store authorizes and locks
     the caller's draft, locks and validates its verified installation,

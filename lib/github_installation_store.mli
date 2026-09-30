@@ -1,6 +1,5 @@
 (** Persistence of a successfully verified GitHub App installation into
-    [github_installations]. This feature module owns its SQL; nothing here
-    belongs to the legacy [Db] macro-module.
+    [github_installations]. This feature module owns its SQL.
 
     The only GitHub-derived input is the abstract
     {!Github_user_installations.verified_installation} — proof that the

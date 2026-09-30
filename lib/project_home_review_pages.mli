@@ -99,8 +99,8 @@ type feedback =
     the [create-shell] marker and [</main>] — every phrv-* element, form,
     and copy string — is byte-identical in both documents. *)
 type launch_shell = {
-  community_record : Db.community;
-  rail_communities : Db.community list;
+  community_record : Community_types.community;
+  rail_communities : Community_types.community list;
   sidebar : string;
 }
 

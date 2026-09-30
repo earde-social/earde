@@ -182,8 +182,8 @@ let create (module C : Caqti_lwt.CONNECTION) ~user_id ~project_slug
                     && is_network_community
                     &&
                     match
-                      ( Db.community_visibility_of_string visibility_raw,
-                        Db.community_onboarding_state_of_string
+                      ( Community_types.community_visibility_of_string visibility_raw,
+                        Community_types.community_onboarding_state_of_string
                           onboarding_raw )
                     with
                     | Some visibility, Ok onboarding_state ->

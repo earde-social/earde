@@ -25,9 +25,9 @@ let check_error_json name expected ~code ~message =
 
 (* JSON success shape: the composer response is the same canonical row as a
    catch-up entry / realtime new_msg payload, minute-precision timestamp
-   included. Built from a plain Db.chat_message record — no DB. *)
-let chat_row ?(deleted = false) ~id ~content ~created_at () : Earde.Db.chat_message =
-  { Earde.Db.id = Int64.of_int id; channel_id = 14; user_id = Some 7;
+   included. Built from a plain Chat_store.chat_message record — no DB. *)
+let chat_row ?(deleted = false) ~id ~content ~created_at () : Earde.Chat_store.chat_message =
+  { Earde.Chat_store.id = Int64.of_int id; channel_id = 14; user_id = Some 7;
     content; created_at; edited_at = None;
     deleted_at = (if deleted then Some created_at else None) }
 

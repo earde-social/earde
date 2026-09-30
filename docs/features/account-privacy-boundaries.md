@@ -174,7 +174,7 @@ client-address rule are unchanged; the opportunistic expiry cleanup remains
 best effort and cannot change a decision. An exception raised by an allowed
 handler is that handler's own and is not relabelled as a limiter outage.
 
-The separate image-upload budget (`Db.Rate_limit.check_upload`) is not this
+The separate image-upload budget (`Rate_limit_store.check_upload`) is not this
 middleware and deliberately stays fail-open on storage errors.
 
 ## Operations

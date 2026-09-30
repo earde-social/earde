@@ -13,8 +13,8 @@
    relation as an auto-updatable view EXCEPT the ones named, so a handler runs
    normally until it reaches a query against an omitted table, which then
    fails with a real PostgreSQL error. Omitting `users` breaks
-   Db.is_globally_banned; omitting `community_bans` breaks
-   Db.community_is_banned. Nothing about production code is changed to make
+   Admin_store.is_globally_banned; omitting `community_bans` breaks
+   Community_ban_store.is_banned. Nothing about production code is changed to make
    this possible: no failpoint, no test hook. *)
 
 let ( let* ) = Lwt.bind
@@ -124,9 +124,9 @@ let with_shadow url =
     (Uri.add_query_param' (Uri.of_string url)
        ("options", "-csearch_path=" ^ shadow))
 
-(* Omitting `users` breaks Db.is_globally_banned and nothing else the gates
+(* Omitting `users` breaks Admin_store.is_globally_banned and nothing else the gates
    below reach first; omitting `community_bans` breaks
-   Db.community_is_banned only. *)
+   Community_ban_store.is_banned only. *)
 let global_read_broken = [ "users" ]
 
 let local_read_broken = [ "community_bans" ]

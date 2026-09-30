@@ -1,9 +1,3 @@
-(* Bound before `open Db`, which would otherwise shadow the top-level
-   Analytics module with Db.Analytics. *)
-module Posthog = Analytics
-
-open Db
-
 (* The pre-/feed global feed renderer and its warm-chrome sidebar are gone:
    feed_page below serves /feed, the only global feed surface, and / and /all
    redirect to it. *)
@@ -382,7 +376,7 @@ let new_community_form ?user ?(rail_communities = []) request =
    Reports and Manage moderators stay off this sidebar (the settings/report
    suites count those links per document); Manage moderators keeps its legacy
    placement inside the Moderators panel instead. *)
-let launch_flat_community_sidebar ~(community : community) ~can_manage () =
+let launch_flat_community_sidebar ~(community : Community_types.community) ~can_manage () =
   let esc = Components.html_escape in
   let slug = esc community.slug in
   let tile_glyph =
@@ -414,7 +408,7 @@ let launch_flat_community_sidebar ~(community : community) ~can_manage () =
       slug
   in
   let vis_note =
-    if community.visibility = Db.Community_private then
+    if community.visibility = Community_types.Community_private then
       "<div class='launch-side-vis'>private community</div>"
     else ""
   in
@@ -453,7 +447,7 @@ let launch_flat_community_sidebar ~(community : community) ~can_manage () =
      modlog and the top-mod/admin downvote toggle keep their gates and routes;
    - the pre-rendered ccp-* connected-projects fragment is spliced verbatim
      (its markup is pinned by the fragment suites) and restyled by CSS only. *)
-let community_page ?user ?(noindex=false) ?(connected_projects="") ?(connected_communities="") ~is_member ~is_current_user_mod ~is_current_user_top_mod ~mod_usernames ~admin_usernames ~banned_usernames ~user_communities ~moderated_communities user_votes current_page sort_mode (community : community) (posts : feed_item list) request =
+let community_page ?user ?(noindex=false) ?(connected_projects="") ?(connected_communities="") ~is_member ~is_current_user_mod ~is_current_user_top_mod ~mod_usernames ~admin_usernames ~banned_usernames ~user_communities ~moderated_communities user_votes current_page sort_mode (community : Community_types.community) (posts : Post_types.feed_item list) request =
   let csrf_token = Dream.csrf_tag request in
   let is_admin = Dream.session_field request "is_admin" = Some "true" in
   let esc = Components.html_escape in
@@ -461,7 +455,7 @@ let community_page ?user ?(noindex=false) ?(connected_projects="") ?(connected_c
   (* Fed only the legacy left sidebar; the launch shell's global rail owns
      joined-community navigation now. Kept in the signature so the handler
      call site (shared with the structured branch's data load) stays intact. *)
-  ignore (moderated_communities : community list);
+  ignore (moderated_communities : Community_types.community list);
   let has_next = List.length posts = 20 in
 
   (* Own rows render byte-identically; a shared row carries THIS community's
@@ -469,7 +463,7 @@ let community_page ?user ?(noindex=false) ?(connected_projects="") ?(connected_c
      provenance/section chips come from the placement, not the origin. *)
   let posts_html =
     if posts = [] then "<div class='bg-gray-50 p-12 text-center rounded-xl border border-dashed border-[#D0C9BC] text-gray-500'>No posts yet. Be the first to share something!</div>"
-    else String.concat "\n" (List.map (fun (item : feed_item) ->
+    else String.concat "\n" (List.map (fun (item : Post_types.feed_item) ->
       let shared = Option.map (fun ctx -> (community.slug, ctx)) item.fi_shared in
       Components.render_post ~is_current_user_mod ~mod_usernames ~admin_usernames ~banned_usernames ?shared request user_votes item.fi_post) posts)
   in
@@ -500,7 +494,7 @@ let community_page ?user ?(noindex=false) ?(connected_projects="") ?(connected_c
         if is_member then Printf.sprintf "<form action='/leave' method='POST'>%s<input type='hidden' name='community_id' value='%d'><input type='hidden' name='redirect_to' value='/c/%s'><button type='submit' class='btn btn--secondary btn--block launch-leave'>Leave</button></form>" csrf_token community.id community.slug
         (* No self-serve join for private communities (Slice C): a non-member who can see this
            page is a mod/admin; show no misleading Join button (the /join route 404s anyway). *)
-        else if community.visibility = Db.Community_private then ""
+        else if community.visibility = Community_types.Community_private then ""
         else Printf.sprintf "<form action='/join' method='POST'>%s<input type='hidden' name='community_id' value='%d'><input type='hidden' name='redirect_to' value='/c/%s'><button type='submit' class='btn btn--primary btn--block'>Join</button></form>" csrf_token community.id community.slug
   in
 
@@ -560,7 +554,7 @@ let community_page ?user ?(noindex=false) ?(connected_projects="") ?(connected_c
     (if community.is_network_community then
        " <span class='badge badge--network badge--lg'>&#9672; Network community</span>"
      else "")
-    ^ (if community.visibility = Db.Community_private then
+    ^ (if community.visibility = Community_types.Community_private then
          " <span class='badge badge--plain badge--lg'>Private</span>"
        else "")
   in
@@ -677,8 +671,8 @@ let community_page ?user ?(noindex=false) ?(connected_projects="") ?(connected_c
    [moderation_log_active] marks the always-present Moderation log entry current —
    used only by the modlog route (pass 14A), which is public by design, so the
    entry itself renders for every viewer exactly as before. *)
-let launch_knowledge_sidebar ~(community : community) ~(channels : channel list)
-    ~(sections : community_section list) ?active_section_slug
+let launch_knowledge_sidebar ~(community : Community_types.community) ~(channels : Channel_store.channel list)
+    ~(sections : Section_store.community_section list) ?active_section_slug
     ?(append_uncategorized = false) ?(settings_active = false)
     ?(moderation_log_active = false)
     ?(show_visibility_note = true) ~can_manage () =
@@ -713,22 +707,22 @@ let launch_knowledge_sidebar ~(community : community) ~(channels : channel list)
       slug
   in
   let vis_note =
-    if show_visibility_note && community.visibility = Db.Community_private then
+    if show_visibility_note && community.visibility = Community_types.Community_private then
       "<div class='launch-side-vis'>private community</div>"
     else ""
   in
-  let live_channels = List.filter (fun (c : channel) -> not c.is_archived) channels in
+  let live_channels = List.filter (fun (c : Channel_store.channel) -> not c.is_archived) channels in
   let nav_live =
     if live_channels = [] then ""
     else
       "<p class='kicker sidebar__group'>Live</p>"
-      ^ String.concat "" (List.map (fun (c : channel) ->
+      ^ String.concat "" (List.map (fun (c : Channel_store.channel) ->
           Printf.sprintf
             "<a class='navitem' href='/c/%s/ch/%s'><span class='navitem__sigil navitem__sigil--live'>#</span>%s</a>"
             slug (esc c.slug) (esc c.slug))
           live_channels)
   in
-  let section_item (s : community_section) =
+  let section_item (s : Section_store.community_section) =
     let cls =
       if active_section_slug = Some s.slug then "navitem navitem--active" else "navitem" in
     Printf.sprintf
@@ -763,10 +757,10 @@ let launch_knowledge_sidebar ~(community : community) ~(channels : channel list)
     (esc community.name) side_head nav_overview vis_note nav_live nav_knowledge nav_network
 
 let community_section_shell_page ?user ?(noindex=false) ?thread_count ?last_activity ~is_current_user_mod ~mod_usernames ~admin_usernames
-    ~banned_usernames ~(rail_communities : community list) ~(channels : channel list)
-    ~(sections : community_section list)
-    ~(section : community_section) ~user_votes ~current_page ~sort_mode
-    ~(community : community) ~(posts : feed_item list) request =
+    ~banned_usernames ~(rail_communities : Community_types.community list) ~(channels : Channel_store.channel list)
+    ~(sections : Section_store.community_section list)
+    ~(section : Section_store.community_section) ~user_votes ~current_page ~sort_mode
+    ~(community : Community_types.community) ~(posts : Post_types.feed_item list) request =
   let esc = Components.html_escape in
   (* base_url drives the sort tabs, the New-thread link, and pagination — all stay on the section URL. *)
   let base_url = Printf.sprintf "/c/%s/s/%s" (esc community.slug) (esc section.slug) in
@@ -831,7 +825,7 @@ let community_section_shell_page ?user ?(noindex=false) ?thread_count ?last_acti
      "Shared from" provenance line. *)
   let posts_html =
     if posts = [] then "<div class='cs-empty'>No threads here yet — start the first one.</div>"
-    else String.concat "\n" (List.map (fun (item : feed_item) ->
+    else String.concat "\n" (List.map (fun (item : Post_types.feed_item) ->
       let shared = Option.map (fun ctx -> (community.slug, ctx)) item.fi_shared in
       Components.render_forum_row ~is_current_user_mod ~mod_usernames ~admin_usernames ~banned_usernames ?shared request user_votes item.fi_post) posts)
   in
@@ -889,7 +883,7 @@ let community_section_shell_page ?user ?(noindex=false) ?thread_count ?last_acti
      element itself (never a wrapper div — see the chat-layout regression). *)
   let main_el =
     Printf.sprintf "<main class='%s'>%s</main>"
-      (if community.visibility = Db.Community_private then "cs-main ph-no-capture" else "cs-main")
+      (if community.visibility = Community_types.Community_private then "cs-main ph-no-capture" else "cs-main")
       main
   in
   let aside = Printf.sprintf "<aside class='aside'>%s</aside>" right_pane in
@@ -911,9 +905,9 @@ let community_section_shell_page ?user ?(noindex=false) ?thread_count ?last_acti
    Following renders an intentional empty state that points at public content
    + the founder, never a fake Browse-communities link (no such route). *)
 let feed_page ?user ~scope ~sort_mode ~is_logged_in ~admin_usernames
-    ~(rail_communities : community list) ~user_votes ~current_page
+    ~(rail_communities : Community_types.community list) ~user_votes ~current_page
     ?(shared_destinations : (int * (string * string) list) list = [])
-    (posts : post list) request =
+    (posts : Post_types.post list) request =
   let esc = Components.html_escape in
 
   (* Contact links: reuse the existing founder Telegram link; keep the existing pilot mailto. *)
@@ -959,7 +953,7 @@ let feed_page ?user ~scope ~sort_mode ~is_logged_in ~admin_usernames
       (* Origin-side enrichment only: each card is still the one canonical
          row the feed query selected — [shared_destinations] adds a
          provenance span and can neither add, drop, nor reorder cards. *)
-      String.concat "\n" (List.map (fun (p : post) ->
+      String.concat "\n" (List.map (fun (p : Post_types.post) ->
         let shared_with =
           Option.value ~default:[] (List.assoc_opt p.id shared_destinations) in
         Components.render_forum_row ~admin_usernames ~show_context:true
@@ -1022,7 +1016,7 @@ let feed_page ?user ~scope ~sort_mode ~is_logged_in ~admin_usernames
   let following_block =
     if rail_communities = [] then ""
     else
-      let rows = String.concat "" (List.map (fun (c : community) ->
+      let rows = String.concat "" (List.map (fun (c : Community_types.community) ->
         Printf.sprintf
           "<a class='navitem' href='/c/%s'><span class='avatar avatar--20' style='background:%s'>%s</span><span class='mono'>/c/%s</span></a>"
           (esc c.slug) (Components.launch_tile_color c.slug) (esc (tile_glyph c.slug)) (esc c.slug)
@@ -1156,14 +1150,14 @@ module Start_thread = struct
     ss_date_range : string;
   }
 
-  let summarize_source (msgs : Db.thread_source_msg list) : source_summary =
-    let available = List.filter (fun (m : Db.thread_source_msg) -> not m.sm_deleted) msgs in
+  let summarize_source (msgs : Thread_source_store.thread_source_msg list) : source_summary =
+    let available = List.filter (fun (m : Thread_source_store.thread_source_msg) -> not m.sm_deleted) msgs in
     let participants =
-      List.fold_left (fun acc (m : Db.thread_source_msg) ->
+      List.fold_left (fun acc (m : Thread_source_store.thread_source_msg) ->
         let a = String.trim m.sm_author in
         if a = "" || List.mem a acc then acc else a :: acc) [] available
     in
-    let dates = List.map (fun (m : Db.thread_source_msg) -> date_of_ts m.sm_created_at) msgs in
+    let dates = List.map (fun (m : Thread_source_store.thread_source_msg) -> date_of_ts m.sm_created_at) msgs in
     let date_range =
       match dates with
       | [] -> ""
@@ -1180,10 +1174,10 @@ end
 let community_channel_shell_page ?user ?realtime_token ?(noindex=false) ~is_member ?(can_start=false)
     ?(thread_links : (int64 * int * string * bool) list = [])
     ?(source_focus : (int * string * int64 list) option)
-    ~(rail_communities : community list)
-    ~(channels : channel list) ~(sections : community_section list)
-    ~(channel : channel) ~(messages : (chat_message * string option) list)
-    ~(community : community) request =
+    ~(rail_communities : Community_types.community list)
+    ~(channels : Channel_store.channel list) ~(sections : Section_store.community_section list)
+    ~(channel : Channel_store.channel) ~(messages : (Chat_store.chat_message * string option) list)
+    ~(community : Community_types.community) request =
   let esc = Components.html_escape in
   let csrf_token = Dream.csrf_tag request in
   let channel_url = Printf.sprintf "/c/%s/ch/%s" (esc community.slug) (esc channel.slug) in
@@ -1224,7 +1218,7 @@ let community_channel_shell_page ?user ?realtime_token ?(noindex=false) ~is_memb
       (esc community.slug)
   in
   let vis_note =
-    if community.visibility = Db.Community_private then
+    if community.visibility = Community_types.Community_private then
       "<div class='launch-side-vis'>private community</div>"
     else ""
   in
@@ -1232,7 +1226,7 @@ let community_channel_shell_page ?user ?realtime_token ?(noindex=false) ~is_memb
     if channels = [] then ""
     else
       "<p class='kicker sidebar__group'>Live</p>"
-      ^ String.concat "" (List.map (fun (c : channel) ->
+      ^ String.concat "" (List.map (fun (c : Channel_store.channel) ->
           let cls = if c.slug = channel.slug then "navitem navitem--active" else "navitem" in
           Printf.sprintf
             "<a class='%s' href='/c/%s/ch/%s'><span class='navitem__sigil navitem__sigil--live'>#</span>%s</a>"
@@ -1243,7 +1237,7 @@ let community_channel_shell_page ?user ?realtime_token ?(noindex=false) ~is_memb
     if sections = [] then ""
     else
       "<p class='kicker sidebar__group'>Knowledge</p>"
-      ^ String.concat "" (List.map (fun (s : community_section) ->
+      ^ String.concat "" (List.map (fun (s : Section_store.community_section) ->
           Printf.sprintf
             "<a class='navitem' href='/c/%s/s/%s'><span class='navitem__sigil navitem__sigil--live'>&sect;</span>%s</a>"
             (esc community.slug) (esc s.slug) (esc s.name))
@@ -1285,7 +1279,7 @@ let community_channel_shell_page ?user ?realtime_token ?(noindex=false) ~is_memb
   (* Stream oldest → newest (the DB read already returns ascending), so newest sits at the
      bottom. Deleted messages are masked; a NULL/unknown author (GDPR tombstone) shows
      "[deleted]". Avatar glyph = first letter of the resolved author. *)
-  let render_message ((m : chat_message), (author : string option)) =
+  let render_message ((m : Chat_store.chat_message), (author : string option)) =
     let name = match author with Some u -> u | None -> "[deleted]" in
     let initial =
       if String.length name > 0 && name.[0] <> '['
@@ -1356,7 +1350,7 @@ let community_channel_shell_page ?user ?realtime_token ?(noindex=false) ~is_memb
     | None ->
         Printf.sprintf "<div class='cs-composer cs-composer-prompt'>Please <a href='/login'>log in</a> to chat in #%s.</div>"
           (esc channel.slug)
-    | Some _ when not is_member && community.visibility = Db.Community_private ->
+    | Some _ when not is_member && community.visibility = Community_types.Community_private ->
         (* Private community: a non-member viewing this is an authorized mod/admin; they still
            can't chat without membership, but show no self-join button (Slice C). *)
         "<div class='cs-composer cs-composer-prompt'><span>Only members can chat in this private community.</span></div>"
@@ -1449,7 +1443,7 @@ let community_channel_shell_page ?user ?realtime_token ?(noindex=false) ~is_memb
      (never a wrapper div — see the chat-layout regression). *)
   let main_el =
     Printf.sprintf "<main class='%s'>%s</main>"
-      (if community.visibility = Db.Community_private then "cs-main ph-no-capture" else "cs-main")
+      (if community.visibility = Community_types.Community_private then "cs-main ph-no-capture" else "cs-main")
       main
   in
   Components.launch_community_surface_page ?user ~noindex ~request ~rail_communities
@@ -1464,7 +1458,7 @@ let community_channel_shell_page ?user ?realtime_token ?(noindex=false) ~is_memb
    or timestamps ever reach an unauthorized viewer's markup. *)
 type thread_source_view =
   | Ts_private
-  | Ts_visible of (string * string) option * Db.thread_source_msg list
+  | Ts_visible of (string * string) option * Thread_source_store.thread_source_msg list
 
 (* An accepted DESTINATION-context rendering of the canonical thread,
    resolved and authorized by the handler (accepted placement, destination
@@ -1507,10 +1501,10 @@ let thread_shell_page ?user ?(noindex=false) ?(can_share=false) ?(can_comment=fa
     ?(creation_notice : thread_creation_notice option)
     ?(shared_context : shared_thread_page_context option)
     ?(shared_with : (string * string) list = []) ~is_member ~is_current_user_mod ~mod_usernames ~admin_usernames
-    ~banned_usernames ~(rail_communities : community list) ~(channels : channel list)
-    ~(sections : community_section list) ~(community : community)
+    ~banned_usernames ~(rail_communities : Community_types.community list) ~(channels : Channel_store.channel list)
+    ~(sections : Section_store.community_section list) ~(community : Community_types.community)
     ?(thread_source : thread_source_view option)
-    ~user_post_votes ~user_comment_votes ~(post : post) ~(comments : comment list) request =
+    ~user_post_votes ~user_comment_votes ~(post : Post_types.post) ~(comments : Comment_store.comment list) request =
   let esc = Components.html_escape in
   let csrf_token = Dream.csrf_tag request in
   let current_user = Dream.session_field request "username" in
@@ -1798,7 +1792,7 @@ let thread_shell_page ?user ?(noindex=false) ?(can_share=false) ?(can_comment=fa
           @ (if summary.Start_thread.ss_unavailable = 0 then []
              else [ Printf.sprintf "%d unavailable" summary.Start_thread.ss_unavailable ]) in
         let meta_html = String.concat " &middot; " meta_bits in
-        let row (m : Db.thread_source_msg) =
+        let row (m : Thread_source_store.thread_source_msg) =
           if m.sm_deleted then
             "<div class='th-src-msg th-src-msg--gone'><span class='th-src-unavailable'>[message unavailable]</span></div>"
           else
@@ -1859,7 +1853,7 @@ let thread_shell_page ?user ?(noindex=false) ?(can_share=false) ?(can_comment=fa
              join CTA that could not help. *)
           ""
       (* Private community: viewer is an authorized non-member (mod/admin); no self-join button. *)
-      | Some _ when community.visibility = Db.Community_private ->
+      | Some _ when community.visibility = Community_types.Community_private ->
           Printf.sprintf "<div class='ct-join'><span>Only members of <a href='/c/%s'>/c/%s</a> can reply.</span></div>"
             (esc community.slug) (esc community.slug)
       | Some _ ->
@@ -1871,9 +1865,9 @@ let thread_shell_page ?user ?(noindex=false) ?(can_share=false) ?(can_comment=fa
 
   (* --- comments, shell-styled. Mod/admin/ban dialogs copied verbatim from post_page. --- *)
   let rec render_comment_tree all_comments parent_id depth =
-    let children = List.filter (fun (c : comment) -> c.parent_id = parent_id) all_comments in
+    let children = List.filter (fun (c : Comment_store.comment) -> c.parent_id = parent_id) all_comments in
     if children = [] then ""
-    else String.concat "\n" (List.map (fun (c : comment) ->
+    else String.concat "\n" (List.map (fun (c : Comment_store.comment) ->
       let nested = render_comment_tree all_comments (Some c.id) (depth + 1) in
       let cvote = Option.value ~default:0 (List.assoc_opt c.id user_comment_votes) in
       let up_color = if cvote = 1 then "text-orange-500" else "text-gray-400 hover:text-orange-500" in
@@ -2150,7 +2144,7 @@ let thread_shell_page ?user ?(noindex=false) ?(can_share=false) ?(can_comment=fa
     (esc (Components.time_ago post.created_at)) post.comment_count post.score back_cta in
   (* Participants: deduped, real authors from the loaded post + comments; tombstoned users skipped. *)
   let participants_block =
-    let names = post.username :: List.map (fun (c : comment) -> c.username) comments in
+    let names = post.username :: List.map (fun (c : Comment_store.comment) -> c.username) comments in
     let seen = Hashtbl.create 16 in
     let uniq = List.filter (fun u ->
       if Components.is_deleted_user u || Hashtbl.mem seen u then false
@@ -2171,7 +2165,7 @@ let thread_shell_page ?user ?(noindex=false) ?(can_share=false) ?(can_comment=fa
     match thread_source with
     | Some (Ts_visible (_, msgs)) ->
         let names =
-          List.fold_left (fun acc (m : Db.thread_source_msg) ->
+          List.fold_left (fun acc (m : Thread_source_store.thread_source_msg) ->
             let a = String.trim m.sm_author in
             if m.sm_deleted || a = "" || List.mem a acc then acc else acc @ [a]) [] msgs in
         if names = [] then ""
@@ -2200,7 +2194,7 @@ let thread_shell_page ?user ?(noindex=false) ?(can_share=false) ?(can_comment=fa
      itself (never a wrapper div — see the chat-layout regression). *)
   let main_el =
     Printf.sprintf "<main class='%s'>%s</main>"
-      (if community.visibility = Db.Community_private then "cs-main ph-no-capture" else "cs-main")
+      (if community.visibility = Community_types.Community_private then "cs-main ph-no-capture" else "cs-main")
       main
   in
   let aside = Printf.sprintf "<aside class='aside'>%s</aside>" right_pane in
@@ -2211,7 +2205,7 @@ let thread_shell_page ?user ?(noindex=false) ?(can_share=false) ?(can_comment=fa
 (* /c/:slug — the public community home / overview / entry page of a FLAT
    community (structured ones render community_overview_page). Markup scoped
    under .community-home; every datum here is real — no fake member/online/message counts and
-   no created_at, because Db.community carries neither. SSR-only: every link/form works with JS
+   no created_at, because Community_types.community carries neither. SSR-only: every link/form works with JS
    off. Public presentation only — management (downvotes, mods, sections, bans) lives in
    /c/:slug/settings; the only management affordance here is the gated "Edit community" link. *)
 (* [connected_projects_count]/[connected_communities_count]: how many records the two public
@@ -2234,9 +2228,9 @@ let thread_shell_page ?user ?(noindex=false) ?(can_share=false) ?(can_comment=fa
    built here, in the composition, so the CSS never has to reorder or fill
    cards by position. *)
 let community_overview_page ?user ?(noindex=false) ?(connected_projects_count=0) ?(connected_communities_count=0) ~is_member ~is_current_user_mod ~is_current_user_top_mod
-    ~mod_usernames ~orphaned ~(rail_communities : community list)
-    ~(channels : channel list) ~(recent_posts : feed_item list)
-    (community : community) (section_stats : (community_section * int * string option) list) request =
+    ~mod_usernames ~orphaned ~(rail_communities : Community_types.community list)
+    ~(channels : Channel_store.channel list) ~(recent_posts : Post_types.feed_item list)
+    (community : Community_types.community) (section_stats : (Section_store.community_section * int * string option) list) request =
   let csrf_token = Dream.csrf_tag request in
   let is_admin = Dream.session_field request "is_admin" = Some "true" in
   let esc = Components.html_escape in
@@ -2281,7 +2275,7 @@ let community_overview_page ?user ?(noindex=false) ?(connected_projects_count=0)
      the default-structure merge). Prefer the canonical "general" slug, fall back to the first
      section — so a renamed/reordered General still resolves and the link is never dead. *)
   let target_section =
-    match List.find_opt (fun ((s : community_section), _, _) -> s.slug = "general") section_stats with
+    match List.find_opt (fun ((s : Section_store.community_section), _, _) -> s.slug = "general") section_stats with
     | Some s -> Some s
     | None -> (match section_stats with s :: _ -> Some s | [] -> None)
   in
@@ -2290,7 +2284,7 @@ let community_overview_page ?user ?(noindex=false) ?(connected_projects_count=0)
      first channel (mirrors target_section) so the link is never dead; if a community somehow
      has no channels we fall back to the section feed below. *)
   let target_channel =
-    match List.find_opt (fun (c : channel) -> c.slug = "general") channels with
+    match List.find_opt (fun (c : Channel_store.channel) -> c.slug = "general") channels with
     | Some c -> Some c
     | None -> (match channels with c :: _ -> Some c | [] -> None)
   in
@@ -2306,11 +2300,11 @@ let community_overview_page ?user ?(noindex=false) ?(connected_projects_count=0)
         "<a class='btn btn--primary' href='/login'>Log in to join &rarr;</a>"
     | Some _ ->
         (match target_channel with
-        | Some (c : channel) ->
+        | Some (c : Channel_store.channel) ->
             let chat_url = Printf.sprintf "/c/%s/ch/%s" slug (esc c.slug) in
             (* Private community: anyone seeing this overview is authorized to read it, so link
                straight in — never show a self-join button (Slice C). *)
-            if is_member || community.visibility = Db.Community_private then
+            if is_member || community.visibility = Community_types.Community_private then
               Printf.sprintf "<a class='btn btn--primary' href='%s'>Open #%s &rarr;</a>" chat_url (esc c.slug)
             else
               Printf.sprintf "<form action='/join' method='POST'>%s<input type='hidden' name='community_id' value='%d'><input type='hidden' name='redirect_to' value='%s'><button type='submit' class='btn btn--primary btn--block'>Join &amp; open #%s &rarr;</button></form>"
@@ -2318,9 +2312,9 @@ let community_overview_page ?user ?(noindex=false) ?(connected_projects_count=0)
         | None ->
             (* No channels (shouldn't happen post default-structure) — fall back to a section feed. *)
             (match target_section with
-             | Some ((s : community_section), _, _) ->
+             | Some ((s : Section_store.community_section), _, _) ->
                  let feed_url = Printf.sprintf "/c/%s/s/%s" slug (esc s.slug) in
-                 if is_member || community.visibility = Db.Community_private then
+                 if is_member || community.visibility = Community_types.Community_private then
                    Printf.sprintf "<a class='btn btn--primary' href='%s'>Open %s &rarr;</a>"
                      feed_url (esc s.name)
                  else
@@ -2364,7 +2358,7 @@ let community_overview_page ?user ?(noindex=false) ?(connected_projects_count=0)
   (* Visibility state, stated factually where the viewer already is. Public
      is the default and carries no marker. *)
   let vis_note =
-    if community.visibility = Db.Community_private then
+    if community.visibility = Community_types.Community_private then
       "<div class='launch-side-vis'>private community</div>"
     else ""
   in
@@ -2372,14 +2366,14 @@ let community_overview_page ?user ?(noindex=false) ?(connected_projects_count=0)
     if channels = [] then ""
     else
       "<p class='kicker sidebar__group'>Live</p>"
-      ^ String.concat "" (List.map (fun (c : channel) ->
+      ^ String.concat "" (List.map (fun (c : Channel_store.channel) ->
           Printf.sprintf
             "<a class='navitem' href='/c/%s/ch/%s'><span class='navitem__sigil navitem__sigil--live'>#</span>%s</a>"
             slug (esc c.slug) (esc c.slug))
           channels)
   in
   let nav_sections_items =
-    List.map (fun ((s : community_section), post_count, _) ->
+    List.map (fun ((s : Section_store.community_section), post_count, _) ->
         Printf.sprintf
           "<a class='navitem' href='/c/%s/s/%s'><span class='navitem__sigil navitem__sigil--live'>&sect;</span>%s<span class='navitem__trail'>%d</span></a>"
           slug (esc s.slug) (esc s.name) post_count)
@@ -2433,7 +2427,7 @@ let community_overview_page ?user ?(noindex=false) ?(connected_projects_count=0)
     (if community.is_network_community then
        " <span class='badge badge--network badge--lg'>&#9672; Network community</span>"
      else "")
-    ^ (if community.visibility = Db.Community_private then
+    ^ (if community.visibility = Community_types.Community_private then
          " <span class='badge badge--plain badge--lg'>Private</span>"
        else "")
   in
@@ -2453,7 +2447,7 @@ let community_overview_page ?user ?(noindex=false) ?(connected_projects_count=0)
   in
 
   (* --- forum sections: flat panel rows over real per-section counts. --- *)
-  let render_section ((s : community_section), post_count, _last_activity) =
+  let render_section ((s : Section_store.community_section), post_count, _last_activity) =
     Printf.sprintf
       "<a class='project-row launch-secrow' href='/c/%s/s/%s'><span class='launch-sec-sigil'>&sect;</span><span class='launch-sec-main'><span class='launch-sec-name'>%s</span>%s</span><span class='launch-sec-count'>%d</span></a>"
       slug (esc s.slug) (esc s.name)
@@ -2487,7 +2481,7 @@ let community_overview_page ?user ?(noindex=false) ?(connected_projects_count=0)
   let recent_panel =
     if recent_posts = [] then ""
     else
-      let rows = String.concat "" (List.map (fun (item : feed_item) ->
+      let rows = String.concat "" (List.map (fun (item : Post_types.feed_item) ->
         let p = item.fi_post in
         let href = match item.fi_shared with
           | Some _ -> Components.canonical_thread_path community.slug p.id p.title
@@ -2519,7 +2513,7 @@ let community_overview_page ?user ?(noindex=false) ?(connected_projects_count=0)
   let channels_panel =
     if channels = [] then ""
     else
-      let rows = String.concat "" (List.map (fun (c : channel) ->
+      let rows = String.concat "" (List.map (fun (c : Channel_store.channel) ->
         Printf.sprintf
           "<a class='project-row launch-chanrow' href='/c/%s/ch/%s'><span class='launch-chan-line'><span class='launch-chan-hash'>#</span> %s</span>%s</a>"
           slug (esc c.slug) (esc c.slug)
@@ -2651,13 +2645,13 @@ let community_overview_page ?user ?(noindex=false) ?(connected_projects_count=0)
    the read model for anyone else, and this page never loads it at all. An empty fragment
    also removes the panel from the navigation, so no ordinary moderator can reach an empty
    management surface by typing ?panel=projects. *)
-let community_settings_page ?user ?(connected_projects="") ?(rail_communities=[]) ~is_admin ~is_top_mod ~open_reports_count ~(community : community) ~(mods : user list) ~(banned_users : user list) ~(members : user list) ~(sections : community_section list) ~(channels : Db.channel list) request =
+let community_settings_page ?user ?(connected_projects="") ?(rail_communities=[]) ~is_admin ~is_top_mod ~open_reports_count ~(community : Community_types.community) ~(mods : User_store.user list) ~(banned_users : User_store.user list) ~(members : User_store.user list) ~(sections : Section_store.community_section list) ~(channels : Channel_store.channel list) request =
   let csrf_token = Dream.csrf_tag request in
   let esc = Components.html_escape in
   let slug = esc community.slug in
   (* Active (non-archived) channel count — used both in the status strip and to gate the
      archive control in the UI (the server enforces the same guards regardless). *)
-  let active_channels = List.filter (fun (c : Db.channel) -> not c.is_archived) channels in
+  let active_channels = List.filter (fun (c : Channel_store.channel) -> not c.is_archived) channels in
   let active_channel_count = List.length active_channels in
 
   (* The settings surface is a control panel: a left nav of panels, one panel rendered
@@ -2675,7 +2669,7 @@ let community_settings_page ?user ?(connected_projects="") ?(rail_communities=[]
     | _ -> "visibility"
   in
 
-  let is_private = community.visibility = Db.Community_private in
+  let is_private = community.visibility = Community_types.Community_private in
   let can_edit_vis = is_top_mod || is_admin in
 
   (* Network-community lifecycle state. A provisioned setup draft is not
@@ -2687,7 +2681,7 @@ let community_settings_page ?user ?(connected_projects="") ?(rail_communities=[]
      canonical surface. *)
   let is_network_draft =
     community.is_network_community
-    && community.onboarding_state = Db.Community_draft
+    && community.onboarding_state = Community_types.Community_draft
   in
   (* The setup surface independently reauthorizes (current top_mod of this
      community, or a durable users.is_admin holder), so this only decides
@@ -2939,7 +2933,7 @@ let community_settings_page ?user ?(connected_projects="") ?(rail_communities=[]
      always-expanded cards. idx is the 0-based list index — the position columns exist in the
      schema but have no reorder endpoint, so we only SHOW the current order here; explicit
      reordering is a follow-up. *)
-  let render_channel_item idx (c : Db.channel) =
+  let render_channel_item idx (c : Channel_store.channel) =
     let status_badge =
       if c.is_archived then "<span class='cm-badge cm-badge--archived'>Archived</span>"
       else "<span class='cm-badge cm-badge--active'>Active</span>"
@@ -3034,7 +3028,7 @@ let community_settings_page ?user ?(connected_projects="") ?(rail_communities=[]
   let sections_inner =
     if not community.sections_enabled then ""
     else begin
-      let render_section_item idx (s : community_section) =
+      let render_section_item idx (s : Section_store.community_section) =
         Printf.sprintf "
           <details class='cm-item'>
             <summary>
@@ -3151,7 +3145,7 @@ let community_settings_page ?user ?(connected_projects="") ?(rail_communities=[]
       if members = [] then
         "<p class='cm-empty'>No members in the allow-list yet.</p>"
       else
-        let rows = String.concat "\n" (List.map (fun (m : user) ->
+        let rows = String.concat "\n" (List.map (fun (m : User_store.user) ->
           let remove_btn =
             if not can_edit then ""
             else
@@ -3265,7 +3259,7 @@ let community_settings_page ?user ?(connected_projects="") ?(rail_communities=[]
       if banned_users = [] then
         "<p class='cm-empty'>No users are currently banned from this community.</p>"
       else
-        let rows = String.concat "\n" (List.map (fun (b : user) ->
+        let rows = String.concat "\n" (List.map (fun (b : User_store.user) ->
           Printf.sprintf "
             <div class='cm-list-row'>
               <a href='/u/%s' class='cm-user-link'>u/%s</a>
@@ -3367,20 +3361,20 @@ let community_settings_page ?user ?(connected_projects="") ?(rail_communities=[]
     ~content:(Components.private_replay_guard ~community content) ()
 
 let manage_mods_page ?user ?(rail_communities = []) ~is_admin ~current_user_role
-    ~(channels : channel list) ~(sections : community_section list)
-    ~(community : community) ~(mods : moderator_entry list) request =
+    ~(channels : Channel_store.channel list) ~(sections : Section_store.community_section list)
+    ~(community : Community_types.community) ~(mods : Moderator_store.moderator_entry list) request =
   let csrf_token = Dream.csrf_tag request in
   let esc = Components.html_escape in
   let slug = esc community.slug in
 
   (* Group mods by role for visual separation. *)
-  let top_mods   = List.filter (fun m -> m.role = "top_mod")   mods in
-  let regular_mods = List.filter (fun m -> m.role = "mod")     mods in
-  let legacy_mods  = List.filter (fun m -> m.role = "legacy_mod") mods in
+  let top_mods   = List.filter (fun m -> m.Moderator_store.role = "top_mod")   mods in
+  let regular_mods = List.filter (fun m -> m.Moderator_store.role = "mod")     mods in
+  let legacy_mods  = List.filter (fun m -> m.Moderator_store.role = "legacy_mod") mods in
 
   let can_manage = is_admin || current_user_role = Some "top_mod" in
 
-  let render_top_mod_row (m : moderator_entry) =
+  let render_top_mod_row (m : Moderator_store.moderator_entry) =
     (* A top_mod cannot demote another top_mod; only admins have that power.
        Prevents power consolidation by a single top_mod ousting peers. *)
     let action_btn =
@@ -3402,7 +3396,7 @@ let manage_mods_page ?user ?(rail_communities = []) ~is_admin ~current_user_role
       (esc m.username) (esc m.username) action_btn
   in
 
-  let render_mod_row (m : moderator_entry) =
+  let render_mod_row (m : Moderator_store.moderator_entry) =
     let action_btns =
       if can_manage then
         Printf.sprintf "
@@ -3430,7 +3424,7 @@ let manage_mods_page ?user ?(rail_communities = []) ~is_admin ~current_user_role
       (esc m.username) (esc m.username) action_btns
   in
 
-  let render_legacy_row (m : moderator_entry) =
+  let render_legacy_row (m : Moderator_store.moderator_entry) =
     Printf.sprintf "
       <div class='cm-list-row'>
         <div><a href='/u/%s' class='cm-user-link cm-user-link--muted'>u/%s</a><span class='cm-badge cm-badge--legacy'>Legacy</span></div>
@@ -3541,8 +3535,8 @@ let manage_mods_page ?user ?(rail_communities = []) ~is_admin ~current_user_role
    ordering and the rail tiles stay owned by the shared launch doc. The
    community-bound states keep their (id, visibility) analytics pair through
    the wrapper's [analytics_community], exactly what create_page received. *)
-let choose_community_page ?user ?request ?(rail_communities = []) (communities : community list) =
-  let render_option (community : community) =
+let choose_community_page ?user ?request ?(rail_communities = []) (communities : Community_types.community list) =
+  let render_option (community : Community_types.community) =
     Printf.sprintf "
     <a href='/new-post?community=%s' class='create-comm'>
         <span>
@@ -3579,7 +3573,7 @@ let choose_community_page ?user ?request ?(rail_communities = []) (communities :
     ~page_class:"launch-post-creation" ~title:"Choose Community"
     ~content:(Printf.sprintf "<div class='create-shell'>%s</div>" content) ()
 
-let join_to_post_page ?user ?(rail_communities = []) (community : community) request =
+let join_to_post_page ?user ?(rail_communities = []) (community : Community_types.community) request =
   let csrf_token = Dream.csrf_tag request in
   let content = Printf.sprintf "
     <div class='create-wrap create-wrap--narrow'>
@@ -3622,10 +3616,10 @@ let join_to_post_page ?user ?(rail_communities = []) (community : community) req
    checkboxes, title/content/section fields) is pinned — only the outer
    document moved onto Components.launch_community_page. *)
 let start_thread_form ?user ?error ?(rail_communities = [])
-    ~(channels : channel list) ~can_manage
-    ~(community : community) ~(channel : channel)
-    ~(seed_id : int64) ~(candidates : (chat_message * string option) list)
-    ~(sections : community_section list)
+    ~(channels : Channel_store.channel list) ~can_manage
+    ~(community : Community_types.community) ~(channel : Channel_store.channel)
+    ~(seed_id : int64) ~(candidates : (Chat_store.chat_message * string option) list)
+    ~(sections : Section_store.community_section list)
     ~(default_section_id : int) ~default_title ~default_body request =
   let esc = Components.html_escape in
   let csrf_token = Dream.csrf_tag request in
@@ -3634,7 +3628,7 @@ let start_thread_form ?user ?error ?(rail_communities = [])
   let section_dropdown =
     if sections = [] then ""
     else begin
-      let options = String.concat "\n" (List.map (fun (s : community_section) ->
+      let options = String.concat "\n" (List.map (fun (s : Section_store.community_section) ->
         let selected = if s.section_id = default_section_id then " selected" else "" in
         Printf.sprintf "<option value='%d'%s>%s</option>" s.section_id selected (esc s.name)
       ) sections) in
@@ -3645,7 +3639,7 @@ let start_thread_form ?user ?error ?(rail_communities = [])
             </div>" options
     end
   in
-  let render_candidate ((m : chat_message), (author : string option)) =
+  let render_candidate ((m : Chat_store.chat_message), (author : string option)) =
     let name = match author with Some u -> u | None -> "[deleted]" in
     let is_seed = m.id = seed_id in
     let checkbox =
@@ -3768,12 +3762,12 @@ let start_thread_form ?user ?error ?(rail_communities = [])
 
 let new_post_form ?user ?preselected_section_id ?(rail_communities = [])
     ?(share_candidates : (string * string) list = [])
-    (sections : community_section list) (community : community) request =
+    (sections : Section_store.community_section list) (community : Community_types.community) request =
   let csrf_token = Dream.csrf_tag request in
   let section_dropdown =
     if sections = [] then ""
     else begin
-      let options = String.concat "\n" (List.map (fun (s : community_section) ->
+      let options = String.concat "\n" (List.map (fun (s : Section_store.community_section) ->
         let selected = match preselected_section_id with
           | Some id when id = s.section_id -> " selected"
           | _ -> ""
@@ -3880,16 +3874,16 @@ let new_post_form ?user ?preselected_section_id ?(rail_communities = [])
    target from the trusted slug + hidden type/id and re-runs the ban/self-report gates,
    so this page only sets up the inputs. target_type is emitted as the closed-variant
    string; the reason <select> values mirror report_reason_to_string. *)
-let report_form_page ?user ?(rail_communities = []) ~(channels : channel list)
-    ~(sections : community_section list) ~can_manage ~(community : community)
-    ~(target_type : Db.report_target) ~target_id ~target_title ~return_url request =
+let report_form_page ?user ?(rail_communities = []) ~(channels : Channel_store.channel list)
+    ~(sections : Section_store.community_section list) ~can_manage ~(community : Community_types.community)
+    ~(target_type : Report_store.report_target) ~target_id ~target_title ~return_url request =
   let esc = Components.html_escape in
   let csrf_token = Dream.csrf_tag request in
   let kind_label = match target_type with
-    | Db.Report_post -> "post"
-    | Db.Report_comment -> "comment"
-    | Db.Report_chat_message -> "message" in
-  let target_type_s = Db.report_target_to_string target_type in
+    | Report_store.Report_post -> "post"
+    | Report_store.Report_comment -> "comment"
+    | Report_store.Report_chat_message -> "message" in
+  let target_type_s = Report_store.report_target_to_string target_type in
   (* Trim an over-long excerpt for the context line; full content stays untouched in the DB. *)
   let excerpt =
     let t = String.trim target_title in
@@ -3986,44 +3980,44 @@ let report_form_page ?user ?(rail_communities = []) ~(channels : channel list)
    deleted, or beyond the preview cap) degrade to "Target unavailable or deleted". This
    page is PRIVATE — the handler gates it on M/TM/A; it adds no authority of its own. *)
 let reports_queue_page ?user ?(rail_communities = []) ~is_admin ~is_top_mod
-    ~(channels : channel list)
-    ~(sections : community_section list) ~(community : community) ~(status : Db.report_status)
-    ~(reports : Db.report_row list) ~(previews : (int * (string * string)) list) request =
+    ~(channels : Channel_store.channel list)
+    ~(sections : Section_store.community_section list) ~(community : Community_types.community) ~(status : Report_store.report_status)
+    ~(reports : Report_store.report_row list) ~(previews : (int * (string * string)) list) request =
   let esc = Components.html_escape in
   let csrf_token = Dream.csrf_tag request in
   let slug = esc community.slug in
   let reason_label = function
-    | Db.Report_spam -> "Spam"
-    | Db.Report_abuse -> "Abuse / harassment"
-    | Db.Report_off_topic -> "Off-topic"
-    | Db.Report_illegal -> "Illegal / dangerous"
-    | Db.Report_other -> "Other" in
+    | Report_store.Report_spam -> "Spam"
+    | Report_store.Report_abuse -> "Abuse / harassment"
+    | Report_store.Report_off_topic -> "Off-topic"
+    | Report_store.Report_illegal -> "Illegal / dangerous"
+    | Report_store.Report_other -> "Other" in
   let target_label = function
-    | Db.Report_post -> "post"
-    | Db.Report_comment -> "comment"
-    | Db.Report_chat_message -> "chat message" in
+    | Report_store.Report_post -> "post"
+    | Report_store.Report_comment -> "comment"
+    | Report_store.Report_chat_message -> "chat message" in
   let action_kind_label = function
-    | Db.Report_removed_content -> "Content removed"
-    | Db.Report_banned_author -> "Author banned"
-    | Db.Report_other_action -> "Action taken" in
+    | Report_store.Report_removed_content -> "Content removed"
+    | Report_store.Report_banned_author -> "Author banned"
+    | Report_store.Report_other_action -> "Action taken" in
   (* Reuse the existing badge palette so the queue needs no new status-pill CSS. *)
   let status_badge = function
-    | Db.Report_open -> "<span class='cm-badge cm-badge--active'>Open</span>"
-    | Db.Report_action_taken -> "<span class='cm-badge cm-badge--top'>Action taken</span>"
-    | Db.Report_dismissed -> "<span class='cm-badge cm-badge--archived'>Dismissed</span>" in
+    | Report_store.Report_open -> "<span class='cm-badge cm-badge--active'>Open</span>"
+    | Report_store.Report_action_taken -> "<span class='cm-badge cm-badge--top'>Action taken</span>"
+    | Report_store.Report_dismissed -> "<span class='cm-badge cm-badge--archived'>Dismissed</span>" in
   let tab st label =
     let cls = if st = status then "cm-nav-link cm-nav-link--active" else "cm-nav-link" in
     Printf.sprintf "<a href='/c/%s/reports?status=%s' class='%s'>%s</a>"
-      slug (Db.report_status_to_string st) cls label in
+      slug (Report_store.report_status_to_string st) cls label in
   let tabs = String.concat "\n" [
-    tab Db.Report_open "Open";
-    tab Db.Report_action_taken "Action taken";
-    tab Db.Report_dismissed "Dismissed";
+    tab Report_store.Report_open "Open";
+    tab Report_store.Report_action_taken "Action taken";
+    tab Report_store.Report_dismissed "Dismissed";
   ] in
   let excerpt s =
     let t = String.trim s in
     if String.length t <= 140 then t else String.sub t 0 137 ^ "\xe2\x80\xa6" in
-  let render_row (r : Db.report_row) =
+  let render_row (r : Report_store.report_row) =
     let reporter = esc r.reporter_username in
     let author = match r.target_author_username with
       | Some u -> Printf.sprintf "<a href='/u/%s' class='cm-table-actor'>u/%s</a>" (esc u) (esc u)
@@ -4046,7 +4040,7 @@ let reports_queue_page ?user ?(rail_communities = []) ~is_admin ~is_top_mod
        form, two formaction submits, so the optional note applies to whichever action fires —
        no JS, no modal. Resolved rows show the recorded outcome instead. *)
     let actions_html =
-      if r.status = Db.Report_open then
+      if r.status = Report_store.Report_open then
         Printf.sprintf "
           <form method='POST' class='cm-report-actions'>
             %s
@@ -4086,9 +4080,9 @@ let reports_queue_page ?user ?(rail_communities = []) ~is_admin ~is_top_mod
       actions_html
   in
   let empty_msg = match status with
-    | Db.Report_open -> "No open reports. Nothing needs your attention right now."
-    | Db.Report_action_taken -> "No reports have been actioned yet."
-    | Db.Report_dismissed -> "No reports have been dismissed yet." in
+    | Report_store.Report_open -> "No open reports. Nothing needs your attention right now."
+    | Report_store.Report_action_taken -> "No reports have been actioned yet."
+    | Report_store.Report_dismissed -> "No reports have been dismissed yet." in
   let table_body =
     if reports = [] then
       Printf.sprintf "<tr><td colspan='5' class='cm-table-empty'>%s</td></tr>" empty_msg
@@ -4097,7 +4091,7 @@ let reports_queue_page ?user ?(rail_communities = []) ~is_admin ~is_top_mod
      enriched, say so rather than silently showing "unavailable" for the tail. *)
   let preview_note =
     if List.length reports > List.length previews
-       && List.exists (fun (r : Db.report_row) -> not (List.mem_assoc r.id previews)) reports
+       && List.exists (fun (r : Report_store.report_row) -> not (List.mem_assoc r.id previews)) reports
     then "<p class='cm-panel-desc'>Context previews are shown for the most recent reports; older rows link from their target type where available.</p>"
     else "" in
   (* Panel body only — the shared settings shell below owns the header band
@@ -4175,18 +4169,18 @@ let reports_queue_page ?user ?(rail_communities = []) ~is_admin ~is_top_mod
    script from the wrapper (confirmModal, copyPostLink, optimistic voting, one
    notification fetch); guests get the share-only script so the byte-pinned
    Share control keeps working, and zero notification fetches. *)
-let post_page ?user ?(noindex=false) ~is_member ~is_current_user_mod ~mod_usernames ~admin_usernames ~banned_usernames ~community ~user_communities ~moderated_communities:_ user_post_votes user_comment_votes (post : post) (comments : comment list) request =
+let post_page ?user ?(noindex=false) ~is_member ~is_current_user_mod ~mod_usernames ~admin_usernames ~banned_usernames ~community ~user_communities ~moderated_communities:_ user_post_votes user_comment_votes (post : Post_types.post) (comments : Comment_store.comment list) request =
   let csrf_token = Dream.csrf_tag request in
   let current_user = Dream.session_field request "username" in
 
   (* Recursive comment tree: children filtered at render time rather than
      pre-grouped in SQL to keep the query simple and avoid a recursive CTE. *)
   let rec render_comment_tree all_comments current_parent_id =
-    let children = List.filter (fun (c : comment) -> c.parent_id = current_parent_id) all_comments in
+    let children = List.filter (fun (c : Comment_store.comment) -> c.parent_id = current_parent_id) all_comments in
 
     if children = [] then ""
     else
-      let children_html = List.map (fun (c : comment) ->
+      let children_html = List.map (fun (c : Comment_store.comment) ->
         let nested_html = render_comment_tree all_comments (Some c.id) in
 
         (* Reply button toggles a hidden form; splitting button from form keeps the
@@ -4707,7 +4701,7 @@ let post_page ?user ?(noindex=false) ~is_member ~is_current_user_mod ~mod_userna
   in
 
   let post_rules_html =
-    match community.rules with
+    match community.Community_types.rules with
     | Some rules when rules <> "" ->
         Printf.sprintf "<div class='mt-4 pt-4 border-t border-gray-100'><h3 class='text-xs font-bold text-gray-500 uppercase tracking-wider mb-2'>Rules</h3><p class='text-xs text-gray-600 whitespace-pre-wrap'>%s</p></div>" (Components.html_escape rules)
     | _ -> ""
@@ -4883,7 +4877,7 @@ let user_profile_page ?user ?(rail_communities = []) ~is_admin ~is_globally_bann
     else ""
   in
   let mod_badges =
-    String.concat " " (List.map (fun (a : community) ->
+    String.concat " " (List.map (fun (a : Community_types.community) ->
       Printf.sprintf "<a href='/c/%s' class='account-badge account-badge--mod'>Mod of /c/%s</a>"
         a.slug a.slug
     ) moderated_communities)
@@ -4972,7 +4966,7 @@ let user_profile_page ?user ?(rail_communities = []) ~is_admin ~is_globally_bann
      This row reuses the SAME real post data and the SAME vote-form DOM (up-form, score span,
      down-form, with the optimistic-vote colour classes) so voting behaves identically — only
      the surrounding layout differs. No query / canonical-URL change. *)
-  let render_thread_row (post : Db.post) =
+  let render_thread_row (post : Post_types.post) =
     let current_vote = Option.value ~default:0 (List.assoc_opt post.id user_votes) in
     let up_color = if current_vote = 1 then "text-orange-500" else "text-gray-400 hover:text-orange-500" in
     let down_color = if current_vote = -1 then "text-[#69C3D2]" else "text-gray-400 hover:text-[#69C3D2]" in
@@ -5057,7 +5051,7 @@ let user_profile_page ?user ?(rail_communities = []) ~is_admin ~is_globally_bann
     if community_stats = [] then
       "<div class='account-empty'>No community activity yet.</div>"
     else begin
-      let cards = String.concat "\n" (List.map (fun (s : Db.community_user_stat) ->
+      let cards = String.concat "\n" (List.map (fun (s : Community_user_stats_store.community_user_stat) ->
         let total = s.local_post_count + s.local_comment_count in
         let active_since =
           match s.first_active_at with
@@ -5284,9 +5278,9 @@ let settings_page ?user ?(rail_communities = []) bio avatar_url request =
    skinned onto the approved flat .notif anatomy by the "notifications only"
    integration section at the end of earde.css. The handoff's filter tabs and
    "mark all read" POST are deliberately absent — no such routes exist; the
-   GET itself marks everything read (Db.mark_notifs_read) exactly as before. *)
-let notifications_page ?user ?(rail_communities = []) (notifs : Db.notification list) request =
-  let render_notif (n : Db.notification) =
+   GET itself marks everything read (Notification_store.mark_notifs_read) exactly as before. *)
+let notifications_page ?user ?(rail_communities = []) (notifs : Notification_store.notification list) request =
+  let render_notif (n : Notification_store.notification) =
     let unread_class = if n.is_read then "" else " account-notif--unread" in
     (* Project-home notifications are structured: no stored prose, so the
        label and destination derive from the durable kind and the joined
@@ -5520,7 +5514,7 @@ let notifications_page ?user ?(rail_communities = []) (notifs : Db.notification 
           | None -> None)
     in
     (* Notifications without a destination render as non-clickable divs.
-       Read state is already persisted server-side on page load (Db.mark_notifs_read);
+       Read state is already persisted server-side on page load (Notification_store.mark_notifs_read);
        the onclick is a purely cosmetic clear of the unread accent on this visit. *)
     match link with
     | Some href ->
@@ -5563,12 +5557,12 @@ let notifications_page ?user ?(rail_communities = []) (notifs : Db.notification 
    community / did it come from chat?" An empty query renders a local prompt state instead
    of redirecting; the route and q/t/page semantics are unchanged. The visible Threads tab
    keeps the internal tab value "posts". chat_sources is the bounded per-page provenance
-   lookup (post_id -> channel slug/name/source count) from Db.get_thread_sources_for_posts —
+   lookup (post_id -> channel slug/name/source count) from Thread_source_store.get_thread_sources_for_posts —
    no N+1. rail_communities feeds the launch rail only (viewer membership, same order as
    every other launch surface); it never enters result content. *)
 (* user_votes is part of the stable positional API (vote state for the old card renderer); the
    compact search rows show score but no vote arrows, so it is intentionally unused here. *)
-let search_results_page ?user ~admin_usernames ?(chat_sources=[]) ?(rail_communities=[]) _user_votes current_page active_tab query (communities: community list) users (posts: post list) comments request =
+let search_results_page ?user ~admin_usernames ?(chat_sources=[]) ?(rail_communities=[]) _user_votes current_page active_tab query (communities: Community_types.community list) users (posts: Post_types.post list) comments request =
   (* Two escaping contexts, applied separately: [eq]/[et] are HTML-escaped for
      text and form-value positions. URLs built for href attributes first
      percent-encode the value as a query parameter (so '&', '=', '#', spaces
@@ -5587,7 +5581,7 @@ let search_results_page ?user ~admin_usernames ?(chat_sources=[]) ?(rail_communi
   in
 
   (* --- per-tab row renderers (cool-grey .search-shell idiom) --- *)
-  let render_community (a: community) =
+  let render_community (a: Community_types.community) =
     (* Reuse the people-result avatar classes (.sr-avatar / --mono) so community and user rows
        align identically; community_avatar falls back to a name letter-tile, never a broken image. *)
     let avatar_html =
@@ -5638,7 +5632,7 @@ let search_results_page ?user ~admin_usernames ?(chat_sources=[]) ?(rail_communi
       score (Components.html_escape content) post_id
   in
 
-  let render_thread (post: post) =
+  let render_thread (post: Post_types.post) =
     let section_html = match post.section_name, post.section_slug with
       | Some sn, Some ss ->
           Printf.sprintf " <span class='sr-sep'>&rsaquo;</span> <a class='sr-s' href='/c/%s/s/%s'>%s</a>"
@@ -5717,7 +5711,7 @@ let search_results_page ?user ~admin_usernames ?(chat_sources=[]) ?(rail_communi
      is the effective page after the handler's max-1 clamp. Emitted only when
      analytics is enabled and a non-empty search actually executed. *)
   let analytics_meta_html =
-    match Posthog.browser_config () with
+    match Analytics.browser_config () with
     | None -> ""
     | Some _ ->
         let analytics_tab, result_count =
@@ -6132,8 +6126,8 @@ let looks_random_username raw =
    only. *)
 let admin_dashboard_page ?user ?(rail_communities = []) ~signups_enabled
     ~(turnstile : [ `Configured | `Disabled | `Misconfigured ]) ~brevo_configured
-    ~(recent_users : Db.admin_recent_user list) ~(pending : Db.pending_signup_row list)
-    ~(banned_users : user list) request =
+    ~(recent_users : Admin_store.admin_recent_user list) ~(pending : Admin_store.pending_signup_row list)
+    ~(banned_users : User_store.user list) request =
   let csrf_token = Dream.csrf_tag request in
   let esc = Components.html_escape in
   (* "recently created" cutoff as an ISO-ish string; created_at::text sorts lexically the
@@ -6176,7 +6170,7 @@ let admin_dashboard_page ?user ?(rail_communities = []) ~signups_enabled
       if recent_users = [] then
         "<tr><td colspan='6' class='admin-empty'>No users yet.</td></tr>"
       else
-        String.concat "\n" (List.map (fun (u : Db.admin_recent_user) ->
+        String.concat "\n" (List.map (fun (u : Admin_store.admin_recent_user) ->
           let badges =
             (if u.is_admin  then "<span class='admin-badge admin-badge--admin'>admin</span>" else "")
             ^ (if u.is_banned then "<span class='admin-badge admin-badge--banned'>banned</span>" else "")
@@ -6219,7 +6213,7 @@ let admin_dashboard_page ?user ?(rail_communities = []) ~signups_enabled
       if pending = [] then
         "<tr><td colspan='5' class='admin-empty'>No active pending signups.</td></tr>"
       else
-        String.concat "\n" (List.map (fun (p : Db.pending_signup_row) ->
+        String.concat "\n" (List.map (fun (p : Admin_store.pending_signup_row) ->
           let ip = match p.ip_address with Some s when s <> "" -> esc s | _ -> "—" in
           Printf.sprintf
             "<tr>\
@@ -6249,7 +6243,7 @@ let admin_dashboard_page ?user ?(rail_communities = []) ~signups_enabled
       if banned_users = [] then
         "<tr><td colspan='3' class='admin-empty'>No users are currently globally banned.</td></tr>"
       else
-        String.concat "\n" (List.map (fun (u : user) ->
+        String.concat "\n" (List.map (fun (u : User_store.user) ->
           Printf.sprintf
             "<tr>\
                <td><a class='admin-user-link' href='/u/%s'>%s</a></td>\
@@ -6298,9 +6292,9 @@ let admin_dashboard_page ?user ?(rail_communities = []) ~signups_enabled
 (* === MODERATION LOG === *)
 
 let mod_log_page ?user ?(noindex=false) ?(rail_communities = [])
-    ~(can_access_settings : bool) ~(channels : channel list)
-    ~(sections : community_section list)
-    ~(community : Db.community) (actions : Db.mod_action list) request =
+    ~(can_access_settings : bool) ~(channels : Channel_store.channel list)
+    ~(sections : Section_store.community_section list)
+    ~(community : Community_types.community) (actions : Mod_log_store.mod_action list) request =
   let esc = Components.html_escape in
   (* Mod log is member-visible, not mod-only. Send viewers who can reach settings back into the
      moderation panel; send everyone else back to the community home. *)
@@ -6310,7 +6304,7 @@ let mod_log_page ?user ?(noindex=false) ?(rail_communities = [])
     else
       Printf.sprintf "<a href='/c/%s' class='cm-back'>&larr; Back to community</a>" (esc community.slug)
   in
-  let render_action (a : Db.mod_action) =
+  let render_action (a : Mod_log_store.mod_action) =
     let target_html = match a.target_id with
       | None -> ""
       | Some tid -> Printf.sprintf "<span class='cm-table-target'> &middot; target #%d</span>" tid

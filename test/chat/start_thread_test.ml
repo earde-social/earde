@@ -1,6 +1,4 @@
 module ST = Earde.Pages.Start_thread
-module D = Earde.Db
-
 (* "Start thread from chat" pure helpers — title/body prefill, checkbox-id parsing,
    server-side selection guard. No DB, no request. *)
 
@@ -45,8 +43,8 @@ let check_ts name expected f raw =
 
 (* Promoted-conversation provenance summary — a source-row constructor keeps the cases
    readable; summaries render as a stable string for a single assertion per case. *)
-let sm ?(seed = false) ?(deleted = false) ~id ~author ~at content : Earde.Db.thread_source_msg =
-  { Earde.Db.sm_id = Int64.of_int id; sm_author = author; sm_content = content;
+let sm ?(seed = false) ?(deleted = false) ~id ~author ~at content : Earde.Thread_source_store.thread_source_msg =
+  { Earde.Thread_source_store.sm_id = Int64.of_int id; sm_author = author; sm_content = content;
     sm_created_at = at; sm_is_seed = seed; sm_deleted = deleted }
 
 let summary_str (s : ST.source_summary) =
@@ -179,41 +177,41 @@ let suites =
       ] )
     (* Report target enum: every constructor round-trips; off-enum strings rejected. *)
   ; ( "report_target_roundtrip"
-    , [ check_round_trip "post" D.report_target_to_string D.report_target_of_string D.Report_post
-      ; check_round_trip "comment" D.report_target_to_string D.report_target_of_string D.Report_comment
-      ; check_round_trip "chat_message" D.report_target_to_string D.report_target_of_string D.Report_chat_message
-      ; check_none "empty" D.report_target_of_string ""
-      ; check_none "unknown" D.report_target_of_string "user"
-      ; check_none "case-sensitive" D.report_target_of_string "Post"
-      ; check_none "cross-enum status" D.report_target_of_string "open"
+    , [ check_round_trip "post" Earde.Report_store.report_target_to_string Earde.Report_store.report_target_of_string Earde.Report_store.Report_post
+      ; check_round_trip "comment" Earde.Report_store.report_target_to_string Earde.Report_store.report_target_of_string Earde.Report_store.Report_comment
+      ; check_round_trip "chat_message" Earde.Report_store.report_target_to_string Earde.Report_store.report_target_of_string Earde.Report_store.Report_chat_message
+      ; check_none "empty" Earde.Report_store.report_target_of_string ""
+      ; check_none "unknown" Earde.Report_store.report_target_of_string "user"
+      ; check_none "case-sensitive" Earde.Report_store.report_target_of_string "Post"
+      ; check_none "cross-enum status" Earde.Report_store.report_target_of_string "open"
       ] )
     (* Report reason enum. *)
   ; ( "report_reason_roundtrip"
-    , [ check_round_trip "spam" D.report_reason_to_string D.report_reason_of_string D.Report_spam
-      ; check_round_trip "abuse" D.report_reason_to_string D.report_reason_of_string D.Report_abuse
-      ; check_round_trip "off_topic" D.report_reason_to_string D.report_reason_of_string D.Report_off_topic
-      ; check_round_trip "illegal" D.report_reason_to_string D.report_reason_of_string D.Report_illegal
-      ; check_round_trip "other" D.report_reason_to_string D.report_reason_of_string D.Report_other
-      ; check_none "empty" D.report_reason_of_string ""
-      ; check_none "unknown" D.report_reason_of_string "harassment"
-      ; check_none "off-topic dash variant" D.report_reason_of_string "off-topic"
+    , [ check_round_trip "spam" Earde.Report_store.report_reason_to_string Earde.Report_store.report_reason_of_string Earde.Report_store.Report_spam
+      ; check_round_trip "abuse" Earde.Report_store.report_reason_to_string Earde.Report_store.report_reason_of_string Earde.Report_store.Report_abuse
+      ; check_round_trip "off_topic" Earde.Report_store.report_reason_to_string Earde.Report_store.report_reason_of_string Earde.Report_store.Report_off_topic
+      ; check_round_trip "illegal" Earde.Report_store.report_reason_to_string Earde.Report_store.report_reason_of_string Earde.Report_store.Report_illegal
+      ; check_round_trip "other" Earde.Report_store.report_reason_to_string Earde.Report_store.report_reason_of_string Earde.Report_store.Report_other
+      ; check_none "empty" Earde.Report_store.report_reason_of_string ""
+      ; check_none "unknown" Earde.Report_store.report_reason_of_string "harassment"
+      ; check_none "off-topic dash variant" Earde.Report_store.report_reason_of_string "off-topic"
       ] )
     (* Report status enum. *)
   ; ( "report_status_roundtrip"
-    , [ check_round_trip "open" D.report_status_to_string D.report_status_of_string D.Report_open
-      ; check_round_trip "dismissed" D.report_status_to_string D.report_status_of_string D.Report_dismissed
-      ; check_round_trip "action_taken" D.report_status_to_string D.report_status_of_string D.Report_action_taken
-      ; check_none "empty" D.report_status_of_string ""
-      ; check_none "unknown" D.report_status_of_string "resolved"
-      ; check_none "cross-enum target" D.report_status_of_string "post"
+    , [ check_round_trip "open" Earde.Report_store.report_status_to_string Earde.Report_store.report_status_of_string Earde.Report_store.Report_open
+      ; check_round_trip "dismissed" Earde.Report_store.report_status_to_string Earde.Report_store.report_status_of_string Earde.Report_store.Report_dismissed
+      ; check_round_trip "action_taken" Earde.Report_store.report_status_to_string Earde.Report_store.report_status_of_string Earde.Report_store.Report_action_taken
+      ; check_none "empty" Earde.Report_store.report_status_of_string ""
+      ; check_none "unknown" Earde.Report_store.report_status_of_string "resolved"
+      ; check_none "cross-enum target" Earde.Report_store.report_status_of_string "post"
       ] )
     (* Report action_kind enum. Report_other_action serializes to the bare "other". *)
   ; ( "report_action_kind_roundtrip"
-    , [ check_round_trip "removed_content" D.report_action_kind_to_string D.report_action_kind_of_string D.Report_removed_content
-      ; check_round_trip "banned_author" D.report_action_kind_to_string D.report_action_kind_of_string D.Report_banned_author
-      ; check_round_trip "other" D.report_action_kind_to_string D.report_action_kind_of_string D.Report_other_action
-      ; check_none "empty" D.report_action_kind_of_string ""
-      ; check_none "unknown" D.report_action_kind_of_string "deleted"
-      ; check_none "removed variant" D.report_action_kind_of_string "removed"
+    , [ check_round_trip "removed_content" Earde.Report_store.report_action_kind_to_string Earde.Report_store.report_action_kind_of_string Earde.Report_store.Report_removed_content
+      ; check_round_trip "banned_author" Earde.Report_store.report_action_kind_to_string Earde.Report_store.report_action_kind_of_string Earde.Report_store.Report_banned_author
+      ; check_round_trip "other" Earde.Report_store.report_action_kind_to_string Earde.Report_store.report_action_kind_of_string Earde.Report_store.Report_other_action
+      ; check_none "empty" Earde.Report_store.report_action_kind_of_string ""
+      ; check_none "unknown" Earde.Report_store.report_action_kind_of_string "deleted"
+      ; check_none "removed variant" Earde.Report_store.report_action_kind_of_string "removed"
       ] )
   ]

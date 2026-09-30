@@ -63,7 +63,7 @@ type feedback =
 val management_page :
   ?user:string ->
   ?request:Dream.request ->
-  ?shell:Db.community * Db.community list * string ->
+  ?shell:Community_types.community * Community_types.community list * string ->
   state:state ->
   feedback:feedback option ->
   unit ->
@@ -78,7 +78,7 @@ val management_page :
 val target_search_page :
   ?user:string ->
   ?request:Dream.request ->
-  ?shell:Db.community * Db.community list * string ->
+  ?shell:Community_types.community * Community_types.community list * string ->
   community:community ->
   query:string ->
   results:target list ->
@@ -95,7 +95,7 @@ val target_search_page :
 val confirm_page :
   ?user:string ->
   ?request:Dream.request ->
-  ?shell:Db.community * Db.community list * string ->
+  ?shell:Community_types.community * Community_types.community list * string ->
   community:community ->
   target:target ->
   note:string ->

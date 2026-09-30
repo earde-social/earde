@@ -243,8 +243,8 @@ let community_of_row ~community_slug (id, stored_slug, name) (visibility, onboar
   then Error ()
   else
     match
-      ( Db.community_visibility_of_string visibility,
-        Db.community_onboarding_state_of_string onboarding )
+      ( Community_types.community_visibility_of_string visibility,
+        Community_types.community_onboarding_state_of_string onboarding )
     with
     | Some _, Ok _ -> Ok { community_row_id = id }
     | None, _ | _, Error _ -> Error ()

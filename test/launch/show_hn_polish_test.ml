@@ -287,7 +287,7 @@ let assert_shell_contract label ~slug ~active_href html =
     true
     (Html_assert.contains html ("/c/" ^ slug ^ " <span class='accent'>settings</span>"))
 
-let polish_community : Earde.Db.community =
+let polish_community : Earde.Community_types.community =
   { Launch_fixture.nav_test_community with id = 777; slug = "polish"; name = "Polish" }
 
 let render_settings ?(target = "/c/polish/settings") ~is_admin ~is_top_mod ()
@@ -368,7 +368,7 @@ let reports_case =
         render_with_request ~target:"/c/polish/reports" (fun req ->
             Earde.Pages.reports_queue_page ~is_admin:false ~is_top_mod:true
               ~channels:[] ~sections:[] ~community:polish_community
-              ~status:Earde.Db.Report_open ~reports:[] ~previews:[] req)
+              ~status:Earde.Report_store.Report_open ~reports:[] ~previews:[] req)
       in
       assert_shell_contract "reports" ~slug:"polish"
         ~active_href:"/c/polish/settings?panel=moderation" html;

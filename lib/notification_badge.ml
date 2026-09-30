@@ -58,7 +58,7 @@ let middleware inner_handler request =
         | None -> Lwt.return_unit
         | Some user_id ->
             Dream.sql request (fun db ->
-                match%lwt Db.count_unread_notifs db user_id with
+                match%lwt Notification_store.count_unread_notifs db user_id with
                 | Ok count ->
                     Dream.set_field request unread_field count;
                     Lwt.return_unit

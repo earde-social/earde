@@ -147,9 +147,9 @@ let gate_cases =
 (* === DB-free: settings navigation and legacy-control suppression === *)
 
 let settings_community ?(slug = "ncph-nav") ?(network = true)
-    ?(onboarding = Earde.Db.Community_draft)
-    ?(visibility = Earde.Db.Community_private) ?(indexable = false)
-    ?(discoverable = false) () : Earde.Db.community =
+    ?(onboarding = Earde.Community_types.Community_draft)
+    ?(visibility = Earde.Community_types.Community_private) ?(indexable = false)
+    ?(discoverable = false) () : Earde.Community_types.community =
   { id = 4242; slug; name = "Ncph Nav"; description = None; rules = None;
     avatar_url = None; banner_url = None; allow_downvotes = true;
     sections_enabled = true; visibility; indexable;
@@ -175,7 +175,7 @@ let render_settings ?(panel = "visibility") ~community ~is_admin ~is_top_mod
     (Lwt_main.run
        (pipeline
           (Dream.request ~method_:`GET
-             ~target:("/c/" ^ community.Earde.Db.slug ^ "/settings?panel=" ^ panel)
+             ~target:("/c/" ^ community.slug ^ "/settings?panel=" ^ panel)
              "")));
   match !captured with
   | Some html -> html
@@ -184,14 +184,14 @@ let render_settings ?(panel = "visibility") ~community ~is_admin ~is_top_mod
 let nav_link = "href='/c/ncph-nav/setup'"
 
 let published_network =
-  settings_community ~onboarding:Earde.Db.Community_published
-    ~visibility:Earde.Db.Community_public ~indexable:true ~discoverable:true
+  settings_community ~onboarding:Earde.Community_types.Community_published
+    ~visibility:Earde.Community_types.Community_public ~indexable:true ~discoverable:true
     ()
 
 let legacy_community =
   settings_community ~network:false
-    ~onboarding:Earde.Db.Community_published
-    ~visibility:Earde.Db.Community_public ~indexable:true ~discoverable:true
+    ~onboarding:Earde.Community_types.Community_published
+    ~visibility:Earde.Community_types.Community_public ~indexable:true ~discoverable:true
     ()
 
 let nav_cases =

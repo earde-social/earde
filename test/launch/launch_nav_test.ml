@@ -114,7 +114,7 @@ let nav_entry_cases =
         ignore
           (Earde.Pages.new_community_form
             : ?user:string ->
-              ?rail_communities:Earde.Db.community list ->
+              ?rail_communities:Earde.Community_types.community list ->
               Dream.request ->
               string))
   ]

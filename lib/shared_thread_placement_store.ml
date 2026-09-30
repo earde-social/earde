@@ -392,8 +392,8 @@ let with_locked_community (module C : Caqti_lwt.CONNECTION) ~rollback_to id k =
     -> (
       match
         ( row_id = id && row_id > 0,
-          Db.community_visibility_of_string visibility_raw,
-          Db.community_onboarding_state_of_string onboarding_raw )
+          Community_types.community_visibility_of_string visibility_raw,
+          Community_types.community_onboarding_state_of_string onboarding_raw )
       with
       | true, Some visibility, Ok onboarding_state ->
           k

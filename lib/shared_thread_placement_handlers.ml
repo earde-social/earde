@@ -302,20 +302,20 @@ let management_state_of_view view : Pages_sth.management_state =
 let load_launch_shell request ~user_id ~canonical_slug ~can_manage
     ~settings_active =
   Dream.sql request (fun db ->
-      match%lwt Db.get_community_by_slug db canonical_slug with
+      match%lwt Community_store.get_community_by_slug db canonical_slug with
       | Ok (Some community) ->
           let%lwt channels =
-            match%lwt Db.get_channels_by_community db community.Db.id with
+            match%lwt Channel_store.get_channels_by_community db community.id with
             | Ok channels -> Lwt.return channels
             | Error _ -> Lwt.return []
           in
           let%lwt sections =
-            match%lwt Db.get_sections_by_community db community.Db.id with
+            match%lwt Section_store.get_sections_by_community db community.id with
             | Ok sections -> Lwt.return sections
             | Error _ -> Lwt.return []
           in
           let%lwt rail_communities =
-            match%lwt Db.get_user_communities db user_id with
+            match%lwt Membership_store.get_user_communities db user_id with
             | Ok communities -> Lwt.return communities
             | Error _ -> Lwt.return []
           in

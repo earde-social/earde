@@ -1,10 +1,10 @@
 (** Durable PostHog person-deletion worker (analytics spec §3.3).
 
     This module owns the private Persons-API HTTP client and the per-job
-    attempt orchestration; job PERSISTENCE lives in [Db.PosthogDeletionJobs].
+    attempt orchestration; job PERSISTENCE lives in [Posthog_deletion_job_store].
     It deliberately sits outside [Analytics] (which stays pure event
-    collection, no DB knowledge) and outside [Db] (which performs no network
-    IO) — callers wire the two together through the callbacks below, so no
+    collection, no DB knowledge) and outside the stores (which perform no
+    network IO) — callers wire the two together through the callbacks below, so no
     database connection is ever held across PostHog HTTP.
 
     Configuration comes from [Analytics.deletion_api_config] (POSTHOG_UI_HOST,
@@ -79,7 +79,7 @@ val process_batch :
   (batch_summary, string) result Lwt.t
 
 (** [process_batch] over §13 group-cleanup jobs ([(job_id, group_key)] rows
-    from [Db.claim_posthog_group_cleanup_batch]) — the same bounded, durable
+    from [Posthog_group_cleanup_job_store.claim_batch]) — the same bounded, durable
     retry mechanism, not a second system. *)
 val process_group_batch :
   claim:(unit -> ((int * string) list, string) result Lwt.t) ->

@@ -572,10 +572,10 @@ let document ?user ?request ?shell ?(in_settings_shell = false) ~title ~body ()
       Components.launch_message_page ?request ~noindex:true ~title
         ~content:(Printf.sprintf "<div class='create-shell'>%s</div>" wrapped)
         ()
-  | Some ((community_record : Db.community), rail_communities, sidebar) ->
+  | Some ((community_record : Community_types.community), rail_communities, sidebar) ->
       let content =
         if in_settings_shell then
-          Community_settings_shell.wrap ~slug:community_record.Db.slug
+          Community_settings_shell.wrap ~slug:community_record.slug
             ~active:Community_settings_shell.Shared_threads
             ~can_complete_setup:
               (Community_settings_shell.can_complete_setup
@@ -587,8 +587,8 @@ let document ?user ?request ?shell ?(in_settings_shell = false) ~title ~body ()
               "<div class='launch-review-context'><span \
                class='launch-review-context-name'>%s</span><span \
                class='launch-review-context-slug'>/c/%s</span></div>"
-              (esc community_record.Db.name)
-              (esc community_record.Db.slug)
+              (esc community_record.name)
+              (esc community_record.slug)
           in
           context ^ Printf.sprintf "<div class='create-shell'>%s</div>" wrapped
       in

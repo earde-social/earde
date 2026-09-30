@@ -25,7 +25,7 @@ let render_launch_doc ?session_user ?analytics_community () =
   in
   !rendered
 
-let analytics_channel : Earde.Db.channel =
+let analytics_channel : Earde.Channel_store.channel =
   { id = 1; community_id = 9; slug = "general"; name = "general"; topic = None
   ; position = 0; is_archived = false; created_at = "2026-01-01 00:00:00"
   ; indexable = true }
@@ -34,11 +34,11 @@ let with_enabled_config f =
   AnT.use_enabled_test_configuration ();
   Fun.protect ~finally:AnT.clear_configuration_override f
 
-let test_community ~id ~visibility : Earde.Db.community =
-  { Earde.Db.id; slug = "testc"; name = "Test Community"; description = None;
+let test_community ~id ~visibility : Earde.Community_types.community =
+  { Earde.Community_types.id; slug = "testc"; name = "Test Community"; description = None;
     rules = None; avatar_url = None; banner_url = None; allow_downvotes = true;
     sections_enabled = true; visibility; indexable = true;
-    is_network_community = false; onboarding_state = Earde.Db.Community_published;
+    is_network_community = false; onboarding_state = Earde.Community_types.Community_published;
     discoverable = true }
 
 (* Renders the search results page through real session middleware (the page
@@ -95,7 +95,7 @@ let suites =
             AnT.use_disabled_test_configuration ();
             Fun.protect ~finally:AnT.clear_configuration_override (fun () ->
                 let html =
-                  render_launch_doc ~session_user:"42" ~analytics_community:(7, Earde.Db.Community_public)
+                  render_launch_doc ~session_user:"42" ~analytics_community:(7, Earde.Community_types.Community_public)
                     ()
                 in
                 Alcotest.(check bool) "no identity attr" false
@@ -106,7 +106,7 @@ let suites =
           (fun () ->
             with_enabled_config (fun () ->
                 let html =
-                  render_launch_doc ~session_user:"42" ~analytics_community:(7, Earde.Db.Community_public)
+                  render_launch_doc ~session_user:"42" ~analytics_community:(7, Earde.Community_types.Community_public)
                     ()
                 in
                 (* exactly one identity and one group attribute (the other
@@ -127,7 +127,7 @@ let suites =
   ; ( "analytics_group_attrs"
     , [ Analytics_fixture.an_case "community-bound launch document emits exactly community:7" (fun () ->
             with_enabled_config (fun () ->
-                let html = render_launch_doc ~analytics_community:(7, Earde.Db.Community_public) () in
+                let html = render_launch_doc ~analytics_community:(7, Earde.Community_types.Community_public) () in
                 Alcotest.(check (option string)) "group attr"
                   (Some "community:7")
                   (Html_assert.attr_value html "data-analytics-group")))
@@ -140,7 +140,7 @@ let suites =
           (fun () ->
             with_enabled_config (fun () ->
                 let community =
-                  test_community ~id:9 ~visibility:Earde.Db.Community_public
+                  test_community ~id:9 ~visibility:Earde.Community_types.Community_public
                 in
                 let html =
                   Earde.Components.launch_community_page ~community
@@ -159,7 +159,7 @@ let suites =
           (fun () ->
             with_enabled_config (fun () ->
                 let community =
-                  test_community ~id:9 ~visibility:Earde.Db.Community_private
+                  test_community ~id:9 ~visibility:Earde.Community_types.Community_private
                 in
                 let html =
                   Earde.Components.launch_community_page ~community
@@ -192,7 +192,7 @@ let suites =
       ; Analytics_fixture.an_case "private channel document marks cs-main itself" (fun () ->
             with_enabled_config (fun () ->
                 let community =
-                  test_community ~id:9 ~visibility:Earde.Db.Community_private
+                  test_community ~id:9 ~visibility:Earde.Community_types.Community_private
                 in
                 let html =
                   Http_fixture.with_session_request ~target:"/c/testc/ch/general"
@@ -221,13 +221,13 @@ let suites =
                    and its join gate). *)
                 check_attr "launch_app_page (new-post / join gate)"
                   (Some "community:8")
-                  (Analytics_fixture.launch_doc ~analytics_community:(8, Earde.Db.Community_public) ());
+                  (Analytics_fixture.launch_doc ~analytics_community:(8, Earde.Community_types.Community_public) ());
                 (* The community documents derive it from the record. *)
                 check_attr "launch_community_page" (Some "community:5")
                   (Earde.Components.launch_community_page
                      ~community:
                        (test_community ~id:5
-                          ~visibility:Earde.Db.Community_public)
+                          ~visibility:Earde.Community_types.Community_public)
                      ~sidebar:"SIDE"
                      ~page_class:"launch-community-overview" ~title:"T"
                      ~content:"B" ());
@@ -235,7 +235,7 @@ let suites =
                   (Earde.Components.launch_community_surface_page
                      ~community:
                        (test_community ~id:6
-                          ~visibility:Earde.Db.Community_public)
+                          ~visibility:Earde.Community_types.Community_public)
                      ~sidebar:"SIDE" ~page_class:"launch-community-channel"
                      ~title:"T" ~main_el:"<main class='cs-main'>B</main>" ())))
       ; Analytics_fixture.an_case "global launch documents emit no group" (fun () ->
@@ -269,9 +269,9 @@ let suites =
                   render_search ~page:3 ~tab:"communities"
                     ~communities:
                       [ test_community ~id:1
-                          ~visibility:Earde.Db.Community_public
+                          ~visibility:Earde.Community_types.Community_public
                       ; test_community ~id:2
-                          ~visibility:Earde.Db.Community_public
+                          ~visibility:Earde.Community_types.Community_public
                       ]
                     "ocaml"
                 in
@@ -346,7 +346,7 @@ let suites =
                   render_search ~tab:"people"
                     ~communities:
                       [ test_community ~id:1
-                          ~visibility:Earde.Db.Community_public
+                          ~visibility:Earde.Community_types.Community_public
                       ]
                     "x"
                 in

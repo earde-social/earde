@@ -1,5 +1,5 @@
-(* Step-3 RETURNING-id changes: Db.create_comment and
-   Db.pending_signup_confirm must return the real inserted ids, with the
+(* Step-3 RETURNING-id changes: Comment_store.create_comment and
+   Pending_signup_store.confirm must return the real inserted ids, with the
    failure variants unchanged. Same EARDE_TEST_DATABASE_URL opt-in gate as
    Mod_scope. *)
 
@@ -45,7 +45,7 @@ let comment_returning_case =
       let* post = C.find q_insert_post (community, author) in
       let* post = Db_fixture.or_fail "post" post in
       let* top =
-        Earde.Db.create_comment conn "step3ret top comment" post author None
+        Earde.Comment_store.create_comment conn "step3ret top comment" post author None
       in
       let top = match top with
         | Ok (`Created id) -> id
@@ -63,7 +63,7 @@ let comment_returning_case =
            Alcotest.(check (option int)) "top has no parent" None parent
        | None -> Alcotest.fail "returned top id matches no comment row");
       let* reply =
-        Earde.Db.create_comment conn "step3ret reply comment" post author
+        Earde.Comment_store.create_comment conn "step3ret reply comment" post author
           (Some top)
       in
       let reply = match reply with
@@ -97,7 +97,7 @@ let signup_confirm_returning_case =
       let (module C : Caqti_lwt.CONNECTION) = c in
       let* r = C.exec q_insert_pending ("step3ret_confirmed", "step3ret_tok_1") in
       let* () = Db_fixture.or_fail "insert pending" r in
-      let* confirmed = Earde.Db.pending_signup_confirm conn "step3ret_tok_1" in
+      let* confirmed = Earde.Pending_signup_store.confirm conn "step3ret_tok_1" in
       let user_id, username =
         match confirmed with
         | Ok (`Confirmed (id, name, email, created_at, is_admin)) ->
@@ -116,11 +116,11 @@ let signup_confirm_returning_case =
       Alcotest.(check (option int)) "returned id is the real users.id"
         (Some user_id) looked_up;
       (* Replay of the same token: consumed_at excludes it -> `Invalid. *)
-      let* replay = Earde.Db.pending_signup_confirm conn "step3ret_tok_1" in
+      let* replay = Earde.Pending_signup_store.confirm conn "step3ret_tok_1" in
       Alcotest.(check string) "replayed token invalid" "invalid"
         (confirm_str replay);
       (* Unknown token stays `Invalid. *)
-      let* unknown = Earde.Db.pending_signup_confirm conn "step3ret_tok_none" in
+      let* unknown = Earde.Pending_signup_store.confirm conn "step3ret_tok_none" in
       Alcotest.(check string) "unknown token invalid" "invalid"
         (confirm_str unknown);
       Lwt.return_unit)
@@ -133,7 +133,7 @@ let signup_confirm_failures_case =
         C.exec q_insert_expired_pending ("step3ret_expired", "step3ret_tok_2")
       in
       let* () = Db_fixture.or_fail "insert expired pending" r in
-      let* expired = Earde.Db.pending_signup_confirm conn "step3ret_tok_2" in
+      let* expired = Earde.Pending_signup_store.confirm conn "step3ret_tok_2" in
       Alcotest.(check string) "expired token invalid" "invalid"
         (confirm_str expired);
       let* none = C.find_opt q_user_id_by_name "step3ret_expired" in
@@ -144,7 +144,7 @@ let signup_confirm_failures_case =
       let* taken_id = Db_fixture.or_fail "existing user" taken in
       let* r = C.exec q_insert_pending ("step3ret_taken", "step3ret_tok_3") in
       let* () = Db_fixture.or_fail "insert conflicting pending" r in
-      let* conflict = Earde.Db.pending_signup_confirm conn "step3ret_tok_3" in
+      let* conflict = Earde.Pending_signup_store.confirm conn "step3ret_tok_3" in
       Alcotest.(check string) "conflicting pending" "conflict"
         (confirm_str conflict);
       let* still = C.find_opt q_user_id_by_name "step3ret_taken" in

@@ -427,8 +427,8 @@ let publish (module C : Caqti_lwt.CONNECTION) ~actor_user_id
       && discoverable = new_discoverable
       &&
       match
-        ( Db.community_visibility_of_string visibility_raw,
-          Db.community_onboarding_state_of_string onboarding_raw )
+        ( Community_types.community_visibility_of_string visibility_raw,
+          Community_types.community_onboarding_state_of_string onboarding_raw )
       with
       | Some visibility, Ok onboarding_state ->
           visibility = new_visibility
@@ -544,8 +544,8 @@ let publish (module C : Caqti_lwt.CONNECTION) ~actor_user_id
           C.collect_list publish_update_query
             ( (community_id, final_name, final_slug),
               ( final_description,
-                Db.community_visibility_to_string new_visibility,
-                Db.string_of_community_onboarding_state new_onboarding ),
+                Community_types.community_visibility_to_string new_visibility,
+                Community_types.string_of_community_onboarding_state new_onboarding ),
               (new_indexable, new_discoverable, current_community_slug) )
           >>= function
           | Error err ->
@@ -737,8 +737,8 @@ let publish (module C : Caqti_lwt.CONNECTION) ~actor_user_id
               ( (visibility_raw, onboarding_raw),
                 (is_network, indexable, discoverable) ) )) -> (
           match
-            ( Db.community_visibility_of_string visibility_raw,
-              Db.community_onboarding_state_of_string onboarding_raw )
+            ( Community_types.community_visibility_of_string visibility_raw,
+              Community_types.community_onboarding_state_of_string onboarding_raw )
           with
           | None, _ | _, Error _ -> rollback_to Inconsistent_data
           | Some visibility, Ok onboarding_state ->
@@ -747,8 +747,8 @@ let publish (module C : Caqti_lwt.CONNECTION) ~actor_user_id
                 rollback_to Draft_unavailable
               else
                 let exact_draft_state =
-                  onboarding_state = Db.Community_draft
-                  && visibility = Db.Community_private
+                  onboarding_state = Community_types.Community_draft
+                  && visibility = Community_types.Community_private
                   && (not indexable) && not discoverable
                 in
                 if not exact_draft_state then
@@ -822,15 +822,15 @@ let publish (module C : Caqti_lwt.CONNECTION) ~actor_user_id
                as corruption. *)
             rollback_to Draft_unavailable
           else (
-            match Db.community_onboarding_state_of_string onboarding_raw with
+            match Community_types.community_onboarding_state_of_string onboarding_raw with
             | Error _ -> rollback_to Inconsistent_data
-            | Ok Db.Community_published ->
+            | Ok Community_types.Community_published ->
                 (* Already published — including a published community
                    whose home relation was legitimately removed later, for
                    which a zero-relation candidate would otherwise read as
                    corruption. *)
                 rollback_to Draft_unavailable
-            | Ok Db.Community_draft -> resolve_candidate_relation
+            | Ok Community_types.Community_draft -> resolve_candidate_relation
                                          ~candidate_community_id)
 
     and resolve_candidate_relation ~candidate_community_id =

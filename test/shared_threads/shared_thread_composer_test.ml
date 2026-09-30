@@ -137,14 +137,14 @@ let composer_note_suite =
 
 (* --- the composer form, DB-free --- *)
 
-let composer_community : Earde.Db.community =
+let composer_community : Earde.Community_types.community =
   { id = 8811; slug = "sth-ui-comp";
     name = "Sth Ui Composer";
     description = None; rules = None; avatar_url = None; banner_url = None;
     allow_downvotes = true; sections_enabled = false;
-    visibility = Earde.Db.Community_public; indexable = true;
+    visibility = Earde.Community_types.Community_public; indexable = true;
     is_network_community = false;
-    onboarding_state = Earde.Db.Community_published; discoverable = true }
+    onboarding_state = Earde.Community_types.Community_published; discoverable = true }
 
 let render_composer ?(share_candidates = []) () =
   let captured = ref None in
@@ -1091,10 +1091,10 @@ let origin_feed_invariance_case =
       let* () = exec conn "age shared" Shared_thread_http_fixture.q_age_post (post, 3) in
       let* () = exec conn "age pb" Shared_thread_http_fixture.q_age_post (pb, 2) in
       let ids_of limit offset =
-        let* r = Earde.Db.get_all_posts conn Earde.Db.Newest limit offset in
+        let* r = Earde.Post_store.get_all_posts conn Earde.Post_types.Newest limit offset in
         Lwt.return
           (List.map
-             (fun (p : Earde.Db.post) -> p.Earde.Db.id)
+             (fun (p : Earde.Post_types.post) -> p.id)
              (Shared_thread_http_fixture.ok "get_all_posts" r))
       in
       (* The same fixtures WITHOUT enrichment: capture the exact feed

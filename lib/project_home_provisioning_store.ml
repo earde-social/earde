@@ -122,7 +122,7 @@ let insert_community_query =
              is_network_community, indexable, discoverable"
 
 (* Step 4: the actor's initial membership, in the exact durable shape
-   Db.join_community writes — the two-column row is the whole schema. The
+   Membership_store.join_community writes — the two-column row is the whole schema. The
    community is brand new inside this transaction, so no conflict is
    possible and RETURNING proves exactly one row. Membership is required
    in its own right: private-community authorization reads members,
@@ -134,7 +134,7 @@ let insert_member_query =
    VALUES ($1, $2) RETURNING TRUE"
 
 (* Step 5: the actor as initial top moderator, in the exact durable shape
-   Db.add_top_moderator writes (explicit 'top_mod' — the column default is
+   Moderator_store.add_top_moderator writes (explicit 'top_mod' — the column default is
    'mod'); promoted_at keeps its production default. *)
 let insert_moderator_query =
   let open Caqti_request.Infix in
@@ -275,14 +275,14 @@ let provision (module C : Caqti_lwt.CONNECTION) ~actor_user_id ~project_slug
         && (not discoverable)
         &&
         match
-          ( Db.community_visibility_of_string visibility_raw,
-            Db.community_onboarding_state_of_string onboarding_raw )
+          ( Community_types.community_visibility_of_string visibility_raw,
+            Community_types.community_onboarding_state_of_string onboarding_raw )
         with
-        | Some Db.Community_private, Ok Db.Community_draft ->
+        | Some Community_types.Community_private, Ok Community_types.Community_draft ->
             Network_communities.lifecycle_state_valid
               ~is_network_community:network
-              ~onboarding_state:Db.Community_draft
-              ~visibility:Db.Community_private ~indexable ~discoverable
+              ~onboarding_state:Community_types.Community_draft
+              ~visibility:Community_types.Community_private ~indexable ~discoverable
         | _, _ -> false
       in
 

@@ -1,7 +1,7 @@
 (* === Cross-community moderation scoping (security regression) ===
    A moderator of community A must not be able to tombstone content in community
    B by forging the numeric id on an A-scoped route. The enforcement lives in the
-   SQL of Db.mod_delete_post / Db.mod_delete_comment (id AND community scope,
+   SQL of Admin_store.mod_delete_post / Admin_store.mod_delete_comment (id AND community scope,
    RETURNING as match proof), so only a DB-backed test can catch a regression —
    a pure helper test cannot see a missing `AND community_id`.
 
@@ -115,11 +115,11 @@ let check_post_state (module C : Caqti_lwt.CONNECTION) label post_id expected =
 let posts_case =
   db_case "cross-community post delete refused; local delete works" (fun conn c ->
       let* (a, _b, _author, post_a, post_b) = setup_posts c in
-      let* cross = Earde.Db.mod_delete_post conn ~community_id:a post_b in
+      let* cross = Earde.Admin_store.mod_delete_post conn ~community_id:a post_b in
       Alcotest.(check (result bool string)) "A-scoped delete of B post matches nothing" (Ok false) cross;
       let* () = check_post_state c "B post untouched, image_url intact" post_b
           (Some "modscope original post", Some "/static/uploads/modscope_b.webp") in
-      let* local = Earde.Db.mod_delete_post conn ~community_id:a post_a in
+      let* local = Earde.Admin_store.mod_delete_post conn ~community_id:a post_a in
       Alcotest.(check (result bool string)) "A-scoped delete of A post matches" (Ok true) local;
       check_post_state c "A post tombstoned, image_url cleared" post_a
         (Some "[removed by moderator]", None))
@@ -134,12 +134,12 @@ let comments_case =
       let* comment_a = or_fail "comment a" comment_a in
       let* comment_b = C.find q_insert_comment (post_b, author) in
       let* comment_b = or_fail "comment b" comment_b in
-      let* cross = Earde.Db.mod_delete_comment conn ~community_id:a comment_b in
+      let* cross = Earde.Admin_store.mod_delete_comment conn ~community_id:a comment_b in
       Alcotest.(check (result (option int) string)) "A-scoped delete of B comment matches nothing" (Ok None) cross;
       let* content = C.find q_comment_content comment_b in
       let* content = or_fail "B comment state" content in
       Alcotest.(check string) "B comment untouched" "modscope original comment" content;
-      let* local = Earde.Db.mod_delete_comment conn ~community_id:a comment_a in
+      let* local = Earde.Admin_store.mod_delete_comment conn ~community_id:a comment_a in
       Alcotest.(check (result (option int) string)) "A-scoped delete of A comment matches, returns parent post"
         (Ok (Some post_a)) local;
       let* content = C.find q_comment_content comment_a in
@@ -165,7 +165,7 @@ let delete_comment_case =
       (* Non-author (e.g. a mod of A) against B's comment: zero rows match.
          soft_delete_comment reports Ok () either way — the ownership scope in
          the SQL is what this pins down. *)
-      let* r = Earde.Db.soft_delete_comment conn comment_b other in
+      let* r = Earde.Comment_store.soft_delete_comment conn comment_b other in
       Alcotest.(check (result unit string)) "non-author soft delete does not error" (Ok ()) r;
       let* content = C.find q_comment_content comment_b in
       let* content = or_fail "B comment state" content in
@@ -173,13 +173,13 @@ let delete_comment_case =
       (* The author still deletes their own comment. *)
       let* comment_a = C.find q_insert_comment (post_a, author) in
       let* comment_a = or_fail "comment a" comment_a in
-      let* r = Earde.Db.soft_delete_comment conn comment_a author in
+      let* r = Earde.Comment_store.soft_delete_comment conn comment_a author in
       Alcotest.(check (result unit string)) "author soft delete ok" (Ok ()) r;
       let* content = C.find q_comment_content comment_a in
       let* content = or_fail "A comment state" content in
       Alcotest.(check string) "author soft delete tombstones" "[deleted]" content;
       (* Global admin: deletes regardless of author, with the admin label. *)
-      let* r = Earde.Db.admin_delete_comment conn ~label:"[removed by admin]" comment_b in
+      let* r = Earde.Admin_store.admin_delete_comment conn ~label:"[removed by admin]" comment_b in
       Alcotest.(check (result unit string)) "admin delete ok" (Ok ()) r;
       let* content = C.find q_comment_content comment_b in
       let* content = or_fail "B comment after admin" content in

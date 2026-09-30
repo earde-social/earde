@@ -1368,7 +1368,7 @@ let suites =
             AnT.use_enabled_test_configuration ();
             Fun.protect ~finally:AnT.clear_configuration_override (fun () ->
                 let html =
-                  Analytics_fixture.launch_doc ~analytics_community:(9, Earde.Db.Community_private) ()
+                  Analytics_fixture.launch_doc ~analytics_community:(9, Earde.Community_types.Community_private) ()
                 in
                 Alcotest.(check bool) "private marker" true
                   (Html_assert.contains html "data-analytics-private-community='true'");
@@ -1378,7 +1378,7 @@ let suites =
             AnT.use_enabled_test_configuration ();
             Fun.protect ~finally:AnT.clear_configuration_override (fun () ->
                 let html =
-                  Analytics_fixture.launch_doc ~analytics_community:(7, Earde.Db.Community_public) ()
+                  Analytics_fixture.launch_doc ~analytics_community:(7, Earde.Community_types.Community_public) ()
                 in
                 Alcotest.(check bool) "no private marker" false
                   (Html_assert.contains html "data-analytics-private-community");
