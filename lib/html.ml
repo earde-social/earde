@@ -81,34 +81,6 @@ let image_src_opt raw =
 
 let image_src raw = Option.value (image_src_opt raw) ~default:"#"
 
-(* The HTML parser decodes entities before the script engine reads the
-   attribute, so &#39; would become a real apostrophe and end the literal
-   early. JavaScript escaping therefore comes first and HTML escaping
-   second; the HTML escaping is exactly reversed by the parser. Backslash
-   first (else the added escapes would be doubled), then quotes, line
-   terminators (a raw newline is a syntax error inside a literal), then
-   < > & as \xNN so no markup or entity survives, then the remaining
-   C0/DEL control bytes. *)
-let js_string s =
-  let buf = Buffer.create (String.length s + 8) in
-  String.iter
-    (fun c ->
-      match c with
-      | '\\' -> Buffer.add_string buf "\\\\"
-      | '\'' -> Buffer.add_string buf "\\'"
-      | '"' -> Buffer.add_string buf "\\\""
-      | '\n' -> Buffer.add_string buf "\\n"
-      | '\r' -> Buffer.add_string buf "\\r"
-      | '\t' -> Buffer.add_string buf "\\t"
-      | '<' -> Buffer.add_string buf "\\x3C"
-      | '>' -> Buffer.add_string buf "\\x3E"
-      | '&' -> Buffer.add_string buf "\\x26"
-      | c when Char.code c < 0x20 || Char.code c = 0x7f ->
-          Buffer.add_string buf (Printf.sprintf "\\x%02X" (Char.code c))
-      | c -> Buffer.add_char buf c)
-    s;
-  escape (Buffer.contents buf)
-
 let template markup holes =
   let n = String.length markup in
   let buf = Buffer.create (n + 64) in

@@ -151,7 +151,9 @@ let session_of uid name =
   [ ("user_id", string_of_int uid); ("username", name) ]
 
 let share_onclick post_id =
-  Printf.sprintf "onclick='copyPostLink(\"/p/%d\", this)'" post_id
+  Printf.sprintf
+    "data-share-path='/p/%d' onclick='copyPostLink(this.dataset.sharePath, this)'"
+    post_id
 
 (* 1: an anonymous public flat page carries exactly one working
    copyPostLink definition, wired to the canonical /p/:id path, with no

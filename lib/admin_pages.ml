@@ -172,7 +172,7 @@ let admin_dashboard_page ?user ?(rail_communities = []) ~signups_enabled
                <td><a class='admin-user-link' href='/u/%s'>%s</a></td>\
                <td class='admin-cell-muted'>%s</td>\
                <td>\
-                 <form class='admin-act-form' action='/admin/unban/user/%s' method='POST' onsubmit=\"confirmModal(event, 'Lift global ban on u/%s?')\">\
+                 <form class='admin-act-form' action='/admin/unban/user/%s' method='POST' data-confirm='%s' onsubmit=\"confirmModal(event, this.dataset.confirm)\">\
                    %s\
                    <button type='submit' class='admin-btn-unban'>Unban</button>\
                  </form>\
@@ -182,7 +182,7 @@ let admin_dashboard_page ?user ?(rail_communities = []) ~signups_enabled
   ; (Html.text (u.username))
   ; (Html.text (u.email))
   ; Html.int (u.id)
-  ; (Html.js_string (u.username))
+  ; Html.text ("Lift global ban on u/" ^ u.username ^ "?")
   ; csrf_token ])
         ) banned_users)
     in

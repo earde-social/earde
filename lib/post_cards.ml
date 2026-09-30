@@ -358,7 +358,7 @@ let render_post ?(is_current_user_mod=false) ?(mod_usernames=[]) ?(admin_usernam
          | _ -> Html.empty)
   in
   (Html.template "
-  <div onclick=\"if(!event.target.closest('a, button, form')) window.location='%s'\" class='cursor-pointer border-b border-[#E8E2D9] py-4 flex gap-4 hover:bg-[#F0EBE0] transition-colors'>
+  <div data-href='%s' onclick=\"if(!event.target.closest('a, button, form')) window.location=this.dataset.href\" class='cursor-pointer border-b border-[#E8E2D9] py-4 flex gap-4 hover:bg-[#F0EBE0] transition-colors'>
 
       <div class='flex flex-col items-center pt-0.5 w-7 shrink-0 cursor-default' onclick=\"event.stopPropagation()\">
           %s
@@ -390,11 +390,11 @@ let render_post ?(is_current_user_mod=false) ?(mod_usernames=[]) ?(admin_usernam
               <a href='%s' class='hover:text-[#C94C4C] flex items-center gap-1 transition relative z-10'>
                   <span>💬</span><span>%s comments</span>
               </a>
-              <button type='button' onclick='copyPostLink(\"%s\", this)' class='text-xs font-medium text-gray-500 hover:text-gray-900 flex items-center transition-colors cursor-pointer ml-4'>🔗 Share</button>
+              <button type='button' data-share-path='%s' onclick='copyPostLink(this.dataset.sharePath, this)' class='text-xs font-medium text-gray-500 hover:text-gray-900 flex items-center transition-colors cursor-pointer ml-4'>🔗 Share</button>
           </div>
       </div>
   </div>"
-  [ (Html.text (thread_target))
+  [ Html.internal_path thread_target
   ; upvote_html
   ; Html.int (post.score)
   ; downvote_html
@@ -414,8 +414,8 @@ let render_post ?(is_current_user_mod=false) ?(mod_usernames=[]) ?(admin_usernam
 
 (* Compact host for a link post's domain chip: strip scheme + a leading www. and cut at the
    first path/query/fragment. None when it doesn't look like an http(s) URL, so the row shows
-   no chip rather than a misleading fragment. Display goes through html_escape; the href uses
-   safe_url. Hand-rolled (no Uri dep on the hot render path) — only needs host extraction. *)
+   no chip rather than a misleading fragment. Display goes through Html.text; the href uses
+   Html.external_url. Hand-rolled (no Uri dep on the hot render path) — only needs host extraction. *)
 let extract_domain url =
   let u = String.trim url in
   let strip_prefix p s =

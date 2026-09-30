@@ -57,7 +57,7 @@ let valid_project_slug value =
   in
   length >= 1 && length <= 80 && is_alnum value.[length - 1] && check 0
 
-(* Same http(s)-only test Components.safe_url applies, so a URL that is not a
+(* Same http(s)-only test Html.external_url applies, so a URL that is not a
    real link degrades to inert text instead of becoming a "#" anchor. *)
 let http_url value =
   let lower = String.lowercase_ascii value in

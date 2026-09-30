@@ -665,7 +665,7 @@ let community_overview_page ?user ?(noindex=false) ?(connected_projects_count=0)
   let plural n = if n = 1 then "" else "s" in
 
   (* Community face: the avatar image when one is set and passes the gate
-     (safe_img_src accepts the local /static/uploads/ path), else the launch
+     (Html.image_src accepts the local /static/uploads/ path), else the launch
      rail's capitalized 2-letter slug glyph on the deterministic palette
      tone — the same fallback every launch tile uses, so the crest, sidebar
      head, and rail tile all agree. *)

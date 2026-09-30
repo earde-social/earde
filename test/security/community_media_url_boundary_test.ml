@@ -4,7 +4,7 @@
    URLs back to the browser through hidden inputs, and /update-community used
    whatever came back as its no-upload fallback. Any moderator could therefore
    store an arbitrary external URL as a community's avatar or banner. The
-   public community page renders both through safe_img_src, which permits any
+   public community page renders both through Html.image_src, which permits any
    https origin, so every visitor of that community — anonymous ones included —
    would fetch it, handing a third party their IP, User-Agent and Referer.
 
@@ -36,7 +36,7 @@ let forged_banner = "/static/uploads/earde_1700000009999_999001.webp"
 
 (* Authoritative stored values. Deliberately NOT pipeline-shaped: they name
    no local file, so nothing on disk corresponds to them for any code path
-   to create, keep or delete. They still render — safe_img_src admits any
+   to create, keep or delete. They still render — Html.image_src admits any
    https origin — so the two "not vacuous" render assertions below keep
    their full force, and the reserved .invalid TLD cannot resolve, so
    nothing ever fetches them. *)

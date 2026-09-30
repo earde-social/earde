@@ -142,6 +142,7 @@ let () =
           ; Target_admin_immunity_test.suites
           ; Community_media_url_boundary_test.suites
           ; Auth_mail_test.suites
+          ; Html_boundary_test.suites
           ; Account_privacy_test.suites
           ; Realtime_generations_test.suites
           ; Github_verification_freshness_test.suites

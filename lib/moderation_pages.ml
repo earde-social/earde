@@ -340,7 +340,7 @@ let reports_queue_page ?user ?(rail_communities = []) ~is_admin ~is_top_mod
   [ (Html.text ((excerpt d))) ])
       | _ -> Html.empty in
     (* Context link + live preview come from the handler's bounded enrichment; a row not
-       present (chat/deleted/over-cap) degrades rather than 500s. safe_internal_path gates
+       present (chat/deleted/over-cap) degrades rather than 500s. Html.internal_path gates
        the server-built path. *)
     let context_html = match List.assoc_opt r.id previews with
       | Some (url, preview) ->

@@ -16,9 +16,9 @@
     Everything else enters through a constructor that decides escaping by
     construction: {!text} for character data and quoted attribute values,
     {!int} and {!int64} for numbers, {!external_url}, {!internal_path} and
-    {!image_src} for URLs by context, and {!js_string} for a string literal
-    inside an inline event-handler attribute. None of them returns its
-    input unchanged. *)
+    {!image_src} for URLs by context. None of them returns its input
+    unchanged. Values that an inline script needs travel in data attributes
+    as text; no user data is ever written into script source. *)
 
 type t
 
@@ -59,13 +59,6 @@ val image_src : string -> t
 
 val image_src_opt : string -> t option
 (** {!image_src}, with [None] where it would render ["#"]. *)
-
-val js_string : string -> t
-(** The body of a single-quoted JavaScript string literal that sits inside
-    an HTML event-handler attribute. JavaScript escaping comes first, so the
-    source the script engine sees after the HTML parser has decoded
-    entities is still one literal; HTML escaping of the result keeps the
-    attribute delimiter safe. *)
 
 val template : string -> t list -> t
 (** [template markup holes] substitutes [holes], in order, for the

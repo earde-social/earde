@@ -271,7 +271,7 @@ let privacy_page ?user:_ request =
    require byte-identical denials. No handler, status, header, redirect or
    message string changes.
 
-   [return_url] is gated by Components.safe_internal_path at this ONE shared
+   [return_url] is gated by Html.internal_path at this ONE shared
    sink rather than at each of the ~70 call sites. Several of those build the
    destination from a route parameter (e.g. "/c/" ^ Dream.param "slug"), and
    Dream percent-decodes parameters, so a crafted slug put attacker bytes

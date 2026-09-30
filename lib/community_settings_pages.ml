@@ -387,7 +387,7 @@ let community_settings_page ?user ?(connected_projects = Html.empty) ?(rail_comm
   (* ---- Panel: Profile ---- *)
   (* Native file inputs can't reflect an existing upload ("No file chosen" even when an
      avatar exists), so each upload field gets an explicit current-state row: a preview via
-     the shared safe_img_src helpers when an asset exists, or a "none yet" note.
+     the shared Html.image_src helpers when an asset exists, or a "none yet" note.
 
      The preview is display only. The form carries no avatar/banner URL of its own: when
      no file is uploaded, /update-community keeps the values it read from the community

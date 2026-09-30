@@ -213,8 +213,8 @@ let search_results_page ?user ~admin_usernames ?(chat_sources=[]) ?(rail_communi
 
   let render_user (_, username, _, bio, avatar) =
     let eu = (Html.text (username)) in
-    (* Same safe_img_src gate + letter-tile fallback as the community row above; replaces the
-       prior hand-rolled <img>/tile markup (raw url, only html_escape'd) so a stored unsafe
+    (* Same Html.image_src gate + letter-tile fallback as the community row above; replaces the
+       prior hand-rolled <img>/tile markup (raw url, only escaped) so a stored unsafe
        avatar_url can't render a broken/hostile src. *)
     let avatar_html =
       Components.user_avatar ~img_class:"sr-avatar"

@@ -13,7 +13,7 @@
 let user_profile_page ?user ?(rail_communities = []) ~is_admin ~is_globally_banned ~profile_id ~admin_usernames ~moderated_communities ~active_tab user_votes username joined_at bio_opt avatar_url_opt karma posts user_comments community_stats request =
   let csrf_token = Csrf_field.tag request in
   let bio = Option.value ~default:"This user hasn't written a bio yet." bio_opt in
-  (* Profile avatar: route the stored URL through Components.user_avatar (safe_img_src) instead
+  (* Profile avatar: route the stored URL through Components.user_avatar (Html.image_src) instead
      of raw interpolation. Avatarless profiles now show a local letter tile rather than the old
      external Gravatar "mystery person" default — one fewer third-party image dependency. *)
   let avatar_html =
@@ -78,31 +78,31 @@ let user_profile_page ?user ?(rail_communities = []) ~is_admin ~is_globally_bann
   in
 
   (* The username is attacker-chosen for accounts created before the signup
-     charset rule, so every sink below is escaped for its own context. The two
-     confirmModal hooks are JavaScript string literals inside an HTML
-     attribute — html_escape alone decodes back to a live apostrophe there,
-     so they take js_single_quoted_attr. *)
+     charset rule. The confirmation text travels in a data attribute, escaped
+     as ordinary attribute text, and the inline hook only reads it: no user
+     data is ever part of script source. *)
   let admin_controls =
     if is_admin && (Option.value ~default:"" user) <> username then
-      let js_username = (Html.js_string (username)) in
+      let confirm_text prefix suffix = Html.text (prefix ^ username ^ suffix) in
       let ban_or_unban_btn =
         if is_globally_banned then
           (Html.template "
-            <form action='/admin/unban/user/%s' method='POST' onsubmit=\"confirmModal(event, 'Lift global ban on u/%s?')\">
+            <form action='/admin/unban/user/%s' method='POST' data-confirm='%s' onsubmit=\"confirmModal(event, this.dataset.confirm)\">
                 %s
                 <button type='submit' class='account-btn account-btn--secondary'>Unban user</button>
             </form>"
   [ Html.int (profile_id)
-  ; js_username
+  ; confirm_text "Lift global ban on u/" "?"
   ; csrf_token ])
         else
           (Html.template "
-            <form action='/admin/ban/user/%s' method='POST' onsubmit=\"confirmModal(event, 'Permanently ban u/%s? They will be blocked from logging in and posting.')\">
+            <form action='/admin/ban/user/%s' method='POST' data-confirm='%s' onsubmit=\"confirmModal(event, this.dataset.confirm)\">
                 %s
                 <button type='submit' class='account-btn'>Ban user</button>
             </form>"
   [ Html.int (profile_id)
-  ; js_username
+  ; confirm_text "Permanently ban u/"
+      "? They will be blocked from logging in and posting."
   ; csrf_token ])
       in
       (Html.template "
@@ -364,7 +364,7 @@ let settings_page ?user ?(rail_communities = []) bio avatar_url request =
   let current_bio = (Html.text ((Option.value ~default:"" bio))) in
 
   (* Read-only preview of the stored avatar above the upload input. Same Components.user_avatar
-     gate (safe_img_src) + letter-tile fallback as the profile header, so a missing/unsafe
+     gate (Html.image_src) + letter-tile fallback as the profile header, so a missing/unsafe
      avatar shows the local tile rather than a broken image. Does not change the upload form. *)
   let avatar_preview =
     Components.user_avatar ~alt:"Current avatar"

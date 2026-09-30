@@ -104,7 +104,8 @@ let guest_wrapper_case =
          the share-only script; nothing else runs. *)
       Alcotest.(check int) "exactly one copyPostLink definition" 1
         (Html_assert.occurrences page "function copyPostLink");
-      Html_assert.must page "onclick='copyPostLink(\"/p/9107\", this)'";
+      Html_assert.must page
+        "data-share-path='/p/9107' onclick='copyPostLink(this.dataset.sharePath, this)'";
       Alcotest.(check int) "zero notification fetches" 0
         (Html_assert.occurrences page "/api/unread-notifs");
       Alcotest.(check int) "no notif badge markup" 0

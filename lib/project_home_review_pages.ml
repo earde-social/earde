@@ -98,7 +98,7 @@ let valid_community_slug value =
          Char.code byte > 0x20 && Char.code byte <> 0x7f && byte <> '/')
        value
 
-(* Same http(s)-only test Components.safe_url applies, so a repository URL
+(* Same http(s)-only test Html.external_url applies, so a repository URL
    that is not a real link degrades to inert text instead of a "#" anchor. *)
 let http_url value =
   let lower = String.lowercase_ascii value in

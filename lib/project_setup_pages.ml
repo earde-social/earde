@@ -239,7 +239,7 @@ let repository_details_html (repository : repository_option) =
   in
   (* default_branch may contain '/' — text only, never a URL segment. The
      html_url is the validated canonical GitHub URL, still gated and escaped
-     normally (safe_url) like any other href. *)
+     normally (Html.external_url) like any other href. *)
   (Html.template "%s%s<p class='ps-repo-meta'>Default branch <code \
      class='ps-repo-branch'>%s</code> &middot; <a href='%s' \
      class='create-link'>View on GitHub</a></p>"
