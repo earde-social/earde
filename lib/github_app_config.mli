@@ -1,21 +1,21 @@
 (** Validated public configuration for the GitHub App installation and
     user-authorization flow.
 
-    Covers only the public surface needed to render and start installation:
-    the public origin, app slug, OAuth client id and the two registered
-    return URLs. Server credentials (GITHUB_APP_ID, GITHUB_APP_CLIENT_SECRET,
+    Covers only the public surface needed to render and start installation: the
+    public origin, app slug, OAuth client id and the two registered return URLs.
+    Server credentials (GITHUB_APP_ID, GITHUB_APP_CLIENT_SECRET,
     GITHUB_APP_PRIVATE_KEY_PATH) are deliberately not read here.
 
-    Validation guarantees that both registered URLs sit on the configured
-    public origin with their exact registered paths and carry no userinfo,
-    query or fragment — so OAuth callbacks can only target our own origin and
-    the future redirect_uri can be emitted exactly as stored. *)
+    Validation guarantees that both registered URLs sit on the configured public
+    origin with their exact registered paths and carry no userinfo, query or
+    fragment — so OAuth callbacks can only target our own origin and the future
+    redirect_uri can be emitted exactly as stored. *)
 
 type t
 
 val public_origin : t -> string
-(** Canonical origin, e.g. ["https://earde.com"] — lowercase scheme and host,
-    no trailing slash, no default port. *)
+(** Canonical origin, e.g. ["https://earde.com"] — lowercase scheme and host, no
+    trailing slash, no default port. *)
 
 val app_slug : t -> string
 val client_id : t -> string

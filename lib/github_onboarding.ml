@@ -1,9 +1,7 @@
 (* Pure GitHub installation / onboarding domain rules. No IO — see the .mli
    for what each rule encodes. *)
 
-type account_type =
-  | User
-  | Organization
+type account_type = User | Organization
 
 (* Exact match only, as in Network_communities: these values come from our
    own schema enums, so anything off-enum (padding, case drift) is a bug or
@@ -17,10 +15,7 @@ let string_of_account_type = function
   | User -> "user"
   | Organization -> "organization"
 
-type installation_status =
-  | Active
-  | Revoked
-  | Inaccessible
+type installation_status = Active | Revoked | Inaccessible
 
 let installation_status_of_string = function
   | "active" -> Ok Active
@@ -40,15 +35,13 @@ let installation_transition_allowed ~from_ ~to_ =
   | Revoked, (Active | Inaccessible) -> false
   | (Active | Inaccessible), _ -> true
 
-type flow =
-  | Project_onboarding
+type flow = Project_onboarding
 
 let flow_of_string = function
   | "project_onboarding" -> Ok Project_onboarding
   | s -> Error (Printf.sprintf "unknown onboarding flow: %S" s)
 
-let string_of_flow = function
-  | Project_onboarding -> "project_onboarding"
+let string_of_flow = function Project_onboarding -> "project_onboarding"
 
 let revoked_at_allowed ~status ~has_revoked_at =
   match status with

@@ -1,12 +1,14 @@
-(** Post and forum-row cards with their author, moderation and sharing
-    controls. *)
+(** Post and forum-row cards with their author, moderation and sharing controls.
+*)
 
 val post_admin_actions :
   ?is_current_user_mod:bool ->
   ?admin_usernames:string list ->
   ?banned_usernames:string list ->
   csrf_token:Html.t ->
-  Dream.request -> Post_types.post -> Html.t
+  Dream.request ->
+  Post_types.post ->
+  Html.t
 
 val canonical_thread_path : string -> int -> string -> string
 
@@ -20,7 +22,10 @@ val render_post :
   ?admin_usernames:string list ->
   ?banned_usernames:string list ->
   ?shared:feed_shared ->
-  Dream.request -> (int * int) list -> Post_types.post -> Html.t
+  Dream.request ->
+  (int * int) list ->
+  Post_types.post ->
+  Html.t
 
 val extract_domain : string -> string option
 
@@ -32,4 +37,7 @@ val render_forum_row :
   ?show_context:bool ->
   ?shared:feed_shared ->
   ?shared_with:(string * string) list ->
-  Dream.request -> (int * int) list -> Post_types.post -> Html.t
+  Dream.request ->
+  (int * int) list ->
+  Post_types.post ->
+  Html.t

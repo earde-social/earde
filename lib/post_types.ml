@@ -1,6 +1,12 @@
 type post = {
-  id : int; title : string; url : string option; content : string option;
-  community_id : int; user_id : int; username : string; community_slug : string;
+  id : int;
+  title : string;
+  url : string option;
+  content : string option;
+  community_id : int;
+  user_id : int;
+  username : string;
+  community_slug : string;
   created_at : string;
   score : int;
   comment_count : int;
@@ -32,13 +38,41 @@ let post_row_type : post_row Caqti_type.t =
   let open Caqti_type in
   t5
     (t4 int string (option string) (option string))
-    (t4 int int string string)
-    (t4 string int int bool)
+    (t4 int int string string) (t4 string int int bool)
     (t4 (option string) (option string) (option string) bool)
     (t4 int int int (option string))
 
-let map_post_row ((id, title, url, content), (community_id, user_id, username, community_slug), (created_at, score, comment_count, allow_downvotes), (image_url, section_name, section_slug, community_sections_enabled), (author_local_karma, author_local_post_count, author_local_comment_count, author_first_active_at)) =
-  { id; title; url; content; community_id; user_id; username; community_slug; created_at; score; comment_count; allow_downvotes; image_url; section_name; section_slug; community_sections_enabled; author_local_karma; author_local_post_count; author_local_comment_count; author_first_active_at }
+let map_post_row
+    ( (id, title, url, content),
+      (community_id, user_id, username, community_slug),
+      (created_at, score, comment_count, allow_downvotes),
+      (image_url, section_name, section_slug, community_sections_enabled),
+      ( author_local_karma,
+        author_local_post_count,
+        author_local_comment_count,
+        author_first_active_at ) ) =
+  {
+    id;
+    title;
+    url;
+    content;
+    community_id;
+    user_id;
+    username;
+    community_slug;
+    created_at;
+    score;
+    comment_count;
+    allow_downvotes;
+    image_url;
+    section_name;
+    section_slug;
+    community_sections_enabled;
+    author_local_karma;
+    author_local_post_count;
+    author_local_comment_count;
+    author_first_active_at;
+  }
 
 (* A community-scoped feed row wraps the canonical post rather than extending
    it: [post] keeps its immutable origin identity (community_slug and the
@@ -53,10 +87,7 @@ type feed_shared_context = {
   fs_section_slug : string option;
 }
 
-type feed_item = {
-  fi_post : post;
-  fi_shared : feed_shared_context option;
-}
+type feed_item = { fi_post : post; fi_shared : feed_shared_context option }
 
 type feed_item_row =
   post_row * (bool * string option * string option * string option)
@@ -65,12 +96,19 @@ let feed_item_row_type : feed_item_row Caqti_type.t =
   let open Caqti_type in
   t2 post_row_type (t4 bool (option string) (option string) (option string))
 
-let map_feed_item_row (post_row, (via_placement, origin_name, ds_name, ds_slug)) =
-  { fi_post = map_post_row post_row;
+let map_feed_item_row (post_row, (via_placement, origin_name, ds_name, ds_slug))
+    =
+  {
+    fi_post = map_post_row post_row;
     fi_shared =
       (if via_placement then
          (* origin_name is a.name on the placement arm and therefore never
             NULL in practice; the default only guards a corrupt row. *)
-         Some { fs_origin_name = Option.value origin_name ~default:"";
-                fs_section_name = ds_name; fs_section_slug = ds_slug }
-       else None) }
+         Some
+           {
+             fs_origin_name = Option.value origin_name ~default:"";
+             fs_section_name = ds_name;
+             fs_section_slug = ds_slug;
+           }
+       else None);
+  }

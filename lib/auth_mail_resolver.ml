@@ -7,7 +7,8 @@ type 'endp t = {
 let default_permits = 2
 
 let create ~permits ~resolve =
-  if permits <= 0 then invalid_arg "Auth_mail_resolver.create: permits must be positive";
+  if permits <= 0 then
+    invalid_arg "Auth_mail_resolver.create: permits must be positive";
   { permits; run = resolve; outstanding = 0 }
 
 let outstanding t = t.outstanding

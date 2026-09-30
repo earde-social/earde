@@ -24,7 +24,7 @@ let cleanup_after_seconds = 2.0 *. window_seconds
 let check_q =
   let open Caqti_request.Infix in
   (Caqti_type.(t3 string string float) ->! Caqti_type.int)
-  {|INSERT INTO rate_limits (ip_address, endpoint, attempts, window_start)
+    {|INSERT INTO rate_limits (ip_address, endpoint, attempts, window_start)
     VALUES ($1, $2, 1, $3)
     ON CONFLICT (ip_address, endpoint) DO UPDATE
       SET attempts     = CASE WHEN rate_limits.window_start + 60.0 < EXCLUDED.window_start
@@ -57,10 +57,10 @@ let check db ip endpoint = check_with ~max_attempts db ip endpoint
    two policies want different numbers. The endpoint name is a constant,
    never a request path, so all three upload routes share one budget. *)
 let upload_endpoint = "image-upload"
-
 let upload_max_attempts = 10
 
-let check_upload db ip = check_with ~max_attempts:upload_max_attempts db ip upload_endpoint
+let check_upload db ip =
+  check_with ~max_attempts:upload_max_attempts db ip upload_endpoint
 
 (* One bounded cleanup batch: deletes at most [batch] expired rows so a
    large backlog can never stall a request-path connection. The only bind
@@ -74,14 +74,15 @@ let cleanup_batch = 500
 let cleanup_q =
   let open Caqti_request.Infix in
   (Caqti_type.(t2 float int) ->! Caqti_type.int)
-  {|WITH doomed AS (
+    {|WITH doomed AS (
       SELECT ctid FROM rate_limits WHERE window_start < $1 LIMIT $2
     ), deleted AS (
       DELETE FROM rate_limits WHERE ctid IN (SELECT ctid FROM doomed)
       RETURNING 1
     ) SELECT COUNT(*)::int FROM deleted|}
 
-let cleanup_expired ?(now = Unix.gettimeofday ()) (module C : Caqti_lwt.CONNECTION) =
+let cleanup_expired ?(now = Unix.gettimeofday ())
+    (module C : Caqti_lwt.CONNECTION) =
   C.find cleanup_q (now -. cleanup_after_seconds, cleanup_batch) >>= function
   | Ok deleted -> Lwt.return (Ok deleted)
   | Error e -> Lwt.return (Error (Caqti_error.show e))

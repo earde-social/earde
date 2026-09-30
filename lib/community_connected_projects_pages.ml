@@ -17,10 +17,7 @@ open Html.Infix
    degrades to inert text rather than becoming an actionable link. Nothing
    here raises on a malformed model. *)
 
-type verification =
-  | Verified
-  | Stale
-  | Revoked
+type verification = Verified | Stale | Revoked
 
 type repository = {
   full_name : string;
@@ -38,7 +35,6 @@ type project = {
   website_url : string option;
   repositories : repository list;
 }
-
 
 (* The same canonical grammar the read model and the project-home routes
    require. Used only to decide whether a slug is coherent enough to count as
@@ -117,20 +113,22 @@ let verification_copy = function
   | Revoked -> Html.static "Verification revoked"
 
 let heading_html =
-  (Html.static "<h2 class='ccp-title'>Connected projects</h2>\
-   <p class='ccp-sub'>Open-source projects that use this community as their \
-   Earde home.</p>")
+  Html.static
+    "<h2 class='ccp-title'>Connected projects</h2><p \
+     class='ccp-sub'>Open-source projects that use this community as their \
+     Earde home.</p>"
 
 (* Markers ride after the identity, never replacing it, so an archived or
    primary repository stays fully labelled. *)
 let repo_markers (r : repository) =
   let primary =
-    if r.is_primary then (Html.static " <span class='ccp-marker ccp-primary'>Primary</span>")
+    if r.is_primary then
+      Html.static " <span class='ccp-marker ccp-primary'>Primary</span>"
     else Html.empty
   in
   let archived =
     if r.is_archived then
-      (Html.static " <span class='ccp-marker ccp-archived'>Archived</span>")
+      Html.static " <span class='ccp-marker ccp-archived'>Archived</span>"
     else Html.empty
   in
   primary ++ archived
@@ -139,22 +137,18 @@ let repo_markers (r : repository) =
    project may carry links at all and the URL is the canonical GitHub target
    for that exact full name. *)
 let repo_identity_html ~linkable (r : repository) =
-  let text = (Html.text (r.full_name)) in
+  let text = Html.text r.full_name in
   if
-    linkable
-    && http_url r.html_url
+    linkable && http_url r.html_url
     && canonical_github_url ~full_name:r.full_name ~html_url:r.html_url
   then
-    (Html.template "<a href='%s' class='ccp-repo-link'>%s</a>"
-  [ (Html.external_url (r.html_url))
-  ; text ])
-  else (Html.template "<span class='ccp-repo-name'>%s</span>"
-  [ text ])
+    Html.template "<a href='%s' class='ccp-repo-link'>%s</a>"
+      [ Html.external_url r.html_url; text ]
+  else Html.template "<span class='ccp-repo-name'>%s</span>" [ text ]
 
 let repo_html ~linkable (r : repository) =
-  (Html.template "<li class='ccp-repo'>%s%s</li>"
-  [ (repo_identity_html ~linkable r)
-  ; (repo_markers r) ])
+  Html.template "<li class='ccp-repo'>%s%s</li>"
+    [ repo_identity_html ~linkable r; repo_markers r ]
 
 (* A repository full name repeated inside one project leaves only its first
    occurrence linked, so a duplicated row can never present two competing
@@ -165,13 +159,14 @@ let repositories_html ~linkable repos =
     | [] -> []
     | (r : repository) :: rest ->
         let first = not (List.mem r.full_name seen) in
-        repo_html ~linkable:(linkable && first) r :: go (r.full_name :: seen) rest
+        repo_html ~linkable:(linkable && first) r
+        :: go (r.full_name :: seen) rest
   in
   match repos with
   | [] -> Html.empty
   | repos ->
-      (Html.template "<ul class='ccp-repos'>%s</ul>"
-  [ (Html.concat (go [] repos)) ])
+      Html.template "<ul class='ccp-repos'>%s</ul>"
+        [ Html.concat (go [] repos) ]
 
 (* The website is offered as a link only when it is a real http(s) target and
    this project may carry links; otherwise the stored value still renders, but
@@ -180,35 +175,37 @@ let website_html ~linkable = function
   | None -> Html.empty
   | Some url ->
       if linkable && http_url url then
-        (Html.template "<p class='ccp-website'><a href='%s' class='ccp-website-link'>%s</a></p>"
-  [ (Html.external_url (url))
-  ; (Html.text (url)) ])
-      else (Html.template "<p class='ccp-website'>%s</p>"
-  [ (Html.text (url)) ])
+        Html.template
+          "<p class='ccp-website'><a href='%s' \
+           class='ccp-website-link'>%s</a></p>"
+          [ Html.external_url url; Html.text url ]
+      else Html.template "<p class='ccp-website'>%s</p>" [ Html.text url ]
 
 (* The project name is never a link: no public permanent-project route exists,
    and the owner-only setup destination must not be advertised on a page
    ordinary visitors reach. A blank name degrades to a generic label rather
    than rendering an empty heading. *)
 let project_name_html (p : project) =
-  let label = if nonblank p.name then (Html.text (p.name)) else (Html.static "Open-source project") in
-  (Html.template "<h3 class='ccp-name'>%s</h3>"
-  [ label ])
+  let label =
+    if nonblank p.name then Html.text p.name
+    else Html.static "Open-source project"
+  in
+  Html.template "<h3 class='ccp-name'>%s</h3>" [ label ]
 
 let project_html ~linkable (p : project) =
-  (Html.template "<li class='ccp-project'>\
-     <div class='ccp-identity'>%s\
-     <p class='ccp-kind'>%s</p>\
-     <p class='ccp-namespace'>%s</p>\
-     <p class='ccp-verification'>%s</p>\
-     <p class='ccp-connected'>Project connected through GitHub</p>%s\
-     </div>%s</li>"
-  [ (project_name_html p)
-  ; (kind_copy p.kind)
-  ; (Html.text (p.namespace_login))
-  ; (verification_copy p.verification)
-  ; (website_html ~linkable p.website_url)
-  ; (repositories_html ~linkable p.repositories) ])
+  Html.template
+    "<li class='ccp-project'><div class='ccp-identity'>%s<p \
+     class='ccp-kind'>%s</p><p class='ccp-namespace'>%s</p><p \
+     class='ccp-verification'>%s</p><p class='ccp-connected'>Project connected \
+     through GitHub</p>%s</div>%s</li>"
+    [
+      project_name_html p;
+      kind_copy p.kind;
+      Html.text p.namespace_login;
+      verification_copy p.verification;
+      website_html ~linkable p.website_url;
+      repositories_html ~linkable p.repositories;
+    ]
 
 (* Link-carrying is decided per project: the slug must be canonical and this
    the first occurrence of it, so a duplicated project slug leaves at most one
@@ -229,9 +226,10 @@ let connected_projects_section ~projects =
   match projects with
   | [] -> Html.empty
   | projects ->
-      (Html.template "<section class='ccp-section'>%s<ul class='ccp-projects'>%s</ul></section>"
-  [ heading_html
-  ; (projects_html projects) ])
+      Html.template
+        "<section class='ccp-section'>%s<ul \
+         class='ccp-projects'>%s</ul></section>"
+        [ heading_html; projects_html projects ]
 
 (* The dedicated Network page names both destinations whether or not either
    holds anything, so it needs a section that survives an empty list. The
@@ -240,6 +238,7 @@ let connected_projects_section ~projects =
    community page keeps its own contract: there, nothing connected still
    means no block at all. *)
 let empty_projects_section =
-  (Html.template "<section class='ccp-section'>%s<p class='ccp-empty'>No connected \
-     projects yet.</p></section>"
-  [ heading_html ])
+  Html.template
+    "<section class='ccp-section'>%s<p class='ccp-empty'>No connected projects \
+     yet.</p></section>"
+    [ heading_html ]

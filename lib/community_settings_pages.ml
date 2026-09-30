@@ -13,7 +13,9 @@ open Html.Infix
    fragment slice (create-shell → </main>) carries no launch chrome. *)
 let new_community_form ?user ?(rail_communities = []) request =
   let csrf_token = Csrf_field.tag request in
-  let content = (Html.template {html|
+  let content =
+    Html.template
+      {html|
     <div class='create-wrap'>
       <div class='create-panel'>
         <div class='create-head'>
@@ -143,19 +145,18 @@ let new_community_form ?user ?(rail_communities = []) request =
     }
     </script>
     |html}
-  [ csrf_token ])
+      [ csrf_token ]
   in
   let context =
-    (Html.static "<div class='launch-newcomm-context'>\
-     <span class='launch-newcomm-context-label'>Administrator utility</span>\
-     <span class='launch-newcomm-context-path'>/new-community</span>\
-     </div>")
+    Html.static
+      "<div class='launch-newcomm-context'><span \
+       class='launch-newcomm-context-label'>Administrator utility</span><span \
+       class='launch-newcomm-context-path'>/new-community</span></div>"
   in
   Page_shell.launch_app_page ?user ~request ~rail_communities
     ~page_class:"launch-new-community" ~title:"New Community"
     ~content:
-      (context ++ (Html.template "<div class='create-shell'>%s</div>"
-  [ content ]))
+      (context ++ Html.template "<div class='create-shell'>%s</div>" [ content ])
     ()
 
 (* [connected_projects] is the pre-rendered "Connected projects" management fragment
@@ -164,12 +165,19 @@ let new_community_form ?user ?(rail_communities = []) request =
    the read model for anyone else, and this page never loads it at all. An empty fragment
    also removes the panel from the navigation, so no ordinary moderator can reach an empty
    management surface by typing ?panel=projects. *)
-let community_settings_page ?user ?(connected_projects = Html.empty) ?(rail_communities=[]) ~is_admin ~is_top_mod ~open_reports_count ~(community : Community_types.community) ~(mods : User_store.user list) ~(banned_users : User_store.user list) ~(members : User_store.user list) ~(sections : Section_store.community_section list) ~(channels : Channel_store.channel list) request =
+let community_settings_page ?user ?(connected_projects = Html.empty)
+    ?(rail_communities = []) ~is_admin ~is_top_mod ~open_reports_count
+    ~(community : Community_types.community) ~(mods : User_store.user list)
+    ~(banned_users : User_store.user list) ~(members : User_store.user list)
+    ~(sections : Section_store.community_section list)
+    ~(channels : Channel_store.channel list) request =
   let csrf_token = Csrf_field.tag request in
-  let slug = (Html.text (community.slug)) in
+  let slug = Html.text community.slug in
   (* Active (non-archived) channel count — used both in the status strip and to gate the
      archive control in the UI (the server enforces the same guards regardless). *)
-  let active_channels = List.filter (fun (c : Channel_store.channel) -> not c.is_archived) channels in
+  let active_channels =
+    List.filter (fun (c : Channel_store.channel) -> not c.is_archived) channels
+  in
   let active_channel_count = List.length active_channels in
 
   (* The settings surface is a control panel: a left nav of panels, one panel rendered
@@ -183,7 +191,9 @@ let community_settings_page ?user ?(connected_projects = Html.empty) ?(rail_comm
   let panel =
     match Dream.query request "panel" with
     | Some "projects" when has_connected_projects -> "projects"
-    | Some ("profile" | "channels" | "members" | "moderation" | "bans" as p) -> p
+    | Some (("profile" | "channels" | "members" | "moderation" | "bans") as p)
+      ->
+        p
     | _ -> "visibility"
   in
 
@@ -213,27 +223,32 @@ let community_settings_page ?user ?(connected_projects = Html.empty) ?(rail_comm
   in
   let setup_pointer_note =
     if not can_complete_setup then
-      (Html.static "<p class='cm-muted-note'>This community is still a setup draft. Its \
-       identity and publication are decided together by an authorized \
-       publisher.</p>")
+      Html.static
+        "<p class='cm-muted-note'>This community is still a setup draft. Its \
+         identity and publication are decided together by an authorized \
+         publisher.</p>"
     else
-      (Html.template "<p class='cm-muted-note'>This community is still a private setup \
+      Html.template
+        "<p class='cm-muted-note'>This community is still a private setup \
          draft. Its name, address, description, visibility, and discovery are \
          decided together when you <a href='/c/%s/setup'>complete setup and \
          publish</a>.</p>"
-  [ slug ])
+        [ slug ]
   in
 
   let stat label cls value =
-    (Html.template "<div class='cm-stat'><span class='cm-stat-label'>%s</span><span class='cm-stat-val %s'>%s</span></div>"
-  [ label
-  ; cls
-  ; value ])
+    Html.template
+      "<div class='cm-stat'><span class='cm-stat-label'>%s</span><span \
+       class='cm-stat-val %s'>%s</span></div>"
+      [ label; cls; value ]
   in
 
   let sort_option value label selected_val =
-    let sel = if selected_val = value then Html.static " selected" else Html.empty in
-    Html.template "<option value='%s'%s>%s</option>" [ Html.text value; sel; Html.text label ]
+    let sel =
+      if selected_val = value then Html.static " selected" else Html.empty
+    in
+    Html.template "<option value='%s'%s>%s</option>"
+      [ Html.text value; sel; Html.text label ]
   in
 
   (* Per-child indexability state + (TM/A only) toggle. Indexability is sensitive
@@ -243,20 +258,29 @@ let community_settings_page ?user ?(connected_projects = Html.empty) ?(rail_comm
      the badge lives in the always-visible summary and the toggle in the expanded ops strip. *)
   let can_edit_idx = is_top_mod || is_admin in
   let idx_badge ~indexable =
-    if indexable then (Html.static "<span class='cm-badge cm-badge--active'>Indexable</span>")
-    else (Html.static "<span class='cm-badge cm-badge--archived'>Not indexable</span>")
+    if indexable then
+      Html.static "<span class='cm-badge cm-badge--active'>Indexable</span>"
+    else
+      Html.static
+        "<span class='cm-badge cm-badge--archived'>Not indexable</span>"
   in
   let idx_toggle_form ~action ~indexable =
     if not can_edit_idx then Html.empty
     else
-      let (next_val, label) =
-        if indexable then ("false", "Make non-indexable") else ("true", "Make indexable")
+      let next_val, label =
+        if indexable then ("false", "Make non-indexable")
+        else ("true", "Make indexable")
       in
-      (Html.template "<form action='%s' method='POST' class='cm-form-inline'>%s<input type='hidden' name='indexable' value='%s'><button type='submit' class='cm-btn-sm'>%s</button></form>"
-  [ Html.internal_path action
-  ; csrf_token
-  ; (Html.text next_val)
-  ; (Html.text label) ])
+      Html.template
+        "<form action='%s' method='POST' class='cm-form-inline'>%s<input \
+         type='hidden' name='indexable' value='%s'><button type='submit' \
+         class='cm-btn-sm'>%s</button></form>"
+        [
+          Html.internal_path action;
+          csrf_token;
+          Html.text next_val;
+          Html.text label;
+        ]
   in
   (* Community-level private / non-indexable dominates child flags (effective_indexable_child):
      while dominated, a child's stored flag has no public effect. We still allow toggling so the flag
@@ -265,9 +289,17 @@ let community_settings_page ?user ?(connected_projects = Html.empty) ?(rail_comm
   let dominated_note =
     if not community_dominates_children then Html.empty
     else if is_private then
-      (Html.static "<p class='cm-muted-note' style='margin:0 0 10px'>This community is private, so everything in it is non-indexable no matter what these flags say. They take effect only once the community is public and indexable.</p>")
+      Html.static
+        "<p class='cm-muted-note' style='margin:0 0 10px'>This community is \
+         private, so everything in it is non-indexable no matter what these \
+         flags say. They take effect only once the community is public and \
+         indexable.</p>"
     else
-      (Html.static "<p class='cm-muted-note' style='margin:0 0 10px'>This community is public but excluded from discovery (noindex), so everything in it is non-indexable no matter what these flags say. They take effect only once the community is also indexable.</p>")
+      Html.static
+        "<p class='cm-muted-note' style='margin:0 0 10px'>This community is \
+         public but excluded from discovery (noindex), so everything in it is \
+         non-indexable no matter what these flags say. They take effect only \
+         once the community is also indexable.</p>"
   in
 
   (* ---- Panel: Visibility & discovery (default) ---- *)
@@ -277,33 +309,68 @@ let community_settings_page ?user ?(connected_projects = Html.empty) ?(rail_comm
      flag is shown only as inactive secondary copy. The community-level routes/inputs are unchanged. *)
   let visibility_panel =
     let downvotes_row =
-      if community.allow_downvotes then stat (Html.static "downvotes") (Html.static "cm-stat-val--ok") (Html.static "enabled")
-      else stat (Html.static "downvotes") (Html.static "cm-stat-val--off") (Html.static "disabled")
+      if community.allow_downvotes then
+        stat (Html.static "downvotes")
+          (Html.static "cm-stat-val--ok")
+          (Html.static "enabled")
+      else
+        stat (Html.static "downvotes")
+          (Html.static "cm-stat-val--off")
+          (Html.static "disabled")
     in
     let discovery_row =
-      if is_private then stat (Html.static "discovery") (Html.static "cm-stat-val--off") (Html.static "noindex &middot; private")
-      else if community.indexable then stat (Html.static "discovery") (Html.static "cm-stat-val--ok") (Html.static "indexable")
-      else stat (Html.static "discovery") (Html.static "cm-stat-val--off") (Html.static "noindex")
+      if is_private then
+        stat (Html.static "discovery")
+          (Html.static "cm-stat-val--off")
+          (Html.static "noindex &middot; private")
+      else if community.indexable then
+        stat (Html.static "discovery")
+          (Html.static "cm-stat-val--ok")
+          (Html.static "indexable")
+      else
+        stat (Html.static "discovery")
+          (Html.static "cm-stat-val--off")
+          (Html.static "noindex")
     in
     let status_strip =
-      (Html.template "<div class='cm-stats' style='margin-bottom:14px'>%s%s%s%s%s%s</div>"
-  [ (stat (Html.static "visibility") Html.empty (if is_private then (Html.static "Private") else (Html.static "Public")))
-  ; discovery_row
-  ; (stat (Html.static "live channels") Html.empty (Html.text (string_of_int active_channel_count)))
-  ; (if community.sections_enabled
-         then stat (Html.static "sections") Html.empty (Html.int (List.length sections))
-         else stat (Html.static "sections") (Html.static "cm-stat-val--off") (Html.static "off"))
-  ; (stat (Html.static "moderators") Html.empty (Html.text (string_of_int (List.length mods))))
-  ; downvotes_row ])
+      Html.template
+        "<div class='cm-stats' style='margin-bottom:14px'>%s%s%s%s%s%s</div>"
+        [
+          stat (Html.static "visibility") Html.empty
+            (if is_private then Html.static "Private" else Html.static "Public");
+          discovery_row;
+          stat
+            (Html.static "live channels")
+            Html.empty
+            (Html.text (string_of_int active_channel_count));
+          (if community.sections_enabled then
+             stat (Html.static "sections") Html.empty
+               (Html.int (List.length sections))
+           else
+             stat (Html.static "sections")
+               (Html.static "cm-stat-val--off")
+               (Html.static "off"));
+          stat (Html.static "moderators") Html.empty
+            (Html.text (string_of_int (List.length mods)));
+          downvotes_row;
+        ]
     in
     let explanation =
       if is_private then
-        (Html.static "<p class='cm-panel-desc'>Private communities are only readable by members, moderators, and admins. \
-         <strong>Private communities are never indexed.</strong></p>")
+        Html.static
+          "<p class='cm-panel-desc'>Private communities are only readable by \
+           members, moderators, and admins. <strong>Private communities are \
+           never indexed.</strong></p>"
       else if community.indexable then
-        (Html.static "<p class='cm-panel-desc'>This community can appear in the public feed, search, and discovery, and may be indexed by search engines.</p>")
+        Html.static
+          "<p class='cm-panel-desc'>This community can appear in the public \
+           feed, search, and discovery, and may be indexed by search \
+           engines.</p>"
       else
-        (Html.static "<p class='cm-panel-desc'>This community is public by link, but <strong>excluded from the public feed, search, and discovery</strong>, and marked <code>noindex</code>.</p>")
+        Html.static
+          "<p class='cm-panel-desc'>This community is public by link, but \
+           <strong>excluded from the public feed, search, and \
+           discovery</strong>, and marked <code>noindex</code>.</p>"
     in
     let visibility_control =
       if is_network_draft then setup_pointer_note
@@ -313,20 +380,29 @@ let community_settings_page ?user ?(connected_projects = Html.empty) ?(rail_comm
            existing route, so the control stays fully server-rendered. Clicking the
            already-active segment re-submits the current value (idempotent). *)
         let seg value label active =
-          (Html.template "<form action='/c/%s/settings/visibility' method='POST' class='cm-form-inline'>%s<input type='hidden' name='visibility' value='%s'><button type='submit' class='cm-seg-btn%s'>%s</button></form>"
-  [ slug
-  ; csrf_token
-  ; value
-  ; (if active then (Html.static " cm-seg-btn--active") else Html.empty)
-  ; label ])
+          Html.template
+            "<form action='/c/%s/settings/visibility' method='POST' \
+             class='cm-form-inline'>%s<input type='hidden' name='visibility' \
+             value='%s'><button type='submit' \
+             class='cm-seg-btn%s'>%s</button></form>"
+            [
+              slug;
+              csrf_token;
+              value;
+              (if active then Html.static " cm-seg-btn--active" else Html.empty);
+              label;
+            ]
         in
-        (Html.template "
-          <div class='cm-field' style='margin-top:2px'>
-            <label class='cm-label'>Visibility</label>
-            <div class='cm-seg'>%s%s</div>
-          </div>"
-  [ (seg (Html.static "public") (Html.static "Public") (not is_private))
-  ; (seg (Html.static "private") (Html.static "Private") is_private) ])
+        Html.template
+          "\n\
+          \          <div class='cm-field' style='margin-top:2px'>\n\
+          \            <label class='cm-label'>Visibility</label>\n\
+          \            <div class='cm-seg'>%s%s</div>\n\
+          \          </div>"
+          [
+            seg (Html.static "public") (Html.static "Public") (not is_private);
+            seg (Html.static "private") (Html.static "Private") is_private;
+          ]
     in
     let indexable_control =
       (* Indexing on a network community is not an independent switch: the
@@ -336,52 +412,82 @@ let community_settings_page ?user ?(connected_projects = Html.empty) ?(rail_comm
       if community.is_network_community then
         if is_network_draft then Html.empty
         else
-          (Html.static "<p class='cm-muted-note' style='margin-top:12px'>Discovery for this \
-           community follows the Public or Unlisted choice made when it was \
-           published.</p>")
+          Html.static
+            "<p class='cm-muted-note' style='margin-top:12px'>Discovery for \
+             this community follows the Public or Unlisted choice made when it \
+             was published.</p>"
       else if not can_edit_vis then Html.empty
       else if is_private then
         (* No actionable indexability control while private; surface the stored flag as
            inactive copy so it doesn't look clickable. *)
-        (Html.template "<p class='cm-muted-note' style='margin-top:12px'>Private communities are never indexed. The stored indexability flag is <strong>%s</strong> &mdash; it takes effect only if the community becomes public.</p>"
-  [ (if community.indexable then (Html.static "indexable") else (Html.static "non-indexable")) ])
+        Html.template
+          "<p class='cm-muted-note' style='margin-top:12px'>Private \
+           communities are never indexed. The stored indexability flag is \
+           <strong>%s</strong> &mdash; it takes effect only if the community \
+           becomes public.</p>"
+          [
+            (if community.indexable then Html.static "indexable"
+             else Html.static "non-indexable");
+          ]
       else
         let seg value label active =
-          (Html.template "<form action='/c/%s/settings/indexability' method='POST' class='cm-form-inline'>%s<input type='hidden' name='indexable' value='%s'><button type='submit' class='cm-seg-btn%s'>%s</button></form>"
-  [ slug
-  ; csrf_token
-  ; value
-  ; (if active then (Html.static " cm-seg-btn--active") else Html.empty)
-  ; label ])
+          Html.template
+            "<form action='/c/%s/settings/indexability' method='POST' \
+             class='cm-form-inline'>%s<input type='hidden' name='indexable' \
+             value='%s'><button type='submit' \
+             class='cm-seg-btn%s'>%s</button></form>"
+            [
+              slug;
+              csrf_token;
+              value;
+              (if active then Html.static " cm-seg-btn--active" else Html.empty);
+              label;
+            ]
         in
-        (Html.template "
-          <div class='cm-field' style='margin-top:14px'>
-            <label class='cm-label'>Discovery</label>
-            <div class='cm-seg'>%s%s</div>
-            <p class='cm-muted-note' style='margin:6px 0 0'>Non-indexable keeps the community readable by link but marked <code>noindex</code> and out of the public feed, search, and discovery.</p>
-          </div>"
-  [ (seg (Html.static "true") (Html.static "Indexable") community.indexable)
-  ; (seg (Html.static "false") (Html.static "Non-indexable") (not community.indexable)) ])
+        Html.template
+          "\n\
+          \          <div class='cm-field' style='margin-top:14px'>\n\
+          \            <label class='cm-label'>Discovery</label>\n\
+          \            <div class='cm-seg'>%s%s</div>\n\
+          \            <p class='cm-muted-note' style='margin:6px 0 \
+           0'>Non-indexable keeps the community readable by link but marked \
+           <code>noindex</code> and out of the public feed, search, and \
+           discovery.</p>\n\
+          \          </div>"
+          [
+            seg (Html.static "true") (Html.static "Indexable")
+              community.indexable;
+            seg (Html.static "false")
+              (Html.static "Non-indexable")
+              (not community.indexable);
+          ]
     in
     let editor_note =
       if can_edit_vis then Html.empty
-      else (Html.static "<p class='cm-muted-note'>Only Top Mods and admins can change visibility and discovery settings.</p>")
+      else
+        Html.static
+          "<p class='cm-muted-note'>Only Top Mods and admins can change \
+           visibility and discovery settings.</p>"
     in
-    (Html.template "
-      <section class='cm-panel'>
-        <h2 class='cm-panel-title'>Visibility &amp; discovery</h2>
-        <p class='cm-panel-desc'>Who can read this community, and whether it appears in the public feed, search, and discovery.</p>
-        %s
-        %s
-        %s
-        %s
-        %s
-      </section>"
-  [ status_strip
-  ; explanation
-  ; visibility_control
-  ; indexable_control
-  ; editor_note ])
+    Html.template
+      "\n\
+      \      <section class='cm-panel'>\n\
+      \        <h2 class='cm-panel-title'>Visibility &amp; discovery</h2>\n\
+      \        <p class='cm-panel-desc'>Who can read this community, and \
+       whether it appears in the public feed, search, and discovery.</p>\n\
+      \        %s\n\
+      \        %s\n\
+      \        %s\n\
+      \        %s\n\
+      \        %s\n\
+      \      </section>"
+      [
+        status_strip;
+        explanation;
+        visibility_control;
+        indexable_control;
+        editor_note;
+      ]
   in
 
   (* ---- Panel: Profile ---- *)
@@ -395,16 +501,33 @@ let community_settings_page ?user ?(connected_projects = Html.empty) ?(rail_comm
   let avatar_status =
     match community.avatar_url with
     | Some u when String.trim u <> "" ->
-        (Html.template "<div class='cm-asset'>%s<span class='cm-asset-note'>Current avatar uploaded &mdash; choose a file to replace it.</span></div>"
-  [ (Components.community_avatar ~img_class:"cm-asset-avatar" ~tile_class:"cm-asset-avatar" ~name:community.name (Some u)) ])
-    | _ -> (Html.static "<div class='cm-asset'><span class='cm-asset-note'>No avatar uploaded yet.</span></div>")
+        Html.template
+          "<div class='cm-asset'>%s<span class='cm-asset-note'>Current avatar \
+           uploaded &mdash; choose a file to replace it.</span></div>"
+          [
+            Components.community_avatar ~img_class:"cm-asset-avatar"
+              ~tile_class:"cm-asset-avatar" ~name:community.name (Some u);
+          ]
+    | _ ->
+        Html.static
+          "<div class='cm-asset'><span class='cm-asset-note'>No avatar \
+           uploaded yet.</span></div>"
   in
   let banner_status =
     match community.banner_url with
     | Some u when String.trim u <> "" ->
-        (Html.template "<div class='cm-asset'>%s<span class='cm-asset-note'>Current banner uploaded &mdash; choose a file to replace it.</span></div>"
-  [ (Components.community_banner ~wrap_class:"cm-asset-banner" ~img_class:"cm-asset-banner-img" ~fallback_class:"cm-asset-banner" (Some u)) ])
-    | _ -> (Html.static "<div class='cm-asset'><span class='cm-asset-note'>No banner uploaded yet.</span></div>")
+        Html.template
+          "<div class='cm-asset'>%s<span class='cm-asset-note'>Current banner \
+           uploaded &mdash; choose a file to replace it.</span></div>"
+          [
+            Components.community_banner ~wrap_class:"cm-asset-banner"
+              ~img_class:"cm-asset-banner-img" ~fallback_class:"cm-asset-banner"
+              (Some u);
+          ]
+    | _ ->
+        Html.static
+          "<div class='cm-asset'><span class='cm-asset-note'>No banner \
+           uploaded yet.</span></div>"
   in
   let profile_panel =
     if is_network_draft then
@@ -412,52 +535,63 @@ let community_settings_page ?user ?(connected_projects = Html.empty) ?(rail_comm
          community row; for a setup draft that is a canonical-identity edit
          outside the publication flow, and the route now refuses it. No form
          is rendered rather than one the server would reject. *)
-      (Html.template "
-      <section class='cm-panel'>
-        <h2 class='cm-panel-title'>Profile</h2>
-        <p class='cm-panel-desc'>Description, rules, and imagery shown on the public community page.</p>
-        %s
-      </section>"
-  [ setup_pointer_note ])
+      Html.template
+        "\n\
+        \      <section class='cm-panel'>\n\
+        \        <h2 class='cm-panel-title'>Profile</h2>\n\
+        \        <p class='cm-panel-desc'>Description, rules, and imagery \
+         shown on the public community page.</p>\n\
+        \        %s\n\
+        \      </section>"
+        [ setup_pointer_note ]
     else
-    (Html.template "
-      <section class='cm-panel'>
-        <h2 class='cm-panel-title'>Profile</h2>
-        <p class='cm-panel-desc'>Description, rules, and imagery shown on the public community page.</p>
-        <form action='/update-community' method='POST' enctype='multipart/form-data' class='cm-form'>
-          %s
-          <input type='hidden' name='community_id' value='%s'>
-          <input type='hidden' name='community_slug' value='%s'>
-          <div class='cm-field'>
-            <label class='cm-label'>Description</label>
-            <textarea name='description' rows='3' class='cm-textarea'>%s</textarea>
-          </div>
-          <div class='cm-field'>
-            <label class='cm-label'>Community rules</label>
-            <textarea name='rules' rows='5' class='cm-textarea'>%s</textarea>
-          </div>
-          <div class='cm-assets2'>
-            <div class='cm-field'>
-              <label class='cm-label'>Avatar image</label>
-              %s
-              <input type='file' name='avatar_url' accept='image/*' class='cm-file'>
-            </div>
-            <div class='cm-field'>
-              <label class='cm-label'>Banner image</label>
-              %s
-              <input type='file' name='banner_url' accept='image/*' class='cm-file'>
-            </div>
-          </div>
-          <button type='submit' class='cm-btn'>Save changes</button>
-        </form>
-      </section>"
-  [ csrf_token
-  ; Html.int (community.id)
-  ; slug
-  ; (Html.text ((Option.value ~default:"" community.description)))
-  ; (Html.text ((Option.value ~default:"" community.rules)))
-  ; avatar_status
-  ; banner_status ])
+      Html.template
+        "\n\
+        \      <section class='cm-panel'>\n\
+        \        <h2 class='cm-panel-title'>Profile</h2>\n\
+        \        <p class='cm-panel-desc'>Description, rules, and imagery \
+         shown on the public community page.</p>\n\
+        \        <form action='/update-community' method='POST' \
+         enctype='multipart/form-data' class='cm-form'>\n\
+        \          %s\n\
+        \          <input type='hidden' name='community_id' value='%s'>\n\
+        \          <input type='hidden' name='community_slug' value='%s'>\n\
+        \          <div class='cm-field'>\n\
+        \            <label class='cm-label'>Description</label>\n\
+        \            <textarea name='description' rows='3' \
+         class='cm-textarea'>%s</textarea>\n\
+        \          </div>\n\
+        \          <div class='cm-field'>\n\
+        \            <label class='cm-label'>Community rules</label>\n\
+        \            <textarea name='rules' rows='5' \
+         class='cm-textarea'>%s</textarea>\n\
+        \          </div>\n\
+        \          <div class='cm-assets2'>\n\
+        \            <div class='cm-field'>\n\
+        \              <label class='cm-label'>Avatar image</label>\n\
+        \              %s\n\
+        \              <input type='file' name='avatar_url' accept='image/*' \
+         class='cm-file'>\n\
+        \            </div>\n\
+        \            <div class='cm-field'>\n\
+        \              <label class='cm-label'>Banner image</label>\n\
+        \              %s\n\
+        \              <input type='file' name='banner_url' accept='image/*' \
+         class='cm-file'>\n\
+        \            </div>\n\
+        \          </div>\n\
+        \          <button type='submit' class='cm-btn'>Save changes</button>\n\
+        \        </form>\n\
+        \      </section>"
+        [
+          csrf_token;
+          Html.int community.id;
+          slug;
+          Html.text (Option.value ~default:"" community.description);
+          Html.text (Option.value ~default:"" community.rules);
+          avatar_status;
+          banner_status;
+        ]
   in
 
   (* ---- Panel: Channels & sections ---- *)
@@ -469,212 +603,277 @@ let community_settings_page ?user ?(connected_projects = Html.empty) ?(rail_comm
      reordering is a follow-up. *)
   let render_channel_item idx (c : Channel_store.channel) =
     let status_badge =
-      if c.is_archived then (Html.static "<span class='cm-badge cm-badge--archived'>Archived</span>")
-      else (Html.static "<span class='cm-badge cm-badge--active'>Active</span>")
+      if c.is_archived then
+        Html.static "<span class='cm-badge cm-badge--archived'>Archived</span>"
+      else Html.static "<span class='cm-badge cm-badge--active'>Active</span>"
     in
     (* Active channels link to their live view; archived ones are not navigable. *)
     let name_html =
-      if c.is_archived then (Html.template "<span class='cm-section-name'>%s</span>"
-  [ (Html.text (c.name)) ])
-      else (Html.template "<a class='cm-section-name cm-channel-link' href='/c/%s/ch/%s'>%s</a>"
-  [ slug
-  ; (Html.text (c.slug))
-  ; (Html.text (c.name)) ])
+      if c.is_archived then
+        Html.template "<span class='cm-section-name'>%s</span>"
+          [ Html.text c.name ]
+      else
+        Html.template
+          "<a class='cm-section-name cm-channel-link' href='/c/%s/ch/%s'>%s</a>"
+          [ slug; Html.text c.slug; Html.text c.name ]
     in
     let row_note =
-      if c.slug = "general" then (Html.static "<span class='cm-item-note'>Default channel</span>") else Html.empty
+      if c.slug = "general" then
+        Html.static "<span class='cm-item-note'>Default channel</span>"
+      else Html.empty
     in
     (* Archive is reversible (never a hard-delete). The default #general channel and the
        last remaining active channel cannot be archived — noted in the ops strip, enforced
        server-side in archive_channel_handler either way. *)
     let archive_control =
       if c.is_archived then
-        (Html.template "
-          <form action='/c/%s/channels/%s/unarchive' method='POST' class='cm-form-inline'>
-            %s
-            <button type='submit' class='cm-btn-sm cm-btn-sm--ok'>Unarchive</button>
-          </form>"
-  [ slug
-  ; Html.int (c.id)
-  ; csrf_token ])
-      else if c.slug = "general" then (Html.static "<span class='cm-muted-note'>The default #general channel cannot be archived.</span>")
-      else if active_channel_count <= 1 then (Html.static "<span class='cm-muted-note'>The last active channel cannot be archived.</span>")
+        Html.template
+          "\n\
+          \          <form action='/c/%s/channels/%s/unarchive' method='POST' \
+           class='cm-form-inline'>\n\
+          \            %s\n\
+          \            <button type='submit' class='cm-btn-sm \
+           cm-btn-sm--ok'>Unarchive</button>\n\
+          \          </form>"
+          [ slug; Html.int c.id; csrf_token ]
+      else if c.slug = "general" then
+        Html.static
+          "<span class='cm-muted-note'>The default #general channel cannot be \
+           archived.</span>"
+      else if active_channel_count <= 1 then
+        Html.static
+          "<span class='cm-muted-note'>The last active channel cannot be \
+           archived.</span>"
       else
-        (Html.template "
-          <form action='/c/%s/channels/%s/archive' method='POST' class='cm-form-inline'
-                onsubmit=\"confirmModal(event, 'Archive this channel? Members will no longer see it. You can unarchive it later.')\">
-            %s
-            <button type='submit' class='cm-btn-sm cm-btn-sm--danger'>Archive</button>
-          </form>"
-  [ slug
-  ; Html.int (c.id)
-  ; csrf_token ])
+        Html.template
+          "\n\
+          \          <form action='/c/%s/channels/%s/archive' method='POST' \
+           class='cm-form-inline'\n\
+          \                onsubmit=\"confirmModal(event, 'Archive this \
+           channel? Members will no longer see it. You can unarchive it \
+           later.')\">\n\
+          \            %s\n\
+          \            <button type='submit' class='cm-btn-sm \
+           cm-btn-sm--danger'>Archive</button>\n\
+          \          </form>"
+          [ slug; Html.int c.id; csrf_token ]
     in
-    (Html.template "
-      <details class='cm-item'>
-        <summary>
-          <span class='cm-item-pos'>%s</span>
-          <span class='cm-item-name'>%s<span class='cm-section-slug'>/ch/%s</span></span>
-          <span class='cm-item-badges'>%s</span>
-          <span class='cm-item-meta'>%s<span class='cm-item-hint'>edit</span></span>
-        </summary>
-        <div class='cm-item-body'>
-          <form action='/c/%s/channels/%s/update' method='POST' class='cm-form'>
-            %s
-            <div class='cm-field'>
-              <input type='text' name='name' value='%s' required placeholder='Channel name' class='cm-input'>
-            </div>
-            <div class='cm-field'>
-              <input type='text' name='topic' value='%s' placeholder='Topic (optional)' class='cm-input'>
-            </div>
-            <button type='submit' class='cm-btn cm-btn--secondary'>Save</button>
-          </form>
-          <div class='cm-item-ops'>
-            %s
-          </div>
-        </div>
-      </details>"
-  [ Html.text (Printf.sprintf "%02d" ((idx + 1)))
-  ; name_html
-  ; (Html.text (c.slug))
-  ; status_badge
-  ; row_note
-  ; slug
-  ; Html.int (c.id)
-  ; csrf_token
-  ; (Html.text (c.name))
-  ; (Html.text ((Option.value ~default:"" c.topic)))
-  ; archive_control ])
+    Html.template
+      "\n\
+      \      <details class='cm-item'>\n\
+      \        <summary>\n\
+      \          <span class='cm-item-pos'>%s</span>\n\
+      \          <span class='cm-item-name'>%s<span \
+       class='cm-section-slug'>/ch/%s</span></span>\n\
+      \          <span class='cm-item-badges'>%s</span>\n\
+      \          <span class='cm-item-meta'>%s<span \
+       class='cm-item-hint'>edit</span></span>\n\
+      \        </summary>\n\
+      \        <div class='cm-item-body'>\n\
+      \          <form action='/c/%s/channels/%s/update' method='POST' \
+       class='cm-form'>\n\
+      \            %s\n\
+      \            <div class='cm-field'>\n\
+      \              <input type='text' name='name' value='%s' required \
+       placeholder='Channel name' class='cm-input'>\n\
+      \            </div>\n\
+      \            <div class='cm-field'>\n\
+      \              <input type='text' name='topic' value='%s' \
+       placeholder='Topic (optional)' class='cm-input'>\n\
+      \            </div>\n\
+      \            <button type='submit' class='cm-btn \
+       cm-btn--secondary'>Save</button>\n\
+      \          </form>\n\
+      \          <div class='cm-item-ops'>\n\
+      \            %s\n\
+      \          </div>\n\
+      \        </div>\n\
+      \      </details>"
+      [
+        Html.text (Printf.sprintf "%02d" (idx + 1));
+        name_html;
+        Html.text c.slug;
+        status_badge;
+        row_note;
+        slug;
+        Html.int c.id;
+        csrf_token;
+        Html.text c.name;
+        Html.text (Option.value ~default:"" c.topic);
+        archive_control;
+      ]
   in
   let channels_block =
     let rows =
-      if channels = [] then (Html.static "<p class='cm-empty'>No channels yet.</p>")
-      else (Html.template "<div class='cm-items'>%s</div>"
-  [ ((Html.join (Html.static "\n")) (List.mapi render_channel_item channels)) ])
+      if channels = [] then
+        Html.static "<p class='cm-empty'>No channels yet.</p>"
+      else
+        Html.template "<div class='cm-items'>%s</div>"
+          [
+            (Html.join (Html.static "\n"))
+              (List.mapi render_channel_item channels);
+          ]
     in
-    (Html.template "
-      <h3 class='cm-subhead'>Live chat channels</h3>
-      <p class='cm-panel-desc'>Live chat channels for real-time discussion in this community. Archive a channel to remove it from the live channel list; you can unarchive it later. The default <code>#general</code> channel and the last active channel cannot be archived.</p>
-      %s
-      %s
-      <details class='cm-add'>
-        <summary>+ Add channel</summary>
-        <div class='cm-add-body'>
-          <form action='/c/%s/channels/add' method='POST' class='cm-form'>
-            %s
-            <input type='text' name='name' required placeholder='Channel name' class='cm-input'>
-            <input type='text' name='topic' placeholder='Topic (optional)' class='cm-input'>
-            <button type='submit' class='cm-btn'>Add channel</button>
-          </form>
-        </div>
-      </details>"
-  [ dominated_note
-  ; rows
-  ; slug
-  ; csrf_token ])
+    Html.template
+      "\n\
+      \      <h3 class='cm-subhead'>Live chat channels</h3>\n\
+      \      <p class='cm-panel-desc'>Live chat channels for real-time \
+       discussion in this community. Archive a channel to remove it from the \
+       live channel list; you can unarchive it later. The default \
+       <code>#general</code> channel and the last active channel cannot be \
+       archived.</p>\n\
+      \      %s\n\
+      \      %s\n\
+      \      <details class='cm-add'>\n\
+      \        <summary>+ Add channel</summary>\n\
+      \        <div class='cm-add-body'>\n\
+      \          <form action='/c/%s/channels/add' method='POST' \
+       class='cm-form'>\n\
+      \            %s\n\
+      \            <input type='text' name='name' required \
+       placeholder='Channel name' class='cm-input'>\n\
+      \            <input type='text' name='topic' placeholder='Topic \
+       (optional)' class='cm-input'>\n\
+      \            <button type='submit' class='cm-btn'>Add channel</button>\n\
+      \          </form>\n\
+      \        </div>\n\
+      \      </details>"
+      [ dominated_note; rows; slug; csrf_token ]
   in
   let sections_inner =
     if not community.sections_enabled then Html.empty
     else begin
       let render_section_item idx (s : Section_store.community_section) =
-        (Html.template "
-          <details class='cm-item'>
-            <summary>
-              <span class='cm-item-pos'>%s</span>
-              <span class='cm-item-name'><span class='cm-section-name'>%s</span><span class='cm-section-slug'>/s/%s</span></span>
-              <span class='cm-item-badges'>%s</span>
-              <span class='cm-item-meta'><span class='cm-item-note'>sort: %s</span><span class='cm-item-hint'>edit</span></span>
-            </summary>
-            <div class='cm-item-body'>
-              <form action='/c/%s/sections/%s/update' method='POST' class='cm-form'>
-                %s
-                <div class='cm-row2'>
-                  <input type='text' name='name' value='%s' required class='cm-input'>
-                  <select name='default_sort' class='cm-select'>
-                    %s%s%s%s
-                  </select>
-                </div>
-                <textarea name='description' rows='2' placeholder='Description (optional)' class='cm-textarea'>%s</textarea>
-                <button type='submit' class='cm-btn cm-btn--secondary'>Save</button>
-              </form>
-              <div class='cm-item-ops'>
-                %s
-                <form action='/c/%s/sections/%s/delete' method='POST' class='cm-form-inline'
-                      onsubmit=\"return confirm('Delete this section? Posts will not be deleted. They will be moved to Uncategorized.')\">
-                  %s
-                  <button type='submit' class='cm-btn-sm cm-btn-sm--danger'>Delete section</button>
-                </form>
-                <span class='cm-muted-note'>Posts move to Uncategorized on delete.</span>
-              </div>
-            </div>
-          </details>"
-  [ Html.text (Printf.sprintf "%02d" ((idx + 1)))
-  ; (Html.text (s.name))
-  ; (Html.text (s.slug))
-  ; (idx_badge ~indexable:s.indexable)
-  ; (Html.text (s.default_sort))
-  ; slug
-  ; Html.int (s.section_id)
-  ; csrf_token
-  ; (Html.text (s.name))
-  ; (sort_option "hot" "Hot" s.default_sort)
-  ; (sort_option "new" "New" s.default_sort)
-  ; (sort_option "top" "Top" s.default_sort)
-  ; (sort_option "active" "Active" s.default_sort)
-  ; (Html.text ((Option.value ~default:"" s.description)))
-  ; (idx_toggle_form ~action:(Printf.sprintf "/c/%s/sections/%d/indexability" (community.slug) s.section_id) ~indexable:s.indexable)
-  ; slug
-  ; Html.int (s.section_id)
-  ; csrf_token ])
+        Html.template
+          "\n\
+          \          <details class='cm-item'>\n\
+          \            <summary>\n\
+          \              <span class='cm-item-pos'>%s</span>\n\
+          \              <span class='cm-item-name'><span \
+           class='cm-section-name'>%s</span><span \
+           class='cm-section-slug'>/s/%s</span></span>\n\
+          \              <span class='cm-item-badges'>%s</span>\n\
+          \              <span class='cm-item-meta'><span \
+           class='cm-item-note'>sort: %s</span><span \
+           class='cm-item-hint'>edit</span></span>\n\
+          \            </summary>\n\
+          \            <div class='cm-item-body'>\n\
+          \              <form action='/c/%s/sections/%s/update' method='POST' \
+           class='cm-form'>\n\
+          \                %s\n\
+          \                <div class='cm-row2'>\n\
+          \                  <input type='text' name='name' value='%s' \
+           required class='cm-input'>\n\
+          \                  <select name='default_sort' class='cm-select'>\n\
+          \                    %s%s%s%s\n\
+          \                  </select>\n\
+          \                </div>\n\
+          \                <textarea name='description' rows='2' \
+           placeholder='Description (optional)' \
+           class='cm-textarea'>%s</textarea>\n\
+          \                <button type='submit' class='cm-btn \
+           cm-btn--secondary'>Save</button>\n\
+          \              </form>\n\
+          \              <div class='cm-item-ops'>\n\
+          \                %s\n\
+          \                <form action='/c/%s/sections/%s/delete' \
+           method='POST' class='cm-form-inline'\n\
+          \                      onsubmit=\"return confirm('Delete this \
+           section? Posts will not be deleted. They will be moved to \
+           Uncategorized.')\">\n\
+          \                  %s\n\
+          \                  <button type='submit' class='cm-btn-sm \
+           cm-btn-sm--danger'>Delete section</button>\n\
+          \                </form>\n\
+          \                <span class='cm-muted-note'>Posts move to \
+           Uncategorized on delete.</span>\n\
+          \              </div>\n\
+          \            </div>\n\
+          \          </details>"
+          [
+            Html.text (Printf.sprintf "%02d" (idx + 1));
+            Html.text s.name;
+            Html.text s.slug;
+            idx_badge ~indexable:s.indexable;
+            Html.text s.default_sort;
+            slug;
+            Html.int s.section_id;
+            csrf_token;
+            Html.text s.name;
+            sort_option "hot" "Hot" s.default_sort;
+            sort_option "new" "New" s.default_sort;
+            sort_option "top" "Top" s.default_sort;
+            sort_option "active" "Active" s.default_sort;
+            Html.text (Option.value ~default:"" s.description);
+            idx_toggle_form
+              ~action:
+                (Printf.sprintf "/c/%s/sections/%d/indexability" community.slug
+                   s.section_id)
+              ~indexable:s.indexable;
+            slug;
+            Html.int s.section_id;
+            csrf_token;
+          ]
       in
       let next_position = List.length sections + 1 in
       let rows =
-        if sections = [] then (Html.static "<p class='cm-empty'>No sections yet.</p>")
-        else (Html.template "<div class='cm-items'>%s</div>"
-  [ ((Html.join (Html.static "\n")) (List.mapi render_section_item sections)) ])
+        if sections = [] then
+          Html.static "<p class='cm-empty'>No sections yet.</p>"
+        else
+          Html.template "<div class='cm-items'>%s</div>"
+            [
+              (Html.join (Html.static "\n"))
+                (List.mapi render_section_item sections);
+            ]
       in
-      (Html.template "
-        <h3 class='cm-subhead' style='margin-top:24px'>Forum sections</h3>
-        <p class='cm-panel-desc'>Organize posts into sections. Deleting a section moves its posts to Uncategorized. Indexable sections and their threads can appear in the public feed, search, and discovery; non-indexable ones are marked <code>noindex</code> and excluded from public discovery.</p>
-        %s
-        %s
-        <details class='cm-add'>
-          <summary>+ Add section</summary>
-          <div class='cm-add-body'>
-            <form action='/c/%s/sections/add' method='POST' class='cm-form'>
-              %s
-              <div class='cm-row2'>
-                <input type='text' name='name' required placeholder='Section name' class='cm-input'>
-                <select name='default_sort' class='cm-select'>
-                  <option value='hot'>Hot</option>
-                  <option value='new'>New</option>
-                  <option value='top'>Top</option>
-                  <option value='active'>Active</option>
-                </select>
-              </div>
-              <textarea name='description' rows='2' placeholder='Description (optional)' class='cm-textarea'></textarea>
-              <input type='hidden' name='position' value='%s'>
-              <button type='submit' class='cm-btn'>Add section</button>
-            </form>
-          </div>
-        </details>"
-  [ dominated_note
-  ; rows
-  ; slug
-  ; csrf_token
-  ; Html.int (next_position) ])
+      Html.template
+        "\n\
+        \        <h3 class='cm-subhead' style='margin-top:24px'>Forum \
+         sections</h3>\n\
+        \        <p class='cm-panel-desc'>Organize posts into sections. \
+         Deleting a section moves its posts to Uncategorized. Indexable \
+         sections and their threads can appear in the public feed, search, and \
+         discovery; non-indexable ones are marked <code>noindex</code> and \
+         excluded from public discovery.</p>\n\
+        \        %s\n\
+        \        %s\n\
+        \        <details class='cm-add'>\n\
+        \          <summary>+ Add section</summary>\n\
+        \          <div class='cm-add-body'>\n\
+        \            <form action='/c/%s/sections/add' method='POST' \
+         class='cm-form'>\n\
+        \              %s\n\
+        \              <div class='cm-row2'>\n\
+        \                <input type='text' name='name' required \
+         placeholder='Section name' class='cm-input'>\n\
+        \                <select name='default_sort' class='cm-select'>\n\
+        \                  <option value='hot'>Hot</option>\n\
+        \                  <option value='new'>New</option>\n\
+        \                  <option value='top'>Top</option>\n\
+        \                  <option value='active'>Active</option>\n\
+        \                </select>\n\
+        \              </div>\n\
+        \              <textarea name='description' rows='2' \
+         placeholder='Description (optional)' class='cm-textarea'></textarea>\n\
+        \              <input type='hidden' name='position' value='%s'>\n\
+        \              <button type='submit' class='cm-btn'>Add section</button>\n\
+        \            </form>\n\
+        \          </div>\n\
+        \        </details>"
+        [ dominated_note; rows; slug; csrf_token; Html.int next_position ]
     end
   in
   let channels_panel =
-    (Html.template "
-      <section class='cm-panel'>
-        <h2 class='cm-panel-title'>Channels &amp; sections</h2>
-        <p class='cm-panel-desc'>Live chat channels and forum sections for this community. Rows are shown in their current order.</p>
-        %s
-        %s
-      </section>"
-  [ channels_block
-  ; sections_inner ])
+    Html.template
+      "\n\
+      \      <section class='cm-panel'>\n\
+      \        <h2 class='cm-panel-title'>Channels &amp; sections</h2>\n\
+      \        <p class='cm-panel-desc'>Live chat channels and forum sections \
+       for this community. Rows are shown in their current order.</p>\n\
+      \        %s\n\
+      \        %s\n\
+      \      </section>"
+      [ channels_block; sections_inner ]
   in
 
   (* ---- Panel: Members ---- *)
@@ -689,68 +888,83 @@ let community_settings_page ?user ?(connected_projects = Html.empty) ?(rail_comm
     let can_edit = is_top_mod || is_admin in
     let desc =
       if is_private then
-        (Html.static "<p class='cm-panel-desc'>Members can read this private community. Top Mods and admins can add or remove members. \
-          Removing a member is not a ban &mdash; it only removes them from the member list. \
-          Moderators and admins may still have access through their role, so they may not appear in this list.</p>")
+        Html.static
+          "<p class='cm-panel-desc'>Members can read this private community. \
+           Top Mods and admins can add or remove members. Removing a member is \
+           not a ban &mdash; it only removes them from the member list. \
+           Moderators and admins may still have access through their role, so \
+           they may not appear in this list.</p>"
       else
-        (Html.static "<p class='cm-panel-desc'>This community is public. Members listed here are saved community members, but access is not restricted while the community is public. \
-          Removing a member only deletes the saved member entry &mdash; it does not ban them. \
-          The member list takes effect again if the community becomes private.</p>")
+        Html.static
+          "<p class='cm-panel-desc'>This community is public. Members listed \
+           here are saved community members, but access is not restricted \
+           while the community is public. Removing a member only deletes the \
+           saved member entry &mdash; it does not ban them. The member list \
+           takes effect again if the community becomes private.</p>"
     in
     let member_rows =
       if members = [] then
-        (Html.static "<p class='cm-empty'>No members in the allow-list yet.</p>")
+        Html.static "<p class='cm-empty'>No members in the allow-list yet.</p>"
       else
-        let rows = (Html.join (Html.static "\n")) (List.map (fun (m : User_store.user) ->
-          let remove_btn =
-            if not can_edit then Html.empty
-            else
-              (Html.template "
-                <form action='/c/%s/settings/members/remove' method='POST' class='cm-form-inline'>
-                  %s
-                  <input type='hidden' name='target_user_id' value='%s'>
-                  <button type='submit' class='cm-btn-sm cm-btn-sm--danger'>Remove member</button>
-                </form>"
-  [ slug
-  ; csrf_token
-  ; Html.int (m.id) ])
-          in
-          (Html.template "
-            <div class='cm-list-row'>
-              <a href='/u/%s' class='cm-user-link'>u/%s</a>
-              %s
-            </div>"
-  [ (Html.text (m.username))
-  ; (Html.text (m.username))
-  ; remove_btn ])
-        ) members) in
-        (Html.template "<div class='cm-list'>%s</div>"
-  [ rows ])
+        let rows =
+          (Html.join (Html.static "\n"))
+            (List.map
+               (fun (m : User_store.user) ->
+                 let remove_btn =
+                   if not can_edit then Html.empty
+                   else
+                     Html.template
+                       "\n\
+                       \                <form \
+                        action='/c/%s/settings/members/remove' method='POST' \
+                        class='cm-form-inline'>\n\
+                       \                  %s\n\
+                       \                  <input type='hidden' \
+                        name='target_user_id' value='%s'>\n\
+                       \                  <button type='submit' \
+                        class='cm-btn-sm cm-btn-sm--danger'>Remove \
+                        member</button>\n\
+                       \                </form>"
+                       [ slug; csrf_token; Html.int m.id ]
+                 in
+                 Html.template
+                   "\n\
+                   \            <div class='cm-list-row'>\n\
+                   \              <a href='/u/%s' class='cm-user-link'>u/%s</a>\n\
+                   \              %s\n\
+                   \            </div>"
+                   [ Html.text m.username; Html.text m.username; remove_btn ])
+               members)
+        in
+        Html.template "<div class='cm-list'>%s</div>" [ rows ]
     in
     let add_form =
       if not is_private then Html.empty
       else if not can_edit then
-        (Html.static "<p class='cm-muted-note'>Only Top Mods and admins can manage members.</p>")
+        Html.static
+          "<p class='cm-muted-note'>Only Top Mods and admins can manage \
+           members.</p>"
       else
-        (Html.template "
-          <form action='/c/%s/settings/members/add' method='POST' class='cm-inline-form' style='margin-top:16px'>
-            %s
-            <input type='text' name='username' required placeholder='Username to add' class='cm-input'>
-            <button type='submit' class='cm-btn'>Add member</button>
-          </form>"
-  [ slug
-  ; csrf_token ])
+        Html.template
+          "\n\
+          \          <form action='/c/%s/settings/members/add' method='POST' \
+           class='cm-inline-form' style='margin-top:16px'>\n\
+          \            %s\n\
+          \            <input type='text' name='username' required \
+           placeholder='Username to add' class='cm-input'>\n\
+          \            <button type='submit' class='cm-btn'>Add member</button>\n\
+          \          </form>"
+          [ slug; csrf_token ]
     in
-    (Html.template "
-      <section class='cm-panel'>
-        <h2 class='cm-panel-title'>Members</h2>
-        %s
-        %s
-        %s
-      </section>"
-  [ desc
-  ; member_rows
-  ; add_form ])
+    Html.template
+      "\n\
+      \      <section class='cm-panel'>\n\
+      \        <h2 class='cm-panel-title'>Members</h2>\n\
+      \        %s\n\
+      \        %s\n\
+      \        %s\n\
+      \      </section>"
+      [ desc; member_rows; add_form ]
   in
 
   (* ---- Panel: Moderation ---- *)
@@ -766,117 +980,156 @@ let community_settings_page ?user ?(connected_projects = Html.empty) ?(rail_comm
         (* Same segmented idiom as visibility/discovery; each segment POSTs the explicit
            allow_downvotes value to the existing route. *)
         let seg value label active =
-          (Html.template "<form action='/c/%s/toggle_downvotes' method='POST' class='cm-form-inline'>%s<input type='hidden' name='allow_downvotes' value='%s'><button type='submit' class='cm-seg-btn%s'>%s</button></form>"
-  [ slug
-  ; csrf_token
-  ; value
-  ; (if active then (Html.static " cm-seg-btn--active") else Html.empty)
-  ; label ])
+          Html.template
+            "<form action='/c/%s/toggle_downvotes' method='POST' \
+             class='cm-form-inline'>%s<input type='hidden' \
+             name='allow_downvotes' value='%s'><button type='submit' \
+             class='cm-seg-btn%s'>%s</button></form>"
+            [
+              slug;
+              csrf_token;
+              value;
+              (if active then Html.static " cm-seg-btn--active" else Html.empty);
+              label;
+            ]
         in
-        (Html.template "
-          <h3 class='cm-subhead' style='margin-top:0'>Moderation tools</h3>
-          <div class='cm-field'>
-            <label class='cm-label'>Downvotes</label>
-            <div class='cm-seg'>%s%s</div>
-            <p class='cm-muted-note' style='margin:6px 0 0'>Only Top Mods and admins can change this.</p>
-          </div>"
-  [ (seg (Html.static "true") (Html.static "Enabled") community.allow_downvotes)
-  ; (seg (Html.static "false") (Html.static "Disabled") (not community.allow_downvotes)) ])
+        Html.template
+          "\n\
+          \          <h3 class='cm-subhead' style='margin-top:0'>Moderation \
+           tools</h3>\n\
+          \          <div class='cm-field'>\n\
+          \            <label class='cm-label'>Downvotes</label>\n\
+          \            <div class='cm-seg'>%s%s</div>\n\
+          \            <p class='cm-muted-note' style='margin:6px 0 0'>Only \
+           Top Mods and admins can change this.</p>\n\
+          \          </div>"
+          [
+            seg (Html.static "true") (Html.static "Enabled")
+              community.allow_downvotes;
+            seg (Html.static "false") (Html.static "Disabled")
+              (not community.allow_downvotes);
+          ]
     in
-    (Html.template "
-      <section class='cm-panel'>
-        <h2 class='cm-panel-title'>Moderation</h2>
-        <p class='cm-panel-desc'>Governance, flagged content, and the public audit trail for this community.</p>
-        <div class='cm-modlinks'>
-          <a href='/c/%s/manage-mods' class='cm-cardlink cm-cardlink--sm'>
-            <div>
-              <p class='cm-cardlink-title'>Manage moderators</p>
-              <p class='cm-cardlink-desc'>Add, promote, and remove moderators &mdash; Council of Equals governance.</p>
-            </div>
-            <span class='cm-cardlink-go'>&rarr;</span>
-          </a>
-          <a href='/c/%s/reports' class='cm-cardlink cm-cardlink--sm'>
-            <div>
-              <p class='cm-cardlink-title'>Reports%s</p>
-              <p class='cm-cardlink-desc'>Review posts and comments flagged by members &mdash; spam, abuse, and rule-breaking content.</p>
-            </div>
-            <span class='cm-cardlink-go'>&rarr;</span>
-          </a>
-          <a href='/c/%s/modlog' class='cm-cardlink cm-cardlink--sm'>
-            <div>
-              <p class='cm-cardlink-title'>Mod log</p>
-              <p class='cm-cardlink-desc'>Public audit trail of moderation actions in this community.</p>
-            </div>
-            <span class='cm-cardlink-go'>&rarr;</span>
-          </a>
-        </div>
-        %s
-      </section>"
-  [ slug
-  ; slug
-  ; (if open_reports_count > 0
-       then (Html.template " <span class='cm-badge cm-badge--active'>%s open</span>"
-  [ Html.int (open_reports_count) ])
-       else Html.empty)
-  ; slug
-  ; modtools_block ])
+    Html.template
+      "\n\
+      \      <section class='cm-panel'>\n\
+      \        <h2 class='cm-panel-title'>Moderation</h2>\n\
+      \        <p class='cm-panel-desc'>Governance, flagged content, and the \
+       public audit trail for this community.</p>\n\
+      \        <div class='cm-modlinks'>\n\
+      \          <a href='/c/%s/manage-mods' class='cm-cardlink \
+       cm-cardlink--sm'>\n\
+      \            <div>\n\
+      \              <p class='cm-cardlink-title'>Manage moderators</p>\n\
+      \              <p class='cm-cardlink-desc'>Add, promote, and remove \
+       moderators &mdash; Council of Equals governance.</p>\n\
+      \            </div>\n\
+      \            <span class='cm-cardlink-go'>&rarr;</span>\n\
+      \          </a>\n\
+      \          <a href='/c/%s/reports' class='cm-cardlink cm-cardlink--sm'>\n\
+      \            <div>\n\
+      \              <p class='cm-cardlink-title'>Reports%s</p>\n\
+      \              <p class='cm-cardlink-desc'>Review posts and comments \
+       flagged by members &mdash; spam, abuse, and rule-breaking content.</p>\n\
+      \            </div>\n\
+      \            <span class='cm-cardlink-go'>&rarr;</span>\n\
+      \          </a>\n\
+      \          <a href='/c/%s/modlog' class='cm-cardlink cm-cardlink--sm'>\n\
+      \            <div>\n\
+      \              <p class='cm-cardlink-title'>Mod log</p>\n\
+      \              <p class='cm-cardlink-desc'>Public audit trail of \
+       moderation actions in this community.</p>\n\
+      \            </div>\n\
+      \            <span class='cm-cardlink-go'>&rarr;</span>\n\
+      \          </a>\n\
+      \        </div>\n\
+      \        %s\n\
+      \      </section>"
+      [
+        slug;
+        slug;
+        (if open_reports_count > 0 then
+           Html.template
+             " <span class='cm-badge cm-badge--active'>%s open</span>"
+             [ Html.int open_reports_count ]
+         else Html.empty);
+        slug;
+        modtools_block;
+      ]
   in
 
   (* ---- Panel: Bans ---- *)
   let bans_panel =
     let banned_section =
       if banned_users = [] then
-        (Html.static "<p class='cm-empty'>No users are currently banned from this community.</p>")
+        Html.static
+          "<p class='cm-empty'>No users are currently banned from this \
+           community.</p>"
       else
-        let rows = (Html.join (Html.static "\n")) (List.map (fun (b : User_store.user) ->
-          (Html.template "
-            <div class='cm-list-row'>
-              <a href='/u/%s' class='cm-user-link'>u/%s</a>
-              <form action='/unban-community-user' method='POST' class='cm-form-inline'>
-                %s
-                <input type='hidden' name='target_user_id' value='%s'>
-                <input type='hidden' name='community_id' value='%s'>
-                <input type='hidden' name='community_slug' value='%s'>
-                <button type='submit' class='cm-btn-sm cm-btn-sm--ok'>Unban</button>
-              </form>
-            </div>"
-  [ (Html.text (b.username))
-  ; (Html.text (b.username))
-  ; csrf_token
-  ; Html.int (b.id)
-  ; Html.int (community.id)
-  ; slug ])
-        ) banned_users) in
-        (Html.template "<div class='cm-list'>%s</div>"
-  [ rows ])
+        let rows =
+          (Html.join (Html.static "\n"))
+            (List.map
+               (fun (b : User_store.user) ->
+                 Html.template
+                   "\n\
+                   \            <div class='cm-list-row'>\n\
+                   \              <a href='/u/%s' class='cm-user-link'>u/%s</a>\n\
+                   \              <form action='/unban-community-user' \
+                    method='POST' class='cm-form-inline'>\n\
+                   \                %s\n\
+                   \                <input type='hidden' name='target_user_id' \
+                    value='%s'>\n\
+                   \                <input type='hidden' name='community_id' \
+                    value='%s'>\n\
+                   \                <input type='hidden' name='community_slug' \
+                    value='%s'>\n\
+                   \                <button type='submit' class='cm-btn-sm \
+                    cm-btn-sm--ok'>Unban</button>\n\
+                   \              </form>\n\
+                   \            </div>"
+                   [
+                     Html.text b.username;
+                     Html.text b.username;
+                     csrf_token;
+                     Html.int b.id;
+                     Html.int community.id;
+                     slug;
+                   ])
+               banned_users)
+        in
+        Html.template "<div class='cm-list'>%s</div>" [ rows ]
     in
-    (Html.template "
-      <section class='cm-panel cm-danger'>
-        <h2 class='cm-panel-title'>Bans</h2>
-        <p class='cm-panel-desc'>Banned users cannot post or comment in this community. Bans are logged to the mod log.</p>
-        <form action='/ban-community-user' method='POST' class='cm-inline-form'>
-          %s
-          <input type='hidden' name='community_id' value='%s'>
-          <input type='text' name='target_username' required placeholder='Username to ban' class='cm-input'>
-          <button type='submit' class='cm-btn'>Ban user</button>
-        </form>
-        <h3 class='cm-subhead'>Banned users</h3>
-        %s
-      </section>"
-  [ csrf_token
-  ; Html.int (community.id)
-  ; banned_section ])
+    Html.template
+      "\n\
+      \      <section class='cm-panel cm-danger'>\n\
+      \        <h2 class='cm-panel-title'>Bans</h2>\n\
+      \        <p class='cm-panel-desc'>Banned users cannot post or comment in \
+       this community. Bans are logged to the mod log.</p>\n\
+      \        <form action='/ban-community-user' method='POST' \
+       class='cm-inline-form'>\n\
+      \          %s\n\
+      \          <input type='hidden' name='community_id' value='%s'>\n\
+      \          <input type='text' name='target_username' required \
+       placeholder='Username to ban' class='cm-input'>\n\
+      \          <button type='submit' class='cm-btn'>Ban user</button>\n\
+      \        </form>\n\
+      \        <h3 class='cm-subhead'>Banned users</h3>\n\
+      \        %s\n\
+      \      </section>"
+      [ csrf_token; Html.int community.id; banned_section ]
   in
 
   (* Already-escaped, form-bearing HTML from the pure removal-pages module; this page adds
      only the panel chrome and never inspects, rewrites, or re-escapes it. *)
   let projects_panel =
-    (Html.template "<section class='cm-panel'>
-        <h2 class='cm-panel-title'>Connected projects</h2>
-        <p class='cm-panel-desc'>Open-source projects that use this community as their Earde home.</p>
-        %s
-      </section>"
-  [ connected_projects ])
+    Html.template
+      "<section class='cm-panel'>\n\
+      \        <h2 class='cm-panel-title'>Connected projects</h2>\n\
+      \        <p class='cm-panel-desc'>Open-source projects that use this \
+       community as their Earde home.</p>\n\
+      \        %s\n\
+      \      </section>"
+      [ connected_projects ]
   in
 
   let main_panel =
@@ -931,7 +1184,8 @@ let community_settings_page ?user ?(connected_projects = Html.empty) ?(rail_comm
     Community_pages.launch_knowledge_sidebar ~community ~channels ~sections
       ~settings_active:true ~can_manage:true ()
   in
-  Community_shell.launch_community_page ?user ~request ~rail_communities ~community ~sidebar
-    ~page_class:"launch-community-settings"
+  Community_shell.launch_community_page ?user ~request ~rail_communities
+    ~community ~sidebar ~page_class:"launch-community-settings"
     ~title:(Printf.sprintf "Settings — /c/%s" community.slug)
-    ~content:(Page_shell.private_replay_guard ~community content) ()
+    ~content:(Page_shell.private_replay_guard ~community content)
+    ()

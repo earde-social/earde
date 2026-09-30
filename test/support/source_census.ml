@@ -18,7 +18,7 @@ let production_sources =
   let lib_files =
     Sys.readdir lib |> Array.to_list
     |> List.filter (fun f ->
-           Filename.check_suffix f ".ml" || Filename.check_suffix f ".mli")
+        Filename.check_suffix f ".ml" || Filename.check_suffix f ".mli")
     |> List.sort compare
     |> List.map (fun f -> ("lib/" ^ f, read ("lib/" ^ f)))
   in
@@ -47,7 +47,30 @@ let count_everywhere needle =
     (fun acc (_, body) -> acc + Html_assert.count_sub body needle)
     0 implementations
 
+(* A backslash-newline inside a string literal continues it without the
+   newline or the next line's leading blanks. Joining those continuations
+   reads the markup as it renders, wherever the formatter breaks a line. *)
+let join_continuations src =
+  let b = Buffer.create (String.length src) in
+  let n = String.length src in
+  let rec go i =
+    if i >= n then ()
+    else if src.[i] = '\\' && i + 1 < n && src.[i + 1] = '\n' then (
+      let j = ref (i + 2) in
+      while !j < n && (src.[!j] = ' ' || src.[!j] = '\t') do
+        incr j
+      done;
+      go !j)
+    else (
+      Buffer.add_char b src.[i];
+      go (i + 1))
+  in
+  go 0;
+  Buffer.contents b
+
 (* The modules that build the launch documents: their top bars, shared
-   scripts and badge calls. *)
+   scripts and badge calls, with literal continuations joined. *)
 let launch_shells =
-  String.concat "\n" [ read "lib/page_shell.ml"; read "lib/community_shell.ml" ]
+  join_continuations
+    (String.concat "\n"
+       [ read "lib/page_shell.ml"; read "lib/community_shell.ml" ])

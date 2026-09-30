@@ -36,9 +36,7 @@ let ( let* ) = Result.bind
 (* Same limits Project_identity enforces for the permanent project identity,
    and the same ones open_source_projects checks durably. *)
 let max_name_scalars = 120
-
 let max_slug_bytes = 80
-
 let max_description_scalars = 2000
 
 (* --- Shared byte-level helpers (mirrors Project_identity) ---------------- *)
@@ -107,8 +105,7 @@ let is_slug_char c = (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')
    byte length is character length here. *)
 let slug_structure_ok s =
   let n = String.length s in
-  n >= 1
-  && n <= max_slug_bytes
+  n >= 1 && n <= max_slug_bytes
   && s.[0] <> '-'
   && s.[n - 1] <> '-'
   &&
@@ -139,11 +136,11 @@ let normalize_line_endings s =
   let b = Buffer.create n in
   let i = ref 0 in
   while !i < n do
-    (if s.[!i] = '\r' then begin
-       Buffer.add_char b '\n';
-       if !i + 1 < n && s.[!i + 1] = '\n' then incr i
-     end
-     else Buffer.add_char b s.[!i]);
+    if s.[!i] = '\r' then begin
+      Buffer.add_char b '\n';
+      if !i + 1 < n && s.[!i + 1] = '\n' then incr i
+    end
+    else Buffer.add_char b s.[!i];
     incr i
   done;
   Buffer.contents b
@@ -191,8 +188,11 @@ let of_fields fields =
     match fields with
     | [] -> (
         match acc with
-        | { p_name = Some name; p_slug = Some slug;
-            p_description = Some description } ->
+        | {
+         p_name = Some name;
+         p_slug = Some slug;
+         p_description = Some description;
+        } ->
             Ok (name, slug, description)
         | _ -> Error Invalid_form)
     | ("community_name", raw) :: rest -> (
@@ -216,7 +216,5 @@ let of_fields fields =
   Ok { community_name; community_slug; community_description }
 
 let community_name t = t.community_name
-
 let community_slug t = t.community_slug
-
 let community_description t = t.community_description

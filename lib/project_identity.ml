@@ -66,13 +66,9 @@ let ( let* ) = Result.bind
    a verified draft never holds more repositories, so a larger context is
    malformed, not large. *)
 let max_selected_snapshots = 2000
-
 let max_name_scalars = 120
-
 let max_slug_bytes = 80
-
 let max_description_scalars = 2000
-
 let max_website_scalars = 2048
 
 (* --- Shared byte-level helpers ------------------------------------------- *)
@@ -158,7 +154,6 @@ let validate_name raw =
    project living at /projects/new. No speculative reservations — widen this
    set only when a new exact static /projects/<value> route lands. *)
 let reserved_slugs = [ "new" ]
-
 let is_slug_char c = (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')
 
 (* ^[a-z0-9]+(-[a-z0-9]+)*$ checked positionally: every byte is [a-z0-9] or a
@@ -166,8 +161,7 @@ let is_slug_char c = (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')
    byte length is character length here. *)
 let slug_structure_ok s =
   let n = String.length s in
-  n >= 1
-  && n <= max_slug_bytes
+  n >= 1 && n <= max_slug_bytes
   && s.[0] <> '-'
   && s.[n - 1] <> '-'
   &&
@@ -196,11 +190,11 @@ let normalize_line_endings s =
   let b = Buffer.create n in
   let i = ref 0 in
   while !i < n do
-    (if s.[!i] = '\r' then begin
-       Buffer.add_char b '\n';
-       if !i + 1 < n && s.[!i + 1] = '\n' then incr i
-     end
-     else Buffer.add_char b s.[!i]);
+    if s.[!i] = '\r' then begin
+      Buffer.add_char b '\n';
+      if !i + 1 < n && s.[!i + 1] = '\n' then incr i
+    end
+    else Buffer.add_char b s.[!i];
     incr i
   done;
   Buffer.contents b
@@ -261,9 +255,7 @@ let validate_website = function
               | None -> false
             in
             let host_ok =
-              match Uri.host uri with
-              | Some host -> host <> ""
-              | None -> false
+              match Uri.host uri with Some host -> host <> "" | None -> false
             in
             if scheme_ok && host_ok && Uri.userinfo uri = None then
               Ok (Some url)
@@ -284,7 +276,8 @@ let validate_primary ~kind ~selected = function
   | None -> (
       match kind with
       | Project -> Error Primary_repository_required
-      | Organization | Ecosystem | Foundation | Working_group | Other -> Ok None)
+      | Organization | Ecosystem | Foundation | Working_group | Other -> Ok None
+      )
 
 (* Deterministic order: selected-context structure, non-empty rule, name,
    slug, description, website, primary. The first failure is the whole
@@ -302,13 +295,8 @@ let create ~kind ~name ~slug ~description ~website_url ~selected_snapshot_ids
   Ok { kind; name; slug; description; website_url; primary_snapshot_id }
 
 let kind t = t.kind
-
 let name t = t.name
-
 let slug t = t.slug
-
 let description t = t.description
-
 let website_url t = t.website_url
-
 let primary_snapshot_id t = t.primary_snapshot_id

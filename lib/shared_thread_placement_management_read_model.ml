@@ -8,7 +8,6 @@
    contract. *)
 
 open Lwt.Infix
-
 module Stp = Shared_thread_placements
 module Cc = Community_connections
 
@@ -17,10 +16,7 @@ type counterpart = { counterpart_name : string; counterpart_slug : string }
 let counterpart_name { counterpart_name; _ } = counterpart_name
 let counterpart_slug { counterpart_slug; _ } = counterpart_slug
 
-type section_option = {
-  section_option_id : int;
-  section_option_name : string;
-}
+type section_option = { section_option_id : int; section_option_name : string }
 
 let section_option_id { section_option_id; _ } = section_option_id
 let section_option_name { section_option_name; _ } = section_option_name
@@ -95,8 +91,7 @@ let subjects_post_id { subjects_post_id; _ } = subjects_post_id
 let subjects_origin_community_id { subjects_origin_community_id; _ } =
   subjects_origin_community_id
 
-let subjects_destination_community_id { subjects_destination_community_id; _ }
-    =
+let subjects_destination_community_id { subjects_destination_community_id; _ } =
   subjects_destination_community_id
 
 type withdrawal_grant = {
@@ -151,29 +146,21 @@ let positive id = Int64.compare id 0L > 0
 let load_community_query =
   let open Caqti_request.Infix in
   (Caqti_type.(t2 (t2 string int) bool)
-   ->? Caqti_type.(
-         t2
-           (t2 (t2 int string) (t2 string string))
-           (t3 string bool bool)))
-  "SELECT c.id, c.slug, c.name, c.visibility, c.onboarding_state, \
-          c.discoverable, c.sections_enabled \
-   FROM communities c \
-   WHERE c.slug = $1 \
-     AND (EXISTS (SELECT 1 FROM community_moderators m \
-                  WHERE m.community_id = c.id AND m.user_id = $2 \
-                    AND m.role = 'top_mod') \
-          OR ($3 AND EXISTS (SELECT 1 FROM users u \
-                             WHERE u.id = $2 AND u.is_admin)))"
+  ->? Caqti_type.(
+        t2 (t2 (t2 int string) (t2 string string)) (t3 string bool bool)))
+    "SELECT c.id, c.slug, c.name, c.visibility, c.onboarding_state, \
+     c.discoverable, c.sections_enabled FROM communities c WHERE c.slug = $1 \
+     AND (EXISTS (SELECT 1 FROM community_moderators m WHERE m.community_id = \
+     c.id AND m.user_id = $2 AND m.role = 'top_mod') OR ($3 AND EXISTS (SELECT \
+     1 FROM users u WHERE u.id = $2 AND u.is_admin)))"
 
 (* This community's own sections, loaded once for every accept form on the
    page — never once per placement row. *)
 let sections_query =
   let open Caqti_request.Infix in
   (Caqti_type.int ->* Caqti_type.(t2 int string))
-  "SELECT cs.id, cs.name \
-   FROM community_sections cs \
-   WHERE cs.community_id = $1 \
-   ORDER BY cs.position ASC, cs.name ASC, cs.id ASC"
+    "SELECT cs.id, cs.name FROM community_sections cs WHERE cs.community_id = \
+     $1 ORDER BY cs.position ASC, cs.name ASC, cs.id ASC"
 
 (* The four queues. Pending queues read oldest first — they are review
    queues; accepted queues read newest acceptance first — they are a
@@ -183,75 +170,62 @@ let sections_query =
 let incoming_query =
   let open Caqti_request.Infix in
   (Caqti_type.(t2 int int)
-   ->* Caqti_type.(
-         t2
-           (t2 (t2 int64 int) (t2 string string))
-           (t3 string (option string) string)))
-  "SELECT sp.id, sp.post_id, other.slug, other.name, p.title, \
-          sp.request_note, sp.created_at::text \
-   FROM shared_thread_placements sp \
-   JOIN posts p ON p.id = sp.post_id \
-   JOIN communities other ON other.id = sp.origin_community_id \
-   WHERE sp.destination_community_id = $1 AND sp.status = 'pending' \
-   ORDER BY sp.created_at ASC, sp.id ASC \
-   LIMIT $2"
+  ->* Caqti_type.(
+        t2
+          (t2 (t2 int64 int) (t2 string string))
+          (t3 string (option string) string)))
+    "SELECT sp.id, sp.post_id, other.slug, other.name, p.title, \
+     sp.request_note, sp.created_at::text FROM shared_thread_placements sp \
+     JOIN posts p ON p.id = sp.post_id JOIN communities other ON other.id = \
+     sp.origin_community_id WHERE sp.destination_community_id = $1 AND \
+     sp.status = 'pending' ORDER BY sp.created_at ASC, sp.id ASC LIMIT $2"
 
 let outgoing_query =
   let open Caqti_request.Infix in
   (Caqti_type.(t2 int int)
-   ->* Caqti_type.(
-         t2
-           (t2 (t2 int64 int) (t2 string string))
-           (t3 string (option string) string)))
-  "SELECT sp.id, sp.post_id, other.slug, other.name, p.title, \
-          sp.request_note, sp.created_at::text \
-   FROM shared_thread_placements sp \
-   JOIN posts p ON p.id = sp.post_id \
-   JOIN communities other ON other.id = sp.destination_community_id \
-   WHERE sp.origin_community_id = $1 AND sp.status = 'pending' \
-   ORDER BY sp.created_at ASC, sp.id ASC \
-   LIMIT $2"
+  ->* Caqti_type.(
+        t2
+          (t2 (t2 int64 int) (t2 string string))
+          (t3 string (option string) string)))
+    "SELECT sp.id, sp.post_id, other.slug, other.name, p.title, \
+     sp.request_note, sp.created_at::text FROM shared_thread_placements sp \
+     JOIN posts p ON p.id = sp.post_id JOIN communities other ON other.id = \
+     sp.destination_community_id WHERE sp.origin_community_id = $1 AND \
+     sp.status = 'pending' ORDER BY sp.created_at ASC, sp.id ASC LIMIT $2"
 
 let shared_into_query =
   let open Caqti_request.Infix in
   (Caqti_type.(t2 int int)
-   ->* Caqti_type.(
-         t2
-           (t2 (t2 int64 int) (t2 string string))
-           (t3 string (option string) (option string))))
-  "SELECT sp.id, sp.post_id, other.slug, other.name, p.title, \
-          cs.name, sp.reviewed_at::text \
-   FROM shared_thread_placements sp \
-   JOIN posts p ON p.id = sp.post_id \
-   JOIN communities other ON other.id = sp.origin_community_id \
-   LEFT JOIN community_sections cs ON cs.id = sp.destination_section_id \
-   WHERE sp.destination_community_id = $1 AND sp.status = 'accepted' \
-   ORDER BY sp.reviewed_at DESC, sp.id DESC \
-   LIMIT $2"
+  ->* Caqti_type.(
+        t2
+          (t2 (t2 int64 int) (t2 string string))
+          (t3 string (option string) (option string))))
+    "SELECT sp.id, sp.post_id, other.slug, other.name, p.title, cs.name, \
+     sp.reviewed_at::text FROM shared_thread_placements sp JOIN posts p ON \
+     p.id = sp.post_id JOIN communities other ON other.id = \
+     sp.origin_community_id LEFT JOIN community_sections cs ON cs.id = \
+     sp.destination_section_id WHERE sp.destination_community_id = $1 AND \
+     sp.status = 'accepted' ORDER BY sp.reviewed_at DESC, sp.id DESC LIMIT $2"
 
 let shared_from_query =
   let open Caqti_request.Infix in
   (Caqti_type.(t2 int int)
-   ->* Caqti_type.(
-         t2
-           (t2 (t2 int64 int) (t2 string string))
-           (t3 string (option string) (option string))))
-  "SELECT sp.id, sp.post_id, other.slug, other.name, p.title, \
-          cs.name, sp.reviewed_at::text \
-   FROM shared_thread_placements sp \
-   JOIN posts p ON p.id = sp.post_id \
-   JOIN communities other ON other.id = sp.destination_community_id \
-   LEFT JOIN community_sections cs ON cs.id = sp.destination_section_id \
-   WHERE sp.origin_community_id = $1 AND sp.status = 'accepted' \
-   ORDER BY sp.reviewed_at DESC, sp.id DESC \
-   LIMIT $2"
+  ->* Caqti_type.(
+        t2
+          (t2 (t2 int64 int) (t2 string string))
+          (t3 string (option string) (option string))))
+    "SELECT sp.id, sp.post_id, other.slug, other.name, p.title, cs.name, \
+     sp.reviewed_at::text FROM shared_thread_placements sp JOIN posts p ON \
+     p.id = sp.post_id JOIN communities other ON other.id = \
+     sp.destination_community_id LEFT JOIN community_sections cs ON cs.id = \
+     sp.destination_section_id WHERE sp.origin_community_id = $1 AND sp.status \
+     = 'accepted' ORDER BY sp.reviewed_at DESC, sp.id DESC LIMIT $2"
 
 let subjects_query =
   let open Caqti_request.Infix in
   (Caqti_type.int64 ->? Caqti_type.(t3 int int int))
-  "SELECT sp.post_id, sp.origin_community_id, sp.destination_community_id \
-   FROM shared_thread_placements sp \
-   WHERE sp.id = $1"
+    "SELECT sp.post_id, sp.origin_community_id, sp.destination_community_id \
+     FROM shared_thread_placements sp WHERE sp.id = $1"
 
 (* The withdrawal gate in one statement: the route community must be the
    placement's origin, and the caller its original requester, a current
@@ -261,17 +235,13 @@ let subjects_query =
 let authorize_withdrawal_query =
   let open Caqti_request.Infix in
   (Caqti_type.(t2 (t2 string int64) (t2 int bool))
-   ->? Caqti_type.(t3 int string int))
-  "SELECT c.id, c.slug, sp.post_id \
-   FROM communities c \
-   JOIN shared_thread_placements sp ON sp.origin_community_id = c.id \
-   WHERE c.slug = $1 AND sp.id = $2 \
-     AND (sp.requested_by_user_id = $3 \
-          OR EXISTS (SELECT 1 FROM community_moderators m \
-                     WHERE m.community_id = c.id AND m.user_id = $3 \
-                       AND m.role = 'top_mod') \
-          OR ($4 AND EXISTS (SELECT 1 FROM users u \
-                             WHERE u.id = $3 AND u.is_admin)))"
+  ->? Caqti_type.(t3 int string int))
+    "SELECT c.id, c.slug, sp.post_id FROM communities c JOIN \
+     shared_thread_placements sp ON sp.origin_community_id = c.id WHERE c.slug \
+     = $1 AND sp.id = $2 AND (sp.requested_by_user_id = $3 OR EXISTS (SELECT 1 \
+     FROM community_moderators m WHERE m.community_id = c.id AND m.user_id = \
+     $3 AND m.role = 'top_mod') OR ($4 AND EXISTS (SELECT 1 FROM users u WHERE \
+     u.id = $3 AND u.is_admin)))"
 
 (* === decoding === *)
 
@@ -302,12 +272,12 @@ let canonical_note note =
   | Error _ -> false
   | Ok value -> Stp.request_note value = note
 
-let decode_pending
-    (((id, post_id), (slug, name)), (title, note, requested_at)) =
+let decode_pending (((id, post_id), (slug, name)), (title, note, requested_at))
+    =
   match decode_counterpart ~slug ~name with
   | Some counterpart
-    when positive id && post_id > 0 && canonical_note note
-         && requested_at <> "" ->
+    when positive id && post_id > 0 && canonical_note note && requested_at <> ""
+    ->
       Some
         {
           pending_placement_id = id;
@@ -375,8 +345,8 @@ let load_for_manager (module C : Caqti_lwt.CONNECTION) ~user_id
     | Ok None -> Lwt.return (Ok None)
     | Ok
         (Some
-          ( ((community_id, stored_slug), (name, visibility_raw)),
-            (onboarding_raw, discoverable, sections_enabled) )) -> (
+           ( ((community_id, stored_slug), (name, visibility_raw)),
+             (onboarding_raw, discoverable, sections_enabled) )) -> (
         match
           ( community_id > 0
             && String.equal stored_slug community_slug
@@ -423,10 +393,9 @@ let load_for_manager (module C : Caqti_lwt.CONNECTION) ~user_id
                                   ( collect_all decode_section section_rows,
                                     collect_all decode_pending incoming_rows,
                                     collect_all decode_pending outgoing_rows,
-                                    collect_all decode_accepted
-                                      shared_into_rows,
-                                    collect_all decode_accepted
-                                      shared_from_rows )
+                                    collect_all decode_accepted shared_into_rows,
+                                    collect_all decode_accepted shared_from_rows
+                                  )
                                 with
                                 | ( Some sections,
                                     Some incoming,
@@ -440,8 +409,7 @@ let load_for_manager (module C : Caqti_lwt.CONNECTION) ~user_id
                                               view_community_id = community_id;
                                               view_community_name = name;
                                               view_community_slug = stored_slug;
-                                              view_community_eligible =
-                                                eligible;
+                                              view_community_eligible = eligible;
                                               view_sections_enabled =
                                                 sections_enabled;
                                               view_section_options = sections;
@@ -450,11 +418,11 @@ let load_for_manager (module C : Caqti_lwt.CONNECTION) ~user_id
                                               view_shared_into = shared_into;
                                               view_shared_from = shared_from;
                                             }))
-                                | _ -> Lwt.return (Error Inconsistent_data))))))))
+                                | _ -> Lwt.return (Error Inconsistent_data))))))
+            ))
 
 let load_placement_subjects (module C : Caqti_lwt.CONNECTION) ~placement_id =
-  if not (positive placement_id) then
-    Lwt.return (Error Invalid_placement_id)
+  if not (positive placement_id) then Lwt.return (Error Invalid_placement_id)
   else
     C.find_opt subjects_query placement_id >>= function
     | Error _ -> Lwt.return (Error Storage_error)

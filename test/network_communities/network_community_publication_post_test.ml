@@ -21,53 +21,32 @@ module Pi = Earde.Project_identity
 let ( let* ) = Lwt.bind
 
 open Caqti_request.Infix
-
 module Hd = Earde.Network_community_publication_handlers
-
 module Pgs = Earde.Network_community_publication_pages
-
 module Rmh = Earde.Project_home_removal_handlers
 
 let case = Case.quick
-
 let counting_loader = Http_fixture.counting_loader
-
 let ok_loader = Http_fixture.ok_loader
-
 let status_of = Http_fixture.status_of
-
 let or_fail = Db_fixture.or_fail
-
 let insert_user = Db_fixture.insert_user
-
 let exec = Db_fixture.exec
-
 let find = Db_fixture.find
-
 let insert_community = Community_fixture.insert_community
-
 let make_draft = Network_community_fixture.make_draft
-
 let snapshot = Network_community_fixture.snapshot
-
 let check_unchanged = Network_community_fixture.check_unchanged
-
 let check_published = Network_community_fixture.check_published
-
 let search_lists = Network_community_fixture.search_lists
 
 (* The two patterns this feature owns, and the neighbours the flow lands
    on. *)
 let get_pattern = "/c/:slug/setup"
-
 let post_pattern = "/c/:slug/publish"
-
 let get_target slug = Printf.sprintf "/c/%s/setup" slug
-
 let post_target slug = Printf.sprintf "/c/%s/publish" slug
-
 let community_target slug = Printf.sprintf "/c/%s" slug
-
 let settings_target slug = Printf.sprintf "/c/%s/settings" slug
 
 let project_side_remove ~project ~community =
@@ -89,10 +68,11 @@ let make ~mode ~load_config =
 (* Exactly the four application fields, in the page's own order. *)
 let fields ?(name = "Ncpb Community Home") ?(slug = "ncpb-home")
     ?(description = "") ?(visibility = "public") () =
-  [ ("community_name", name);
+  [
+    ("community_name", name);
     ("community_slug", slug);
     ("community_description", description);
-    ("publication_visibility", visibility)
+    ("publication_visibility", visibility);
   ]
 
 (* ============ DB-free: the route shape ============ *)
@@ -104,10 +84,11 @@ let fields ?(name = "Ncpb Community Home") ?(slug = "ncpb-home")
    no SQL. *)
 let route_router () =
   Dream.router
-    [ Dream.get get_pattern (fun req -> make_get ~mode:Ob.Off req);
+    [
+      Dream.get get_pattern (fun req -> make_get ~mode:Ob.Off req);
       Dream.post post_pattern (fun req ->
           make ~mode:Ob.Off ~load_config:(fun () -> ok_loader ()) req);
-      Dream.get "/c/:slug/settings" (fun _req -> Dream.html "settings")
+      Dream.get "/c/:slug/settings" (fun _req -> Dream.html "settings");
     ]
 
 let route_run ~method_ ~target =
@@ -115,67 +96,75 @@ let route_run ~method_ ~target =
     (Http_fixture.gate_run ~method_ ~target (route_router ()))
 
 let route_cases =
-  [ case "publication route: the registered POST pattern is exactly the \
-          action the setup page's form emits" (fun () ->
+  [
+    case
+      "publication route: the registered POST pattern is exactly the action \
+       the setup page's form emits" (fun () ->
         let html =
           Pgs.network_community_publication_page
             ~community:
-              { Pgs.name = "Ncpb Home";
+              {
+                Pgs.name = "Ncpb Home";
                 slug = "ncpb-alpha-home";
-                description = None
+                description = None;
               }
             ~project:
-              { Pgs.name = "Ncpb Project";
+              {
+                Pgs.name = "Ncpb Project";
                 slug = "ncpb-alpha";
                 namespace_login = "ncpb-owner";
-                kind = Pi.Project
+                kind = Pi.Project;
               }
             ~values:
-              { Pgs.community_name = "";
+              {
+                Pgs.community_name = "";
                 community_slug = "";
                 community_description = "";
-                publication_visibility = ""
+                publication_visibility = "";
               }
             ~feedback:None ()
         in
-        Alcotest.(check bool) "the page posts to the registered route" true
+        Alcotest.(check bool)
+          "the page posts to the registered route" true
           (Html_assert.contains html
              (Printf.sprintf "action='%s'" (post_target "ncpb-alpha-home")));
-        Alcotest.(check int) "exactly one form" 1
-          (Html_assert.occurrences (Html_assert.panel_fragment html) "<form"))
-  ; case "publication route: the POST target resolves once, the setup GET \
-          stays registered, and no alias exists" (fun () ->
+        Alcotest.(check int)
+          "exactly one form" 1
+          (Html_assert.occurrences (Html_assert.panel_fragment html) "<form"));
+    case
+      "publication route: the POST target resolves once, the setup GET stays \
+       registered, and no alias exists" (fun () ->
         Http_fixture.check_clean_redirect "post dispatches" "/bring"
           (route_run ~method_:`POST ~target:(post_target "ncpb-alpha-home"));
         Http_fixture.check_clean_redirect "get dispatches" "/bring"
           (route_run ~method_:`GET ~target:(get_target "ncpb-alpha-home"));
         (* The neighbouring settings GET is unshadowed by either. *)
-        Alcotest.(check int) "settings unshadowed" 200
+        Alcotest.(check int)
+          "settings unshadowed" 200
           (status_of
              (route_run ~method_:`GET ~target:(settings_target "ncpb-any")));
         List.iter
           (fun (label, method_, target) ->
             Alcotest.(check int)
-              (label ^ ": unrouted")
-              404
+              (label ^ ": unrouted") 404
               (status_of (route_run ~method_ ~target)))
-          [ ("GET on the POST path", `GET, post_target "ncpb-alpha-home");
+          [
+            ("GET on the POST path", `GET, post_target "ncpb-alpha-home");
             ("POST on the GET path", `POST, get_target "ncpb-alpha-home");
             ("trailing slash", `POST, post_target "ncpb-alpha-home" ^ "/");
             ("sub-path", `POST, post_target "ncpb-alpha-home" ^ "/confirm");
             ("plural alias", `POST, "/c/ncpb-alpha-home/publishes");
             ("legacy alias", `POST, "/c/ncpb-alpha-home/publication");
             ("bare", `POST, "/publish");
-            ("segmentless", `POST, "/c/publish")
-          ])
+            ("segmentless", `POST, "/c/publish");
+          ]);
   ]
 
 (* ======== DB-free: shared rollout and authentication gates ======== *)
 
 let post_run ?session ?(headers = []) ~mode ~load_config () =
   Http_fixture.gate_run ?session ~headers ~method_:`POST
-    ~target:(post_target "ncpb-any")
-    (make ~mode ~load_config)
+    ~target:(post_target "ncpb-any") (make ~mode ~load_config)
 
 let routed_post ?session ?(headers = []) ?(mode = Ob.Public) ~load_config () =
   Http_fixture.gate_run ?session ~headers ~method_:`POST
@@ -184,8 +173,10 @@ let routed_post ?session ?(headers = []) ?(mode = Ob.Public) ~load_config () =
        [ Dream.post post_pattern (fun req -> make ~mode ~load_config req) ])
 
 let gate_cases =
-  [ case "POST publish off: clean /bring redirect before any route read, \
-          configuration load, or SQL" (fun () ->
+  [
+    case
+      "POST publish off: clean /bring redirect before any route read, \
+       configuration load, or SQL" (fun () ->
         let loader, calls = counting_loader (ok_loader ()) in
         Http_fixture.check_clean_redirect "off" "/bring"
           (Http_fixture.gate_response "off"
@@ -195,12 +186,14 @@ let gate_cases =
           (Http_fixture.gate_response "off routed"
              (routed_post ~session:Http_fixture.admin_session ~mode:Ob.Off
                 ~load_config:loader ()));
-        Alcotest.(check int) "loader never called" 0 !calls)
-  ; case "POST publish: anonymous and malformed sessions to /login, loader \
-          untouched" (fun () ->
+        Alcotest.(check int) "loader never called" 0 !calls);
+    case
+      "POST publish: anonymous and malformed sessions to /login, loader \
+       untouched" (fun () ->
         let loader, calls = counting_loader (ok_loader ()) in
         Http_fixture.check_clean_redirect "anonymous" "/login"
-          (Http_fixture.gate_response "anonymous" (routed_post ~load_config:loader ()));
+          (Http_fixture.gate_response "anonymous"
+             (routed_post ~load_config:loader ()));
         List.iter
           (fun raw ->
             Http_fixture.check_clean_redirect ("user_id " ^ raw) "/login"
@@ -215,18 +208,19 @@ let gate_cases =
              (routed_post
                 ~session:[ ("is_admin", "true") ]
                 ~mode:Ob.Admins ~load_config:loader ()));
-        Alcotest.(check int) "loader never called" 0 !calls)
-  ; case "POST publish admins mode: a non-admin is redirected before the \
-          configuration load" (fun () ->
+        Alcotest.(check int) "loader never called" 0 !calls);
+    case
+      "POST publish admins mode: a non-admin is redirected before the \
+       configuration load" (fun () ->
         let loader, calls = counting_loader (ok_loader ()) in
         Http_fixture.check_clean_redirect "non-admin" "/bring"
           (Http_fixture.gate_response "non-admin"
              (routed_post ~session:Http_fixture.logged_in ~mode:Ob.Admins
                 ~load_config:loader ()));
-        Alcotest.(check int) "loader never called" 0 !calls)
-  ; case "POST publish: authorized sessions continue past the gates, and \
-          an unrouted request is the generic 404 before configuration"
-      (fun () ->
+        Alcotest.(check int) "loader never called" 0 !calls);
+    case
+      "POST publish: authorized sessions continue past the gates, and an \
+       unrouted request is the generic 404 before configuration" (fun () ->
         (* Routerless: past the gates the missing route parameter is the
            next rejection, so reaching that defensive 404 proves the gates
            passed with no configuration read and no SQL (no sql_pool is
@@ -237,11 +231,11 @@ let gate_cases =
             Http_fixture.gate_response label
               (post_run ~session ~mode ~load_config:loader ())
           in
-          Alcotest.(check int) (label ^ ": defensive 404") 404
-            (status_of response);
+          Alcotest.(check int)
+            (label ^ ": defensive 404")
+            404 (status_of response);
           Alcotest.(check (option string))
-            (label ^ ": no-store")
-            (Some "no-store")
+            (label ^ ": no-store") (Some "no-store")
             (Dream.header response "Cache-Control");
           Alcotest.(check int) (label ^ ": loader untouched") 0 !calls
         in
@@ -251,47 +245,60 @@ let gate_cases =
         (* Routed and authorized with a good configuration and origin: the
            next rejection is the missing content type, proving the whole
            prefix ran and still no SQL happened. *)
-        Alcotest.(check int) "routed: 400 content type" 400
+        Alcotest.(check int)
+          "routed: 400 content type" 400
           (status_of
              (Http_fixture.gate_response "routed"
                 (routed_post ~session:Http_fixture.logged_in
                    ~headers:[ ("Origin", "https://earde.com") ]
                    ~load_config:(fun () -> ok_loader ())
-                   ()))))
+                   ()))));
   ]
 
 (* ============ DB-free: configuration and origin ============ *)
 
 let config_origin_cases =
-  [ case "POST publish: a configuration failure is a generic 503 that names \
-          nothing" (fun () ->
-        let loader, calls = counting_loader (Github_fixture.gac_of_values ~origin:None ()) in
+  [
+    case
+      "POST publish: a configuration failure is a generic 503 that names \
+       nothing" (fun () ->
+        let loader, calls =
+          counting_loader (Github_fixture.gac_of_values ~origin:None ())
+        in
         let response =
           Http_fixture.gate_response "config failure"
             (routed_post ~session:Http_fixture.logged_in
                ~headers:
-                 [ ("Origin", "https://earde.com");
-                   ("Content-Type", "application/x-www-form-urlencoded")
+                 [
+                   ("Origin", "https://earde.com");
+                   ("Content-Type", "application/x-www-form-urlencoded");
                  ]
                ~load_config:loader ())
         in
         Alcotest.(check int) "503" 503 (status_of response);
         Alcotest.(check int) "loader called once" 1 !calls;
-        Alcotest.(check (option string)) "no-store" (Some "no-store")
+        Alcotest.(check (option string))
+          "no-store" (Some "no-store")
           (Dream.header response "Cache-Control");
-        Alcotest.(check (option string)) "referrer policy"
-          (Some Earde.Request_origin.referrer_policy)
+        Alcotest.(check (option string))
+          "referrer policy" (Some Earde.Request_origin.referrer_policy)
           (Dream.header response "Referrer-Policy");
         let body = Lwt_main.run (Dream.body response) in
         List.iter
           (fun needle ->
-            Alcotest.(check bool) ("no leak " ^ needle) false
+            Alcotest.(check bool)
+              ("no leak " ^ needle) false
               (Html_assert.contains body needle))
-          [ "EARDE_PUBLIC_ORIGIN"; "GITHUB_APP"; "Missing"; "Invalid";
-            "public_origin"
-          ])
-  ; case "POST publish origin gate: the exact same-origin policy, before \
-          any form parse" (fun () ->
+          [
+            "EARDE_PUBLIC_ORIGIN";
+            "GITHUB_APP";
+            "Missing";
+            "Invalid";
+            "public_origin";
+          ]);
+    case
+      "POST publish origin gate: the exact same-origin policy, before any form \
+       parse" (fun () ->
         let origin_run label ?sec_fetch_site origin =
           let headers =
             (match origin with Some o -> [ ("Origin", o) ] | None -> [])
@@ -306,7 +313,8 @@ let config_origin_cases =
                ())
         in
         let rejected label ?sec_fetch_site origin =
-          Alcotest.(check int) (label ^ ": 403") 403
+          Alcotest.(check int)
+            (label ^ ": 403") 403
             (status_of (origin_run label ?sec_fetch_site origin))
         in
         (* Past the origin gate the missing content type is the next
@@ -331,14 +339,16 @@ let config_origin_cases =
         rejected "cross-site" ~sec_fetch_site:"cross-site" None;
         rejected "same-site metadata" ~sec_fetch_site:"same-site" None;
         let leak = origin_run "reflection" (Some "https://evil.example") in
-        Alcotest.(check bool) "origin never reflected" false
-          (Html_assert.contains (Lwt_main.run (Dream.body leak)) "evil.example"))
+        Alcotest.(check bool)
+          "origin never reflected" false
+          (Html_assert.contains (Lwt_main.run (Dream.body leak)) "evil.example"));
   ]
 
 (* ==================== DB-free: CSRF ==================== *)
 
 let csrf_pipeline () =
-  Dream.set_secret Github_fixture.cookie_secret @@ Dream.memory_sessions
+  Dream.set_secret Github_fixture.cookie_secret
+  @@ Dream.memory_sessions
   @@ fun req ->
   let* () = Dream.set_session_field req "user_id" "42" in
   match Dream.method_ req with
@@ -347,8 +357,9 @@ let csrf_pipeline () =
         (Dream.csrf_token req ^ "\n" ^ Dream.csrf_token ~valid_for:(-60.) req)
   | _ ->
       Dream.router
-        [ Dream.post post_pattern (fun r ->
-              make ~mode:Ob.Public ~load_config:(fun () -> ok_loader ()) r)
+        [
+          Dream.post post_pattern (fun r ->
+              make ~mode:Ob.Public ~load_config:(fun () -> ok_loader ()) r);
         ]
         req
 
@@ -363,19 +374,22 @@ let csrf_post ?cookie ?(content_type = true) pipeline body_fields =
   match
     Lwt_main.run
       (pipeline
-         (Dream.request ~method_:`POST ~target:(post_target "ncpb-any")
-            ~headers (Http_fixture.form_body body_fields)))
+         (Dream.request ~method_:`POST ~target:(post_target "ncpb-any") ~headers
+            (Http_fixture.form_body body_fields)))
   with
   | response -> `Response response
   | exception _ -> `Db_boundary
 
 let csrf_rejected label expected result =
-  Alcotest.(check int) (label ^ ": status") expected
+  Alcotest.(check int)
+    (label ^ ": status") expected
     (status_of (Http_fixture.gate_response label result))
 
 let csrf_cases =
-  [ case "POST publish CSRF: Dream verification gates every submission; \
-          only a verified form reaches the database" (fun () ->
+  [
+    case
+      "POST publish CSRF: Dream verification gates every submission; only a \
+       verified form reaches the database" (fun () ->
         let pipeline = csrf_pipeline () in
         let cookie, fresh, expired = Http_fixture.mint_tokens "mint" pipeline in
         let valid = fields () in
@@ -388,8 +402,7 @@ let csrf_cases =
         Http_fixture.check_db_boundary "missing token re-renders"
           (csrf_post ~cookie pipeline valid);
         Http_fixture.check_db_boundary "invalid token re-renders"
-          (csrf_post ~cookie pipeline
-             (("dream.csrf", "not-a-token") :: valid));
+          (csrf_post ~cookie pipeline (("dream.csrf", "not-a-token") :: valid));
         Http_fixture.check_db_boundary "expired token re-renders"
           (csrf_post ~cookie pipeline (("dream.csrf", expired) :: valid));
         Http_fixture.check_db_boundary "duplicate tokens re-render"
@@ -410,9 +423,10 @@ let csrf_cases =
            CSRF passed, Dream stripped its own field, and the store call is
            the next thing to run. *)
         Http_fixture.check_db_boundary "verified form continues"
-          (csrf_post ~cookie pipeline (("dream.csrf", fresh) :: valid)))
-  ; case "POST publish CSRF: a verified token with an invalid form still \
-          re-authorizes through the database" (fun () ->
+          (csrf_post ~cookie pipeline (("dream.csrf", fresh) :: valid)));
+    case
+      "POST publish CSRF: a verified token with an invalid form still \
+       re-authorizes through the database" (fun () ->
         let pipeline = csrf_pipeline () in
         let cookie, fresh, _ = Http_fixture.mint_tokens "mint" pipeline in
         (* Every parser rejection re-renders the owner-authorized page,
@@ -423,13 +437,14 @@ let csrf_cases =
             Http_fixture.check_db_boundary label
               (csrf_post ~cookie pipeline
                  (("dream.csrf", fresh) :: body_fields)))
-          [ ("unknown field", ("ncpb_unknown", "x") :: fields ());
+          [
+            ("unknown field", ("ncpb_unknown", "x") :: fields ());
             ("blank name", fields ~name:"   " ());
             ("uppercase slug", fields ~slug:"Ncpb-Home" ());
             ( "control byte in description",
               fields ~description:"ncpb\001body" () );
-            ("unknown visibility", fields ~visibility:"private" ())
-          ])
+            ("unknown visibility", fields ~visibility:"private" ());
+          ]);
   ]
 
 (* ================= Database-gated integration ================= *)
@@ -437,44 +452,40 @@ let csrf_cases =
 (* Distinctive credential-shaped fixtures. None may appear in any page,
    redirect, header, or cookie this feature produces. *)
 let access_marker = "gho_NCPB_ACCESS_TOKEN_SECRET"
-
 let refresh_marker = "ghr_NCPB_REFRESH_TOKEN"
-
 let pkce_marker = "NCPB_PKCE_VERIFIER_VALUE"
-
 let state_marker = "NCPB_OAUTH_STATE_VALUE"
-
 let secret_marker = "NCPB_CLIENT_SECRET_VALUE"
 
 let credential_markers =
-  [ ("access token", access_marker);
+  [
+    ("access token", access_marker);
     ("refresh token", refresh_marker);
     ("PKCE verifier", pkce_marker);
     ("OAuth state", state_marker);
     ("client secret", secret_marker);
     ("external installation id", "956000001");
-    ("external account id", "956100001")
+    ("external account id", "956100001");
   ]
 
 let q_cleanup =
   List.map
     (fun sql -> (Caqti_type.unit ->. Caqti_type.unit) sql)
-    [ "DELETE FROM project_home_audit_events \
-       WHERE project_id IN \
-         (SELECT id FROM open_source_projects \
-          WHERE forge_namespace_id BETWEEN 956100001 AND 956100999)"
-      ; "DELETE FROM open_source_projects \
-       WHERE forge_namespace_id BETWEEN 956100001 AND 956100999"
-    ; "DELETE FROM project_onboarding_drafts \
-       WHERE github_installation_record_id IN \
-         (SELECT id FROM github_installations \
-          WHERE github_installation_id BETWEEN 956000001 AND 956000999)"
-    ; "DELETE FROM communities WHERE slug LIKE 'ncpb-%'"
-    ; "DELETE FROM users WHERE username LIKE 'ncpb_%'"
-    ; "DELETE FROM github_installations \
-       WHERE github_installation_id BETWEEN 956000001 AND 956000999"
-    ; "DELETE FROM rate_limits WHERE endpoint LIKE '/c/ncpb-%'"
-    ; "DELETE FROM rate_limits WHERE endpoint LIKE '/projects/ncpb-%'"
+    [
+      "DELETE FROM project_home_audit_events WHERE project_id IN (SELECT id \
+       FROM open_source_projects WHERE forge_namespace_id BETWEEN 956100001 \
+       AND 956100999)";
+      "DELETE FROM open_source_projects WHERE forge_namespace_id BETWEEN \
+       956100001 AND 956100999";
+      "DELETE FROM project_onboarding_drafts WHERE \
+       github_installation_record_id IN (SELECT id FROM github_installations \
+       WHERE github_installation_id BETWEEN 956000001 AND 956000999)";
+      "DELETE FROM communities WHERE slug LIKE 'ncpb-%'";
+      "DELETE FROM users WHERE username LIKE 'ncpb_%'";
+      "DELETE FROM github_installations WHERE github_installation_id BETWEEN \
+       956000001 AND 956000999";
+      "DELETE FROM rate_limits WHERE endpoint LIKE '/c/ncpb-%'";
+      "DELETE FROM rate_limits WHERE endpoint LIKE '/projects/ncpb-%'";
     ]
 
 (* The shared authenticated-mutation limiter buckets by (client ip, path).
@@ -484,45 +495,36 @@ let q_cleanup =
    wires it. *)
 let q_clear_limits =
   (Caqti_type.unit ->. Caqti_type.unit)
-  "DELETE FROM rate_limits \
-   WHERE endpoint LIKE '/c/ncpb-%' OR endpoint LIKE '/projects/ncpb-%'"
+    "DELETE FROM rate_limits WHERE endpoint LIKE '/c/ncpb-%' OR endpoint LIKE \
+     '/projects/ncpb-%'"
 
 let q_count_by_slug = Network_community_fixture.q_count_by_slug
-
 let q_community_state = Network_community_fixture.q_community_state
-
 let q_delete_sections = Network_community_fixture.q_delete_sections
-
 let q_set_verification = Home_request_fixture.q_set_verification
-
 let q_mark_removed = Home_request_fixture.q_mark_removed
-
 let q_insert_moderator = Community_fixture.q_insert_moderator
-
 let q_remove_moderator = Community_fixture.q_remove_moderator
-
 let q_set_moderator_role = Community_fixture.q_set_moderator_role
-
 let q_insert_member = Community_fixture.q_insert_member
-
 let q_set_admin = Community_fixture.q_set_admin
 
 let q_verification =
   (Caqti_type.int64 ->! Caqti_type.string)
-  "SELECT verification_status FROM open_source_projects WHERE id = $1"
+    "SELECT verification_status FROM open_source_projects WHERE id = $1"
 
 let q_relation_status =
   (Caqti_type.int64 ->! Caqti_type.string)
-  "SELECT status FROM community_projects WHERE id = $1"
+    "SELECT status FROM community_projects WHERE id = $1"
 
 let q_insert_post =
   (Caqti_type.(t2 int int) ->! Caqti_type.int)
-  "INSERT INTO posts (title, content, community_id, user_id) \
-   VALUES ('Ncpb Post', 'Ncpb body', $1, $2) RETURNING id"
+    "INSERT INTO posts (title, content, community_id, user_id) VALUES ('Ncpb \
+     Post', 'Ncpb body', $1, $2) RETURNING id"
 
 let q_count_posts =
   (Caqti_type.int ->! Caqti_type.int)
-  "SELECT COUNT(*) FROM posts WHERE community_id = $1"
+    "SELECT COUNT(*) FROM posts WHERE community_id = $1"
 
 let db_case name f =
   Alcotest.test_case name `Quick (fun () ->
@@ -544,8 +546,7 @@ let db_case name f =
              let* () = cleanup () in
              Lwt.finalize
                (fun () -> f ~url conn)
-               (fun () ->
-                 Lwt.finalize cleanup (fun () -> C.disconnect ()))))
+               (fun () -> Lwt.finalize cleanup (fun () -> C.disconnect ()))))
 
 (* === the real production pipeline shape ===
 
@@ -559,7 +560,6 @@ let db_case name f =
    identity is sticky: a request that already carries a session keeps its
    own user, so independent cookies stay independent under concurrency. *)
 let shared_identity : (int * bool) option ref = ref None
-
 let shared_pipeline = ref None
 
 let identity_middleware handler request =
@@ -593,17 +593,18 @@ let allowing_limiter =
     ~cleanup:ignore
 
 let build_pipeline_with ~limited ~url =
-  Dream.sql_pool ~size:2 url @@ Dream.set_secret Github_fixture.cookie_secret
+  Dream.sql_pool ~size:2 url
+  @@ Dream.set_secret Github_fixture.cookie_secret
   @@ Dream.memory_sessions @@ identity_middleware
   @@ Dream.router
-       [ Dream.get "/mint" (fun req -> Dream.respond (Dream.csrf_token req));
+       [
+         Dream.get "/mint" (fun req -> Dream.respond (Dream.csrf_token req));
          Dream.get get_pattern (fun req -> make_get ~mode:Ob.Public req);
          Dream.post post_pattern
            (limited (fun req ->
-                make ~mode:Ob.Public
-                  ~load_config:(fun () -> ok_loader ())
-                  req));
-         Dream.post "/projects/:project_slug/community-home/:community_slug/remove"
+                make ~mode:Ob.Public ~load_config:(fun () -> ok_loader ()) req));
+         Dream.post
+           "/projects/:project_slug/community-home/:community_slug/remove"
            (limited (fun req ->
                 Rmh.make_project_side_home_removal_handler ~mode:Ob.Public
                   ~load_config:(fun () -> ok_loader ())
@@ -615,7 +616,7 @@ let build_pipeline_with ~limited ~url =
                   req));
          Dream.get "/c/:slug" Earde.Community_handlers.community_page_handler;
          Dream.get "/c/:slug/settings"
-           Earde.Community_settings_handlers.community_settings_handler
+           Earde.Community_settings_handlers.community_settings_handler;
        ]
 
 let build_pipeline ~url = build_pipeline_with ~limited ~url
@@ -632,7 +633,6 @@ let as_user ?(admin_session = false) uid =
   shared_identity := Some (uid, admin_session)
 
 let as_anonymous () = shared_identity := None
-
 let clear_limits conn = exec conn "clear rate limits" q_clear_limits ()
 
 let do_get ?pipeline ?cookie ~url ~target () =
@@ -657,8 +657,8 @@ let do_post ?pipeline ?conn ?(origin = Some "https://earde.com") ~url ~cookie
   in
   let headers =
     (match origin with Some o -> [ ("Origin", o) ] | None -> [])
-    @ [ ("Content-Type", "application/x-www-form-urlencoded");
-        ("Cookie", cookie)
+    @ [
+        ("Content-Type", "application/x-www-form-urlencoded"); ("Cookie", cookie);
       ]
   in
   let* response =
@@ -693,41 +693,60 @@ let open_setup label ~url ~slug uid =
   let* response, body = do_get ~url ~target:(get_target slug) () in
   Alcotest.(check int) (label ^ ": setup page 200") 200 (status_of response);
   Lwt.return
-    (Http_fixture.session_cookie label response, Http_fixture.csrf_of_page label body, body)
+    ( Http_fixture.session_cookie label response,
+      Http_fixture.csrf_of_page label body,
+      body )
 
 let check_clean_redirect label expected response body =
   Alcotest.(check int) (label ^ ": 303") 303 (status_of response);
-  Alcotest.(check (option string)) (label ^ ": Location") (Some expected)
+  Alcotest.(check (option string))
+    (label ^ ": Location") (Some expected)
     (Dream.header response "Location");
-  Alcotest.(check (option string)) (label ^ ": no-store") (Some "no-store")
+  Alcotest.(check (option string))
+    (label ^ ": no-store") (Some "no-store")
     (Dream.header response "Cache-Control");
-  Alcotest.(check (option string)) (label ^ ": no-cache") (Some "no-cache")
+  Alcotest.(check (option string))
+    (label ^ ": no-cache") (Some "no-cache")
     (Dream.header response "Pragma");
-  Alcotest.(check (option string)) (label ^ ": no-referrer")
-    (Some "no-referrer")
+  Alcotest.(check (option string))
+    (label ^ ": no-referrer") (Some "no-referrer")
     (Dream.header response "Referrer-Policy");
   Alcotest.(check string) (label ^ ": empty body") "" body
 
 let check_generic_404 label response body =
   Alcotest.(check int) (label ^ ": 404") 404 (status_of response);
-  Alcotest.(check (option string)) (label ^ ": no-store") (Some "no-store")
+  Alcotest.(check (option string))
+    (label ^ ": no-store") (Some "no-store")
     (Dream.header response "Cache-Control");
-  Alcotest.(check bool) (label ^ ": generic copy") true
+  Alcotest.(check bool)
+    (label ^ ": generic copy") true
     (Html_assert.contains body "This page does not exist.")
 
 let check_generic_500 label response body =
   Alcotest.(check int) (label ^ ": 500") 500 (status_of response);
-  Alcotest.(check (option string)) (label ^ ": no-store") (Some "no-store")
+  Alcotest.(check (option string))
+    (label ^ ": no-store") (Some "no-store")
     (Dream.header response "Cache-Control");
-  Alcotest.(check bool) (label ^ ": generic copy") true
+  Alcotest.(check bool)
+    (label ^ ": generic copy") true
     (Html_assert.contains body "Something went wrong on our side.");
   List.iter
     (fun needle ->
-      Alcotest.(check bool) (label ^ ": no detail " ^ needle) false
+      Alcotest.(check bool)
+        (label ^ ": no detail " ^ needle)
+        false
         (Html_assert.contains body needle))
-    [ "communities_slug_key"; "community_projects"; "open_source_projects";
-      "Caqti"; "PostgreSQL"; "SELECT"; "search_path"; "Inconsistent";
-      "Storage_error"; "ncpb_void"
+    [
+      "communities_slug_key";
+      "community_projects";
+      "open_source_projects";
+      "Caqti";
+      "PostgreSQL";
+      "SELECT";
+      "search_path";
+      "Inconsistent";
+      "Storage_error";
+      "ncpb_void";
     ]
 
 (* The re-rendered publication form: the requested status, the exact
@@ -735,18 +754,29 @@ let check_generic_500 label response body =
    route under the community's current slug. *)
 let check_rerender label ~status ~feedback ~slug response body =
   Alcotest.(check int) (label ^ ": status") status (status_of response);
-  Alcotest.(check (option string)) (label ^ ": no-store") (Some "no-store")
+  Alcotest.(check (option string))
+    (label ^ ": no-store") (Some "no-store")
     (Dream.header response "Cache-Control");
-  Alcotest.(check (option string)) (label ^ ": referrer policy")
+  Alcotest.(check (option string))
+    (label ^ ": referrer policy")
     (Some Earde.Request_origin.referrer_policy)
     (Dream.header response "Referrer-Policy");
-  Alcotest.(check bool) (label ^ ": feedback copy") true
+  Alcotest.(check bool)
+    (label ^ ": feedback copy")
+    true
     (Html_assert.contains body feedback);
-  Alcotest.(check bool) (label ^ ": fresh CSRF field") true
+  Alcotest.(check bool)
+    (label ^ ": fresh CSRF field")
+    true
     (Html_assert.contains body "name=\"dream.csrf\"");
-  Alcotest.(check bool) (label ^ ": posts back to this route") true
-    (Html_assert.contains body (Printf.sprintf "action='%s'" (post_target slug)));
-  Alcotest.(check int) (label ^ ": exactly one form") 1
+  Alcotest.(check bool)
+    (label ^ ": posts back to this route")
+    true
+    (Html_assert.contains body
+       (Printf.sprintf "action='%s'" (post_target slug)));
+  Alcotest.(check int)
+    (label ^ ": exactly one form")
+    1
     (Html_assert.occurrences (Html_assert.panel_fragment body) "<form")
 
 (* The existing community-page unavailable answer, asserted exactly as the
@@ -754,13 +784,16 @@ let check_rerender label ~status ~feedback ~slug response body =
    community authorization. *)
 let check_community_unavailable label response body =
   Alcotest.(check int) (label ^ ": 404") 404 (status_of response);
-  Alcotest.(check bool) (label ^ ": generic copy") true
+  Alcotest.(check bool)
+    (label ^ ": generic copy") true
     (Html_assert.contains body "This community does not exist.")
 
 let check_body_no_credentials label body =
   List.iter
     (fun (what, needle) ->
-      Alcotest.(check bool) (label ^ ": body free of " ^ what) false
+      Alcotest.(check bool)
+        (label ^ ": body free of " ^ what)
+        false
         (Html_assert.contains body needle))
     credential_markers
 
@@ -772,7 +805,9 @@ let check_no_credentials label response body =
   in
   List.iter
     (fun (what, needle) ->
-      Alcotest.(check bool) (label ^ ": headers free of " ^ what) false
+      Alcotest.(check bool)
+        (label ^ ": headers free of " ^ what)
+        false
         (Html_assert.contains headers needle))
     credential_markers
 
@@ -802,8 +837,9 @@ let replace_substring haystack ~needle ~replacement =
 (* === success: Public === *)
 
 let public_success_case =
-  db_case "POST publish: a top moderator's Public submission publishes the \
-           community and redirects to its final public home" (fun ~url conn ->
+  db_case
+    "POST publish: a top moderator's Public submission publishes the community \
+     and redirects to its final public home" (fun ~url conn ->
       let* owner = insert_user conn "ncpb_owner" in
       let* reader = insert_user conn "ncpb_reader" in
       let* project, cid, rid =
@@ -818,26 +854,30 @@ let public_success_case =
       let* cookie, token, page =
         open_setup "setup" ~url ~slug:"ncpb-alpha-home" owner
       in
-      Alcotest.(check bool) "the form posts to the POST route" true
+      Alcotest.(check bool)
+        "the form posts to the POST route" true
         (Html_assert.contains page
            (Printf.sprintf "action='%s'" (post_target "ncpb-alpha-home")));
       let* response, body =
-        do_post ~conn ~url ~cookie ~target:(post_target "ncpb-alpha-home")
+        do_post ~conn ~url ~cookie
+          ~target:(post_target "ncpb-alpha-home")
           ~token
           ~body_fields:
             (fields ~name:"Ncpb Alpha Hub" ~slug:"ncpb-alpha-hub"
-               ~description:"A durable hub description."
-               ~visibility:"public" ())
+               ~description:"A durable hub description." ~visibility:"public" ())
           ()
       in
-      check_clean_redirect "published" (community_target "ncpb-alpha-hub")
+      check_clean_redirect "published"
+        (community_target "ncpb-alpha-hub")
         response body;
       check_no_credentials "published redirect" response body;
       (* No query, fragment, result token, or internal identifier — and
          never the settings route. *)
       List.iter
         (fun needle ->
-          Alcotest.(check bool) ("Location free of " ^ needle) false
+          Alcotest.(check bool)
+            ("Location free of " ^ needle)
+            false
             (Html_assert.contains (location response) needle))
         [ "?"; "#"; "published"; "ok="; "settings" ];
       (* The exact durable lifecycle: published, public, indexable,
@@ -857,26 +897,28 @@ let public_success_case =
       let* response, page_body =
         do_get ~url ~cookie ~target:(community_target "ncpb-alpha-hub") ()
       in
-      Alcotest.(check int) "publisher reads the community" 200
-        (status_of response);
-      Alcotest.(check bool) "the published name renders" true
+      Alcotest.(check int)
+        "publisher reads the community" 200 (status_of response);
+      Alcotest.(check bool)
+        "the published name renders" true
         (Html_assert.contains page_body "Ncpb Alpha Hub");
-      Alcotest.(check bool) "a Public community is indexable" false
+      Alcotest.(check bool)
+        "a Public community is indexable" false
         (Html_assert.contains page_body "content='noindex'");
       check_no_credentials "published community page" response page_body;
       let* reader_cookie, _ = open_session "reader" ~url reader in
       let* response, _ =
         do_get ~url ~cookie:reader_cookie
-          ~target:(community_target "ncpb-alpha-hub") ()
+          ~target:(community_target "ncpb-alpha-hub")
+          ()
       in
-      Alcotest.(check int) "an unrelated user reads it" 200
-        (status_of response);
+      Alcotest.(check int) "an unrelated user reads it" 200 (status_of response);
       as_anonymous ();
       let* response, _ =
         do_get ~url ~target:(community_target "ncpb-alpha-hub") ()
       in
-      Alcotest.(check int) "an anonymous visitor reads it" 200
-        (status_of response);
+      Alcotest.(check int)
+        "an anonymous visitor reads it" 200 (status_of response);
       (* The old slug is gone: no alias, no redirect. *)
       let* response, body =
         do_get ~url ~target:(community_target "ncpb-alpha-home") ()
@@ -898,20 +940,21 @@ let public_success_case =
 (* === success: Unlisted === *)
 
 let unlisted_success_case =
-  db_case "POST publish: an Unlisted submission stays reachable by URL but \
-           out of indexing and discovery" (fun ~url conn ->
+  db_case
+    "POST publish: an Unlisted submission stays reachable by URL but out of \
+     indexing and discovery" (fun ~url conn ->
       let* owner = insert_user conn "ncpb_unowner" in
       let* project, cid, rid =
-        make_draft conn ~user:owner ~ext_id:956000002L
-          ~project_slug:"ncpb-unl" ~slug:"ncpb-unl-home"
-          ~name:"Ncpb Unlisted Home"
+        make_draft conn ~user:owner ~ext_id:956000002L ~project_slug:"ncpb-unl"
+          ~slug:"ncpb-unl-home" ~name:"Ncpb Unlisted Home"
       in
       let* before = snapshot "before" conn ~cid ~project ~rid in
       let* cookie, token, _ =
         open_setup "setup" ~url ~slug:"ncpb-unl-home" owner
       in
       let* response, body =
-        do_post ~conn ~url ~cookie ~target:(post_target "ncpb-unl-home")
+        do_post ~conn ~url ~cookie
+          ~target:(post_target "ncpb-unl-home")
           ~token
           ~body_fields:
             (fields ~name:"Ncpb Unlisted Home" ~slug:"ncpb-unl-home"
@@ -921,12 +964,12 @@ let unlisted_success_case =
       (* Publishing under the unchanged slug: normal success, no false
          conflict handling. *)
       check_clean_redirect "published unlisted"
-        (community_target "ncpb-unl-home") response body;
+        (community_target "ncpb-unl-home")
+        response body;
       let* () =
         check_published "durable" conn ~cid ~project ~rid ~before
-          ~name:"Ncpb Unlisted Home" ~description:"<null>"
-          ~slug:"ncpb-unl-home" ~old_slug:"ncpb-unl-home" ~indexable:false
-          ~discoverable:false
+          ~name:"Ncpb Unlisted Home" ~description:"<null>" ~slug:"ncpb-unl-home"
+          ~old_slug:"ncpb-unl-home" ~indexable:false ~discoverable:false
       in
       (* Direct anonymous reachability under existing public
          authorization. *)
@@ -934,9 +977,9 @@ let unlisted_success_case =
       let* response, page_body =
         do_get ~url ~target:(community_target "ncpb-unl-home") ()
       in
-      Alcotest.(check int) "anonymous direct URL works" 200
-        (status_of response);
-      Alcotest.(check bool) "but it is marked noindex" true
+      Alcotest.(check int) "anonymous direct URL works" 200 (status_of response);
+      Alcotest.(check bool)
+        "but it is marked noindex" true
         (Html_assert.contains page_body "content='noindex'");
       (* And it is absent from discovery. *)
       let* () =
@@ -948,18 +991,16 @@ let unlisted_success_case =
 (* === form parsing: 422 rendering and safe value preservation === *)
 
 let long_name = "Ncpb " ^ String.make 130 'n'
-
 let long_description = String.make 2100 'd'
 
 let parser_rejection_case =
-  db_case "POST publish: every parser rejection is a 422 re-render that \
-           preserves only provably safe values and mutates nothing"
-    (fun ~url conn ->
+  db_case
+    "POST publish: every parser rejection is a 422 re-render that preserves \
+     only provably safe values and mutates nothing" (fun ~url conn ->
       let* owner = insert_user conn "ncpb_fowner" in
       let* project, cid, rid =
-        make_draft conn ~user:owner ~ext_id:956000003L
-          ~project_slug:"ncpb-form" ~slug:"ncpb-form-home"
-          ~name:"Ncpb Form Home"
+        make_draft conn ~user:owner ~ext_id:956000003L ~project_slug:"ncpb-form"
+          ~slug:"ncpb-form-home" ~name:"Ncpb Form Home"
       in
       let* before = snapshot "before" conn ~cid ~project ~rid in
       let* cookie, token, _ =
@@ -982,13 +1023,15 @@ let parser_rejection_case =
       check_no_credentials "invalid form" response body;
       List.iter
         (fun needle ->
-          Alcotest.(check bool) ("invalid form reflects no " ^ needle) false
+          Alcotest.(check bool)
+            ("invalid form reflects no " ^ needle)
+            false
             (Html_assert.contains body needle))
-        [ "ncpb_planted"; "Ncpb Planted Name"; "ncpb-planted";
-          "Planted body."
-        ];
-      Alcotest.(check bool) "the controls are blank" true
-        (Html_assert.contains body "name='community_slug' maxlength='80' value=''");
+        [ "ncpb_planted"; "Ncpb Planted Name"; "ncpb-planted"; "Planted body." ];
+      Alcotest.(check bool)
+        "the controls are blank" true
+        (Html_assert.contains body
+           "name='community_slug' maxlength='80' value=''");
       (* A duplicated known field is structurally invalid too, and reflects
          nothing. *)
       let* token = mint_token "duplicate" ~url ~cookie in
@@ -1004,7 +1047,9 @@ let parser_rejection_case =
         response body;
       List.iter
         (fun needle ->
-          Alcotest.(check bool) ("duplicate reflects no " ^ needle) false
+          Alcotest.(check bool)
+            ("duplicate reflects no " ^ needle)
+            false
             (Html_assert.contains body needle))
         [ "ncpb-dup-one"; "ncpb-dup-two" ];
       (* 2. Semantic name: the exact submitted values survive. *)
@@ -1019,12 +1064,17 @@ let parser_rejection_case =
       check_rerender "invalid name" ~status:422
         ~feedback:"Enter a community name we can use." ~slug:"ncpb-form-home"
         response body;
-      Alcotest.(check bool) "name preserved" true (Html_assert.contains body long_name);
-      Alcotest.(check bool) "slug preserved" true
+      Alcotest.(check bool)
+        "name preserved" true
+        (Html_assert.contains body long_name);
+      Alcotest.(check bool)
+        "slug preserved" true
         (Html_assert.contains body "value='ncpb-kept-slug'");
-      Alcotest.(check bool) "description preserved" true
+      Alcotest.(check bool)
+        "description preserved" true
         (Html_assert.contains body ">Kept body.</textarea>");
-      Alcotest.(check bool) "choice preserved" true
+      Alcotest.(check bool)
+        "choice preserved" true
         (Html_assert.contains body "value='unlisted' checked");
       (* 3. Semantic slug. *)
       let* token = mint_token "slug" ~url ~cookie in
@@ -1038,9 +1088,11 @@ let parser_rejection_case =
       check_rerender "invalid slug" ~status:422
         ~feedback:"Enter a community address using lowercase letters"
         ~slug:"ncpb-form-home" response body;
-      Alcotest.(check bool) "slug preserved verbatim" true
+      Alcotest.(check bool)
+        "slug preserved verbatim" true
         (Html_assert.contains body "value='Ncpb-Bad-Slug'");
-      Alcotest.(check bool) "name preserved" true
+      Alcotest.(check bool)
+        "name preserved" true
         (Html_assert.contains body "value='Ncpb Kept Name'");
       (* 4. Semantic description. *)
       let* token = mint_token "description" ~url ~cookie in
@@ -1054,7 +1106,8 @@ let parser_rejection_case =
       check_rerender "invalid description" ~status:422
         ~feedback:"That description can't be used." ~slug:"ncpb-form-home"
         response body;
-      Alcotest.(check bool) "description preserved" true
+      Alcotest.(check bool)
+        "description preserved" true
         (Html_assert.contains body long_description);
       (* 5. Publication choice: every rejected spelling, including the one
          shape a network community can never have. *)
@@ -1091,20 +1144,24 @@ let parser_rejection_case =
       in
       List.iter
         (fun needle ->
-          Alcotest.(check bool) ("no preselection: " ^ needle) false
+          Alcotest.(check bool)
+            ("no preselection: " ^ needle)
+            false
             (Html_assert.contains body needle))
         [ "value='public' checked"; "value='unlisted' checked" ];
-      Alcotest.(check bool) "the rejected value is not reflected as markup"
-        false (Html_assert.contains body "value='private'");
+      Alcotest.(check bool)
+        "the rejected value is not reflected as markup" false
+        (Html_assert.contains body "value='private'");
       let* token = mint_token "empty preselection" ~url ~cookie in
       let* _response, body =
         do_post ~conn ~url ~cookie ~target ~token
           ~body_fields:
-            (fields ~name:"Ncpb Kept Name" ~slug:"ncpb-kept-slug"
-               ~visibility:"" ())
+            (fields ~name:"Ncpb Kept Name" ~slug:"ncpb-kept-slug" ~visibility:""
+               ())
           ()
       in
-      Alcotest.(check bool) "no choice falls back to public" true
+      Alcotest.(check bool)
+        "no choice falls back to public" true
         (Html_assert.contains body "value='public' checked");
       (* Escaping: preserved values are text, never markup. *)
       let* token = mint_token "escaping" ~url ~cookie in
@@ -1116,13 +1173,17 @@ let parser_rejection_case =
           ()
       in
       Alcotest.(check int) "422" 422 (status_of response);
-      Alcotest.(check bool) "escaped name" true
+      Alcotest.(check bool)
+        "escaped name" true
         (Html_assert.contains body "&lt;script&gt;ncpb_x()&lt;/script&gt;");
-      Alcotest.(check bool) "raw name absent" false
+      Alcotest.(check bool)
+        "raw name absent" false
         (Html_assert.contains body "<script>ncpb_x()</script>");
-      Alcotest.(check bool) "escaped description" true
+      Alcotest.(check bool)
+        "escaped description" true
         (Html_assert.contains body "&lt;b&gt;ncpb&lt;/b&gt;");
-      Alcotest.(check bool) "raw description absent" false
+      Alcotest.(check bool)
+        "raw description absent" false
         (Html_assert.contains body "<b>ncpb</b>");
       (* Nothing durable moved through any of them. *)
       check_unchanged "after every rejection" conn ~cid ~project ~rid before)
@@ -1130,13 +1191,13 @@ let parser_rejection_case =
 (* === community-slug conflict and retry === *)
 
 let slug_conflict_case =
-  db_case "POST publish: a taken final slug is a safe 409 re-render that \
-           keeps the draft intact and stays retryable" (fun ~url conn ->
+  db_case
+    "POST publish: a taken final slug is a safe 409 re-render that keeps the \
+     draft intact and stays retryable" (fun ~url conn ->
       let* owner = insert_user conn "ncpb_cowner" in
       let* project, cid, rid =
-        make_draft conn ~user:owner ~ext_id:956000004L
-          ~project_slug:"ncpb-conf" ~slug:"ncpb-conf-home"
-          ~name:"Ncpb Conf Home"
+        make_draft conn ~user:owner ~ext_id:956000004L ~project_slug:"ncpb-conf"
+          ~slug:"ncpb-conf-home" ~name:"Ncpb Conf Home"
       in
       (* Three shapes of "taken": a legacy community, an unpublished
          network draft, and a published network community. *)
@@ -1173,28 +1234,43 @@ let slug_conflict_case =
         let* response, body =
           do_post ~conn ~url ~cookie ~target ~token
             ~body_fields:
-              (fields ~name:"Ncpb Conf Home" ~slug
-                 ~description:"Conflict body." ~visibility:"unlisted" ())
+              (fields ~name:"Ncpb Conf Home" ~slug ~description:"Conflict body."
+                 ~visibility:"unlisted" ())
             ()
         in
         check_rerender label ~status:409
           ~feedback:"That community address is already taken."
           ~slug:"ncpb-conf-home" response body;
-        Alcotest.(check bool) (label ^ ": slug preserved") true
+        Alcotest.(check bool)
+          (label ^ ": slug preserved")
+          true
           (Html_assert.contains body (Printf.sprintf "value='%s'" slug));
-        Alcotest.(check bool) (label ^ ": name preserved") true
+        Alcotest.(check bool)
+          (label ^ ": name preserved")
+          true
           (Html_assert.contains body "value='Ncpb Conf Home'");
-        Alcotest.(check bool) (label ^ ": description preserved") true
+        Alcotest.(check bool)
+          (label ^ ": description preserved")
+          true
           (Html_assert.contains body ">Conflict body.</textarea>");
-        Alcotest.(check bool) (label ^ ": choice preserved") true
+        Alcotest.(check bool)
+          (label ^ ": choice preserved")
+          true
           (Html_assert.contains body "value='unlisted' checked");
         (* Nothing about the conflicting community leaks. *)
         List.iter
           (fun needle ->
-            Alcotest.(check bool) (label ^ ": no leak " ^ needle) false
+            Alcotest.(check bool)
+              (label ^ ": no leak " ^ needle)
+              false
               (Html_assert.contains body needle))
-          [ "Ncpb Legacy"; "Ncpb Other Draft"; "Ncpb Other Published";
-            "onboarding_state"; "is_network_community"; "visibility ="
+          [
+            "Ncpb Legacy";
+            "Ncpb Other Draft";
+            "Ncpb Other Published";
+            "onboarding_state";
+            "is_network_community";
+            "visibility =";
           ];
         check_no_credentials label response body;
         bodies := normalized ~slug body :: !bodies;
@@ -1215,14 +1291,15 @@ let slug_conflict_case =
           List.iteri
             (fun i body ->
               Alcotest.(check bool)
-                (Printf.sprintf "409 body %d identical once the submitted \
-                                 slug is masked" i)
+                (Printf.sprintf
+                   "409 body %d identical once the submitted slug is masked" i)
                 true (String.equal first body))
             rest);
       (* The draft is byte-unchanged: old slug, private lifecycle,
          identity, relation, membership, moderation, shell. *)
-      let* () = check_unchanged "after conflicts" conn ~cid ~project ~rid
-                  before in
+      let* () =
+        check_unchanged "after conflicts" conn ~cid ~project ~rid before
+      in
       (* And a free slug still publishes. *)
       let* token = mint_token "retry" ~url ~cookie in
       let* response, body =
@@ -1233,7 +1310,8 @@ let slug_conflict_case =
           ()
       in
       check_clean_redirect "retry succeeds"
-        (community_target "ncpb-conf-final") response body;
+        (community_target "ncpb-conf-final")
+        response body;
       check_published "retry" conn ~cid ~project ~rid ~before
         ~name:"Ncpb Conf Home" ~description:"Conflict body."
         ~slug:"ncpb-conf-final" ~old_slug:"ncpb-conf-home" ~indexable:false
@@ -1242,8 +1320,9 @@ let slug_conflict_case =
 (* === durable authority variants === *)
 
 let authority_case =
-  db_case "POST publish: every durable publication authority works, and \
-           only durable authority does" (fun ~url conn ->
+  db_case
+    "POST publish: every durable publication authority works, and only durable \
+     authority does" (fun ~url conn ->
       let* owner = insert_user conn "ncpb_aowner" in
       let* second = insert_user conn "ncpb_asecond" in
       let* admin = insert_user conn "ncpb_aadmin" in
@@ -1260,8 +1339,7 @@ let authority_case =
         let* cookie, token, _ = open_setup label ~url ~slug actor in
         let* response, body =
           do_post ~conn ~url ~cookie ~target:(post_target slug) ~token
-            ~body_fields:
-              (fields ~name:"Ncpb Authority Home" ~slug:final ())
+            ~body_fields:(fields ~name:"Ncpb Authority Home" ~slug:final ())
             ()
         in
         check_clean_redirect label (community_target final) response body;
@@ -1273,15 +1351,14 @@ let authority_case =
       let* () =
         publish_as "creating top mod" ~ext_id:956000005L
           ~project_slug:"ncpb-auth-a" ~slug:"ncpb-auth-a-home"
-          ~final:"ncpb-auth-a-live" ~actor:owner
-          ~setup:(fun ~community:_ -> Lwt.return_unit)
+          ~final:"ncpb-auth-a-live" ~actor:owner ~setup:(fun ~community:_ ->
+            Lwt.return_unit)
       in
       (* A second current top moderator with no creation provenance. *)
       let* () =
         publish_as "second top mod" ~ext_id:956000006L
           ~project_slug:"ncpb-auth-b" ~slug:"ncpb-auth-b-home"
-          ~final:"ncpb-auth-b-live" ~actor:second
-          ~setup:(fun ~community ->
+          ~final:"ncpb-auth-b-live" ~actor:second ~setup:(fun ~community ->
             exec conn "second top_mod" q_insert_moderator
               (second, community, "top_mod"))
       in
@@ -1289,22 +1366,22 @@ let authority_case =
       let* () =
         publish_as "durable admin" ~ext_id:956000007L
           ~project_slug:"ncpb-auth-c" ~slug:"ncpb-auth-c-home"
-          ~final:"ncpb-auth-c-live" ~actor:admin
-          ~setup:(fun ~community:_ -> Lwt.return_unit)
+          ~final:"ncpb-auth-c-live" ~actor:admin ~setup:(fun ~community:_ ->
+            Lwt.return_unit)
       in
       (* An actor holding both authorities at once. *)
       publish_as "top mod and durable admin" ~ext_id:956000008L
         ~project_slug:"ncpb-auth-d" ~slug:"ncpb-auth-d-home"
-        ~final:"ncpb-auth-d-live" ~actor:both
-        ~setup:(fun ~community ->
+        ~final:"ncpb-auth-d-live" ~actor:both ~setup:(fun ~community ->
           exec conn "both top_mod" q_insert_moderator
             (both, community, "top_mod")))
 
 (* === unavailable and unauthorized === *)
 
 let unavailable_case =
-  db_case "POST publish: every unavailable or unauthorized state is one \
-           byte-identical generic 404" (fun ~url conn ->
+  db_case
+    "POST publish: every unavailable or unauthorized state is one \
+     byte-identical generic 404" (fun ~url conn ->
       let* owner = insert_user conn "ncpb_uowner" in
       let* member = insert_user conn "ncpb_umember" in
       let* moddy = insert_user conn "ncpb_umod" in
@@ -1314,8 +1391,8 @@ let unavailable_case =
       let* removed = insert_user conn "ncpb_uremoved" in
       let* stranger = insert_user conn "ncpb_ustranger" in
       let* _project, cid, rid =
-        make_draft conn ~user:owner ~ext_id:956000009L
-          ~project_slug:"ncpb-un" ~slug:"ncpb-un-home"
+        make_draft conn ~user:owner ~ext_id:956000009L ~project_slug:"ncpb-un"
+          ~slug:"ncpb-un-home"
       in
       (* Everyone below opens their own session; nobody but a durable
          top_mod or admin can even see the setup page, so tokens come from
@@ -1334,17 +1411,14 @@ let unavailable_case =
         bodies := body :: !bodies;
         Lwt.return_unit
       in
+      let* () = exec conn "member" q_insert_member (member, cid) in
       let* () =
-        exec conn "member" q_insert_member (member, cid)
+        expect_404 "ordinary member" ~user:member ~slug:"ncpb-un-home" ()
       in
-      let* () = expect_404 "ordinary member" ~user:member ~slug:"ncpb-un-home" () in
-      let* () =
-        exec conn "mod" q_insert_moderator (moddy, cid, "mod")
-      in
+      let* () = exec conn "mod" q_insert_moderator (moddy, cid, "mod") in
       let* () = expect_404 "mod" ~user:moddy ~slug:"ncpb-un-home" () in
       let* () =
-        exec conn "legacy_mod" q_insert_moderator
-          (legacy_mod, cid, "legacy_mod")
+        exec conn "legacy_mod" q_insert_moderator (legacy_mod, cid, "legacy_mod")
       in
       let* () =
         expect_404 "legacy_mod" ~user:legacy_mod ~slug:"ncpb-un-home" ()
@@ -1361,23 +1435,21 @@ let unavailable_case =
       in
       (* A downgraded top moderator, and a removed one. *)
       let* () =
-        exec conn "downgrade seed" q_insert_moderator
-          (demoted, cid, "top_mod")
+        exec conn "downgrade seed" q_insert_moderator (demoted, cid, "top_mod")
       in
       let* () =
         exec conn "downgrade" q_set_moderator_role (demoted, cid, "mod")
       in
       let* () =
-        expect_404 "downgraded top moderator" ~user:demoted
-          ~slug:"ncpb-un-home" ()
+        expect_404 "downgraded top moderator" ~user:demoted ~slug:"ncpb-un-home"
+          ()
       in
       let* () =
         exec conn "removal seed" q_insert_moderator (removed, cid, "top_mod")
       in
       let* () = exec conn "remove" q_remove_moderator (removed, cid) in
       let* () =
-        expect_404 "removed top moderator" ~user:removed ~slug:"ncpb-un-home"
-          ()
+        expect_404 "removed top moderator" ~user:removed ~slug:"ncpb-un-home" ()
       in
       (* A session-shaped admin with no durable users.is_admin row. *)
       let* () =
@@ -1413,7 +1485,8 @@ let unavailable_case =
       let* n = find conn "no final slug" q_count_by_slug "ncpb-un-final" in
       Alcotest.(check int) "nothing published" 0 n;
       let* state = find conn "state" q_community_state cid in
-      Alcotest.(check bool) "still a private draft" true
+      Alcotest.(check bool)
+        "still a private draft" true
         (Html_assert.contains state "|private|draft|true|false|false");
       (* An already-published community is the same generic 404 as every
          state above — the replay suite drives that end to end, and here it
@@ -1429,7 +1502,8 @@ let unavailable_case =
       let* () = exec conn "remove relation" q_mark_removed rid in
       let* cookie, token = open_session "relation removed" ~url owner in
       let* response, body =
-        do_post ~conn ~url ~cookie ~target:(post_target "ncpb-un-home")
+        do_post ~conn ~url ~cookie
+          ~target:(post_target "ncpb-un-home")
           ~token
           ~body_fields:(fields ~slug:"ncpb-un-final" ())
           ()
@@ -1443,8 +1517,9 @@ let unavailable_case =
 (* === project verification drift === *)
 
 let verification_case =
-  db_case "POST publish: publication survives every known project \
-           verification state" (fun ~url conn ->
+  db_case
+    "POST publish: publication survives every known project verification state"
+    (fun ~url conn ->
       let* owner = insert_user conn "ncpb_vowner" in
       let publish_with label ~ext_id ~project_slug ~slug ~final ~status
           ~visibility ~indexable =
@@ -1459,8 +1534,7 @@ let verification_case =
         let* response, body =
           do_post ~conn ~url ~cookie ~target:(post_target slug) ~token
             ~body_fields:
-              (fields ~name:"Ncpb Verification Home" ~slug:final ~visibility
-                 ())
+              (fields ~name:"Ncpb Verification Home" ~slug:final ~visibility ())
             ()
         in
         check_clean_redirect label (community_target final) response body;
@@ -1470,17 +1544,18 @@ let verification_case =
             ~old_slug:slug ~indexable ~discoverable:indexable
         in
         (* Publication never touches verification. *)
-        let* after = find conn (label ^ ": verification") q_verification
-                       project in
-        Alcotest.(check string) (label ^ ": verification unchanged") status
-          after;
+        let* after =
+          find conn (label ^ ": verification") q_verification project
+        in
+        Alcotest.(check string)
+          (label ^ ": verification unchanged")
+          status after;
         Lwt.return_unit
       in
       let* () =
-        publish_with "verified" ~ext_id:956000010L
-          ~project_slug:"ncpb-ver-a" ~slug:"ncpb-ver-a-home"
-          ~final:"ncpb-ver-a-live" ~status:"verified" ~visibility:"public"
-          ~indexable:true
+        publish_with "verified" ~ext_id:956000010L ~project_slug:"ncpb-ver-a"
+          ~slug:"ncpb-ver-a-home" ~final:"ncpb-ver-a-live" ~status:"verified"
+          ~visibility:"public" ~indexable:true
       in
       let* () =
         publish_with "stale" ~ext_id:956000011L ~project_slug:"ncpb-ver-b"
@@ -1494,8 +1569,9 @@ let verification_case =
 (* === replay === *)
 
 let replay_case =
-  db_case "POST publish: replaying a succeeded submission publishes nothing \
-           more and is the generic 404" (fun ~url conn ->
+  db_case
+    "POST publish: replaying a succeeded submission publishes nothing more and \
+     is the generic 404" (fun ~url conn ->
       let* owner = insert_user conn "ncpb_rowner" in
       let* project, cid, rid =
         make_draft conn ~user:owner ~ext_id:956000013L
@@ -1513,7 +1589,8 @@ let replay_case =
       let* response, body =
         do_post ~conn ~url ~cookie ~target ~token ~body_fields ()
       in
-      check_clean_redirect "first" (community_target "ncpb-replay-live")
+      check_clean_redirect "first"
+        (community_target "ncpb-replay-live")
         response body;
       (* The very same token replayed. Dream's CSRF tokens are stateless and
          session-bound rather than one-shot, so the token still verifies:
@@ -1523,9 +1600,11 @@ let replay_case =
         do_post ~conn ~url ~cookie ~target ~token ~body_fields ()
       in
       check_generic_404 "same-token replay" response body;
-      Alcotest.(check (option string)) "no redirect" None
+      Alcotest.(check (option string))
+        "no redirect" None
         (Dream.header response "Location");
-      Alcotest.(check bool) "no final slug leaks" false
+      Alcotest.(check bool)
+        "no final slug leaks" false
         (Html_assert.contains body "ncpb-replay-live");
       (* A freshly minted token replays to the same place. *)
       let* fresh = mint_token "fresh" ~url ~cookie in
@@ -1537,7 +1616,8 @@ let replay_case =
          is no longer a draft. *)
       let* fresh = mint_token "new slug" ~url ~cookie in
       let* response, body =
-        do_post ~conn ~url ~cookie ~target:(post_target "ncpb-replay-live")
+        do_post ~conn ~url ~cookie
+          ~target:(post_target "ncpb-replay-live")
           ~token:fresh ~body_fields ()
       in
       check_generic_404 "replay under the final slug" response body;
@@ -1556,19 +1636,19 @@ let replay_case =
       let* old_n = find conn "old" q_count_by_slug "ncpb-replay-home" in
       Alcotest.(check int) "the old slug stays released" 0 old_n;
       check_published "after replays" conn ~cid ~project ~rid ~before
-        ~name:"Ncpb Replay Home" ~description:"<null>"
-        ~slug:"ncpb-replay-live" ~old_slug:"ncpb-replay-home"
-        ~indexable:true ~discoverable:true)
+        ~name:"Ncpb Replay Home" ~description:"<null>" ~slug:"ncpb-replay-live"
+        ~old_slug:"ncpb-replay-home" ~indexable:true ~discoverable:true)
 
 (* === durable failures === *)
 
 let inconsistent_case =
-  db_case "POST publish: durable draft corruption is one generic \
-           non-cacheable 500 with no partial publication" (fun ~url conn ->
+  db_case
+    "POST publish: durable draft corruption is one generic non-cacheable 500 \
+     with no partial publication" (fun ~url conn ->
       let* owner = insert_user conn "ncpb_icowner" in
       let* project, cid, rid =
-        make_draft conn ~user:owner ~ext_id:956000014L
-          ~project_slug:"ncpb-ic" ~slug:"ncpb-ic-home"
+        make_draft conn ~user:owner ~ext_id:956000014L ~project_slug:"ncpb-ic"
+          ~slug:"ncpb-ic-home"
       in
       (* The setup page is opened while the draft is still sound; the shell
          is corrupted underneath it. *)
@@ -1578,7 +1658,8 @@ let inconsistent_case =
       let* () = exec conn "drop sections" q_delete_sections cid in
       let* before = snapshot "corrupt" conn ~cid ~project ~rid in
       let* response, body =
-        do_post ~conn ~url ~cookie ~target:(post_target "ncpb-ic-home")
+        do_post ~conn ~url ~cookie
+          ~target:(post_target "ncpb-ic-home")
           ~token
           ~body_fields:(fields ~slug:"ncpb-ic-live" ())
           ()
@@ -1590,9 +1671,9 @@ let inconsistent_case =
       check_unchanged "rolled back" conn ~cid ~project ~rid before)
 
 let storage_case =
-  db_case "POST publish: a real database failure is one generic \
-           non-cacheable 500 on both the store and the re-render path"
-    (fun ~url _conn ->
+  db_case
+    "POST publish: a real database failure is one generic non-cacheable 500 on \
+     both the store and the re-render path" (fun ~url _conn ->
       let poisoned =
         Uri.to_string
           (Uri.add_query_param' (Uri.of_string url)
@@ -1607,7 +1688,9 @@ let storage_case =
          handler's own storage-error collapse is exercised behind an
          allowing limiter — the only way a request can reach it here. *)
       let limited_pipe = build_pipeline ~url:poisoned in
-      let poison_pipe = build_pipeline_with ~limited:allowing_limiter ~url:poisoned in
+      let poison_pipe =
+        build_pipeline_with ~limited:allowing_limiter ~url:poisoned
+      in
       shared_pipeline := saved;
       as_user 424244;
       let* response, token =
@@ -1616,7 +1699,8 @@ let storage_case =
       let cookie = Http_fixture.session_cookie "poisoned limiter" response in
       let* response, _ =
         do_post ~pipeline:limited_pipe ~url ~cookie
-          ~target:(post_target "ncpb-anything") ~token
+          ~target:(post_target "ncpb-anything")
+          ~token
           ~body_fields:(fields ~slug:"ncpb-void-live" ())
           ()
       in
@@ -1628,14 +1712,16 @@ let storage_case =
       let cookie = Http_fixture.session_cookie "poisoned" response in
       let* response, body =
         do_post ~pipeline:poison_pipe ~url ~cookie
-          ~target:(post_target "ncpb-anything") ~token
+          ~target:(post_target "ncpb-anything")
+          ~token
           ~body_fields:(fields ~slug:"ncpb-void-live" ())
           ()
       in
       check_generic_500 "poisoned store call" response body;
       let* response, body =
         do_post ~pipeline:poison_pipe ~url ~cookie
-          ~target:(post_target "ncpb-anything") ~token
+          ~target:(post_target "ncpb-anything")
+          ~token
           ~body_fields:(fields ~slug:"Ncpb-Bad" ())
           ()
       in
@@ -1645,14 +1731,14 @@ let storage_case =
 (* === concurrency through HTTP === *)
 
 let same_draft_race_case =
-  db_case "POST publish: two concurrent submissions for one draft publish \
-           it exactly once; the loser is the generic 404" (fun ~url conn ->
+  db_case
+    "POST publish: two concurrent submissions for one draft publish it exactly \
+     once; the loser is the generic 404" (fun ~url conn ->
       let* owner = insert_user conn "ncpb_p1owner" in
       let* second = insert_user conn "ncpb_p1second" in
       let* project, cid, rid =
-        make_draft conn ~user:owner ~ext_id:956000015L
-          ~project_slug:"ncpb-race" ~slug:"ncpb-race-home"
-          ~name:"Ncpb Race Home"
+        make_draft conn ~user:owner ~ext_id:956000015L ~project_slug:"ncpb-race"
+          ~slug:"ncpb-race-home" ~name:"Ncpb Race Home"
       in
       let* () =
         exec conn "second top_mod" q_insert_moderator (second, cid, "top_mod")
@@ -1672,25 +1758,20 @@ let same_draft_race_case =
       let* (response_a, body_a), (response_b, body_b) =
         Lwt.both
           (do_post ~url ~cookie:cookie_a ~target ~token:token_a
-             ~body_fields:
-               (fields ~name:"Ncpb Race Home" ~slug:"ncpb-race-a" ())
+             ~body_fields:(fields ~name:"Ncpb Race Home" ~slug:"ncpb-race-a" ())
              ())
           (do_post ~url ~cookie:cookie_b ~target ~token:token_b
-             ~body_fields:
-               (fields ~name:"Ncpb Race Home" ~slug:"ncpb-race-b" ())
+             ~body_fields:(fields ~name:"Ncpb Race Home" ~slug:"ncpb-race-b" ())
              ())
       in
       let a_won = status_of response_a = 303 in
       let win, win_body, lose, lose_body, winning_slug, losing_slug =
         if a_won then
-          (response_a, body_a, response_b, body_b, "ncpb-race-a",
-           "ncpb-race-b")
+          (response_a, body_a, response_b, body_b, "ncpb-race-a", "ncpb-race-b")
         else
-          (response_b, body_b, response_a, body_a, "ncpb-race-b",
-           "ncpb-race-a")
+          (response_b, body_b, response_a, body_a, "ncpb-race-b", "ncpb-race-a")
       in
-      check_clean_redirect "winner" (community_target winning_slug) win
-        win_body;
+      check_clean_redirect "winner" (community_target winning_slug) win win_body;
       check_generic_404 "loser" lose lose_body;
       let* winners = find conn "winner row" q_count_by_slug winning_slug in
       Alcotest.(check int) "the winning slug exists" 1 winners;
@@ -1701,8 +1782,9 @@ let same_draft_race_case =
         ~old_slug:"ncpb-race-home" ~indexable:true ~discoverable:true)
 
 let same_slug_race_case =
-  db_case "POST publish: two drafts racing for one final slug leave one \
-           winner and a clean, retryable 409 loser" (fun ~url conn ->
+  db_case
+    "POST publish: two drafts racing for one final slug leave one winner and a \
+     clean, retryable 409 loser" (fun ~url conn ->
       let* owner_a = insert_user conn "ncpb_s1owner" in
       let* owner_b = insert_user conn "ncpb_s2owner" in
       let* project_a, cid_a, rid_a =
@@ -1715,10 +1797,12 @@ let same_slug_race_case =
           ~project_slug:"ncpb-slug-b" ~slug:"ncpb-slug-b-home"
           ~name:"Ncpb Slug B"
       in
-      let* before_a = snapshot "before a" conn ~cid:cid_a ~project:project_a
-                        ~rid:rid_a in
-      let* before_b = snapshot "before b" conn ~cid:cid_b ~project:project_b
-                        ~rid:rid_b in
+      let* before_a =
+        snapshot "before a" conn ~cid:cid_a ~project:project_a ~rid:rid_a
+      in
+      let* before_b =
+        snapshot "before b" conn ~cid:cid_b ~project:project_b ~rid:rid_b
+      in
       let* cookie_a, token_a, _ =
         open_setup "draft a" ~url ~slug:"ncpb-slug-a-home" owner_a
       in
@@ -1732,28 +1816,54 @@ let same_slug_race_case =
       let* (response_a, body_a), (response_b, body_b) =
         Lwt.both
           (do_post ~url ~cookie:cookie_a
-             ~target:(post_target "ncpb-slug-a-home") ~token:token_a
-             ~body_fields ())
+             ~target:(post_target "ncpb-slug-a-home")
+             ~token:token_a ~body_fields ())
           (do_post ~url ~cookie:cookie_b
-             ~target:(post_target "ncpb-slug-b-home") ~token:token_b
-             ~body_fields ())
+             ~target:(post_target "ncpb-slug-b-home")
+             ~token:token_b ~body_fields ())
       in
       let a_won = status_of response_a = 303 in
-      let ( winner, winner_body, loser, loser_body, loser_slug, loser_cookie,
-            loser_cid, loser_project, loser_rid, loser_before ) =
+      let ( winner,
+            winner_body,
+            loser,
+            loser_body,
+            loser_slug,
+            loser_cookie,
+            loser_cid,
+            loser_project,
+            loser_rid,
+            loser_before ) =
         if a_won then
-          (response_a, body_a, response_b, body_b, "ncpb-slug-b-home",
-           cookie_b, cid_b, project_b, rid_b, before_b)
+          ( response_a,
+            body_a,
+            response_b,
+            body_b,
+            "ncpb-slug-b-home",
+            cookie_b,
+            cid_b,
+            project_b,
+            rid_b,
+            before_b )
         else
-          (response_b, body_b, response_a, body_a, "ncpb-slug-a-home",
-           cookie_a, cid_a, project_a, rid_a, before_a)
+          ( response_b,
+            body_b,
+            response_a,
+            body_a,
+            "ncpb-slug-a-home",
+            cookie_a,
+            cid_a,
+            project_a,
+            rid_a,
+            before_a )
       in
-      check_clean_redirect "winner" (community_target "ncpb-shared-live")
+      check_clean_redirect "winner"
+        (community_target "ncpb-shared-live")
         winner winner_body;
       check_rerender "loser" ~status:409
         ~feedback:"That community address is already taken." ~slug:loser_slug
         loser loser_body;
-      Alcotest.(check bool) "loser keeps its submission" true
+      Alcotest.(check bool)
+        "loser keeps its submission" true
         (Html_assert.contains loser_body "value='ncpb-shared-live'");
       let* n = find conn "shared" q_count_by_slug "ncpb-shared-live" in
       Alcotest.(check int) "exactly one community owns the slug" 1 n;
@@ -1764,37 +1874,38 @@ let same_slug_race_case =
       in
       let* token = mint_token "loser retry" ~url ~cookie:loser_cookie in
       let* response, body =
-        do_post ~conn ~url ~cookie:loser_cookie
-          ~target:(post_target loser_slug) ~token
+        do_post ~conn ~url ~cookie:loser_cookie ~target:(post_target loser_slug)
+          ~token
           ~body_fields:
             (fields ~name:"Ncpb Shared Home" ~slug:"ncpb-shared-other" ())
           ()
       in
       check_clean_redirect "loser retries successfully"
-        (community_target "ncpb-shared-other") response body;
+        (community_target "ncpb-shared-other")
+        response body;
       Lwt.return_unit)
 
 (* === draft protection and post-publication removal === *)
 
 let removal_case =
-  db_case "POST publish: home removal is refused while the community is a \
-           draft and works once it is published" (fun ~url conn ->
+  db_case
+    "POST publish: home removal is refused while the community is a draft and \
+     works once it is published" (fun ~url conn ->
       let* owner = insert_user conn "ncpb_remowner" in
       (* Two drafts, so each existing removal route is exercised on its
          own. *)
       let* project_a, cid_a, rid_a =
         make_draft conn ~user:owner ~ext_id:956000018L
-          ~project_slug:"ncpb-rem-a" ~slug:"ncpb-rem-a-home"
-          ~name:"Ncpb Rem A"
+          ~project_slug:"ncpb-rem-a" ~slug:"ncpb-rem-a-home" ~name:"Ncpb Rem A"
       in
       let* _project_b, _cid_b, rid_b =
         make_draft conn ~user:owner ~ext_id:956000019L
-          ~project_slug:"ncpb-rem-b" ~slug:"ncpb-rem-b-home"
-          ~name:"Ncpb Rem B"
+          ~project_slug:"ncpb-rem-b" ~slug:"ncpb-rem-b-home" ~name:"Ncpb Rem B"
       in
       let* _post = find conn "post" q_insert_post (cid_a, owner) in
-      let* before_a = snapshot "before a" conn ~cid:cid_a ~project:project_a
-                        ~rid:rid_a in
+      let* before_a =
+        snapshot "before a" conn ~cid:cid_a ~project:project_a ~rid:rid_a
+      in
       let* cookie, token, _ =
         open_setup "setup a" ~url ~slug:"ncpb-rem-a-home" owner
       in
@@ -1808,7 +1919,8 @@ let removal_case =
           ~token ()
       in
       check_clean_redirect "project-side refusal"
-        (request_home_target "ncpb-rem-a") response body;
+        (request_home_target "ncpb-rem-a")
+        response body;
       let* token = mint_token "community side" ~url ~cookie in
       let* response, body =
         do_bare_post ~conn ~url ~cookie
@@ -1818,7 +1930,8 @@ let removal_case =
           ~token ()
       in
       check_clean_redirect "community-side refusal"
-        (settings_projects_target "ncpb-rem-a-home") response body;
+        (settings_projects_target "ncpb-rem-a-home")
+        response body;
       let* status = find conn "relation" q_relation_status rid_a in
       Alcotest.(check string) "relation still accepted" "accepted" status;
       let* () =
@@ -1828,12 +1941,14 @@ let removal_case =
       (* 2. Setup remains publishable, and publishing succeeds. *)
       let* token = mint_token "publish a" ~url ~cookie in
       let* response, body =
-        do_post ~conn ~url ~cookie ~target:(post_target "ncpb-rem-a-home")
+        do_post ~conn ~url ~cookie
+          ~target:(post_target "ncpb-rem-a-home")
           ~token
           ~body_fields:(fields ~name:"Ncpb Rem A" ~slug:"ncpb-rem-a-live" ())
           ()
       in
-      check_clean_redirect "published a" (community_target "ncpb-rem-a-live")
+      check_clean_redirect "published a"
+        (community_target "ncpb-rem-a-live")
         response body;
       (* 3. Removal after publication succeeds through the project-side
          route, and the published community and its content remain. *)
@@ -1846,11 +1961,13 @@ let removal_case =
           ~token ()
       in
       check_clean_redirect "project-side removal"
-        (request_home_target "ncpb-rem-a") response body;
+        (request_home_target "ncpb-rem-a")
+        response body;
       let* status = find conn "relation after" q_relation_status rid_a in
       Alcotest.(check string) "relation removed" "removed" status;
       let* state = find conn "community after" q_community_state cid_a in
-      Alcotest.(check bool) "the community stays published and public" true
+      Alcotest.(check bool)
+        "the community stays published and public" true
         (Html_assert.contains state "|public|published|true|true|true");
       let* posts = find conn "posts" q_count_posts cid_a in
       Alcotest.(check int) "content survives removal" 1 posts;
@@ -1861,11 +1978,13 @@ let removal_case =
       in
       let* response, body =
         do_post ~conn ~url ~cookie:cookie_b
-          ~target:(post_target "ncpb-rem-b-home") ~token:token_b
+          ~target:(post_target "ncpb-rem-b-home")
+          ~token:token_b
           ~body_fields:(fields ~name:"Ncpb Rem B" ~slug:"ncpb-rem-b-live" ())
           ()
       in
-      check_clean_redirect "published b" (community_target "ncpb-rem-b-live")
+      check_clean_redirect "published b"
+        (community_target "ncpb-rem-b-live")
         response body;
       let* token_b = mint_token "remove b" ~url ~cookie:cookie_b in
       let* response, body =
@@ -1876,7 +1995,8 @@ let removal_case =
           ~token:token_b ()
       in
       check_clean_redirect "community-side removal"
-        (settings_projects_target "ncpb-rem-b-live") response body;
+        (settings_projects_target "ncpb-rem-b-live")
+        response body;
       let* status = find conn "relation b" q_relation_status rid_b in
       Alcotest.(check string) "relation b removed" "removed" status;
       Lwt.return_unit)
@@ -1884,8 +2004,9 @@ let removal_case =
 (* === the mutation rate limiter really wraps this route === *)
 
 let rate_limit_case =
-  db_case "POST publish: the route carries the shared \
-           authenticated-mutation rate limit" (fun ~url conn ->
+  db_case
+    "POST publish: the route carries the shared authenticated-mutation rate \
+     limit" (fun ~url conn ->
       let* () = clear_limits conn in
       let* cookie, token = open_session "rate limit" ~url 424245 in
       let target = post_target "ncpb-ratelimit" in
@@ -1900,7 +2021,8 @@ let rate_limit_case =
               ~body_fields:(fields ~slug:"ncpb-ratelimit-live" ())
               ()
           in
-          if Html_assert.contains body "Too Many Attempts" then Lwt.return (n, response)
+          if Html_assert.contains body "Too Many Attempts" then
+            Lwt.return (n, response)
           else (
             Alcotest.(check int)
               (Printf.sprintf "attempt %d is the generic 404" n)
@@ -1908,21 +2030,21 @@ let rate_limit_case =
             drive (n + 1))
       in
       let* attempts, response = drive 1 in
-      Alcotest.(check bool) "blocked only after several attempts" true
-        (attempts > 1);
+      Alcotest.(check bool)
+        "blocked only after several attempts" true (attempts > 1);
       Alcotest.(check int) "blocked page status" 200 (status_of response);
       clear_limits conn)
 
 (* === privacy sweep === *)
 
 let privacy_case =
-  db_case "POST publish: no credential-shaped fixture reaches any response, \
-           redirect, cookie, or the published community" (fun ~url conn ->
+  db_case
+    "POST publish: no credential-shaped fixture reaches any response, \
+     redirect, cookie, or the published community" (fun ~url conn ->
       let* owner = insert_user conn "ncpb_privowner" in
       let* project, cid, rid =
-        make_draft conn ~user:owner ~ext_id:956000001L
-          ~project_slug:"ncpb-priv" ~slug:"ncpb-priv-home"
-          ~name:"Ncpb Priv Home"
+        make_draft conn ~user:owner ~ext_id:956000001L ~project_slug:"ncpb-priv"
+          ~slug:"ncpb-priv-home" ~name:"Ncpb Priv Home"
       in
       let* before = snapshot "before" conn ~cid ~project ~rid in
       let* cookie, token, page =
@@ -1944,7 +2066,9 @@ let privacy_case =
       Alcotest.(check int) "422" 422 (status_of response);
       check_no_credentials "rejected submission" response body;
       (* A 409 body: only the intentionally submitted safe identity. *)
-      let* _taken = insert_community ~name:"Ncpb Taken" conn "ncpb-priv-taken" in
+      let* _taken =
+        insert_community ~name:"Ncpb Taken" conn "ncpb-priv-taken"
+      in
       let* token = mint_token "conflict" ~url ~cookie in
       let* response, body =
         do_post ~conn ~url ~cookie ~target ~token
@@ -1957,7 +2081,8 @@ let privacy_case =
       (* A generic 404 body. *)
       let* token = mint_token "missing" ~url ~cookie in
       let* response, body =
-        do_post ~conn ~url ~cookie ~target:(post_target "ncpb-priv-nothing")
+        do_post ~conn ~url ~cookie
+          ~target:(post_target "ncpb-priv-nothing")
           ~token
           ~body_fields:(fields ~slug:"ncpb-priv-live" ())
           ()
@@ -1973,7 +2098,8 @@ let privacy_case =
                ~description:"Safe body." ())
           ()
       in
-      check_clean_redirect "success" (community_target "ncpb-priv-live")
+      check_clean_redirect "success"
+        (community_target "ncpb-priv-live")
         response body;
       check_no_credentials "success redirect" response body;
       let* response, page_body =
@@ -1981,23 +2107,34 @@ let privacy_case =
       in
       check_no_credentials "published community" response page_body;
       (* The intentionally supplied public identity is what survives. *)
-      Alcotest.(check bool) "the supplied name is public" true
+      Alcotest.(check bool)
+        "the supplied name is public" true
         (Html_assert.contains page_body "Ncpb Priv Home");
       check_published "privacy" conn ~cid ~project ~rid ~before
-        ~name:"Ncpb Priv Home" ~description:"Safe body."
-        ~slug:"ncpb-priv-live" ~old_slug:"ncpb-priv-home" ~indexable:true
-        ~discoverable:true)
+        ~name:"Ncpb Priv Home" ~description:"Safe body." ~slug:"ncpb-priv-live"
+        ~old_slug:"ncpb-priv-home" ~indexable:true ~discoverable:true)
 
 let db_suite =
-  [ public_success_case; unlisted_success_case; parser_rejection_case;
-    slug_conflict_case; authority_case; unavailable_case;
-    verification_case; replay_case; inconsistent_case; storage_case;
-    same_draft_race_case; same_slug_race_case; removal_case;
-    rate_limit_case; privacy_case
+  [
+    public_success_case;
+    unlisted_success_case;
+    parser_rejection_case;
+    slug_conflict_case;
+    authority_case;
+    unavailable_case;
+    verification_case;
+    replay_case;
+    inconsistent_case;
+    storage_case;
+    same_draft_race_case;
+    same_slug_race_case;
+    removal_case;
+    rate_limit_case;
+    privacy_case;
   ]
 
 let suites =
-    (* POST /c/:slug/publish: the exact registered route (once, no alias,
+  (* POST /c/:slug/publish: the exact registered route (once, no alias,
        no method variant) beside the setup GET, the DB-free
        rollout/authentication gates, the configuration/origin/CSRF
        sequence, and the database-gated end-to-end journey — Public and
@@ -2007,10 +2144,10 @@ let suites =
        drift, replay, durable failures, HTTP-level concurrency, draft
        protection and post-publication removal, the shared mutation rate
        limit, and the privacy sweep. *)
-  [ ("network_community_publication_post_route", route_cases)
-  ; ("network_community_publication_post_gates", gate_cases)
-  ; ("network_community_publication_post_config_origin",
-     config_origin_cases)
-  ; ("network_community_publication_post_csrf", csrf_cases)
-  ; ("network_community_publication_post_db", db_suite)
+  [
+    ("network_community_publication_post_route", route_cases);
+    ("network_community_publication_post_gates", gate_cases);
+    ("network_community_publication_post_config_origin", config_origin_cases);
+    ("network_community_publication_post_csrf", csrf_cases);
+    ("network_community_publication_post_db", db_suite);
   ]

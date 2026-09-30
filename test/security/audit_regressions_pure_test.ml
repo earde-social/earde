@@ -7,7 +7,6 @@
    [Sec_db] below, behind the usual EARDE_TEST_DATABASE_URL gate. *)
 
 let case name f = Alcotest.test_case name `Quick f
-
 let req target = Dream.request ~method_:`GET ~target ""
 
 (* Pages that emit a CSRF field need a request that has been through
@@ -35,8 +34,9 @@ let msg_page_hostile_return_url =
   case "msg_page: a quote+markup return_url emits no raw tag" (fun () ->
       let payload = "/c/x'><svg onload=alert(document.domain)>/t/z" in
       let body =
-        Earde.Site_pages.msg_page ~title:"Not Found" ~message:"This community does not exist."
-          ~alert_type:"error" ~return_url:payload (req "/")
+        Earde.Site_pages.msg_page ~title:"Not Found"
+          ~message:"This community does not exist." ~alert_type:"error"
+          ~return_url:payload (req "/")
       in
       (* The document's own alert glyph is an <svg>, so the assertion is on
          the PAYLOAD: no attribute-closing quote, no event handler, no
@@ -65,37 +65,49 @@ let msg_page_rejects_foreign_targets =
           Security_fixture.must_not label body "href='https://evil.example";
           Security_fixture.must_not label body "href='/\\\\evil.example";
           Security_fixture.must label body "href='#'")
-        [ ("javascript:", "javascript:alert(1)");
+        [
+          ("javascript:", "javascript:alert(1)");
           ("protocol-relative", "//evil.example/x");
           ("backslash variant", "/\\evil.example/x");
           ("absolute foreign", "https://evil.example/x");
           ("empty", "");
-          ("bare fragment", "#") ])
+          ("bare fragment", "#");
+        ])
 
 let msg_page_preserves_internal_paths =
   case "msg_page: ordinary internal back links are unchanged" (fun () ->
       List.iter
         (fun path ->
           let body =
-            Earde.Site_pages.msg_page ~title:"T" ~message:"M" ~alert_type:"error"
-              ~return_url:path (req "/")
+            Earde.Site_pages.msg_page ~title:"T" ~message:"M"
+              ~alert_type:"error" ~return_url:path (req "/")
           in
-          Security_fixture.must ("internal " ^ path) body (Printf.sprintf "href='%s'" path))
-        [ "/"; "/c/example"; "/c/example/settings"; "/settings"; "/p/12";
-          "/c/example/t/12-a-thread" ])
+          Security_fixture.must ("internal " ^ path) body
+            (Printf.sprintf "href='%s'" path))
+        [
+          "/";
+          "/c/example";
+          "/c/example/settings";
+          "/settings";
+          "/p/12";
+          "/c/example/t/12-a-thread";
+        ])
 
 (* --- Fix 3: username escaping and the new signup syntax ---------------- *)
 
 let js_attr_escaping =
   case "confirm hooks: user data never enters script source" (fun () ->
       let hostile =
-        [ "x'); alert(1); ('"; "</script><svg onload=alert(1)>";
-          "a\\b\"c\nd" ]
+        [ "x'); alert(1); ('"; "</script><svg onload=alert(1)>"; "a\\b\"c\nd" ]
       in
       let banned =
         List.mapi
           (fun i username ->
-            ({ id = 900 + i; username; email = Printf.sprintf "u%d@example.invalid" i }
+            ({
+               id = 900 + i;
+               username;
+               email = Printf.sprintf "u%d@example.invalid" i;
+             }
               : Earde.User_store.user))
           hostile
       in
@@ -119,10 +131,12 @@ let js_attr_escaping =
       in
       (* Every hook is the one constant script; the names live only in
          escaped attribute text. *)
-      Alcotest.(check int) "one hook per banned user" (List.length hostile)
+      Alcotest.(check int)
+        "one hook per banned user" (List.length hostile)
         (Html_assert.occurrences page
            "onsubmit=\"confirmModal(event, this.dataset.confirm)\"");
-      Alcotest.(check int) "no call passes a script literal" 0
+      Alcotest.(check int)
+        "no call passes a script literal" 0
         (Html_assert.occurrences page "confirmModal(event, '");
       Security_fixture.must "apostrophe" page
         "data-confirm='Lift global ban on u/x&#39;); alert(1); (&#39;?'";
@@ -134,15 +148,35 @@ let username_syntax =
   case "is_valid_new_username: route-safe ASCII only" (fun () ->
       let ok = Earde.Auth_handlers.is_valid_new_username in
       List.iter
-        (fun name ->
-          Alcotest.(check bool) ("accepted: " ^ name) true (ok name))
+        (fun name -> Alcotest.(check bool) ("accepted: " ^ name) true (ok name))
         [ "alice"; "Alice"; "alice_1"; "a-b-c"; "ABC123"; "_x"; "x-" ];
       List.iter
         (fun name ->
-          Alcotest.(check bool) ("rejected: " ^ String.escaped name) false (ok name))
-        [ ""; "x'><svg onload=alert(1)>"; "a b"; "a\tb"; "a\nb"; "a/b";
-          "a\\b"; "a\"b"; "a'b"; "a<b"; "a>b"; "a&b"; "a?b"; "a#b"; "a%b";
-          "a.b"; "a@b"; "a\x00b"; "a\x7fb"; "ünïcode" ])
+          Alcotest.(check bool)
+            ("rejected: " ^ String.escaped name)
+            false (ok name))
+        [
+          "";
+          "x'><svg onload=alert(1)>";
+          "a b";
+          "a\tb";
+          "a\nb";
+          "a/b";
+          "a\\b";
+          "a\"b";
+          "a'b";
+          "a<b";
+          "a>b";
+          "a&b";
+          "a?b";
+          "a#b";
+          "a%b";
+          "a.b";
+          "a@b";
+          "a\x00b";
+          "a\x7fb";
+          "ünïcode";
+        ])
 
 (* The stored-XSS half: an account whose hostile name predates the syntax
    rule must still render inert on its public, crawlable profile. *)
@@ -212,7 +246,8 @@ let settings_form_has_no_avatar_input =
       Security_fixture.must_not "settings form" body "existing_avatar_url";
       (* The upload control and the read-only preview both remain. *)
       Security_fixture.must "settings form" body "name='avatar_url'";
-      Security_fixture.must "settings form" body "/static/uploads/earde_1_2.webp")
+      Security_fixture.must "settings form" body
+        "/static/uploads/earde_1_2.webp")
 
 (* --- Fix 6: production-aware Secure session cookie -------------------- *)
 
@@ -220,8 +255,12 @@ let cookie_policy_origin_rule =
   case "session cookie: Secure follows the configured public origin" (fun () ->
       let p = Earde.Session_cookie_policy.secure_required in
       Alcotest.(check bool) "https origin" true (p (Some "https://earde.com"));
-      Alcotest.(check bool) "https with path" true (p (Some "https://earde.com/"));
-      Alcotest.(check bool) "http origin" false (p (Some "http://localhost:8080"));
+      Alcotest.(check bool)
+        "https with path" true
+        (p (Some "https://earde.com/"));
+      Alcotest.(check bool)
+        "http origin" false
+        (p (Some "http://localhost:8080"));
       Alcotest.(check bool) "unset" false (p None);
       Alcotest.(check bool) "empty" false (p (Some ""));
       (* Never derived from a forwarded header, so a client-supplied
@@ -243,55 +282,66 @@ let cookie_policy_attribute =
       Security_fixture.must "keeps the name" secured "dream.session=abc";
       (* Idempotent, and case-insensitive about an existing attribute. *)
       Alcotest.(check string) "idempotent" secured (add secured);
-      Alcotest.(check bool) "detects lowercase" true
-        (has "a=b; path=/; secure");
+      Alcotest.(check bool) "detects lowercase" true (has "a=b; path=/; secure");
       (* A cookie whose VALUE merely contains the word is not already
          secure — the check is anchored to ';'-separated attributes. *)
-      Alcotest.(check bool) "value is not an attribute" false
+      Alcotest.(check bool)
+        "value is not an attribute" false
         (has "dream.session=secure; Path=/");
-      Security_fixture.must "value is not an attribute" (add "dream.session=secure; Path=/")
+      Security_fixture.must "value is not an attribute"
+        (add "dream.session=secure; Path=/")
         "; Secure")
 
 (* --- Fix 7: image-upload policy --------------------------------------- *)
 
 let png_header = "\x89PNG\r\n\x1a\n\x00\x00\x00\x0dIHDR"
-
 let jpeg_header = "\xff\xd8\xff\xe0\x00\x10JFIF"
-
 let gif_header = "GIF89a\x01\x00\x01\x00"
-
 let webp_header = "RIFF\x24\x00\x00\x00WEBPVP8 "
 
 let upload_format_gate =
-  case "image upload: the format gate reads magic bytes, not labels"
-    (fun () ->
+  case "image upload: the format gate reads magic bytes, not labels" (fun () ->
       let d = Earde.Image_upload.detect_format in
-      Alcotest.(check bool) "png" true (d png_header = Some Earde.Image_upload.Png);
-      Alcotest.(check bool) "jpeg" true (d jpeg_header = Some Earde.Image_upload.Jpeg);
-      Alcotest.(check bool) "gif87a" true (d "GIF87a\x01\x00" = Some Earde.Image_upload.Gif);
-      Alcotest.(check bool) "gif89a" true (d gif_header = Some Earde.Image_upload.Gif);
-      Alcotest.(check bool) "webp" true (d webp_header = Some Earde.Image_upload.Webp);
+      Alcotest.(check bool)
+        "png" true
+        (d png_header = Some Earde.Image_upload.Png);
+      Alcotest.(check bool)
+        "jpeg" true
+        (d jpeg_header = Some Earde.Image_upload.Jpeg);
+      Alcotest.(check bool)
+        "gif87a" true
+        (d "GIF87a\x01\x00" = Some Earde.Image_upload.Gif);
+      Alcotest.(check bool)
+        "gif89a" true
+        (d gif_header = Some Earde.Image_upload.Gif);
+      Alcotest.(check bool)
+        "webp" true
+        (d webp_header = Some Earde.Image_upload.Webp);
       List.iter
         (fun (label, payload) ->
           Alcotest.(check bool) ("rejected: " ^ label) true (d payload = None))
-        [ ("empty", "");
+        [
+          ("empty", "");
           ("truncated png", "\x89PN");
           ("truncated webp riff", "RIFFabc");
           ("riff that is not webp", "RIFF\x24\x00\x00\x00WAVEfmt ");
-          ("svg", "<?xml version=\"1.0\"?><svg xmlns='http://www.w3.org/2000/svg'/>");
+          ( "svg",
+            "<?xml version=\"1.0\"?><svg xmlns='http://www.w3.org/2000/svg'/>"
+          );
           ("svg no prologue", "<svg onload=alert(1)></svg>");
-          ("imagemagick MSL", "<?xml version=\"1.0\"?><image><read filename=\"x\"/></image>");
+          ( "imagemagick MSL",
+            "<?xml version=\"1.0\"?><image><read filename=\"x\"/></image>" );
           ("imagemagick MVG", "push graphic-context\nviewbox 0 0 1 1\n");
           ("pdf", "%PDF-1.7\n");
           ("postscript", "%!PS-Adobe-3.0\n");
           ("elf", "\x7fELF\x02\x01\x01");
           ("shell script", "#!/bin/sh\nrm -rf /\n");
           ("plain text", "hello");
-          ("html", "<html><body>x</body></html>") ])
+          ("html", "<html><body>x</body></html>");
+        ])
 
 let upload_argv_is_safe =
-  case "image upload: argv pins the coder, the limits and every path"
-    (fun () ->
+  case "image upload: argv pins the coder, the limits and every path" (fun () ->
       let argv =
         Earde.Image_upload.convert_argv ~binary:"convert"
           ~format:Earde.Image_upload.Png ~purpose:Earde.Image_upload.Post_image
@@ -312,9 +362,11 @@ let upload_argv_is_safe =
         [ "memory"; "map"; "disk"; "area"; "width"; "height"; "time" ];
       (* Geometry is a compile-time constant per surface. *)
       Security_fixture.must "resize" joined "1920x1080>";
-      Alcotest.(check string) "avatar geometry" "512x512>"
+      Alcotest.(check string)
+        "avatar geometry" "512x512>"
         (Earde.Image_upload.resize_geometry Earde.Image_upload.Profile_avatar);
-      Alcotest.(check string) "banner geometry" "1920x480>"
+      Alcotest.(check string)
+        "banner geometry" "1920x480>"
         (Earde.Image_upload.resize_geometry Earde.Image_upload.Community_banner))
 
 let upload_argv_neutralises_metacharacters =
@@ -332,23 +384,27 @@ let upload_argv_neutralises_metacharacters =
       in
       let l = Array.to_list argv in
       (* Exactly one element carries the whole path; nothing is split. *)
-      let carriers =
-        List.filter (fun e -> Html_assert.contains e "rm -rf") l
-      in
-      Alcotest.(check int) "one argv element carries it" 1
-        (List.length carriers);
-      Alcotest.(check string) "carried verbatim, coder-qualified"
-        ("JPEG:" ^ nasty ^ "[0]") (List.hd carriers))
+      let carriers = List.filter (fun e -> Html_assert.contains e "rm -rf") l in
+      Alcotest.(check int)
+        "one argv element carries it" 1 (List.length carriers);
+      Alcotest.(check string)
+        "carried verbatim, coder-qualified"
+        ("JPEG:" ^ nasty ^ "[0]")
+        (List.hd carriers))
 
 let upload_messages_are_uniform =
   case "image upload: refusal messages disclose nothing about the payload"
     (fun () ->
       (* One message for every refusal reason, so a payload cannot be used
          to probe what the pipeline recognises. *)
-      Security_fixture.must "message" Earde.Image_upload.rejected_message "JPEG, PNG, GIF, WebP";
-      Alcotest.(check int) "5 MiB cap" (5 * 1024 * 1024)
+      Security_fixture.must "message" Earde.Image_upload.rejected_message
+        "JPEG, PNG, GIF, WebP";
+      Alcotest.(check int)
+        "5 MiB cap"
+        (5 * 1024 * 1024)
         Earde.Image_upload.max_bytes;
-      Security_fixture.must "size message" Earde.Image_upload.too_large_message "5 MB")
+      Security_fixture.must "size message" Earde.Image_upload.too_large_message
+        "5 MB")
 
 (* --- Fix 9: the rate limiter's client identity ------------------------- *)
 
@@ -356,18 +412,18 @@ let peer_parsing =
   case "client address: the ephemeral source port never reaches the key"
     (fun () ->
       let p = Earde.Client_address.peer_ip in
-      Alcotest.(check (option string)) "ipv4" (Some "127.0.0.1")
-        (p "127.0.0.1:44746");
-      Alcotest.(check (option string)) "ipv4 other port" (Some "127.0.0.1")
-        (p "127.0.0.1:51001");
-      Alcotest.(check (option string)) "public ipv4" (Some "198.51.100.44")
-        (p "198.51.100.44:9");
+      Alcotest.(check (option string))
+        "ipv4" (Some "127.0.0.1") (p "127.0.0.1:44746");
+      Alcotest.(check (option string))
+        "ipv4 other port" (Some "127.0.0.1") (p "127.0.0.1:51001");
+      Alcotest.(check (option string))
+        "public ipv4" (Some "198.51.100.44") (p "198.51.100.44:9");
       (* Dream renders IPv6 unbracketed, so the split must be at the LAST
          colon. *)
-      Alcotest.(check (option string)) "ipv6 loopback" (Some "::1")
-        (p "::1:44746");
-      Alcotest.(check (option string)) "ipv6 full" (Some "2001:db8::1")
-        (p "2001:db8::1:0");
+      Alcotest.(check (option string))
+        "ipv6 loopback" (Some "::1") (p "::1:44746");
+      Alcotest.(check (option string))
+        "ipv6 full" (Some "2001:db8::1") (p "2001:db8::1:0");
       (* A Unix-socket peer is a path, not an address. *)
       Alcotest.(check (option string)) "unix socket" None (p "/run/earde.sock");
       Alcotest.(check (option string)) "garbage" None (p "not-an-address:1"))
@@ -375,9 +431,10 @@ let peer_parsing =
 let normalisation_collapses_spellings =
   case "client address: alternative spellings collapse to one key" (fun () ->
       let n = Earde.Client_address.normalize_ip in
-      Alcotest.(check (option string)) "ipv6 leading zeros" (Some "::1")
-        (n "::0001");
-      Alcotest.(check (option string)) "ipv6 canonical" (n "::1") (n "0:0:0:0:0:0:0:1");
+      Alcotest.(check (option string))
+        "ipv6 leading zeros" (Some "::1") (n "::0001");
+      Alcotest.(check (option string))
+        "ipv6 canonical" (n "::1") (n "0:0:0:0:0:0:0:1");
       Alcotest.(check (option string)) "malformed" None (n "999.999.999.999");
       Alcotest.(check (option string)) "empty" None (n "");
       Alcotest.(check (option string)) "text" None (n "evil"))
@@ -400,18 +457,19 @@ let forwarded_header_is_ignored_on_direct_connections =
           [ 1; 2; 3; 4; 5; 6; 7; 8 ]
       in
       List.iter
-        (fun k ->
-          Alcotest.(check string) "one stable bucket" "198.51.100.44" k)
+        (fun k -> Alcotest.(check string) "one stable bucket" "198.51.100.44" k)
         keys;
       Alcotest.(check string) "no header" "198.51.100.44" (key None);
-      Alcotest.(check string) "comma salad" "198.51.100.44"
+      Alcotest.(check string)
+        "comma salad" "198.51.100.44"
         (key (Some "1.1.1.1, 2.2.2.2, 3.3.3.3")))
 
 let ports_share_one_bucket =
   case "client address: one IP on many ports is one bucket" (fun () ->
       let key port =
         Earde.Client_address.client_ip ~trusted_proxies:trusted
-          ~peer:(Printf.sprintf "203.0.113.7:%d" port) ~forwarded_for:None
+          ~peer:(Printf.sprintf "203.0.113.7:%d" port)
+          ~forwarded_for:None
       in
       List.iter
         (fun port ->
@@ -428,18 +486,21 @@ let trusted_proxy_uses_rightmost_entry =
       (* nginx's proxy_add_x_forwarded_for APPENDS what it saw, so the
          rightmost entry is the trustworthy one and everything left of it
          is client-supplied noise. *)
-      Alcotest.(check string) "single entry" "198.51.100.44"
-        (key "198.51.100.44");
-      Alcotest.(check string) "client-prepended noise is ignored"
-        "198.51.100.44" (key "10.0.0.1, 198.51.100.44");
-      Alcotest.(check string) "a long forged chain is ignored"
-        "198.51.100.44"
+      Alcotest.(check string)
+        "single entry" "198.51.100.44" (key "198.51.100.44");
+      Alcotest.(check string)
+        "client-prepended noise is ignored" "198.51.100.44"
+        (key "10.0.0.1, 198.51.100.44");
+      Alcotest.(check string)
+        "a long forged chain is ignored" "198.51.100.44"
         (key "1.1.1.1, 2.2.2.2, 3.3.3.3, 4.4.4.4, 198.51.100.44");
-      Alcotest.(check string) "whitespace tolerated" "198.51.100.44"
+      Alcotest.(check string)
+        "whitespace tolerated" "198.51.100.44"
         (key "  10.0.0.1 ,   198.51.100.44   ");
       (* The forged prefix cannot mint buckets: rotating it changes nothing. *)
       let rotated =
-        List.map (fun i -> key (Printf.sprintf "10.0.0.%d, 198.51.100.44" i))
+        List.map
+          (fun i -> key (Printf.sprintf "10.0.0.%d, 198.51.100.44" i))
           [ 1; 2; 3; 4; 5 ]
       in
       List.iter
@@ -457,13 +518,23 @@ let malformed_forwarded_fails_safe =
          over-limiting, never a bypass. And rotating garbage cannot make
          more than that one bucket. *)
       List.iter
-        (fun ff -> Alcotest.(check string) ("falls back: " ^ ff) "127.0.0.1" (key ff))
-        [ ""; ","; "not-an-ip"; "evil, worse"; "999.999.999.999";
-          "<script>"; "10.0.0.1.5"; "unknown" ];
+        (fun ff ->
+          Alcotest.(check string) ("falls back: " ^ ff) "127.0.0.1" (key ff))
+        [
+          "";
+          ",";
+          "not-an-ip";
+          "evil, worse";
+          "999.999.999.999";
+          "<script>";
+          "10.0.0.1.5";
+          "unknown";
+        ];
       (* A malformed tail with a valid entry to its left still refuses the
          left value: only the proxy's own appended entry is trusted, and it
          is unusable here. *)
-      Alcotest.(check string) "valid-left, garbage-right" "127.0.0.1"
+      Alcotest.(check string)
+        "valid-left, garbage-right" "127.0.0.1"
         (key "198.51.100.44, garbage"))
 
 let distinct_clients_stay_distinct =
@@ -478,8 +549,8 @@ let distinct_clients_stay_distinct =
       Alcotest.(check string) "a" "198.51.100.1" a;
       Alcotest.(check string) "b" "198.51.100.2" b;
       (* IPv6 clients work the same way. *)
-      Alcotest.(check string) "ipv6 client" "2001:db8::5"
-        (via_proxy "2001:db8::5"))
+      Alcotest.(check string)
+        "ipv6 client" "2001:db8::5" (via_proxy "2001:db8::5"))
 
 let unparseable_peer_is_one_shared_bucket =
   case "client address: an unparseable peer shares one constant bucket"
@@ -488,48 +559,66 @@ let unparseable_peer_is_one_shared_bucket =
         Earde.Client_address.client_ip ~trusted_proxies:trusted ~peer
           ~forwarded_for:(Some "1.2.3.4")
       in
-      Alcotest.(check string) "unix socket" Earde.Client_address.fallback_key
-        (key "/run/earde.sock");
-      Alcotest.(check string) "garbage" Earde.Client_address.fallback_key
-        (key "???"))
+      Alcotest.(check string)
+        "unix socket" Earde.Client_address.fallback_key (key "/run/earde.sock");
+      Alcotest.(check string)
+        "garbage" Earde.Client_address.fallback_key (key "???"))
 
 let empty_trusted_set_trusts_nothing =
   case "client address: an empty trusted set ignores every forwarded header"
     (fun () ->
-      Alcotest.(check string) "loopback peer, no trust" "127.0.0.1"
+      Alcotest.(check string)
+        "loopback peer, no trust" "127.0.0.1"
         (Earde.Client_address.client_ip ~trusted_proxies:[]
            ~peer:"127.0.0.1:44746" ~forwarded_for:(Some "198.51.100.44"));
-      Alcotest.(check bool) "loopback is the default trusted set" true
-        (Earde.Client_address.default_trusted_proxies
-         = [ "127.0.0.1"; "::1" ]))
+      Alcotest.(check bool)
+        "loopback is the default trusted set" true
+        (Earde.Client_address.default_trusted_proxies = [ "127.0.0.1"; "::1" ]))
 
 let escaping_suite =
-  [ msg_page_hostile_return_url; msg_page_rejects_foreign_targets;
-    msg_page_preserves_internal_paths; js_attr_escaping; username_syntax;
-    hostile_username_profile_render; ordinary_username_profile_render;
-    settings_form_has_no_avatar_input ]
+  [
+    msg_page_hostile_return_url;
+    msg_page_rejects_foreign_targets;
+    msg_page_preserves_internal_paths;
+    js_attr_escaping;
+    username_syntax;
+    hostile_username_profile_render;
+    ordinary_username_profile_render;
+    settings_form_has_no_avatar_input;
+  ]
 
 let cookie_suite = [ cookie_policy_origin_rule; cookie_policy_attribute ]
 
 let upload_suite =
-  [ upload_format_gate; upload_argv_is_safe;
-    upload_argv_neutralises_metacharacters; upload_messages_are_uniform ]
+  [
+    upload_format_gate;
+    upload_argv_is_safe;
+    upload_argv_neutralises_metacharacters;
+    upload_messages_are_uniform;
+  ]
 
 let client_address_suite =
-  [ peer_parsing; normalisation_collapses_spellings;
-    forwarded_header_is_ignored_on_direct_connections; ports_share_one_bucket;
-    trusted_proxy_uses_rightmost_entry; malformed_forwarded_fails_safe;
-    distinct_clients_stay_distinct; unparseable_peer_is_one_shared_bucket;
-    empty_trusted_set_trusts_nothing ]
+  [
+    peer_parsing;
+    normalisation_collapses_spellings;
+    forwarded_header_is_ignored_on_direct_connections;
+    ports_share_one_bucket;
+    trusted_proxy_uses_rightmost_entry;
+    malformed_forwarded_fails_safe;
+    distinct_clients_stay_distinct;
+    unparseable_peer_is_one_shared_bucket;
+    empty_trusted_set_trusts_nothing;
+  ]
 
 let suites =
-    (* Pre-launch security fixes. The pure halves — output escaping, the
+  (* Pre-launch security fixes. The pure halves — output escaping, the
        new username syntax, the image-upload accept/argv policy, the
        session-cookie attribute rule and the client-address resolution —
        are DB-free; the reachability of each original exploit is pinned by
        the gated suites that follow. *)
-  [ ("security_escaping", escaping_suite)
-  ; ("security_session_cookie", cookie_suite)
-  ; ("security_image_upload_policy", upload_suite)
-  ; ("security_client_address", client_address_suite)
+  [
+    ("security_escaping", escaping_suite);
+    ("security_session_cookie", cookie_suite);
+    ("security_image_upload_policy", upload_suite);
+    ("security_client_address", client_address_suite);
   ]

@@ -15,24 +15,20 @@ open Caqti_request.Infix
 let ddl sql = (Caqti_type.unit ->. Caqti_type.unit) sql
 
 let drop_statements =
-  [ ddl
-      "ALTER TABLE communities \
-       DROP CONSTRAINT IF EXISTS communities_network_lifecycle_check"
+  [
+    ddl
+      "ALTER TABLE communities DROP CONSTRAINT IF EXISTS \
+       communities_network_lifecycle_check";
   ]
 
 let add_statements =
-  [ ddl
-      "ALTER TABLE communities \
-       ADD CONSTRAINT communities_network_lifecycle_check CHECK ( \
-         NOT is_network_community OR ( \
-           (onboarding_state = 'draft' \
-            AND visibility = 'private' \
-            AND NOT indexable \
-            AND NOT discoverable) \
-           OR \
-           (onboarding_state = 'published' \
-            AND visibility = 'public' \
-            AND indexable = discoverable)))"
+  [
+    ddl
+      "ALTER TABLE communities ADD CONSTRAINT \
+       communities_network_lifecycle_check CHECK ( NOT is_network_community OR \
+       ( (onboarding_state = 'draft' AND visibility = 'private' AND NOT \
+       indexable AND NOT discoverable) OR (onboarding_state = 'published' AND \
+       visibility = 'public' AND indexable = discoverable)))";
   ]
 
 let run conn statements =
@@ -45,7 +41,6 @@ let run conn statements =
     statements
 
 let drop conn = run conn drop_statements
-
 let restore conn = run conn add_statements
 
 let run_cleanup conn queries =

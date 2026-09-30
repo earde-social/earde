@@ -99,38 +99,50 @@ type report_row = {
    (BIGINT). resolved_at/created_at are ::text-cast like the other stores. *)
 let report_row_type =
   let open Caqti_type in
-  t4
-    (t4 int int int string)
+  t4 (t4 int int int string)
     (t4 string int64 (option int) (option string))
     (t4 string (option string) string (option string))
     (t4 (option string) (option int) (option string) string)
 
 let report_select =
-  "SELECT r.id, r.community_id, r.reporter_user_id, reporter.username,
-          r.target_type, r.target_id, r.target_author_user_id, author.username,
-          r.reason, r.details, r.status, r.action_kind,
-          r.resolution_note, r.resolved_by_user_id, r.resolved_at::text, r.created_at::text
-   FROM reports r
-   JOIN users reporter ON r.reporter_user_id = reporter.id
-   LEFT JOIN users author ON r.target_author_user_id = author.id"
+  "SELECT r.id, r.community_id, r.reporter_user_id, reporter.username,\n\
+  \          r.target_type, r.target_id, r.target_author_user_id, \
+   author.username,\n\
+  \          r.reason, r.details, r.status, r.action_kind,\n\
+  \          r.resolution_note, r.resolved_by_user_id, r.resolved_at::text, \
+   r.created_at::text\n\
+  \   FROM reports r\n\
+  \   JOIN users reporter ON r.reporter_user_id = reporter.id\n\
+  \   LEFT JOIN users author ON r.target_author_user_id = author.id"
 
 (* CHECK constraints guarantee the enum strings are on-enum, so the *_of_string defaults
    below are unreachable; they exist only to keep decoding total. action_kind is NULL or
    on-enum, hence Option.bind. *)
 let map_report_row
-    ((id, community_id, reporter_user_id, reporter_username),
-     (target_type_s, target_id, target_author_user_id, target_author_username),
-     (reason_s, details, status_s, action_kind_s),
-     (resolution_note, resolved_by_user_id, resolved_at, created_at)) =
+    ( (id, community_id, reporter_user_id, reporter_username),
+      (target_type_s, target_id, target_author_user_id, target_author_username),
+      (reason_s, details, status_s, action_kind_s),
+      (resolution_note, resolved_by_user_id, resolved_at, created_at) ) =
   {
-    id; community_id; reporter_user_id; reporter_username;
-    target_type = Option.value (report_target_of_string target_type_s) ~default:Report_post;
-    target_id; target_author_user_id; target_author_username;
-    reason = Option.value (report_reason_of_string reason_s) ~default:Report_other;
+    id;
+    community_id;
+    reporter_user_id;
+    reporter_username;
+    target_type =
+      Option.value (report_target_of_string target_type_s) ~default:Report_post;
+    target_id;
+    target_author_user_id;
+    target_author_username;
+    reason =
+      Option.value (report_reason_of_string reason_s) ~default:Report_other;
     details;
-    status = Option.value (report_status_of_string status_s) ~default:Report_open;
+    status =
+      Option.value (report_status_of_string status_s) ~default:Report_open;
     action_kind = Option.bind action_kind_s report_action_kind_of_string;
-    resolution_note; resolved_by_user_id; resolved_at; created_at;
+    resolution_note;
+    resolved_by_user_id;
+    resolved_at;
+    created_at;
   }
 
 (* ON CONFLICT DO NOTHING fires against uniq_reports_open_per_reporter_target — the only
@@ -141,18 +153,25 @@ let map_report_row
    collide on a generated id, so bare DO NOTHING is both correct and simpler. *)
 let create_report_query =
   let open Caqti_request.Infix in
-  (Caqti_type.(t2 (t4 int int string int64) (t3 (option int) string (option string))) ->? Caqti_type.int)
-  "INSERT INTO reports
-     (community_id, reporter_user_id, target_type, target_id, target_author_user_id, reason, details)
-   VALUES ($1, $2, $3, $4, $5, $6, $7)
-   ON CONFLICT DO NOTHING
-   RETURNING id"
+  (Caqti_type.(
+     t2 (t4 int int string int64) (t3 (option int) string (option string)))
+  ->? Caqti_type.int)
+    "INSERT INTO reports\n\
+    \     (community_id, reporter_user_id, target_type, target_id, \
+     target_author_user_id, reason, details)\n\
+    \   VALUES ($1, $2, $3, $4, $5, $6, $7)\n\
+    \   ON CONFLICT DO NOTHING\n\
+    \   RETURNING id"
 
-let create_report (module C : Caqti_lwt.CONNECTION) ~community_id ~reporter_user_id
-    ~target_type ~target_id ~target_author_user_id ~reason ~details =
+let create_report (module C : Caqti_lwt.CONNECTION) ~community_id
+    ~reporter_user_id ~target_type ~target_id ~target_author_user_id ~reason
+    ~details =
   C.find_opt create_report_query
-    ((community_id, reporter_user_id, report_target_to_string target_type, target_id),
-     (target_author_user_id, report_reason_to_string reason, details))
+    ( ( community_id,
+        reporter_user_id,
+        report_target_to_string target_type,
+        target_id ),
+      (target_author_user_id, report_reason_to_string reason, details) )
   >>= function
   | Ok (Some id) -> Lwt.return (Ok (`Created id))
   | Ok None -> Lwt.return (Ok `Duplicate)
@@ -161,20 +180,22 @@ let create_report (module C : Caqti_lwt.CONNECTION) ~community_id ~reporter_user
 let get_reports_by_community_query =
   let open Caqti_request.Infix in
   (Caqti_type.(t2 int string) ->* report_row_type)
-  (report_select ^ "
-   WHERE r.community_id = $1 AND r.status = $2
-   ORDER BY r.created_at DESC, r.id DESC")
+    (report_select
+   ^ "\n\
+     \   WHERE r.community_id = $1 AND r.status = $2\n\
+     \   ORDER BY r.created_at DESC, r.id DESC")
 
-let get_reports_by_community (module C : Caqti_lwt.CONNECTION) community_id ~status =
-  C.collect_list get_reports_by_community_query (community_id, report_status_to_string status)
+let get_reports_by_community (module C : Caqti_lwt.CONNECTION) community_id
+    ~status =
+  C.collect_list get_reports_by_community_query
+    (community_id, report_status_to_string status)
   >>= function
   | Ok rows -> Lwt.return (Ok (List.map map_report_row rows))
   | Error e -> Lwt.return (Error (Caqti_error.show e))
 
 let get_report_by_id_query =
   let open Caqti_request.Infix in
-  (Caqti_type.int ->? report_row_type)
-  (report_select ^ " WHERE r.id = $1")
+  (Caqti_type.int ->? report_row_type) (report_select ^ " WHERE r.id = $1")
 
 let get_report_by_id (module C : Caqti_lwt.CONNECTION) report_id =
   C.find_opt get_report_by_id_query report_id >>= function
@@ -184,16 +205,19 @@ let get_report_by_id (module C : Caqti_lwt.CONNECTION) report_id =
 
 let resolve_report_query =
   let open Caqti_request.Infix in
-  (Caqti_type.(t2 (t3 string (option string) (option string)) (t2 int int)) ->. Caqti_type.unit)
-  "UPDATE reports
-   SET status = $1, action_kind = $2, resolution_note = $3,
-       resolved_by_user_id = $4, resolved_at = CURRENT_TIMESTAMP
-   WHERE id = $5"
+  (Caqti_type.(t2 (t3 string (option string) (option string)) (t2 int int))
+  ->. Caqti_type.unit)
+    "UPDATE reports\n\
+    \   SET status = $1, action_kind = $2, resolution_note = $3,\n\
+    \       resolved_by_user_id = $4, resolved_at = CURRENT_TIMESTAMP\n\
+    \   WHERE id = $5"
 
-let resolve_report (module C : Caqti_lwt.CONNECTION) report_id ~resolver_user_id ~status ~action_kind ~note =
+let resolve_report (module C : Caqti_lwt.CONNECTION) report_id ~resolver_user_id
+    ~status ~action_kind ~note =
   let action_kind_s = Option.map report_action_kind_to_string action_kind in
   C.exec resolve_report_query
-    ((report_status_to_string status, action_kind_s, note), (resolver_user_id, report_id))
+    ( (report_status_to_string status, action_kind_s, note),
+      (resolver_user_id, report_id) )
   >>= function
   | Ok () -> Lwt.return (Ok ())
   | Error e -> Lwt.return (Error (Caqti_error.show e))
@@ -201,7 +225,8 @@ let resolve_report (module C : Caqti_lwt.CONNECTION) report_id ~resolver_user_id
 let count_open_reports_query =
   let open Caqti_request.Infix in
   (Caqti_type.int ->! Caqti_type.int)
-  "SELECT COUNT(*)::int FROM reports WHERE community_id = $1 AND status = 'open'"
+    "SELECT COUNT(*)::int FROM reports WHERE community_id = $1 AND status = \
+     'open'"
 
 let count_open_reports (module C : Caqti_lwt.CONNECTION) community_id =
   C.find count_open_reports_query community_id >>= function

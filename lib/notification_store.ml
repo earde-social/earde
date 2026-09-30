@@ -96,91 +96,166 @@ let get_notifications_query =
      since gone (its FKs cascade), which the renderer reads as the generic
      degraded line. *)
   (Caqti_type.(t2 int bool)
-   ->* Caqti_type.(
-         t2
-           (t2
+  ->* Caqti_type.(
+        t2
+          (t2
              (t2
-                (t2 (t4 int int (option int) string) (t3 (option string) bool string))
-                (t4 (option string) (option string) (option string) (option string)))
+                (t2
+                   (t4 int int (option int) string)
+                   (t3 (option string) bool string))
+                (t4 (option string) (option string) (option string)
+                   (option string)))
              (t2 (option string) (option string)))
-           (t2
-              (t4 (option int) (option string) (option string) (option string))
-              (t2 (t3 (option string) (option string) (option bool))
-                 (t4 (option bool) (option bool) (option bool) (option bool))))))
-  (Printf.sprintf
-  "SELECT n.id, n.user_id, n.post_id, n.notif_type, n.message, n.is_read, n.created_at::text,
-          p.name, p.slug, c.name, c.slug, cp.name, cp.slug,
-          stp_post.id, stp_post.title, sto.name, sto.slug, std.name, std.slug,
-          (stp.origin_community_id = n.community_id),
-          CASE WHEN sto.id IS NULL THEN NULL
-               ELSE (sto.visibility = 'public'
-                     OR EXISTS (SELECT 1 FROM community_members stv
-                                WHERE stv.user_id = n.user_id AND stv.community_id = sto.id)
-                     OR EXISTS (SELECT 1 FROM community_moderators stvm
-                                WHERE stvm.user_id = n.user_id AND stvm.community_id = sto.id)
-                     OR EXISTS (SELECT 1 FROM users stvu
-                                WHERE stvu.id = n.user_id AND stvu.is_admin)) END,
-          CASE WHEN std.id IS NULL THEN NULL
-               ELSE (std.visibility = 'public'
-                     OR EXISTS (SELECT 1 FROM community_members stw
-                                WHERE stw.user_id = n.user_id AND stw.community_id = std.id)
-                     OR EXISTS (SELECT 1 FROM community_moderators stwm
-                                WHERE stwm.user_id = n.user_id AND stwm.community_id = std.id)
-                     OR EXISTS (SELECT 1 FROM users stwu
-                                WHERE stwu.id = n.user_id AND stwu.is_admin)) END,
-          CASE WHEN stp_post.id IS NULL OR sto.id IS NULL THEN NULL
-               ELSE ((stp_post.content IS NULL OR stp_post.content NOT IN (%s))
-                     AND ((stp_post.user_id = n.user_id
-                           AND EXISTS (SELECT 1 FROM community_members sca
-                                       WHERE sca.user_id = n.user_id AND sca.community_id = sto.id)
-                           AND NOT EXISTS (SELECT 1 FROM community_bans scb
-                                           WHERE scb.user_id = n.user_id AND scb.community_id = sto.id)
-                           AND NOT EXISTS (SELECT 1 FROM users scu
-                                           WHERE scu.id = n.user_id AND scu.is_banned))
-                          OR EXISTS (SELECT 1 FROM community_moderators scm
-                                     WHERE scm.user_id = n.user_id AND scm.community_id = sto.id
-                                       AND scm.role = 'top_mod')
-                          OR ($2 AND EXISTS (SELECT 1 FROM users sce
-                                             WHERE sce.id = n.user_id AND sce.is_admin)))) END,
-          CASE WHEN std.id IS NULL THEN NULL
-               ELSE (EXISTS (SELECT 1 FROM community_moderators sdm
-                             WHERE sdm.user_id = n.user_id AND sdm.community_id = std.id
-                               AND sdm.role = 'top_mod')
-                     OR ($2 AND EXISTS (SELECT 1 FROM users sde
-                                        WHERE sde.id = n.user_id AND sde.is_admin))) END
-   FROM notifications n
-   LEFT JOIN open_source_projects p ON p.id = n.project_id
-   LEFT JOIN communities c ON c.id = n.community_id
-   LEFT JOIN community_connections cc ON cc.id = n.connection_id
-   LEFT JOIN communities cp
-          ON cp.id = CASE WHEN cc.requester_community_id = n.community_id
-                          THEN cc.recipient_community_id
-                          ELSE cc.requester_community_id END
-   LEFT JOIN shared_thread_placements stp ON stp.id = n.shared_thread_placement_id
-   LEFT JOIN posts stp_post ON stp_post.id = stp.post_id
-   LEFT JOIN communities sto ON sto.id = stp.origin_community_id
-   LEFT JOIN communities std ON std.id = stp.destination_community_id
-   WHERE n.user_id = $1 ORDER BY n.created_at DESC LIMIT 50"
-  (* The Share page refuses tombstoned threads for every viewer, so the
+          (t2
+             (t4 (option int) (option string) (option string) (option string))
+             (t2
+                (t3 (option string) (option string) (option bool))
+                (t4 (option bool) (option bool) (option bool) (option bool)))))
+  )
+    (Printf.sprintf
+       "SELECT n.id, n.user_id, n.post_id, n.notif_type, n.message, n.is_read, \
+        n.created_at::text,\n\
+       \          p.name, p.slug, c.name, c.slug, cp.name, cp.slug,\n\
+       \          stp_post.id, stp_post.title, sto.name, sto.slug, std.name, \
+        std.slug,\n\
+       \          (stp.origin_community_id = n.community_id),\n\
+       \          CASE WHEN sto.id IS NULL THEN NULL\n\
+       \               ELSE (sto.visibility = 'public'\n\
+       \                     OR EXISTS (SELECT 1 FROM community_members stv\n\
+       \                                WHERE stv.user_id = n.user_id AND \
+        stv.community_id = sto.id)\n\
+       \                     OR EXISTS (SELECT 1 FROM community_moderators stvm\n\
+       \                                WHERE stvm.user_id = n.user_id AND \
+        stvm.community_id = sto.id)\n\
+       \                     OR EXISTS (SELECT 1 FROM users stvu\n\
+       \                                WHERE stvu.id = n.user_id AND \
+        stvu.is_admin)) END,\n\
+       \          CASE WHEN std.id IS NULL THEN NULL\n\
+       \               ELSE (std.visibility = 'public'\n\
+       \                     OR EXISTS (SELECT 1 FROM community_members stw\n\
+       \                                WHERE stw.user_id = n.user_id AND \
+        stw.community_id = std.id)\n\
+       \                     OR EXISTS (SELECT 1 FROM community_moderators stwm\n\
+       \                                WHERE stwm.user_id = n.user_id AND \
+        stwm.community_id = std.id)\n\
+       \                     OR EXISTS (SELECT 1 FROM users stwu\n\
+       \                                WHERE stwu.id = n.user_id AND \
+        stwu.is_admin)) END,\n\
+       \          CASE WHEN stp_post.id IS NULL OR sto.id IS NULL THEN NULL\n\
+       \               ELSE ((stp_post.content IS NULL OR stp_post.content NOT \
+        IN (%s))\n\
+       \                     AND ((stp_post.user_id = n.user_id\n\
+       \                           AND EXISTS (SELECT 1 FROM community_members \
+        sca\n\
+       \                                       WHERE sca.user_id = n.user_id \
+        AND sca.community_id = sto.id)\n\
+       \                           AND NOT EXISTS (SELECT 1 FROM \
+        community_bans scb\n\
+       \                                           WHERE scb.user_id = \
+        n.user_id AND scb.community_id = sto.id)\n\
+       \                           AND NOT EXISTS (SELECT 1 FROM users scu\n\
+       \                                           WHERE scu.id = n.user_id \
+        AND scu.is_banned))\n\
+       \                          OR EXISTS (SELECT 1 FROM \
+        community_moderators scm\n\
+       \                                     WHERE scm.user_id = n.user_id AND \
+        scm.community_id = sto.id\n\
+       \                                       AND scm.role = 'top_mod')\n\
+       \                          OR ($2 AND EXISTS (SELECT 1 FROM users sce\n\
+       \                                             WHERE sce.id = n.user_id \
+        AND sce.is_admin)))) END,\n\
+       \          CASE WHEN std.id IS NULL THEN NULL\n\
+       \               ELSE (EXISTS (SELECT 1 FROM community_moderators sdm\n\
+       \                             WHERE sdm.user_id = n.user_id AND \
+        sdm.community_id = std.id\n\
+       \                               AND sdm.role = 'top_mod')\n\
+       \                     OR ($2 AND EXISTS (SELECT 1 FROM users sde\n\
+       \                                        WHERE sde.id = n.user_id AND \
+        sde.is_admin))) END\n\
+       \   FROM notifications n\n\
+       \   LEFT JOIN open_source_projects p ON p.id = n.project_id\n\
+       \   LEFT JOIN communities c ON c.id = n.community_id\n\
+       \   LEFT JOIN community_connections cc ON cc.id = n.connection_id\n\
+       \   LEFT JOIN communities cp\n\
+       \          ON cp.id = CASE WHEN cc.requester_community_id = \
+        n.community_id\n\
+       \                          THEN cc.recipient_community_id\n\
+       \                          ELSE cc.requester_community_id END\n\
+       \   LEFT JOIN shared_thread_placements stp ON stp.id = \
+        n.shared_thread_placement_id\n\
+       \   LEFT JOIN posts stp_post ON stp_post.id = stp.post_id\n\
+       \   LEFT JOIN communities sto ON sto.id = stp.origin_community_id\n\
+       \   LEFT JOIN communities std ON std.id = stp.destination_community_id\n\
+       \   WHERE n.user_id = $1 ORDER BY n.created_at DESC LIMIT 50"
+       (* The Share page refuses tombstoned threads for every viewer, so the
      capability must too. The labels come from the one pure authority,
      never respelled here; they are fixed quote-free bytes, safe to splice
      as SQL string literals. *)
-  (String.concat ", "
-     (List.map
-        (fun label -> "'" ^ label ^ "'")
-        Shared_thread_placements.tombstone_labels)))
+       (String.concat ", "
+          (List.map
+             (fun label -> "'" ^ label ^ "'")
+             Shared_thread_placements.tombstone_labels)))
 
-let get_notifications (module C: Caqti_lwt.CONNECTION) ~session_admin user_id =
+let get_notifications (module C : Caqti_lwt.CONNECTION) ~session_admin user_id =
   C.collect_list get_notifications_query (user_id, session_admin) >>= function
-  | Ok rows -> Lwt.return (Ok (List.map (fun (((((id, user_id, post_id, notif_type), (message, is_read, created_at)), (project_name, project_slug, community_name, community_slug)), (counterpart_name, counterpart_slug)), ((st_post_id, st_post_title, st_origin_name, st_origin_slug), ((st_destination_name, st_destination_slug, st_origin_context), (st_origin_visible, st_destination_visible, st_share_capable, st_manage_capable)))) -> {id; user_id; post_id; notif_type; message; is_read; created_at; project_name; project_slug; community_name; community_slug; counterpart_name; counterpart_slug; st_post_id; st_post_title; st_origin_name; st_origin_slug; st_destination_name; st_destination_slug; st_origin_context; st_origin_visible; st_destination_visible; st_share_capable; st_manage_capable}) rows))
+  | Ok rows ->
+      Lwt.return
+        (Ok
+           (List.map
+              (fun ( ( ( ( (id, user_id, post_id, notif_type),
+                           (message, is_read, created_at) ),
+                         ( project_name,
+                           project_slug,
+                           community_name,
+                           community_slug ) ),
+                       (counterpart_name, counterpart_slug) ),
+                     ( ( st_post_id,
+                         st_post_title,
+                         st_origin_name,
+                         st_origin_slug ),
+                       ( ( st_destination_name,
+                           st_destination_slug,
+                           st_origin_context ),
+                         ( st_origin_visible,
+                           st_destination_visible,
+                           st_share_capable,
+                           st_manage_capable ) ) ) ) ->
+                {
+                  id;
+                  user_id;
+                  post_id;
+                  notif_type;
+                  message;
+                  is_read;
+                  created_at;
+                  project_name;
+                  project_slug;
+                  community_name;
+                  community_slug;
+                  counterpart_name;
+                  counterpart_slug;
+                  st_post_id;
+                  st_post_title;
+                  st_origin_name;
+                  st_origin_slug;
+                  st_destination_name;
+                  st_destination_slug;
+                  st_origin_context;
+                  st_origin_visible;
+                  st_destination_visible;
+                  st_share_capable;
+                  st_manage_capable;
+                })
+              rows))
   | Error e -> Lwt.return (Error (Caqti_error.show e))
 
 let count_unread_notifs_query =
   let open Caqti_request.Infix in
   (Caqti_type.int ->! Caqti_type.int)
-  "SELECT COUNT(*)::int FROM notifications WHERE user_id = $1 AND is_read = FALSE"
+    "SELECT COUNT(*)::int FROM notifications WHERE user_id = $1 AND is_read = \
+     FALSE"
 
-let count_unread_notifs (module C: Caqti_lwt.CONNECTION) user_id =
+let count_unread_notifs (module C : Caqti_lwt.CONNECTION) user_id =
   C.find count_unread_notifs_query user_id >>= function
   | Ok c -> Lwt.return (Ok c)
   | Error e -> Lwt.return (Error (Caqti_error.show e))
@@ -188,31 +263,33 @@ let count_unread_notifs (module C: Caqti_lwt.CONNECTION) user_id =
 let mark_notifs_read_query =
   let open Caqti_request.Infix in
   (Caqti_type.int ->. Caqti_type.unit)
-  "UPDATE notifications SET is_read = TRUE WHERE user_id = $1"
+    "UPDATE notifications SET is_read = TRUE WHERE user_id = $1"
 
-let mark_notifs_read (module C: Caqti_lwt.CONNECTION) user_id =
+let mark_notifs_read (module C : Caqti_lwt.CONNECTION) user_id =
   C.exec mark_notifs_read_query user_id >>= function
-  | Ok () -> Lwt.return (Ok())
+  | Ok () -> Lwt.return (Ok ())
   | Error e -> Lwt.return (Error (Caqti_error.show e))
 
 let create_notif_query =
   let open Caqti_request.Infix in
   (Caqti_type.(t4 int (option int) string string) ->. Caqti_type.unit)
-  "INSERT INTO notifications (user_id, post_id, notif_type, message) VALUES ($1, $2, $3, $4)"
+    "INSERT INTO notifications (user_id, post_id, notif_type, message) VALUES \
+     ($1, $2, $3, $4)"
 
-let create_notif (module C: Caqti_lwt.CONNECTION) user_id post_id_opt notif_type message =
-  C.exec create_notif_query (user_id, post_id_opt, notif_type, message) >>= function
-  | Ok () -> Lwt.return (Ok())
+let create_notif (module C : Caqti_lwt.CONNECTION) user_id post_id_opt
+    notif_type message =
+  C.exec create_notif_query (user_id, post_id_opt, notif_type, message)
+  >>= function
+  | Ok () -> Lwt.return (Ok ())
   | Error e -> Lwt.return (Error (Caqti_error.show e))
 
 (* Notification delivery is best-effort; collapse Ok None and Error into the same
    Error path so callers can skip silently if the post/comment was deleted. *)
 let get_post_owner_query =
   let open Caqti_request.Infix in
-  (Caqti_type.int ->? Caqti_type.int)
-  "SELECT user_id FROM posts WHERE id = $1"
+  (Caqti_type.int ->? Caqti_type.int) "SELECT user_id FROM posts WHERE id = $1"
 
-let get_post_owner (module C: Caqti_lwt.CONNECTION) pid =
+let get_post_owner (module C : Caqti_lwt.CONNECTION) pid =
   C.find_opt get_post_owner_query pid >>= function
   | Ok (Some id) -> Lwt.return (Ok id)
   | _ -> Lwt.return (Error "not found")
@@ -220,9 +297,9 @@ let get_post_owner (module C: Caqti_lwt.CONNECTION) pid =
 let get_comment_owner_query =
   let open Caqti_request.Infix in
   (Caqti_type.int ->? Caqti_type.int)
-  "SELECT user_id FROM comments WHERE id = $1"
+    "SELECT user_id FROM comments WHERE id = $1"
 
-let get_comment_owner (module C: Caqti_lwt.CONNECTION) cid =
+let get_comment_owner (module C : Caqti_lwt.CONNECTION) cid =
   C.find_opt get_comment_owner_query cid >>= function
   | Ok (Some id) -> Lwt.return (Ok id)
   | _ -> Lwt.return (Error "not found")
@@ -230,9 +307,9 @@ let get_comment_owner (module C: Caqti_lwt.CONNECTION) cid =
 let get_comment_post_id_query =
   let open Caqti_request.Infix in
   (Caqti_type.int ->? Caqti_type.int)
-  "SELECT post_id FROM comments WHERE id = $1"
+    "SELECT post_id FROM comments WHERE id = $1"
 
-let get_comment_post_id (module C: Caqti_lwt.CONNECTION) cid =
+let get_comment_post_id (module C : Caqti_lwt.CONNECTION) cid =
   C.find_opt get_comment_post_id_query cid >>= function
   | Ok (Some id) -> Lwt.return (Ok id)
   | _ -> Lwt.return (Error "not found")

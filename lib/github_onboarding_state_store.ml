@@ -12,9 +12,7 @@
 
 open Lwt.Infix
 
-type issue_error =
-  | Invalid_user_id
-  | Storage_error
+type issue_error = Invalid_user_id | Storage_error
 
 let ttl_seconds = 900
 
@@ -25,12 +23,12 @@ let valid_user_id user_id = user_id > 0
 let insert_state_query =
   let open Caqti_request.Infix in
   (Caqti_type.(t2 (t4 string int string string) int) ->. Caqti_type.unit)
-  "INSERT INTO github_onboarding_states \
-     (state_hash, user_id, session_binding_hash, flow, expires_at) \
-   VALUES ($1, $2, $3, $4, NOW() + $5 * INTERVAL '1 second')"
+    "INSERT INTO github_onboarding_states (state_hash, user_id, \
+     session_binding_hash, flow, expires_at) VALUES ($1, $2, $3, $4, NOW() + \
+     $5 * INTERVAL '1 second')"
 
-let issue (module C : Caqti_lwt.CONNECTION) ~user_id ~session_binding_hash
-    ~flow =
+let issue (module C : Caqti_lwt.CONNECTION) ~user_id ~session_binding_hash ~flow
+    =
   if not (valid_user_id user_id) then Lwt.return (Error Invalid_user_id)
   else
     let state = Github_onboarding_crypto.generate_state () in
@@ -76,21 +74,16 @@ let valid_pending_installation_id id = Int64.compare id 0L > 0
 let attach_pending_installation_query =
   let open Caqti_request.Infix in
   (Caqti_type.(t2 (t3 string string string) int64) ->? Caqti_type.bool)
-  "UPDATE github_onboarding_states \
-     SET pending_github_installation_id = $4 \
-   WHERE state_hash = $1 \
-     AND session_binding_hash = $2 \
-     AND flow = $3 \
-     AND consumed_at IS NULL \
-     AND expires_at > NOW() \
-     AND (pending_github_installation_id IS NULL \
-          OR pending_github_installation_id = $4) \
-   RETURNING TRUE"
+    "UPDATE github_onboarding_states SET pending_github_installation_id = $4 \
+     WHERE state_hash = $1 AND session_binding_hash = $2 AND flow = $3 AND \
+     consumed_at IS NULL AND expires_at > NOW() AND \
+     (pending_github_installation_id IS NULL OR pending_github_installation_id \
+     = $4) RETURNING TRUE"
 
 let attach_pending_installation (module C : Caqti_lwt.CONNECTION) ~state
     ~session_binding_hash ~flow ~pending_github_installation_id =
-  if not (valid_pending_installation_id pending_github_installation_id)
-  then Lwt.return (Error Invalid_pending_installation_id)
+  if not (valid_pending_installation_id pending_github_installation_id) then
+    Lwt.return (Error Invalid_pending_installation_id)
   else
     let state_hash =
       Github_onboarding_crypto.state_hash_to_string
@@ -102,8 +95,7 @@ let attach_pending_installation (module C : Caqti_lwt.CONNECTION) ~state
     in
     let flow = Github_onboarding.string_of_flow flow in
     C.find_opt attach_pending_installation_query
-      ( (state_hash, session_binding_hash, flow),
-        pending_github_installation_id )
+      ((state_hash, session_binding_hash, flow), pending_github_installation_id)
     >>= function
     | Ok (Some _) -> Lwt.return (Ok ())
     | Ok None ->
@@ -137,22 +129,19 @@ type consume_error =
 let lock_state_query =
   let open Caqti_request.Infix in
   (Caqti_type.string
-   ->? Caqti_type.(t2 (t4 int64 int string string)
-                      (t3 (option int64) bool bool)))
-  "SELECT id, user_id, session_binding_hash, flow, \
-          pending_github_installation_id, \
-          expires_at <= NOW() AS expired, \
-          consumed_at IS NOT NULL AS consumed \
-   FROM github_onboarding_states \
-   WHERE state_hash = $1 \
-   FOR UPDATE"
+  ->? Caqti_type.(t2 (t4 int64 int string string) (t3 (option int64) bool bool))
+  )
+    "SELECT id, user_id, session_binding_hash, flow, \
+     pending_github_installation_id, expires_at <= NOW() AS expired, \
+     consumed_at IS NOT NULL AS consumed FROM github_onboarding_states WHERE \
+     state_hash = $1 FOR UPDATE"
 
 (* Keyed on the locked row's primary key and touching only consumed_at: the
    identity/lifecycle columns of a burned row stay intact for audit. *)
 let mark_consumed_query =
   let open Caqti_request.Infix in
   (Caqti_type.int64 ->. Caqti_type.unit)
-  "UPDATE github_onboarding_states SET consumed_at = NOW() WHERE id = $1"
+    "UPDATE github_onboarding_states SET consumed_at = NOW() WHERE id = $1"
 
 (* Single-use consumption. The whole operation runs under one transaction
    with the row locked FOR UPDATE; concurrent consumers of the same state
@@ -173,15 +162,14 @@ let mark_consumed_query =
    states (not found / expired / already consumed) are reported without
    writing anything — an expired row stays for cleanup/audit and a replayed
    row keeps its original consumed_at. *)
-let consume (module C : Caqti_lwt.CONNECTION) ~state ~session_binding_hash
-    ~flow =
+let consume (module C : Caqti_lwt.CONNECTION) ~state ~session_binding_hash ~flow
+    =
   let state_hash =
     Github_onboarding_crypto.state_hash_to_string
       (Github_onboarding_crypto.hash_state state)
   in
   let session_binding_hash =
-    Github_onboarding_crypto.session_binding_hash_to_string
-      session_binding_hash
+    Github_onboarding_crypto.session_binding_hash_to_string session_binding_hash
   in
   (* As elsewhere in this module every Caqti error is dropped payload-free;
      rollback failure adds nothing a caller may act on either. *)
@@ -202,8 +190,8 @@ let consume (module C : Caqti_lwt.CONNECTION) ~state ~session_binding_hash
       | Ok None -> rollback_to State_not_found
       | Ok
           (Some
-            ( (row_id, stored_user_id, stored_binding_hash, stored_flow),
-              (pending, expired, consumed) )) -> (
+             ( (row_id, stored_user_id, stored_binding_hash, stored_flow),
+               (pending, expired, consumed) )) -> (
           if consumed then rollback_to State_already_consumed
           else if expired then rollback_to State_expired
           else if not (String.equal stored_binding_hash session_binding_hash)
@@ -237,6 +225,5 @@ let consume (module C : Caqti_lwt.CONNECTION) ~state ~session_binding_hash
                                    {
                                      user_id = stored_user_id;
                                      flow = parsed_flow;
-                                     pending_github_installation_id =
-                                       pending_id;
+                                     pending_github_installation_id = pending_id;
                                    }))))))

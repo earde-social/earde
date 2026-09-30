@@ -56,7 +56,8 @@ let page_headers =
 let clean_redirect location =
   Dream.response ~status:`See_Other
     ~headers:
-      [ ("Location", location);
+      [
+        ("Location", location);
         ("Cache-Control", "no-store");
         ("Pragma", "no-cache");
         ("Referrer-Policy", "no-referrer");
@@ -106,8 +107,8 @@ let unavailable_page request =
 let not_found_page request =
   Dream.respond ~status:`Not_Found ~headers:page_headers
     (Site_pages.msg_page ?user:(session_user request) ~title:"Not Found"
-       ~message:"This page does not exist." ~alert_type:"error"
-       ~return_url:"/" request)
+       ~message:"This page does not exist." ~alert_type:"error" ~return_url:"/"
+       request)
 
 (* --- Redirect destinations ---
 
@@ -204,8 +205,8 @@ let handle_removal_result request ~user_id ~surface ~redirect = function
          reflected. *)
       not_found_page request
   | Error
-      (Store.Project_unavailable | Store.Community_unavailable
-      | Store.Actor_unauthorized) ->
+      ( Store.Project_unavailable | Store.Community_unavailable
+      | Store.Actor_unauthorized ) ->
       (* Missing project, missing community, wrong pair, and every
          insufficient authority stay indistinguishable. *)
       not_found_page request
@@ -226,16 +227,17 @@ let handle_removal_result request ~user_id ~surface ~redirect = function
 let make_removal_handler ~surface ~redirect_of ~mode ~load_config request =
   with_gates ~mode request (fun ~user_id ->
       match
-        (route_param request "project_slug", route_param request "community_slug")
+        ( route_param request "project_slug",
+          route_param request "community_slug" )
       with
       | None, _ | _, None -> not_found_page request
       | Some project_slug, Some community_slug -> (
           match load_config () with
           | Error _ -> unavailable_page request
-          | Ok config ->
+          | Ok config -> (
               if not (Request_origin.same_origin_request config request) then
                 forbidden_page request
-              else (
+              else
                 (* Dream's form API enforces the URL-encoded content type
                    and verifies its own CSRF field, which it strips from
                    the returned fields. Every CSRF failure collapses to one

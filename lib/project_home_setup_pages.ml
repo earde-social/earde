@@ -10,9 +10,7 @@ open Html.Infix
    that fails the shared HTTP(S) gate degrades to plain text rather than
    becoming an actionable link. *)
 
-type account_type =
-  | Personal
-  | Organization
+type account_type = Personal | Organization
 
 type repository = {
   full_name : string;
@@ -33,7 +31,6 @@ type project = {
   namespace_type : account_type;
   repositories : repository list;
 }
-
 
 let account_type_copy = function
   | Personal -> Html.static "Personal account"
@@ -60,18 +57,19 @@ let linked_or_text ~link_class url text_html =
         [ safe; Html.text link_class; text_html ]
 
 let heading =
-  (Html.static "<div class='create-head'>\
-   <h1 class='create-title'>Project created</h1>\
-   <p class='create-sub phs-verified'>Project connected through GitHub</p>\
-   </div>")
+  Html.static
+    "<div class='create-head'><h1 class='create-title'>Project created</h1><p \
+     class='create-sub phs-verified'>Project connected through \
+     GitHub</p></div>"
 
 let summary_html project =
   let optional_rows =
     (match project.description with
-    | None -> Html.empty
-    | Some text ->
-        (Html.template "<dt>Description</dt><dd class='phs-description'>%s</dd>"
-  [ (Html.text (text)) ]))
+      | None -> Html.empty
+      | Some text ->
+          Html.template
+            "<dt>Description</dt><dd class='phs-description'>%s</dd>"
+            [ Html.text text ])
     ++
     (* The website row exists only for a URL the shared HTTP(S) gate
        accepts: a corrupt scheme is dropped whole rather than rendered as
@@ -82,58 +80,61 @@ let summary_html project =
         match Html.external_url_opt url with
         | None -> Html.empty
         | Some safe ->
-            Html.template "<dt>Website</dt><dd class='phs-website'><a href='%s' \
+            Html.template
+              "<dt>Website</dt><dd class='phs-website'><a href='%s' \
                class='create-link'>%s</a></dd>"
               [ safe; Html.text url ])
   in
-  (Html.template "<section class='phs-summary'>\
-     <h2 class='phs-name'>%s</h2>\
-     <dl class='phs-facts'>\
-     <dt>Earde identifier</dt><dd><code class='phs-slug'>%s</code></dd>\
-     <dt>Kind</dt><dd class='phs-kind'>%s</dd>\
-     <dt>GitHub namespace</dt><dd class='phs-namespace'>%s (%s)</dd>\
-     %s</dl>\
-     </section>"
-  [ (Html.text (project.name))
-  ; (Html.text (project.slug))
-  ; (kind_copy project.kind)
-  ; (Html.text (project.namespace_login))
-  ; (account_type_copy project.namespace_type)
-  ; optional_rows ])
+  Html.template
+    "<section class='phs-summary'><h2 class='phs-name'>%s</h2><dl \
+     class='phs-facts'><dt>Earde identifier</dt><dd><code \
+     class='phs-slug'>%s</code></dd><dt>Kind</dt><dd \
+     class='phs-kind'>%s</dd><dt>GitHub namespace</dt><dd \
+     class='phs-namespace'>%s (%s)</dd>%s</dl></section>"
+    [
+      Html.text project.name;
+      Html.text project.slug;
+      kind_copy project.kind;
+      Html.text project.namespace_login;
+      account_type_copy project.namespace_type;
+      optional_rows;
+    ]
 
 let repository_html repository =
   let markers =
     (if repository.is_primary then
-       (Html.static "<span class='phs-repo-primary'>Primary</span>")
+       Html.static "<span class='phs-repo-primary'>Primary</span>"
      else Html.empty)
     ++
     if repository.is_archived then
-      (Html.static "<span class='phs-repo-archived'>Archived</span>")
+      Html.static "<span class='phs-repo-archived'>Archived</span>"
     else Html.empty
   in
   let description =
     match repository.description with
-    | Some text -> (Html.template "<p class='phs-repo-desc'>%s</p>"
-  [ (Html.text (text)) ])
+    | Some text ->
+        Html.template "<p class='phs-repo-desc'>%s</p>" [ Html.text text ]
     | None -> Html.empty
   in
   (* default_branch may contain '/' — text only, never a URL segment. *)
-  (Html.template "<li class='phs-repo'><span class='phs-repo-name'>%s</span>%s%s\
-     <p class='phs-repo-meta'>Default branch <code \
+  Html.template
+    "<li class='phs-repo'><span class='phs-repo-name'>%s</span>%s%s<p \
+     class='phs-repo-meta'>Default branch <code \
      class='phs-repo-branch'>%s</code></p></li>"
-  [ (linked_or_text ~link_class:"create-link phs-repo-link"
-       repository.html_url
-       (Html.text (repository.full_name)))
-  ; markers
-  ; description
-  ; (Html.text (repository.default_branch)) ])
+    [
+      linked_or_text ~link_class:"create-link phs-repo-link" repository.html_url
+        (Html.text repository.full_name);
+      markers;
+      description;
+      Html.text repository.default_branch;
+    ]
 
 let repositories_html repositories =
-  (Html.template "<section class='phs-repos'>\
-     <h2 class='phs-repos-title'>Repositories</h2>\
-     <ul class='phs-repo-list'>%s</ul>\
-     </section>"
-  [ ((Html.join (Html.static "\n")) (List.map repository_html repositories)) ])
+  Html.template
+    "<section class='phs-repos'><h2 \
+     class='phs-repos-title'>Repositories</h2><ul \
+     class='phs-repo-list'>%s</ul></section>"
+    [ (Html.join (Html.static "\n")) (List.map repository_html repositories) ]
 
 (* The same canonical grammar the request-home route and read model
    require. A project slug outside it never becomes a navigation link. *)
@@ -158,24 +159,26 @@ let valid_project_slug value =
 let next_step_html project =
   let links =
     if valid_project_slug project.slug then
-      (Html.template "<p class='phs-next-connect'><a href='%s' class='create-link \
-         phs-next-request-link'>Connect to an existing community</a></p>\
-         <p class='phs-next-create'><a href='%s' class='create-link \
+      Html.template
+        "<p class='phs-next-connect'><a href='%s' class='create-link \
+         phs-next-request-link'>Connect to an existing community</a></p><p \
+         class='phs-next-create'><a href='%s' class='create-link \
          phs-next-create-link'>Create a community home</a></p>"
-  [ (Html.internal_path (("/projects/" ^ project.slug ^ "/request-home")))
-  ; (Html.internal_path (("/projects/" ^ project.slug ^ "/community-home/new"))) ])
+        [
+          Html.internal_path ("/projects/" ^ project.slug ^ "/request-home");
+          Html.internal_path
+            ("/projects/" ^ project.slug ^ "/community-home/new");
+        ]
     else Html.empty
   in
-  (Html.template "<section class='phs-next'>\
-     <h2 class='phs-next-title'>Choose a community home</h2>\
-     <p class='create-sub phs-next-copy'>Connect this project to an \
-     existing Earde community, or create a community home for it.</p>\
-     %s\
-     <p class='create-sub phs-next-freshness'>Both need a GitHub \
-     verification from the last 30 days. If yours is older, \
-     <a href='/bring'>connect the project through GitHub again</a> \
-     to renew it.</p></section>"
-  [ links ])
+  Html.template
+    "<section class='phs-next'><h2 class='phs-next-title'>Choose a community \
+     home</h2><p class='create-sub phs-next-copy'>Connect this project to an \
+     existing Earde community, or create a community home for it.</p>%s<p \
+     class='create-sub phs-next-freshness'>Both need a GitHub verification \
+     from the last 30 days. If yours is older, <a href='/bring'>connect the \
+     project through GitHub again</a> to renew it.</p></section>"
+    [ links ]
 
 (* Launch onboarding stepper (Cartographic Civic, 04-ROUTES): the same
    five-step sequence the /projects/new wrapper renders, truthfully
@@ -186,7 +189,9 @@ let next_step_html project =
    fragment the test suites slice is untouched. Markup only — no form, no
    field, no script, no inline style. *)
 let stepper_html =
-  let labels = List.map Html.text [ "GitHub"; "Project"; "Home"; "Configure"; "Complete" ] in
+  let labels =
+    List.map Html.text [ "GitHub"; "Project"; "Home"; "Configure"; "Complete" ]
+  in
   let active = 2 in
   let step index label =
     let dot_class, dot_text =
@@ -199,24 +204,30 @@ let stepper_html =
       if index = active then "step__label step__label--active"
       else "step__label"
     in
-    (Html.template "<li class='step'><span class='%s'>%s</span><span class='%s'>%s</span></li>"
-  [ (Html.text dot_class)
-  ; (Html.text dot_text)
-  ; (Html.text label_class)
-  ; label ])
+    Html.template
+      "<li class='step'><span class='%s'>%s</span><span \
+       class='%s'>%s</span></li>"
+      [ Html.text dot_class; Html.text dot_text; Html.text label_class; label ]
   in
-  (Html.template "<ol class='steps' aria-label='Project onboarding steps'>%s</ol>"
-  [ (Html.join (Html.static "<li class='step__rule' aria-hidden='true'></li>")
-       (List.mapi step labels)) ])
+  Html.template
+    "<ol class='steps' aria-label='Project onboarding steps'>%s</ol>"
+    [
+      Html.join
+        (Html.static "<li class='step__rule' aria-hidden='true'></li>")
+        (List.mapi step labels);
+    ]
 
 let project_home_setup_page ?user ?request ~project () =
   let body =
-    (Html.template "<div class='create-wrap project-home-setup'><div \
+    Html.template
+      "<div class='create-wrap project-home-setup'><div \
        class='create-panel'>%s%s%s%s</div></div>"
-  [ heading
-  ; (summary_html project)
-  ; (repositories_html project.repositories)
-  ; (next_step_html project) ])
+      [
+        heading;
+        summary_html project;
+        repositories_html project.repositories;
+        next_step_html project;
+      ]
   in
   (* noindex: a steward-only setup surface — not for search indexes. *)
   Page_shell.launch_onboarding_page ?user ?request ~noindex:true

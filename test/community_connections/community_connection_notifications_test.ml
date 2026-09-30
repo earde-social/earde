@@ -12,37 +12,25 @@
 let ( let* ) = Lwt.bind
 
 open Caqti_request.Infix
-
 module Cc = Earde.Community_connections
-
 module Store = Earde.Community_connections_store
-
 module Notif = Earde.Community_connection_notifications
 
 let or_fail = Db_fixture.or_fail
-
 let reject = Db_fixture.reject
-
 let insert_user = Db_fixture.insert_user
-
 let exec = Db_fixture.exec
-
 let find = Db_fixture.find
-
 let collect = Db_fixture.collect
-
 let insert_community = Community_fixture.insert_community
-
 let make_project = Home_request_fixture.make_project
-
 let contains haystack needle = Html_assert.occurs haystack ~needle
-
 let status_of = Http_fixture.status_of
-
 let error_str = Community_fixture.error_str
 
 let add_role conn ~user ~community role =
-  exec conn "role fixture" Community_fixture.q_insert_moderator (user, community, role)
+  exec conn "role fixture" Community_fixture.q_insert_moderator
+    (user, community, role)
 
 let add_top_mod conn ~user ~community = add_role conn ~user ~community "top_mod"
 
@@ -61,40 +49,35 @@ let set_admin conn ~user flag =
 let q_cleanup =
   List.map
     (fun sql -> (Caqti_type.unit ->. Caqti_type.unit) sql)
-    [ "DROP TRIGGER IF EXISTS ccnt_fail_notif ON notifications"
-    ; "DROP FUNCTION IF EXISTS ccnt_fail_fn()"
-    ; "DELETE FROM notifications \
-       WHERE user_id IN (SELECT id FROM users WHERE username LIKE 'ccnt_%')"
-    ; "DELETE FROM notifications \
-       WHERE community_id IN \
-         (SELECT id FROM communities WHERE slug LIKE 'ccnt-%')"
-    ; "DELETE FROM community_connection_audit_events \
-       WHERE requester_community_id IN \
-               (SELECT id FROM communities WHERE slug LIKE 'ccnt-%') \
-          OR recipient_community_id IN \
-               (SELECT id FROM communities WHERE slug LIKE 'ccnt-%')"
-    ; "DELETE FROM community_connections \
-       WHERE requester_community_id IN \
-               (SELECT id FROM communities WHERE slug LIKE 'ccnt-%') \
-          OR recipient_community_id IN \
-               (SELECT id FROM communities WHERE slug LIKE 'ccnt-%')"
-    ; "DELETE FROM project_home_audit_events \
-       WHERE project_id IN \
-         (SELECT id FROM open_source_projects \
-          WHERE forge_namespace_id BETWEEN 964100001 AND 964100999)"
-    ; "DELETE FROM project_home_audit_events \
-       WHERE community_id IN \
-         (SELECT id FROM communities WHERE slug LIKE 'ccnt-%')"
-    ; "DELETE FROM open_source_projects \
-       WHERE forge_namespace_id BETWEEN 964100001 AND 964100999"
-    ; "DELETE FROM project_onboarding_drafts \
-       WHERE github_installation_record_id IN \
-         (SELECT id FROM github_installations \
-          WHERE github_installation_id BETWEEN 964000001 AND 964000999)"
-    ; "DELETE FROM communities WHERE slug LIKE 'ccnt-%'"
-    ; "DELETE FROM users WHERE username LIKE 'ccnt_%'"
-    ; "DELETE FROM github_installations \
-       WHERE github_installation_id BETWEEN 964000001 AND 964000999"
+    [
+      "DROP TRIGGER IF EXISTS ccnt_fail_notif ON notifications";
+      "DROP FUNCTION IF EXISTS ccnt_fail_fn()";
+      "DELETE FROM notifications WHERE user_id IN (SELECT id FROM users WHERE \
+       username LIKE 'ccnt_%')";
+      "DELETE FROM notifications WHERE community_id IN (SELECT id FROM \
+       communities WHERE slug LIKE 'ccnt-%')";
+      "DELETE FROM community_connection_audit_events WHERE \
+       requester_community_id IN (SELECT id FROM communities WHERE slug LIKE \
+       'ccnt-%') OR recipient_community_id IN (SELECT id FROM communities \
+       WHERE slug LIKE 'ccnt-%')";
+      "DELETE FROM community_connections WHERE requester_community_id IN \
+       (SELECT id FROM communities WHERE slug LIKE 'ccnt-%') OR \
+       recipient_community_id IN (SELECT id FROM communities WHERE slug LIKE \
+       'ccnt-%')";
+      "DELETE FROM project_home_audit_events WHERE project_id IN (SELECT id \
+       FROM open_source_projects WHERE forge_namespace_id BETWEEN 964100001 \
+       AND 964100999)";
+      "DELETE FROM project_home_audit_events WHERE community_id IN (SELECT id \
+       FROM communities WHERE slug LIKE 'ccnt-%')";
+      "DELETE FROM open_source_projects WHERE forge_namespace_id BETWEEN \
+       964100001 AND 964100999";
+      "DELETE FROM project_onboarding_drafts WHERE \
+       github_installation_record_id IN (SELECT id FROM github_installations \
+       WHERE github_installation_id BETWEEN 964000001 AND 964000999)";
+      "DELETE FROM communities WHERE slug LIKE 'ccnt-%'";
+      "DELETE FROM users WHERE username LIKE 'ccnt_%'";
+      "DELETE FROM github_installations WHERE github_installation_id BETWEEN \
+       964000001 AND 964000999";
     ]
 
 let db_case name f =
@@ -117,61 +100,59 @@ let db_case name f =
              let* () = cleanup () in
              Lwt.finalize
                (fun () -> f ~url conn)
-               (fun () ->
-                 Lwt.finalize cleanup (fun () -> C.disconnect ()))))
+               (fun () -> Lwt.finalize cleanup (fun () -> C.disconnect ()))))
 
 (* === observation === *)
 
 (* One tuple per notification of one connection, ordered by recipient so
    expectations do not depend on insertion order. *)
 let q_notifs =
-  (Caqti_type.int64
-   ->* Caqti_type.(t2 (t2 int string) (t2 (option int) int)))
-  "SELECT user_id, notif_type, actor_user_id, community_id \
-   FROM notifications WHERE connection_id = $1 \
-   ORDER BY user_id, notif_type"
+  (Caqti_type.int64 ->* Caqti_type.(t2 (t2 int string) (t2 (option int) int)))
+    "SELECT user_id, notif_type, actor_user_id, community_id FROM \
+     notifications WHERE connection_id = $1 ORDER BY user_id, notif_type"
 
 let q_notif_count =
   (Caqti_type.int64 ->! Caqti_type.int)
-  "SELECT COUNT(*) FROM notifications WHERE connection_id = $1"
+    "SELECT COUNT(*) FROM notifications WHERE connection_id = $1"
 
 (* Every stored byte of one connection's notifications, for the boolean
    absence sweep over notes and usernames. *)
 let q_notif_blob =
   (Caqti_type.int64 ->! Caqti_type.string)
-  "SELECT COALESCE(string_agg(n::text, '|'), '<none>') \
-   FROM notifications n WHERE connection_id = $1"
+    "SELECT COALESCE(string_agg(n::text, '|'), '<none>') FROM notifications n \
+     WHERE connection_id = $1"
 
 (* Creation must never mark anything read. *)
 let q_all_unread =
   (Caqti_type.int64 ->! Caqti_type.bool)
-  "SELECT COALESCE(BOOL_AND(NOT is_read), TRUE) \
-   FROM notifications WHERE connection_id = $1"
+    "SELECT COALESCE(BOOL_AND(NOT is_read), TRUE) FROM notifications WHERE \
+     connection_id = $1"
 
 let q_event_count =
   (Caqti_type.int64 ->! Caqti_type.int)
-  "SELECT COUNT(*) FROM community_connection_audit_events \
-   WHERE connection_id = $1"
+    "SELECT COUNT(*) FROM community_connection_audit_events WHERE \
+     connection_id = $1"
 
 let q_pair_event_count =
   (Caqti_type.int ->! Caqti_type.int)
-  "SELECT COUNT(*) FROM community_connection_audit_events \
-   WHERE requester_community_id = $1 OR recipient_community_id = $1"
+    "SELECT COUNT(*) FROM community_connection_audit_events WHERE \
+     requester_community_id = $1 OR recipient_community_id = $1"
 
 let q_pair_notif_count =
   (Caqti_type.int ->! Caqti_type.int)
-  "SELECT COUNT(*) FROM notifications WHERE community_id = $1"
+    "SELECT COUNT(*) FROM notifications WHERE community_id = $1"
 
 let q_status =
   (Caqti_type.int64 ->! Caqti_type.string)
-  "SELECT status FROM community_connections WHERE id = $1"
+    "SELECT status FROM community_connections WHERE id = $1"
 
 let notif_t = Alcotest.(pair (pair int string) (pair (option int) int))
 
 let check_notifs label conn ~connection expected =
   let* rows = collect conn (label ^ ": notifications") q_notifs connection in
   Alcotest.(check (list notif_t))
-    (label ^ ": exact notifications") expected rows;
+    (label ^ ": exact notifications")
+    expected rows;
   let* unread = find conn (label ^ ": unread") q_all_unread connection in
   Alcotest.(check bool) (label ^ ": all rows unread") true unread;
   Lwt.return_unit
@@ -225,8 +206,8 @@ let review_ok label conn ~reviewer ~connection ~recipient decision =
   | Ok _ -> Lwt.return_unit
   | Error e -> Alcotest.failf "%s: %s" label (error_str e)
 
-let review_expect label expected conn ~reviewer ~connection ~recipient
-    decision =
+let review_expect label expected conn ~reviewer ~connection ~recipient decision
+    =
   let* r = review conn ~reviewer ~connection ~recipient decision in
   match r with
   | Ok _ -> Alcotest.failf "%s: expected %s, got Ok" label (error_str expected)
@@ -255,8 +236,8 @@ let remove_expect label expected conn ~actor ~connection ~acting =
 (* === recipients === *)
 
 let request_recipients_case =
-  db_case "request: only the recipient community's exact top mods are \
-           notified" (fun ~url:_ conn ->
+  db_case "request: only the recipient community's exact top mods are notified"
+    (fun ~url:_ conn ->
       let* actor = insert_user conn "ccnt_rq_actor" in
       let* atop = insert_user conn "ccnt_rq_atop" in
       let* btop1 = insert_user conn "ccnt_rq_btop1" in
@@ -283,14 +264,17 @@ let request_recipients_case =
          not a member, and never a broadcast to global admins. *)
       let expected =
         List.sort compare
-          [ ((btop1, "community_connection_requested"), (Some actor, b));
-            ((btop2, "community_connection_requested"), (Some actor, b)) ]
+          [
+            ((btop1, "community_connection_requested"), (Some actor, b));
+            ((btop2, "community_connection_requested"), (Some actor, b));
+          ]
       in
       check_notifs "request" conn ~connection:id expected)
 
 let review_recipients_case =
-  db_case "accept and reject: only the requesting community's top mods are \
-           notified" (fun ~url:_ conn ->
+  db_case
+    "accept and reject: only the requesting community's top mods are notified"
+    (fun ~url:_ conn ->
       let* rtop = insert_user conn "ccnt_rv_rtop" in
       let* atop1 = insert_user conn "ccnt_rv_atop1" in
       let* atop2 = insert_user conn "ccnt_rv_atop2" in
@@ -310,15 +294,17 @@ let review_recipients_case =
         request_ok "request b" conn ~actor:atop1 ~requester:a ~recipient:b ()
       in
       let* () =
-        review_ok "accept" conn ~reviewer:rtop ~connection:accepted
-          ~recipient:b Store.Accept
+        review_ok "accept" conn ~reviewer:rtop ~connection:accepted ~recipient:b
+          Store.Accept
       in
       let* () =
         check_notifs "accept" conn ~connection:accepted
           (List.sort compare
-             [ ((rtop, "community_connection_requested"), (Some atop1, b));
+             [
+               ((rtop, "community_connection_requested"), (Some atop1, b));
                ((atop1, "community_connection_accepted"), (Some rtop, a));
-               ((atop2, "community_connection_accepted"), (Some rtop, a)) ])
+               ((atop2, "community_connection_accepted"), (Some rtop, a));
+             ])
       in
       (* The ordinary and legacy moderators of the requesting community are
          absent from that exact list, as is the reviewing side itself beyond
@@ -327,18 +313,21 @@ let review_recipients_case =
         request_ok "request c" conn ~actor:atop2 ~requester:a ~recipient:c ()
       in
       let* () =
-        review_ok "reject" conn ~reviewer:rtop ~connection:rejected
-          ~recipient:c Store.Reject
+        review_ok "reject" conn ~reviewer:rtop ~connection:rejected ~recipient:c
+          Store.Reject
       in
       check_notifs "reject" conn ~connection:rejected
         (List.sort compare
-           [ ((rtop, "community_connection_requested"), (Some atop2, c));
+           [
+             ((rtop, "community_connection_requested"), (Some atop2, c));
              ((atop1, "community_connection_rejected"), (Some rtop, a));
-             ((atop2, "community_connection_rejected"), (Some rtop, a)) ]))
+             ((atop2, "community_connection_rejected"), (Some rtop, a));
+           ]))
 
 let removal_recipients_case =
-  db_case "remove: the opposite community's top mods are notified, from \
-           either side" (fun ~url:_ conn ->
+  db_case
+    "remove: the opposite community's top mods are notified, from either side"
+    (fun ~url:_ conn ->
       let* atop = insert_user conn "ccnt_rm_atop" in
       let* btop = insert_user conn "ccnt_rm_btop" in
       let* a = insert_community conn "ccnt-rm-a" in
@@ -355,36 +344,41 @@ let removal_recipients_case =
         review_ok "accept" conn ~reviewer:btop ~connection:first ~recipient:b
           Store.Accept
       in
-      let* () = remove_ok "remove from a" conn ~actor:atop ~connection:first
-          ~acting:a in
+      let* () =
+        remove_ok "remove from a" conn ~actor:atop ~connection:first ~acting:a
+      in
       let* () =
         check_notifs "removed by requester" conn ~connection:first
           (List.sort compare
-             [ ((btop, "community_connection_requested"), (Some atop, b));
+             [
+               ((btop, "community_connection_requested"), (Some atop, b));
                ((atop, "community_connection_accepted"), (Some btop, a));
-               ((btop, "community_connection_removed"), (Some atop, b)) ])
+               ((btop, "community_connection_removed"), (Some atop, b));
+             ])
       in
       (* Removed by the recipient side: the requester side hears about it. *)
       let* second =
         request_ok "request 2" conn ~actor:atop ~requester:a ~recipient:c ()
       in
       let* () =
-        review_ok "accept 2" conn ~reviewer:btop ~connection:second
-          ~recipient:c Store.Accept
+        review_ok "accept 2" conn ~reviewer:btop ~connection:second ~recipient:c
+          Store.Accept
       in
       let* () =
-        remove_ok "remove from c" conn ~actor:btop ~connection:second
-          ~acting:c
+        remove_ok "remove from c" conn ~actor:btop ~connection:second ~acting:c
       in
       check_notifs "removed by recipient" conn ~connection:second
         (List.sort compare
-           [ ((btop, "community_connection_requested"), (Some atop, c));
+           [
+             ((btop, "community_connection_requested"), (Some atop, c));
              ((atop, "community_connection_accepted"), (Some btop, a));
-             ((atop, "community_connection_removed"), (Some btop, a)) ]))
+             ((atop, "community_connection_removed"), (Some btop, a));
+           ]))
 
 let actor_excluded_case =
-  db_case "the acting user is never notified, even holding top_mod on the \
-           notified side" (fun ~url:_ conn ->
+  db_case
+    "the acting user is never notified, even holding top_mod on the notified \
+     side" (fun ~url:_ conn ->
       let* both = insert_user conn "ccnt_ax_both" in
       let* other = insert_user conn "ccnt_ax_other" in
       let* a = insert_community conn "ccnt-ax-a" in
@@ -394,8 +388,9 @@ let actor_excluded_case =
       let* () = add_top_mod conn ~user:both ~community:a in
       let* () = add_top_mod conn ~user:both ~community:b in
       let* () = add_top_mod conn ~user:other ~community:b in
-      let* id = request_ok "request" conn ~actor:both ~requester:a
-          ~recipient:b () in
+      let* id =
+        request_ok "request" conn ~actor:both ~requester:a ~recipient:b ()
+      in
       let* () =
         check_notifs "request excludes its actor" conn ~connection:id
           [ ((other, "community_connection_requested"), (Some both, b)) ]
@@ -420,8 +415,7 @@ let dedup_case =
       let* () = add_top_mod conn ~user:dup ~community:b in
       (* End to end: dup is top_mod on both sides, so both the request and
          the review name them — once each, never twice for one kind. *)
-      let* id = request_ok "request" conn ~actor ~requester:a ~recipient:b ()
-      in
+      let* id = request_ok "request" conn ~actor ~requester:a ~recipient:b () in
       let* () =
         review_ok "accept" conn ~reviewer:actor ~connection:id ~recipient:b
           Store.Accept
@@ -429,8 +423,10 @@ let dedup_case =
       let* () =
         check_notifs "one row per kind" conn ~connection:id
           (List.sort compare
-             [ ((dup, "community_connection_requested"), (Some actor, b));
-               ((dup, "community_connection_accepted"), (Some actor, a)) ])
+             [
+               ((dup, "community_connection_requested"), (Some actor, b));
+               ((dup, "community_connection_accepted"), (Some actor, a));
+             ])
       in
       (* And directly: a caller-supplied list carrying the same id three
          times, plus the actor, still yields exactly one row. The unique
@@ -452,8 +448,10 @@ let dedup_case =
       | Error _ -> Alcotest.fail "direct insert_many refused");
       check_notifs "deduplicated directly" conn ~connection:direct
         (List.sort compare
-           [ ((fresh, "community_connection_requested"), (Some actor, c));
-             ((fresh, "community_connection_removed"), (Some actor, c)) ]))
+           [
+             ((fresh, "community_connection_requested"), (Some actor, c));
+             ((fresh, "community_connection_removed"), (Some actor, c));
+           ]))
 
 let zero_recipients_case =
   db_case "a transition with no eligible recipient still commits"
@@ -464,8 +462,7 @@ let zero_recipients_case =
       let* b = insert_community conn "ccnt-zr-b" in
       (* b has an ordinary moderator and no top mod at all. *)
       let* () = add_role conn ~user:bmod ~community:b "mod" in
-      let* id = request_ok "request" conn ~actor ~requester:a ~recipient:b ()
-      in
+      let* id = request_ok "request" conn ~actor ~requester:a ~recipient:b () in
       let* () = check_status "committed" conn id "pending" in
       let* () = check_events "audit written" conn ~connection:id 1 in
       let* () = check_notif_count "no notifications" conn ~connection:id 0 in
@@ -482,8 +479,8 @@ let zero_recipients_case =
       check_notif_count "still none after removal" conn ~connection:id 0)
 
 let stale_transition_case =
-  db_case "a stale duplicate accept, reject, or remove creates no \
-           notification" (fun ~url:_ conn ->
+  db_case "a stale duplicate accept, reject, or remove creates no notification"
+    (fun ~url:_ conn ->
       let* actor = insert_user conn "ccnt_st_actor" in
       let* atop = insert_user conn "ccnt_st_atop" in
       let* btop = insert_user conn "ccnt_st_btop" in
@@ -491,8 +488,7 @@ let stale_transition_case =
       let* b = insert_community conn "ccnt-st-b" in
       let* () = add_top_mod conn ~user:atop ~community:a in
       let* () = add_top_mod conn ~user:btop ~community:b in
-      let* id = request_ok "request" conn ~actor ~requester:a ~recipient:b ()
-      in
+      let* id = request_ok "request" conn ~actor ~requester:a ~recipient:b () in
       let* () =
         review_ok "accept" conn ~reviewer:btop ~connection:id ~recipient:b
           Store.Accept
@@ -512,8 +508,8 @@ let stale_transition_case =
       (* And a second removal after the first committed. *)
       let* () = remove_ok "remove" conn ~actor:atop ~connection:id ~acting:a in
       let* () =
-        remove_expect "second remove" Store.Removal_unavailable conn
-          ~actor:atop ~connection:id ~acting:a
+        remove_expect "second remove" Store.Removal_unavailable conn ~actor:atop
+          ~connection:id ~acting:a
       in
       let* () =
         remove_expect "remove from the other side" Store.Removal_unavailable
@@ -523,9 +519,11 @@ let stale_transition_case =
       check_notifs "exactly one set per committed transition" conn
         ~connection:id
         (List.sort compare
-           [ ((btop, "community_connection_requested"), (Some actor, b));
+           [
+             ((btop, "community_connection_requested"), (Some actor, b));
              ((atop, "community_connection_accepted"), (Some btop, a));
-             ((btop, "community_connection_removed"), (Some atop, b)) ]))
+             ((btop, "community_connection_removed"), (Some atop, b));
+           ]))
 
 (* === atomicity === *)
 
@@ -533,16 +531,15 @@ let ddl sql = (Caqti_type.unit ->. Caqti_type.unit) sql
 
 let q_create_fail_fn =
   ddl
-    "CREATE FUNCTION ccnt_fail_fn() RETURNS trigger \
-     LANGUAGE plpgsql \
-     AS 'BEGIN RAISE EXCEPTION ''ccnt fixture failure''; END'"
+    "CREATE FUNCTION ccnt_fail_fn() RETURNS trigger LANGUAGE plpgsql AS 'BEGIN \
+     RAISE EXCEPTION ''ccnt fixture failure''; END'"
 
 let q_drop_fail_fn = ddl "DROP FUNCTION IF EXISTS ccnt_fail_fn()"
 
 let q_poison_notif =
   ddl
-    "CREATE TRIGGER ccnt_fail_notif BEFORE INSERT ON notifications \
-     FOR EACH ROW EXECUTE FUNCTION ccnt_fail_fn()"
+    "CREATE TRIGGER ccnt_fail_notif BEFORE INSERT ON notifications FOR EACH \
+     ROW EXECUTE FUNCTION ccnt_fail_fn()"
 
 let q_unpoison_notif =
   ddl "DROP TRIGGER IF EXISTS ccnt_fail_notif ON notifications"
@@ -556,8 +553,9 @@ let with_poisoned_notifications conn f =
     (fun () -> exec conn "drop fail fn" q_drop_fail_fn ())
 
 let notification_failure_rolls_back_case =
-  db_case "atomicity: a failed notification insert rolls the mutation and \
-           its audit event back" (fun ~url:_ conn ->
+  db_case
+    "atomicity: a failed notification insert rolls the mutation and its audit \
+     event back" (fun ~url:_ conn ->
       let* actor = insert_user conn "ccnt_nf_actor" in
       let* atop = insert_user conn "ccnt_nf_atop" in
       let* btop = insert_user conn "ccnt_nf_btop" in
@@ -575,8 +573,9 @@ let notification_failure_rolls_back_case =
       let* notifs = find conn "pair notifs" q_pair_notif_count b in
       Alcotest.(check int) "no notification survived" 0 notifs;
       (* And once the poison is gone the same request commits all three. *)
-      let* id = request_ok "request afterwards" conn ~actor ~requester:a
-          ~recipient:b () in
+      let* id =
+        request_ok "request afterwards" conn ~actor ~requester:a ~recipient:b ()
+      in
       let* () = check_events "one event" conn ~connection:id 1 in
       let* () = check_notif_count "one notification" conn ~connection:id 1 in
       (* The same atomicity on a review, whose mutation is an UPDATE. *)
@@ -591,8 +590,9 @@ let notification_failure_rolls_back_case =
       check_notif_count "still one notification" conn ~connection:id 1)
 
 let concurrent_review_case =
-  db_case "concurrency: the winning review commits exactly one audit event \
-           and one notification set" (fun ~url:_ conn ->
+  db_case
+    "concurrency: the winning review commits exactly one audit event and one \
+     notification set" (fun ~url:_ conn ->
       let* actor = insert_user conn "ccnt_cc_actor" in
       let* atop = insert_user conn "ccnt_cc_atop" in
       let* btop = insert_user conn "ccnt_cc_btop" in
@@ -600,8 +600,7 @@ let concurrent_review_case =
       let* b = insert_community conn "ccnt-cc-b" in
       let* () = add_top_mod conn ~user:atop ~community:a in
       let* () = add_top_mod conn ~user:btop ~community:b in
-      let* id = request_ok "request" conn ~actor ~requester:a ~recipient:b ()
-      in
+      let* id = request_ok "request" conn ~actor ~requester:a ~recipient:b () in
       Db_fixture.with_second_connection (fun conn2 ->
           let* r1, r2 =
             Lwt.both
@@ -616,105 +615,99 @@ let concurrent_review_case =
               ()
           | Ok _, Ok _ -> Alcotest.fail "both reviews won"
           | Error e, Error e' ->
-              Alcotest.failf "both failed (%s, %s)" (error_str e)
-                (error_str e')
+              Alcotest.failf "both failed (%s, %s)" (error_str e) (error_str e')
           | Ok _, Error e | Error e, Ok _ ->
               Alcotest.failf "unexpected loser error %s" (error_str e));
           let* () = check_status "accepted once" conn id "accepted" in
           let* () = check_events "two events total" conn ~connection:id 2 in
           check_notifs "one set per committed transition" conn ~connection:id
             (List.sort compare
-               [ ((btop, "community_connection_requested"), (Some actor, b));
-                 ((atop, "community_connection_accepted"), (Some btop, a)) ])))
+               [
+                 ((btop, "community_connection_requested"), (Some actor, b));
+                 ((atop, "community_connection_accepted"), (Some btop, a));
+               ])))
 
 (* === durable shapes === *)
 
 (* Every shape case writes through one of these, so the SQL of each case is
    the whole statement being judged and nothing else. Parameters are always
    $1 user, $2 community, $3 connection, $4 project, $5 relation. *)
-let shape3 sql =
-  (Caqti_type.(t3 int int int64) ->. Caqti_type.unit) sql
+let shape3 sql = (Caqti_type.(t3 int int int64) ->. Caqti_type.unit) sql
 
 let shape5 sql =
-  (Caqti_type.(t2 (t3 int int int64) (t2 int64 int64)) ->. Caqti_type.unit)
-    sql
+  (Caqti_type.(t2 (t3 int int int64) (t2 int64 int64)) ->. Caqti_type.unit) sql
 
 let q_valid_connection_shape =
   shape3
-    "INSERT INTO notifications \
-       (user_id, notif_type, actor_user_id, community_id, connection_id) \
-     VALUES ($1, 'community_connection_accepted', NULL, $2, $3)"
+    "INSERT INTO notifications (user_id, notif_type, actor_user_id, \
+     community_id, connection_id) VALUES ($1, 'community_connection_accepted', \
+     NULL, $2, $3)"
 
 let q_valid_legacy_shape =
   shape3
-    "INSERT INTO notifications (user_id, notif_type, message) \
-     SELECT $1, 'comment_reply', 'someone replied to your post.' \
-     WHERE $2 > 0 AND $3 > 0"
+    "INSERT INTO notifications (user_id, notif_type, message) SELECT $1, \
+     'comment_reply', 'someone replied to your post.' WHERE $2 > 0 AND $3 > 0"
 
 let q_valid_project_home_shape =
   shape5
-    "INSERT INTO notifications \
-       (user_id, notif_type, actor_user_id, project_id, community_id, \
-        relation_id) \
-     SELECT $1, 'project_home_requested', NULL, $4, $2, $5 \
-     WHERE $3 > 0"
+    "INSERT INTO notifications (user_id, notif_type, actor_user_id, \
+     project_id, community_id, relation_id) SELECT $1, \
+     'project_home_requested', NULL, $4, $2, $5 WHERE $3 > 0"
 
 let q_connection_with_message =
   shape3
-    "INSERT INTO notifications \
-       (user_id, notif_type, community_id, connection_id, message) \
-     VALUES ($1, 'community_connection_accepted', $2, $3, 'prose')"
+    "INSERT INTO notifications (user_id, notif_type, community_id, \
+     connection_id, message) VALUES ($1, 'community_connection_accepted', $2, \
+     $3, 'prose')"
 
 let q_connection_with_post =
   shape3
-    "INSERT INTO notifications \
-       (user_id, notif_type, community_id, connection_id, post_id) \
-     VALUES ($1, 'community_connection_accepted', $2, $3, 1)"
+    "INSERT INTO notifications (user_id, notif_type, community_id, \
+     connection_id, post_id) VALUES ($1, 'community_connection_accepted', $2, \
+     $3, 1)"
 
 let q_connection_without_connection =
   shape3
-    "INSERT INTO notifications (user_id, notif_type, community_id) \
-     SELECT $1, 'community_connection_accepted', $2 WHERE $3 > 0"
+    "INSERT INTO notifications (user_id, notif_type, community_id) SELECT $1, \
+     'community_connection_accepted', $2 WHERE $3 > 0"
 
 let q_connection_without_community =
   shape3
-    "INSERT INTO notifications (user_id, notif_type, connection_id) \
-     SELECT $1, 'community_connection_accepted', $3 WHERE $2 > 0"
+    "INSERT INTO notifications (user_id, notif_type, connection_id) SELECT $1, \
+     'community_connection_accepted', $3 WHERE $2 > 0"
 
 let q_connection_with_project =
   shape5
-    "INSERT INTO notifications \
-       (user_id, notif_type, community_id, connection_id, project_id) \
-     SELECT $1, 'community_connection_accepted', $2, $3, $4 WHERE $5 > 0"
+    "INSERT INTO notifications (user_id, notif_type, community_id, \
+     connection_id, project_id) SELECT $1, 'community_connection_accepted', \
+     $2, $3, $4 WHERE $5 > 0"
 
 let q_connection_with_relation =
   shape5
-    "INSERT INTO notifications \
-       (user_id, notif_type, community_id, connection_id, relation_id) \
-     SELECT $1, 'community_connection_accepted', $2, $3, $5 WHERE $4 > 0"
+    "INSERT INTO notifications (user_id, notif_type, community_id, \
+     connection_id, relation_id) SELECT $1, 'community_connection_accepted', \
+     $2, $3, $5 WHERE $4 > 0"
 
 let q_project_home_with_connection =
   shape5
-    "INSERT INTO notifications \
-       (user_id, notif_type, project_id, community_id, relation_id, \
-        connection_id) \
-     VALUES ($1, 'project_home_requested', $4, $2, $5, $3)"
+    "INSERT INTO notifications (user_id, notif_type, project_id, community_id, \
+     relation_id, connection_id) VALUES ($1, 'project_home_requested', $4, $2, \
+     $5, $3)"
 
 let q_legacy_with_connection =
   shape3
-    "INSERT INTO notifications \
-       (user_id, notif_type, message, community_id, connection_id) \
-     VALUES ($1, 'comment_reply', 'prose', $2, $3)"
+    "INSERT INTO notifications (user_id, notif_type, message, community_id, \
+     connection_id) VALUES ($1, 'comment_reply', 'prose', $2, $3)"
 
 let q_unknown_kind =
   shape3
     "INSERT INTO notifications (user_id, notif_type, community_id, \
-       connection_id) \
-     VALUES ($1, 'community_connection_archived', $2, $3)"
+     connection_id) VALUES ($1, 'community_connection_archived', $2, $3)"
 
 let shape_case =
-  db_case "schema: the three notification shapes are separately valid and \
-           every mixture is refused" (fun ~url:_ conn ->
+  db_case
+    "schema: the three notification shapes are separately valid and every \
+     mixture is refused" (fun ~url:_ conn ->
       let (module C : Caqti_lwt.CONNECTION) = conn in
       let* owner = insert_user conn "ccnt_sh_owner" in
       let* recipient = insert_user conn "ccnt_sh_recipient" in
@@ -730,8 +723,8 @@ let shape_case =
         make_project conn ~user:owner ~ext_id:964000001L ~slug:"ccnt-sh-proj"
       in
       let* relation =
-        Home_audit_fixture.request_ok "home request" conn ~user:owner ~slug:"ccnt-sh-proj"
-          ~community:home
+        Home_audit_fixture.request_ok "home request" conn ~user:owner
+          ~slug:"ccnt-sh-proj" ~community:home
       in
       let five = ((recipient, a, connection), (project, relation)) in
       (* Valid: all three shapes, each on its own terms. *)
@@ -752,24 +745,28 @@ let shape_case =
           (fun (label, q) ->
             let* r = C.exec q (recipient, a, connection) in
             reject label r)
-          [ ("connection kind carrying prose", q_connection_with_message)
-          ; ("connection kind carrying a post link", q_connection_with_post)
-          ; ("connection kind without its connection",
-             q_connection_without_connection)
-          ; ("connection kind without its community",
-             q_connection_without_community)
-          ; ("legacy kind carrying a connection", q_legacy_with_connection)
-          ; ("an unknown kind", q_unknown_kind) ]
+          [
+            ("connection kind carrying prose", q_connection_with_message);
+            ("connection kind carrying a post link", q_connection_with_post);
+            ( "connection kind without its connection",
+              q_connection_without_connection );
+            ( "connection kind without its community",
+              q_connection_without_community );
+            ("legacy kind carrying a connection", q_legacy_with_connection);
+            ("an unknown kind", q_unknown_kind);
+          ]
       in
       Lwt_list.iter_s
         (fun (label, q) ->
           let* r = C.exec q five in
           reject label r)
-        [ ("connection kind carrying a project", q_connection_with_project)
-        ; ("connection kind carrying a home relation",
-           q_connection_with_relation)
-        ; ("project-home kind carrying a connection",
-           q_project_home_with_connection) ])
+        [
+          ("connection kind carrying a project", q_connection_with_project);
+          ( "connection kind carrying a home relation",
+            q_connection_with_relation );
+          ( "project-home kind carrying a connection",
+            q_project_home_with_connection );
+        ])
 
 (* === read model and rendering === *)
 
@@ -788,10 +785,9 @@ let sql_pool url =
 
 let notifications_page_for ~url ~label user_id =
   let pipeline =
-    sql_pool url @@ Dream.memory_sessions @@ fun req ->
-    let* () =
-      Dream.set_session_field req "user_id" (string_of_int user_id)
-    in
+    sql_pool url @@ Dream.memory_sessions
+    @@ fun req ->
+    let* () = Dream.set_session_field req "user_id" (string_of_int user_id) in
     Earde.Account_handlers.notifications_handler req
   in
   let* response =
@@ -802,22 +798,26 @@ let notifications_page_for ~url ~label user_id =
   Lwt.return body
 
 let notifications_of conn user_id =
-  let* r = Earde.Notification_store.get_notifications conn ~session_admin:false user_id in
+  let* r =
+    Earde.Notification_store.get_notifications conn ~session_admin:false user_id
+  in
   match r with
   | Ok rows -> Lwt.return rows
   | Error e -> Alcotest.failf "get_notifications: %s" e
 
 let counterpart_case =
-  db_case "read model: the counterpart is derived from the stored context, \
-           from either direction" (fun ~url:_ conn ->
+  db_case
+    "read model: the counterpart is derived from the stored context, from \
+     either direction" (fun ~url:_ conn ->
       let* atop = insert_user conn "ccnt_cp_atop" in
       let* btop = insert_user conn "ccnt_cp_btop" in
       let* a = insert_community ~name:"Ccnt Alpha" conn "ccnt-cp-a" in
       let* b = insert_community ~name:"Ccnt Beta" conn "ccnt-cp-b" in
       let* () = add_top_mod conn ~user:atop ~community:a in
       let* () = add_top_mod conn ~user:btop ~community:b in
-      let* id = request_ok "request" conn ~actor:atop ~requester:a
-          ~recipient:b () in
+      let* id =
+        request_ok "request" conn ~actor:atop ~requester:a ~recipient:b ()
+      in
       let* () =
         review_ok "accept" conn ~reviewer:btop ~connection:id ~recipient:b
           Store.Accept
@@ -827,34 +827,41 @@ let counterpart_case =
       let* brows = notifications_of conn btop in
       (match brows with
       | [ n ] ->
-          Alcotest.(check string) "b: kind"
-            "community_connection_requested" n.Earde.Notification_store.notif_type;
-          Alcotest.(check (option string)) "b: context" (Some "ccnt-cp-b")
-            n.community_slug;
-          Alcotest.(check (option string)) "b: counterpart"
-            (Some "ccnt-cp-a") n.Earde.Notification_store.counterpart_slug;
-          Alcotest.(check (option string)) "b: counterpart name"
-            (Some "Ccnt Alpha") n.Earde.Notification_store.counterpart_name
+          Alcotest.(check string)
+            "b: kind" "community_connection_requested"
+            n.Earde.Notification_store.notif_type;
+          Alcotest.(check (option string))
+            "b: context" (Some "ccnt-cp-b") n.community_slug;
+          Alcotest.(check (option string))
+            "b: counterpart" (Some "ccnt-cp-a")
+            n.Earde.Notification_store.counterpart_slug;
+          Alcotest.(check (option string))
+            "b: counterpart name" (Some "Ccnt Alpha")
+            n.Earde.Notification_store.counterpart_name
       | rows -> Alcotest.failf "b: %d rows" (List.length rows));
       (* a's top mod was notified about the acceptance; their context is a,
          so the same durable connection yields b as the counterpart. *)
       let* arows = notifications_of conn atop in
       (match arows with
       | [ n ] ->
-          Alcotest.(check string) "a: kind" "community_connection_accepted"
+          Alcotest.(check string)
+            "a: kind" "community_connection_accepted"
             n.Earde.Notification_store.notif_type;
-          Alcotest.(check (option string)) "a: context" (Some "ccnt-cp-a")
-            n.community_slug;
-          Alcotest.(check (option string)) "a: counterpart"
-            (Some "ccnt-cp-b") n.Earde.Notification_store.counterpart_slug;
-          Alcotest.(check (option string)) "a: counterpart name"
-            (Some "Ccnt Beta") n.Earde.Notification_store.counterpart_name
+          Alcotest.(check (option string))
+            "a: context" (Some "ccnt-cp-a") n.community_slug;
+          Alcotest.(check (option string))
+            "a: counterpart" (Some "ccnt-cp-b")
+            n.Earde.Notification_store.counterpart_slug;
+          Alcotest.(check (option string))
+            "a: counterpart name" (Some "Ccnt Beta")
+            n.Earde.Notification_store.counterpart_name
       | rows -> Alcotest.failf "a: %d rows" (List.length rows));
       Lwt.return_unit)
 
 let render_case =
-  db_case "ui: each kind renders its stable copy and links to the \
-           recipient's own management context" (fun ~url conn ->
+  db_case
+    "ui: each kind renders its stable copy and links to the recipient's own \
+     management context" (fun ~url conn ->
       let* atop = insert_user conn "ccnt_ui_atop" in
       let* btop = insert_user conn "ccnt_ui_btop" in
       let* a = insert_community ~name:"Ccnt Requesting" conn "ccnt-ui-a" in
@@ -868,8 +875,8 @@ let render_case =
         request_ok "request b" conn ~actor:atop ~requester:a ~recipient:b ()
       in
       let* () =
-        review_ok "accept" conn ~reviewer:btop ~connection:accepted
-          ~recipient:b Store.Accept
+        review_ok "accept" conn ~reviewer:btop ~connection:accepted ~recipient:b
+          Store.Accept
       in
       let* () =
         remove_ok "remove" conn ~actor:btop ~connection:accepted ~acting:b
@@ -879,8 +886,8 @@ let render_case =
         request_ok "request c" conn ~actor:atop ~requester:a ~recipient:c ()
       in
       let* () =
-        review_ok "reject" conn ~reviewer:btop ~connection:rejected
-          ~recipient:c Store.Reject
+        review_ok "reject" conn ~reviewer:btop ~connection:rejected ~recipient:c
+          Store.Reject
       in
       (* The requesting side sees accepted, rejected, and removed copy, each
          pointing at its OWN community's connections page. *)
@@ -890,19 +897,24 @@ let render_case =
           Alcotest.(check bool)
             ("requester sees: " ^ needle)
             true (contains body needle))
-        [ "Ccnt Reviewing accepted your connection request."
-        ; "Ccnt Rejecting rejected your connection request."
-        ; "Ccnt Reviewing removed the community connection."
-        ; "href='/c/ccnt-ui-a/settings/connections'" ];
+        [
+          "Ccnt Reviewing accepted your connection request.";
+          "Ccnt Rejecting rejected your connection request.";
+          "Ccnt Reviewing removed the community connection.";
+          "href='/c/ccnt-ui-a/settings/connections'";
+        ];
       (* Never the other side's management context, and never a username. *)
       List.iter
         (fun needle ->
           Alcotest.(check bool)
             ("requester never sees: " ^ needle)
             false (contains body needle))
-        [ "/c/ccnt-ui-b/settings/connections"
-        ; "/c/ccnt-ui-c/settings/connections"
-        ; "ccnt_ui_btop"; "ccnt_ui_atop" ];
+        [
+          "/c/ccnt-ui-b/settings/connections";
+          "/c/ccnt-ui-c/settings/connections";
+          "ccnt_ui_btop";
+          "ccnt_ui_atop";
+        ];
       (* The reviewing side sees the request copy, in its own context. *)
       let* body = notifications_page_for ~url ~label:"reviewer" btop in
       List.iter
@@ -910,16 +922,20 @@ let render_case =
           Alcotest.(check bool)
             ("reviewer sees: " ^ needle)
             true (contains body needle))
-        [ "Ccnt Requesting wants to connect with your community."
-        ; "href='/c/ccnt-ui-b/settings/connections'"
-        ; "href='/c/ccnt-ui-c/settings/connections'" ];
-      Alcotest.(check bool) "reviewer never sees the requester's context"
-        false (contains body "/c/ccnt-ui-a/settings/connections");
+        [
+          "Ccnt Requesting wants to connect with your community.";
+          "href='/c/ccnt-ui-b/settings/connections'";
+          "href='/c/ccnt-ui-c/settings/connections'";
+        ];
+      Alcotest.(check bool)
+        "reviewer never sees the requester's context" false
+        (contains body "/c/ccnt-ui-a/settings/connections");
       Lwt.return_unit)
 
 let privacy_case =
-  db_case "the request note and every username stay out of notification \
-           storage and rendered output" (fun ~url conn ->
+  db_case
+    "the request note and every username stay out of notification storage and \
+     rendered output" (fun ~url conn ->
       let* atop = insert_user conn "ccnt_pv_atop" in
       let* btop = insert_user conn "ccnt_pv_btop" in
       let* a = insert_community ~name:"Ccnt Privacy A" conn "ccnt-pv-a" in
@@ -959,21 +975,29 @@ let privacy_case =
       Lwt.return_unit)
 
 let recipient_suite =
-  [ request_recipients_case; review_recipients_case
-  ; removal_recipients_case; actor_excluded_case; dedup_case
-  ; zero_recipients_case ]
+  [
+    request_recipients_case;
+    review_recipients_case;
+    removal_recipients_case;
+    actor_excluded_case;
+    dedup_case;
+    zero_recipients_case;
+  ]
 
 let transaction_suite =
-  [ stale_transition_case; notification_failure_rolls_back_case
-  ; concurrent_review_case ]
+  [
+    stale_transition_case;
+    notification_failure_rolls_back_case;
+    concurrent_review_case;
+  ]
 
 let schema_suite = [ shape_case ]
-
 let ui_suite = [ counterpart_case; render_case; privacy_case ]
 
 let suites =
-  [ ("community_connection_notifications", recipient_suite)
-  ; ("community_connection_notification_txn", transaction_suite)
-  ; ("community_connection_notification_schema", schema_suite)
-  ; ("community_connection_notification_ui", ui_suite)
+  [
+    ("community_connection_notifications", recipient_suite);
+    ("community_connection_notification_txn", transaction_suite);
+    ("community_connection_notification_schema", schema_suite);
+    ("community_connection_notification_ui", ui_suite);
   ]

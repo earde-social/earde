@@ -18,11 +18,16 @@ let mod_action_row_type =
 
 let log_action_query =
   let open Caqti_request.Infix in
-  (Caqti_type.(t2 (t2 int int) (t3 string (option int) string)) ->. Caqti_type.unit)
-  "INSERT INTO mod_actions (community_id, moderator_id, action_type, target_id, reason) VALUES ($1, $2, $3, $4, $5)"
+  (Caqti_type.(t2 (t2 int int) (t3 string (option int) string))
+  ->. Caqti_type.unit)
+    "INSERT INTO mod_actions (community_id, moderator_id, action_type, \
+     target_id, reason) VALUES ($1, $2, $3, $4, $5)"
 
-let log_action (module C : Caqti_lwt.CONNECTION) community_id moderator_id action_type target_id reason =
-  C.exec log_action_query ((community_id, moderator_id), (action_type, target_id, reason)) >>= function
+let log_action (module C : Caqti_lwt.CONNECTION) community_id moderator_id
+    action_type target_id reason =
+  C.exec log_action_query
+    ((community_id, moderator_id), (action_type, target_id, reason))
+  >>= function
   | Ok () -> Lwt.return (Ok ())
   | Error e -> Lwt.return (Error (Caqti_error.show e))
 
@@ -31,18 +36,32 @@ let log_action (module C : Caqti_lwt.CONNECTION) community_id moderator_id actio
 let get_modlog_query =
   let open Caqti_request.Infix in
   (Caqti_type.int ->* mod_action_row_type)
-  "SELECT ma.id, ma.community_id, ma.moderator_id, u.username, ma.action_type, ma.target_id, ma.reason, ma.created_at::text
-   FROM mod_actions ma
-   JOIN users u ON ma.moderator_id = u.id
-   WHERE ma.community_id = $1
-   ORDER BY ma.created_at DESC
-   LIMIT 100"
+    "SELECT ma.id, ma.community_id, ma.moderator_id, u.username, \
+     ma.action_type, ma.target_id, ma.reason, ma.created_at::text\n\
+    \   FROM mod_actions ma\n\
+    \   JOIN users u ON ma.moderator_id = u.id\n\
+    \   WHERE ma.community_id = $1\n\
+    \   ORDER BY ma.created_at DESC\n\
+    \   LIMIT 100"
 
 let get_modlog (module C : Caqti_lwt.CONNECTION) community_id =
   C.collect_list get_modlog_query community_id >>= function
   | Ok rows ->
-      let actions = List.map (fun ((id, community_id, moderator_id, moderator_username), (action_type, target_id, reason, created_at)) ->
-        { id; community_id; moderator_id; moderator_username; action_type; target_id; reason; created_at }
-      ) rows in
+      let actions =
+        List.map
+          (fun ( (id, community_id, moderator_id, moderator_username),
+                 (action_type, target_id, reason, created_at) ) ->
+            {
+              id;
+              community_id;
+              moderator_id;
+              moderator_username;
+              action_type;
+              target_id;
+              reason;
+              created_at;
+            })
+          rows
+      in
       Lwt.return (Ok actions)
   | Error e -> Lwt.return (Error (Caqti_error.show e))

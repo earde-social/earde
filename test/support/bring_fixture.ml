@@ -1,8 +1,8 @@
 (* Running the /bring handler and reading its page. *)
 
 module Ob = Earde.Project_onboarding
-let ( let* ) = Lwt.bind
 
+let ( let* ) = Lwt.bind
 let bring_case name f = Alcotest.test_case name `Quick f
 
 let run ?(session = []) ?(mode = Ob.Public) ?(target = "/bring") () =
@@ -19,17 +19,11 @@ let run ?(session = []) ?(mode = Ob.Public) ?(target = "/bring") () =
   Lwt_main.run (pipeline (Dream.request ~method_:`GET ~target ""))
 
 let body_of response = Lwt_main.run (Dream.body response)
-
 let status_of response = Dream.status_to_int (Dream.status response)
-
 let member = [ ("user_id", "42"); ("username", "alice") ]
-
 let admin = member @ [ ("is_admin", "true") ]
-
 let login_copy = "An Earde account is required to connect a project"
-
 let start_action = "action='/integrations/github/install/start'"
-
 let button_copy = "Connect a GitHub project"
 
 let count_occurrences haystack needle =
@@ -46,7 +40,8 @@ let count_occurrences haystack needle =
    never be "no-referrer" (see Browser_form_post below). *)
 let check_page label response =
   Alcotest.(check int) (label ^ ": 200") 200 (status_of response);
-  Alcotest.(check (option string)) (label ^ ": no-store") (Some "no-store")
+  Alcotest.(check (option string))
+    (label ^ ": no-store") (Some "no-store")
     (Dream.header response "Cache-Control");
   Alcotest.(check (option string))
     (label ^ ": referrer policy")
@@ -55,9 +50,10 @@ let check_page label response =
 
 (* One representative session/mode pair per user-facing state. *)
 let all_states =
-  [ ("off", admin, Ob.Off)
-  ; ("anonymous", [], Ob.Public)
-  ; ("rollout-limited", member, Ob.Admins)
-  ; ("ready", member, Ob.Public)
-  ; ("admin ready", admin, Ob.Admins)
+  [
+    ("off", admin, Ob.Off);
+    ("anonymous", [], Ob.Public);
+    ("rollout-limited", member, Ob.Admins);
+    ("ready", member, Ob.Public);
+    ("admin ready", admin, Ob.Admins);
   ]

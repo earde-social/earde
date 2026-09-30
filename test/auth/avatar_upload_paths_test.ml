@@ -17,8 +17,7 @@ let accepts =
       Alcotest.(check (option string))
         "short digit runs still match the shape"
         (Some "static/uploads/earde_1_2.webp")
-        (Earde.Avatar_uploads.local_file_of_url
-           "/static/uploads/earde_1_2.webp"))
+        (Earde.Avatar_uploads.local_file_of_url "/static/uploads/earde_1_2.webp"))
 
 let rejects =
   case "everything else maps to None" (fun () ->
@@ -27,12 +26,10 @@ let rejects =
           label None
           (Earde.Avatar_uploads.local_file_of_url url)
       in
-      refuse "external absolute URL"
-        "https://cdn.example.com/earde_1_2.webp";
+      refuse "external absolute URL" "https://cdn.example.com/earde_1_2.webp";
       refuse "protocol-relative URL" "//evil.example/earde_1_2.webp";
       refuse "bundled static asset" "/static/images/logo-mark.svg";
-      refuse "traversal into images"
-        "/static/uploads/../images/logo-mark.svg";
+      refuse "traversal into images" "/static/uploads/../images/logo-mark.svg";
       refuse "encoded traversal" "/static/uploads/..%2F..%2Fetc%2Fpasswd";
       refuse "nested separator" "/static/uploads/evil/earde_1_2.webp";
       refuse "empty basename" "/static/uploads/";
@@ -56,13 +53,16 @@ let cleanup_dispatch =
         | `Failed -> "failed"
         | `Not_local -> "not_local"
       in
-      Alcotest.(check string) "no avatar" "not_local"
+      Alcotest.(check string)
+        "no avatar" "not_local"
         (show (Earde.Avatar_uploads.cleanup_deleted_account_avatar None));
-      Alcotest.(check string) "external avatar" "not_local"
+      Alcotest.(check string)
+        "external avatar" "not_local"
         (show
            (Earde.Avatar_uploads.cleanup_deleted_account_avatar
               (Some "https://cdn.example.com/earde_1_2.webp")));
-      Alcotest.(check string) "traversal avatar" "not_local"
+      Alcotest.(check string)
+        "traversal avatar" "not_local"
         (show
            (Earde.Avatar_uploads.cleanup_deleted_account_avatar
               (Some "/static/uploads/../images/logo-mark.svg"))))
@@ -75,11 +75,12 @@ let removal =
         | `Absent -> "absent"
         | `Failed -> "failed"
       in
-      Alcotest.(check string) "existing file is removed" "removed"
+      Alcotest.(check string)
+        "existing file is removed" "removed"
         (show (Earde.Avatar_uploads.remove_local_file path));
       Alcotest.(check bool) "file is gone" false (Sys.file_exists path);
-      Alcotest.(check string) "second attempt is absent, not a failure"
-        "absent"
+      Alcotest.(check string)
+        "second attempt is absent, not a failure" "absent"
         (show (Earde.Avatar_uploads.remove_local_file path)))
 
 (* Uploads are served with no access check, so a private community's post
@@ -88,40 +89,51 @@ let removal =
    repeats the same sequence after every restart: with the same Random
    state it minted the same suffix. *)
 let fresh_names =
-  case "fresh upload names are unguessable and keep the pipeline shape" (fun () ->
+  case "fresh upload names are unguessable and keep the pipeline shape"
+    (fun () ->
       let digits_of base =
         match String.split_on_char '_' base with
         | [ "earde"; _ms; d ] -> d
         | _ -> Alcotest.failf "unexpected shape %S" base
       in
       let mint () =
-        Earde.Avatar_uploads.fresh_basename ~now_ms:1722779100123L ~random:Dream.random
+        Earde.Avatar_uploads.fresh_basename ~now_ms:1722779100123L
+          ~random:Dream.random
       in
       Random.init 7;
       let a = mint () in
       Random.init 7;
       let b = mint () in
-      Alcotest.(check bool) "independent of the stdlib Random state" true
+      Alcotest.(check bool)
+        "independent of the stdlib Random state" true
         (digits_of a <> digits_of b);
       Alcotest.(check int) "32 random digits" 32 (String.length (digits_of a));
-      Alcotest.(check bool) "digits only" true
+      Alcotest.(check bool)
+        "digits only" true
         (String.for_all (fun c -> c >= '0' && c <= '9') (digits_of a));
-      Alcotest.(check (option string)) "the deletion validator accepts it"
+      Alcotest.(check (option string))
+        "the deletion validator accepts it"
         (Some ("static/uploads/" ^ a ^ ".webp"))
-        (Earde.Avatar_uploads.local_file_of_url ("/static/uploads/" ^ a ^ ".webp"));
+        (Earde.Avatar_uploads.local_file_of_url
+           ("/static/uploads/" ^ a ^ ".webp"));
       (* Bytes 250..255 are skipped so every digit stays uniform. *)
-      let feed = ref [ String.make 40 '\255'; String.init 40 (fun i -> Char.chr (i mod 250)) ] in
+      let feed =
+        ref
+          [
+            String.make 40 '\255';
+            String.init 40 (fun i -> Char.chr (i mod 250));
+          ]
+      in
       let scripted n =
         match !feed with
-        | x :: rest -> feed := rest; String.sub x 0 (min n (String.length x))
+        | x :: rest ->
+            feed := rest;
+            String.sub x 0 (min n (String.length x))
         | [] -> String.make n '\000'
       in
       let c = Earde.Avatar_uploads.fresh_basename ~now_ms:5L ~random:scripted in
-      Alcotest.(check string) "rejection sampling"
-        "earde_5_01234567890123456789012345678901" c)
+      Alcotest.(check string)
+        "rejection sampling" "earde_5_01234567890123456789012345678901" c)
 
 let suite = [ accepts; rejects; cleanup_dispatch; removal; fresh_names ]
-
-let suites =
-  [ ("avatar_upload_paths", suite)
-  ]
+let suites = [ ("avatar_upload_paths", suite) ]

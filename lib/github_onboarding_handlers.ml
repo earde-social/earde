@@ -41,10 +41,10 @@ let forbidden_page request =
    values, URLs, or error constructors ever reach the page. *)
 let unavailable_page request =
   Dream.respond ~status:`Service_Unavailable
-    (Site_pages.msg_page ?user:(session_user request) ~title:"Temporarily Unavailable"
+    (Site_pages.msg_page ?user:(session_user request)
+       ~title:"Temporarily Unavailable"
        ~message:
-         "GitHub connection is temporarily unavailable. Please try again \
-          later."
+         "GitHub connection is temporarily unavailable. Please try again later."
        ~alert_type:"error" ~return_url:"/bring" request)
 
 (* Same-origin browser check for this state-changing POST: the shared
@@ -62,7 +62,8 @@ let same_origin_request = Request_origin.same_origin_request
 let clean_redirect location =
   Dream.response ~status:`See_Other
     ~headers:
-      [ ("Location", location);
+      [
+        ("Location", location);
         ("Cache-Control", "no-store");
         ("Pragma", "no-cache");
         ("Referrer-Policy", "no-referrer");
@@ -179,8 +180,7 @@ let make_setup_return_handler ~mode ~load_config request =
                      delete it. Whether decryption or decoding failed stays
                      private. *)
                   let response = bring_redirect () in
-                  Github_onboarding_cookie.drop config ~request ~response
-                    ~state;
+                  Github_onboarding_cookie.drop config ~request ~response ~state;
                   Lwt.return response
               | Ok data -> (
                   let%lwt attached =
@@ -188,8 +188,8 @@ let make_setup_return_handler ~mode ~load_config request =
                         Github_onboarding_state_store
                         .attach_pending_installation db ~state
                           ~session_binding_hash:
-                            (Github_onboarding_session_data
-                             .session_binding_hash data)
+                            (Github_onboarding_session_data.session_binding_hash
+                               data)
                           ~flow:Github_onboarding.Project_onboarding
                           ~pending_github_installation_id:installation_id)
                   in
@@ -232,16 +232,14 @@ let make_start_installation_handler ~mode ~load_config request =
   | Project_onboarding.Admins | Project_onboarding.Public -> (
       match authenticated_user_id request with
       | None -> Dream.redirect request "/login"
-      | Some user_id ->
-          let is_admin =
-            session_field_opt request "is_admin" = Some "true"
-          in
+      | Some user_id -> (
+          let is_admin = session_field_opt request "is_admin" = Some "true" in
           if not (Project_onboarding.onboarding_available mode ~is_admin) then
             forbidden_page request
-          else (
+          else
             match load_config () with
             | Error _ -> unavailable_page request
-            | Ok config ->
+            | Ok config -> (
                 if not (same_origin_request config request) then
                   forbidden_page request
                 else
@@ -254,11 +252,11 @@ let make_start_installation_handler ~mode ~load_config request =
                     Dream.sql request (fun db ->
                         Github_onboarding_state_store.issue db ~user_id
                           ~session_binding_hash:
-                            (Github_onboarding_session_data
-                             .session_binding_hash data)
+                            (Github_onboarding_session_data.session_binding_hash
+                               data)
                           ~flow:Github_onboarding.Project_onboarding)
                   in
-                  (match issued with
+                  match issued with
                   | Error _ -> unavailable_page request
                   | Ok state -> (
                       let location =
@@ -395,8 +393,8 @@ let parse_oauth_callback_target target =
    state is burned or spent either way — so each deletes the per-flow
    cookie on its way out. *)
 let finish_authorization ~config ~credentials ~exchange_transport
-    ~installations_transport ~repositories_transport ~request ~state ~data
-    ~code =
+    ~installations_transport ~repositories_transport ~request ~state ~data ~code
+    =
   let%lwt consumed =
     Dream.sql request (fun db ->
         Github_onboarding_state_store.consume db ~state
@@ -416,8 +414,8 @@ let finish_authorization ~config ~credentials ~exchange_transport
        | Github_onboarding_state_store.State_already_consumed
        | Github_onboarding_state_store.Session_binding_mismatch
        | Github_onboarding_state_store.Flow_mismatch
-       | Github_onboarding_state_store.Missing_pending_installation ) as
-       reason) ->
+       | Github_onboarding_state_store.Missing_pending_installation ) as reason)
+    ->
       (* One collapsed answer whether the state was already dead or was
          just atomically burned by a mismatch — which one stays private,
          and the cookie can never succeed against this row again. The
@@ -454,9 +452,8 @@ let finish_authorization ~config ~credentials ~exchange_transport
                   }))
       | Ok token_set -> (
           let%lwt verification =
-            Github_user_installations.verify
-              ~transport:installations_transport ~token_set
-              ~installation_id:pending_github_installation_id
+            Github_user_installations.verify ~transport:installations_transport
+              ~token_set ~installation_id:pending_github_installation_id
           in
           match verification with
           | Error
@@ -470,8 +467,7 @@ let finish_authorization ~config ~credentials ~exchange_transport
                 (failed_callback_dropping config ~request ~state
                    (Diagnostics.Installation_verification_failed
                       {
-                        pending_installation_id =
-                          pending_github_installation_id;
+                        pending_installation_id = pending_github_installation_id;
                         error = reason;
                       }))
           | Ok verified_installation -> (
@@ -484,8 +480,7 @@ let finish_authorization ~config ~credentials ~exchange_transport
                     Github_user_installations.installation_id
                       verified_installation;
                   account_type =
-                    Github_user_installations.account_type
-                      verified_installation;
+                    Github_user_installations.account_type verified_installation;
                 }
               in
               let%lwt listed =
@@ -497,12 +492,13 @@ let finish_authorization ~config ~credentials ~exchange_transport
               | Error
                   (( Github_user_installation_repositories.Transport_error
                    | Github_user_installation_repositories
-                     .Unexpected_http_status _
+                     .Unexpected_http_status
+                       _
                    | Github_user_installation_repositories.Invalid_response
                    | Github_user_installation_repositories
                      .No_public_repositories
-                   | Github_user_installation_repositories.Pagination_limit
-                     ) as reason) ->
+                   | Github_user_installation_repositories.Pagination_limit ) as
+                   reason) ->
                   (* Nothing is persisted when the listing fails: the
                      installation record and draft only exist together
                      with a complete snapshot source. This is also where a
@@ -512,10 +508,7 @@ let finish_authorization ~config ~credentials ~exchange_transport
                   Lwt.return
                     (failed_callback_dropping config ~request ~state
                        (Diagnostics.Repository_listing_failed
-                          {
-                            installation = verified_context;
-                            error = reason;
-                          }))
+                          { installation = verified_context; error = reason }))
               | Ok repository_set -> (
                   (* The token set stays behind in memory on purpose: only
                      the verified identity and the validated public
@@ -530,8 +523,7 @@ let finish_authorization ~config ~credentials ~exchange_transport
                     Dream.sql request (fun db ->
                         let%lwt recorded =
                           Github_installation_store.record_verified db
-                            ~connected_by_user_id:user_id
-                            verified_installation
+                            ~connected_by_user_id:user_id verified_installation
                         in
                         match recorded with
                         | Error
@@ -550,19 +542,17 @@ let finish_authorization ~config ~credentials ~exchange_transport
                                     }))
                         | Ok () -> (
                             let%lwt refreshed =
-                              Project_onboarding_draft_store.refresh_verified
-                                db ~user_id
-                                ~installation:verified_installation
+                              Project_onboarding_draft_store.refresh_verified db
+                                ~user_id ~installation:verified_installation
                                 ~repositories:repository_set
                             in
                             match refreshed with
                             | Error
-                                (( Project_onboarding_draft_store
-                                   .Invalid_user_id
+                                (( Project_onboarding_draft_store.Invalid_user_id
                                  | Project_onboarding_draft_store
                                    .Installation_unavailable
-                                 | Project_onboarding_draft_store
-                                   .Storage_error ) as reason) ->
+                                 | Project_onboarding_draft_store.Storage_error
+                                   ) as reason) ->
                                 Lwt.return
                                   (Error
                                      (Diagnostics.Draft_persistence_failed
@@ -579,8 +569,7 @@ let finish_authorization ~config ~credentials ~exchange_transport
                   match persisted with
                   | Error reason ->
                       Lwt.return
-                        (failed_callback_dropping config ~request ~state
-                           reason)
+                        (failed_callback_dropping config ~request ~state reason)
                   | Ok () ->
                       (* Both persistence steps committed: the verified
                          installation record and the refreshed draft exist.
@@ -622,16 +611,16 @@ let make_bring_handler ~mode request =
         match user_id with
         | None -> Github_onboarding_pages.Login_required
         | Some _ ->
-            let is_admin =
-              session_field_opt request "is_admin" = Some "true"
-            in
+            let is_admin = session_field_opt request "is_admin" = Some "true" in
             if Project_onboarding.onboarding_available mode ~is_admin then
               Github_onboarding_pages.Ready
             else Github_onboarding_pages.Rollout_limited)
   in
   (* Chrome identity under the same validity rule as the access state: a
      session username without a valid positive user_id stays anonymous. *)
-  let user = match user_id with None -> None | Some _ -> session_user request in
+  let user =
+    match user_id with None -> None | Some _ -> session_user request
+  in
   (* no-store: the page reflects session identity, rollout mode, and
      one-time callback feedback. The referrer policy is the shared one from
      Request_origin, not "no-referrer": this page hosts the start form, and
@@ -640,7 +629,8 @@ let make_bring_handler ~mode request =
      query still never reaches an outbound Referer. *)
   Dream.html
     ~headers:
-      [ ("Cache-Control", "no-store");
+      [
+        ("Cache-Control", "no-store");
         ("Referrer-Policy", Request_origin.referrer_policy);
       ]
     (Github_onboarding_pages.bring_page ?user ~request ~access
@@ -648,8 +638,8 @@ let make_bring_handler ~mode request =
        ())
 
 let make_oauth_callback_handler ~mode ~load_config ~load_credentials
-    ~exchange_transport ~installations_transport ~repositories_transport
-    request =
+    ~exchange_transport ~installations_transport ~repositories_transport request
+    =
   match mode with
   | Project_onboarding.Off ->
       (* Kill switch: no parsing, no configuration or credential read, no
@@ -682,7 +672,8 @@ let make_oauth_callback_handler ~mode ~load_config ~load_credentials
                   (* Another browser, or cleared data: nothing to delete,
                      and any other browser's cookie can still finish. No
                      credentials, SQL, or GitHub. *)
-                  Lwt.return (failed_callback request Diagnostics.Cookie_missing)
+                  Lwt.return
+                    (failed_callback request Diagnostics.Cookie_missing)
               | Error Github_onboarding_cookie.Invalid ->
                   (* Undecryptable material is useless; delete it. Still no
                      credentials, SQL, or GitHub. *)
@@ -713,5 +704,5 @@ let make_oauth_callback_handler ~mode ~load_config ~load_credentials
                       | Ok credentials ->
                           finish_authorization ~config ~credentials
                             ~exchange_transport ~installations_transport
-                            ~repositories_transport ~request ~state ~data
-                            ~code)))))
+                            ~repositories_transport ~request ~state ~data ~code)
+                  ))))

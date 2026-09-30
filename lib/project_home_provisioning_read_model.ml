@@ -24,10 +24,7 @@ type project = {
   project_namespace_login : string;
 }
 
-type view = {
-  view_project : project;
-  view_suggested_slug : string;
-}
+type view = { view_project : project; view_suggested_slug : string }
 
 type error =
   | Invalid_user_id
@@ -143,8 +140,7 @@ let valid_project_description = function
         is_ascii_control_or_del c && c <> '\n' && c <> '\t'
       in
       String.equal (trim_ascii text) text
-      && text <> ""
-      && String.is_valid_utf_8 text
+      && text <> "" && String.is_valid_utf_8 text
       && (not (String.exists is_forbidden text))
       && utf8_scalar_count text <= 2000
 
@@ -160,21 +156,15 @@ let valid_project_description = function
 let load_query =
   let open Caqti_request.Infix in
   (Caqti_type.(t2 string int)
-   ->? Caqti_type.(
-         t2 (t3 int64 string string) (t4 (option string) string string string)))
-    "SELECT p.id, p.name, p.slug, \
-            p.description, p.kind, p.forge_namespace_login, \
-            p.verification_status \
-     FROM open_source_projects p \
-     JOIN project_stewards s ON s.project_id = p.id AND s.user_id = $2 \
-     WHERE p.slug = $1 \
-       AND p.verification_status = 'verified' \
-       AND github_evidence_is_fresh(s.github_verified_at) \
-       AND NOT EXISTS ( \
-         SELECT 1 FROM community_projects cp \
-         WHERE cp.project_id = p.id \
-           AND cp.relation_type = 'home' \
-           AND cp.status IN ('pending', 'accepted'))"
+  ->? Caqti_type.(
+        t2 (t3 int64 string string) (t4 (option string) string string string)))
+    "SELECT p.id, p.name, p.slug, p.description, p.kind, \
+     p.forge_namespace_login, p.verification_status FROM open_source_projects \
+     p JOIN project_stewards s ON s.project_id = p.id AND s.user_id = $2 WHERE \
+     p.slug = $1 AND p.verification_status = 'verified' AND \
+     github_evidence_is_fresh(s.github_verified_at) AND NOT EXISTS ( SELECT 1 \
+     FROM community_projects cp WHERE cp.project_id = p.id AND \
+     cp.relation_type = 'home' AND cp.status IN ('pending', 'accepted'))"
 
 let load_for_steward (module C : Caqti_lwt.CONNECTION) ~user_id ~project_slug =
   if user_id <= 0 then Lwt.return (Error Invalid_user_id)
@@ -192,8 +182,8 @@ let load_for_steward (module C : Caqti_lwt.CONNECTION) ~user_id ~project_slug =
         Ok None
     | Ok
         (Some
-          ( (row_id, stored_name, stored_slug),
-            (stored_description, kind_raw, login, verification) )) -> (
+           ( (row_id, stored_name, stored_slug),
+             (stored_description, kind_raw, login, verification) )) -> (
         match Project_identity.kind_of_string kind_raw with
         | None -> Error Inconsistent_data
         | Some kind ->
@@ -222,4 +212,6 @@ let load_for_steward (module C : Caqti_lwt.CONNECTION) ~user_id ~project_slug =
               let suggested =
                 if community_creation_slug stored_slug then stored_slug else ""
               in
-              Ok (Some { view_project = loaded; view_suggested_slug = suggested }))
+              Ok
+                (Some { view_project = loaded; view_suggested_slug = suggested })
+        )

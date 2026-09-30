@@ -87,12 +87,12 @@ let template markup holes =
   let rec go i holes =
     if i >= n then (
       if holes <> [] then invalid_arg "Html.template: more holes than markers")
-    else if i + 1 < n && markup.[i] = '%' && markup.[i + 1] = 's' then (
+    else if i + 1 < n && markup.[i] = '%' && markup.[i + 1] = 's' then
       match holes with
       | h :: rest ->
           Buffer.add_string buf h;
           go (i + 2) rest
-      | [] -> invalid_arg "Html.template: more markers than holes")
+      | [] -> invalid_arg "Html.template: more markers than holes"
     else (
       Buffer.add_char buf markup.[i];
       go (i + 1) holes)
@@ -104,8 +104,10 @@ let static markup = markup
 let trusted markup = markup
 let concat = String.concat ""
 let join = String.concat
+
 module Infix = struct
   let ( ++ ) = ( ^ )
 end
+
 let is_empty s = s = ""
 let to_string s = s

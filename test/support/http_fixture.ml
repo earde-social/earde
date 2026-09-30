@@ -52,9 +52,7 @@ let counting_loader result =
     calls )
 
 let ok_loader () = Github_fixture.gac_of_values ()
-
 let status_of response = Dream.status_to_int (Dream.status response)
-
 let make_setup ~mode = Pc.make_project_home_setup_handler ~mode
 
 let gate_run ?session ?(headers = []) ~method_ ~target handler =
@@ -86,23 +84,24 @@ let check_db_boundary label = function
         (status_of response)
 
 let logged_in = [ ("user_id", "42") ]
-
 let admin_session = [ ("user_id", "42"); ("is_admin", "true") ]
 
 let check_clean_redirect label expected response =
   Alcotest.(check int) (label ^ ": 303") 303 (status_of response);
-  Alcotest.(check (option string)) (label ^ ": Location") (Some expected)
+  Alcotest.(check (option string))
+    (label ^ ": Location") (Some expected)
     (Dream.header response "Location");
-  Alcotest.(check (option string)) (label ^ ": no-store")
-    (Some "no-store")
+  Alcotest.(check (option string))
+    (label ^ ": no-store") (Some "no-store")
     (Dream.header response "Cache-Control");
-  Alcotest.(check (option string)) (label ^ ": no-cache")
-    (Some "no-cache")
+  Alcotest.(check (option string))
+    (label ^ ": no-cache") (Some "no-cache")
     (Dream.header response "Pragma");
-  Alcotest.(check (option string)) (label ^ ": no-referrer")
-    (Some "no-referrer")
+  Alcotest.(check (option string))
+    (label ^ ": no-referrer") (Some "no-referrer")
     (Dream.header response "Referrer-Policy");
-  Alcotest.(check string) (label ^ ": empty body") ""
+  Alcotest.(check string)
+    (label ^ ": empty body") ""
     (Lwt_main.run (Dream.body response))
 
 (* Values are percent-encoded, so fixture text with spaces, controls, or
@@ -119,8 +118,7 @@ let urlencode value =
   Buffer.contents buffer
 
 let form_body fields =
-  String.concat "&"
-    (List.map (fun (k, v) -> k ^ "=" ^ urlencode v) fields)
+  String.concat "&" (List.map (fun (k, v) -> k ^ "=" ^ urlencode v) fields)
 
 let session_cookie label response =
   match
@@ -130,15 +128,18 @@ let session_cookie label response =
   with
   | None -> Alcotest.fail (label ^ ": no session cookie")
   | Some v -> (
-      match String.index_opt v ';' with
-      | Some i -> String.sub v 0 i
-      | None -> v)
+      match String.index_opt v ';' with Some i -> String.sub v 0 i | None -> v)
 
 let identity_fields ?(kind = "project") ?(name = "Fixture Project")
-    ?(slug = "pch-fixture") ?(description = "") ?(website = "")
-    ?(primary = "") ~draft () =
-  [ ("draft_id", draft); ("kind", kind); ("name", name); ("slug", slug);
-    ("description", description); ("website_url", website);
+    ?(slug = "pch-fixture") ?(description = "") ?(website = "") ?(primary = "")
+    ~draft () =
+  [
+    ("draft_id", draft);
+    ("kind", kind);
+    ("name", name);
+    ("slug", slug);
+    ("description", description);
+    ("website_url", website);
     ("primary_snapshot_id", primary);
   ]
 
@@ -152,21 +153,18 @@ let mint_tokens label pipeline =
   | _ -> Alcotest.fail (label ^ ": unexpected mint body")
 
 let do_get ?cookie ~target pipeline =
-  let headers =
-    match cookie with Some c -> [ ("Cookie", c) ] | None -> []
-  in
-  let* response =
-    pipeline (Dream.request ~method_:`GET ~target ~headers "")
-  in
+  let headers = match cookie with Some c -> [ ("Cookie", c) ] | None -> [] in
+  let* response = pipeline (Dream.request ~method_:`GET ~target ~headers "") in
   let* body = Dream.body response in
   Lwt.return (response, body)
 
 let check_page label response =
   Alcotest.(check int) (label ^ ": 200") 200 (status_of response);
-  Alcotest.(check (option string)) (label ^ ": no-store")
-    (Some "no-store")
+  Alcotest.(check (option string))
+    (label ^ ": no-store") (Some "no-store")
     (Dream.header response "Cache-Control");
-  Alcotest.(check (option string)) (label ^ ": referrer policy")
+  Alcotest.(check (option string))
+    (label ^ ": referrer policy")
     (Some Earde.Request_origin.referrer_policy)
     (Dream.header response "Referrer-Policy")
 
@@ -188,16 +186,17 @@ let mint_token label ~cookie pipeline =
 
 let check_redirect_lwt label expected response =
   Alcotest.(check int) (label ^ ": 303") 303 (status_of response);
-  Alcotest.(check (option string)) (label ^ ": Location") (Some expected)
+  Alcotest.(check (option string))
+    (label ^ ": Location") (Some expected)
     (Dream.header response "Location");
-  Alcotest.(check (option string)) (label ^ ": no-store")
-    (Some "no-store")
+  Alcotest.(check (option string))
+    (label ^ ": no-store") (Some "no-store")
     (Dream.header response "Cache-Control");
-  Alcotest.(check (option string)) (label ^ ": no-cache")
-    (Some "no-cache")
+  Alcotest.(check (option string))
+    (label ^ ": no-cache") (Some "no-cache")
     (Dream.header response "Pragma");
-  Alcotest.(check (option string)) (label ^ ": no-referrer")
-    (Some "no-referrer")
+  Alcotest.(check (option string))
+    (label ^ ": no-referrer") (Some "no-referrer")
     (Dream.header response "Referrer-Policy");
   let* body = Dream.body response in
   Alcotest.(check string) (label ^ ": empty body") "" body;

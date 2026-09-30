@@ -7,79 +7,63 @@
 let ( let* ) = Lwt.bind
 
 open Caqti_request.Infix
-
 module P = Earde.Shared_thread_placements
-
 module Store = Earde.Shared_thread_placement_store
 
 let find = Db_fixture.find
-
 let collect = Db_fixture.collect
-
 let exec = Db_fixture.exec
-
 let insert_user = Db_fixture.insert_user
-
 let contains haystack needle = Html_assert.occurs haystack ~needle
-
 let db_case = Shared_thread_fixture.db_case
-
 let fixture = Shared_thread_fixture.fixture
-
 let insert_post = Shared_thread_fixture.insert_post
-
 let request_ok = Shared_thread_fixture.request_ok
-
 let review_ok = Shared_thread_fixture.review_ok
-
 let withdraw_ok = Shared_thread_fixture.withdraw_ok
-
 let remove_ok = Shared_thread_fixture.remove_ok
 
 let add_role conn ~user ~community role =
-  exec conn "role fixture" Community_fixture.q_insert_moderator (user, community, role)
+  exec conn "role fixture" Community_fixture.q_insert_moderator
+    (user, community, role)
 
-let add_top_mod conn ~user ~community =
-  add_role conn ~user ~community "top_mod"
+let add_top_mod conn ~user ~community = add_role conn ~user ~community "top_mod"
 
 (* One tuple per notification of one placement, ordered by recipient so
    expectations do not depend on insertion order. *)
 let q_notifs =
-  (Caqti_type.int64
-   ->* Caqti_type.(t2 (t2 int string) (t2 (option int) int)))
-  "SELECT user_id, notif_type, actor_user_id, community_id \
-   FROM notifications WHERE shared_thread_placement_id = $1 \
-   ORDER BY user_id, notif_type"
+  (Caqti_type.int64 ->* Caqti_type.(t2 (t2 int string) (t2 (option int) int)))
+    "SELECT user_id, notif_type, actor_user_id, community_id FROM \
+     notifications WHERE shared_thread_placement_id = $1 ORDER BY user_id, \
+     notif_type"
 
 let q_notif_count =
   (Caqti_type.int64 ->! Caqti_type.int)
-  "SELECT COUNT(*) FROM notifications \
-   WHERE shared_thread_placement_id = $1"
+    "SELECT COUNT(*) FROM notifications WHERE shared_thread_placement_id = $1"
 
 (* Every stored byte of one placement's notifications, for the boolean
    absence sweep over notes and usernames. *)
 let q_notif_blob =
   (Caqti_type.int64 ->! Caqti_type.string)
-  "SELECT COALESCE(string_agg(n::text, '|'), '<none>') \
-   FROM notifications n WHERE shared_thread_placement_id = $1"
+    "SELECT COALESCE(string_agg(n::text, '|'), '<none>') FROM notifications n \
+     WHERE shared_thread_placement_id = $1"
 
 (* Creation must never mark anything read. *)
 let q_all_unread =
   (Caqti_type.int64 ->! Caqti_type.bool)
-  "SELECT COALESCE(BOOL_AND(NOT is_read), TRUE) \
-   FROM notifications WHERE shared_thread_placement_id = $1"
+    "SELECT COALESCE(BOOL_AND(NOT is_read), TRUE) FROM notifications WHERE \
+     shared_thread_placement_id = $1"
 
 let notif_t = Alcotest.(pair (pair int string) (pair (option int) int))
 
 let sorted expected =
-  List.sort
-    (fun ((a, ka), _) ((b, kb), _) -> compare (a, ka) (b, kb))
-    expected
+  List.sort (fun ((a, ka), _) ((b, kb), _) -> compare (a, ka) (b, kb)) expected
 
 let check_notifs label conn ~placement expected =
   let* rows = collect conn (label ^ ": notifications") q_notifs placement in
   Alcotest.(check (list notif_t))
-    (label ^ ": exact notifications") (sorted expected) rows;
+    (label ^ ": exact notifications")
+    (sorted expected) rows;
   let* unread = find conn (label ^ ": unread") q_all_unread placement in
   Alcotest.(check bool) (label ^ ": all rows unread") true unread;
   Lwt.return_unit
@@ -100,8 +84,10 @@ let requested_recipients_case =
       let* () = add_top_mod conn ~user:origin_tm ~community:o in
       let* id = request_ok "request" conn ~actor ~post ~destination:d () in
       check_notifs "requested" conn ~placement:id
-        [ ((tm1, "shared_thread_requested"), (Some actor, d))
-        ; ((tm2, "shared_thread_requested"), (Some actor, d)) ])
+        [
+          ((tm1, "shared_thread_requested"), (Some actor, d));
+          ((tm2, "shared_thread_requested"), (Some actor, d));
+        ])
 
 let requested_actor_excluded_case =
   db_case "requested: the acting top_mod is never notified" (fun conn ->
@@ -114,8 +100,7 @@ let requested_actor_excluded_case =
         [ ((other, "shared_thread_requested"), (Some actor, d)) ])
 
 let zero_recipients_case =
-  db_case "requested: zero recipients never fails the transition"
-    (fun conn ->
+  db_case "requested: zero recipients never fails the transition" (fun conn ->
       let* actor, _, d, post, _ = fixture conn "nzero" in
       let* id = request_ok "request" conn ~actor ~post ~destination:d () in
       let* n = find conn "count" q_notif_count id in
@@ -123,8 +108,8 @@ let zero_recipients_case =
       Lwt.return_unit)
 
 let review_recipients_case =
-  db_case "review: requester and author both hear the outcome, in origin \
-           context"
+  db_case
+    "review: requester and author both hear the outcome, in origin context"
     (fun conn ->
       let* actor, o, d, _, _ = fixture conn "nrev" in
       let* author = insert_user conn "stp_nrev_author" in
@@ -136,8 +121,10 @@ let review_recipients_case =
           (Store.Accept None) P.Accepted
       in
       check_notifs "accepted" conn ~placement:id
-        [ ((actor, "shared_thread_accepted"), (Some reviewer, o))
-        ; ((author, "shared_thread_accepted"), (Some reviewer, o)) ])
+        [
+          ((actor, "shared_thread_accepted"), (Some reviewer, o));
+          ((author, "shared_thread_accepted"), (Some reviewer, o));
+        ])
 
 let review_dedup_case =
   db_case "review: a requesting author collapses to one notification"
@@ -161,8 +148,8 @@ let reviewer_is_requester_case =
       let* post = insert_post conn ~community:o ~author in
       let* id = request_ok "request" conn ~actor ~post ~destination:d () in
       let* _ =
-        review_ok "accept by the requester" conn ~reviewer:actor
-          ~placement:id ~destination:d (Store.Accept None) P.Accepted
+        review_ok "accept by the requester" conn ~reviewer:actor ~placement:id
+          ~destination:d (Store.Accept None) P.Accepted
       in
       check_notifs "self-review" conn ~placement:id
         [ ((author, "shared_thread_accepted"), (Some actor, o)) ])
@@ -176,13 +163,15 @@ let withdrawn_recipients_case =
       let* id = request_ok "request" conn ~actor ~post ~destination:d () in
       let* _ = withdraw_ok "withdraw" conn ~actor ~placement:id ~origin:o in
       check_notifs "withdrawn" conn ~placement:id
-        [ ((tm, "shared_thread_requested"), (Some actor, d))
-        ; ((tm, "shared_thread_withdrawn"), (Some actor, d)) ])
+        [
+          ((tm, "shared_thread_requested"), (Some actor, d));
+          ((tm, "shared_thread_withdrawn"), (Some actor, d));
+        ])
 
 let removed_union_case =
-  db_case "removed: both sides' top_mods, requester, and author — \
-           deduplicated, actor excluded, per-side context"
-    (fun conn ->
+  db_case
+    "removed: both sides' top_mods, requester, and author — deduplicated, \
+     actor excluded, per-side context" (fun conn ->
       let* actor, o, d, _, _ = fixture conn "nrm" in
       let* author = insert_user conn "stp_nrm_author" in
       let* post = insert_post conn ~community:o ~author in
@@ -196,8 +185,8 @@ let removed_union_case =
       let* () = add_top_mod conn ~user:both_tm ~community:d in
       let* id = request_ok "request" conn ~actor ~post ~destination:d () in
       let* _ =
-        review_ok "accept" conn ~reviewer:remover ~placement:id
-          ~destination:d (Store.Accept None) P.Accepted
+        review_ok "accept" conn ~reviewer:remover ~placement:id ~destination:d
+          (Store.Accept None) P.Accepted
       in
       let* _ = remove_ok "remove" conn ~actor:remover ~placement:id ~acting:o in
       let removed = "shared_thread_removed" in
@@ -208,25 +197,26 @@ let removed_union_case =
       Alcotest.(check (list notif_t))
         "exact removal recipients"
         (List.sort compare
-           [ ((origin_tm, removed), (Some remover, o))
+           [
+             ((origin_tm, removed), (Some remover, o))
              (* A top moderator of both sides is notified once, in
-                origin context. *)
-           ; ((both_tm, removed), (Some remover, o))
-           ; ((actor, removed), (Some remover, o))
-           ; ((author, removed), (Some remover, o))
-           ; ((dest_tm, removed), (Some remover, d)) ])
+                origin context. *);
+             ((both_tm, removed), (Some remover, o));
+             ((actor, removed), (Some remover, o));
+             ((author, removed), (Some remover, o));
+             ((dest_tm, removed), (Some remover, d));
+           ])
         removed_rows;
       Lwt.return_unit)
 
 let privacy_case =
-  db_case "privacy: no note, name, or prose is stored on any row"
-    (fun conn ->
+  db_case "privacy: no note, name, or prose is stored on any row" (fun conn ->
       let* actor, _, d, post, _ = fixture conn "priv" in
       let* tm = insert_user conn "stp_priv_tm" in
       let* () = add_top_mod conn ~user:tm ~community:d in
       let* id =
-        request_ok "request" conn ~actor
-          ~note:"SECRETNOTE do not surface" ~post ~destination:d ()
+        request_ok "request" conn ~actor ~note:"SECRETNOTE do not surface" ~post
+          ~destination:d ()
       in
       let* blob = find conn "blob" q_notif_blob id in
       List.iter
@@ -237,11 +227,16 @@ let privacy_case =
       Lwt.return_unit)
 
 let suite =
-  [ requested_recipients_case; requested_actor_excluded_case
-  ; zero_recipients_case; review_recipients_case; review_dedup_case
-  ; reviewer_is_requester_case; withdrawn_recipients_case
-  ; removed_union_case; privacy_case ]
-
-let suites =
-  [ ("shared_thread_notifications", suite)
+  [
+    requested_recipients_case;
+    requested_actor_excluded_case;
+    zero_recipients_case;
+    review_recipients_case;
+    review_dedup_case;
+    reviewer_is_requester_case;
+    withdrawn_recipients_case;
+    removed_union_case;
+    privacy_case;
   ]
+
+let suites = [ ("shared_thread_notifications", suite) ]

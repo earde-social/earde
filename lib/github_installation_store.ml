@@ -38,20 +38,15 @@ let domain_account_type = function
 let record_verified_query =
   let open Caqti_request.Infix in
   (Caqti_type.(t2 (t4 int64 int64 string string) int) ->? Caqti_type.bool)
-  "INSERT INTO github_installations \
-     (github_installation_id, github_account_id, github_account_login, \
-      github_account_type, connected_by_user_id, status) \
-   VALUES ($1, $2, $3, $4, $5, 'active') \
-   ON CONFLICT (github_installation_id) DO UPDATE \
-   SET github_account_login = EXCLUDED.github_account_login, \
-       status = 'active', \
-       updated_at = NOW() \
-   WHERE github_installations.status <> 'revoked' \
-     AND github_installations.github_account_id = \
-         EXCLUDED.github_account_id \
-     AND github_installations.github_account_type = \
-         EXCLUDED.github_account_type \
-   RETURNING TRUE"
+    "INSERT INTO github_installations (github_installation_id, \
+     github_account_id, github_account_login, github_account_type, \
+     connected_by_user_id, status) VALUES ($1, $2, $3, $4, $5, 'active') ON \
+     CONFLICT (github_installation_id) DO UPDATE SET github_account_login = \
+     EXCLUDED.github_account_login, status = 'active', updated_at = NOW() \
+     WHERE github_installations.status <> 'revoked' AND \
+     github_installations.github_account_id = EXCLUDED.github_account_id AND \
+     github_installations.github_account_type = EXCLUDED.github_account_type \
+     RETURNING TRUE"
 
 let record_verified (module C : Caqti_lwt.CONNECTION) ~connected_by_user_id
     verified =
@@ -60,8 +55,7 @@ let record_verified (module C : Caqti_lwt.CONNECTION) ~connected_by_user_id
   else
     let account_type =
       Github_onboarding.string_of_account_type
-        (domain_account_type
-           (Github_user_installations.account_type verified))
+        (domain_account_type (Github_user_installations.account_type verified))
     in
     C.find_opt record_verified_query
       ( ( Github_user_installations.installation_id verified,

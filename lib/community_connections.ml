@@ -26,11 +26,7 @@ let connection_eligible ~visibility ~onboarding_state ~discoverable =
   && onboarding_state = Community_types.Community_published
   && discoverable
 
-type status =
-  | Pending
-  | Accepted
-  | Rejected
-  | Removed
+type status = Pending | Accepted | Rejected | Removed
 
 (* Closed conversion: exactly the four database spellings, nothing else.
    Aliases and capitalization variants belong to no layer — the store reads
@@ -48,10 +44,7 @@ let string_of_status = function
   | Rejected -> "rejected"
   | Removed -> "removed"
 
-type action =
-  | Accept
-  | Reject
-  | Remove
+type action = Accept | Reject | Remove
 
 type t = {
   requester_community_id : int;
@@ -101,11 +94,11 @@ let normalize_line_endings s =
   let b = Buffer.create n in
   let i = ref 0 in
   while !i < n do
-    (if s.[!i] = '\r' then begin
-       Buffer.add_char b '\n';
-       if !i + 1 < n && s.[!i + 1] = '\n' then incr i
-     end
-     else Buffer.add_char b s.[!i]);
+    if s.[!i] = '\r' then begin
+      Buffer.add_char b '\n';
+      if !i + 1 < n && s.[!i + 1] = '\n' then incr i
+    end
+    else Buffer.add_char b s.[!i];
     incr i
   done;
   Buffer.contents b
@@ -150,8 +143,8 @@ let validate_note = function
           then Error Invalid_request_note
           else Ok (Some text))
 
-let create_pending ~requester_community_id ~recipient_community_id
-    ~request_note =
+let create_pending ~requester_community_id ~recipient_community_id ~request_note
+    =
   if requester_community_id <= 0 || recipient_community_id <= 0 then
     Error Invalid_community_id
   else if requester_community_id = recipient_community_id then
@@ -171,7 +164,6 @@ let create_pending ~requester_community_id ~recipient_community_id
           }
 
 let requester_community_id t = t.requester_community_id
-
 let recipient_community_id t = t.recipient_community_id
 
 (* Ascending order — the same normalization the durable partial unique index
@@ -187,14 +179,12 @@ let involves t ~community_id =
   || t.recipient_community_id = community_id
 
 let counterpart t ~community_id =
-  if t.requester_community_id = community_id then
-    Some t.recipient_community_id
+  if t.requester_community_id = community_id then Some t.recipient_community_id
   else if t.recipient_community_id = community_id then
     Some t.requester_community_id
   else None
 
 let status t = t.status
-
 let request_note t = t.request_note
 
 (* The lifecycle is a straight line: a pending request is reviewed once

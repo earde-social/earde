@@ -1,5 +1,5 @@
-(** Live chat: the channel page, message history as JSON, message sending
-    and the realtime token. Messages are persisted before any live publish. *)
+(** Live chat: the channel page, message history as JSON, message sending and
+    the realtime token. Messages are persisted before any live publish. *)
 
 val community_channel_handler : Dream.handler
 
@@ -19,7 +19,5 @@ module Chat_api : sig
 end
 
 val channel_messages_json_handler : Dream.handler
-
 val realtime_token_handler : Dream.handler
-
 val send_message_handler : Dream.handler

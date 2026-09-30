@@ -20,17 +20,11 @@ let ( let* ) = Lwt.bind
 open Caqti_request.Infix
 
 let or_fail = Db_fixture.or_fail
-
 let insert_user = Db_fixture.insert_user
-
 let exec = Db_fixture.exec
-
 let find = Db_fixture.find
-
 let insert_community = Community_fixture.insert_community
-
 let contains haystack needle = Html_assert.occurs haystack ~needle
-
 let status_of = Http_fixture.status_of
 
 let add_top_mod conn ~user ~community =
@@ -40,20 +34,19 @@ let add_top_mod conn ~user ~community =
 let q_cleanup =
   List.map
     (fun sql -> (Caqti_type.unit ->. Caqti_type.unit) sql)
-    [ "DELETE FROM notifications \
-       WHERE user_id IN (SELECT id FROM users WHERE username LIKE 'nbdg_%')"
-    ; "DELETE FROM community_connection_audit_events \
-       WHERE requester_community_id IN \
-               (SELECT id FROM communities WHERE slug LIKE 'nbdg-%') \
-          OR recipient_community_id IN \
-               (SELECT id FROM communities WHERE slug LIKE 'nbdg-%')"
-    ; "DELETE FROM community_connections \
-       WHERE requester_community_id IN \
-               (SELECT id FROM communities WHERE slug LIKE 'nbdg-%') \
-          OR recipient_community_id IN \
-               (SELECT id FROM communities WHERE slug LIKE 'nbdg-%')"
-    ; "DELETE FROM communities WHERE slug LIKE 'nbdg-%'"
-    ; "DELETE FROM users WHERE username LIKE 'nbdg_%'"
+    [
+      "DELETE FROM notifications WHERE user_id IN (SELECT id FROM users WHERE \
+       username LIKE 'nbdg_%')";
+      "DELETE FROM community_connection_audit_events WHERE \
+       requester_community_id IN (SELECT id FROM communities WHERE slug LIKE \
+       'nbdg-%') OR recipient_community_id IN (SELECT id FROM communities \
+       WHERE slug LIKE 'nbdg-%')";
+      "DELETE FROM community_connections WHERE requester_community_id IN \
+       (SELECT id FROM communities WHERE slug LIKE 'nbdg-%') OR \
+       recipient_community_id IN (SELECT id FROM communities WHERE slug LIKE \
+       'nbdg-%')";
+      "DELETE FROM communities WHERE slug LIKE 'nbdg-%'";
+      "DELETE FROM users WHERE username LIKE 'nbdg_%'";
     ]
 
 let db_case name f =
@@ -76,25 +69,24 @@ let db_case name f =
              let* () = cleanup () in
              Lwt.finalize
                (fun () -> f ~url conn)
-               (fun () ->
-                 Lwt.finalize cleanup (fun () -> C.disconnect ()))))
+               (fun () -> Lwt.finalize cleanup (fun () -> C.disconnect ()))))
 
 (* Ordinary prose notifications: the legacy row shape, which is all this
    suite needs — the badge counts rows, not kinds. *)
 let q_seed_notification =
   (Caqti_type.(t2 int string) ->. Caqti_type.unit)
-  "INSERT INTO notifications (user_id, notif_type, message) \
-   VALUES ($1, 'mention', $2)"
+    "INSERT INTO notifications (user_id, notif_type, message) VALUES ($1, \
+     'mention', $2)"
 
 let q_seed_many =
   (Caqti_type.(t2 int int) ->. Caqti_type.unit)
-  "INSERT INTO notifications (user_id, notif_type, message) \
-   SELECT $1, 'mention', 'Nbdg bulk ' || g FROM generate_series(1, $2) AS g"
+    "INSERT INTO notifications (user_id, notif_type, message) SELECT $1, \
+     'mention', 'Nbdg bulk ' || g FROM generate_series(1, $2) AS g"
 
 let q_unread =
   (Caqti_type.int ->! Caqti_type.int)
-  "SELECT COUNT(*)::int FROM notifications \
-   WHERE user_id = $1 AND is_read = FALSE"
+    "SELECT COUNT(*)::int FROM notifications WHERE user_id = $1 AND is_read = \
+     FALSE"
 
 let seed conn user label =
   exec conn "seed notification" q_seed_notification (user, label)
@@ -107,7 +99,6 @@ let unread conn label user expected =
 (* --- The real routed application, over the real pool --- *)
 
 let gck_secret = "nbdg-test-secret"
-
 let shared_sql_pool : Dream.middleware option ref = ref None
 
 let sql_pool url =
@@ -127,37 +118,36 @@ let badge_probe request =
 
 let routes =
   Dream.router
-    [ Dream.get "/probe" badge_probe
-    (* The same document behind the two shapes the middleware must skip: a
+    [
+      Dream.get "/probe" badge_probe
+      (* The same document behind the two shapes the middleware must skip: a
        .json catch-up path (with and without its query string) and a
        realtime-token refresh. The probe renders a badge whenever a count
-       was stashed, so a badge here means the query ran. *)
-    ; Dream.get "/probe.json" badge_probe
-    ; Dream.get "/probe/realtime-token" badge_probe
-    ; Dream.get "/static/probe" badge_probe
-    ; Dream.get "/c/:slug" Earde.Community_handlers.community_page_handler
-    ; Dream.get "/c/:slug/settings/connections"
-        Earde.Community_connections_handlers.make_connections_page_handler
-    ; Dream.get "/notifications" Earde.Account_handlers.notifications_handler
+       was stashed, so a badge here means the query ran. *);
+      Dream.get "/probe.json" badge_probe;
+      Dream.get "/probe/realtime-token" badge_probe;
+      Dream.get "/static/probe" badge_probe;
+      Dream.get "/c/:slug" Earde.Community_handlers.community_page_handler;
+      Dream.get "/c/:slug/settings/connections"
+        Earde.Community_connections_handlers.make_connections_page_handler;
+      Dream.get "/notifications" Earde.Account_handlers.notifications_handler;
     ]
 
 let session_layer session handler request =
   match session with
   | None -> handler request
   | Some (uid, username) ->
-      let* () =
-        Dream.set_session_field request "user_id" (string_of_int uid)
-      in
+      let* () = Dream.set_session_field request "user_id" (string_of_int uid) in
       let* () = Dream.set_session_field request "username" username in
       handler request
 
 (* The badge middleware sits exactly where bin/main.ml mounts it: inside
    the pool and the session store, immediately outside the router. *)
 let pipeline ?session ~url () =
-  sql_pool url @@ Dream.set_secret gck_secret @@ Dream.memory_sessions
-  @@ session_layer session
-  @@ Earde.Notification_badge.middleware
-  @@ routes
+  sql_pool url
+  @@ Dream.set_secret gck_secret
+  @@ Dream.memory_sessions @@ session_layer session
+  @@ Earde.Notification_badge.middleware @@ routes
 
 let get ~pipeline target =
   let* response = pipeline (Dream.request ~method_:`GET ~target "") in
@@ -172,13 +162,18 @@ let badge_markup n =
 let check_badge label body expected =
   Alcotest.(check bool)
     (label ^ ": the bell itself is unconditional")
-    true (contains body "class='bell'");
+    true
+    (contains body "class='bell'");
   match expected with
   | None ->
       Alcotest.(check bool)
-        (label ^ ": no badge element") false (contains body "notif-badge");
+        (label ^ ": no badge element")
+        false
+        (contains body "notif-badge");
       Alcotest.(check bool)
-        (label ^ ": no badge class") false (contains body "bell__count")
+        (label ^ ": no badge class")
+        false
+        (contains body "bell__count")
   | Some n ->
       Alcotest.(check bool)
         (label ^ ": badge reads " ^ n)
@@ -188,9 +183,8 @@ let check_badge label body expected =
 (* --- 0. no production source can hard-code a badge ---------------------- *)
 
 let sources_case =
-  Alcotest.test_case
-    "the badge markup exists in exactly one production source" `Quick
-    (fun () ->
+  Alcotest.test_case "the badge markup exists in exactly one production source"
+    `Quick (fun () ->
       (* dune test runs against _build, where the ppx leaves a .pp.ml
          beside each preprocessed source; they are the same code twice. *)
       let sources =
@@ -204,7 +198,8 @@ let sources_case =
       in
       Alcotest.(check (list string))
         "only Notification_badge renders the badge"
-        [ "lib/notification_badge.ml" ] owners;
+        [ "lib/notification_badge.ml" ]
+        owners;
       List.iter
         (fun (path, body) ->
           List.iter
@@ -241,8 +236,8 @@ let zero_then_one_case =
    means it skipped. *)
 let request_scope_case =
   db_case
-    "only document requests incur the unread count; json, realtime-token \
-     and asset paths do not" (fun ~url conn ->
+    "only document requests incur the unread count; json, realtime-token and \
+     asset paths do not" (fun ~url conn ->
       let* user = insert_user conn "nbdg_scope" in
       let* () = seed conn user "Nbdg scope" in
       let p = pipeline ~session:(user, "nbdg_scope") ~url () in
@@ -257,10 +252,11 @@ let request_scope_case =
             Alcotest.(check int) (label ^ ": 200") 200 status;
             check_badge label body None;
             Lwt.return_unit)
-          [ ("catch-up json", "/probe.json")
-          ; ("catch-up json with query", "/probe.json?after_id=12")
-          ; ("realtime token", "/probe/realtime-token")
-          ; ("asset", "/static/probe")
+          [
+            ("catch-up json", "/probe.json");
+            ("catch-up json with query", "/probe.json?after_id=12");
+            ("realtime token", "/probe/realtime-token");
+            ("asset", "/static/probe");
           ]
       in
       (* An anonymous document never counts either. *)
@@ -274,8 +270,8 @@ let request_scope_case =
 
 let parity_case =
   db_case
-    "a positive count is identical on an ordinary community page and on \
-     the connections management page" (fun ~url conn ->
+    "a positive count is identical on an ordinary community page and on the \
+     connections management page" (fun ~url conn ->
       let* top = insert_user conn "nbdg_par" in
       let* cid = insert_community ~name:"Nbdg Parity" conn "nbdg-par" in
       let* () = add_top_mod conn ~user:top ~community:cid in
@@ -292,9 +288,11 @@ let parity_case =
       check_badge "community home" home (Some "3");
       check_badge "connections management" mgmt (Some "3");
       (* Neither page renders a second, disagreeing badge. *)
-      Alcotest.(check int) "home: one badge" 1
+      Alcotest.(check int)
+        "home: one badge" 1
         (Html_assert.count_sub home "id='notif-badge'");
-      Alcotest.(check int) "connections: one badge" 1
+      Alcotest.(check int)
+        "connections: one badge" 1
         (Html_assert.count_sub mgmt "id='notif-badge'");
       Lwt.return_unit)
 
@@ -352,10 +350,10 @@ let failure_case =
       in
       let broken =
         Dream.sql_pool ~size:1 poisoned_url
-        @@ Dream.set_secret gck_secret @@ Dream.memory_sessions
+        @@ Dream.set_secret gck_secret
+        @@ Dream.memory_sessions
         @@ session_layer (Some (user, "nbdg_fail"))
-        @@ Earde.Notification_badge.middleware
-        @@ routes
+        @@ Earde.Notification_badge.middleware @@ routes
       in
       let* status, body = get ~pipeline:broken "/probe" in
       (* The page itself still renders: the badge fails soft. *)
@@ -380,7 +378,8 @@ let cap_case =
       let p = pipeline ~session:(user, "nbdg_cap") ~url () in
       let* _status, body = get ~pipeline:p "/probe" in
       check_badge "capped" body (Some "99+");
-      Alcotest.(check bool) "the real count is not rendered" false
+      Alcotest.(check bool)
+        "the real count is not rendered" false
         (contains body (badge_markup "150"));
       Lwt.return_unit)
 
@@ -388,8 +387,8 @@ let cap_case =
 
 let connection_notification_case =
   db_case
-    "a community-connection notification is counted by the badge and links \
-     to the recipient's own management context" (fun ~url conn ->
+    "a community-connection notification is counted by the badge and links to \
+     the recipient's own management context" (fun ~url conn ->
       let* requester_top = insert_user conn "nbdg_cn_req" in
       let* recipient_top = insert_user conn "nbdg_cn_rec" in
       let* a = insert_community ~name:"Nbdg Conn A" conn "nbdg-cn-a" in
@@ -401,7 +400,9 @@ let connection_notification_case =
           ~recipient:b ()
       in
       (* The recipient's top mod: one unread, counted. The actor: none. *)
-      let recipient = pipeline ~session:(recipient_top, "nbdg_cn_rec") ~url () in
+      let recipient =
+        pipeline ~session:(recipient_top, "nbdg_cn_rec") ~url ()
+      in
       let* _status, body = get ~pipeline:recipient "/probe" in
       check_badge "recipient" body (Some "1");
       let actor = pipeline ~session:(requester_top, "nbdg_cn_req") ~url () in
@@ -411,18 +412,24 @@ let connection_notification_case =
          connections page, not the requester's. *)
       let* status, page = get ~pipeline:recipient "/notifications" in
       Alcotest.(check int) "notifications 200" 200 status;
-      Alcotest.(check bool) "links to the recipient's management context"
-        true
+      Alcotest.(check bool)
+        "links to the recipient's management context" true
         (contains page "href='/c/nbdg-cn-b/settings/connections'");
-      Alcotest.(check bool) "not the requester's" false
+      Alcotest.(check bool)
+        "not the requester's" false
         (contains page "href='/c/nbdg-cn-a/settings/connections'");
       Lwt.return_unit)
 
 let suite =
-  [ sources_case; zero_then_one_case; request_scope_case; parity_case
-  ; read_semantics_case; failure_case; cap_case
-  ; connection_notification_case ]
-
-let suites =
-  [ ("notification_badge", suite)
+  [
+    sources_case;
+    zero_then_one_case;
+    request_scope_case;
+    parity_case;
+    read_semantics_case;
+    failure_case;
+    cap_case;
+    connection_notification_case;
   ]
+
+let suites = [ ("notification_badge", suite) ]

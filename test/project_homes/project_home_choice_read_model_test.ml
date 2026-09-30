@@ -16,9 +16,7 @@ module Phr = Earde.Project_home_relation
 let ( let* ) = Lwt.bind
 
 open Caqti_request.Infix
-
 module Rm = Earde.Project_home_choice_read_model
-
 module Rq = Earde.Project_home_request_store
 
 let error_str : Rm.error -> string = function
@@ -33,11 +31,8 @@ let vis_str : Rm.visibility -> string = function
   | Rm.Currently_unavailable -> "currently_unavailable"
 
 let or_fail = Db_fixture.or_fail
-
 let insert_user = Db_fixture.insert_user
-
 let exec = Db_fixture.exec
-
 let make_project = Home_request_fixture.make_project
 
 (* Same dependency order as the sibling suites; the LIKE pattern also
@@ -45,26 +40,25 @@ let make_project = Home_request_fixture.make_project
 let q_cleanup =
   List.map
     (fun sql -> (Caqti_type.unit ->. Caqti_type.unit) sql)
-    [ "DELETE FROM project_home_audit_events \
-       WHERE project_id IN \
-         (SELECT id FROM open_source_projects \
-          WHERE forge_namespace_id BETWEEN 944500001 AND 944500999)"
-      ; "DELETE FROM open_source_projects \
-       WHERE forge_namespace_id BETWEEN 944500001 AND 944500999"
-    ; "DELETE FROM project_onboarding_drafts \
-       WHERE github_installation_record_id IN \
-         (SELECT id FROM github_installations \
-          WHERE github_installation_id BETWEEN 944400001 AND 944400999)"
-    ; "DELETE FROM communities WHERE slug LIKE 'phcv-%'"
-    ; "DELETE FROM users WHERE username LIKE 'phcv_%'"
-    ; "DELETE FROM github_installations \
-       WHERE github_installation_id BETWEEN 944400001 AND 944400999"
+    [
+      "DELETE FROM project_home_audit_events WHERE project_id IN (SELECT id \
+       FROM open_source_projects WHERE forge_namespace_id BETWEEN 944500001 \
+       AND 944500999)";
+      "DELETE FROM open_source_projects WHERE forge_namespace_id BETWEEN \
+       944500001 AND 944500999";
+      "DELETE FROM project_onboarding_drafts WHERE \
+       github_installation_record_id IN (SELECT id FROM github_installations \
+       WHERE github_installation_id BETWEEN 944400001 AND 944400999)";
+      "DELETE FROM communities WHERE slug LIKE 'phcv-%'";
+      "DELETE FROM users WHERE username LIKE 'phcv_%'";
+      "DELETE FROM github_installations WHERE github_installation_id BETWEEN \
+       944400001 AND 944400999";
     ]
 
 let q_corrupt_description =
   (Caqti_type.int ->. Caqti_type.unit)
-  "UPDATE communities SET description = 'phcv' || chr(1) || 'corrupt' \
-   WHERE id = $1"
+    "UPDATE communities SET description = 'phcv' || chr(1) || 'corrupt' WHERE \
+     id = $1"
 
 (* Each case gets a fresh connection and a clean fixture slate; cleanup
    runs again afterwards even when an assertion fails mid-way, and the
@@ -89,8 +83,7 @@ let db_case name f =
              let* () = cleanup () in
              Lwt.finalize
                (fun () -> f conn)
-               (fun () ->
-                 Lwt.finalize cleanup (fun () -> C.disconnect ()))))
+               (fun () -> Lwt.finalize cleanup (fun () -> C.disconnect ()))))
 
 (* db_case with the scoped lifecycle CHECK (migration 20260726130000)
    dropped for the whole case: these fixtures deliberately write drift
@@ -100,7 +93,8 @@ let db_case name f =
 let db_case_lifecycle_relaxed name f =
   db_case name (fun conn ->
       Network_community_lifecycle_constraint.around conn
-        ~cleanup:(fun () -> Network_community_lifecycle_constraint.run_cleanup conn q_cleanup)
+        ~cleanup:(fun () ->
+          Network_community_lifecycle_constraint.run_cleanup conn q_cleanup)
         (fun () -> f conn))
 
 (* === call helpers === *)
@@ -126,11 +120,9 @@ let load_expect label expected conn ~user ~slug =
   let* r = load conn ~user ~slug in
   match r with
   | Ok None ->
-      Alcotest.failf "%s: expected %s, got Ok None" label
-        (error_str expected)
+      Alcotest.failf "%s: expected %s, got Ok None" label (error_str expected)
   | Ok (Some _) ->
-      Alcotest.failf "%s: expected %s, got Ok Some" label
-        (error_str expected)
+      Alcotest.failf "%s: expected %s, got Ok Some" label (error_str expected)
   | Error e ->
       Alcotest.(check string) label (error_str expected) (error_str e);
       Lwt.return_unit
@@ -148,7 +140,8 @@ let active_of label view =
   | None -> Alcotest.failf "%s: expected an active relation" label
 
 let check_no_active label view =
-  Alcotest.(check bool) label true
+  Alcotest.(check bool)
+    label true
     (match Rm.active_relation view with None -> true | Some _ -> false)
 
 (* === pure input validation === *)
@@ -170,8 +163,7 @@ let pure_inputs_case =
       let expect label e ~user ~slug = load_expect label e dead ~user ~slug in
       let* () = expect "user id 0" Rm.Invalid_user_id ~user:0 ~slug:"phcv-a" in
       let* () =
-        expect "negative user id" Rm.Invalid_user_id ~user:(-7)
-          ~slug:"phcv-a"
+        expect "negative user id" Rm.Invalid_user_id ~user:(-7) ~slug:"phcv-a"
       in
       let* () =
         expect "user checked before slug" Rm.Invalid_user_id ~user:0
@@ -182,17 +174,18 @@ let pure_inputs_case =
           (fun bad ->
             expect "invalid project slug" Rm.Invalid_project_slug ~user:1
               ~slug:bad)
-          [ ""
-          ; "Phcv-Upper"
-          ; "phcv slug"
-          ; " phcv-a"
-          ; "phcv-a "
-          ; "phcv_a"
-          ; "phcv/a"
-          ; "-phcv"
-          ; "phcv-"
-          ; "phcv--a"
-          ; String.make 81 'a'
+          [
+            "";
+            "Phcv-Upper";
+            "phcv slug";
+            " phcv-a";
+            "phcv-a ";
+            "phcv_a";
+            "phcv/a";
+            "-phcv";
+            "phcv-";
+            "phcv--a";
+            String.make 81 'a';
           ]
       in
       Lwt.return_unit)
@@ -227,24 +220,25 @@ let steward_view_case =
       in
       let* view = load_view "owner load" conn ~user:a ~slug:"phcv-view" in
       let p = Rm.project view in
-      Alcotest.(check string) "project name" "Pfin Fixture Project"
-        (Rm.project_name p);
-      Alcotest.(check string) "canonical slug" "phcv-view"
-        (Rm.project_slug p);
-      Alcotest.(check string) "namespace login" "pfin-owner"
+      Alcotest.(check string)
+        "project name" "Pfin Fixture Project" (Rm.project_name p);
+      Alcotest.(check string) "canonical slug" "phcv-view" (Rm.project_slug p);
+      Alcotest.(check string)
+        "namespace login" "pfin-owner"
         (Rm.project_namespace_login p);
       check_no_active "no active relation" view;
-      Alcotest.(check int) "no fixture-eligible targets" 0
+      Alcotest.(check int)
+        "no fixture-eligible targets" 0
         (List.length (phcv_only (Rm.eligible_communities view)));
       (* A second steward is equally authorized — membership or
          moderation in any community is never consulted. *)
       let* () =
-        exec conn "add steward" Home_request_fixture.q_insert_steward (project, b, inst)
+        exec conn "add steward" Home_request_fixture.q_insert_steward
+          (project, b, inst)
       in
-      let* view_b =
-        load_view "second steward" conn ~user:b ~slug:"phcv-view"
-      in
-      Alcotest.(check string) "same project" "phcv-view"
+      let* view_b = load_view "second steward" conn ~user:b ~slug:"phcv-view" in
+      Alcotest.(check string)
+        "same project" "phcv-view"
         (Rm.project_slug (Rm.project view_b));
       Lwt.return_unit)
 
@@ -259,93 +253,114 @@ let collapse_case =
       let* () = load_none "missing project" conn ~user:a ~slug:"phcv-absent" in
       let* () = load_none "foreign project" conn ~user:b ~slug:"phcv-auth" in
       let* () =
-        exec conn "mark stale" Home_request_fixture.q_set_verification (project, "stale")
+        exec conn "mark stale" Home_request_fixture.q_set_verification
+          (project, "stale")
       in
       let* () = load_none "stale project" conn ~user:a ~slug:"phcv-auth" in
       let* () =
-        exec conn "mark revoked" Home_request_fixture.q_set_verification (project, "revoked")
+        exec conn "mark revoked" Home_request_fixture.q_set_verification
+          (project, "revoked")
       in
       let* () = load_none "revoked project" conn ~user:a ~slug:"phcv-auth" in
       let* () =
         exec conn "restore verified" Home_request_fixture.q_set_verification
           (project, "verified")
       in
-      let* () = exec conn "drop steward" Home_request_fixture.q_delete_steward (project, a) in
+      let* () =
+        exec conn "drop steward" Home_request_fixture.q_delete_steward
+          (project, a)
+      in
       load_none "creator without stewardship" conn ~user:a ~slug:"phcv-auth")
 
 (* === eligible list === *)
 
 let eligible_case =
-  db_case_lifecycle_relaxed "choice: eligible predicate, mapping, and deterministic order"
-    (fun conn ->
+  db_case_lifecycle_relaxed
+    "choice: eligible predicate, mapping, and deterministic order" (fun conn ->
       let* a = insert_user conn "phcv_a" in
       let* _, _project =
         make_project conn ~user:a ~ext_id:944400003L ~slug:"phcv-elig"
       in
       let* unl =
-        Community_fixture.insert_community conn "phcv-elig-unl" ~name:"phcv apple"
-          ~indexable:false ~discoverable:false
+        Community_fixture.insert_community conn "phcv-elig-unl"
+          ~name:"phcv apple" ~indexable:false ~discoverable:false
       in
       let* same_a =
-        Community_fixture.insert_community conn "phcv-elig-same-a" ~name:"Phcv Same"
+        Community_fixture.insert_community conn "phcv-elig-same-a"
+          ~name:"Phcv Same"
       in
       let* same_b =
-        Community_fixture.insert_community conn "phcv-elig-same-b" ~name:"Phcv Same"
+        Community_fixture.insert_community conn "phcv-elig-same-b"
+          ~name:"Phcv Same"
       in
       let* pub =
-        Community_fixture.insert_community conn "phcv-elig-pub" ~name:"Phcv Zebra"
-          ~description:"Multi\nline\twith \xe2\x98\x95"
+        Community_fixture.insert_community conn "phcv-elig-pub"
+          ~name:"Phcv Zebra" ~description:"Multi\nline\twith \xe2\x98\x95"
       in
       let* _legacy =
-        Community_fixture.insert_community conn "phcv-elig-legacy" ~network:false
+        Community_fixture.insert_community conn "phcv-elig-legacy"
+          ~network:false
       in
       let* _draft =
-        Community_fixture.insert_community conn "phcv-elig-draft" ~onboarding:"draft"
-          ~visibility:"private" ~indexable:false ~discoverable:false
+        Community_fixture.insert_community conn "phcv-elig-draft"
+          ~onboarding:"draft" ~visibility:"private" ~indexable:false
+          ~discoverable:false
       in
       let* _priv =
-        Community_fixture.insert_community conn "phcv-elig-priv" ~visibility:"private"
-          ~indexable:false ~discoverable:false
+        Community_fixture.insert_community conn "phcv-elig-priv"
+          ~visibility:"private" ~indexable:false ~discoverable:false
       in
       let* view = load_view "eligible load" conn ~user:a ~slug:"phcv-elig" in
       check_no_active "no active relation" view;
       let eligible = phcv_only (Rm.eligible_communities view) in
       (* lower(name) ASC, then slug ASC for the tied pair; the excluded
          legacy, draft, and private slugs prove the predicate. *)
-      Alcotest.(check (list string)) "deterministic order"
-        [ "phcv-elig-unl"; "phcv-elig-same-a"; "phcv-elig-same-b";
-          "phcv-elig-pub" ]
+      Alcotest.(check (list string))
+        "deterministic order"
+        [
+          "phcv-elig-unl";
+          "phcv-elig-same-a";
+          "phcv-elig-same-b";
+          "phcv-elig-pub";
+        ]
         (List.map Rm.community_slug eligible);
-      Alcotest.(check (list int)) "exact local ids"
+      Alcotest.(check (list int))
+        "exact local ids"
         [ unl; same_a; same_b; pub ]
         (List.map Rm.community_id eligible);
       let by_slug slug =
         List.find (fun c -> Rm.community_slug c = slug) eligible
       in
       let pub_c = by_slug "phcv-elig-pub" in
-      Alcotest.(check string) "public name" "Phcv Zebra"
-        (Rm.community_name pub_c);
-      Alcotest.(check string) "fully listed maps to Public" "public"
+      Alcotest.(check string)
+        "public name" "Phcv Zebra" (Rm.community_name pub_c);
+      Alcotest.(check string)
+        "fully listed maps to Public" "public"
         (vis_str (Rm.community_visibility pub_c));
-      Alcotest.(check (option string)) "description byte-exact"
-        (Some "Multi\nline\twith \xe2\x98\x95")
+      Alcotest.(check (option string))
+        "description byte-exact" (Some "Multi\nline\twith \xe2\x98\x95")
         (Rm.community_description pub_c);
       let unl_c = by_slug "phcv-elig-unl" in
-      Alcotest.(check string) "fully unlisted maps to Unlisted" "unlisted"
+      Alcotest.(check string)
+        "fully unlisted maps to Unlisted" "unlisted"
         (vis_str (Rm.community_visibility unl_c));
-      Alcotest.(check (option string)) "absent description stays None" None
+      Alcotest.(check (option string))
+        "absent description stays None" None
         (Rm.community_description unl_c);
       Lwt.return_unit)
 
 let mixed_flags_case =
-  db_case_lifecycle_relaxed "choice: mixed publication flags on an eligible row are corrupt"
+  db_case_lifecycle_relaxed
+    "choice: mixed publication flags on an eligible row are corrupt"
     (fun conn ->
       let* a = insert_user conn "phcv_a" in
       let* _, _project =
         make_project conn ~user:a ~ext_id:944400004L ~slug:"phcv-mix"
       in
       let* home = Community_fixture.insert_community conn "phcv-mix-home" in
-      let* () = exec conn "mix flags" Home_request_fixture.q_mix_community_flags home in
+      let* () =
+        exec conn "mix flags" Home_request_fixture.q_mix_community_flags home
+      in
       let* () =
         load_expect "mixed flags" Rm.Inconsistent_data conn ~user:a
           ~slug:"phcv-mix"
@@ -354,19 +369,23 @@ let mixed_flags_case =
          scoped identity constraints are dropped for this probe alone
          and restored under Lwt.finalize once the row is canonical
          again. *)
-      let* () = exec conn "restore flags" Community_fixture.q_make_unlisted home in
+      let* () =
+        exec conn "restore flags" Community_fixture.q_make_unlisted home
+      in
       let* () = Network_community_constraints.drop conn in
       Lwt.finalize
         (fun () ->
           let* () =
-            exec conn "corrupt slug" Home_request_fixture.q_corrupt_community_slug
+            exec conn "corrupt slug"
+              Home_request_fixture.q_corrupt_community_slug
               (home, "phcv-mix bad slug")
           in
-          load_expect "corrupt eligible slug" Rm.Inconsistent_data conn
-            ~user:a ~slug:"phcv-mix")
+          load_expect "corrupt eligible slug" Rm.Inconsistent_data conn ~user:a
+            ~slug:"phcv-mix")
         (fun () ->
           let* () =
-            exec conn "recanonicalize" Network_community_constraints.q_recanonicalize
+            exec conn "recanonicalize"
+              Network_community_constraints.q_recanonicalize
               (home, "phcv-mix-home", "phcv-mix-home")
           in
           Network_community_constraints.restore conn))
@@ -381,35 +400,42 @@ let active_pending_case =
         make_project conn ~user:a ~ext_id:944400005L ~slug:"phcv-pend"
       in
       let* home =
-        Community_fixture.insert_community conn "phcv-pend-home" ~name:"Phcv Pending Home"
+        Community_fixture.insert_community conn "phcv-pend-home"
+          ~name:"Phcv Pending Home"
       in
       let* _other = Community_fixture.insert_community conn "phcv-pend-other" in
       let* _rid =
-        Community_fixture.request_pending "pending fixture" conn ~user:a ~slug:"phcv-pend"
-          ~community:home ~note:"phcv secret note" ()
+        Community_fixture.request_pending "pending fixture" conn ~user:a
+          ~slug:"phcv-pend" ~community:home ~note:"phcv secret note" ()
       in
       let* view = load_view "pending load" conn ~user:a ~slug:"phcv-pend" in
       let relation = active_of "pending" view in
-      Alcotest.(check bool) "status pending" true
+      Alcotest.(check bool)
+        "status pending" true
         (Rm.active_relation_status relation = Phr.Pending);
       let c = Rm.active_relation_community relation in
       Alcotest.(check int) "target id" home (Rm.community_id c);
-      Alcotest.(check string) "target slug" "phcv-pend-home"
-        (Rm.community_slug c);
-      Alcotest.(check string) "target name" "Phcv Pending Home"
-        (Rm.community_name c);
-      Alcotest.(check string) "fully eligible target maps Public" "public"
+      Alcotest.(check string)
+        "target slug" "phcv-pend-home" (Rm.community_slug c);
+      Alcotest.(check string)
+        "target name" "Phcv Pending Home" (Rm.community_name c);
+      Alcotest.(check string)
+        "fully eligible target maps Public" "public"
         (vis_str (Rm.community_visibility c));
       (* The private note crosses nowhere: no accessor exists, and no
          exposed field carries it. *)
       List.iter
         (fun v ->
-          Alcotest.(check bool) "no note leakage" false
+          Alcotest.(check bool)
+            "no note leakage" false
             (Html_assert.contains v "phcv secret note"))
-        [ Rm.community_name c; Rm.community_slug c;
-          (match Rm.community_description c with Some d -> d | None -> "")
+        [
+          Rm.community_name c;
+          Rm.community_slug c;
+          (match Rm.community_description c with Some d -> d | None -> "");
         ];
-      Alcotest.(check int) "eligible list exactly empty" 0
+      Alcotest.(check int)
+        "eligible list exactly empty" 0
         (List.length (Rm.eligible_communities view));
       Lwt.return_unit)
 
@@ -421,21 +447,24 @@ let active_accepted_case =
       in
       let* home = Community_fixture.insert_community conn "phcv-acc-home" in
       let* rid =
-        Community_fixture.request_pending "accepted fixture" conn ~user:a ~slug:"phcv-acc"
-          ~community:home ()
+        Community_fixture.request_pending "accepted fixture" conn ~user:a
+          ~slug:"phcv-acc" ~community:home ()
       in
       let* () = exec conn "accept" Home_request_fixture.q_mark_accepted rid in
       let* view = load_view "accepted load" conn ~user:a ~slug:"phcv-acc" in
       let relation = active_of "accepted" view in
-      Alcotest.(check bool) "status accepted" true
+      Alcotest.(check bool)
+        "status accepted" true
         (Rm.active_relation_status relation = Phr.Accepted);
-      Alcotest.(check string) "target slug" "phcv-acc-home"
+      Alcotest.(check string)
+        "target slug" "phcv-acc-home"
         (Rm.community_slug (Rm.active_relation_community relation));
-      Alcotest.(check string) "fully eligible target maps Public" "public"
+      Alcotest.(check string)
+        "fully eligible target maps Public" "public"
         (vis_str
-           (Rm.community_visibility
-              (Rm.active_relation_community relation)));
-      Alcotest.(check int) "eligible list exactly empty" 0
+           (Rm.community_visibility (Rm.active_relation_community relation)));
+      Alcotest.(check int)
+        "eligible list exactly empty" 0
         (List.length (Rm.eligible_communities view));
       Lwt.return_unit)
 
@@ -448,33 +477,31 @@ let historical_case =
       in
       let* home = Community_fixture.insert_community conn "phcv-hist-home" in
       let* rid =
-        Community_fixture.request_pending "first request" conn ~user:a ~slug:"phcv-hist"
-          ~community:home ()
+        Community_fixture.request_pending "first request" conn ~user:a
+          ~slug:"phcv-hist" ~community:home ()
       in
       let* () = exec conn "reject" Home_request_fixture.q_mark_rejected rid in
       let* view = load_view "after rejection" conn ~user:a ~slug:"phcv-hist" in
       check_no_active "rejection leaves no active relation" view;
-      Alcotest.(check (list string)) "target eligible again"
-        [ "phcv-hist-home" ]
-        (List.map Rm.community_slug
-           (phcv_only (Rm.eligible_communities view)));
+      Alcotest.(check (list string))
+        "target eligible again" [ "phcv-hist-home" ]
+        (List.map Rm.community_slug (phcv_only (Rm.eligible_communities view)));
       let* rid2 =
-        Community_fixture.request_pending "second request" conn ~user:a ~slug:"phcv-hist"
-          ~community:home ()
+        Community_fixture.request_pending "second request" conn ~user:a
+          ~slug:"phcv-hist" ~community:home ()
       in
       let* () = exec conn "accept" Home_request_fixture.q_mark_accepted rid2 in
       let* () = exec conn "remove" Home_request_fixture.q_mark_removed rid2 in
       let* view2 = load_view "after removal" conn ~user:a ~slug:"phcv-hist" in
       check_no_active "removal leaves no active relation" view2;
-      Alcotest.(check (list string)) "target eligible after removal"
-        [ "phcv-hist-home" ]
-        (List.map Rm.community_slug
-           (phcv_only (Rm.eligible_communities view2)));
+      Alcotest.(check (list string))
+        "target eligible after removal" [ "phcv-hist-home" ]
+        (List.map Rm.community_slug (phcv_only (Rm.eligible_communities view2)));
       Lwt.return_unit)
 
 let drift_case =
-  db_case_lifecycle_relaxed "choice: drifted active targets map exactly, reasons collapsed"
-    (fun conn ->
+  db_case_lifecycle_relaxed
+    "choice: drifted active targets map exactly, reasons collapsed" (fun conn ->
       let* a = insert_user conn "phcv_a" in
       (* Four projects, one active target each: the still-eligible
          unlisted shape keeps its exact label; private, draft, and
@@ -484,10 +511,11 @@ let drift_case =
           (fun (ext_id, slug) ->
             let* _ = make_project conn ~user:a ~ext_id ~slug in
             Lwt.return_unit)
-          [ (944400008L, "phcv-drift-unl")
-          ; (944400009L, "phcv-drift-priv")
-          ; (944400011L, "phcv-drift-draft")
-          ; (944400012L, "phcv-drift-leg")
+          [
+            (944400008L, "phcv-drift-unl");
+            (944400009L, "phcv-drift-priv");
+            (944400011L, "phcv-drift-draft");
+            (944400012L, "phcv-drift-leg");
           ]
       in
       let* unlisted_home =
@@ -510,28 +538,41 @@ let drift_case =
         Lwt_list.iter_s
           (fun (slug, community) ->
             let* _ =
-              Community_fixture.request_pending "drift fixture" conn ~user:a ~slug
-                ~community ()
+              Community_fixture.request_pending "drift fixture" conn ~user:a
+                ~slug ~community ()
             in
             Lwt.return_unit)
-          [ ("phcv-drift-unl", unlisted_home)
-          ; ("phcv-drift-priv", private_home)
-          ; ("phcv-drift-draft", draft_home)
-          ; ("phcv-drift-leg", legacy_home)
+          [
+            ("phcv-drift-unl", unlisted_home);
+            ("phcv-drift-priv", private_home);
+            ("phcv-drift-draft", draft_home);
+            ("phcv-drift-leg", legacy_home);
           ]
       in
-      let* () = exec conn "make unlisted" Community_fixture.q_make_unlisted unlisted_home in
-      let* () = exec conn "make private" Community_fixture.q_make_private private_home in
-      let* () = exec conn "make draft" Community_fixture.q_make_draft_state draft_home in
-      let* () = exec conn "make legacy" Community_fixture.q_make_legacy legacy_home in
+      let* () =
+        exec conn "make unlisted" Community_fixture.q_make_unlisted
+          unlisted_home
+      in
+      let* () =
+        exec conn "make private" Community_fixture.q_make_private private_home
+      in
+      let* () =
+        exec conn "make draft" Community_fixture.q_make_draft_state draft_home
+      in
+      let* () =
+        exec conn "make legacy" Community_fixture.q_make_legacy legacy_home
+      in
       Lwt_list.iter_s
         (fun (label, slug, home_slug, expected) ->
           let* view = load_view label conn ~user:a ~slug in
           let relation = active_of label view in
           let c = Rm.active_relation_community relation in
-          Alcotest.(check string) (label ^ ": identity survives") home_slug
-            (Rm.community_slug c);
-          Alcotest.(check string) (label ^ ": exact mapping") expected
+          Alcotest.(check string)
+            (label ^ ": identity survives")
+            home_slug (Rm.community_slug c);
+          Alcotest.(check string)
+            (label ^ ": exact mapping")
+            expected
             (vis_str (Rm.community_visibility c));
           (* The reason never crosses: no accessor value names the
              drifted lifecycle. *)
@@ -540,51 +581,70 @@ let drift_case =
               List.iter
                 (fun v ->
                   Alcotest.(check bool)
-                    (label ^ ": no " ^ word ^ " leakage") false
+                    (label ^ ": no " ^ word ^ " leakage")
+                    false
                     (Html_assert.contains (String.lowercase_ascii v) word))
-                [ Rm.community_name c
-                ; vis_str (Rm.community_visibility c)
-                ; (match Rm.community_description c with
+                [
+                  Rm.community_name c;
+                  vis_str (Rm.community_visibility c);
+                  (match Rm.community_description c with
                   | Some d -> d
-                  | None -> "")
+                  | None -> "");
                 ])
             [ "private"; "draft"; "legacy"; "network" ];
           (* The active relation still suppresses the chooser. *)
-          Alcotest.(check int) (label ^ ": eligible list exactly empty") 0
+          Alcotest.(check int)
+            (label ^ ": eligible list exactly empty")
+            0
             (List.length (Rm.eligible_communities view));
           Lwt.return_unit)
-        [ ( "unlisted target", "phcv-drift-unl", "phcv-drift-unl-home",
-            "unlisted" )
-        ; ( "private target", "phcv-drift-priv", "phcv-drift-priv-home",
-            "currently_unavailable" )
-        ; ( "draft target", "phcv-drift-draft", "phcv-drift-draft-home",
-            "currently_unavailable" )
-        ; ( "legacy target", "phcv-drift-leg", "phcv-drift-leg-home",
-            "currently_unavailable" )
+        [
+          ( "unlisted target",
+            "phcv-drift-unl",
+            "phcv-drift-unl-home",
+            "unlisted" );
+          ( "private target",
+            "phcv-drift-priv",
+            "phcv-drift-priv-home",
+            "currently_unavailable" );
+          ( "draft target",
+            "phcv-drift-draft",
+            "phcv-drift-draft-home",
+            "currently_unavailable" );
+          ( "legacy target",
+            "phcv-drift-leg",
+            "phcv-drift-leg-home",
+            "currently_unavailable" );
         ])
 
 let corrupt_active_case =
-  db_case_lifecycle_relaxed "choice: malformed active-target metadata is corrupt, never partial"
+  db_case_lifecycle_relaxed
+    "choice: malformed active-target metadata is corrupt, never partial"
     (fun conn ->
       let* a = insert_user conn "phcv_a" in
       let* _, _project =
         make_project conn ~user:a ~ext_id:944400010L ~slug:"phcv-corr"
       in
       let* home =
-        Community_fixture.insert_community conn "phcv-corr-home" ~name:"Phcv Corr Home"
+        Community_fixture.insert_community conn "phcv-corr-home"
+          ~name:"Phcv Corr Home"
       in
       let* _ =
-        Community_fixture.request_pending "corrupt fixture" conn ~user:a ~slug:"phcv-corr"
-          ~community:home ()
+        Community_fixture.request_pending "corrupt fixture" conn ~user:a
+          ~slug:"phcv-corr" ~community:home ()
       in
       (* Flags that contradict each other are corruption even on an
          active target — never Currently_unavailable. *)
-      let* () = exec conn "mix flags" Home_request_fixture.q_mix_community_flags home in
       let* () =
-        load_expect "mixed flags on active target" Rm.Inconsistent_data
-          conn ~user:a ~slug:"phcv-corr"
+        exec conn "mix flags" Home_request_fixture.q_mix_community_flags home
       in
-      let* () = exec conn "restore flags" Community_fixture.q_make_listed home in
+      let* () =
+        load_expect "mixed flags on active target" Rm.Inconsistent_data conn
+          ~user:a ~slug:"phcv-corr"
+      in
+      let* () =
+        exec conn "restore flags" Community_fixture.q_make_listed home
+      in
       (* Identity corruption is now barred by the scoped constraints;
          they are dropped for these probes alone and restored under
          Lwt.finalize once the row is canonical again. *)
@@ -592,46 +652,60 @@ let corrupt_active_case =
       Lwt.finalize
         (fun () ->
           let* () =
-            exec conn "corrupt slug" Home_request_fixture.q_corrupt_community_slug
+            exec conn "corrupt slug"
+              Home_request_fixture.q_corrupt_community_slug
               (home, "phcv-corr bad slug")
           in
           let* () =
-            load_expect "non-addressable target slug" Rm.Inconsistent_data
-              conn ~user:a ~slug:"phcv-corr"
-          in
-          let* () =
-            exec conn "restore slug" Home_request_fixture.q_corrupt_community_slug
-              (home, "phcv-corr-home")
-          in
-          let* () = exec conn "blank name" Community_fixture.q_set_name (home, "   ") in
-          let* () =
-            load_expect "blank target name" Rm.Inconsistent_data conn
+            load_expect "non-addressable target slug" Rm.Inconsistent_data conn
               ~user:a ~slug:"phcv-corr"
           in
           let* () =
-            exec conn "restore name" Community_fixture.q_set_name (home, "Phcv Corr Home")
+            exec conn "restore slug"
+              Home_request_fixture.q_corrupt_community_slug
+              (home, "phcv-corr-home")
+          in
+          let* () =
+            exec conn "blank name" Community_fixture.q_set_name (home, "   ")
+          in
+          let* () =
+            load_expect "blank target name" Rm.Inconsistent_data conn ~user:a
+              ~slug:"phcv-corr"
+          in
+          let* () =
+            exec conn "restore name" Community_fixture.q_set_name
+              (home, "Phcv Corr Home")
           in
           let* () =
             exec conn "corrupt description" q_corrupt_description home
           in
-          load_expect "control-unsafe description" Rm.Inconsistent_data
-            conn ~user:a ~slug:"phcv-corr")
+          load_expect "control-unsafe description" Rm.Inconsistent_data conn
+            ~user:a ~slug:"phcv-corr")
         (fun () ->
           let* () =
-            exec conn "recanonicalize" Network_community_constraints.q_recanonicalize
+            exec conn "recanonicalize"
+              Network_community_constraints.q_recanonicalize
               (home, "phcv-corr-home", "Phcv Corr Home")
           in
           Network_community_constraints.restore conn))
 
 let suite =
-  [ pure_inputs_case; storage_case; steward_view_case; collapse_case;
-    eligible_case; mixed_flags_case; active_pending_case;
-    active_accepted_case; historical_case; drift_case;
-    corrupt_active_case ]
+  [
+    pure_inputs_case;
+    storage_case;
+    steward_view_case;
+    collapse_case;
+    eligible_case;
+    mixed_flags_case;
+    active_pending_case;
+    active_accepted_case;
+    historical_case;
+    drift_case;
+    corrupt_active_case;
+  ]
 
 let suites =
-    (* Home choice read model: owner-authorized view of the active home
+  (* Home choice read model: owner-authorized view of the active home
        relation or the deterministic eligible target list.
        Database-gated. *)
-  [ ("project_home_choice_read_model", suite)
-  ]
+  [ ("project_home_choice_read_model", suite) ]

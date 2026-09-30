@@ -13,10 +13,7 @@ type draft = { id : int64 }
 
 let draft_id { id } = id
 
-type error =
-  | Invalid_user_id
-  | Installation_unavailable
-  | Storage_error
+type error = Invalid_user_id | Installation_unavailable | Storage_error
 
 (* Pure precheck, before any SQL: drafts only exist for authenticated users
    with real ids. *)
@@ -37,11 +34,8 @@ let domain_account_type = function
 let find_installation_record_query =
   let open Caqti_request.Infix in
   (Caqti_type.(t3 int64 int64 string) ->? Caqti_type.int64)
-  "SELECT id FROM github_installations \
-   WHERE github_installation_id = $1 \
-     AND github_account_id = $2 \
-     AND github_account_type = $3 \
-     AND status = 'active' \
+    "SELECT id FROM github_installations WHERE github_installation_id = $1 AND \
+     github_account_id = $2 AND github_account_type = $3 AND status = 'active' \
      AND revoked_at IS NULL"
 
 (* One atomic insert-or-refresh arbitrated by the partial unique index on
@@ -60,21 +54,18 @@ let find_installation_record_query =
 let upsert_draft_query =
   let open Caqti_request.Infix in
   (Caqti_type.(t2 int int64) ->! Caqti_type.int64)
-  "INSERT INTO project_onboarding_drafts \
-     (user_id, github_installation_record_id, status, expires_at, verified_at) \
-   VALUES ($1, $2, 'active', NOW() + INTERVAL '24 hours', NOW()) \
-   ON CONFLICT (user_id, github_installation_record_id) \
-     WHERE status = 'active' \
-   DO UPDATE \
-   SET expires_at = NOW() + INTERVAL '24 hours', \
-       verified_at = NOW(), \
-       updated_at = GREATEST(NOW(), project_onboarding_drafts.created_at) \
-   RETURNING id"
+    "INSERT INTO project_onboarding_drafts (user_id, \
+     github_installation_record_id, status, expires_at, verified_at) VALUES \
+     ($1, $2, 'active', NOW() + INTERVAL '24 hours', NOW()) ON CONFLICT \
+     (user_id, github_installation_record_id) WHERE status = 'active' DO \
+     UPDATE SET expires_at = NOW() + INTERVAL '24 hours', verified_at = NOW(), \
+     updated_at = GREATEST(NOW(), project_onboarding_drafts.created_at) \
+     RETURNING id"
 
 let delete_snapshot_query =
   let open Caqti_request.Infix in
   (Caqti_type.int64 ->. Caqti_type.unit)
-  "DELETE FROM project_onboarding_draft_repositories WHERE draft_id = $1"
+    "DELETE FROM project_onboarding_draft_repositories WHERE draft_id = $1"
 
 (* One prepared insert reused for every repository row. Selection state is
    the SQL literal FALSE — a refreshed verification is a new authoritative
@@ -82,15 +73,18 @@ let delete_snapshot_query =
    come from the column defaults. *)
 let insert_snapshot_row_query =
   let open Caqti_request.Infix in
-  (Caqti_type.(t2 (t2 (t2 int64 int) (t2 int64 int64))
-                  (t2 (t4 string string string string)
-                      (t2 (t2 (option string) string) bool)))
-   ->. Caqti_type.unit)
-  "INSERT INTO project_onboarding_draft_repositories \
-     (draft_id, position, github_repository_id, github_owner_id, \
-      owner_login, name, full_name, html_url, description, \
-      default_branch, is_archived, is_selected, is_primary) \
-   VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, FALSE, FALSE)"
+  (Caqti_type.(
+     t2
+       (t2 (t2 int64 int) (t2 int64 int64))
+       (t2
+          (t4 string string string string)
+          (t2 (t2 (option string) string) bool)))
+  ->. Caqti_type.unit)
+    "INSERT INTO project_onboarding_draft_repositories (draft_id, position, \
+     github_repository_id, github_owner_id, owner_login, name, full_name, \
+     html_url, description, default_branch, is_archived, is_selected, \
+     is_primary) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, FALSE, \
+     FALSE)"
 
 (* Renewal and claim release (Project_finalization_store) each decide on
    the table the other writes, so both lock the affected project rows
@@ -104,22 +98,18 @@ let insert_snapshot_row_query =
 let lock_installation_query =
   let open Caqti_request.Infix in
   (Caqti_type.int64 ->* Caqti_type.int64)
-  "SELECT i.id FROM github_installations i \
-   JOIN project_onboarding_drafts d ON d.github_installation_record_id = i.id \
-   WHERE d.id = $1 \
-   FOR KEY SHARE OF i"
+    "SELECT i.id FROM github_installations i JOIN project_onboarding_drafts d \
+     ON d.github_installation_record_id = i.id WHERE d.id = $1 FOR KEY SHARE \
+     OF i"
 
 let lock_renewal_projects_query =
   let open Caqti_request.Infix in
   (Caqti_type.(t2 int64 int) ->* Caqti_type.int64)
-  "SELECT p.id FROM open_source_projects p \
-   JOIN project_stewards s ON s.project_id = p.id \
-   JOIN project_onboarding_drafts d ON d.user_id = s.user_id \
-   JOIN github_installations i ON i.id = d.github_installation_record_id \
-   WHERE d.id = $1 AND d.user_id = $2 \
-     AND p.forge_namespace_id = i.github_account_id \
-   ORDER BY p.id \
-   FOR UPDATE OF p"
+    "SELECT p.id FROM open_source_projects p JOIN project_stewards s ON \
+     s.project_id = p.id JOIN project_onboarding_drafts d ON d.user_id = \
+     s.user_id JOIN github_installations i ON i.id = \
+     d.github_installation_record_id WHERE d.id = $1 AND d.user_id = $2 AND \
+     p.forge_namespace_id = i.github_account_id ORDER BY p.id FOR UPDATE OF p"
 
 (* Renewal of existing stewardship evidence (see
    docs/features/github-verification-lifecycle.md). The snapshot just
@@ -133,26 +123,18 @@ let lock_renewal_projects_query =
 let renew_steward_evidence_query =
   let open Caqti_request.Infix in
   (Caqti_type.(t2 int64 int) ->. Caqti_type.unit)
-  "UPDATE project_stewards s \
-   SET github_verified_at = NOW(), \
-       github_installation_record_id = d.github_installation_record_id \
-   FROM project_onboarding_drafts d, github_installations i, \
-        open_source_projects p \
-   WHERE d.id = $1 AND d.user_id = $2 \
-     AND i.id = d.github_installation_record_id \
-     AND s.user_id = d.user_id \
-     AND p.id = s.project_id \
-     AND p.forge_namespace_id = i.github_account_id \
-     AND EXISTS (SELECT 1 FROM project_repositories r \
-                 WHERE r.project_id = p.id AND r.released_at IS NULL) \
-     AND NOT EXISTS ( \
-       SELECT 1 FROM project_repositories r \
-       WHERE r.project_id = p.id AND r.released_at IS NULL \
-         AND NOT EXISTS ( \
-           SELECT 1 FROM project_onboarding_draft_repositories dr \
-           WHERE dr.draft_id = d.id \
-             AND dr.github_repository_id = r.github_repository_id \
-             AND dr.github_owner_id = i.github_account_id))"
+    "UPDATE project_stewards s SET github_verified_at = NOW(), \
+     github_installation_record_id = d.github_installation_record_id FROM \
+     project_onboarding_drafts d, github_installations i, open_source_projects \
+     p WHERE d.id = $1 AND d.user_id = $2 AND i.id = \
+     d.github_installation_record_id AND s.user_id = d.user_id AND p.id = \
+     s.project_id AND p.forge_namespace_id = i.github_account_id AND EXISTS \
+     (SELECT 1 FROM project_repositories r WHERE r.project_id = p.id AND \
+     r.released_at IS NULL) AND NOT EXISTS ( SELECT 1 FROM \
+     project_repositories r WHERE r.project_id = p.id AND r.released_at IS \
+     NULL AND NOT EXISTS ( SELECT 1 FROM project_onboarding_draft_repositories \
+     dr WHERE dr.draft_id = d.id AND dr.github_repository_id = \
+     r.github_repository_id AND dr.github_owner_id = i.github_account_id))"
 
 let refresh_verified (module C : Caqti_lwt.CONNECTION) ~user_id ~installation
     ~repositories =
@@ -176,25 +158,27 @@ let refresh_verified (module C : Caqti_lwt.CONNECTION) ~user_id ~installation
           C.collect_list lock_installation_query draft_row_id >>= function
           | Error _ -> rollback_to Storage_error
           | Ok _ -> (
-          C.collect_list lock_renewal_projects_query (draft_row_id, user_id)
-          >>= function
-          | Error _ -> rollback_to Storage_error
-          | Ok _ -> (
-          C.exec renew_steward_evidence_query (draft_row_id, user_id) >>= function
-          | Error _ -> rollback_to Storage_error
-          | Ok () -> (
-          C.commit () >>= function
-          | Error _ -> Lwt.return (Error Storage_error)
-          | Ok () -> Lwt.return (Ok { id = draft_row_id })))))
+              C.collect_list lock_renewal_projects_query (draft_row_id, user_id)
+              >>= function
+              | Error _ -> rollback_to Storage_error
+              | Ok _ -> (
+                  C.exec renew_steward_evidence_query (draft_row_id, user_id)
+                  >>= function
+                  | Error _ -> rollback_to Storage_error
+                  | Ok () -> (
+                      C.commit () >>= function
+                      | Error _ -> Lwt.return (Error Storage_error)
+                      | Ok () -> Lwt.return (Ok { id = draft_row_id })))))
       | repo :: rest -> (
           let module R = Github_user_installation_repositories in
           C.exec insert_snapshot_row_query
-            ( ( (draft_row_id, position),
-                (R.repository_id repo, R.owner_id repo) ),
-              ( (R.owner_login repo, R.name repo, R.full_name repo,
-                 R.html_url repo),
-                ((R.description repo, R.default_branch repo),
-                 R.is_archived repo) ) )
+            ( ((draft_row_id, position), (R.repository_id repo, R.owner_id repo)),
+              ( ( R.owner_login repo,
+                  R.name repo,
+                  R.full_name repo,
+                  R.html_url repo ),
+                ((R.description repo, R.default_branch repo), R.is_archived repo)
+              ) )
           >>= function
           | Error _ -> rollback_to Storage_error
           | Ok () -> insert_snapshot draft_row_id (position + 1) rest)

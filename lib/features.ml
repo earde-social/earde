@@ -12,7 +12,6 @@
    local/dev environments point the feature at a test community. *)
 
 let shared_cursors_env = "EARDE_SHARED_CURSOR_COMMUNITIES"
-
 let default_shared_cursor_slugs = [ "beryl" ]
 
 let slugs_of_string raw =

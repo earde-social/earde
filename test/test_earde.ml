@@ -3,147 +3,149 @@
 
 let () =
   Alcotest.run "earde"
-    (
-     ( "smoke"
-       , [ Alcotest.test_case "true is true" `Quick (fun () ->
-               Alcotest.(check bool) "same bool" true true) ] )
-     :: List.concat
-          [ Signup_guard_test.suites
-          ; Start_thread_test.suites
-          ; Community_visibility_test.suites
-          ; Realtime_token_test.suites
-          ; Chat_api_test.suites
-          ; Comment_delete_test.suites
-          ; Analytics_test.suites
-          ; Analytics_page_test.suites
-          ; Posthog_deletion_client_test.suites
-          ; Analytics_config_test.suites
-          ; Moderation_scope_test.suites
-          ; Insert_returning_ids_test.suites
-          ; Analytics_events_test.suites
-          ; Account_deletion_analytics_test.suites
-          ; Group_cleanup_test.suites
-          ; Project_onboarding_mode_test.suites
-          ; Bring_page_test.suites
-          ; Bring_handler_test.suites
-          ; Bring_desktop_gate_test.suites
-          ; Launch_nav_test.suites
-          ; Network_communities_domain_test.suites
-          ; Github_onboarding_domain_test.suites
-          ; Github_onboarding_crypto_test.suites
-          ; Github_onboarding_pkce_test.suites
-          ; Github_onboarding_state_store_test.suites
-          ; Github_installation_store_test.suites
-          ; Project_onboarding_draft_schema_test.suites
-          ; Project_onboarding_draft_store_test.suites
-          ; Project_onboarding_draft_read_model_test.suites
-          ; Project_onboarding_draft_selection_store_test.suites
-          ; Open_source_project_schema_test.suites
-          ; Community_projects_schema_test.suites
-          ; Project_finalization_store_test.suites
-          ; Github_onboarding_start_handler_test.suites
-          ; Bring_browser_post_test.suites
-          ; Github_setup_return_handler_test.suites
-          ; Github_oauth_callback_handler_test.suites
-          ; Github_onboarding_diagnostics_test.suites
-          ; Github_app_config_test.suites
-          ; Github_oauth_credentials_test.suites
-          ; Github_onboarding_urls_test.suites
-          ; Github_onboarding_session_data_test.suites
-          ; Github_onboarding_cookie_test.suites
-          ; Github_oauth_token_exchange_test.suites
-          ; Github_user_installations_test.suites
-          ; Github_user_installation_repositories_test.suites
-          ; Request_target_redaction_test.suites
-          ; Rate_limit_blocked_page_test.suites
-          ; Project_setup_repository_form_test.suites
-          ; Project_setup_pages_test.suites
-          ; Project_setup_handlers_test.suites
-          ; Project_identity_test.suites
-          ; Project_identity_form_test.suites
-          ; Project_identity_page_test.suites
-          ; Project_creation_handlers_test.suites
-          ; Project_home_relation_test.suites
-          ; Project_home_request_store_test.suites
-          ; Project_home_request_form_test.suites
-          ; Project_home_choice_read_model_test.suites
-          ; Project_home_choice_pages_test.suites
-          ; Project_home_request_handlers_test.suites
-          ; Project_home_review_store_test.suites
-          ; Project_home_review_pages_test.suites
-          ; Project_home_review_read_model_test.suites
-          ; Project_home_review_handlers_test.suites
-          ; Community_connected_projects_read_model_test.suites
-          ; Community_connected_projects_pages_test.suites
-          ; Community_connected_projects_route_test.suites
-          ; Project_home_removal_store_test.suites
-          ; Project_home_removal_handlers_test.suites
-          ; Project_home_provisioning_form_test.suites
-          ; Project_home_provisioning_pages_test.suites
-          ; Project_home_provisioning_read_model_test.suites
-          ; Project_home_provisioning_get_test.suites
-          ; Network_community_identity_schema_test.suites
-          ; Network_community_lifecycle_schema_test.suites
-          ; Project_home_provisioning_store_test.suites
-          ; Project_home_provisioning_post_test.suites
-          ; Network_community_publication_form_test.suites
-          ; Network_community_publication_pages_test.suites
-          ; Network_community_publication_read_model_test.suites
-          ; Network_community_setup_route_test.suites
-          ; Network_community_legacy_mutation_test.suites
-          ; Network_community_publication_store_test.suites
-          ; Network_community_publication_post_test.suites
-          ; Project_home_draft_protection_test.suites
-          ; Project_home_audit_test.suites
-          ; Project_home_notifications_test.suites
-          ; Project_home_funnel_analytics_test.suites
-          ; Login_session_replacement_test.suites
-          ; Report_private_authz_test.suites
-          ; Flat_share_script_test.suites
-          ; New_post_private_authz_test.suites
-          ; Reset_token_escaping_test.suites
-          ; Privacy_page_test.suites
-          ; Avatar_upload_paths_test.suites
-          ; Rate_limit_cleanup_test.suites
-          ; Message_page_test.suites
-          ; Create_pages_test.suites
-          ; Admin_dashboard_page_test.suites
-          ; Safe_local_redirect_test.suites
-          ; Global_admin_ban_test.suites
-          ; Legacy_post_page_test.suites
-          ; Legacy_census_test.suites
-          ; Launch_cta_test.suites
-          ; Launch_footer_test.suites
-          ; Show_hn_polish_test.suites
-          ; Community_connection_domain_test.suites
-          ; Community_connections_schema_test.suites
-          ; Community_connections_store_test.suites
-          ; Community_connections_pages_test.suites
-          ; Community_connections_handlers_test.suites
-          ; Community_connection_notifications_test.suites
-          ; Community_connections_public_test.suites
-          ; Notification_badge_test.suites
-          ; Launch_scope_css_test.suites
-          ; Community_home_layout_test.suites
-          ; Community_network_page_test.suites
-          ; Shared_thread_placement_domain_test.suites
-          ; Shared_thread_placement_schema_test.suites
-          ; Shared_thread_placement_store_test.suites
-          ; Shared_thread_notifications_test.suites
-          ; Shared_thread_pages_test.suites
-          ; Shared_thread_handlers_test.suites
-          ; Shared_thread_destination_test.suites
-          ; Shared_thread_composer_test.suites
-          ; Audit_regressions_pure_test.suites
-          ; Audit_regressions_db_test.suites
-          ; Correctness_boundaries_test.suites
-          ; Ban_fail_closed_test.suites
-          ; Stale_admin_test.suites
-          ; Target_admin_immunity_test.suites
-          ; Community_media_url_boundary_test.suites
-          ; Auth_mail_test.suites
-          ; Html_boundary_test.suites
-          ; Account_privacy_test.suites
-          ; Realtime_generations_test.suites
-          ; Github_verification_freshness_test.suites
-          ])
+    (( "smoke",
+       [
+         Alcotest.test_case "true is true" `Quick (fun () ->
+             Alcotest.(check bool) "same bool" true true);
+       ] )
+    :: List.concat
+         [
+           Signup_guard_test.suites;
+           Start_thread_test.suites;
+           Community_visibility_test.suites;
+           Realtime_token_test.suites;
+           Chat_api_test.suites;
+           Comment_delete_test.suites;
+           Analytics_test.suites;
+           Analytics_page_test.suites;
+           Posthog_deletion_client_test.suites;
+           Analytics_config_test.suites;
+           Moderation_scope_test.suites;
+           Insert_returning_ids_test.suites;
+           Analytics_events_test.suites;
+           Account_deletion_analytics_test.suites;
+           Group_cleanup_test.suites;
+           Project_onboarding_mode_test.suites;
+           Bring_page_test.suites;
+           Bring_handler_test.suites;
+           Bring_desktop_gate_test.suites;
+           Launch_nav_test.suites;
+           Network_communities_domain_test.suites;
+           Github_onboarding_domain_test.suites;
+           Github_onboarding_crypto_test.suites;
+           Github_onboarding_pkce_test.suites;
+           Github_onboarding_state_store_test.suites;
+           Github_installation_store_test.suites;
+           Project_onboarding_draft_schema_test.suites;
+           Project_onboarding_draft_store_test.suites;
+           Project_onboarding_draft_read_model_test.suites;
+           Project_onboarding_draft_selection_store_test.suites;
+           Open_source_project_schema_test.suites;
+           Community_projects_schema_test.suites;
+           Project_finalization_store_test.suites;
+           Github_onboarding_start_handler_test.suites;
+           Bring_browser_post_test.suites;
+           Github_setup_return_handler_test.suites;
+           Github_oauth_callback_handler_test.suites;
+           Github_onboarding_diagnostics_test.suites;
+           Github_app_config_test.suites;
+           Github_oauth_credentials_test.suites;
+           Github_onboarding_urls_test.suites;
+           Github_onboarding_session_data_test.suites;
+           Github_onboarding_cookie_test.suites;
+           Github_oauth_token_exchange_test.suites;
+           Github_user_installations_test.suites;
+           Github_user_installation_repositories_test.suites;
+           Request_target_redaction_test.suites;
+           Rate_limit_blocked_page_test.suites;
+           Project_setup_repository_form_test.suites;
+           Project_setup_pages_test.suites;
+           Project_setup_handlers_test.suites;
+           Project_identity_test.suites;
+           Project_identity_form_test.suites;
+           Project_identity_page_test.suites;
+           Project_creation_handlers_test.suites;
+           Project_home_relation_test.suites;
+           Project_home_request_store_test.suites;
+           Project_home_request_form_test.suites;
+           Project_home_choice_read_model_test.suites;
+           Project_home_choice_pages_test.suites;
+           Project_home_request_handlers_test.suites;
+           Project_home_review_store_test.suites;
+           Project_home_review_pages_test.suites;
+           Project_home_review_read_model_test.suites;
+           Project_home_review_handlers_test.suites;
+           Community_connected_projects_read_model_test.suites;
+           Community_connected_projects_pages_test.suites;
+           Community_connected_projects_route_test.suites;
+           Project_home_removal_store_test.suites;
+           Project_home_removal_handlers_test.suites;
+           Project_home_provisioning_form_test.suites;
+           Project_home_provisioning_pages_test.suites;
+           Project_home_provisioning_read_model_test.suites;
+           Project_home_provisioning_get_test.suites;
+           Network_community_identity_schema_test.suites;
+           Network_community_lifecycle_schema_test.suites;
+           Project_home_provisioning_store_test.suites;
+           Project_home_provisioning_post_test.suites;
+           Network_community_publication_form_test.suites;
+           Network_community_publication_pages_test.suites;
+           Network_community_publication_read_model_test.suites;
+           Network_community_setup_route_test.suites;
+           Network_community_legacy_mutation_test.suites;
+           Network_community_publication_store_test.suites;
+           Network_community_publication_post_test.suites;
+           Project_home_draft_protection_test.suites;
+           Project_home_audit_test.suites;
+           Project_home_notifications_test.suites;
+           Project_home_funnel_analytics_test.suites;
+           Login_session_replacement_test.suites;
+           Report_private_authz_test.suites;
+           Flat_share_script_test.suites;
+           New_post_private_authz_test.suites;
+           Reset_token_escaping_test.suites;
+           Privacy_page_test.suites;
+           Avatar_upload_paths_test.suites;
+           Rate_limit_cleanup_test.suites;
+           Message_page_test.suites;
+           Create_pages_test.suites;
+           Admin_dashboard_page_test.suites;
+           Safe_local_redirect_test.suites;
+           Global_admin_ban_test.suites;
+           Legacy_post_page_test.suites;
+           Legacy_census_test.suites;
+           Launch_cta_test.suites;
+           Launch_footer_test.suites;
+           Show_hn_polish_test.suites;
+           Community_connection_domain_test.suites;
+           Community_connections_schema_test.suites;
+           Community_connections_store_test.suites;
+           Community_connections_pages_test.suites;
+           Community_connections_handlers_test.suites;
+           Community_connection_notifications_test.suites;
+           Community_connections_public_test.suites;
+           Notification_badge_test.suites;
+           Launch_scope_css_test.suites;
+           Community_home_layout_test.suites;
+           Community_network_page_test.suites;
+           Shared_thread_placement_domain_test.suites;
+           Shared_thread_placement_schema_test.suites;
+           Shared_thread_placement_store_test.suites;
+           Shared_thread_notifications_test.suites;
+           Shared_thread_pages_test.suites;
+           Shared_thread_handlers_test.suites;
+           Shared_thread_destination_test.suites;
+           Shared_thread_composer_test.suites;
+           Audit_regressions_pure_test.suites;
+           Audit_regressions_db_test.suites;
+           Correctness_boundaries_test.suites;
+           Ban_fail_closed_test.suites;
+           Stale_admin_test.suites;
+           Target_admin_immunity_test.suites;
+           Community_media_url_boundary_test.suites;
+           Auth_mail_test.suites;
+           Html_boundary_test.suites;
+           Account_privacy_test.suites;
+           Realtime_generations_test.suites;
+           Github_verification_freshness_test.suites;
+         ])

@@ -12,21 +12,33 @@ open Caqti_request.Infix
 let q_cleanup =
   List.map
     (fun sql -> (Caqti_type.unit ->. Caqti_type.unit) sql)
-    [ "DELETE FROM thread_source_messages WHERE post_id IN (SELECT id FROM posts WHERE title LIKE 'step6 %')"
-    ; "DELETE FROM notifications WHERE user_id IN (SELECT id FROM users WHERE username LIKE 'step6_%')"
-    ; "DELETE FROM comments WHERE content LIKE 'step6 %'"
-    ; "DELETE FROM posts WHERE title LIKE 'step6 %'"
-    ; "DELETE FROM chat_messages WHERE content LIKE 'step6 %'"
-    ; "DELETE FROM community_user_stats WHERE user_id IN (SELECT id FROM users WHERE username LIKE 'step6_%')"
-    ; "DELETE FROM community_members WHERE community_id IN (SELECT id FROM communities WHERE slug LIKE 'step6-%')"
-    ; "DELETE FROM community_moderators WHERE community_id IN (SELECT id FROM communities WHERE slug LIKE 'step6-%')"
-    ; "DELETE FROM channels WHERE community_id IN (SELECT id FROM communities WHERE slug LIKE 'step6-%')"
-    ; "DELETE FROM community_sections WHERE community_id IN (SELECT id FROM communities WHERE slug LIKE 'step6-%')"
-    ; "DELETE FROM posthog_group_cleanup_jobs WHERE group_key IN (SELECT 'community:' || c.id::text FROM communities c WHERE c.slug LIKE 'step6-%')"
-    ; "DELETE FROM communities WHERE slug LIKE 'step6-%'"
-    ; "DELETE FROM posthog_group_cleanup_jobs WHERE NOT EXISTS (SELECT 1 FROM communities c WHERE 'community:' || c.id::text = posthog_group_cleanup_jobs.group_key)"
-    ; "DELETE FROM pending_signups WHERE username LIKE 'step6_%'"
-    ; "DELETE FROM users WHERE username LIKE 'step6_%'"
+    [
+      "DELETE FROM thread_source_messages WHERE post_id IN (SELECT id FROM \
+       posts WHERE title LIKE 'step6 %')";
+      "DELETE FROM notifications WHERE user_id IN (SELECT id FROM users WHERE \
+       username LIKE 'step6_%')";
+      "DELETE FROM comments WHERE content LIKE 'step6 %'";
+      "DELETE FROM posts WHERE title LIKE 'step6 %'";
+      "DELETE FROM chat_messages WHERE content LIKE 'step6 %'";
+      "DELETE FROM community_user_stats WHERE user_id IN (SELECT id FROM users \
+       WHERE username LIKE 'step6_%')";
+      "DELETE FROM community_members WHERE community_id IN (SELECT id FROM \
+       communities WHERE slug LIKE 'step6-%')";
+      "DELETE FROM community_moderators WHERE community_id IN (SELECT id FROM \
+       communities WHERE slug LIKE 'step6-%')";
+      "DELETE FROM channels WHERE community_id IN (SELECT id FROM communities \
+       WHERE slug LIKE 'step6-%')";
+      "DELETE FROM community_sections WHERE community_id IN (SELECT id FROM \
+       communities WHERE slug LIKE 'step6-%')";
+      "DELETE FROM posthog_group_cleanup_jobs WHERE group_key IN (SELECT \
+       'community:' || c.id::text FROM communities c WHERE c.slug LIKE \
+       'step6-%')";
+      "DELETE FROM communities WHERE slug LIKE 'step6-%'";
+      "DELETE FROM posthog_group_cleanup_jobs WHERE NOT EXISTS (SELECT 1 FROM \
+       communities c WHERE 'community:' || c.id::text = \
+       posthog_group_cleanup_jobs.group_key)";
+      "DELETE FROM pending_signups WHERE username LIKE 'step6_%'";
+      "DELETE FROM users WHERE username LIKE 'step6_%'";
     ]
 
 let or_fail label = function
@@ -57,35 +69,35 @@ let db_case name f =
              let* () = cleanup () in
              Lwt.finalize
                (fun () -> f ~url conn (module C : Caqti_lwt.CONNECTION))
-               (fun () ->
-                 Lwt.finalize cleanup (fun () -> C.disconnect ()))))
+               (fun () -> Lwt.finalize cleanup (fun () -> C.disconnect ()))))
 
 let q_insert_community =
   (Caqti_type.(t3 string bool string) ->! Caqti_type.int)
-  "INSERT INTO communities (slug, name, sections_enabled, visibility)
-   VALUES ($1, $1, $2, $3) RETURNING id"
+    "INSERT INTO communities (slug, name, sections_enabled, visibility)\n\
+    \   VALUES ($1, $1, $2, $3) RETURNING id"
 
 let q_insert_post =
   (Caqti_type.(t2 int int) ->! Caqti_type.int)
-  "INSERT INTO posts (title, content, community_id, user_id)
-   VALUES ('step6 post', 'step6 post body', $1, $2) RETURNING id"
+    "INSERT INTO posts (title, content, community_id, user_id)\n\
+    \   VALUES ('step6 post', 'step6 post body', $1, $2) RETURNING id"
 
 let q_insert_pending =
   (Caqti_type.(t2 string string) ->. Caqti_type.unit)
-  "INSERT INTO pending_signups (username, email, password_hash, token_hash, expires_at)
-   VALUES ($1, $1 || '@test.invalid', 'x', $2, NOW() + INTERVAL '1 hour')"
+    "INSERT INTO pending_signups (username, email, password_hash, token_hash, \
+     expires_at)\n\
+    \   VALUES ($1, $1 || '@test.invalid', 'x', $2, NOW() + INTERVAL '1 hour')"
 
 let q_comment_content =
   (Caqti_type.int ->? Caqti_type.string)
-  "SELECT content FROM comments WHERE id = $1"
+    "SELECT content FROM comments WHERE id = $1"
 
 let q_community_id_by_slug =
   (Caqti_type.string ->? Caqti_type.int)
-  "SELECT id FROM communities WHERE slug = $1"
+    "SELECT id FROM communities WHERE slug = $1"
 
 let q_visibility_by_id =
   (Caqti_type.int ->? Caqti_type.string)
-  "SELECT visibility FROM communities WHERE id = $1"
+    "SELECT visibility FROM communities WHERE id = $1"
 
 (* POST runner: presets session fields, injects a valid dream.csrf into the
    (urlencoded or multipart) body, and returns (status, sink payloads). *)
@@ -97,7 +109,8 @@ let run_handler ~url ?(consent = Some "granted") ?(session = [])
   Lwt.finalize
     (fun () ->
       let pipeline =
-        Dream.sql_pool url @@ Dream.memory_sessions @@ fun req ->
+        Dream.sql_pool url @@ Dream.memory_sessions
+        @@ fun req ->
         let* () =
           Lwt_list.iter_s
             (fun (k, v) -> Dream.set_session_field req k v)
@@ -106,14 +119,17 @@ let run_handler ~url ?(consent = Some "granted") ?(session = [])
         let csrf = Dream.csrf_token req in
         let fields = ("dream.csrf", csrf) :: form in
         Dream.set_body req
-          (if multipart then Http_fixture.multipart_body fields else Http_fixture.encoded_form_body fields);
+          (if multipart then Http_fixture.multipart_body fields
+           else Http_fixture.encoded_form_body fields);
         handler req
       in
       let headers =
-        [ ( "Content-Type",
+        [
+          ( "Content-Type",
             if multipart then
               "multipart/form-data; boundary=" ^ Http_fixture.multipart_boundary
-            else "application/x-www-form-urlencoded" ) ]
+            else "application/x-www-form-urlencoded" );
+        ]
         @ (match accept with Some a -> [ ("Accept", a) ] | None -> [])
         @ Analytics_fixture.consent_header consent
       in
@@ -136,7 +152,8 @@ let run_get_handler ~url ?(consent = Some "granted") ~target handler =
     (fun () ->
       let pipeline = Dream.sql_pool url @@ Dream.memory_sessions @@ handler in
       let request =
-        Dream.request ~method_:`GET ~target ~headers:(Analytics_fixture.consent_header consent)
+        Dream.request ~method_:`GET ~target
+          ~headers:(Analytics_fixture.consent_header consent)
           ""
       in
       let* response = pipeline request in
@@ -150,8 +167,7 @@ let run_get_handler ~url ?(consent = Some "granted") ~target handler =
 let check_set_keys name expected payload =
   match List.assoc_opt "$set" (Analytics_fixture.payload_props payload) with
   | Some (`Assoc set) ->
-      Alcotest.(check (slist string compare))
-        name expected (List.map fst set)
+      Alcotest.(check (slist string compare)) name expected (List.map fst set)
   | _ -> Alcotest.failf "%s: payload has no $set" name
 
 let signup_case =
@@ -167,27 +183,35 @@ let signup_case =
       in
       Alcotest.(check int) "confirm status" 200 status;
       (match payloads with
-       | [ p ] ->
-           Alcotest.(check string) "event" "account_signed_up" (Analytics_fixture.event_of p);
-           Alcotest.(check (slist string compare))
-             "props keys" [ "user_id"; "$set"; "deployment_environment" ]
-             (Analytics_fixture.prop_keys p);
-           check_set_keys "closed $set"
-             [ "username"; "signup_date"; "is_admin" ] p;
-           (match List.assoc_opt "$set" (Analytics_fixture.payload_props p) with
-            | Some (`Assoc set) ->
-                Alcotest.(check (option string)) "$set username"
-                  (Some "step6_signup")
-                  (match List.assoc_opt "username" set with
-                   | Some (`String u) -> Some u
-                   | _ -> None)
-            | _ -> Alcotest.fail "no $set");
-           (match List.assoc_opt "user_id" (Analytics_fixture.payload_props p) with
-            | Some (`Int uid) ->
-                Alcotest.(check string) "distinct id"
-                  ("user:" ^ string_of_int uid) (Analytics_fixture.distinct_of p)
-            | _ -> Alcotest.fail "no user_id prop")
-       | l -> Alcotest.failf "expected 1 signup event, got %d" (List.length l));
+      | [ p ] -> (
+          Alcotest.(check string)
+            "event" "account_signed_up"
+            (Analytics_fixture.event_of p);
+          Alcotest.(check (slist string compare))
+            "props keys"
+            [ "user_id"; "$set"; "deployment_environment" ]
+            (Analytics_fixture.prop_keys p);
+          check_set_keys "closed $set"
+            [ "username"; "signup_date"; "is_admin" ]
+            p;
+          (match List.assoc_opt "$set" (Analytics_fixture.payload_props p) with
+          | Some (`Assoc set) ->
+              Alcotest.(check (option string))
+                "$set username" (Some "step6_signup")
+                (match List.assoc_opt "username" set with
+                | Some (`String u) -> Some u
+                | _ -> None)
+          | _ -> Alcotest.fail "no $set");
+          match
+            List.assoc_opt "user_id" (Analytics_fixture.payload_props p)
+          with
+          | Some (`Int uid) ->
+              Alcotest.(check string)
+                "distinct id"
+                ("user:" ^ string_of_int uid)
+                (Analytics_fixture.distinct_of p)
+          | _ -> Alcotest.fail "no user_id prop")
+      | l -> Alcotest.failf "expected 1 signup event, got %d" (List.length l));
       (* Replay: token consumed -> `Invalid -> no event. *)
       let* status, payloads =
         run_get_handler ~url ~target:"/confirm?token=step6_tok_1"
@@ -223,19 +247,26 @@ let login_case =
             [ ("identifier", "step6_login"); ("password", "step6 password") ]
           Earde.Auth_handlers.login_handler
       in
-      Alcotest.(check bool) "login redirects" true (Http_fixture.is_redirect status);
+      Alcotest.(check bool)
+        "login redirects" true
+        (Http_fixture.is_redirect status);
       (match payloads with
-       | [ p ] ->
-           Alcotest.(check string) "event" "account_logged_in" (Analytics_fixture.event_of p);
-           Alcotest.(check string) "distinct id"
-             ("user:" ^ string_of_int uid) (Analytics_fixture.distinct_of p);
-           Alcotest.(check (slist string compare))
-             "person fields only inside $set"
-             [ "user_id"; "$set"; "deployment_environment" ]
-             (Analytics_fixture.prop_keys p);
-           check_set_keys "closed $set"
-             [ "username"; "signup_date"; "is_admin" ] p
-       | l -> Alcotest.failf "expected 1 login event, got %d" (List.length l));
+      | [ p ] ->
+          Alcotest.(check string)
+            "event" "account_logged_in"
+            (Analytics_fixture.event_of p);
+          Alcotest.(check string)
+            "distinct id"
+            ("user:" ^ string_of_int uid)
+            (Analytics_fixture.distinct_of p);
+          Alcotest.(check (slist string compare))
+            "person fields only inside $set"
+            [ "user_id"; "$set"; "deployment_environment" ]
+            (Analytics_fixture.prop_keys p);
+          check_set_keys "closed $set"
+            [ "username"; "signup_date"; "is_admin" ]
+            p
+      | l -> Alcotest.failf "expected 1 login event, got %d" (List.length l));
       let* status, payloads =
         run_handler ~url ~target:"/login"
           ~form:[ ("identifier", "step6_login"); ("password", "wrong") ]
@@ -246,8 +277,7 @@ let login_case =
       Lwt.return_unit)
 
 let join_case =
-  db_case
-    "join emits community_joined + $groupidentify; private/denied silent"
+  db_case "join emits community_joined + $groupidentify; private/denied silent"
     (fun ~url conn c ->
       let (module C : Caqti_lwt.CONNECTION) = c in
       ignore conn;
@@ -266,36 +296,56 @@ let join_case =
             [ ("community_id", string_of_int pub); ("redirect_to", "/feed") ]
           Earde.Membership_handlers.join_community_handler
       in
-      Alcotest.(check bool) "join redirects" true (Http_fixture.is_redirect status);
+      Alcotest.(check bool)
+        "join redirects" true
+        (Http_fixture.is_redirect status);
       (match payloads with
-       | [ joined; gi ] ->
-           Alcotest.(check string) "event" "community_joined"
-             (Analytics_fixture.event_of joined);
-           Alcotest.(check string) "joined distinct"
-             ("user:" ^ string_of_int uid) (Analytics_fixture.distinct_of joined);
-           Alcotest.(check (option string)) "$groups key"
-             (Some ("community:" ^ string_of_int pub))
-             (Analytics_fixture.an_group_key joined);
-           Alcotest.(check (slist string compare))
-             "joined props keys"
-             [ "user_id"; "community_id"; "community_slug";
-               "community_visibility"; "$groups"; "deployment_environment" ]
-             (Analytics_fixture.prop_keys joined);
-           Alcotest.(check string) "groupidentify event" "$groupidentify"
-             (Analytics_fixture.event_of gi);
-           Alcotest.(check string) "groupidentify distinct is the USER"
-             ("user:" ^ string_of_int uid) (Analytics_fixture.distinct_of gi);
-           Alcotest.(check (option string)) "group key"
-             (Some ("community:" ^ string_of_int pub))
-             (Analytics_fixture.group_key_prop_of gi);
-           Alcotest.(check (slist string compare))
-             "closed group props (no created_at on the record)"
-             [ "community_id"; "community_slug"; "community_name";
-               "community_visibility" ]
-             (List.map fst (Analytics_fixture.group_set_of gi))
-       | l ->
-           Alcotest.failf "expected joined+groupidentify, got %d payloads"
-             (List.length l));
+      | [ joined; gi ] ->
+          Alcotest.(check string)
+            "event" "community_joined"
+            (Analytics_fixture.event_of joined);
+          Alcotest.(check string)
+            "joined distinct"
+            ("user:" ^ string_of_int uid)
+            (Analytics_fixture.distinct_of joined);
+          Alcotest.(check (option string))
+            "$groups key"
+            (Some ("community:" ^ string_of_int pub))
+            (Analytics_fixture.an_group_key joined);
+          Alcotest.(check (slist string compare))
+            "joined props keys"
+            [
+              "user_id";
+              "community_id";
+              "community_slug";
+              "community_visibility";
+              "$groups";
+              "deployment_environment";
+            ]
+            (Analytics_fixture.prop_keys joined);
+          Alcotest.(check string)
+            "groupidentify event" "$groupidentify"
+            (Analytics_fixture.event_of gi);
+          Alcotest.(check string)
+            "groupidentify distinct is the USER"
+            ("user:" ^ string_of_int uid)
+            (Analytics_fixture.distinct_of gi);
+          Alcotest.(check (option string))
+            "group key"
+            (Some ("community:" ^ string_of_int pub))
+            (Analytics_fixture.group_key_prop_of gi);
+          Alcotest.(check (slist string compare))
+            "closed group props (no created_at on the record)"
+            [
+              "community_id";
+              "community_slug";
+              "community_name";
+              "community_visibility";
+            ]
+            (List.map fst (Analytics_fixture.group_set_of gi))
+      | l ->
+          Alcotest.failf "expected joined+groupidentify, got %d payloads"
+            (List.length l));
       (* Private community: same 404 as missing; nothing emitted. *)
       let* status, payloads =
         run_handler ~url ~session ~target:"/join"
@@ -312,7 +362,8 @@ let join_case =
             [ ("community_id", string_of_int pub); ("redirect_to", "/feed") ]
           Earde.Membership_handlers.join_community_handler
       in
-      Alcotest.(check bool) "denied join still redirects" true
+      Alcotest.(check bool)
+        "denied join still redirects" true
         (Http_fixture.is_redirect status);
       Alcotest.(check int) "denied join emits none" 0 (List.length payloads);
       Lwt.return_unit)
@@ -337,23 +388,28 @@ let leave_case =
           Earde.Membership_handlers.leave_community_handler
       in
       let* status, payloads = leave () in
-      Alcotest.(check bool) "leave redirects" true (Http_fixture.is_redirect status);
+      Alcotest.(check bool)
+        "leave redirects" true
+        (Http_fixture.is_redirect status);
       (match payloads with
-       | [ p ] ->
-           Alcotest.(check string) "event" "community_left" (Analytics_fixture.event_of p);
-           Alcotest.(check (slist string compare))
-             "props keys"
-             [ "user_id"; "community_id"; "$groups";
-               "deployment_environment" ]
-             (Analytics_fixture.prop_keys p);
-           Alcotest.(check (option string)) "$groups key"
-             (Some ("community:" ^ string_of_int cid))
-             (Analytics_fixture.an_group_key p)
-       | l -> Alcotest.failf "expected 1 leave event, got %d" (List.length l));
+      | [ p ] ->
+          Alcotest.(check string)
+            "event" "community_left"
+            (Analytics_fixture.event_of p);
+          Alcotest.(check (slist string compare))
+            "props keys"
+            [ "user_id"; "community_id"; "$groups"; "deployment_environment" ]
+            (Analytics_fixture.prop_keys p);
+          Alcotest.(check (option string))
+            "$groups key"
+            (Some ("community:" ^ string_of_int cid))
+            (Analytics_fixture.an_group_key p)
+      | l -> Alcotest.failf "expected 1 leave event, got %d" (List.length l));
       (* Leaving again as a non-member: identical product response (the
          DELETE matches zero rows), but no community_left event. *)
       let* status, payloads = leave () in
-      Alcotest.(check bool) "no-op leave still redirects" true
+      Alcotest.(check bool)
+        "no-op leave still redirects" true
         (Http_fixture.is_redirect status);
       Alcotest.(check int) "no-op leave emits none" 0 (List.length payloads);
       Lwt.return_unit)
@@ -362,7 +418,9 @@ let visibility_case =
   db_case "visibility change emits one $groupidentify with the new value"
     (fun ~url _conn c ->
       let (module C : Caqti_lwt.CONNECTION) = c in
-      let* uid = C.find Analytics_fixture.q_insert_user ("step6_visadmin", "x") in
+      let* uid =
+        C.find Analytics_fixture.q_insert_user ("step6_visadmin", "x")
+      in
       let* uid = or_fail "user" uid in
       let* r = C.exec Analytics_fixture.q_make_admin uid in
       let* () = or_fail "durable admin" r in
@@ -370,8 +428,10 @@ let visibility_case =
       let* cid = or_fail "community" cid in
       let router =
         Dream.router
-          [ Dream.post "/c/:slug/settings/visibility"
-              Earde.Community_settings_handlers.update_community_visibility_handler
+          [
+            Dream.post "/c/:slug/settings/visibility"
+              Earde.Community_settings_handlers
+              .update_community_visibility_handler;
           ]
       in
       let submit ?consent ~session value =
@@ -381,43 +441,57 @@ let visibility_case =
           router
       in
       let admin_session =
-        [ ("user_id", string_of_int uid); ("username", "step6_visadmin");
-          ("is_admin", "true") ]
+        [
+          ("user_id", string_of_int uid);
+          ("username", "step6_visadmin");
+          ("is_admin", "true");
+        ]
       in
       let* status, payloads = submit ~session:admin_session "private" in
-      Alcotest.(check bool) "visibility change redirects" true
+      Alcotest.(check bool)
+        "visibility change redirects" true
         (Http_fixture.is_redirect status);
       (match payloads with
-       | [ gi ] ->
-           Alcotest.(check string) "event" "$groupidentify" (Analytics_fixture.event_of gi);
-           Alcotest.(check string) "distinct is the acting user, not synthetic"
-             ("user:" ^ string_of_int uid) (Analytics_fixture.distinct_of gi);
-           Alcotest.(check (option string)) "group key"
-             (Some ("community:" ^ string_of_int cid))
-             (Analytics_fixture.group_key_prop_of gi);
-           Alcotest.(check (option string)) "NEW visibility in $group_set"
-             (Some "private")
-             (match List.assoc_opt "community_visibility" (Analytics_fixture.group_set_of gi) with
-              | Some (`String v) -> Some v
-              | _ -> None);
-           (* The switch is TO private, so the §13 redaction applies to
+      | [ gi ] ->
+          Alcotest.(check string)
+            "event" "$groupidentify"
+            (Analytics_fixture.event_of gi);
+          Alcotest.(check string)
+            "distinct is the acting user, not synthetic"
+            ("user:" ^ string_of_int uid)
+            (Analytics_fixture.distinct_of gi);
+          Alcotest.(check (option string))
+            "group key"
+            (Some ("community:" ^ string_of_int cid))
+            (Analytics_fixture.group_key_prop_of gi);
+          Alcotest.(check (option string))
+            "NEW visibility in $group_set" (Some "private")
+            (match
+               List.assoc_opt "community_visibility"
+                 (Analytics_fixture.group_set_of gi)
+             with
+            | Some (`String v) -> Some v
+            | _ -> None);
+          (* The switch is TO private, so the §13 redaction applies to
               this very $groupidentify: no readable identifiers, no
               indexability — only the numeric id and the new closed
               visibility value. *)
-           Alcotest.(check (slist string compare))
-             "closed group props only (private: no slug/name/indexability)"
-             [ "community_id"; "community_visibility" ]
-             (List.map fst (Analytics_fixture.group_set_of gi))
-       | l ->
-           Alcotest.failf "expected 1 groupidentify, got %d" (List.length l));
+          Alcotest.(check (slist string compare))
+            "closed group props only (private: no slug/name/indexability)"
+            [ "community_id"; "community_visibility" ]
+            (List.map fst (Analytics_fixture.group_set_of gi))
+      | l -> Alcotest.failf "expected 1 groupidentify, got %d" (List.length l));
       (* Forbidden: neither admin nor top mod -> 403, silent, value kept. *)
-      let* nobody = C.find Analytics_fixture.q_insert_user ("step6_visnobody", "x") in
+      let* nobody =
+        C.find Analytics_fixture.q_insert_user ("step6_visnobody", "x")
+      in
       let* nobody = or_fail "nobody" nobody in
       let* status, payloads =
         submit
           ~session:
-            [ ("user_id", string_of_int nobody);
-              ("username", "step6_visnobody") ]
+            [
+              ("user_id", string_of_int nobody); ("username", "step6_visnobody");
+            ]
           "public"
       in
       Alcotest.(check int) "forbidden status" 403 status;
@@ -430,7 +504,8 @@ let visibility_case =
       let* status, payloads =
         submit ~consent:(Some "denied") ~session:admin_session "public"
       in
-      Alcotest.(check bool) "denied consent still redirects" true
+      Alcotest.(check bool)
+        "denied consent still redirects" true
         (Http_fixture.is_redirect status);
       Alcotest.(check int) "denied consent emits none" 0 (List.length payloads);
       let* stored = C.find_opt q_visibility_by_id cid in
@@ -443,13 +518,17 @@ let chat_case =
   db_case "chat_message_sent: json and redirect modes each emit exactly once"
     (fun ~url conn c ->
       let (module C : Caqti_lwt.CONNECTION) = c in
-      let* uid = C.find Analytics_fixture.q_insert_user ("step6_chatter", "x") in
+      let* uid =
+        C.find Analytics_fixture.q_insert_user ("step6_chatter", "x")
+      in
       let* uid = or_fail "user" uid in
       let* cid = C.find q_insert_community ("step6-chat", true, "public") in
       let* cid = or_fail "community" cid in
       let* r = Earde.Membership_store.join_community conn uid cid in
       let* () = or_fail_s "membership" r in
-      let* chslug = Earde.Channel_store.create_channel conn cid "general" None 0 in
+      let* chslug =
+        Earde.Channel_store.create_channel conn cid "general" None 0
+      in
       let* chslug = or_fail_s "channel" chslug in
       let session =
         [ ("user_id", string_of_int uid); ("username", "step6_chatter") ]
@@ -457,49 +536,75 @@ let chat_case =
       let send ?accept content =
         run_handler ~url ~session ?accept ~target:"/send-message"
           ~form:
-            [ ("community_slug", "step6-chat"); ("channel_slug", chslug);
-              ("content", content) ]
+            [
+              ("community_slug", "step6-chat");
+              ("channel_slug", chslug);
+              ("content", content);
+            ]
           Earde.Chat_handlers.send_message_handler
       in
       let* status, payloads = send "step6 hello redirect" in
-      Alcotest.(check bool) "redirect mode redirects" true
+      Alcotest.(check bool)
+        "redirect mode redirects" true
         (Http_fixture.is_redirect status);
       (match payloads with
-       | [ p ] ->
-           Alcotest.(check string) "event" "chat_message_sent" (Analytics_fixture.event_of p);
-           Alcotest.(check (option string)) "response_mode"
-             (Some "redirect")
-             (match List.assoc_opt "response_mode" (Analytics_fixture.payload_props p) with
-              | Some (`String m) -> Some m
-              | _ -> None);
-           Alcotest.(check (option string)) "$groups key"
-             (Some ("community:" ^ string_of_int cid))
-             (Analytics_fixture.an_group_key p);
-           Alcotest.(check (slist string compare))
-             "props keys"
-             [ "user_id"; "community_id"; "community_slug"; "channel_id";
-               "channel_slug"; "message_id"; "content_length";
-               "response_mode"; "$groups"; "deployment_environment" ]
-             (Analytics_fixture.prop_keys p);
-           (* Length only — never the message text. *)
-           Alcotest.(check (option int)) "content_length"
-             (Some (String.length "step6 hello redirect"))
-             (match List.assoc_opt "content_length" (Analytics_fixture.payload_props p) with
-              | Some (`Int n) -> Some n
-              | _ -> None)
-       | l -> Alcotest.failf "redirect mode: expected 1, got %d" (List.length l));
+      | [ p ] ->
+          Alcotest.(check string)
+            "event" "chat_message_sent"
+            (Analytics_fixture.event_of p);
+          Alcotest.(check (option string))
+            "response_mode" (Some "redirect")
+            (match
+               List.assoc_opt "response_mode"
+                 (Analytics_fixture.payload_props p)
+             with
+            | Some (`String m) -> Some m
+            | _ -> None);
+          Alcotest.(check (option string))
+            "$groups key"
+            (Some ("community:" ^ string_of_int cid))
+            (Analytics_fixture.an_group_key p);
+          Alcotest.(check (slist string compare))
+            "props keys"
+            [
+              "user_id";
+              "community_id";
+              "community_slug";
+              "channel_id";
+              "channel_slug";
+              "message_id";
+              "content_length";
+              "response_mode";
+              "$groups";
+              "deployment_environment";
+            ]
+            (Analytics_fixture.prop_keys p);
+          (* Length only — never the message text. *)
+          Alcotest.(check (option int))
+            "content_length"
+            (Some (String.length "step6 hello redirect"))
+            (match
+               List.assoc_opt "content_length"
+                 (Analytics_fixture.payload_props p)
+             with
+            | Some (`Int n) -> Some n
+            | _ -> None)
+      | l -> Alcotest.failf "redirect mode: expected 1, got %d" (List.length l));
       let* status, payloads =
         send ~accept:"application/json" "step6 hello json"
       in
       Alcotest.(check int) "json mode 200" 200 status;
       (match payloads with
-       | [ p ] ->
-           Alcotest.(check (option string)) "response_mode json"
-             (Some "json")
-             (match List.assoc_opt "response_mode" (Analytics_fixture.payload_props p) with
-              | Some (`String m) -> Some m
-              | _ -> None)
-       | l -> Alcotest.failf "json mode: expected 1, got %d" (List.length l));
+      | [ p ] ->
+          Alcotest.(check (option string))
+            "response_mode json" (Some "json")
+            (match
+               List.assoc_opt "response_mode"
+                 (Analytics_fixture.payload_props p)
+             with
+            | Some (`String m) -> Some m
+            | _ -> None)
+      | l -> Alcotest.failf "json mode: expected 1, got %d" (List.length l));
       Lwt.return_unit)
 
 let post_case =
@@ -516,35 +621,51 @@ let post_case =
         [ ("user_id", string_of_int uid); ("username", "step6_poster") ]
       in
       let form =
-        [ ("title", "step6 post title"); ("content", "step6 body");
-          ("community_id", string_of_int cid) ]
+        [
+          ("title", "step6 post title");
+          ("content", "step6 body");
+          ("community_id", string_of_int cid);
+        ]
       in
       let* status, payloads =
-        run_handler ~url ~session ~multipart:true ~target:"/create-post"
-          ~form Earde.Post_handlers.create_post_handler
+        run_handler ~url ~session ~multipart:true ~target:"/create-post" ~form
+          Earde.Post_handlers.create_post_handler
       in
-      Alcotest.(check bool) "post redirects" true (Http_fixture.is_redirect status);
+      Alcotest.(check bool)
+        "post redirects" true
+        (Http_fixture.is_redirect status);
       (match payloads with
-       | [ p ] ->
-           Alcotest.(check string) "event" "forum_thread_created" (Analytics_fixture.event_of p);
-           Alcotest.(check (slist string compare))
-             "props keys (no title/body/url)"
-             [ "user_id"; "community_id"; "post_id"; "content_length";
-               "has_link"; "has_mention"; "$groups";
-               "deployment_environment" ]
-             (Analytics_fixture.prop_keys p);
-           Alcotest.(check (option string)) "$groups key"
-             (Some ("community:" ^ string_of_int cid))
-             (Analytics_fixture.an_group_key p)
-       | l -> Alcotest.failf "expected 1 post event, got %d" (List.length l));
+      | [ p ] ->
+          Alcotest.(check string)
+            "event" "forum_thread_created"
+            (Analytics_fixture.event_of p);
+          Alcotest.(check (slist string compare))
+            "props keys (no title/body/url)"
+            [
+              "user_id";
+              "community_id";
+              "post_id";
+              "content_length";
+              "has_link";
+              "has_mention";
+              "$groups";
+              "deployment_environment";
+            ]
+            (Analytics_fixture.prop_keys p);
+          Alcotest.(check (option string))
+            "$groups key"
+            (Some ("community:" ^ string_of_int cid))
+            (Analytics_fixture.an_group_key p)
+      | l -> Alcotest.failf "expected 1 post event, got %d" (List.length l));
       (* Non-member: refused, silent. *)
-      let* other = C.find Analytics_fixture.q_insert_user ("step6_stranger", "x") in
+      let* other =
+        C.find Analytics_fixture.q_insert_user ("step6_stranger", "x")
+      in
       let* other = or_fail "other" other in
       let* status, payloads =
         run_handler ~url
           ~session:
-            [ ("user_id", string_of_int other);
-              ("username", "step6_stranger") ]
+            [ ("user_id", string_of_int other); ("username", "step6_stranger") ]
           ~multipart:true ~target:"/create-post" ~form
           Earde.Post_handlers.create_post_handler
       in
@@ -556,7 +677,9 @@ let comment_case =
   db_case "forum_comment_created carries the real RETURNING comment id"
     (fun ~url conn c ->
       let (module C : Caqti_lwt.CONNECTION) = c in
-      let* uid = C.find Analytics_fixture.q_insert_user ("step6_commenter", "x") in
+      let* uid =
+        C.find Analytics_fixture.q_insert_user ("step6_commenter", "x")
+      in
       let* uid = or_fail "user" uid in
       let* cid = C.find q_insert_community ("step6-comm", false, "public") in
       let* cid = or_fail "community" cid in
@@ -571,44 +694,58 @@ let comment_case =
       in
       let* status, payloads =
         run_handler ~url ~session ~target:"/create-comment"
-          ~form:
-            [ ("content", "step6 comment"); ("post_id", string_of_int pid) ]
+          ~form:[ ("content", "step6 comment"); ("post_id", string_of_int pid) ]
           Earde.Comment_handlers.create_comment_handler
       in
-      Alcotest.(check bool) "comment redirects" true (Http_fixture.is_redirect status);
-      (match payloads with
-       | [ p ] ->
-           Alcotest.(check string) "event" "forum_comment_created" (Analytics_fixture.event_of p);
-           Alcotest.(check (slist string compare))
-             "props keys (top-level comment: no parent_comment_id)"
-             [ "user_id"; "community_id"; "post_id"; "comment_id";
-               "content_length"; "has_mention"; "$groups";
-               "deployment_environment" ]
-             (Analytics_fixture.prop_keys p);
-           (match List.assoc_opt "comment_id" (Analytics_fixture.payload_props p) with
-            | Some (`Int comment_id) ->
-                let* row = C.find_opt q_comment_content comment_id in
-                let* row = or_fail "comment row" row in
-                Alcotest.(check (option string))
-                  "payload comment_id is the real inserted row"
-                  (Some "step6 comment") row;
-                Lwt.return_unit
-            | _ -> Alcotest.fail "payload has no int comment_id")
-       | l ->
-           Alcotest.failf "expected 1 comment event, got %d" (List.length l))
-      )
+      Alcotest.(check bool)
+        "comment redirects" true
+        (Http_fixture.is_redirect status);
+      match payloads with
+      | [ p ] -> (
+          Alcotest.(check string)
+            "event" "forum_comment_created"
+            (Analytics_fixture.event_of p);
+          Alcotest.(check (slist string compare))
+            "props keys (top-level comment: no parent_comment_id)"
+            [
+              "user_id";
+              "community_id";
+              "post_id";
+              "comment_id";
+              "content_length";
+              "has_mention";
+              "$groups";
+              "deployment_environment";
+            ]
+            (Analytics_fixture.prop_keys p);
+          match
+            List.assoc_opt "comment_id" (Analytics_fixture.payload_props p)
+          with
+          | Some (`Int comment_id) ->
+              let* row = C.find_opt q_comment_content comment_id in
+              let* row = or_fail "comment row" row in
+              Alcotest.(check (option string))
+                "payload comment_id is the real inserted row"
+                (Some "step6 comment") row;
+              Lwt.return_unit
+          | _ -> Alcotest.fail "payload has no int comment_id")
+      | l -> Alcotest.failf "expected 1 comment event, got %d" (List.length l))
 
 let promote_case =
   db_case "conversation_promoted once with counts and group key"
     (fun ~url conn c ->
       let (module C : Caqti_lwt.CONNECTION) = c in
-      let* uid = C.find Analytics_fixture.q_insert_user ("step6_promoter", "x") in
+      let* uid =
+        C.find Analytics_fixture.q_insert_user ("step6_promoter", "x")
+      in
       let* uid = or_fail "user" uid in
       let* cid = C.find q_insert_community ("step6-thr", false, "public") in
       let* cid = or_fail "community" cid in
       let* r = Earde.Membership_store.join_community conn uid cid in
       let* () = or_fail_s "membership" r in
-      let* chslug = Earde.Channel_store.create_channel conn cid "general" None 0 in
+      let* chslug =
+        Earde.Channel_store.create_channel conn cid "general" None 0
+      in
       let* chslug = or_fail_s "channel" chslug in
       let* channel = Earde.Channel_store.get_channel_by_slug conn chslug cid in
       let* channel = or_fail_s "channel row" channel in
@@ -617,16 +754,19 @@ let promote_case =
         | Some ch -> ch
         | None -> Alcotest.fail "channel vanished"
       in
-      let* seed = Earde.Chat_store.send_message conn channel.id uid "step6 seed" in
+      let* seed =
+        Earde.Chat_store.send_message conn channel.id uid "step6 seed"
+      in
       let* seed = or_fail_s "seed message" seed in
       let session =
         [ ("user_id", string_of_int uid); ("username", "step6_promoter") ]
       in
       let router =
         Dream.router
-          [ Dream.post
+          [
+            Dream.post
               "/c/:slug/ch/:channel_slug/messages/:message_id/start-thread"
-              Earde.Start_thread_handlers.start_thread_create_handler
+              Earde.Start_thread_handlers.start_thread_create_handler;
           ]
       in
       let* status, payloads =
@@ -637,43 +777,64 @@ let promote_case =
           ~form:[ ("title", "step6 thread"); ("content", "") ]
           router
       in
-      Alcotest.(check bool) "promotion redirects" true (Http_fixture.is_redirect status);
+      Alcotest.(check bool)
+        "promotion redirects" true
+        (Http_fixture.is_redirect status);
       (match payloads with
-       | [ p ] ->
-           Alcotest.(check string) "event" "conversation_promoted" (Analytics_fixture.event_of p);
-           Alcotest.(check string) "distinct"
-             ("user:" ^ string_of_int uid) (Analytics_fixture.distinct_of p);
-           Alcotest.(check (slist string compare))
-             "props keys (sectionless community)"
-             [ "user_id"; "community_id"; "community_slug"; "channel_id";
-               "channel_slug"; "post_id"; "message_id";
-               "promoted_message_count"; "promoted_participant_count";
-               "$groups"; "deployment_environment" ]
-             (Analytics_fixture.prop_keys p);
-           Alcotest.(check (option string)) "$groups key"
-             (Some ("community:" ^ string_of_int cid))
-             (Analytics_fixture.an_group_key p);
-           Alcotest.(check (option int)) "seed-only message count" (Some 1)
-             (match
-                List.assoc_opt "promoted_message_count" (Analytics_fixture.payload_props p)
-              with
-              | Some (`Int n) -> Some n
-              | _ -> None);
-           Alcotest.(check (option int)) "participant count" (Some 1)
-             (match
-                List.assoc_opt "promoted_participant_count" (Analytics_fixture.payload_props p)
-              with
-              | Some (`Int n) -> Some n
-              | _ -> None)
-       | l ->
-           Alcotest.failf "expected 1 promotion event, got %d" (List.length l));
+      | [ p ] ->
+          Alcotest.(check string)
+            "event" "conversation_promoted"
+            (Analytics_fixture.event_of p);
+          Alcotest.(check string)
+            "distinct"
+            ("user:" ^ string_of_int uid)
+            (Analytics_fixture.distinct_of p);
+          Alcotest.(check (slist string compare))
+            "props keys (sectionless community)"
+            [
+              "user_id";
+              "community_id";
+              "community_slug";
+              "channel_id";
+              "channel_slug";
+              "post_id";
+              "message_id";
+              "promoted_message_count";
+              "promoted_participant_count";
+              "$groups";
+              "deployment_environment";
+            ]
+            (Analytics_fixture.prop_keys p);
+          Alcotest.(check (option string))
+            "$groups key"
+            (Some ("community:" ^ string_of_int cid))
+            (Analytics_fixture.an_group_key p);
+          Alcotest.(check (option int))
+            "seed-only message count" (Some 1)
+            (match
+               List.assoc_opt "promoted_message_count"
+                 (Analytics_fixture.payload_props p)
+             with
+            | Some (`Int n) -> Some n
+            | _ -> None);
+          Alcotest.(check (option int))
+            "participant count" (Some 1)
+            (match
+               List.assoc_opt "promoted_participant_count"
+                 (Analytics_fixture.payload_props p)
+             with
+            | Some (`Int n) -> Some n
+            | _ -> None)
+      | l -> Alcotest.failf "expected 1 promotion event, got %d" (List.length l));
       Lwt.return_unit)
 
 let create_community_case =
   db_case "community creation emits exactly one $groupidentify (no event)"
     (fun ~url _conn c ->
       let (module C : Caqti_lwt.CONNECTION) = c in
-      let* uid = C.find Analytics_fixture.q_insert_user ("step6_founder", "x") in
+      let* uid =
+        C.find Analytics_fixture.q_insert_user ("step6_founder", "x")
+      in
       let* uid = or_fail "user" uid in
       let* r = C.exec Analytics_fixture.q_make_admin uid in
       let* () = or_fail "durable admin" r in
@@ -682,35 +843,47 @@ let create_community_case =
          for; the founder must really be an admin to reach the analytics
          behavior under test. *)
       let session =
-        [ ("user_id", string_of_int uid); ("username", "step6_founder");
-          ("is_admin", "true") ]
+        [
+          ("user_id", string_of_int uid);
+          ("username", "step6_founder");
+          ("is_admin", "true");
+        ]
       in
       let* status, payloads =
         run_handler ~url ~session ~target:"/create-community"
           ~form:
-            [ ("name", "step6-created"); ("slug", "step6-created");
-              ("section_count", "0") ]
+            [
+              ("name", "step6-created");
+              ("slug", "step6-created");
+              ("section_count", "0");
+            ]
           Earde.Community_handlers.create_community_handler
       in
-      Alcotest.(check bool) "creation redirects" true (Http_fixture.is_redirect status);
+      Alcotest.(check bool)
+        "creation redirects" true
+        (Http_fixture.is_redirect status);
       let* cid = C.find_opt q_community_id_by_slug "step6-created" in
       let* cid = or_fail "created community" cid in
       let cid =
         match cid with Some id -> id | None -> Alcotest.fail "no community"
       in
       (match payloads with
-       | [ gi ] ->
-           Alcotest.(check string) "only $groupidentify" "$groupidentify"
-             (Analytics_fixture.event_of gi);
-           Alcotest.(check string) "distinct is the creator"
-             ("user:" ^ string_of_int uid) (Analytics_fixture.distinct_of gi);
-           Alcotest.(check (option string)) "group key"
-             (Some ("community:" ^ string_of_int cid))
-             (Analytics_fixture.group_key_prop_of gi)
-       | l ->
-           Alcotest.failf "expected exactly 1 groupidentify, got %d: %s"
-             (List.length l)
-             (String.concat ", " (List.map Analytics_fixture.event_of l)));
+      | [ gi ] ->
+          Alcotest.(check string)
+            "only $groupidentify" "$groupidentify"
+            (Analytics_fixture.event_of gi);
+          Alcotest.(check string)
+            "distinct is the creator"
+            ("user:" ^ string_of_int uid)
+            (Analytics_fixture.distinct_of gi);
+          Alcotest.(check (option string))
+            "group key"
+            (Some ("community:" ^ string_of_int cid))
+            (Analytics_fixture.group_key_prop_of gi)
+      | l ->
+          Alcotest.failf "expected exactly 1 groupidentify, got %d: %s"
+            (List.length l)
+            (String.concat ", " (List.map Analytics_fixture.event_of l)));
       Lwt.return_unit)
 
 let update_settings_case =
@@ -724,39 +897,59 @@ let update_settings_case =
       let* cid = C.find q_insert_community ("step6-upd", true, "public") in
       let* cid = or_fail "community" cid in
       let form =
-        [ ("community_id", string_of_int cid);
+        [
+          ("community_id", string_of_int cid);
           ("community_slug", "step6-upd");
-          ("description", "step6 new description"); ("rules", "");
-          ("avatar_url", ""); ("banner_url", "");
-          ("existing_avatar_url", ""); ("existing_banner_url", "") ]
+          ("description", "step6 new description");
+          ("rules", "");
+          ("avatar_url", "");
+          ("banner_url", "");
+          ("existing_avatar_url", "");
+          ("existing_banner_url", "");
+        ]
       in
       let admin_session =
-        [ ("user_id", string_of_int uid); ("username", "step6_moddy");
-          ("is_admin", "true") ]
+        [
+          ("user_id", string_of_int uid);
+          ("username", "step6_moddy");
+          ("is_admin", "true");
+        ]
       in
       let* status, payloads =
         run_handler ~url ~session:admin_session ~multipart:true
           ~target:"/update-community" ~form
           Earde.Community_settings_handlers.update_community_handler
       in
-      Alcotest.(check bool) "update redirects" true (Http_fixture.is_redirect status);
+      Alcotest.(check bool)
+        "update redirects" true
+        (Http_fixture.is_redirect status);
       (match payloads with
-       | [ gi ] ->
-           Alcotest.(check string) "event" "$groupidentify" (Analytics_fixture.event_of gi);
-           Alcotest.(check string) "distinct is the acting admin"
-             ("user:" ^ string_of_int uid) (Analytics_fixture.distinct_of gi);
-           Alcotest.(check (option string)) "group key"
-             (Some ("community:" ^ string_of_int cid))
-             (Analytics_fixture.group_key_prop_of gi);
-           Alcotest.(check (slist string compare))
-             "closed group props"
-             [ "community_id"; "community_slug"; "community_name";
-               "community_visibility" ]
-             (List.map fst (Analytics_fixture.group_set_of gi))
-       | l ->
-           Alcotest.failf "expected 1 groupidentify, got %d" (List.length l));
+      | [ gi ] ->
+          Alcotest.(check string)
+            "event" "$groupidentify"
+            (Analytics_fixture.event_of gi);
+          Alcotest.(check string)
+            "distinct is the acting admin"
+            ("user:" ^ string_of_int uid)
+            (Analytics_fixture.distinct_of gi);
+          Alcotest.(check (option string))
+            "group key"
+            (Some ("community:" ^ string_of_int cid))
+            (Analytics_fixture.group_key_prop_of gi);
+          Alcotest.(check (slist string compare))
+            "closed group props"
+            [
+              "community_id";
+              "community_slug";
+              "community_name";
+              "community_visibility";
+            ]
+            (List.map fst (Analytics_fixture.group_set_of gi))
+      | l -> Alcotest.failf "expected 1 groupidentify, got %d" (List.length l));
       (* Unauthorized (neither admin nor moderator): 403, silent. *)
-      let* other = C.find Analytics_fixture.q_insert_user ("step6_nobody", "x") in
+      let* other =
+        C.find Analytics_fixture.q_insert_user ("step6_nobody", "x")
+      in
       let* other = or_fail "other" other in
       let* status, payloads =
         run_handler ~url
@@ -773,7 +966,9 @@ let delete_account_case =
   db_case "account_deleted once with the pre-anonymization id"
     (fun ~url conn c ->
       let (module C : Caqti_lwt.CONNECTION) = c in
-      let* uid = C.find Analytics_fixture.q_insert_user ("step6_deleteme", "x") in
+      let* uid =
+        C.find Analytics_fixture.q_insert_user ("step6_deleteme", "x")
+      in
       let* uid = or_fail "user" uid in
       let did = "user:" ^ string_of_int uid in
       (* Step 7 moved the capture into the post-response async cleanup chain
@@ -788,15 +983,15 @@ let delete_account_case =
       Lwt.finalize
         (fun () ->
           let pipeline =
-            Dream.sql_pool url @@ Dream.memory_sessions @@ fun req ->
+            Dream.sql_pool url @@ Dream.memory_sessions
+            @@ fun req ->
             let* () =
               Dream.set_session_field req "user_id" (string_of_int uid)
             in
-            let* () =
-              Dream.set_session_field req "username" "step6_deleteme"
-            in
+            let* () = Dream.set_session_field req "username" "step6_deleteme" in
             let csrf = Dream.csrf_token req in
-            Dream.set_body req (Http_fixture.encoded_form_body [ ("dream.csrf", csrf) ]);
+            Dream.set_body req
+              (Http_fixture.encoded_form_body [ ("dream.csrf", csrf) ]);
             Earde.Account_handlers.delete_account_handler req
           in
           let request =
@@ -807,45 +1002,58 @@ let delete_account_case =
               ""
           in
           let* response = pipeline request in
-          Alcotest.(check bool) "deletion redirects" true
-            (Http_fixture.is_redirect (Dream.status_to_int (Dream.status response)));
+          Alcotest.(check bool)
+            "deletion redirects" true
+            (Http_fixture.is_redirect
+               (Dream.status_to_int (Dream.status response)));
           let* () =
-            Analytics_fixture.wait_until ~label:"post-deletion cleanup chain" (fun () ->
-                let* job = Earde.Posthog_deletion_job_store.get_by_distinct_id conn did in
+            Analytics_fixture.wait_until ~label:"post-deletion cleanup chain"
+              (fun () ->
+                let* job =
+                  Earde.Posthog_deletion_job_store.get_by_distinct_id conn did
+                in
                 match job with
                 | Ok (Some (_, _, _, Some _)) -> Lwt.return true
                 | _ -> Lwt.return false)
           in
           (match !payloads with
-           | [ p ] ->
-               Alcotest.(check string) "event" "account_deleted" (Analytics_fixture.event_of p);
-               Alcotest.(check string) "constant non-user distinct id"
-                 Earde.Analytics.account_deletion_distinct_id (Analytics_fixture.distinct_of p);
-               Alcotest.(check (slist string compare))
-                 "personless: person processing off, plus the envelope"
-                 [ "$process_person_profile"; "deployment_environment" ]
-                 (Analytics_fixture.prop_keys p);
-               Alcotest.(check bool) "no user identity in the metric" false
-                 (Html_assert.contains (Yojson.Safe.to_string p) did)
-           | l ->
-               Alcotest.failf "expected 1 deletion metric, got %d"
-                 (List.length l));
-          let* job = Earde.Posthog_deletion_job_store.get_by_distinct_id conn did in
+          | [ p ] ->
+              Alcotest.(check string)
+                "event" "account_deleted"
+                (Analytics_fixture.event_of p);
+              Alcotest.(check string)
+                "constant non-user distinct id"
+                Earde.Analytics.account_deletion_distinct_id
+                (Analytics_fixture.distinct_of p);
+              Alcotest.(check (slist string compare))
+                "personless: person processing off, plus the envelope"
+                [ "$process_person_profile"; "deployment_environment" ]
+                (Analytics_fixture.prop_keys p);
+              Alcotest.(check bool)
+                "no user identity in the metric" false
+                (Html_assert.contains (Yojson.Safe.to_string p) did)
+          | l ->
+              Alcotest.failf "expected 1 deletion metric, got %d"
+                (List.length l));
+          let* job =
+            Earde.Posthog_deletion_job_store.get_by_distinct_id conn did
+          in
           let* job = or_fail_s "job row" job in
           let* job_id =
             match job with
             | Some (job_id, status, attempts, last_error) ->
-                Alcotest.(check string) "job stays durably pending" "pending"
-                  status;
+                Alcotest.(check string)
+                  "job stays durably pending" "pending" status;
                 Alcotest.(check int) "one immediate attempt" 1 attempts;
-                Alcotest.(check (option string)) "safe config marker"
-                  (Some "missing_configuration") last_error;
+                Alcotest.(check (option string))
+                  "safe config marker" (Some "missing_configuration") last_error;
                 Lwt.return job_id
             | None -> Alcotest.fail "no durable deletion job"
           in
           let* name = C.find_opt Analytics_fixture.q_username_by_id uid in
           let* name = or_fail "anonymized row" name in
-          Alcotest.(check (option string)) "row anonymized"
+          Alcotest.(check (option string))
+            "row anonymized"
             (Some (Printf.sprintf "[deleted_%d]" uid))
             name;
           (* The anonymized username no longer matches the step6_ cleanup
@@ -862,11 +1070,11 @@ let delete_account_case =
 
 let q_set_avatar =
   (Caqti_type.(t2 (option string) int) ->. Caqti_type.unit)
-  "UPDATE users SET avatar_url = $1, bio = 'step6 bio' WHERE id = $2"
+    "UPDATE users SET avatar_url = $1, bio = 'step6 bio' WHERE id = $2"
 
 let q_bio_avatar_by_id =
   (Caqti_type.int ->? Caqti_type.(t2 (option string) (option string)))
-  "SELECT bio, avatar_url FROM users WHERE id = $1"
+    "SELECT bio, avatar_url FROM users WHERE id = $1"
 
 (* Account deletion's file cleanup: the validated local upload disappears,
    a bystander's file survives, a missing file and an external URL are both
@@ -892,9 +1100,13 @@ let delete_account_avatar_case =
       let* a = or_fail "user a" a in
       let* b = C.find Analytics_fixture.q_insert_user ("step6_avatar_b", "x") in
       let* b = or_fail "user b" b in
-      let* c_missing = C.find Analytics_fixture.q_insert_user ("step6_avatar_c", "x") in
+      let* c_missing =
+        C.find Analytics_fixture.q_insert_user ("step6_avatar_c", "x")
+      in
       let* c_missing = or_fail "user c" c_missing in
-      let* d_external = C.find Analytics_fixture.q_insert_user ("step6_avatar_d", "x") in
+      let* d_external =
+        C.find Analytics_fixture.q_insert_user ("step6_avatar_d", "x")
+      in
       let* d_external = or_fail "user d" d_external in
       let set uid value =
         let* r = C.exec q_set_avatar (value, uid) in
@@ -910,19 +1122,18 @@ let delete_account_avatar_case =
       in
       let run_delete uid name =
         let pipeline =
-          Dream.sql_pool url @@ Dream.memory_sessions @@ fun req ->
-          let* () =
-            Dream.set_session_field req "user_id" (string_of_int uid)
-          in
+          Dream.sql_pool url @@ Dream.memory_sessions
+          @@ fun req ->
+          let* () = Dream.set_session_field req "user_id" (string_of_int uid) in
           let* () = Dream.set_session_field req "username" name in
           let csrf = Dream.csrf_token req in
-          Dream.set_body req (Http_fixture.encoded_form_body [ ("dream.csrf", csrf) ]);
+          Dream.set_body req
+            (Http_fixture.encoded_form_body [ ("dream.csrf", csrf) ]);
           Earde.Account_handlers.delete_account_handler req
         in
         pipeline
           (Dream.request ~method_:`POST ~target:"/delete-account"
-             ~headers:
-               [ ("Content-Type", "application/x-www-form-urlencoded") ]
+             ~headers:[ ("Content-Type", "application/x-www-form-urlencoded") ]
              "")
       in
       let check_scrubbed label uid =
@@ -930,16 +1141,18 @@ let delete_account_avatar_case =
         let* profile = or_fail (label ^ " row") profile in
         match profile with
         | Some (bio, avatar) ->
-            Alcotest.(check (option string)) (label ^ " bio cleared") None
-              bio;
-            Alcotest.(check (option string)) (label ^ " avatar cleared")
+            Alcotest.(check (option string)) (label ^ " bio cleared") None bio;
+            Alcotest.(check (option string))
+              (label ^ " avatar cleared")
               None avatar;
             Lwt.return_unit
         | None -> Alcotest.failf "%s row missing" label
       in
       let drop_job_and_user uid =
         let did = "user:" ^ string_of_int uid in
-        let* job = Earde.Posthog_deletion_job_store.get_by_distinct_id conn did in
+        let* job =
+          Earde.Posthog_deletion_job_store.get_by_distinct_id conn did
+        in
         let* job = or_fail_s "job row" job in
         let* () =
           match job with
@@ -955,28 +1168,34 @@ let delete_account_avatar_case =
         (fun () ->
           (* A: a real local upload — its file must go, B's must stay. *)
           let* response = run_delete a "step6_avatar_a" in
-          Alcotest.(check bool) "A: deletion redirects" true
-            (Http_fixture.is_redirect (Dream.status_to_int (Dream.status response)));
+          Alcotest.(check bool)
+            "A: deletion redirects" true
+            (Http_fixture.is_redirect
+               (Dream.status_to_int (Dream.status response)));
           let* () =
-            Analytics_fixture.wait_until ~label:"A avatar file removed" (fun () ->
-                Lwt.return (not (Sys.file_exists a_file)))
+            Analytics_fixture.wait_until ~label:"A avatar file removed"
+              (fun () -> Lwt.return (not (Sys.file_exists a_file)))
           in
-          Alcotest.(check bool) "bystander file untouched" true
-            (Sys.file_exists b_file);
+          Alcotest.(check bool)
+            "bystander file untouched" true (Sys.file_exists b_file);
           let* () = check_scrubbed "A" a in
           (* C: the stored URL's file never existed — deletion still
              succeeds. *)
           let* response = run_delete c_missing "step6_avatar_c" in
-          Alcotest.(check bool) "C: deletion redirects" true
-            (Http_fixture.is_redirect (Dream.status_to_int (Dream.status response)));
+          Alcotest.(check bool)
+            "C: deletion redirects" true
+            (Http_fixture.is_redirect
+               (Dream.status_to_int (Dream.status response)));
           let* () = check_scrubbed "C" c_missing in
           (* D: an external URL never reaches the filesystem. *)
           let* response = run_delete d_external "step6_avatar_d" in
-          Alcotest.(check bool) "D: deletion redirects" true
-            (Http_fixture.is_redirect (Dream.status_to_int (Dream.status response)));
+          Alcotest.(check bool)
+            "D: deletion redirects" true
+            (Http_fixture.is_redirect
+               (Dream.status_to_int (Dream.status response)));
           let* () = check_scrubbed "D" d_external in
-          Alcotest.(check bool) "bystander file still present at the end"
-            true
+          Alcotest.(check bool)
+            "bystander file still present at the end" true
             (Sys.file_exists b_file);
           Lwt.return_unit)
         (fun () ->
@@ -990,11 +1209,20 @@ let delete_account_avatar_case =
           drop_job_and_user d_external))
 
 let suite =
-  [ signup_case; login_case; join_case; leave_case; chat_case; post_case
-  ; comment_case; promote_case; create_community_case; update_settings_case
-  ; visibility_case; delete_account_case; delete_account_avatar_case
+  [
+    signup_case;
+    login_case;
+    join_case;
+    leave_case;
+    chat_case;
+    post_case;
+    comment_case;
+    promote_case;
+    create_community_case;
+    update_settings_case;
+    visibility_case;
+    delete_account_case;
+    delete_account_avatar_case;
   ]
 
-let suites =
-  [ ( "analytics_step6_events", suite )
-  ]
+let suites = [ ("analytics_step6_events", suite) ]

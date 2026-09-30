@@ -1,5 +1,5 @@
-(** The publicly visible accepted connections of one community — the data
-    behind the "Connected communities" block of the existing community pages.
+(** The publicly visible accepted connections of one community — the data behind
+    the "Connected communities" block of the existing community pages.
     Read-only: this feature module owns its SQL, performs no network IO, no
     logging, takes no locks, and never writes.
 
@@ -21,23 +21,22 @@
     one the creation path enforces, so the two readings cannot drift.
 
     Reading is symmetric. An accepted connection belongs to both communities
-    equally, so the same durable row is returned from either side with the
-    other community as the counterpart.
+    equally, so the same durable row is returned from either side with the other
+    community as the counterpart.
 
-    This module decides nothing about who may see the {i viewed} community —
-    the existing community route completes its own lookup and
-    {!Community_read_gate.can_view_community} decision first, and only then reads here, so
-    the block can never become a side channel for a page the viewer was not
-    already entitled to. What this module does own is durable identity: the
-    supplied slug must still resolve to exactly one community row whose stored
-    identity is coherent.
+    This module decides nothing about who may see the {i viewed} community — the
+    existing community route completes its own lookup and
+    {!Community_read_gate.can_view_community} decision first, and only then
+    reads here, so the block can never become a side channel for a page the
+    viewer was not already entitled to. What this module does own is durable
+    identity: the supplied slug must still resolve to exactly one community row
+    whose stored identity is coherent.
 
     Nothing internal crosses: no connection id, community id, status, request
     note, direction, requester/reviewer/remover identity, timestamps, audit
-    rows, moderator or member data, serializers, printers, or
-    [string_of_error]. The closed error variant is payload-free — Caqti and
-    PostgreSQL details (which can echo SQL parameters) are dropped, never
-    returned or logged. *)
+    rows, moderator or member data, serializers, printers, or [string_of_error].
+    The closed error variant is payload-free — Caqti and PostgreSQL details
+    (which can echo SQL parameters) are dropped, never returned or logged. *)
 
 type connected_community
 (** One publicly visible counterpart's public identity. Abstract; the row id,
@@ -46,22 +45,21 @@ type connected_community
 
 type error =
   | Invalid_community_slug
-      (** The supplied slug is not a single non-empty URL path segment (no
-          ASCII whitespace, controls, DEL, or ['/']); rejected before any SQL.
-          Route values are never trimmed, lowercased, percent-decoded, or
-          repaired. *)
+      (** The supplied slug is not a single non-empty URL path segment (no ASCII
+          whitespace, controls, DEL, or ['/']); rejected before any SQL. Route
+          values are never trimmed, lowercased, percent-decoded, or repaired. *)
   | Community_unavailable
       (** No community row carries this exact slug any more. An ineligible
           community is {i not} this error — it is [Ok []]; whether the page
           renders at all is the caller's existing authorization decision. *)
   | Inconsistent_data
       (** A durable row violated a structural invariant: a non-positive
-          community id, a stored slug that is not byte-identical to the
-          supplied one, a counterpart slug outside the single-path-segment
-          grammar, a blank or control-bearing community name, an off-enum
-          visibility or onboarding state, a counterpart equal to the viewed
-          community, or the same counterpart returned twice. Payload-free on
-          purpose; never a partial list. *)
+          community id, a stored slug that is not byte-identical to the supplied
+          one, a counterpart slug outside the single-path-segment grammar, a
+          blank or control-bearing community name, an off-enum visibility or
+          onboarding state, a counterpart equal to the viewed community, or the
+          same counterpart returned twice. Payload-free on purpose; never a
+          partial list. *)
   | Storage_error
       (** Any Caqti/PostgreSQL failure. Raw database errors are dropped, never
           returned or logged: they can echo SQL parameters. *)
@@ -87,6 +85,7 @@ val load_for_community :
     ineligible — is [Ok []], never an error. *)
 
 val community_name : connected_community -> string
+
 val community_slug : connected_community -> string
-(** The stored slug, revalidated as a single URL path segment before the row
-    is returned, so callers may build [/c/<slug>] from it directly. *)
+(** The stored slug, revalidated as a single URL path segment before the row is
+    returned, so callers may build [/c/<slug>] from it directly. *)

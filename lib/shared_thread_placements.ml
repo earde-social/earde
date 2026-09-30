@@ -11,12 +11,7 @@
    rejected note, length, malformed byte, post id, community id, status, or
    action can travel through the error channel. *)
 
-type status =
-  | Pending
-  | Accepted
-  | Rejected
-  | Removed
-  | Withdrawn
+type status = Pending | Accepted | Rejected | Removed | Withdrawn
 
 (* Closed conversion: exactly the five database spellings, nothing else.
    Aliases and capitalization variants belong to no layer — the store reads
@@ -36,11 +31,7 @@ let string_of_status = function
   | Removed -> "removed"
   | Withdrawn -> "withdrawn"
 
-type action =
-  | Accept
-  | Reject
-  | Withdraw
-  | Remove
+type action = Accept | Reject | Withdraw | Remove
 
 type t = {
   post_id : int;
@@ -111,11 +102,11 @@ let normalize_line_endings s =
   let b = Buffer.create n in
   let i = ref 0 in
   while !i < n do
-    (if s.[!i] = '\r' then begin
-       Buffer.add_char b '\n';
-       if !i + 1 < n && s.[!i + 1] = '\n' then incr i
-     end
-     else Buffer.add_char b s.[!i]);
+    if s.[!i] = '\r' then begin
+      Buffer.add_char b '\n';
+      if !i + 1 < n && s.[!i + 1] = '\n' then incr i
+    end
+    else Buffer.add_char b s.[!i];
     incr i
   done;
   Buffer.contents b
@@ -190,9 +181,7 @@ let create_pending ~post_id ~origin_community_id ~destination_community_id
           }
 
 let post_id t = t.post_id
-
 let origin_community_id t = t.origin_community_id
-
 let destination_community_id t = t.destination_community_id
 
 let involves t ~community_id =
@@ -200,7 +189,6 @@ let involves t ~community_id =
   || t.destination_community_id = community_id
 
 let status t = t.status
-
 let request_note t = t.request_note
 
 (* The lifecycle is a short tree: a pending request is closed exactly once —

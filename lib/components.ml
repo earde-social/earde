@@ -5,7 +5,7 @@
    crashing. *)
 let initial_glyph name =
   let n = String.trim name in
-  if n = "" then (Html.static "?")
+  if n = "" then Html.static "?"
   else Html.text (String.uppercase_ascii (String.sub n 0 1))
 
 (* The single letter-tile fallback. [class_] carries the surface's existing
@@ -48,38 +48,56 @@ let is_deleted_user u = String.length u >= 9 && String.sub u 0 9 = "[deleted_"
 
 (* mod_usernames/admin_usernames enable badge rendering at call sites that know the community;
    callers without context omit the params, defaulting to [] so badge logic is a no-op. *)
-let render_author ?(mod_usernames=[]) ?(admin_usernames=[]) username =
+let render_author ?(mod_usernames = []) ?(admin_usernames = []) username =
   if is_deleted_user username then
-    (Html.static "<span class='text-gray-400 italic'>[deleted]</span>")
+    Html.static "<span class='text-gray-400 italic'>[deleted]</span>"
   else
     let mod_badge =
       if List.mem username mod_usernames then
-        (Html.static "<span class='mod-badge ml-1 text-[10px] font-semibold bg-green-100 text-green-700 px-1.5 py-0.5 rounded'>[MOD]</span>")
+        Html.static
+          "<span class='mod-badge ml-1 text-[10px] font-semibold bg-green-100 \
+           text-green-700 px-1.5 py-0.5 rounded'>[MOD]</span>"
       else Html.empty
     in
     (* Admin badge is always site-wide; rendered after MOD so both appear side-by-side
        for the rare case where a site admin is also a local moderator. *)
     let admin_badge =
       if List.mem username admin_usernames then
-        (Html.static "<span class='mod-badge ml-1 text-[10px] font-semibold bg-red-100 text-red-700 px-1.5 py-0.5 rounded'>[ADMIN]</span>")
+        Html.static
+          "<span class='mod-badge ml-1 text-[10px] font-semibold bg-red-100 \
+           text-red-700 px-1.5 py-0.5 rounded'>[ADMIN]</span>"
       else Html.empty
     in
-    Html.template "<a href='/u/%s' class='hover:text-[#C94C4C] hover:underline font-medium transition'>u/%s</a>%s%s"
-  [ Html.text (username)
-  ; Html.text (username)
-  ; mod_badge
-  ; admin_badge ]
+    Html.template
+      "<a href='/u/%s' class='hover:text-[#C94C4C] hover:underline font-medium \
+       transition'>u/%s</a>%s%s"
+      [ Html.text username; Html.text username; mod_badge; admin_badge ]
 
 (* Parse and diff in OCaml rather than casting in SQL to keep DB queries generic
    and avoid timezone drift when the DB and app server are in different locales. *)
 let time_ago date_str =
   try
-    let clean_str = if String.length date_str >= 19 then String.sub date_str 0 19 else date_str in
-    let (y, m, d, h, min, s) =
-      Scanf.sscanf clean_str "%d-%d-%d %d:%d:%d" (fun y m d h min s -> (y, m, d, h, min, s))
+    let clean_str =
+      if String.length date_str >= 19 then String.sub date_str 0 19
+      else date_str
     in
-    let tm = { Unix.tm_sec = s; tm_min = min; tm_hour = h; tm_mday = d;
-               tm_mon = m - 1; tm_year = y - 1900; tm_wday = 0; tm_yday = 0; tm_isdst = false } in
+    let y, m, d, h, min, s =
+      Scanf.sscanf clean_str "%d-%d-%d %d:%d:%d" (fun y m d h min s ->
+          (y, m, d, h, min, s))
+    in
+    let tm =
+      {
+        Unix.tm_sec = s;
+        tm_min = min;
+        tm_hour = h;
+        tm_mday = d;
+        tm_mon = m - 1;
+        tm_year = y - 1900;
+        tm_wday = 0;
+        tm_yday = 0;
+        tm_isdst = false;
+      }
+    in
     (* mktime treats tm as local time; DB timestamps are UTC.
        Compute UTC offset: mktime(gmtime(now)) returns now interpreted as local → offset = now - mktime(gmtime(now)) *)
     let epoch_local, _ = Unix.mktime tm in
@@ -95,13 +113,27 @@ let time_ago date_str =
     else if diff < 2592000 then Printf.sprintf "%d days ago" (diff / 86400)
     else if diff < 31536000 then Printf.sprintf "%d mo ago" (diff / 2592000)
     else Printf.sprintf "%d yr ago" (diff / 31536000)
-  with _ ->
-    date_str
+  with _ -> date_str
 
 let format_month_year date_str =
   try
-    let (y, m) = Scanf.sscanf date_str "%d-%d" (fun y m -> (y, m)) in
-    let months = [|"Jan";"Feb";"Mar";"Apr";"May";"Jun";"Jul";"Aug";"Sep";"Oct";"Nov";"Dec"|] in
-    if m >= 1 && m <= 12 then Printf.sprintf "%s %d" months.(m-1) y
+    let y, m = Scanf.sscanf date_str "%d-%d" (fun y m -> (y, m)) in
+    let months =
+      [|
+        "Jan";
+        "Feb";
+        "Mar";
+        "Apr";
+        "May";
+        "Jun";
+        "Jul";
+        "Aug";
+        "Sep";
+        "Oct";
+        "Nov";
+        "Dec";
+      |]
+    in
+    if m >= 1 && m <= 12 then Printf.sprintf "%s %d" months.(m - 1) y
     else date_str
   with _ -> date_str

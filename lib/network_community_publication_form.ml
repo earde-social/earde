@@ -16,9 +16,7 @@
    Error privacy: rejected values, their lengths, and the failing rule never
    travel; structural failures collapse to one shared constructor. *)
 
-type publication_visibility =
-  | Public
-  | Unlisted
+type publication_visibility = Public | Unlisted
 
 type t = {
   identity : Project_home_provisioning_form.t;
@@ -60,8 +58,12 @@ let structure fields =
     match fields with
     | [] -> (
         match acc with
-        | { p_name = Some name; p_slug = Some slug;
-            p_description = Some description; p_visibility = Some visibility } ->
+        | {
+         p_name = Some name;
+         p_slug = Some slug;
+         p_description = Some description;
+         p_visibility = Some visibility;
+        } ->
             Ok (name, slug, description, visibility)
         | _ -> Error Invalid_form)
     | ("community_name", raw) :: rest -> (
@@ -94,9 +96,10 @@ let structure fields =
 let identity_of raw_name raw_slug raw_description =
   match
     Project_home_provisioning_form.of_fields
-      [ ("community_name", raw_name);
+      [
+        ("community_name", raw_name);
         ("community_slug", raw_slug);
-        ("community_description", raw_description)
+        ("community_description", raw_description);
       ]
   with
   | Ok identity -> Ok identity
@@ -129,7 +132,6 @@ let of_fields fields =
   Ok { identity; visibility }
 
 let community_name t = Project_home_provisioning_form.community_name t.identity
-
 let community_slug t = Project_home_provisioning_form.community_slug t.identity
 
 let community_description t =

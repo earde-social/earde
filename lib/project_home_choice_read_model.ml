@@ -15,10 +15,7 @@
 
 open Lwt.Infix
 
-type visibility =
-  | Public
-  | Unlisted
-  | Currently_unavailable
+type visibility = Public | Unlisted | Currently_unavailable
 
 type project = {
   project_name : string;
@@ -65,6 +62,7 @@ let active_relation_community (r : active_relation) = r.relation_community
 
 let active_relation_removal_allowed (r : active_relation) =
   r.relation_removal_allowed
+
 let project (v : view) = v.view_project
 let active_relation (v : view) = v.view_active_relation
 let eligible_communities (v : view) = v.view_eligible_communities
@@ -101,8 +99,8 @@ let single_path_segment value =
 let nonblank value =
   String.exists
     (fun c ->
-      not (c = ' ' || c = '\t' || c = '\r' || c = '\n' || c = '\x0c'
-           || c = '\x0b'))
+      not
+        (c = ' ' || c = '\t' || c = '\r' || c = '\n' || c = '\x0c' || c = '\x0b'))
     value
 
 (* Community descriptions are multi-line free text: LF and horizontal tab
@@ -127,13 +125,12 @@ let valid_description = function
 let project_query =
   let open Caqti_request.Infix in
   (Caqti_type.(t2 string int)
-   ->? Caqti_type.(t2 (t2 int64 string) (t3 string string string)))
+  ->? Caqti_type.(t2 (t2 int64 string) (t3 string string string)))
     "SELECT p.id, p.name, p.slug, p.forge_namespace_login, \
-            p.verification_status \
-     FROM open_source_projects p \
-     JOIN project_stewards s ON s.project_id = p.id AND s.user_id = $2 \
-     WHERE p.slug = $1 AND p.verification_status = 'verified' \
-       AND github_evidence_is_fresh(s.github_verified_at)"
+     p.verification_status FROM open_source_projects p JOIN project_stewards s \
+     ON s.project_id = p.id AND s.user_id = $2 WHERE p.slug = $1 AND \
+     p.verification_status = 'verified' AND \
+     github_evidence_is_fresh(s.github_verified_at)"
 
 (* The project's active home relation with its target community identity.
    Deliberately no eligibility predicate on the community side: a pending
@@ -144,20 +141,16 @@ let project_query =
 let active_relation_query =
   let open Caqti_request.Infix in
   (Caqti_type.int64
-   ->* Caqti_type.(
-         t2
-           (t2 (t2 string int) (t2 string string))
-           (t2
-              (t2 (option string) string)
-              (t2 (t2 string bool) (t2 bool bool)))))
+  ->* Caqti_type.(
+        t2
+          (t2 (t2 string int) (t2 string string))
+          (t2 (t2 (option string) string) (t2 (t2 string bool) (t2 bool bool))))
+  )
     "SELECT cp.status, c.id, c.name, c.slug, c.description, c.visibility, \
-            c.onboarding_state, c.is_network_community, \
-            c.indexable, c.discoverable \
-     FROM community_projects cp \
-     JOIN communities c ON c.id = cp.community_id \
-     WHERE cp.project_id = $1 \
-       AND cp.relation_type = 'home' \
-       AND cp.status IN ('pending', 'accepted')"
+     c.onboarding_state, c.is_network_community, c.indexable, c.discoverable \
+     FROM community_projects cp JOIN communities c ON c.id = cp.community_id \
+     WHERE cp.project_id = $1 AND cp.relation_type = 'home' AND cp.status IN \
+     ('pending', 'accepted')"
 
 (* Every currently eligible target, in the exact current durable model: a
    network community, live, and not fully private. Legacy communities and
@@ -168,25 +161,21 @@ let active_relation_query =
 let eligible_communities_query =
   let open Caqti_request.Infix in
   (Caqti_type.unit
-   ->* Caqti_type.(
-         t2
-           (t2 (t2 int string) (t2 string (option string)))
-           (t2 (t2 string string) (t2 bool bool))))
+  ->* Caqti_type.(
+        t2
+          (t2 (t2 int string) (t2 string (option string)))
+          (t2 (t2 string string) (t2 bool bool))))
     "SELECT id, name, slug, description, visibility, onboarding_state, \
-            indexable, discoverable \
-     FROM communities \
-     WHERE is_network_community \
-       AND onboarding_state = 'published' \
-       AND visibility = 'public' \
-     ORDER BY lower(name) ASC, slug ASC, id ASC"
+     indexable, discoverable FROM communities WHERE is_network_community AND \
+     onboarding_state = 'published' AND visibility = 'public' ORDER BY \
+     lower(name) ASC, slug ASC, id ASC"
 
 (* === row validation === *)
 
 (* Shared identity rules for any returned community row. Errors are
    deliberately unit: which rule failed on which value must not travel. *)
 let community_identity_valid ~id ~name ~slug ~description =
-  id > 0 && nonblank name
-  && single_path_segment slug
+  id > 0 && nonblank name && single_path_segment slug
   && valid_description description
 
 (* The active target's presentation visibility over its complete current
@@ -225,7 +214,9 @@ let active_target_visibility ~visibility_raw ~onboarding_raw
            which is where the store's own answer would land it. Only the
            boolean crosses — no lifecycle detail rides with it. *)
         let removal_allowed =
-          not (is_network_community && parsed_onboarding = Community_types.Community_draft)
+          not
+            (is_network_community
+            && parsed_onboarding = Community_types.Community_draft)
         in
         let visibility =
           if
@@ -242,11 +233,12 @@ let active_community_of_row ((status_raw, id), (name, slug))
     ( (description, visibility_raw),
       ((onboarding_raw, is_network_community), (indexable, discoverable)) ) =
   match Project_home_relation.status_of_string status_raw with
-  | Some ((Project_home_relation.Pending | Project_home_relation.Accepted) as
-          status) ->
+  | Some
+      ((Project_home_relation.Pending | Project_home_relation.Accepted) as
+       status) -> (
       if not (community_identity_valid ~id ~name ~slug ~description) then
         Error ()
-      else (
+      else
         match
           active_target_visibility ~visibility_raw ~onboarding_raw
             ~is_network_community ~indexable ~discoverable
@@ -272,10 +264,9 @@ let active_community_of_row ((status_raw, id), (name, slug))
    shared lifecycle rule permits — fully listed (Public) or fully unlisted
    (Unlisted). A mixed flag pair is corruption, not a third mode. *)
 let eligible_community_of_row
-    (((id, name), (slug, description)),
-     ((visibility_raw, onboarding_raw), (indexable, discoverable))) =
-  if not (community_identity_valid ~id ~name ~slug ~description) then
-    Error ()
+    ( ((id, name), (slug, description)),
+      ((visibility_raw, onboarding_raw), (indexable, discoverable)) ) =
+  if not (community_identity_valid ~id ~name ~slug ~description) then Error ()
   else
     match
       ( Community_types.community_visibility_of_string visibility_raw,
@@ -285,8 +276,7 @@ let eligible_community_of_row
         if
           not
             (Network_communities.lifecycle_state_valid
-               ~is_network_community:true
-               ~onboarding_state:parsed_onboarding
+               ~is_network_community:true ~onboarding_state:parsed_onboarding
                ~visibility:parsed_visibility ~indexable ~discoverable)
         then Error ()
         else
@@ -307,8 +297,7 @@ let rec convert_eligible acc = function
       | Error () -> Error ()
       | Ok community -> convert_eligible (community :: acc) rest)
 
-let load_for_steward (module C : Caqti_lwt.CONNECTION) ~user_id ~project_slug
-    =
+let load_for_steward (module C : Caqti_lwt.CONNECTION) ~user_id ~project_slug =
   if user_id <= 0 then Lwt.return (Error Invalid_user_id)
   else if not (canonical_project_slug project_slug) then
     Lwt.return (Error Invalid_project_slug)
@@ -321,8 +310,7 @@ let load_for_steward (module C : Caqti_lwt.CONNECTION) ~user_id ~project_slug
         (* Missing project, another user's, creator without stewardship,
            stale, and revoked all collapse into the same absence. *)
         Lwt.return (Ok None)
-    | Ok (Some ((row_id, stored_name), (stored_slug, login, verification)))
-      ->
+    | Ok (Some ((row_id, stored_name), (stored_slug, login, verification))) -> (
         if
           not
             (Int64.compare row_id 0L > 0
@@ -339,7 +327,7 @@ let load_for_steward (module C : Caqti_lwt.CONNECTION) ~user_id ~project_slug
               project_namespace_login = login;
             }
           in
-          C.collect_list active_relation_query row_id >>= ( function
+          C.collect_list active_relation_query row_id >>= function
           | Error _ -> Lwt.return (Error Storage_error)
           | Ok (_ :: _ :: _) ->
               (* The partial unique active-home index promises at most one
@@ -373,4 +361,4 @@ let load_for_steward (module C : Caqti_lwt.CONNECTION) ~user_id ~project_slug
                              view_project = loaded_project;
                              view_active_relation = None;
                              view_eligible_communities = communities;
-                           }))) )
+                           }))))

@@ -39,7 +39,9 @@ let session_field_safe request name =
 let admin_claimant request =
   if session_field_safe request "is_admin" <> Some "true" then None
   else
-    match Option.bind (session_field_safe request "user_id") int_of_string_opt with
+    match
+      Option.bind (session_field_safe request "user_id") int_of_string_opt
+    with
     | Some uid when uid > 0 -> Some uid
     | _ -> None
 
@@ -94,6 +96,7 @@ let current_admin_of_request request =
   | Some _ ->
       let%lwt state = Dream.sql request (fun db -> current_admin db request) in
       (match state with
-       | Current_admin_storage_error e -> ignore (Handler_support.db_error_message e : string)
-       | Current_admin | Current_non_admin -> ());
+      | Current_admin_storage_error e ->
+          ignore (Handler_support.db_error_message e : string)
+      | Current_admin | Current_non_admin -> ());
       Lwt.return state

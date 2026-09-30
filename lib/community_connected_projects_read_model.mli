@@ -1,20 +1,20 @@
-(** The accepted project-home relations of one community — the data behind
-    the "Connected projects" section of the existing community page. Read-only:
-    this feature module owns its SQL, performs no network or GitHub IO, no
-    logging, takes no locks, and never writes.
+(** The accepted project-home relations of one community — the data behind the
+    "Connected projects" section of the existing community page. Read-only: this
+    feature module owns its SQL, performs no network or GitHub IO, no logging,
+    takes no locks, and never writes.
 
     This module decides nothing about who may see the community. The existing
-    community route ({!Community_handlers.community_page_handler}) completes its own
-    lookup and {!Community_read_gate.can_view_community} authorization first, and only
-    then reads here — so the section can never become a side channel for a
-    private or draft community. What this module does own is durable
-    identity: the supplied slug must still resolve to exactly one community
-    row whose stored identity is coherent.
+    community route ({!Community_handlers.community_page_handler}) completes its
+    own lookup and {!Community_read_gate.can_view_community} authorization
+    first, and only then reads here — so the section can never become a side
+    channel for a private or draft community. What this module does own is
+    durable identity: the supplied slug must still resolve to exactly one
+    community row whose stored identity is coherent.
 
     An accepted home relation is a factual, GitHub-verified connection. It is
     deliberately not an endorsement: it does not mean GitHub or Earde endorses
-    the project, that the project's stewards moderate the community, or that
-    the community controls the repository. Nothing in this module's vocabulary
+    the project, that the project's stewards moderate the community, or that the
+    community controls the repository. Nothing in this module's vocabulary
     implies otherwise.
 
     Nothing internal crosses: no relation id, project id, community id,
@@ -31,39 +31,35 @@ type repository
 
 type project
 (** One project whose accepted [home] relation names the target community.
-    Abstract; the project id, steward rows, provenance, and the whole
-    relation record never cross. *)
+    Abstract; the project id, steward rows, provenance, and the whole relation
+    record never cross. *)
 
-(** The project's current GitHub verification state. All three are returned:
-    an accepted home stays part of the community's history while verification
+(** The project's current GitHub verification state. All three are returned: an
+    accepted home stays part of the community's history while verification
     drifts, and the page says plainly which state it is in rather than quietly
     dropping the project. *)
-type verification =
-  | Verified
-  | Stale
-  | Revoked
+type verification = Verified | Stale | Revoked
 
 type error =
   | Invalid_community_slug
-      (** The supplied slug is not a single non-empty URL path segment (no
-          ASCII whitespace, controls, DEL, or ['/']); rejected before any SQL.
-          Route values are never trimmed, lowercased, percent-decoded, or
-          repaired. *)
+      (** The supplied slug is not a single non-empty URL path segment (no ASCII
+          whitespace, controls, DEL, or ['/']); rejected before any SQL. Route
+          values are never trimmed, lowercased, percent-decoded, or repaired. *)
   | Community_unavailable
       (** No community row carries this exact slug any more. Private, draft,
           unlisted, and legacy communities are *not* this error — the caller's
           existing authorization owns whether the page renders at all. *)
   | Inconsistent_data
       (** A durable row violated a structural invariant: a non-positive
-          community id, a stored slug that is not byte-identical to the
-          supplied one, a blank or control-bearing community name, an off-enum
-          community visibility or onboarding state, a non-positive relation or
-          project id, an off-enum project verification status or kind, a
-          non-canonical stored project slug, a blank project name, a
-          non-addressable namespace login, a website URL outside the permanent
-          project grammar, a duplicate or non-adjacent project group, more than
-          one accepted relation for one project, or a missing or malformed
-          repository set. Payload-free on purpose; never a partial list. *)
+          community id, a stored slug that is not byte-identical to the supplied
+          one, a blank or control-bearing community name, an off-enum community
+          visibility or onboarding state, a non-positive relation or project id,
+          an off-enum project verification status or kind, a non-canonical
+          stored project slug, a blank project name, a non-addressable namespace
+          login, a website URL outside the permanent project grammar, a
+          duplicate or non-adjacent project group, more than one accepted
+          relation for one project, or a missing or malformed repository set.
+          Payload-free on purpose; never a partial list. *)
   | Storage_error
       (** Any Caqti/PostgreSQL failure. Raw database errors are dropped, never
           returned or logged: they can echo SQL parameters. *)
@@ -98,6 +94,7 @@ val load_for_community :
     [Ok []], never an error. *)
 
 val repository_full_name : repository -> string
+
 val repository_html_url : repository -> string
 (** Exactly [https://github.com/<owner>/<name>], revalidated by structured
     reconstruction from the stored full name before being returned. *)
@@ -115,9 +112,9 @@ val project_namespace_login : project -> string
 val project_verification : project -> verification
 
 val project_website_url : project -> string option
-(** The stored project website, byte-for-byte, only when it still satisfies
-    the permanent-project website rules {!Project_identity} enforces at
-    creation. No new URL grammar is defined here. *)
+(** The stored project website, byte-for-byte, only when it still satisfies the
+    permanent-project website rules {!Project_identity} enforces at creation. No
+    new URL grammar is defined here. *)
 
 val project_repositories : project -> repository list
 (** The project's permanent repositories in stored position order — at least

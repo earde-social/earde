@@ -37,7 +37,8 @@ let auth_header key =
 let is_safe_uuid uuid =
   uuid <> ""
   && String.for_all
-       (function 'a' .. 'f' | 'A' .. 'F' | '0' .. '9' | '-' -> true | _ -> false)
+       (function
+         | 'a' .. 'f' | 'A' .. 'F' | '0' .. '9' | '-' -> true | _ -> false)
        uuid
 
 (* Lookup outcome: `Absent (no matching person — already-deleted or
@@ -64,10 +65,13 @@ let lookup_person ~config ~distinct_id =
     Uri.with_query'
       (Uri.of_string
          (Printf.sprintf "%s/api/projects/%s/persons/"
-            config.Analytics.deletion_ui_host config.Analytics.deletion_project_id))
+            config.Analytics.deletion_ui_host
+            config.Analytics.deletion_project_id))
       [ ("distinct_id", distinct_id) ]
   in
-  Cohttp_lwt_unix.Client.get ~headers:(auth_header config.Analytics.deletion_api_key) uri
+  Cohttp_lwt_unix.Client.get
+    ~headers:(auth_header config.Analytics.deletion_api_key)
+    uri
   >>= fun (response, body) ->
   let status = Cohttp.Response.status response |> Cohttp.Code.code_of_status in
   if status >= 200 && status < 300 then
@@ -81,12 +85,13 @@ let delete_person ~config ~uuid =
     Uri.with_query'
       (Uri.of_string
          (Printf.sprintf "%s/api/projects/%s/persons/%s/"
-            config.Analytics.deletion_ui_host config.Analytics.deletion_project_id
-            uuid))
+            config.Analytics.deletion_ui_host
+            config.Analytics.deletion_project_id uuid))
       [ ("delete_events", "true") ]
   in
   Cohttp_lwt_unix.Client.delete
-    ~headers:(auth_header config.Analytics.deletion_api_key) uri
+    ~headers:(auth_header config.Analytics.deletion_api_key)
+    uri
   >>= fun (response, body) ->
   Cohttp_lwt.Body.drain_body body >|= fun () ->
   let status = Cohttp.Response.status response |> Cohttp.Code.code_of_status in
@@ -132,8 +137,7 @@ let group_cleanup_targets = [ "community_name"; "community_slug" ]
 
 let group_query ~group_key =
   [
-    ( "group_type_index",
-      string_of_int Analytics.community_group_type_index );
+    ("group_type_index", string_of_int Analytics.community_group_type_index);
     ("group_key", group_key);
   ]
 
@@ -163,7 +167,8 @@ let find_group ~config ~group_key =
       (group_query ~group_key)
   in
   Cohttp_lwt_unix.Client.get
-    ~headers:(auth_header config.Analytics.deletion_api_key) uri
+    ~headers:(auth_header config.Analytics.deletion_api_key)
+    uri
   >>= fun (response, body) ->
   let status = Cohttp.Response.status response |> Cohttp.Code.code_of_status in
   if status = 404 then

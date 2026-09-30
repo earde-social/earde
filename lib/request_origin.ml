@@ -55,8 +55,7 @@ let same_origin_request config request =
   match Dream.header request "Origin" with
   | Some origin -> (
       match
-        ( origin_key origin,
-          origin_key (Github_app_config.public_origin config) )
+        (origin_key origin, origin_key (Github_app_config.public_origin config))
       with
       | Some supplied, Some configured -> supplied = configured
       | _ -> false)

@@ -23,7 +23,6 @@ module Phrp = Earde.Project_home_review_pages
       list bytes match the launch community document for the same state). *)
 
 let case name f = Alcotest.test_case name `Quick f
-
 let ( let* ) = Lwt.bind
 
 (* --- /new-community renderer --- *)
@@ -31,10 +30,13 @@ let ( let* ) = Lwt.bind
 let render_form ?user ?(rail_communities = []) () =
   let rendered = ref None in
   let pipeline =
-    Dream.set_secret Github_fixture.cookie_secret @@ Dream.memory_sessions
+    Dream.set_secret Github_fixture.cookie_secret
+    @@ Dream.memory_sessions
     @@ fun req ->
     rendered :=
-      Some (Earde.Community_settings_pages.new_community_form ?user ~rail_communities req);
+      Some
+        (Earde.Community_settings_pages.new_community_form ?user
+           ~rail_communities req);
     Dream.html ""
   in
   ignore
@@ -50,38 +52,44 @@ let form_marker =
 
 let wrapper_case =
   case
-    "authorized document: launch wrapper, local assets only, one script, \
-     one notification fetch, real rail"
-    (fun () ->
+    "authorized document: launch wrapper, local assets only, one script, one \
+     notification fetch, real rail" (fun () ->
       let page =
         render_form ~user:"ncl_admin"
-          ~rail_communities:[ Launch_fixture.nav_test_community ] ()
+          ~rail_communities:[ Launch_fixture.nav_test_community ]
+          ()
       in
       Html_assert.must page "<body class='launch-new-community'>";
       Html_assert.must page "<title>New Community - Earde</title>";
-      Html_assert.must page "<link rel='stylesheet' href='/static/css/earde.css'>";
+      Html_assert.must page
+        "<link rel='stylesheet' href='/static/css/earde.css'>";
       Html_assert.must page
         "<link rel='stylesheet' href='/static/css/mobile-gate.css'>";
-      Alcotest.(check int) "exactly two stylesheets" 2
+      Alcotest.(check int)
+        "exactly two stylesheets" 2
         (Html_assert.occurrences page "<link rel='stylesheet'");
       Html_assert.must_not page "tailwind";
       Html_assert.must_not page "fonts.googleapis";
       Html_assert.must_not page "shell.css";
       Html_assert.must_not page "create.css";
-      Alcotest.(check int) "no notification fetch (badge is server-rendered)" 0
+      Alcotest.(check int)
+        "no notification fetch (badge is server-rendered)" 0
         (Html_assert.occurrences page "/api/unread-notifs");
-      Alcotest.(check int) "exactly one behavior script" 1
+      Alcotest.(check int)
+        "exactly one behavior script" 1
         (Html_assert.occurrences page "function confirmModal");
       (* The dark rail: Feed (the only active marker), the real joined
          community, and the + Connect tile — nothing invented, no
          current-page tile for this utility. *)
-      Alcotest.(check int) "one active rail marker" 1
+      Alcotest.(check int)
+        "one active rail marker" 1
         (Html_assert.occurrences page "rail__marker");
       Html_assert.must page "href='/c/ocaml/ch/general'";
       Html_assert.must page "rail__item--add' href='/bring'";
       (* Factual administrative context precedes the create-shell marker;
          the page never sells itself as the onboarding flow. *)
-      Html_assert.order page "launch-newcomm-context" "<div class='create-shell'>";
+      Html_assert.order page "launch-newcomm-context"
+        "<div class='create-shell'>";
       Html_assert.must page "Administrator utility";
       Html_assert.must_not page "/projects/new")
 
@@ -89,9 +97,11 @@ let form_contract_case =
   case "the POST /communities form contract is byte-intact" (fun () ->
       let page = render_form ~user:"ncl_admin" () in
       Html_assert.must page form_marker;
-      Alcotest.(check int) "one creation form" 1
+      Alcotest.(check int)
+        "one creation form" 1
         (Html_assert.occurrences page "action='/communities'");
-      Alcotest.(check int) "one framework CSRF field" 1
+      Alcotest.(check int)
+        "one framework CSRF field" 1
         (Html_assert.occurrences page "dream.csrf");
       Html_assert.must page
         "<input type='hidden' name='section_count' id='section_count' \
@@ -116,7 +126,8 @@ let form_contract_case =
         "<button type='submit' class='create-btn create-btn--block'>Create \
          community</button>";
       Html_assert.must_not page "enctype";
-      Alcotest.(check int) "single form id" 1
+      Alcotest.(check int)
+        "single form id" 1
         (Html_assert.occurrences page "id='new-community-form'");
       (* The row-management scripts the server-side count loop depends on. *)
       Html_assert.must page "function addChannel()";
@@ -125,8 +136,7 @@ let form_contract_case =
       Html_assert.must page "function renumberSections()")
 
 let viewerless_render_case =
-  case "viewer-less render carries no script or notification wiring"
-    (fun () ->
+  case "viewer-less render carries no script or notification wiring" (fun () ->
       let page = render_form () in
       Html_assert.must page "<body class='launch-new-community'>";
       Html_assert.must_not page "/api/unread-notifs";
@@ -145,12 +155,11 @@ let handler_router =
 
 let run_get ?(session = []) target =
   let pipeline =
-    Dream.set_secret Github_fixture.cookie_secret @@ Dream.memory_sessions
+    Dream.set_secret Github_fixture.cookie_secret
+    @@ Dream.memory_sessions
     @@ fun req ->
     let* () =
-      Lwt_list.iter_s
-        (fun (k, v) -> Dream.set_session_field req k v)
-        session
+      Lwt_list.iter_s (fun (k, v) -> Dream.set_session_field req k v) session
     in
     handler_router req
   in
@@ -167,14 +176,22 @@ let is_redirect s = s = 301 || s = 302 || s = 303 || s = 307 || s = 308
 let check_denied_clean label body =
   List.iter
     (fun marker ->
-      Alcotest.(check bool) (label ^ ": no " ^ marker) false
+      Alcotest.(check bool)
+        (label ^ ": no " ^ marker)
+        false
         (Html_assert.contains body marker))
-    [ form_marker; "create-shell"; "launch-new-community"; "unread-notifs";
-      "rail__item"; "Start a community"; "dream.csrf" ]
+    [
+      form_marker;
+      "create-shell";
+      "launch-new-community";
+      "unread-notifs";
+      "rail__item";
+      "Start a community";
+      "dream.csrf";
+    ]
 
 let anonymous_gate_case =
-  case "anonymous GET keeps the /bring redirect and renders nothing"
-    (fun () ->
+  case "anonymous GET keeps the /bring redirect and renders nothing" (fun () ->
       let status, location, body = run_get "/new-community" in
       Alcotest.(check bool) "redirects" true (is_redirect status);
       Alcotest.(check (option string)) "location" (Some "/bring") location;
@@ -220,16 +237,17 @@ open Caqti_request.Infix
 let q_cleanup =
   List.map
     (fun sql -> (Caqti_type.unit ->. Caqti_type.unit) sql)
-    [ "DELETE FROM channels WHERE community_id IN \
-       (SELECT id FROM communities WHERE slug LIKE 'ncl-%')"
-    ; "DELETE FROM community_sections WHERE community_id IN \
-       (SELECT id FROM communities WHERE slug LIKE 'ncl-%')"
-    ; "DELETE FROM community_moderators WHERE community_id IN \
-       (SELECT id FROM communities WHERE slug LIKE 'ncl-%')"
-    ; "DELETE FROM community_members WHERE community_id IN \
-       (SELECT id FROM communities WHERE slug LIKE 'ncl-%')"
-    ; "DELETE FROM communities WHERE slug LIKE 'ncl-%'"
-    ; "DELETE FROM users WHERE username LIKE 'ncl_%'"
+    [
+      "DELETE FROM channels WHERE community_id IN (SELECT id FROM communities \
+       WHERE slug LIKE 'ncl-%')";
+      "DELETE FROM community_sections WHERE community_id IN (SELECT id FROM \
+       communities WHERE slug LIKE 'ncl-%')";
+      "DELETE FROM community_moderators WHERE community_id IN (SELECT id FROM \
+       communities WHERE slug LIKE 'ncl-%')";
+      "DELETE FROM community_members WHERE community_id IN (SELECT id FROM \
+       communities WHERE slug LIKE 'ncl-%')";
+      "DELETE FROM communities WHERE slug LIKE 'ncl-%'";
+      "DELETE FROM users WHERE username LIKE 'ncl_%'";
     ]
 
 let or_fail label = function
@@ -256,18 +274,17 @@ let db_case name f =
              let* () = cleanup () in
              Lwt.finalize
                (fun () -> f ~url (module C : Caqti_lwt.CONNECTION))
-               (fun () ->
-                 Lwt.finalize cleanup (fun () -> C.disconnect ()))))
+               (fun () -> Lwt.finalize cleanup (fun () -> C.disconnect ()))))
 
 let q_insert_user =
   (Caqti_type.string ->! Caqti_type.int)
-    "INSERT INTO users (username, email, password_hash, is_email_verified)
-     VALUES ($1, $1 || '@test.invalid', 'x', TRUE) RETURNING id"
+    "INSERT INTO users (username, email, password_hash, is_email_verified)\n\
+    \     VALUES ($1, $1 || '@test.invalid', 'x', TRUE) RETURNING id"
 
 let q_insert_community =
   (Caqti_type.(t4 string string bool string) ->! Caqti_type.int)
-    "INSERT INTO communities (slug, name, sections_enabled, visibility)
-     VALUES ($1, $2, $3, $4) RETURNING id"
+    "INSERT INTO communities (slug, name, sections_enabled, visibility)\n\
+    \     VALUES ($1, $2, $3, $4) RETURNING id"
 
 let q_add_member =
   (Caqti_type.(t2 int int) ->. Caqti_type.unit)
@@ -275,8 +292,8 @@ let q_add_member =
 
 let q_add_top_mod =
   (Caqti_type.(t2 int int) ->. Caqti_type.unit)
-    "INSERT INTO community_moderators (user_id, community_id, role) \
-     VALUES ($1, $2, 'top_mod')"
+    "INSERT INTO community_moderators (user_id, community_id, role) VALUES \
+     ($1, $2, 'top_mod')"
 
 (* Legacy creation authorizes on the DURABLE users.is_admin row; the session
    claim only decides whether that lookup is worth making. An admin fixture
@@ -306,23 +323,22 @@ let q_count_channels =
 
 let q_has_top_mod =
   (Caqti_type.(t2 int int) ->! Caqti_type.bool)
-    "SELECT EXISTS(SELECT 1 FROM community_moderators \
-     WHERE user_id = $1 AND community_id = $2 AND role = 'top_mod')"
+    "SELECT EXISTS(SELECT 1 FROM community_moderators WHERE user_id = $1 AND \
+     community_id = $2 AND role = 'top_mod')"
 
 let q_has_member =
   (Caqti_type.(t2 int int) ->! Caqti_type.bool)
-    "SELECT EXISTS(SELECT 1 FROM community_members \
-     WHERE user_id = $1 AND community_id = $2)"
+    "SELECT EXISTS(SELECT 1 FROM community_members WHERE user_id = $1 AND \
+     community_id = $2)"
 
 let run_get_db ~url ?(session = []) target =
   let pipeline =
-    Dream.sql_pool url @@ Dream.set_secret Github_fixture.cookie_secret
+    Dream.sql_pool url
+    @@ Dream.set_secret Github_fixture.cookie_secret
     @@ Dream.memory_sessions
     @@ fun req ->
     let* () =
-      Lwt_list.iter_s
-        (fun (k, v) -> Dream.set_session_field req k v)
-        session
+      Lwt_list.iter_s (fun (k, v) -> Dream.set_session_field req k v) session
     in
     handler_router req
   in
@@ -344,25 +360,22 @@ let form_body fields =
    inside the same request/session, exactly like the analytics harness. *)
 let run_post ~url ?(session = []) ?(with_csrf = true) form =
   let pipeline =
-    Dream.sql_pool url @@ Dream.set_secret Github_fixture.cookie_secret
+    Dream.sql_pool url
+    @@ Dream.set_secret Github_fixture.cookie_secret
     @@ Dream.memory_sessions
     @@ fun req ->
     let* () =
-      Lwt_list.iter_s
-        (fun (k, v) -> Dream.set_session_field req k v)
-        session
+      Lwt_list.iter_s (fun (k, v) -> Dream.set_session_field req k v) session
     in
     let fields =
-      if with_csrf then ("dream.csrf", Dream.csrf_token req) :: form
-      else form
+      if with_csrf then ("dream.csrf", Dream.csrf_token req) :: form else form
     in
     Dream.set_body req (form_body fields);
     Earde.Community_handlers.create_community_handler req
   in
   let request =
     Dream.request ~method_:`POST ~target:"/communities"
-      ~headers:
-        [ ("Content-Type", "application/x-www-form-urlencoded") ]
+      ~headers:[ ("Content-Type", "application/x-www-form-urlencoded") ]
       ""
   in
   let* response = pipeline request in
@@ -373,8 +386,7 @@ let run_post ~url ?(session = []) ?(with_csrf = true) form =
       body )
 
 let admin_session uid name =
-  [ ("user_id", string_of_int uid); ("username", name);
-    ("is_admin", "true") ]
+  [ ("user_id", string_of_int uid); ("username", name); ("is_admin", "true") ]
 
 let plain_session uid name =
   [ ("user_id", string_of_int uid); ("username", name) ]
@@ -383,41 +395,57 @@ let admin_get_case =
   db_case "global admin gets the real form with the real joined rail"
     (fun ~url (module C : Caqti_lwt.CONNECTION) ->
       let* uid = insert_admin (module C) "ncl_admin" in
-      let* cid = C.find q_insert_community ("ncl-joined", "NCL Joined", true, "public") in
+      let* cid =
+        C.find q_insert_community ("ncl-joined", "NCL Joined", true, "public")
+      in
       let* cid = or_fail "community" cid in
       let* r = C.exec q_add_member (uid, cid) in
       let* () = or_fail "membership" r in
       let* status, _, body =
-        run_get_db ~url ~session:(admin_session uid "ncl_admin")
+        run_get_db ~url
+          ~session:(admin_session uid "ncl_admin")
           "/new-community"
       in
       Alcotest.(check int) "status" 200 status;
-      Alcotest.(check bool) "launch wrapper" true
+      Alcotest.(check bool)
+        "launch wrapper" true
         (Html_assert.contains body "<body class='launch-new-community'>");
-      Alcotest.(check bool) "real form" true (Html_assert.contains body form_marker);
-      Alcotest.(check bool) "joined rail tile" true
+      Alcotest.(check bool)
+        "real form" true
+        (Html_assert.contains body form_marker);
+      Alcotest.(check bool)
+        "joined rail tile" true
         (Html_assert.contains body "href='/c/ncl-joined/ch/general'");
-      Alcotest.(check int) "no notification fetch (badge is server-rendered)" 0
+      Alcotest.(check int)
+        "no notification fetch (badge is server-rendered)" 0
         (Html_assert.occurrences body "/api/unread-notifs");
-      Alcotest.(check bool) "no shell.css" false (Html_assert.contains body "shell.css");
-      Alcotest.(check bool) "no create.css" false (Html_assert.contains body "create.css");
-      Alcotest.(check bool) "no tailwind" false (Html_assert.contains body "tailwind");
+      Alcotest.(check bool)
+        "no shell.css" false
+        (Html_assert.contains body "shell.css");
+      Alcotest.(check bool)
+        "no create.css" false
+        (Html_assert.contains body "create.css");
+      Alcotest.(check bool)
+        "no tailwind" false
+        (Html_assert.contains body "tailwind");
       Lwt.return_unit)
 
 let top_mod_get_case =
-  db_case "real top moderator without the admin flag keeps the /bring \
-           redirect"
+  db_case "real top moderator without the admin flag keeps the /bring redirect"
     (fun ~url (module C : Caqti_lwt.CONNECTION) ->
       let* uid = C.find q_insert_user "ncl_topmod" in
       let* uid = or_fail "top mod" uid in
-      let* cid = C.find q_insert_community ("ncl-modded", "NCL Modded", true, "public") in
+      let* cid =
+        C.find q_insert_community ("ncl-modded", "NCL Modded", true, "public")
+      in
       let* cid = or_fail "community" cid in
       let* r = C.exec q_add_top_mod (uid, cid) in
       let* () = or_fail "top mod row" r in
       let* r = C.exec q_add_member (uid, cid) in
       let* () = or_fail "membership" r in
       let* status, location, body =
-        run_get_db ~url ~session:(plain_session uid "ncl_topmod")
+        run_get_db ~url
+          ~session:(plain_session uid "ncl_topmod")
           "/new-community"
       in
       Alcotest.(check bool) "redirects" true (is_redirect status);
@@ -431,12 +459,17 @@ let post_forbidden_case =
       let* uid = C.find q_insert_user "ncl_pleb" in
       let* uid = or_fail "user" uid in
       let* status, _, body =
-        run_post ~url ~session:(plain_session uid "ncl_pleb")
-          [ ("name", "NCL Forged"); ("slug", "ncl-forged");
-            ("section_count", "0") ]
+        run_post ~url
+          ~session:(plain_session uid "ncl_pleb")
+          [
+            ("name", "NCL Forged");
+            ("slug", "ncl-forged");
+            ("section_count", "0");
+          ]
       in
       Alcotest.(check int) "403" 403 status;
-      Alcotest.(check bool) "denial copy" true
+      Alcotest.(check bool)
+        "denial copy" true
         (Html_assert.contains body
            "Forbidden: community creation is restricted to Earde \
             administrators.");
@@ -446,16 +479,19 @@ let post_forbidden_case =
       Lwt.return_unit)
 
 let post_validation_case =
-  db_case "missing name keeps the Validation Error message page" (fun ~url
-      (module C : Caqti_lwt.CONNECTION) ->
+  db_case "missing name keeps the Validation Error message page"
+    (fun ~url (module C : Caqti_lwt.CONNECTION) ->
       let* uid = insert_admin (module C) "ncl_admin2" in
       let* _status, _, body =
-        run_post ~url ~session:(admin_session uid "ncl_admin2")
+        run_post ~url
+          ~session:(admin_session uid "ncl_admin2")
           [ ("name", ""); ("slug", "ncl-noname"); ("section_count", "0") ]
       in
-      Alcotest.(check bool) "validation copy" true
+      Alcotest.(check bool)
+        "validation copy" true
         (Html_assert.contains body "Community name and URL slug are required.");
-      Alcotest.(check bool) "shared message wrapper" true
+      Alcotest.(check bool)
+        "shared message wrapper" true
         (Html_assert.contains body "launch-message-page");
       let* row = C.find_opt q_community_id "ncl-noname" in
       let* row = or_fail "lookup" row in
@@ -463,18 +499,19 @@ let post_validation_case =
       Lwt.return_unit)
 
 let post_missing_csrf_case =
-  db_case "admin POST without the framework token keeps the Form Error \
-           answer"
+  db_case "admin POST without the framework token keeps the Form Error answer"
     (fun ~url (module C : Caqti_lwt.CONNECTION) ->
       let* uid = insert_admin (module C) "ncl_admin3" in
       let* status, _, body =
         run_post ~url ~with_csrf:false
           ~session:(admin_session uid "ncl_admin3")
-          [ ("name", "NCL Stale"); ("slug", "ncl-stale");
-            ("section_count", "0") ]
+          [
+            ("name", "NCL Stale"); ("slug", "ncl-stale"); ("section_count", "0");
+          ]
       in
       Alcotest.(check int) "400" 400 status;
-      Alcotest.(check bool) "form error copy" true
+      Alcotest.(check bool)
+        "form error copy" true
         (Html_assert.contains body "Your form submission was invalid.");
       let* row = C.find_opt q_community_id "ncl-stale" in
       let* row = or_fail "lookup" row in
@@ -482,22 +519,27 @@ let post_missing_csrf_case =
       Lwt.return_unit)
 
 let post_success_case =
-  db_case "successful creation keeps its database state, redirect and \
-           duplicate-slug answer"
-    (fun ~url (module C : Caqti_lwt.CONNECTION) ->
+  db_case
+    "successful creation keeps its database state, redirect and duplicate-slug \
+     answer" (fun ~url (module C : Caqti_lwt.CONNECTION) ->
       let* uid = insert_admin (module C) "ncl_admin4" in
       let session = admin_session uid "ncl_admin4" in
       let* status, location, _ =
         run_post ~url ~session
-          [ ("name", "NCL Created"); ("slug", "ncl-created");
+          [
+            ("name", "NCL Created");
+            ("slug", "ncl-created");
             ("description", "A pass-19 fixture");
-            ("section_count", "1"); ("section_name_1", "Docs");
+            ("section_count", "1");
+            ("section_name_1", "Docs");
             ("section_sort_1", "top");
-            ("channel_count", "1"); ("channel_name_1", "lab") ]
+            ("channel_count", "1");
+            ("channel_name_1", "lab");
+          ]
       in
       Alcotest.(check bool) "redirects" true (is_redirect status);
-      Alcotest.(check (option string)) "canonical destination"
-        (Some "/c/ncl-created") location;
+      Alcotest.(check (option string))
+        "canonical destination" (Some "/c/ncl-created") location;
       let* cid = C.find_opt q_community_id "ncl-created" in
       let* cid = or_fail "created" cid in
       let cid =
@@ -520,19 +562,28 @@ let post_success_case =
       (* The pre-existing duplicate-slug answer is unchanged. *)
       let* dup_status, _, dup_body =
         run_post ~url ~session
-          [ ("name", "NCL Created Again"); ("slug", "ncl-created");
-            ("section_count", "0") ]
+          [
+            ("name", "NCL Created Again");
+            ("slug", "ncl-created");
+            ("section_count", "0");
+          ]
       in
       Alcotest.(check int) "duplicate 500" 500 dup_status;
-      Alcotest.(check bool) "duplicate copy" true
+      Alcotest.(check bool)
+        "duplicate copy" true
         (Html_assert.contains dup_body
-           "Could not create community. The URL slug may already be \
-            taken.");
+           "Could not create community. The URL slug may already be taken.");
       Lwt.return_unit)
 
 let db_suite =
-  [ admin_get_case; top_mod_get_case; post_forbidden_case;
-    post_validation_case; post_missing_csrf_case; post_success_case ]
+  [
+    admin_get_case;
+    top_mod_get_case;
+    post_forbidden_case;
+    post_validation_case;
+    post_missing_csrf_case;
+    post_success_case;
+  ]
 
 (* --- The review queue's degraded document --- *)
 
@@ -540,25 +591,28 @@ let degraded_render ?user ?(state = Home_review_fixture.phrp_state ()) () =
   Phrp.project_home_review_page ?user ~state ~feedback:None ()
 
 let launch_shell : Phrp.launch_shell =
-  { Phrp.community_record = Launch_fixture.nav_test_community;
+  {
+    Phrp.community_record = Launch_fixture.nav_test_community;
     rail_communities = [ Launch_fixture.nav_test_community ];
-    sidebar = (Earde.Html.static "<div class='ncl-sidebar-mark'></div>") }
+    sidebar = Earde.Html.static "<div class='ncl-sidebar-mark'></div>";
+  }
 
 let launch_render ?user ?(state = Home_review_fixture.phrp_state ()) () =
-  Phrp.project_home_review_page ?user ~shell:launch_shell ~state
-    ~feedback:None ()
+  Phrp.project_home_review_page ?user ~shell:launch_shell ~state ~feedback:None
+    ()
 
 let degraded_wrapper_case =
   case
-    "degraded document: neutral message wrapper, no chrome, no scripts, \
-     no notification wiring"
-    (fun () ->
+    "degraded document: neutral message wrapper, no chrome, no scripts, no \
+     notification wiring" (fun () ->
       let page = degraded_render () in
       Html_assert.must page "<body class='launch-message-page'>";
       Html_assert.must page "<title>Project home requests - Earde</title>";
       Html_assert.must page "<meta name='robots' content='noindex'>";
-      Html_assert.must page "<link rel='stylesheet' href='/static/css/earde.css'>";
-      Alcotest.(check int) "exactly one stylesheet" 1
+      Html_assert.must page
+        "<link rel='stylesheet' href='/static/css/earde.css'>";
+      Alcotest.(check int)
+        "exactly one stylesheet" 1
         (Html_assert.occurrences page "<link rel='stylesheet'");
       Html_assert.must_not page "tailwind";
       Html_assert.must_not page "fonts.googleapis";
@@ -576,10 +630,9 @@ let degraded_wrapper_case =
       Html_assert.must frag "Widget Kit")
 
 let degraded_viewer_independence_case =
-  case "degraded document ignores ?user (no viewer-derived chrome)"
-    (fun () ->
-      Alcotest.(check string) "anonymous = named viewer"
-        (degraded_render ())
+  case "degraded document ignores ?user (no viewer-derived chrome)" (fun () ->
+      Alcotest.(check string)
+        "anonymous = named viewer" (degraded_render ())
         (degraded_render ~user:"ncl_reviewer" ()))
 
 (* The pending-request list — every phrv-* element and form — is byte
@@ -596,13 +649,13 @@ let degraded_fragment_parity_case =
             | None -> Alcotest.fail "unterminated request list"
             | Some e -> String.sub html s (e - s))
       in
-      Alcotest.(check string) "identical request list"
+      Alcotest.(check string)
+        "identical request list"
         (slice (launch_render ()))
         (slice (degraded_render ())))
 
 let launch_branch_unchanged_case =
-  case "normal branch still renders the launch community document"
-    (fun () ->
+  case "normal branch still renders the launch community document" (fun () ->
       let page = launch_render ~user:"ncl_reviewer" () in
       Html_assert.must page "<body class='launch-project-home-review'>";
       (* The queue now renders inside the shared settings shell: the
@@ -618,18 +671,23 @@ let launch_branch_unchanged_case =
       Html_assert.must_not page "launch-message-page")
 
 let degraded_suite =
-  [ degraded_wrapper_case; degraded_viewer_independence_case;
-    degraded_fragment_parity_case; launch_branch_unchanged_case ]
+  [
+    degraded_wrapper_case;
+    degraded_viewer_independence_case;
+    degraded_fragment_parity_case;
+    launch_branch_unchanged_case;
+  ]
 
 let suites =
-    (* Final create-page callers (pass 19): the /new-community renderer
+  (* Final create-page callers (pass 19): the /new-community renderer
        and admin-gate contracts on the launch app chrome, the unchanged
        POST /communities authorization / validation / CSRF / success
        contracts (database-gated), and the review queue's degraded
        document on the neutral launch message wrapper with its feature
        fragment byte-matched against the launch community document. *)
-  [ ("new_community_launch_renderer", renderer_suite)
-  ; ("new_community_admin_gates", gate_suite)
-  ; ("new_community_handlers_db", db_suite)
-  ; ("project_home_review_degraded_page", degraded_suite)
+  [
+    ("new_community_launch_renderer", renderer_suite);
+    ("new_community_admin_gates", gate_suite);
+    ("new_community_handlers_db", db_suite);
+    ("project_home_review_degraded_page", degraded_suite);
   ]

@@ -18,74 +18,67 @@ open Html.Infix
    so no escaping is needed at these call sites; caller-controlled data
    (notably the callback query value) must never be passed in. *)
 
-type access =
-  | Onboarding_disabled
-  | Login_required
-  | Rollout_limited
-  | Ready
-
-type feedback =
-  | Connected
-  | Failed
+type access = Onboarding_disabled | Login_required | Rollout_limited | Ready
+type feedback = Connected | Failed
 
 (* Centred hero: 46px mark, serif 32 title, one-paragraph lead. *)
 let hero =
-  (Html.static "<div class='launch-hero'>\
-   <img src='/static/images/logo-mark.svg' alt='' width='46' height='46'>\
-   <h1 class='launch-hero__title'>Bring your open-source community</h1>\
-   <p class='launch-hero__lead'>Verify a project you maintain through \
-   GitHub, then give it a home on Earde &mdash; either a dedicated \
-   community, or as a connected project inside a broader existing \
-   community.</p>\
-   </div>")
+  Html.static
+    "<div class='launch-hero'><img src='/static/images/logo-mark.svg' alt='' \
+     width='46' height='46'><h1 class='launch-hero__title'>Bring your \
+     open-source community</h1><p class='launch-hero__lead'>Verify a project \
+     you maintain through GitHub, then give it a home on Earde &mdash; either \
+     a dedicated community, or as a connected project inside a broader \
+     existing community.</p></div>"
 
 (* The two home paths, explained side by side. Explainers only — the real
    choice is made later in the onboarding flow, so neither card links
    anywhere (and this page must never link the post-install route). *)
 let option_cards =
-  (Html.static "<div class='choice-grid launch-options'>\
-   <div class='card card--pad launch-option'>\
-   <p class='mono launch-option__kicker launch-option__kicker--moss'>OPTION A</p>\
-   <p class='launch-option__title'>Create a community home</p>\
-   <p class='card__blurb'>A dedicated public community for your project: \
-   live channels, forum sections and governance you steward.</p>\
-   </div>\
-   <div class='card card--pad launch-option'>\
-   <p class='mono launch-option__kicker launch-option__kicker--ochre'>OPTION B</p>\
-   <p class='launch-option__title'>Connect to an existing community</p>\
-   <p class='card__blurb'>Join a broader existing community as a verified \
-   connected project &mdash; no empty duplicate \
-   community.</p>\
-   </div></div>")
+  Html.static
+    "<div class='choice-grid launch-options'><div class='card card--pad \
+     launch-option'><p class='mono launch-option__kicker \
+     launch-option__kicker--moss'>OPTION A</p><p \
+     class='launch-option__title'>Create a community home</p><p \
+     class='card__blurb'>A dedicated public community for your project: live \
+     channels, forum sections and governance you steward.</p></div><div \
+     class='card card--pad launch-option'><p class='mono launch-option__kicker \
+     launch-option__kicker--ochre'>OPTION B</p><p \
+     class='launch-option__title'>Connect to an existing community</p><p \
+     class='card__blurb'>Join a broader existing community as a verified \
+     connected project &mdash; no empty duplicate community.</p></div></div>"
 
 (* Uppercase mono kicker + paragraph explainer block. *)
 let section ~heading body =
-  (Html.template "<div class='launch-explain__block'><h2 class='kicker'>%s</h2>\n\
+  Html.template
+    "<div class='launch-explain__block'><h2 class='kicker'>%s</h2>\n\
      <p class='launch-explain__text'>%s</p></div>"
-  [ heading
-  ; body ])
+    [ heading; body ]
 
 let connecting_section =
-  section ~heading:(Html.static "What connecting GitHub does")
-    (Html.static "Connecting GitHub installs the Earde GitHub App on a project you \
-     maintain. GitHub is used to verify project maintainers and their \
-     public repositories &mdash; nothing else. A project verified this way is \
-     shown as &ldquo;Project connected through GitHub&rdquo;.")
+  section
+    ~heading:(Html.static "What connecting GitHub does")
+    (Html.static
+       "Connecting GitHub installs the Earde GitHub App on a project you \
+        maintain. GitHub is used to verify project maintainers and their \
+        public repositories &mdash; nothing else. A project verified this way \
+        is shown as &ldquo;Project connected through GitHub&rdquo;.")
 
 let meaning_section =
-  section ~heading:(Html.static "What verification means")
-    (Html.static "&ldquo;Verified through GitHub&rdquo; means exactly that: within the \
-     last 30 days, a steward proved through GitHub that they can access the \
-     repository. After that the label reads &ldquo;Verification stale&rdquo; \
-     until a steward connects the project again. Connecting an installation does not \
-     automatically grant moderation rights in an existing Earde community, \
-     and it does not make any community the authoritative or endorsed place \
-     for a project.")
+  section
+    ~heading:(Html.static "What verification means")
+    (Html.static
+       "&ldquo;Verified through GitHub&rdquo; means exactly that: within the \
+        last 30 days, a steward proved through GitHub that they can access the \
+        repository. After that the label reads &ldquo;Verification \
+        stale&rdquo; until a steward connects the project again. Connecting an \
+        installation does not automatically grant moderation rights in an \
+        existing Earde community, and it does not make any community the \
+        authoritative or endorsed place for a project.")
 
 let explainers =
-  (Html.template "<div class='panel launch-explain'>%s%s</div>"
-  [ connecting_section
-  ; meaning_section ])
+  Html.template "<div class='panel launch-explain'>%s%s</div>"
+    [ connecting_section; meaning_section ]
 
 (* One-time callback feedback. At most one banner; None renders no element
    at all. The success copy claims only the connection itself — never a
@@ -97,23 +90,27 @@ let explainers =
 let feedback_html = function
   | None -> Html.empty
   | Some Connected ->
-      (Html.static "<div class='auth-alert'>GitHub installation connected \
-       successfully.</div>")
+      Html.static
+        "<div class='auth-alert'>GitHub installation connected \
+         successfully.</div>"
   | Some Failed ->
-      (Html.static "<div class='auth-alert auth-alert--error'>We couldn't complete the \
-       GitHub connection. Please try again.</div>")
+      Html.static
+        "<div class='auth-alert auth-alert--error'>We couldn't complete the \
+         GitHub connection. Please try again.</div>"
 
 let github_icon =
-  (Html.static "<svg width='20' height='20' viewBox='0 0 16 16' fill='currentColor' \
-   aria-hidden='true'><path d='M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 \
-   5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 \
-   1.08.58 1.23.82.72 1.21 1.87.87 \
-   2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 \
-   0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 \
-   7.6 0 0 1 4 0c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 \
-   2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 \
-   3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 \
-   .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z'/></svg>")
+  Html.static
+    "<svg width='20' height='20' viewBox='0 0 16 16' fill='currentColor' \
+     aria-hidden='true'><path d='M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 \
+     7.59.4.07.55-.17.55-.38 \
+     0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 \
+     1.08.58 1.23.82.72 1.21 1.87.87 \
+     2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 \
+     0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 \
+     0 0 1 4 0c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 \
+     1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 \
+     1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 \
+     8c0-4.42-3.58-8-8-8Z'/></svg>"
 
 (* The one start action of this page. Deliberately parameter-free: no
    hidden user, state, installation, client, callback, or redirect field —
@@ -121,23 +118,28 @@ let github_icon =
    access and same-origin checks. The opening <form> tag is byte-exact test
    contract (Gh_bring_browser_post posts the rendered form). *)
 let start_form =
-  (Html.static "<form method='POST' action='/integrations/github/install/start'>\
-   <button type='submit' class='btn btn--dark'>") ++ github_icon
-  ++ (Html.static " Connect a GitHub project</button></form>")
+  Html.static
+    "<form method='POST' action='/integrations/github/install/start'><button \
+     type='submit' class='btn btn--dark'>"
+  ++ github_icon
+  ++ Html.static " Connect a GitHub project</button></form>"
 
 let access_html = function
   | Onboarding_disabled ->
-      (Html.static "<div class='auth-alert'>Project onboarding is currently unavailable. \
-       This page will be updated when project verification opens.</div>")
+      Html.static
+        "<div class='auth-alert'>Project onboarding is currently unavailable. \
+         This page will be updated when project verification opens.</div>"
   | Login_required ->
-      (Html.static "<div class='auth-alert'>An Earde account is required to connect a \
-       project. <a href='/login' class='auth-link'>Log in</a> to \
-       continue.</div>")
+      Html.static
+        "<div class='auth-alert'>An Earde account is required to connect a \
+         project. <a href='/login' class='auth-link'>Log in</a> to \
+         continue.</div>"
   | Rollout_limited ->
       (* Deliberately about the rollout, not the viewer: nothing here may
          imply missing GitHub permissions or name a configuration flag. *)
-      (Html.static "<div class='auth-alert'>GitHub project onboarding is currently \
-       limited to the early-access rollout. Check back soon.</div>")
+      Html.static
+        "<div class='auth-alert'>GitHub project onboarding is currently \
+         limited to the early-access rollout. Check back soon.</div>"
   | Ready -> start_form
 
 (* Context-aware navigation, real routes only. Logged-in viewers already
@@ -145,25 +147,26 @@ let access_html = function
 let nav_html ~user =
   match user with
   | Some _ ->
-      (Html.static "<div class='auth-foot'><a href='/feed' class='auth-link'>Back to your \
-       feed</a></div>")
+      Html.static
+        "<div class='auth-foot'><a href='/feed' class='auth-link'>Back to your \
+         feed</a></div>"
   | None ->
-      (Html.static "<div class='auth-foot'><a href='/feed' class='auth-link'>Browse the \
-       public feed</a></div>\n\
-       <div class='auth-foot'>Already on Earde? <a href='/login' \
-       class='auth-link'>Log in</a> &middot; New here? <a href='/signup' \
-       class='auth-link'>Sign up</a></div>")
+      Html.static
+        "<div class='auth-foot'><a href='/feed' class='auth-link'>Browse the \
+         public feed</a></div>\n\
+         <div class='auth-foot'>Already on Earde? <a href='/login' \
+         class='auth-link'>Log in</a> &middot; New here? <a href='/signup' \
+         class='auth-link'>Sign up</a></div>"
 
 let footnote =
-  (Html.static "<p class='mono launch-footnote'>Reads public-repository metadata only \
-   &middot; no source-code or write access</p>")
+  Html.static
+    "<p class='mono launch-footnote'>Reads public-repository metadata only \
+     &middot; no source-code or write access</p>"
 
 let bring_page ?user ?request ~access ~feedback () =
   let cta =
-    (Html.template "<div class='launch-cta'>%s\n%s\n%s</div>"
-  [ (access_html access)
-  ; (nav_html ~user)
-  ; footnote ])
+    Html.template "<div class='launch-cta'>%s\n%s\n%s</div>"
+      [ access_html access; nav_html ~user; footnote ]
   in
   let content =
     Html.join (Html.static "\n")

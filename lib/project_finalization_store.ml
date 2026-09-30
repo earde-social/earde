@@ -104,13 +104,9 @@ type snapshot_repo = {
 let lock_draft_query =
   let open Caqti_request.Infix in
   (Caqti_type.(t2 int64 int) ->? Caqti_type.int64)
-  "SELECT github_installation_record_id \
-   FROM project_onboarding_drafts \
-   WHERE id = $1 \
-     AND user_id = $2 \
-     AND status = 'active' \
-     AND expires_at > NOW() \
-   FOR UPDATE"
+    "SELECT github_installation_record_id FROM project_onboarding_drafts WHERE \
+     id = $1 AND user_id = $2 AND status = 'active' AND expires_at > NOW() FOR \
+     UPDATE"
 
 (* The draft's exact installation row, locked so its identity and status
    cannot change until finalization commits — the namespace triple copied
@@ -118,29 +114,25 @@ let lock_draft_query =
 let lock_installation_query =
   let open Caqti_request.Infix in
   (Caqti_type.int64 ->? Caqti_type.(t3 int64 string string))
-  "SELECT github_account_id, github_account_login, github_account_type \
-   FROM github_installations \
-   WHERE id = $1 AND status = 'active' AND revoked_at IS NULL \
-   FOR UPDATE"
+    "SELECT github_account_id, github_account_login, github_account_type FROM \
+     github_installations WHERE id = $1 AND status = 'active' AND revoked_at \
+     IS NULL FOR UPDATE"
 
 (* The complete current snapshot, locked under the already-held draft lock
    (never the other way around). *)
 let lock_snapshot_query =
   let open Caqti_request.Infix in
   (Caqti_type.int64
-   ->* Caqti_type.(
-         t2
-           (t2 (t2 int64 int) (t2 int64 int64))
-           (t2
-              (t4 string string string string)
-              (t2 (t2 (option string) string) (t3 bool bool bool)))))
-  "SELECT id, position, github_repository_id, github_owner_id, \
-          owner_login, name, full_name, html_url, description, \
-          default_branch, is_archived, is_selected, is_primary \
-   FROM project_onboarding_draft_repositories \
-   WHERE draft_id = $1 \
-   ORDER BY position \
-   FOR UPDATE"
+  ->* Caqti_type.(
+        t2
+          (t2 (t2 int64 int) (t2 int64 int64))
+          (t2
+             (t4 string string string string)
+             (t2 (t2 (option string) string) (t3 bool bool bool)))))
+    "SELECT id, position, github_repository_id, github_owner_id, owner_login, \
+     name, full_name, html_url, description, default_branch, is_archived, \
+     is_selected, is_primary FROM project_onboarding_draft_repositories WHERE \
+     draft_id = $1 ORDER BY position FOR UPDATE"
 
 (* A normally completed draft is already unavailable above; an existing
    project referencing a STILL-ACTIVE locked draft is durable corruption,
@@ -148,8 +140,8 @@ let lock_snapshot_query =
 let draft_already_finalized_query =
   let open Caqti_request.Infix in
   (Caqti_type.int64 ->? Caqti_type.bool)
-  "SELECT TRUE FROM open_source_projects \
-   WHERE source_onboarding_draft_id = $1"
+    "SELECT TRUE FROM open_source_projects WHERE source_onboarding_draft_id = \
+     $1"
 
 (* The slug's unique constraint arbitrates concurrent creation: zero
    returned rows means the slug is taken, and the transaction rolls back
@@ -159,17 +151,13 @@ let insert_project_query =
   (Caqti_type.(
      t2
        (t2 (t2 int64 string) (t2 string (option string)))
-       (t2
-          (t2 (option string) string)
-          (t2 (t2 int64 string) (t2 string int))))
-   ->? Caqti_type.int64)
-  "INSERT INTO open_source_projects \
-     (source_onboarding_draft_id, name, slug, description, website_url, \
-      kind, forge, forge_namespace_id, forge_namespace_login, \
-      forge_namespace_type, verification_status, created_by_user_id) \
-   VALUES ($1, $2, $3, $4, $5, $6, 'github', $7, $8, $9, 'verified', $10) \
-   ON CONFLICT (slug) DO NOTHING \
-   RETURNING id"
+       (t2 (t2 (option string) string) (t2 (t2 int64 string) (t2 string int))))
+  ->? Caqti_type.int64)
+    "INSERT INTO open_source_projects (source_onboarding_draft_id, name, slug, \
+     description, website_url, kind, forge, forge_namespace_id, \
+     forge_namespace_login, forge_namespace_type, verification_status, \
+     created_by_user_id) VALUES ($1, $2, $3, $4, $5, $6, 'github', $7, $8, $9, \
+     'verified', $10) ON CONFLICT (slug) DO NOTHING RETURNING id"
 
 (* The permanent authorization record: the caller plus the locked
    installation record as proof — never created_by_user_id and never
@@ -178,12 +166,10 @@ let insert_project_query =
 let insert_steward_query =
   let open Caqti_request.Infix in
   (Caqti_type.(t4 int64 int int64 int64) ->? Caqti_type.int64)
-  "INSERT INTO project_stewards \
-     (project_id, user_id, github_installation_record_id, role, \
-      github_verified_at) \
-   SELECT $1, $2, $3, 'steward', d.verified_at \
-   FROM project_onboarding_drafts d WHERE d.id = $4 \
-   RETURNING project_id"
+    "INSERT INTO project_stewards (project_id, user_id, \
+     github_installation_record_id, role, github_verified_at) SELECT $1, $2, \
+     $3, 'steward', d.verified_at FROM project_onboarding_drafts d WHERE d.id \
+     = $4 RETURNING project_id"
 
 (* A claim whose project has no steward with fresh GitHub evidence no
    longer excludes anyone: its authority depended on access nobody has
@@ -202,17 +188,13 @@ let insert_steward_query =
 let release_stale_claim_query =
   let open Caqti_request.Infix in
   (Caqti_type.int64 ->. Caqti_type.unit)
-  "UPDATE project_repositories r \
-   SET released_at = GREATEST(NOW(), r.created_at), \
-       updated_at = GREATEST(NOW(), r.updated_at) \
-   WHERE r.released_at IS NULL \
-     AND r.project_id = ( \
-       SELECT c.project_id FROM project_repositories c \
-       WHERE c.github_repository_id = $1 AND c.released_at IS NULL) \
-     AND NOT EXISTS ( \
-       SELECT 1 FROM project_stewards s \
-       WHERE s.project_id = r.project_id \
-         AND github_evidence_is_fresh(s.github_verified_at))"
+    "UPDATE project_repositories r SET released_at = GREATEST(NOW(), \
+     r.created_at), updated_at = GREATEST(NOW(), r.updated_at) WHERE \
+     r.released_at IS NULL AND r.project_id = ( SELECT c.project_id FROM \
+     project_repositories c WHERE c.github_repository_id = $1 AND \
+     c.released_at IS NULL) AND NOT EXISTS ( SELECT 1 FROM project_stewards s \
+     WHERE s.project_id = r.project_id AND \
+     github_evidence_is_fresh(s.github_verified_at))"
 
 (* The projects currently holding any selected repository, locked in
    ascending id order before any release is decided, so a concurrent
@@ -224,15 +206,11 @@ let release_stale_claim_query =
 let lock_claim_holders_query =
   let open Caqti_request.Infix in
   (Caqti_type.int64 ->* Caqti_type.int64)
-  "SELECT p.id FROM open_source_projects p \
-   WHERE p.id IN ( \
-     SELECT c.project_id \
-     FROM project_repositories c \
-     JOIN project_onboarding_draft_repositories dr \
-       ON dr.github_repository_id = c.github_repository_id \
-     WHERE dr.draft_id = $1 AND dr.is_selected AND c.released_at IS NULL) \
-   ORDER BY p.id \
-   FOR UPDATE"
+    "SELECT p.id FROM open_source_projects p WHERE p.id IN ( SELECT \
+     c.project_id FROM project_repositories c JOIN \
+     project_onboarding_draft_repositories dr ON dr.github_repository_id = \
+     c.github_repository_id WHERE dr.draft_id = $1 AND dr.is_selected AND \
+     c.released_at IS NULL) ORDER BY p.id FOR UPDATE"
 
 (* One prepared insert reused per selected row. The global unique
    constraint on github_repository_id arbitrates concurrent claims: zero
@@ -244,13 +222,12 @@ let insert_repository_query =
      t2
        (t2 (t2 int64 int) (t2 int64 string))
        (t2 (t2 string (option string)) (t2 string (t2 bool bool))))
-   ->? Caqti_type.int64)
-  "INSERT INTO project_repositories \
-     (project_id, position, github_repository_id, full_name, html_url, \
-      description, default_branch, is_primary, is_archived) \
-   VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) \
-   ON CONFLICT (github_repository_id) WHERE released_at IS NULL DO NOTHING \
-   RETURNING id"
+  ->? Caqti_type.int64)
+    "INSERT INTO project_repositories (project_id, position, \
+     github_repository_id, full_name, html_url, description, default_branch, \
+     is_primary, is_archived) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) ON \
+     CONFLICT (github_repository_id) WHERE released_at IS NULL DO NOTHING \
+     RETURNING id"
 
 (* Only lifecycle and modification move: ownership, installation record,
    expiry, and created_at are other slices' facts. The GREATEST clamp
@@ -263,13 +240,9 @@ let insert_repository_query =
 let complete_draft_query =
   let open Caqti_request.Infix in
   (Caqti_type.int64 ->? Caqti_type.bool)
-  "UPDATE project_onboarding_drafts \
-   SET status = 'completed', \
-       completed_at = GREATEST(NOW(), created_at), \
-       cancelled_at = NULL, \
-       updated_at = GREATEST(NOW(), created_at) \
-   WHERE id = $1 \
-   RETURNING TRUE"
+    "UPDATE project_onboarding_drafts SET status = 'completed', completed_at = \
+     GREATEST(NOW(), created_at), cancelled_at = NULL, updated_at = \
+     GREATEST(NOW(), created_at) WHERE id = $1 RETURNING TRUE"
 
 (* === snapshot validation === *)
 
@@ -298,8 +271,8 @@ let validate_snapshot ~account_id rows =
         && String.equal html_url (canonical_html_url ~owner_login ~name)
         && valid_branch default_branch
         && (match repo_description with
-           | None -> true
-           | Some text -> valid_description text)
+          | None -> true
+          | Some text -> valid_description text)
         && ((not is_primary) || is_selected)
       then
         Ok
@@ -382,17 +355,17 @@ let finalize (module C : Caqti_lwt.CONNECTION) ~user_id ~draft_id ~identity =
           C.exec release_stale_claim_query repo.github_repository_id
           >>= function
           | Error _ -> rollback_to Storage_error
-          | Ok () ->
-          C.find_opt insert_repository_query
-            ( ( (project_row_id, position),
-                (repo.github_repository_id, repo.full_name) ),
-              ( (repo.html_url, repo.repo_description),
-                (repo.default_branch, (is_primary, repo.is_archived)) ) )
-          >>= function
-          | Error _ -> rollback_to Storage_error
-          | Ok None -> rollback_to Repository_already_connected
-          | Ok (Some _) -> copy_repositories project_row_id (position + 1) rest
-          )
+          | Ok () -> (
+              C.find_opt insert_repository_query
+                ( ( (project_row_id, position),
+                    (repo.github_repository_id, repo.full_name) ),
+                  ( (repo.html_url, repo.repo_description),
+                    (repo.default_branch, (is_primary, repo.is_archived)) ) )
+              >>= function
+              | Error _ -> rollback_to Storage_error
+              | Ok None -> rollback_to Repository_already_connected
+              | Ok (Some _) ->
+                  copy_repositories project_row_id (position + 1) rest))
     in
 
     let create_rows ~installation_record_id ~account_id ~account_login
@@ -402,8 +375,8 @@ let finalize (module C : Caqti_lwt.CONNECTION) ~user_id ~draft_id ~identity =
             ( Project_identity.slug identity,
               Project_identity.description identity ) ),
           ( ( Project_identity.website_url identity,
-              Project_identity.string_of_kind
-                (Project_identity.kind identity) ),
+              Project_identity.string_of_kind (Project_identity.kind identity)
+            ),
             ((account_id, account_login), (account_type, user_id)) ) )
       >>= function
       | Error _ -> rollback_to Storage_error
@@ -432,10 +405,10 @@ let finalize (module C : Caqti_lwt.CONNECTION) ~user_id ~draft_id ~identity =
                cancelled) collapses into one error so the store cannot be
                used to probe drafts. *)
             rollback_to Draft_unavailable
-        | Ok (Some installation_record_id) ->
+        | Ok (Some installation_record_id) -> (
             if not (positive installation_record_id) then
               rollback_to Inconsistent_data
-            else (
+            else
               C.find_opt lock_installation_query installation_record_id
               >>= function
               | Error _ -> rollback_to Storage_error
@@ -446,21 +419,19 @@ let finalize (module C : Caqti_lwt.CONNECTION) ~user_id ~draft_id ~identity =
               | Ok (Some (account_id, account_login, account_type_raw)) -> (
                   match account_type_of_db account_type_raw with
                   | None -> rollback_to Inconsistent_data
-                  | Some parsed_account_type ->
-                      if
-                        not (positive account_id && valid_segment account_login)
+                  | Some parsed_account_type -> (
+                      if not (positive account_id && valid_segment account_login)
                       then rollback_to Inconsistent_data
                       else if
                         (* A personal namespace cannot carry the
                            "GitHub organization" kind; every other kind is
                            namespace-flexible. *)
                         Project_identity.kind identity
-                          = Project_identity.Organization
+                        = Project_identity.Organization
                         && parsed_account_type = Github_onboarding.User
                       then rollback_to Kind_namespace_mismatch
-                      else (
-                        C.collect_list lock_snapshot_query draft_id
-                        >>= function
+                      else
+                        C.collect_list lock_snapshot_query draft_id >>= function
                         | Error _ -> rollback_to Storage_error
                         | Ok rows -> (
                             match validate_snapshot ~account_id rows with

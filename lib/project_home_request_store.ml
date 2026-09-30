@@ -71,14 +71,10 @@ let positive id = Int64.compare id 0L > 0
 let lock_project_query =
   let open Caqti_request.Infix in
   (Caqti_type.(t2 string int) ->? Caqti_type.(t3 int64 string string))
-  "SELECT p.id, p.slug, p.verification_status \
-   FROM open_source_projects p \
-   JOIN project_stewards s ON s.project_id = p.id \
-   WHERE p.slug = $1 \
-     AND p.verification_status = 'verified' \
-     AND s.user_id = $2 \
-     AND github_evidence_is_fresh(s.github_verified_at) \
-   FOR UPDATE OF p"
+    "SELECT p.id, p.slug, p.verification_status FROM open_source_projects p \
+     JOIN project_stewards s ON s.project_id = p.id WHERE p.slug = $1 AND \
+     p.verification_status = 'verified' AND s.user_id = $2 AND \
+     github_evidence_is_fresh(s.github_verified_at) FOR UPDATE OF p"
 
 (* The exact target community, locked second under the held project lock.
    Eligibility is entirely in current durable columns: a network community
@@ -91,16 +87,12 @@ let lock_project_query =
 let lock_community_query =
   let open Caqti_request.Infix in
   (Caqti_type.int
-   ->? Caqti_type.(
-         t2 (t2 (t2 int string) (t2 string string)) (t3 bool bool bool)))
-  "SELECT id, slug, visibility, onboarding_state, \
-          is_network_community, indexable, discoverable \
-   FROM communities \
-   WHERE id = $1 \
-     AND is_network_community \
-     AND onboarding_state = 'published' \
-     AND visibility = 'public' \
-   FOR UPDATE"
+  ->? Caqti_type.(
+        t2 (t2 (t2 int string) (t2 string string)) (t3 bool bool bool)))
+    "SELECT id, slug, visibility, onboarding_state, is_network_community, \
+     indexable, discoverable FROM communities WHERE id = $1 AND \
+     is_network_community AND onboarding_state = 'published' AND visibility = \
+     'public' FOR UPDATE"
 
 (* The conflict target is the partial unique active-home index: zero
    returned rows means an active (pending or accepted) home already holds
@@ -111,27 +103,20 @@ let lock_community_query =
    removal time) is written explicitly. *)
 let insert_relation_query =
   let open Caqti_request.Infix in
-  (Caqti_type.(t2 (t2 int64 int) (t2 int (option string)))
-   ->? Caqti_type.int64)
-  "INSERT INTO community_projects \
-     (project_id, community_id, relation_type, status, \
-      requested_by_user_id, reviewed_by_user_id, request_note, \
-      reviewed_at, removed_at) \
-   VALUES ($1, $2, 'home', 'pending', $3, NULL, $4, NULL, NULL) \
-   ON CONFLICT (project_id) \
-     WHERE relation_type = 'home' AND status IN ('pending', 'accepted') \
-   DO NOTHING \
-   RETURNING id"
+  (Caqti_type.(t2 (t2 int64 int) (t2 int (option string))) ->? Caqti_type.int64)
+    "INSERT INTO community_projects (project_id, community_id, relation_type, \
+     status, requested_by_user_id, reviewed_by_user_id, request_note, \
+     reviewed_at, removed_at) VALUES ($1, $2, 'home', 'pending', $3, NULL, $4, \
+     NULL, NULL) ON CONFLICT (project_id) WHERE relation_type = 'home' AND \
+     status IN ('pending', 'accepted') DO NOTHING RETURNING id"
 
 let create (module C : Caqti_lwt.CONNECTION) ~user_id ~project_slug
     ~target_community_id ~relation =
   if user_id <= 0 then Lwt.return (Error Invalid_user_id)
   else if not (canonical_project_slug project_slug) then
     Lwt.return (Error Invalid_project_slug)
-  else if target_community_id <= 0 then
-    Lwt.return (Error Invalid_community_id)
-  else if
-    Project_home_relation.status relation <> Project_home_relation.Pending
+  else if target_community_id <= 0 then Lwt.return (Error Invalid_community_id)
+  else if Project_home_relation.status relation <> Project_home_relation.Pending
   then Lwt.return (Error Invalid_relation)
   else
     (* As in the sibling stores, every Caqti error is dropped payload-free
@@ -148,16 +133,15 @@ let create (module C : Caqti_lwt.CONNECTION) ~user_id ~project_slug
                creator without stewardship, stale, revoked) collapses into
                one error so the store cannot probe projects. *)
             rollback_to Project_unavailable
-        | Ok (Some (project_row_id, stored_slug, stored_verification)) ->
+        | Ok (Some (project_row_id, stored_slug, stored_verification)) -> (
             if
               not
                 (positive project_row_id
                 && String.equal stored_slug project_slug
                 && String.equal stored_verification "verified")
             then rollback_to Inconsistent_data
-            else (
-              C.find_opt lock_community_query target_community_id
-              >>= function
+            else
+              C.find_opt lock_community_query target_community_id >>= function
               | Error _ -> rollback_to Storage_error
               | Ok None ->
                   (* Missing, legacy, setup draft, unpublished, fully
@@ -167,9 +151,9 @@ let create (module C : Caqti_lwt.CONNECTION) ~user_id ~project_slug
                   rollback_to Community_unavailable
               | Ok
                   (Some
-                    ( ( (community_row_id, community_slug),
-                        (visibility_raw, onboarding_raw) ),
-                      (is_network_community, indexable, discoverable) )) ->
+                     ( ( (community_row_id, community_slug),
+                         (visibility_raw, onboarding_raw) ),
+                       (is_network_community, indexable, discoverable) )) -> (
                   (* Durable data the later workflow relies on, validated
                      through the closed variants and the shared lifecycle
                      rule (a published network community must be exactly
@@ -182,29 +166,30 @@ let create (module C : Caqti_lwt.CONNECTION) ~user_id ~project_slug
                     && is_network_community
                     &&
                     match
-                      ( Community_types.community_visibility_of_string visibility_raw,
+                      ( Community_types.community_visibility_of_string
+                          visibility_raw,
                         Community_types.community_onboarding_state_of_string
                           onboarding_raw )
                     with
                     | Some visibility, Ok onboarding_state ->
                         Network_communities.lifecycle_state_valid
-                          ~is_network_community ~onboarding_state
-                          ~visibility ~indexable ~discoverable
+                          ~is_network_community ~onboarding_state ~visibility
+                          ~indexable ~discoverable
                     | None, _ | _, Error _ -> false
                   in
                   if not durable_ok then rollback_to Inconsistent_data
-                  else (
+                  else
                     C.find_opt insert_relation_query
                       ( (project_row_id, community_row_id),
-                        ( user_id,
-                          Project_home_relation.request_note relation ) )
+                        (user_id, Project_home_relation.request_note relation)
+                      )
                     >>= function
                     | Error _ -> rollback_to Storage_error
                     | Ok None -> rollback_to Active_home_exists
-                    | Ok (Some new_relation_id) ->
+                    | Ok (Some new_relation_id) -> (
                         if not (positive new_relation_id) then
                           rollback_to Inconsistent_data
-                        else (
+                        else
                           (* The audit event rides the same transaction:
                              inserted only once the pending relation is
                              validated, and any audit failure rolls the
@@ -213,8 +198,7 @@ let create (module C : Caqti_lwt.CONNECTION) ~user_id ~project_slug
                           Project_home_audit.insert
                             (module C)
                             ~action:Project_home_audit.Home_requested
-                            ~actor_user_id:user_id
-                            ~project_id:project_row_id
+                            ~actor_user_id:user_id ~project_id:project_row_id
                             ~community_id:community_row_id
                             ~relation_id:new_relation_id
                           >>= function
@@ -239,19 +223,17 @@ let create (module C : Caqti_lwt.CONNECTION) ~user_id ~project_slug
                                 ~community_id:community_row_id
                               >>= function
                               | Error
-                                  Project_home_notifications
-                                  .Inconsistent_data ->
+                                  Project_home_notifications.Inconsistent_data
+                                ->
                                   rollback_to Inconsistent_data
-                              | Error
-                                  Project_home_notifications.Storage_error
+                              | Error Project_home_notifications.Storage_error
                                 ->
                                   rollback_to Storage_error
                               | Ok top_moderator_ids -> (
                                   Project_home_notifications.insert_many
                                     (module C)
                                     ~kind:
-                                      Project_home_notifications
-                                      .Home_requested
+                                      Project_home_notifications.Home_requested
                                     ~actor_user_id:user_id
                                     ~project_id:project_row_id
                                     ~community_id:community_row_id
@@ -263,8 +245,8 @@ let create (module C : Caqti_lwt.CONNECTION) ~user_id ~project_slug
                                       .Inconsistent_data ->
                                       rollback_to Inconsistent_data
                                   | Error
-                                      Project_home_notifications
-                                      .Storage_error ->
+                                      Project_home_notifications.Storage_error
+                                    ->
                                       rollback_to Storage_error
                                   | Ok () -> (
                                       C.commit () >>= function
@@ -273,7 +255,5 @@ let create (module C : Caqti_lwt.CONNECTION) ~user_id ~project_slug
                                       | Ok () ->
                                           Lwt.return
                                             (Ok
-                                               {
-                                                 relation_id =
-                                                   new_relation_id;
-                                               }))))))))
+                                               { relation_id = new_relation_id })
+                                      )))))))

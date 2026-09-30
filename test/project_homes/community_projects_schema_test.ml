@@ -14,7 +14,6 @@ let ( let* ) = Lwt.bind
 open Caqti_request.Infix
 
 let or_fail = Db_fixture.or_fail
-
 let reject = Db_fixture.reject
 
 (* Projects first (their deletion cascades community_projects rows),
@@ -22,161 +21,164 @@ let reject = Db_fixture.reject
 let q_cleanup =
   List.map
     (fun sql -> (Caqti_type.unit ->. Caqti_type.unit) sql)
-    [ "DELETE FROM project_home_audit_events \
-       WHERE project_id IN \
-         (SELECT id FROM open_source_projects \
-          WHERE forge_namespace_id BETWEEN 944100001 AND 944100999)"
-      ; "DELETE FROM open_source_projects \
-       WHERE forge_namespace_id BETWEEN 944100001 AND 944100999"
-    ; "DELETE FROM communities WHERE slug LIKE 'cprj-%'"
-    ; "DELETE FROM users WHERE username LIKE 'cprj_%'"
+    [
+      "DELETE FROM project_home_audit_events WHERE project_id IN (SELECT id \
+       FROM open_source_projects WHERE forge_namespace_id BETWEEN 944100001 \
+       AND 944100999)";
+      "DELETE FROM open_source_projects WHERE forge_namespace_id BETWEEN \
+       944100001 AND 944100999";
+      "DELETE FROM communities WHERE slug LIKE 'cprj-%'";
+      "DELETE FROM users WHERE username LIKE 'cprj_%'";
     ]
 
 let q_insert_user =
   (Caqti_type.string ->! Caqti_type.int)
-  "INSERT INTO users (username, email, password_hash, is_email_verified)
-   VALUES ($1, $1 || '@test.invalid', 'x', TRUE) RETURNING id"
+    "INSERT INTO users (username, email, password_hash, is_email_verified)\n\
+    \   VALUES ($1, $1 || '@test.invalid', 'x', TRUE) RETURNING id"
 
 let q_insert_community =
   (Caqti_type.string ->! Caqti_type.int)
-  "INSERT INTO communities (slug, name) VALUES ($1, $1) RETURNING id"
+    "INSERT INTO communities (slug, name) VALUES ($1, $1) RETURNING id"
 
 let q_insert_project =
   (Caqti_type.(t2 string int64) ->! Caqti_type.int64)
-  "INSERT INTO open_source_projects
-     (name, slug, kind, forge_namespace_id, forge_namespace_login,
-      forge_namespace_type)
-   VALUES ('Cprj fixture', $1, 'project', $2, 'cprj-owner', 'user')
-   RETURNING id"
+    "INSERT INTO open_source_projects\n\
+    \     (name, slug, kind, forge_namespace_id, forge_namespace_login,\n\
+    \      forge_namespace_type)\n\
+    \   VALUES ('Cprj fixture', $1, 'project', $2, 'cprj-owner', 'user')\n\
+    \   RETURNING id"
 
 (* Positive ids guaranteed absent, for the FK-failure probes. *)
 let q_absent_community_id =
   (Caqti_type.unit ->! Caqti_type.int)
-  "SELECT COALESCE(MAX(id), 0) + 1000000 FROM communities"
+    "SELECT COALESCE(MAX(id), 0) + 1000000 FROM communities"
 
 (* Full-width relation insert. reviewed_at/removed_at arrive as
    second offsets from the row's own NOW() default (NULL stays NULL),
    so probes can produce exact-equal, later, and earlier-than-created
    timestamps without leaving SQL time. *)
 let q_insert_relation =
-  (Caqti_type.(t2 (t2 (t2 int64 int) (t2 string string))
-                  (t2 (t2 (option int) (option int))
-                      (t2 (option string) (t2 (option int) (option int)))))
-   ->! Caqti_type.int64)
-  "INSERT INTO community_projects
-     (project_id, community_id, relation_type, status,
-      requested_by_user_id, reviewed_by_user_id, request_note,
-      reviewed_at, removed_at)
-   VALUES ($1, $2, $3, $4, $5, $6, $7,
-           NOW() + ($8::int * INTERVAL '1 second'),
-           NOW() + ($9::int * INTERVAL '1 second'))
-   RETURNING id"
+  (Caqti_type.(
+     t2
+       (t2 (t2 int64 int) (t2 string string))
+       (t2
+          (t2 (option int) (option int))
+          (t2 (option string) (t2 (option int) (option int)))))
+  ->! Caqti_type.int64)
+    "INSERT INTO community_projects\n\
+    \     (project_id, community_id, relation_type, status,\n\
+    \      requested_by_user_id, reviewed_by_user_id, request_note,\n\
+    \      reviewed_at, removed_at)\n\
+    \   VALUES ($1, $2, $3, $4, $5, $6, $7,\n\
+    \           NOW() + ($8::int * INTERVAL '1 second'),\n\
+    \           NOW() + ($9::int * INTERVAL '1 second'))\n\
+    \   RETURNING id"
 
 (* updated_at-ordering probe: everything else canonical. *)
 let q_insert_relation_backdated =
   (Caqti_type.(t2 int64 int) ->! Caqti_type.int64)
-  "INSERT INTO community_projects
-     (project_id, community_id, status, updated_at)
-   VALUES ($1, $2, 'pending', NOW() - INTERVAL '10 seconds')
-   RETURNING id"
+    "INSERT INTO community_projects\n\
+    \     (project_id, community_id, status, updated_at)\n\
+    \   VALUES ($1, $2, 'pending', NOW() - INTERVAL '10 seconds')\n\
+    \   RETURNING id"
 
 (* Everything durable on one relation row; timestamp columns reduce to
    presence/ordering booleans (their exact values are NOW()-relative). *)
 let q_relation_row =
-  (Caqti_type.(int64 ->!
-      t2 (t2 (t2 int64 int) (t2 string string))
-         (t2 (t2 (option int) (option int))
-             (t2 (option string) (t3 bool bool bool)))))
-  "SELECT project_id, community_id, relation_type, status,
-          requested_by_user_id, reviewed_by_user_id, request_note,
-          reviewed_at IS NOT NULL, removed_at IS NOT NULL,
-          updated_at >= created_at
-   FROM community_projects WHERE id = $1"
+  Caqti_type.(
+    int64
+    ->! t2
+          (t2 (t2 int64 int) (t2 string string))
+          (t2
+             (t2 (option int) (option int))
+             (t2 (option string) (t3 bool bool bool))))
+    "SELECT project_id, community_id, relation_type, status,\n\
+    \          requested_by_user_id, reviewed_by_user_id, request_note,\n\
+    \          reviewed_at IS NOT NULL, removed_at IS NOT NULL,\n\
+    \          updated_at >= created_at\n\
+    \   FROM community_projects WHERE id = $1"
 
 (* Store-shaped transitions with coherent timestamps, used to free the
    active slot mid-case. Lifecycle legality itself is future-store
    territory — the schema only checks the resulting row shape. *)
 let q_mark_rejected =
   (Caqti_type.int64 ->. Caqti_type.unit)
-  "UPDATE community_projects
-   SET status = 'rejected', reviewed_at = NOW(), updated_at = NOW()
-   WHERE id = $1"
+    "UPDATE community_projects\n\
+    \   SET status = 'rejected', reviewed_at = NOW(), updated_at = NOW()\n\
+    \   WHERE id = $1"
 
 let q_mark_removed =
   (Caqti_type.int64 ->. Caqti_type.unit)
-  "UPDATE community_projects
-   SET status = 'removed', reviewed_at = COALESCE(reviewed_at, NOW()),
-       removed_at = NOW(), updated_at = NOW()
-   WHERE id = $1"
+    "UPDATE community_projects\n\
+    \   SET status = 'removed', reviewed_at = COALESCE(reviewed_at, NOW()),\n\
+    \       removed_at = NOW(), updated_at = NOW()\n\
+    \   WHERE id = $1"
 
 let q_relation_exists =
   (Caqti_type.int64 ->! Caqti_type.int)
-  "SELECT COUNT(*) FROM community_projects WHERE id = $1"
+    "SELECT COUNT(*) FROM community_projects WHERE id = $1"
 
 let q_count_for_project =
   (Caqti_type.int64 ->! Caqti_type.int)
-  "SELECT COUNT(*) FROM community_projects WHERE project_id = $1"
+    "SELECT COUNT(*) FROM community_projects WHERE project_id = $1"
 
 let q_community_exists =
   (Caqti_type.int ->! Caqti_type.int)
-  "SELECT COUNT(*) FROM communities WHERE id = $1"
+    "SELECT COUNT(*) FROM communities WHERE id = $1"
 
 let q_delete_user =
-  (Caqti_type.int ->. Caqti_type.unit)
-  "DELETE FROM users WHERE id = $1"
+  (Caqti_type.int ->. Caqti_type.unit) "DELETE FROM users WHERE id = $1"
 
 let q_delete_community =
-  (Caqti_type.int ->. Caqti_type.unit)
-  "DELETE FROM communities WHERE id = $1"
+  (Caqti_type.int ->. Caqti_type.unit) "DELETE FROM communities WHERE id = $1"
 
 let q_delete_project =
   (Caqti_type.int64 ->. Caqti_type.unit)
-  "DELETE FROM open_source_projects WHERE id = $1"
+    "DELETE FROM open_source_projects WHERE id = $1"
 
 (* Schema audit scoped to exactly the one new table. The pattern list
    is wider than the other suites' on purpose: this table must carry
    no GitHub identifiers or raw JSON either. *)
 let q_credential_columns =
   (Caqti_type.unit ->* Caqti_type.string)
-  "SELECT column_name FROM information_schema.columns
-   WHERE table_schema = 'public' AND table_name = 'community_projects'
-     AND (column_name ~* 'token' OR column_name ~* 'secret'
-          OR column_name ~* 'verifier'
-          OR column_name ~* 'authorization_code'
-          OR column_name ~* 'oauth_code' OR column_name ~* 'raw_state'
-          OR column_name ~* 'session_binding'
-          OR column_name ~* 'private_key'
-          OR column_name ~* 'installation_id'
-          OR column_name ~* 'account_id'
-          OR column_name ~* 'repository_id' OR column_name ~* 'json')"
+    "SELECT column_name FROM information_schema.columns\n\
+    \   WHERE table_schema = 'public' AND table_name = 'community_projects'\n\
+    \     AND (column_name ~* 'token' OR column_name ~* 'secret'\n\
+    \          OR column_name ~* 'verifier'\n\
+    \          OR column_name ~* 'authorization_code'\n\
+    \          OR column_name ~* 'oauth_code' OR column_name ~* 'raw_state'\n\
+    \          OR column_name ~* 'session_binding'\n\
+    \          OR column_name ~* 'private_key'\n\
+    \          OR column_name ~* 'installation_id'\n\
+    \          OR column_name ~* 'account_id'\n\
+    \          OR column_name ~* 'repository_id' OR column_name ~* 'json')"
 
 (* No column may directly assign a role: inserting a relation grants
    neither project stewardship, community moderation, nor global
    administration — those stay in their own tables. *)
 let q_role_columns =
   (Caqti_type.unit ->* Caqti_type.string)
-  "SELECT column_name FROM information_schema.columns
-   WHERE table_schema = 'public' AND table_name = 'community_projects'
-     AND (column_name ~* 'role' OR column_name ~* 'steward'
-          OR column_name ~* 'moderator' OR column_name ~* 'admin')"
+    "SELECT column_name FROM information_schema.columns\n\
+    \   WHERE table_schema = 'public' AND table_name = 'community_projects'\n\
+    \     AND (column_name ~* 'role' OR column_name ~* 'steward'\n\
+    \          OR column_name ~* 'moderator' OR column_name ~* 'admin')"
 
 (* One signature per index: name, uniqueness, predicate (NULL when the
    index is total), and the key columns in index order — so assertions
    inspect real metadata, not generated names alone. *)
 let q_index_signatures =
-  (Caqti_type.(unit ->*
-      t2 (t2 string bool) (t2 (option string) string)))
-  "SELECT ci.relname, ix.indisunique,
-          pg_get_expr(ix.indpred, ix.indrelid),
-          (SELECT string_agg(a.attname, ',' ORDER BY k.ord)
-           FROM unnest(ix.indkey::int2[]) WITH ORDINALITY AS k(attnum, ord)
-           JOIN pg_attribute a
-             ON a.attrelid = ix.indrelid AND a.attnum = k.attnum)
-   FROM pg_index ix
-   JOIN pg_class ci ON ci.oid = ix.indexrelid
-   JOIN pg_class ct ON ct.oid = ix.indrelid
-   WHERE ct.relname = 'community_projects'
-   ORDER BY ci.relname"
+  Caqti_type.(unit ->* t2 (t2 string bool) (t2 (option string) string))
+    "SELECT ci.relname, ix.indisunique,\n\
+    \          pg_get_expr(ix.indpred, ix.indrelid),\n\
+    \          (SELECT string_agg(a.attname, ',' ORDER BY k.ord)\n\
+    \           FROM unnest(ix.indkey::int2[]) WITH ORDINALITY AS k(attnum, ord)\n\
+    \           JOIN pg_attribute a\n\
+    \             ON a.attrelid = ix.indrelid AND a.attnum = k.attnum)\n\
+    \   FROM pg_index ix\n\
+    \   JOIN pg_class ci ON ci.oid = ix.indexrelid\n\
+    \   JOIN pg_class ct ON ct.oid = ix.indrelid\n\
+    \   WHERE ct.relname = 'community_projects'\n\
+    \   ORDER BY ci.relname"
 
 (* Each case gets a fresh connection and a clean fixture slate; cleanup
    runs again afterwards even when an assertion fails mid-way. *)
@@ -200,8 +202,7 @@ let db_case name f =
              let* () = cleanup () in
              Lwt.finalize
                (fun () -> f conn)
-               (fun () ->
-                 Lwt.finalize cleanup (fun () -> C.disconnect ()))))
+               (fun () -> Lwt.finalize cleanup (fun () -> C.disconnect ()))))
 
 let insert_user conn username =
   let (module C : Caqti_lwt.CONNECTION) = conn in
@@ -220,18 +221,18 @@ let insert_project conn slug =
 
 (* Relation-insert helper: ?reviewed/?removed are second offsets from
    the row's created_at (0 = exactly created_at); omitted means NULL. *)
-let insert_relation ?(relation_type = "home") ~status ?requester
-    ?reviewer ?note ?reviewed ?removed conn ~project ~community =
+let insert_relation ?(relation_type = "home") ~status ?requester ?reviewer ?note
+    ?reviewed ?removed conn ~project ~community =
   let (module C : Caqti_lwt.CONNECTION) = conn in
   C.find q_insert_relation
-    ( ((project, community), (relation_type, status))
-    , ((requester, reviewer), (note, (reviewed, removed))) )
+    ( ((project, community), (relation_type, status)),
+      ((requester, reviewer), (note, (reviewed, removed))) )
 
-let insert_relation_ok label ?relation_type ~status ?requester ?reviewer
-    ?note ?reviewed ?removed conn ~project ~community =
+let insert_relation_ok label ?relation_type ~status ?requester ?reviewer ?note
+    ?reviewed ?removed conn ~project ~community =
   let* r =
-    insert_relation ?relation_type ~status ?requester ?reviewer ?note
-      ?reviewed ?removed conn ~project ~community
+    insert_relation ?relation_type ~status ?requester ?reviewer ?note ?reviewed
+      ?removed conn ~project ~community
   in
   or_fail label r
 
@@ -248,19 +249,17 @@ let relation_row conn id =
    (no requester, no note). One project per active row — the active
    slot is per-project. *)
 let shapes_case =
-  db_case "valid shapes: every lifecycle shape round-trips exactly"
-    (fun conn ->
+  db_case "valid shapes: every lifecycle shape round-trips exactly" (fun conn ->
       let* requester = insert_user conn "cprj_a" in
       let* reviewer = insert_user conn "cprj_b" in
       let* community = insert_community conn "cprj-home" in
       let* p1 = insert_project conn "cprj-shape-pending" in
       let* rel =
-        insert_relation_ok "pending with requester and note"
-          ~status:"pending" ~requester
-          ~note:"Nota di richiesta — ✓" conn ~project:p1 ~community
+        insert_relation_ok "pending with requester and note" ~status:"pending"
+          ~requester ~note:"Nota di richiesta — ✓" conn ~project:p1 ~community
       in
-      let* ( ((rp, rc), (rtype, status))
-           , ((req, rev), (note, (has_reviewed, has_removed, upd_ge))) ) =
+      let* ( ((rp, rc), (rtype, status)),
+             ((req, rev), (note, (has_reviewed, has_removed, upd_ge))) ) =
         relation_row conn rel
       in
       Alcotest.(check int64) "project fk round-trips" p1 rp;
@@ -269,49 +268,43 @@ let shapes_case =
       Alcotest.(check string) "status" "pending" status;
       Alcotest.(check (option int)) "requester stored" (Some requester) req;
       Alcotest.(check (option int)) "no reviewer on pending" None rev;
-      Alcotest.(check (option string)) "note byte-exact"
-        (Some "Nota di richiesta — ✓") note;
+      Alcotest.(check (option string))
+        "note byte-exact" (Some "Nota di richiesta — ✓") note;
       Alcotest.(check bool) "pending: no reviewed_at" false has_reviewed;
       Alcotest.(check bool) "pending: no removed_at" false has_removed;
       Alcotest.(check bool) "updated_at >= created_at" true upd_ge;
       let* p2 = insert_project conn "cprj-shape-auto" in
       let* rel =
-        insert_relation_ok "accepted auto-provisioned home"
-          ~status:"accepted" ~requester ~reviewed:0 conn ~project:p2
-          ~community
+        insert_relation_ok "accepted auto-provisioned home" ~status:"accepted"
+          ~requester ~reviewed:0 conn ~project:p2 ~community
       in
-      let* (_, ((_, rev), (_, (has_reviewed, has_removed, _)))) =
+      let* _, ((_, rev), (_, (has_reviewed, has_removed, _))) =
         relation_row conn rel
       in
       Alcotest.(check (option int))
         "auto-provisioned home has no reviewer" None rev;
       Alcotest.(check bool)
-        "auto-provisioned home still records reviewed_at" true
-        has_reviewed;
+        "auto-provisioned home still records reviewed_at" true has_reviewed;
       Alcotest.(check bool) "accepted: no removed_at" false has_removed;
       let* p3 = insert_project conn "cprj-shape-reviewed" in
       let* rel =
-        insert_relation_ok "accepted moderator-reviewed home"
-          ~status:"accepted" ~requester ~reviewer ~reviewed:0 conn
-          ~project:p3 ~community
+        insert_relation_ok "accepted moderator-reviewed home" ~status:"accepted"
+          ~requester ~reviewer ~reviewed:0 conn ~project:p3 ~community
       in
-      let* (_, ((_, rev), (_, (has_reviewed, _, _)))) =
-        relation_row conn rel
-      in
+      let* _, ((_, rev), (_, (has_reviewed, _, _))) = relation_row conn rel in
       Alcotest.(check (option int)) "reviewer stored" (Some reviewer) rev;
       Alcotest.(check bool) "reviewed_at present" true has_reviewed;
       let* p4 = insert_project conn "cprj-shape-rejected" in
       let* _ =
-        insert_relation_ok "rejected request" ~status:"rejected"
-          ~requester ~reviewer ~reviewed:0 conn ~project:p4 ~community
+        insert_relation_ok "rejected request" ~status:"rejected" ~requester
+          ~reviewer ~reviewed:0 conn ~project:p4 ~community
       in
       let* p5 = insert_project conn "cprj-shape-removed" in
       let* rel =
-        insert_relation_ok "removed former home" ~status:"removed"
-          ~requester ~reviewer ~reviewed:0 ~removed:5 conn ~project:p5
-          ~community
+        insert_relation_ok "removed former home" ~status:"removed" ~requester
+          ~reviewer ~reviewed:0 ~removed:5 conn ~project:p5 ~community
       in
-      let* (_, (_, (_, (has_reviewed, has_removed, _)))) =
+      let* _, (_, (_, (has_reviewed, has_removed, _))) =
         relation_row conn rel
       in
       Alcotest.(check bool) "removed keeps reviewed_at" true has_reviewed;
@@ -321,7 +314,7 @@ let shapes_case =
         insert_relation_ok "minimal pending: no requester, no note"
           ~status:"pending" conn ~project:p6 ~community
       in
-      let* (_, ((req, _), (note, _))) = relation_row conn rel in
+      let* _, ((req, _), (note, _)) = relation_row conn rel in
       Alcotest.(check (option int)) "requester nullable" None req;
       Alcotest.(check (option string)) "note nullable" None note;
       Lwt.return_unit)
@@ -330,31 +323,27 @@ let shapes_case =
    combination rejects independently. Failed inserts leave no row, so
    one project/community pair serves every probe. *)
 let status_case =
-  db_case "status constraints: every incoherent shape rejects"
-    (fun conn ->
+  db_case "status constraints: every incoherent shape rejects" (fun conn ->
       let (module C : Caqti_lwt.CONNECTION) = conn in
       let* reviewer = insert_user conn "cprj_b" in
       let* community = insert_community conn "cprj-status" in
       let* project = insert_project conn "cprj-status" in
-      let probe label ?relation_type ~status ?reviewer ?reviewed ?removed
-          () =
+      let probe label ?relation_type ~status ?reviewer ?reviewed ?removed () =
         let* r =
-          insert_relation ?relation_type ~status ?reviewer ?reviewed
-            ?removed conn ~project ~community
+          insert_relation ?relation_type ~status ?reviewer ?reviewed ?removed
+            conn ~project ~community
         in
         reject label r
       in
       let* () = probe "unknown status" ~status:"draft" () in
       let* () =
-        probe "unknown relation type" ~relation_type:"related"
-          ~status:"pending" ()
+        probe "unknown relation type" ~relation_type:"related" ~status:"pending"
+          ()
       in
       let* () =
         probe "pending with reviewed_at" ~status:"pending" ~reviewed:0 ()
       in
-      let* () =
-        probe "pending with reviewer" ~status:"pending" ~reviewer ()
-      in
+      let* () = probe "pending with reviewer" ~status:"pending" ~reviewer () in
       let* () =
         probe "pending with removed_at" ~status:"pending" ~removed:0 ()
       in
@@ -375,8 +364,7 @@ let status_case =
         probe "removed without removed_at" ~status:"removed" ~reviewed:0 ()
       in
       let* () =
-        probe "reviewed_at < created_at" ~status:"accepted"
-          ~reviewed:(-10) ()
+        probe "reviewed_at < created_at" ~status:"accepted" ~reviewed:(-10) ()
       in
       let* () =
         probe "removed_at < created_at" ~status:"removed" ~reviewed:0
@@ -386,44 +374,40 @@ let status_case =
         probe "removed_at < reviewed_at" ~status:"removed" ~reviewed:10
           ~removed:5 ()
       in
-      let* r =
-        C.find q_insert_relation_backdated (project, community)
-      in
+      let* r = C.find q_insert_relation_backdated (project, community) in
       reject "updated_at < created_at" r)
 
 (* Request note bounds. Blank text is structurally allowed on purpose:
    blank→NULL canonicalization (with UTF-8 and control validation)
    belongs to the future pure domain layer, not SQL. *)
 let note_case =
-  db_case "request note: verbatim storage, exact 2000-char bound"
-    (fun conn ->
+  db_case "request note: verbatim storage, exact 2000-char bound" (fun conn ->
       let* community = insert_community conn "cprj-note" in
       let* p1 = insert_project conn "cprj-note-blank" in
       let* rel =
         insert_relation_ok "blank note is structurally allowed"
           ~status:"pending" ~note:"   " conn ~project:p1 ~community
       in
-      let* (_, (_, (note, _))) = relation_row conn rel in
-      Alcotest.(check (option string)) "blank stored verbatim"
-        (Some "   ") note;
+      let* _, (_, (note, _)) = relation_row conn rel in
+      Alcotest.(check (option string)) "blank stored verbatim" (Some "   ") note;
       let* p2 = insert_project conn "cprj-note-utf8" in
       let* rel =
         insert_relation_ok "UTF-8 note" ~status:"pending"
           ~note:"Città — proposta 🏠" conn ~project:p2 ~community
       in
-      let* (_, (_, (note, _))) = relation_row conn rel in
-      Alcotest.(check (option string)) "UTF-8 byte-exact"
-        (Some "Città — proposta 🏠") note;
+      let* _, (_, (note, _)) = relation_row conn rel in
+      Alcotest.(check (option string))
+        "UTF-8 byte-exact" (Some "Città — proposta 🏠") note;
       let* p3 = insert_project conn "cprj-note-max" in
       let* _ =
         insert_relation_ok "2000-char note (char_length counts chars)"
-          ~status:"pending" ~note:(String.make 2000 'n') conn
-          ~project:p3 ~community
+          ~status:"pending" ~note:(String.make 2000 'n') conn ~project:p3
+          ~community
       in
       let* p4 = insert_project conn "cprj-note-over" in
       let* r =
-        insert_relation ~status:"pending" ~note:(String.make 2001 'n')
-          conn ~project:p4 ~community
+        insert_relation ~status:"pending" ~note:(String.make 2001 'n') conn
+          ~project:p4 ~community
       in
       reject "2001-char note" r)
 
@@ -432,20 +416,18 @@ let note_case =
    lets the partial unique index answer — no test-side precheck — so
    the database, not the application, is proven to be the arbiter. *)
 let active_home_case =
-  db_case "one active home per project: the index is the arbiter"
-    (fun conn ->
+  db_case "one active home per project: the index is the arbiter" (fun conn ->
       let (module C : Caqti_lwt.CONNECTION) = conn in
       let* requester = insert_user conn "cprj_a" in
       let* c1 = insert_community conn "cprj-active-1" in
       let* c2 = insert_community conn "cprj-active-2" in
       let* project = insert_project conn "cprj-active" in
       let* pending1 =
-        insert_relation_ok "first pending" ~status:"pending" ~requester
-          conn ~project ~community:c1
+        insert_relation_ok "first pending" ~status:"pending" ~requester conn
+          ~project ~community:c1
       in
       let* r =
-        insert_relation ~status:"pending" ~requester conn ~project
-          ~community:c2
+        insert_relation ~status:"pending" ~requester conn ~project ~community:c2
       in
       let* () = reject "second pending (different community)" r in
       let* r =
@@ -456,8 +438,8 @@ let active_home_case =
       let* r = C.exec q_mark_rejected pending1 in
       let* () = or_fail "reject pending1" r in
       let* pending2 =
-        insert_relation_ok "fresh pending after rejection"
-          ~status:"pending" ~requester conn ~project ~community:c2
+        insert_relation_ok "fresh pending after rejection" ~status:"pending"
+          ~requester conn ~project ~community:c2
       in
       let* r = C.exec q_mark_rejected pending2 in
       let* () = or_fail "reject pending2" r in
@@ -471,15 +453,14 @@ let active_home_case =
       in
       let* () = reject "two accepted homes" r in
       let* r =
-        insert_relation ~status:"pending" ~requester conn ~project
-          ~community:c2
+        insert_relation ~status:"pending" ~requester conn ~project ~community:c2
       in
       let* () = reject "pending while an accepted exists" r in
       let* r = C.exec q_mark_removed accepted1 in
       let* () = or_fail "remove accepted1" r in
       let* accepted2 =
-        insert_relation_ok "new accepted home after removal"
-          ~status:"accepted" ~reviewed:0 conn ~project ~community:c2
+        insert_relation_ok "new accepted home after removal" ~status:"accepted"
+          ~reviewed:0 conn ~project ~community:c2
       in
       let* r = C.exec q_mark_removed accepted2 in
       let* () = or_fail "remove accepted2" r in
@@ -493,18 +474,17 @@ let active_home_case =
    coexist with a later active relation: they fall outside the partial
    index predicate and never occupy the active slot. *)
 let historical_case =
-  db_case "historical rows: rejected/removed never occupy the slot"
-    (fun conn ->
+  db_case "historical rows: rejected/removed never occupy the slot" (fun conn ->
       let (module C : Caqti_lwt.CONNECTION) = conn in
       let* community = insert_community conn "cprj-history" in
       let* project = insert_project conn "cprj-history" in
       let* _ =
-        insert_relation_ok "historical rejection" ~status:"rejected"
-          ~reviewed:0 conn ~project ~community
+        insert_relation_ok "historical rejection" ~status:"rejected" ~reviewed:0
+          conn ~project ~community
       in
       let* _ =
-        insert_relation_ok "historical removal" ~status:"removed"
-          ~reviewed:0 ~removed:5 conn ~project ~community
+        insert_relation_ok "historical removal" ~status:"removed" ~reviewed:0
+          ~removed:5 conn ~project ~community
       in
       let* _ =
         insert_relation_ok "later active pending on the same pair"
@@ -535,24 +515,21 @@ let multi_project_case =
           ~status:"accepted" ~reviewed:0 conn ~project:p2 ~community
       in
       let* _ =
-        insert_relation_ok "project 3 pending, same community"
-          ~status:"pending" conn ~project:p3 ~community
+        insert_relation_ok "project 3 pending, same community" ~status:"pending"
+          conn ~project:p3 ~community
       in
       let* _ =
-        insert_relation_ok "project 4 pending, same community"
-          ~status:"pending" conn ~project:p4 ~community
+        insert_relation_ok "project 4 pending, same community" ~status:"pending"
+          conn ~project:p4 ~community
       in
-      let* r =
-        insert_relation ~status:"pending" conn ~project:p1 ~community
-      in
+      let* r = insert_relation ~status:"pending" conn ~project:p1 ~community in
       reject "project 1 still holds its own active slot" r)
 
 (* FK ends: ghosts reject; deleting one side cascades only the
    relation rows and leaves the other side standing; deleting a
    provenance user nulls only the provenance field. *)
 let fk_deletion_case =
-  db_case "foreign keys: ghosts, cascades, provenance SET NULLs"
-    (fun conn ->
+  db_case "foreign keys: ghosts, cascades, provenance SET NULLs" (fun conn ->
       let (module C : Caqti_lwt.CONNECTION) = conn in
       let* requester = insert_user conn "cprj_a" in
       let* reviewer = insert_user conn "cprj_b" in
@@ -573,19 +550,19 @@ let fk_deletion_case =
       let* ghost_u = C.find Project_fixture.q_absent_user_id () in
       let* ghost_u = or_fail "ghost user id" ghost_u in
       let* r =
-        insert_relation ~status:"pending" ~requester:ghost_u conn
-          ~project ~community
+        insert_relation ~status:"pending" ~requester:ghost_u conn ~project
+          ~community
       in
       let* () = reject "nonexistent requester" r in
       let* r =
-        insert_relation ~status:"accepted" ~reviewer:ghost_u ~reviewed:0
-          conn ~project ~community
+        insert_relation ~status:"accepted" ~reviewer:ghost_u ~reviewed:0 conn
+          ~project ~community
       in
       let* () = reject "nonexistent reviewer" r in
       (* Project deletion cascades the relation, community survives. *)
       let* rel =
-        insert_relation_ok "home to cascade from project"
-          ~status:"accepted" ~reviewed:0 conn ~project ~community
+        insert_relation_ok "home to cascade from project" ~status:"accepted"
+          ~reviewed:0 conn ~project ~community
       in
       let* r = C.exec q_delete_project project in
       let* () = or_fail "delete project" r in
@@ -598,8 +575,8 @@ let fk_deletion_case =
       (* Community deletion cascades the relation, project survives. *)
       let* project = insert_project conn "cprj-fk-2" in
       let* rel =
-        insert_relation_ok "home to cascade from community"
-          ~status:"accepted" ~reviewed:0 conn ~project ~community
+        insert_relation_ok "home to cascade from community" ~status:"accepted"
+          ~reviewed:0 conn ~project ~community
       in
       let* r = C.exec q_delete_community community in
       let* () = or_fail "delete community" r in
@@ -613,39 +590,37 @@ let fk_deletion_case =
          survive untouched. *)
       let* community = insert_community conn "cprj-fk-b" in
       let* rel =
-        insert_relation_ok "pending with doomed requester"
-          ~status:"pending" ~requester ~note:"provenance" conn ~project
-          ~community
+        insert_relation_ok "pending with doomed requester" ~status:"pending"
+          ~requester ~note:"provenance" conn ~project ~community
       in
       let* r = C.exec q_delete_user requester in
       let* () = or_fail "delete requester" r in
-      let* ( (_, (_, status))
-           , ((req, _), (note, (has_reviewed, has_removed, upd_ge))) ) =
+      let* ( (_, (_, status)),
+             ((req, _), (note, (has_reviewed, has_removed, upd_ge))) ) =
         relation_row conn rel
       in
       Alcotest.(check (option int)) "requester went NULL" None req;
       Alcotest.(check string) "status survives" "pending" status;
-      Alcotest.(check (option string)) "note survives"
-        (Some "provenance") note;
-      Alcotest.(check bool) "timestamps coherent" true
-        (upd_ge && not has_reviewed && not has_removed);
+      Alcotest.(check (option string)) "note survives" (Some "provenance") note;
+      Alcotest.(check bool)
+        "timestamps coherent" true
+        (upd_ge && (not has_reviewed) && not has_removed);
       (* Reviewer deletion: same, with reviewed_at staying behind. *)
       let* r = C.exec q_mark_rejected rel in
       let* () = or_fail "clear the active slot" r in
       let* rel =
-        insert_relation_ok "accepted with doomed reviewer"
-          ~status:"accepted" ~reviewer ~reviewed:0 conn ~project
-          ~community
+        insert_relation_ok "accepted with doomed reviewer" ~status:"accepted"
+          ~reviewer ~reviewed:0 conn ~project ~community
       in
       let* r = C.exec q_delete_user reviewer in
       let* () = or_fail "delete reviewer" r in
-      let* ((_, (_, status)), ((_, rev), (_, (has_reviewed, _, _)))) =
+      let* (_, (_, status)), ((_, rev), (_, (has_reviewed, _, _))) =
         relation_row conn rel
       in
       Alcotest.(check (option int)) "reviewer went NULL" None rev;
       Alcotest.(check string) "status survives" "accepted" status;
-      Alcotest.(check bool) "reviewed_at survives the reviewer" true
-        has_reviewed;
+      Alcotest.(check bool)
+        "reviewed_at survives the reviewer" true has_reviewed;
       Lwt.return_unit)
 
 (* Credential/identifier and role-column audits; the pinned column
@@ -660,12 +635,10 @@ let audit_case =
       Alcotest.(check int) "community_projects column count" 12 n;
       let* offenders = C.collect_list q_credential_columns () in
       let* offenders = or_fail "credential-shaped columns" offenders in
-      Alcotest.(check (list string)) "no credential-shaped column" []
-        offenders;
+      Alcotest.(check (list string)) "no credential-shaped column" [] offenders;
       let* offenders = C.collect_list q_role_columns () in
       let* offenders = or_fail "role-shaped columns" offenders in
-      Alcotest.(check (list string)) "no role-granting column" []
-        offenders;
+      Alcotest.(check (list string)) "no role-granting column" [] offenders;
       Lwt.return_unit)
 
 (* Index metadata: the active-home index must be unique, keyed on
@@ -674,13 +647,12 @@ let audit_case =
    their expected key order. Predicates and key columns come from
    pg_index — names alone are not trusted. *)
 let index_case =
-  db_case "index metadata: active-home predicate, queue, history"
-    (fun conn ->
+  db_case "index metadata: active-home predicate, queue, history" (fun conn ->
       let (module C : Caqti_lwt.CONNECTION) = conn in
       let* indexes = C.collect_list q_index_signatures () in
       let* indexes = or_fail "index signatures" indexes in
-      Alcotest.(check int) "exactly four indexes (pkey + three)" 4
-        (List.length indexes);
+      Alcotest.(check int)
+        "exactly four indexes (pkey + three)" 4 (List.length indexes);
       let find_by_columns ?(unique = false) ?(partial = false) label cols =
         match
           List.find_opt
@@ -691,7 +663,7 @@ let index_case =
         | Some ix -> ix
         | None -> Alcotest.failf "%s: no index on (%s)" label cols
       in
-      let ((_, _), (pred, _)) =
+      let (_, _), (pred, _) =
         find_by_columns ~unique:true ~partial:true "active-home index"
           "project_id"
       in
@@ -703,7 +675,8 @@ let index_case =
       List.iter
         (fun needle ->
           Alcotest.(check bool)
-            ("active-home predicate covers " ^ needle) true
+            ("active-home predicate covers " ^ needle)
+            true
             (Html_assert.occurs ~needle pred))
         [ "relation_type"; "'home'"; "status"; "'pending'"; "'accepted'" ];
       let _ =
@@ -715,17 +688,24 @@ let index_case =
       Lwt.return_unit)
 
 let suite =
-  [ shapes_case; status_case; note_case; active_home_case;
-    historical_case; multi_project_case; fk_deletion_case; audit_case;
-    index_case ]
+  [
+    shapes_case;
+    status_case;
+    note_case;
+    active_home_case;
+    historical_case;
+    multi_project_case;
+    fk_deletion_case;
+    audit_case;
+    index_case;
+  ]
 
 let suites =
-    (* Project/community home-relation schema: SQL-only slice, no
+  (* Project/community home-relation schema: SQL-only slice, no
        store yet — closed relation/status vocabularies, per-status row
        shapes, the one-active-home partial unique index as race
        arbiter, historical rejected/removed rows, provenance SET
        NULLs, cascades from both FK ends, and the credential/role
        column audit; same EARDE_TEST_DATABASE_URL gate (each case
        skips without it). *)
-  [ ( "community_projects_schema", suite )
-  ]
+  [ ("community_projects_schema", suite) ]

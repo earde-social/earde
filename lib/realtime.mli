@@ -1,6 +1,6 @@
-(** Best-effort publication of a committed chat message to the realtime
-    gateway. The message is already durable; a failed or slow publish is
-    logged and dropped, and clients catch up over HTTP. *)
+(** Best-effort publication of a committed chat message to the realtime gateway.
+    The message is already durable; a failed or slow publish is logged and
+    dropped, and clients catch up over HTTP. *)
 
 val publish_body :
   topic:string ->
@@ -12,8 +12,8 @@ val publish_body :
   content:string ->
   created_at:string ->
   Yojson.Safe.t
-(** The gateway request body. [topic] is the access-generation topic the
-    caller read after the message committed (docs/features/realtime-access.md). *)
+(** The gateway request body. [topic] is the access-generation topic the caller
+    read after the message committed (docs/features/realtime-access.md). *)
 
 val publish_chat_message :
   topic:string ->
@@ -26,5 +26,5 @@ val publish_chat_message :
   created_at:string ->
   unit Lwt.t
 (** Posts {!publish_body} to the gateway when it is configured, bounded by a
-    timeout. Never fails: every error is logged and swallowed. Does nothing
-    when the gateway URL or internal secret is unset. *)
+    timeout. Never fails: every error is logged and swallowed. Does nothing when
+    the gateway URL or internal secret is unset. *)

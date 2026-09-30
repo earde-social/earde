@@ -9,15 +9,10 @@ let ( let* ) = Lwt.bind
 open Caqti_request.Infix
 
 let or_fail = Db_fixture.or_fail
-
 let reject = Db_fixture.reject
-
 let insert_user = Db_fixture.insert_user
-
 let exec = Db_fixture.exec
-
 let find = Db_fixture.find
-
 let collect = Db_fixture.collect
 
 (* Legacy (non-network) communities: the network lifecycle CHECK ties a
@@ -36,29 +31,25 @@ let insert_community conn slug =
 let q_cleanup =
   List.map
     (fun sql -> (Caqti_type.unit ->. Caqti_type.unit) sql)
-    [ "DELETE FROM notifications \
-       WHERE user_id IN (SELECT id FROM users WHERE username LIKE 'stps_%')"
-    ; "DELETE FROM notifications \
-       WHERE community_id IN \
-         (SELECT id FROM communities WHERE slug LIKE 'stps-%')"
-    ; "DELETE FROM shared_thread_placement_audit_events \
-       WHERE origin_community_id IN \
-               (SELECT id FROM communities WHERE slug LIKE 'stps-%') \
-          OR destination_community_id IN \
-               (SELECT id FROM communities WHERE slug LIKE 'stps-%')"
-    ; "DELETE FROM shared_thread_placements \
-       WHERE origin_community_id IN \
-               (SELECT id FROM communities WHERE slug LIKE 'stps-%') \
-          OR destination_community_id IN \
-               (SELECT id FROM communities WHERE slug LIKE 'stps-%')"
-    ; "DELETE FROM posts \
-       WHERE community_id IN \
-         (SELECT id FROM communities WHERE slug LIKE 'stps-%')"
-    ; "DELETE FROM community_sections \
-       WHERE community_id IN \
-         (SELECT id FROM communities WHERE slug LIKE 'stps-%')"
-    ; "DELETE FROM communities WHERE slug LIKE 'stps-%'"
-    ; "DELETE FROM users WHERE username LIKE 'stps_%'"
+    [
+      "DELETE FROM notifications WHERE user_id IN (SELECT id FROM users WHERE \
+       username LIKE 'stps_%')";
+      "DELETE FROM notifications WHERE community_id IN (SELECT id FROM \
+       communities WHERE slug LIKE 'stps-%')";
+      "DELETE FROM shared_thread_placement_audit_events WHERE \
+       origin_community_id IN (SELECT id FROM communities WHERE slug LIKE \
+       'stps-%') OR destination_community_id IN (SELECT id FROM communities \
+       WHERE slug LIKE 'stps-%')";
+      "DELETE FROM shared_thread_placements WHERE origin_community_id IN \
+       (SELECT id FROM communities WHERE slug LIKE 'stps-%') OR \
+       destination_community_id IN (SELECT id FROM communities WHERE slug LIKE \
+       'stps-%')";
+      "DELETE FROM posts WHERE community_id IN (SELECT id FROM communities \
+       WHERE slug LIKE 'stps-%')";
+      "DELETE FROM community_sections WHERE community_id IN (SELECT id FROM \
+       communities WHERE slug LIKE 'stps-%')";
+      "DELETE FROM communities WHERE slug LIKE 'stps-%'";
+      "DELETE FROM users WHERE username LIKE 'stps_%'";
     ]
 
 let db_case name f =
@@ -81,8 +72,7 @@ let db_case name f =
              let* () = cleanup () in
              Lwt.finalize
                (fun () -> f conn)
-               (fun () ->
-                 Lwt.finalize cleanup (fun () -> C.disconnect ()))))
+               (fun () -> Lwt.finalize cleanup (fun () -> C.disconnect ()))))
 
 (* Raw row fixtures. Every interpolated fragment is either a fixture row
    id produced in this file or a literal written here — no external or
@@ -109,82 +99,77 @@ let row_sql ~post ~origin ~destination ?(status = "'pending'")
     ?(created = "NOW()") ?(updated = "NOW()") ?(reviewed = "NULL")
     ?(removed = "NULL") ?(withdrawn = "NULL") () =
   Printf.sprintf
-    "INSERT INTO shared_thread_placements \
-       (post_id, origin_community_id, destination_community_id, \
-        destination_section_id, status, request_note, \
-        requested_by_user_id, reviewed_by_user_id, removed_by_user_id, \
-        withdrawn_by_user_id, created_at, updated_at, reviewed_at, \
-        removed_at, withdrawn_at) \
-     VALUES (%d, %d, %d, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
+    "INSERT INTO shared_thread_placements (post_id, origin_community_id, \
+     destination_community_id, destination_section_id, status, request_note, \
+     requested_by_user_id, reviewed_by_user_id, removed_by_user_id, \
+     withdrawn_by_user_id, created_at, updated_at, reviewed_at, removed_at, \
+     withdrawn_at) VALUES (%d, %d, %d, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, \
+     %s, %s)"
     post origin destination section status note requested_by reviewed_by
     removed_by withdrawn_by created updated reviewed removed withdrawn
 
 let q_insert_post =
   (Caqti_type.(t3 int int (option int)) ->! Caqti_type.int)
-  "INSERT INTO posts (title, content, community_id, user_id, section_id) \
-   VALUES ('stp thread', 'stp body', $1, $2, $3) RETURNING id"
+    "INSERT INTO posts (title, content, community_id, user_id, section_id) \
+     VALUES ('stp thread', 'stp body', $1, $2, $3) RETURNING id"
 
 let insert_post ?section conn ~community ~author =
   find conn "post fixture" q_insert_post (community, author, section)
 
 let q_insert_section =
   (Caqti_type.(t2 int string) ->! Caqti_type.int)
-  "INSERT INTO community_sections (community_id, name, slug) \
-   VALUES ($1, $2, $2) RETURNING id"
+    "INSERT INTO community_sections (community_id, name, slug) VALUES ($1, $2, \
+     $2) RETURNING id"
 
 let q_delete_section =
   (Caqti_type.int ->. Caqti_type.unit)
-  "DELETE FROM community_sections WHERE id = $1"
+    "DELETE FROM community_sections WHERE id = $1"
 
 let q_delete_user =
   (Caqti_type.int ->. Caqti_type.unit) "DELETE FROM users WHERE id = $1"
 
 let q_count_pair =
   (Caqti_type.(t2 int int) ->! Caqti_type.int)
-  "SELECT COUNT(*) FROM shared_thread_placements \
-   WHERE post_id = $1 AND destination_community_id = $2"
+    "SELECT COUNT(*) FROM shared_thread_placements WHERE post_id = $1 AND \
+     destination_community_id = $2"
 
 let q_sole_id =
   (Caqti_type.(t2 int int) ->! Caqti_type.int64)
-  "SELECT id FROM shared_thread_placements \
-   WHERE post_id = $1 AND destination_community_id = $2 \
-   ORDER BY id LIMIT 1"
+    "SELECT id FROM shared_thread_placements WHERE post_id = $1 AND \
+     destination_community_id = $2 ORDER BY id LIMIT 1"
 
 let q_actors =
   (Caqti_type.int64
-   ->! Caqti_type.(t4 (option int) (option int) (option int) (option int)))
-  "SELECT requested_by_user_id, reviewed_by_user_id, removed_by_user_id, \
-          withdrawn_by_user_id \
-   FROM shared_thread_placements WHERE id = $1"
+  ->! Caqti_type.(t4 (option int) (option int) (option int) (option int)))
+    "SELECT requested_by_user_id, reviewed_by_user_id, removed_by_user_id, \
+     withdrawn_by_user_id FROM shared_thread_placements WHERE id = $1"
 
 let q_section_status =
   (Caqti_type.int64 ->! Caqti_type.(t2 (option int) string))
-  "SELECT destination_section_id, status \
-   FROM shared_thread_placements WHERE id = $1"
+    "SELECT destination_section_id, status FROM shared_thread_placements WHERE \
+     id = $1"
 
 let q_indexdefs =
   (Caqti_type.string ->* Caqti_type.string)
-  "SELECT indexdef FROM pg_indexes \
-   WHERE schemaname = 'public' AND tablename = $1 ORDER BY indexname"
+    "SELECT indexdef FROM pg_indexes WHERE schemaname = 'public' AND tablename \
+     = $1 ORDER BY indexname"
 
 let q_insert_audit =
   (Caqti_type.(t2 (t3 string (option int) int64) (t3 int int int))
-   ->! Caqti_type.int64)
-  "INSERT INTO shared_thread_placement_audit_events \
-     (action, actor_user_id, placement_id, post_id, \
-      origin_community_id, destination_community_id) \
-   VALUES ($1, $2, $3, $4, $5, $6) RETURNING id"
+  ->! Caqti_type.int64)
+    "INSERT INTO shared_thread_placement_audit_events (action, actor_user_id, \
+     placement_id, post_id, origin_community_id, destination_community_id) \
+     VALUES ($1, $2, $3, $4, $5, $6) RETURNING id"
 
 let q_audit_actor =
   (Caqti_type.int64 ->! Caqti_type.(option int))
-  "SELECT actor_user_id FROM shared_thread_placement_audit_events \
-   WHERE id = $1"
+    "SELECT actor_user_id FROM shared_thread_placement_audit_events WHERE id = \
+     $1"
 
 let q_insert_stp_notif =
   (Caqti_type.(t2 (t2 int string) (t2 int int64)) ->! Caqti_type.int)
-  "INSERT INTO notifications \
-     (user_id, notif_type, community_id, shared_thread_placement_id) \
-   VALUES ($1, $2, $3, $4) RETURNING id"
+    "INSERT INTO notifications (user_id, notif_type, community_id, \
+     shared_thread_placement_id) VALUES ($1, $2, $3, $4) RETURNING id"
 
 let base conn tag =
   let* author = insert_user conn ("stps_" ^ tag) in
@@ -237,19 +222,17 @@ let valid_shapes_case =
 let same_community_case =
   db_case "schema: origin and destination cannot be equal" (fun conn ->
       let* _, o, _, post = base conn "self" in
-      refuses conn "self pair"
-        (row_sql ~post ~origin:o ~destination:o ()))
+      refuses conn "self pair" (row_sql ~post ~origin:o ~destination:o ()))
 
 let status_vocabulary_case =
-  db_case "schema: only the five canonical statuses are storable"
-    (fun conn ->
+  db_case "schema: only the five canonical statuses are storable" (fun conn ->
       let* _, o, d, post = base conn "vocab" in
       Lwt_list.iter_s
         (fun raw ->
           refuses conn ("status " ^ raw)
             (row_sql ~post ~origin:o ~destination:d
-               ~status:(Printf.sprintf "'%s'" raw) ~reviewed:"NOW()"
-               ~withdrawn:"NOW()" ()))
+               ~status:(Printf.sprintf "'%s'" raw)
+               ~reviewed:"NOW()" ~withdrawn:"NOW()" ()))
         [ "Pending"; "PENDING"; "active"; "cancelled"; "withdraw"; "" ])
 
 let lifecycle_shape_case =
@@ -259,39 +242,38 @@ let lifecycle_shape_case =
       let section = string_of_int section in
       Lwt_list.iter_s
         (fun (label, sql) -> refuses conn label sql)
-        [ ( "pending with a review time"
-          , row_sql ~post ~origin:o ~destination:d ~reviewed:"NOW()" () )
-        ; ( "pending with a section"
-          , row_sql ~post ~origin:o ~destination:d ~section () )
-        ; ( "pending with a withdrawal time"
-          , row_sql ~post ~origin:o ~destination:d ~withdrawn:"NOW()" () )
-        ; ( "accepted without a review time"
-          , row_sql ~post ~origin:o ~destination:d ~status:"'accepted'" ()
-          )
-        ; ( "accepted with a withdrawal time"
-          , row_sql ~post ~origin:o ~destination:d ~status:"'accepted'"
-              ~reviewed:"NOW()" ~withdrawn:"NOW()" () )
-        ; ( "rejected with a section"
-          , row_sql ~post ~origin:o ~destination:d ~status:"'rejected'"
-              ~reviewed:"NOW()" ~section () )
-        ; ( "removed without a review time"
-          , row_sql ~post ~origin:o ~destination:d ~status:"'removed'"
-              ~removed:"NOW()" () )
-        ; ( "removed without a removal time"
-          , row_sql ~post ~origin:o ~destination:d ~status:"'removed'"
-              ~reviewed:"NOW()" () )
-        ; ( "removed with a withdrawal time"
-          , row_sql ~post ~origin:o ~destination:d ~status:"'removed'"
-              ~reviewed:"NOW()" ~removed:"NOW()" ~withdrawn:"NOW()" () )
-        ; ( "withdrawn with a review time"
-          , row_sql ~post ~origin:o ~destination:d ~status:"'withdrawn'"
-              ~withdrawn:"NOW()" ~reviewed:"NOW()" () )
-        ; ( "withdrawn with a section"
-          , row_sql ~post ~origin:o ~destination:d ~status:"'withdrawn'"
-              ~withdrawn:"NOW()" ~section () )
-        ; ( "withdrawn without a withdrawal time"
-          , row_sql ~post ~origin:o ~destination:d ~status:"'withdrawn'" ()
-          )
+        [
+          ( "pending with a review time",
+            row_sql ~post ~origin:o ~destination:d ~reviewed:"NOW()" () );
+          ( "pending with a section",
+            row_sql ~post ~origin:o ~destination:d ~section () );
+          ( "pending with a withdrawal time",
+            row_sql ~post ~origin:o ~destination:d ~withdrawn:"NOW()" () );
+          ( "accepted without a review time",
+            row_sql ~post ~origin:o ~destination:d ~status:"'accepted'" () );
+          ( "accepted with a withdrawal time",
+            row_sql ~post ~origin:o ~destination:d ~status:"'accepted'"
+              ~reviewed:"NOW()" ~withdrawn:"NOW()" () );
+          ( "rejected with a section",
+            row_sql ~post ~origin:o ~destination:d ~status:"'rejected'"
+              ~reviewed:"NOW()" ~section () );
+          ( "removed without a review time",
+            row_sql ~post ~origin:o ~destination:d ~status:"'removed'"
+              ~removed:"NOW()" () );
+          ( "removed without a removal time",
+            row_sql ~post ~origin:o ~destination:d ~status:"'removed'"
+              ~reviewed:"NOW()" () );
+          ( "removed with a withdrawal time",
+            row_sql ~post ~origin:o ~destination:d ~status:"'removed'"
+              ~reviewed:"NOW()" ~removed:"NOW()" ~withdrawn:"NOW()" () );
+          ( "withdrawn with a review time",
+            row_sql ~post ~origin:o ~destination:d ~status:"'withdrawn'"
+              ~withdrawn:"NOW()" ~reviewed:"NOW()" () );
+          ( "withdrawn with a section",
+            row_sql ~post ~origin:o ~destination:d ~status:"'withdrawn'"
+              ~withdrawn:"NOW()" ~section () );
+          ( "withdrawn without a withdrawal time",
+            row_sql ~post ~origin:o ~destination:d ~status:"'withdrawn'" () );
         ])
 
 let timestamp_order_case =
@@ -299,20 +281,21 @@ let timestamp_order_case =
       let* _, o, d, post = base conn "clock" in
       Lwt_list.iter_s
         (fun (label, sql) -> refuses conn label sql)
-        [ ( "review before creation"
-          , row_sql ~post ~origin:o ~destination:d ~status:"'accepted'"
-              ~reviewed:"NOW() - INTERVAL '1 hour'" () )
-        ; ( "removal before review"
-          , row_sql ~post ~origin:o ~destination:d ~status:"'removed'"
+        [
+          ( "review before creation",
+            row_sql ~post ~origin:o ~destination:d ~status:"'accepted'"
+              ~reviewed:"NOW() - INTERVAL '1 hour'" () );
+          ( "removal before review",
+            row_sql ~post ~origin:o ~destination:d ~status:"'removed'"
               ~created:"NOW() - INTERVAL '2 hour'"
               ~updated:"NOW() - INTERVAL '2 hour'" ~reviewed:"NOW()"
-              ~removed:"NOW() - INTERVAL '1 hour'" () )
-        ; ( "withdrawal before creation"
-          , row_sql ~post ~origin:o ~destination:d ~status:"'withdrawn'"
-              ~withdrawn:"NOW() - INTERVAL '1 hour'" () )
-        ; ( "update before creation"
-          , row_sql ~post ~origin:o ~destination:d
-              ~updated:"NOW() - INTERVAL '1 hour'" () )
+              ~removed:"NOW() - INTERVAL '1 hour'" () );
+          ( "withdrawal before creation",
+            row_sql ~post ~origin:o ~destination:d ~status:"'withdrawn'"
+              ~withdrawn:"NOW() - INTERVAL '1 hour'" () );
+          ( "update before creation",
+            row_sql ~post ~origin:o ~destination:d
+              ~updated:"NOW() - INTERVAL '1 hour'" () );
         ])
 
 let note_length_case =
@@ -321,12 +304,14 @@ let note_length_case =
       let* () =
         accepts conn "2000 fits"
           (row_sql ~post ~origin:o ~destination:d
-             ~note:("'" ^ String.make 2000 'a' ^ "'") ())
+             ~note:("'" ^ String.make 2000 'a' ^ "'")
+             ())
       in
       let* e = insert_community conn "stps-note-e" in
       refuses conn "2001 refused"
         (row_sql ~post ~origin:o ~destination:e
-           ~note:("'" ^ String.make 2001 'a' ^ "'") ()))
+           ~note:("'" ^ String.make 2001 'a' ^ "'")
+           ()))
 
 let one_active_case =
   db_case "schema: at most one active placement per post and destination"
@@ -403,8 +388,8 @@ let actor_deletion_case =
       let* () =
         accepts conn "removed row"
           (row_sql ~post ~origin:o ~destination:d ~status:"'removed'"
-             ~requested_by:a ~reviewed_by:a ~removed_by:a
-             ~reviewed:"NOW()" ~removed:"NOW()" ())
+             ~requested_by:a ~reviewed_by:a ~removed_by:a ~reviewed:"NOW()"
+             ~removed:"NOW()" ())
       in
       let* () =
         accepts conn "withdrawn row"
@@ -462,8 +447,13 @@ let index_shape_case =
             (fun needle ->
               if not (Html_assert.occurs def ~needle) then
                 Alcotest.failf "index definition lacks %S: %s" needle def)
-            [ "UNIQUE"; "post_id"; "destination_community_id"; "pending"
-            ; "accepted" ];
+            [
+              "UNIQUE";
+              "post_id";
+              "destination_community_id";
+              "pending";
+              "accepted";
+            ];
           Lwt.return_unit
       | _ -> Alcotest.fail "the active partial unique index is missing")
 
@@ -473,8 +463,7 @@ let audit_vocabulary_case =
   db_case "schema: the audit action vocabulary is closed" (fun conn ->
       let* author, o, d, post = base conn "audvoc" in
       let* () =
-        accepts conn "placement"
-          (row_sql ~post ~origin:o ~destination:d ())
+        accepts conn "placement" (row_sql ~post ~origin:o ~destination:d ())
       in
       let* placement = find conn "placement id" q_sole_id (post, d) in
       let* () =
@@ -485,16 +474,20 @@ let audit_vocabulary_case =
                 ((action, Some author, placement), (post, o, d))
             in
             Lwt.return_unit)
-          [ "shared_thread_requested"; "shared_thread_accepted"
-          ; "shared_thread_rejected"; "shared_thread_removed"
-          ; "shared_thread_withdrawn" ]
+          [
+            "shared_thread_requested";
+            "shared_thread_accepted";
+            "shared_thread_rejected";
+            "shared_thread_removed";
+            "shared_thread_withdrawn";
+          ]
       in
       refuses conn "off-vocabulary action"
         (Printf.sprintf
-           "INSERT INTO shared_thread_placement_audit_events \
-              (action, placement_id, post_id, origin_community_id, \
-               destination_community_id) \
-            VALUES ('shared_thread_created', %Ld, %d, %d, %d)"
+           "INSERT INTO shared_thread_placement_audit_events (action, \
+            placement_id, post_id, origin_community_id, \
+            destination_community_id) VALUES ('shared_thread_created', %Ld, \
+            %d, %d, %d)"
            placement post o d))
 
 let audit_protects_subjects_case =
@@ -513,8 +506,8 @@ let audit_protects_subjects_case =
       (* Subjects are protected while the event exists... *)
       let* () =
         refuses conn "placement deletion blocked"
-          (Printf.sprintf
-             "DELETE FROM shared_thread_placements WHERE id = %Ld" placement)
+          (Printf.sprintf "DELETE FROM shared_thread_placements WHERE id = %Ld"
+             placement)
       in
       let* () =
         refuses conn "post deletion blocked"
@@ -546,39 +539,35 @@ let notif_shape_case =
       in
       Lwt_list.iter_s
         (fun (label, sql) -> refuses conn label sql)
-        [ ( "prose on a structured kind"
-          , Printf.sprintf
-              "INSERT INTO notifications \
-                 (user_id, notif_type, community_id, \
-                  shared_thread_placement_id, message) \
-               VALUES (%d, 'shared_thread_accepted', %d, %Ld, 'hello')"
-              author d placement )
-        ; ( "post link on a structured kind"
-          , Printf.sprintf
-              "INSERT INTO notifications \
-                 (user_id, notif_type, community_id, \
-                  shared_thread_placement_id, post_id) \
-               VALUES (%d, 'shared_thread_accepted', %d, %Ld, %d)"
-              author d placement post )
-        ; ( "structured kind without a community"
-          , Printf.sprintf
-              "INSERT INTO notifications \
-                 (user_id, notif_type, shared_thread_placement_id) \
-               VALUES (%d, 'shared_thread_rejected', %Ld)"
-              author placement )
-        ; ( "structured kind without a placement"
-          , Printf.sprintf
-              "INSERT INTO notifications \
-                 (user_id, notif_type, community_id) \
+        [
+          ( "prose on a structured kind",
+            Printf.sprintf
+              "INSERT INTO notifications (user_id, notif_type, community_id, \
+               shared_thread_placement_id, message) VALUES (%d, \
+               'shared_thread_accepted', %d, %Ld, 'hello')"
+              author d placement );
+          ( "post link on a structured kind",
+            Printf.sprintf
+              "INSERT INTO notifications (user_id, notif_type, community_id, \
+               shared_thread_placement_id, post_id) VALUES (%d, \
+               'shared_thread_accepted', %d, %Ld, %d)"
+              author d placement post );
+          ( "structured kind without a community",
+            Printf.sprintf
+              "INSERT INTO notifications (user_id, notif_type, \
+               shared_thread_placement_id) VALUES (%d, \
+               'shared_thread_rejected', %Ld)"
+              author placement );
+          ( "structured kind without a placement",
+            Printf.sprintf
+              "INSERT INTO notifications (user_id, notif_type, community_id) \
                VALUES (%d, 'shared_thread_rejected', %d)"
-              author d )
-        ; ( "legacy kind with a placement"
-          , Printf.sprintf
-              "INSERT INTO notifications \
-                 (user_id, notif_type, message, \
-                  shared_thread_placement_id) \
-               VALUES (%d, 'mention', 'hi', %Ld)"
-              author placement )
+              author d );
+          ( "legacy kind with a placement",
+            Printf.sprintf
+              "INSERT INTO notifications (user_id, notif_type, message, \
+               shared_thread_placement_id) VALUES (%d, 'mention', 'hi', %Ld)"
+              author placement );
         ])
 
 let notif_dedup_case =
@@ -597,10 +586,9 @@ let notif_dedup_case =
       let* () =
         refuses conn "replayed duplicate"
           (Printf.sprintf
-             "INSERT INTO notifications \
-                (user_id, notif_type, community_id, \
-                 shared_thread_placement_id) \
-              VALUES (%d, 'shared_thread_requested', %d, %Ld)"
+             "INSERT INTO notifications (user_id, notif_type, community_id, \
+              shared_thread_placement_id) VALUES (%d, \
+              'shared_thread_requested', %d, %Ld)"
              author d placement)
       in
       (* A different kind and a different recipient both coexist. *)
@@ -615,12 +603,22 @@ let notif_dedup_case =
       Lwt.return_unit)
 
 let suite =
-  [ valid_shapes_case; same_community_case; status_vocabulary_case
-  ; lifecycle_shape_case; timestamp_order_case; note_length_case
-  ; one_active_case; history_frees_slot_case; actor_deletion_case
-  ; section_set_null_case; index_shape_case; audit_vocabulary_case
-  ; audit_protects_subjects_case; notif_shape_case; notif_dedup_case ]
-
-let suites =
-  [ ("shared_thread_placements_schema", suite)
+  [
+    valid_shapes_case;
+    same_community_case;
+    status_vocabulary_case;
+    lifecycle_shape_case;
+    timestamp_order_case;
+    note_length_case;
+    one_active_case;
+    history_frees_slot_case;
+    actor_deletion_case;
+    section_set_null_case;
+    index_shape_case;
+    audit_vocabulary_case;
+    audit_protects_subjects_case;
+    notif_shape_case;
+    notif_dedup_case;
   ]
+
+let suites = [ ("shared_thread_placements_schema", suite) ]

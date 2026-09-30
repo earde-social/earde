@@ -14,22 +14,25 @@ let cd_str = function
 
 let check_cd name expected ~is_admin ~requester_id ~owner_id =
   Alcotest.test_case name `Quick (fun () ->
-      Alcotest.(check string) name expected
+      Alcotest.(check string)
+        name expected
         (cd_str (CD.decide ~is_admin ~requester_id ~owner_id)))
 
 let suites =
-    (* /delete-comment matrix: author-only for non-admins; admins delete with
+  (* /delete-comment matrix: author-only for non-admins; admins delete with
        the admin label; moderators are refused (the mod_delete flow is the only
        community-removal path). decide has no community parameter, so there is
        nothing a forged hidden community_id could influence. *)
-  [ ( "delete_comment_authorization"
-    , [ check_cd "author deletes own comment" "author_delete"
-          ~is_admin:false ~requester_id:7 ~owner_id:7
-      ; check_cd "non-author (incl. any moderator) refused" "forbidden"
-          ~is_admin:false ~requester_id:7 ~owner_id:8
-      ; check_cd "admin deletes any comment" "admin_delete"
-          ~is_admin:true ~requester_id:7 ~owner_id:8
-      ; check_cd "admin deleting own comment stays on the admin path" "admin_delete"
-          ~is_admin:true ~requester_id:7 ~owner_id:7
-      ] )
+  [
+    ( "delete_comment_authorization",
+      [
+        check_cd "author deletes own comment" "author_delete" ~is_admin:false
+          ~requester_id:7 ~owner_id:7;
+        check_cd "non-author (incl. any moderator) refused" "forbidden"
+          ~is_admin:false ~requester_id:7 ~owner_id:8;
+        check_cd "admin deletes any comment" "admin_delete" ~is_admin:true
+          ~requester_id:7 ~owner_id:8;
+        check_cd "admin deleting own comment stays on the admin path"
+          "admin_delete" ~is_admin:true ~requester_id:7 ~owner_id:7;
+      ] );
   ]

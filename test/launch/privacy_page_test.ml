@@ -27,18 +27,34 @@ let render_privacy ?user () =
 (* The 16 anchor sections, in document order. The TOC must link every one
    and every one must exist as <section id='…'>. *)
 let section_ids =
-  [ "controller"; "data-we-collect"; "how-we-use"; "public-content";
-    "shared-threads"; "github"; "cookies-analytics"; "recipients";
-    "transfers"; "retention"; "security"; "your-rights"; "deletion";
-    "automated-decisions"; "changes"; "contact" ]
+  [
+    "controller";
+    "data-we-collect";
+    "how-we-use";
+    "public-content";
+    "shared-threads";
+    "github";
+    "cookies-analytics";
+    "recipients";
+    "transfers";
+    "retention";
+    "security";
+    "your-rights";
+    "deletion";
+    "automated-decisions";
+    "changes";
+    "contact";
+  ]
 
 let wrapper_case =
   case "wrapper: launch entry shell, only local launch assets" (fun () ->
       let page = render_privacy () in
       Html_assert.must page "<body class='launch-privacy'>";
       Html_assert.must page "<title>Privacy Policy - Earde</title>";
-      Html_assert.must page "<link rel='stylesheet' href='/static/css/earde.css'>";
-      Alcotest.(check int) "exactly one stylesheet" 1
+      Html_assert.must page
+        "<link rel='stylesheet' href='/static/css/earde.css'>";
+      Alcotest.(check int)
+        "exactly one stylesheet" 1
         (Html_assert.occurrences page "<link rel='stylesheet'");
       Html_assert.must_not page "tailwind";
       Html_assert.must_not page "fonts.googleapis";
@@ -58,10 +74,10 @@ let structure_case =
       Html_assert.must page "Last updated: 4 August 2026";
       Alcotest.(check int) "one h1" 1 (Html_assert.occurrences page "<h1");
       Alcotest.(check int) "sixteen h2" 16 (Html_assert.occurrences page "<h2");
-      Alcotest.(check int) "sixteen sections" 16
+      Alcotest.(check int)
+        "sixteen sections" 16
         (Html_assert.occurrences page "<section id='");
-      Alcotest.(check int) "toc entries" 16
-        (List.length section_ids);
+      Alcotest.(check int) "toc entries" 16 (List.length section_ids);
       List.iter
         (fun id ->
           Html_assert.must page (Printf.sprintf "href='#%s'" id);
@@ -69,9 +85,11 @@ let structure_case =
         section_ids;
       (* The self-service links: settings twice (rights + deletion),
          export once. *)
-      Alcotest.(check int) "settings links" 2
+      Alcotest.(check int)
+        "settings links" 2
         (Html_assert.occurrences page "href='/settings'");
-      Alcotest.(check int) "export link" 1
+      Alcotest.(check int)
+        "export link" 1
         (Html_assert.occurrences page "href='/export-data'"))
 
 let disclosure_case =
@@ -80,7 +98,8 @@ let disclosure_case =
       (* Controller and contact: named contact channel, three times
          (controller, rights, contact). *)
       Html_assert.must page "is the data controller";
-      Alcotest.(check int) "contact mailto" 3
+      Alcotest.(check int)
+        "contact mailto" 3
         (Html_assert.occurrences page "mailto:metacirculardispatches@gmail.com");
       (* Data categories and accuracy about credentials. *)
       Html_assert.must page "salted argon2id hash";
@@ -95,7 +114,8 @@ let disclosure_case =
          community-categorical. *)
       Html_assert.must page "may be indexed by search engines";
       Html_assert.must page "moderation log";
-      Html_assert.must page "publicly accessible communities, channels and sections";
+      Html_assert.must page
+        "publicly accessible communities, channels and sections";
       Html_assert.must page "limited to users authorized to view that area";
       (* Shared Threads. *)
       Html_assert.must page "one canonical thread";
@@ -129,8 +149,8 @@ let disclosure_case =
       Html_assert.must page "supervisory authority";
       (* Automated decisions and deletion behavior. *)
       Html_assert.must page
-        "does not make automated decisions about you that produce legal \
-         or similarly significant effects";
+        "does not make automated decisions about you that produce legal or \
+         similarly significant effects";
       Html_assert.must page "[deleted]")
 
 let consent_controls_case =
@@ -139,20 +159,24 @@ let consent_controls_case =
       (* Exactly the data-analytics-* anatomy analytics.js drives on
          /settings, shipped hidden so a deployment without analytics
          renders no dead control. Buttons, not a form. *)
-      Html_assert.must page "<div class='privacy-consent' data-analytics-settings hidden>";
+      Html_assert.must page
+        "<div class='privacy-consent' data-analytics-settings hidden>";
       Html_assert.must page "data-analytics-state";
       Html_assert.must page "data-analytics-accept";
       Html_assert.must page "data-analytics-refuse";
       Html_assert.must page "data-analytics-error";
-      Alcotest.(check int) "two buttons" 2
+      Alcotest.(check int)
+        "two buttons" 2
         (Html_assert.occurrences page "<button type='button' data-analytics-");
       Html_assert.must_not page "<form";
       (* One panel and one global footer — the footer's
          Analytics-preferences link may not duplicate the control, and the
          anchor it targets is this section's id. *)
-      Alcotest.(check int) "one preferences panel" 1
+      Alcotest.(check int)
+        "one preferences panel" 1
         (Html_assert.occurrences page "data-analytics-settings");
-      Alcotest.(check int) "one global footer" 1
+      Alcotest.(check int)
+        "one global footer" 1
         (Html_assert.occurrences page "<footer class='launch-footer'>");
       Html_assert.must page "<section id='cookies-analytics'>")
 
@@ -161,7 +185,8 @@ let removed_claims_case =
       let page = render_privacy () in
       (* The pre-rewrite page deferred analytics to the future; PostHog is
          live and consent-gated, so that sentence must never return. *)
-      Html_assert.must_not page "If analytics or tracking tools are added in the future";
+      Html_assert.must_not page
+        "If analytics or tracking tools are added in the future";
       (* Authenticated analytics uses internal user:<id> identities, so no
          "anonymous" claim may appear anywhere in the document. *)
       Html_assert.must_not page "anonymous";
@@ -186,8 +211,9 @@ let removed_claims_case =
 
 let viewer_independence_case =
   case "ignored ?user changes nothing" (fun () ->
-      Alcotest.(check string) "anonymous = authenticated"
-        (render_privacy ()) (render_privacy ~user:"qa-viewer" ()))
+      Alcotest.(check string)
+        "anonymous = authenticated" (render_privacy ())
+        (render_privacy ~user:"qa-viewer" ()))
 
 (* The signup consent link is the page's primary inbound route: pin its
    exact destination and security attributes. *)
@@ -206,9 +232,14 @@ let signup_consent_link_case =
         "<a href='/privacy' target='_blank'>Privacy Policy</a>")
 
 let suite =
-  [ wrapper_case; structure_case; disclosure_case; consent_controls_case;
-    removed_claims_case; viewer_independence_case; signup_consent_link_case ]
-
-let suites =
-  [ ("privacy_launch_page", suite)
+  [
+    wrapper_case;
+    structure_case;
+    disclosure_case;
+    consent_controls_case;
+    removed_claims_case;
+    viewer_independence_case;
+    signup_consent_link_case;
   ]
+
+let suites = [ ("privacy_launch_page", suite) ]

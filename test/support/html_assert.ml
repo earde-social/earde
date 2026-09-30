@@ -38,7 +38,9 @@ let attr_value html name =
 let count_sub haystack needle =
   let nl = String.length needle in
   let rec loop i acc =
-    match index_of (String.sub haystack i (String.length haystack - i)) needle with
+    match
+      index_of (String.sub haystack i (String.length haystack - i)) needle
+    with
     | None -> acc
     | Some j -> loop (i + j + nl) (acc + 1)
   in

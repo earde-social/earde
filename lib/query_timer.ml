@@ -8,10 +8,12 @@ let with_query_timer ~name f =
   let ms = (Unix.gettimeofday () -. t0) *. 1000.0 in
   let status = match result with Ok _ -> "ok" | Error _ -> "error" in
   Logs.info (fun m ->
-    m "%s" (Yojson.Safe.to_string (`Assoc [
-      ("query",        `String name);
-      ("execution_ms", `Float ms);
-      ("status",       `String status);
-    ]))
-  );
+      m "%s"
+        (Yojson.Safe.to_string
+           (`Assoc
+              [
+                ("query", `String name);
+                ("execution_ms", `Float ms);
+                ("status", `String status);
+              ])));
   Lwt.return result

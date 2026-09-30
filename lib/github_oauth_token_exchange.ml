@@ -13,7 +13,6 @@ let is_opaque_credential value =
   value <> "" && not (String.exists (fun c -> c <= ' ' || c = '\x7f') value)
 
 type authorization_code = string
-
 type code_error = Invalid_code
 
 let authorization_code_of_callback raw =
@@ -93,8 +92,7 @@ module Cohttp_transport : TRANSPORT = struct
     Lwt.catch
       (fun () -> Lwt.pick [ request (); timeout () ])
       (function
-        | Lwt.Canceled -> Lwt.reraise Lwt.Canceled
-        | _ -> Lwt.return (Error ()))
+        | Lwt.Canceled -> Lwt.reraise Lwt.Canceled | _ -> Lwt.return (Error ()))
 end
 
 type error =
@@ -107,8 +105,8 @@ type error =
    would let a misconfiguration or an attacker aim the client secret at an
    arbitrary host. *)
 let endpoint =
-  Uri.make ~scheme:"https" ~host:"github.com"
-    ~path:"/login/oauth/access_token" ()
+  Uri.make ~scheme:"https" ~host:"github.com" ~path:"/login/oauth/access_token"
+    ()
 
 let request_headers =
   [
@@ -144,9 +142,7 @@ let occurrences fields key =
 
 (* Positive OCaml int only: floats, numeric strings, null, and integers
    Yojson could not represent as an int (`Intlit`) are all rejected. *)
-let positive_seconds = function
-  | `Int n when n > 0 -> Some n
-  | _ -> None
+let positive_seconds = function `Int n when n > 0 -> Some n | _ -> None
 
 let parse_success fields =
   match
@@ -174,7 +170,9 @@ let parse_success fields =
               refresh_token_expires_in = None;
             }
       | Some expires, Some (`String refresh), Some refresh_expires -> (
-          match (positive_seconds expires, positive_seconds refresh_expires) with
+          match
+            (positive_seconds expires, positive_seconds refresh_expires)
+          with
           | Some expires_in, Some refresh_token_expires_in
             when is_opaque_credential refresh ->
               Ok
@@ -191,13 +189,14 @@ let parse_success fields =
 let parse_body body =
   match Yojson.Safe.from_string body with
   | exception _ -> Error Invalid_response
-  | `Assoc fields ->
-      (* Yojson preserves duplicate keys in `Assoc`; a duplicated
+  | `Assoc fields -> (
+      if
+        (* Yojson preserves duplicate keys in `Assoc`; a duplicated
          recognized key makes the response ambiguous, so it is rejected
          before any field is interpreted. Unknown keys stay ignored. *)
-      if List.exists (fun key -> occurrences fields key > 1) recognized_keys
+        List.exists (fun key -> occurrences fields key > 1) recognized_keys
       then Error Invalid_response
-      else (
+      else
         match List.assoc_opt "error" fields with
         | Some error_value -> (
             let contradicted =
@@ -207,8 +206,8 @@ let parse_body body =
                dropped: every well-formed rejection collapses to the same
                payload-free constructor. *)
             match error_value with
-            | `String reason
-              when String.trim reason <> "" && not contradicted ->
+            | `String reason when String.trim reason <> "" && not contradicted
+              ->
                 Error OAuth_rejected
             | _ -> Error Invalid_response)
         | None -> parse_success fields)
@@ -222,12 +221,10 @@ let exchange ~transport:(module Transport : TRANSPORT) ~config ~credentials
     Uri.encoded_of_query
       [
         ("client_id", [ Github_app_config.client_id config ]);
-        ( "client_secret",
-          [ Github_oauth_credentials.client_secret credentials ] );
+        ("client_secret", [ Github_oauth_credentials.client_secret credentials ]);
         ("code", [ code ]);
         ("redirect_uri", [ Github_app_config.callback_url config ]);
-        ( "code_verifier",
-          [ Github_onboarding_pkce.verifier_to_string verifier ] );
+        ("code_verifier", [ Github_onboarding_pkce.verifier_to_string verifier ]);
       ]
   in
   let%lwt result =

@@ -36,7 +36,8 @@ let run url =
   let* conn = Caqti_lwt_unix.connect (Uri.of_string url) in
   match conn with
   | Error err ->
-      prerr_endline ("FATAL: database connection failed: " ^ Caqti_error.show err);
+      prerr_endline
+        ("FATAL: database connection failed: " ^ Caqti_error.show err);
       Lwt.return 1
   | Ok conn -> (
       (* The claim and each outcome mark are single autocommit statements; no
@@ -47,7 +48,8 @@ let run url =
         Earde.Posthog_deletion.process_batch
           ~claim:(fun () ->
             let* jobs =
-              Earde.Posthog_deletion_job_store.claim_batch conn ~limit:batch_limit ()
+              Earde.Posthog_deletion_job_store.claim_batch conn
+                ~limit:batch_limit ()
             in
             (match jobs with
             | Ok jobs ->
@@ -71,7 +73,7 @@ let run url =
       | Error err ->
           prerr_endline ("FATAL: claiming pending jobs failed: " ^ err);
           Lwt.return 1
-      | Ok { Earde.Posthog_deletion.claimed; completed; left_pending } ->
+      | Ok { Earde.Posthog_deletion.claimed; completed; left_pending } -> (
           Printf.printf
             "person deletions: claimed=%d completed=%d still_pending=%d\n%!"
             claimed completed left_pending;
@@ -88,8 +90,7 @@ let run url =
                 | Ok jobs ->
                     List.iter
                       (fun (job_id, group_key) ->
-                        Printf.printf "claimed group cleanup %d (%s)\n%!"
-                          job_id
+                        Printf.printf "claimed group cleanup %d (%s)\n%!" job_id
                           (printable_group_key group_key))
                       jobs
                 | Error _ -> ());
@@ -100,10 +101,11 @@ let run url =
               ~mark_failed:(fun job_id err ->
                 Printf.printf "group cleanup %d: still pending (%s)\n%!" job_id
                   err;
-                Earde.Posthog_group_cleanup_job_store.mark_failed conn job_id err)
+                Earde.Posthog_group_cleanup_job_store.mark_failed conn job_id
+                  err)
               ()
           in
-          (match group_summary with
+          match group_summary with
           | Error err ->
               prerr_endline ("FATAL: claiming group cleanup jobs failed: " ^ err);
               Lwt.return 1

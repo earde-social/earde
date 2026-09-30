@@ -4,22 +4,23 @@
 
 let ( let* ) = Lwt.bind
 
-
 module D = Earde.Auth_mail_dispatcher
 module R = Earde.Auth_mail_resolver
 module LV = Earde.Login_verification
 
 let contains = Html_assert.contains
-
 let count_occurrences = Html_assert.count_sub
 
 let must label hay needle =
-  if not (contains hay needle) then Alcotest.failf "%s: expected text missing" label
+  if not (contains hay needle) then
+    Alcotest.failf "%s: expected text missing" label
 
 let must_not label hay needle =
   if contains hay needle then Alcotest.failf "%s: forbidden text present" label
 
-let rec settle n = if n <= 0 then Lwt.return_unit else Lwt.bind (Lwt.pause ()) (fun () -> settle (n - 1))
+let rec settle n =
+  if n <= 0 then Lwt.return_unit
+  else Lwt.bind (Lwt.pause ()) (fun () -> settle (n - 1))
 
 (* Polls real time for a condition that local IO will make true; bounded so
    a regression fails instead of hanging the suite. *)
@@ -27,7 +28,8 @@ let eventually label ?(seconds = 10.0) cond =
   let deadline = Unix.gettimeofday () +. seconds in
   let rec go () =
     if cond () then Lwt.return_unit
-    else if Unix.gettimeofday () > deadline then Alcotest.failf "%s: never happened" label
+    else if Unix.gettimeofday () > deadline then
+      Alcotest.failf "%s: never happened" label
     else Lwt.bind (Lwt_unix.sleep 0.005) go
   in
   go ()
@@ -94,7 +96,8 @@ module Vclock = struct
         if at > limit then best
         else
           match best with
-          | Some (bat, bseq, _) when bat < at || (bat = at && bseq < seq) -> best
+          | Some (bat, bseq, _) when bat < at || (bat = at && bseq < seq) ->
+              best
           | _ -> Some timer)
       None c.timers
 
@@ -140,7 +143,13 @@ module Fake = struct
   }
 
   let create clock =
-    { clock; started = []; finished = []; cancelled = []; gates = Hashtbl.create 16 }
+    {
+      clock;
+      started = [];
+      finished = [];
+      cancelled = [];
+      gates = Hashtbl.create 16;
+    }
 
   (* Every delivery blocks on its own cancelable promise until the test
      resolves it, or until the dispatcher cancels it at the slot deadline,
@@ -167,12 +176,14 @@ end
 (* What a transport does with an attempt, from the dispatcher's point of
    view. None of these keeps a reference to the job. *)
 type behaviour =
-  | Stall  (* never answers; honours cancellation *)
+  | Stall (* never answers; honours cancellation *)
   | Fast_ok
   | Fast_error
   | Sync_raise
   | Async_raise
-  | After of float * (unit, string) result  (* on the virtual clock; ignores cancellation *)
+  | After of
+      float
+      * (unit, string) result (* on the virtual clock; ignores cancellation *)
 
 let behaviour_name = function
   | Stall -> "stall"
@@ -197,15 +208,18 @@ let check_stats label d ~outstanding ~queued ~running =
   Alcotest.(check (list int))
     (label ^ ": outstanding/queued/running")
     [ outstanding; queued; running ]
-    (let o, q, r = occupancy d in [ o; q; r ])
+    (let o, q, r = occupancy d in
+     [ o; q; r ])
 
 let make_dispatcher ?config clock fake =
-  D.create ?config ~sleep:(Vclock.sleep clock) ~label:(fun _ -> "test")
+  D.create ?config ~sleep:(Vclock.sleep clock)
+    ~label:(fun _ -> "test")
     ~transport:(Fake.transport fake) ()
 
 let submit d job = D.admit d (fun () -> Lwt.return ((), job))
 
-let pure_case name f = Alcotest.test_case name `Quick (fun () -> Lwt_main.run (f ()))
+let pure_case name f =
+  Alcotest.test_case name `Quick (fun () -> Lwt_main.run (f ()))
 
 let is_refused = function `Refused -> true | `Admitted _ -> false
 

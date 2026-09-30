@@ -7,13 +7,10 @@
    log verbatim. *)
 
 type t = { client_secret : string }
-
 type field = Client_secret
-
 type error = Missing of field | Invalid of field
 
 let client_secret_env = "GITHUB_APP_CLIENT_SECRET"
-
 let string_of_field = function Client_secret -> client_secret_env
 
 let string_of_error = function

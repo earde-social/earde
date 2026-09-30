@@ -18,13 +18,9 @@
    a validator. See the .mli for the full contract. *)
 
 open Lwt.Infix
-
 module Int64_set = Set.Make (Int64)
 
-type verification =
-  | Verified
-  | Stale
-  | Revoked
+type verification = Verified | Stale | Revoked
 
 type error =
   | Invalid_community_slug
@@ -185,10 +181,10 @@ let validated_website stored =
    can be revalidated. *)
 let community_query =
   let open Caqti_request.Infix in
-  (Caqti_type.string ->? Caqti_type.(t2 (t3 int string string) (t2 string string)))
-    "SELECT c.id, c.slug, c.name, c.visibility, c.onboarding_state \
-     FROM communities c \
-     WHERE c.slug = $1"
+  (Caqti_type.string
+  ->? Caqti_type.(t2 (t3 int string string) (t2 string string)))
+    "SELECT c.id, c.slug, c.name, c.visibility, c.onboarding_state FROM \
+     communities c WHERE c.slug = $1"
 
 (* The accepted home relations of the community, joined to permanent project
    data and every permanent repository (LEFT JOIN: a corrupt zero-repository
@@ -210,31 +206,28 @@ let community_query =
 let accepted_projects_query =
   let open Caqti_request.Infix in
   (Caqti_type.int
-   ->* Caqti_type.(
-         t2
-           (t2
-              (t4 int64 int64 string string)
-              (t4 string string string (option string)))
-           (option (t2 (t4 int string string string) (t2 bool bool)))))
-    "SELECT cp.id, p.id, p.name, p.slug, \
-            p.kind, p.forge_namespace_login, \
-            project_github_verification(p.id, p.verification_status), \
-            p.website_url, \
-            r.position, r.full_name, r.html_url, r.default_branch, \
-            r.is_primary, r.is_archived \
-     FROM community_projects cp \
-     JOIN open_source_projects p ON p.id = cp.project_id \
-     LEFT JOIN project_repositories r ON r.project_id = p.id \
-     WHERE cp.community_id = $1 \
-       AND cp.relation_type = 'home' AND cp.status = 'accepted' \
-     ORDER BY lower(p.name) ASC, p.slug ASC, p.id ASC, r.position ASC"
+  ->* Caqti_type.(
+        t2
+          (t2
+             (t4 int64 int64 string string)
+             (t4 string string string (option string)))
+          (option (t2 (t4 int string string string) (t2 bool bool)))))
+    "SELECT cp.id, p.id, p.name, p.slug, p.kind, p.forge_namespace_login, \
+     project_github_verification(p.id, p.verification_status), p.website_url, \
+     r.position, r.full_name, r.html_url, r.default_branch, r.is_primary, \
+     r.is_archived FROM community_projects cp JOIN open_source_projects p ON \
+     p.id = cp.project_id LEFT JOIN project_repositories r ON r.project_id = \
+     p.id WHERE cp.community_id = $1 AND cp.relation_type = 'home' AND \
+     cp.status = 'accepted' ORDER BY lower(p.name) ASC, p.slug ASC, p.id ASC, \
+     r.position ASC"
 
 (* === community mapping === *)
 
 (* Durable identity only. Private, draft, unlisted, and legacy states are all
    legitimate here — the caller owns visibility — so the lifecycle columns are
    checked for closed vocabulary and nothing more. *)
-let community_of_row ~community_slug (id, stored_slug, name) (visibility, onboarding) =
+let community_of_row ~community_slug (id, stored_slug, name)
+    (visibility, onboarding) =
   if
     not
       (id > 0
@@ -253,10 +246,7 @@ let community_of_row ~community_slug (id, stored_slug, name) (visibility, onboar
 
 (* Position kept alongside the exposed fields for the cross-row contiguity and
    duplicate rules; dropped from the returned value. *)
-type validated_repo = {
-  vr_position : int;
-  vr_repository : repository;
-}
+type validated_repo = { vr_position : int; vr_repository : repository }
 
 let repository_of_row
     ((position, full_name, html_url, default_branch), (is_primary, is_archived))
@@ -264,9 +254,9 @@ let repository_of_row
   let valid =
     position > 0
     && (match split_full_name full_name with
-       | None -> false
-       | Some (owner_login, name) ->
-           String.equal html_url (canonical_html_url ~owner_login ~name))
+      | None -> false
+      | Some (owner_login, name) ->
+          String.equal html_url (canonical_html_url ~owner_login ~name))
     && valid_branch default_branch
   in
   if valid then
@@ -395,19 +385,20 @@ let project_of_group
           && Int64.compare project_id 0L > 0
           && Int64_set.cardinal relation_ids = 1
           && canonical_project_slug slug
-          && nonblank name && control_safe name
-          && single_path_segment login)
+          && nonblank name && control_safe name && single_path_segment login)
       then Error ()
       else
         match validated_website website_raw with
         | Error () -> Error ()
-        | Ok website ->
-            (* An all-NULL repository half means the LEFT JOIN found no
+        | Ok website -> (
+            if
+              (* An all-NULL repository half means the LEFT JOIN found no
                permanent repository rows: a project with an accepted home must
                still have at least one, so a missing set is corruption, never a
                silently repository-less project. *)
-            if List.exists Option.is_none repo_opts then Error ()
-            else (
+              List.exists Option.is_none repo_opts
+            then Error ()
+            else
               match
                 validate_repositories ~kind (List.filter_map Fun.id repo_opts)
               with

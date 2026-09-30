@@ -13,7 +13,6 @@ module GOC = Earde.Github_onboarding_crypto
 let ( let* ) = Lwt.bind
 
 open Caqti_request.Infix
-
 module Store = Earde.Github_onboarding_state_store
 
 (* attach_error shares constructor names with issue_error, so both
@@ -23,8 +22,7 @@ let issue_error_str : Store.issue_error -> string = function
   | Store.Storage_error -> "Storage_error"
 
 let attach_error_str : Store.attach_error -> string = function
-  | Store.Invalid_pending_installation_id ->
-      "Invalid_pending_installation_id"
+  | Store.Invalid_pending_installation_id -> "Invalid_pending_installation_id"
   | Store.State_unavailable -> "State_unavailable"
   | Store.Storage_error -> "Storage_error"
 
@@ -34,29 +32,30 @@ let or_fail label = function
 
 let q_insert_user =
   (Caqti_type.unit ->! Caqti_type.int)
-  "INSERT INTO users (username, email, password_hash, is_email_verified)
-   VALUES ('ghstate_user', 'ghstate_user@test.invalid', 'x', TRUE) RETURNING id"
+    "INSERT INTO users (username, email, password_hash, is_email_verified)\n\
+    \   VALUES ('ghstate_user', 'ghstate_user@test.invalid', 'x', TRUE) \
+     RETURNING id"
 
 (* Everything stored for a user's states: the three text columns (no other
    column in the table can hold token material), NULL-ness of the two
    lifecycle columns, and the Postgres-computed expiry delta. *)
 let q_rows_for_user =
-  (Caqti_type.(int ->* t2 (t3 string string string) (t3 bool bool float)))
-  "SELECT state_hash, session_binding_hash, flow,
-          pending_github_installation_id IS NULL,
-          consumed_at IS NULL,
-          EXTRACT(EPOCH FROM (expires_at - created_at))::float8
-   FROM github_onboarding_states WHERE user_id = $1 ORDER BY id"
+  Caqti_type.(int ->* t2 (t3 string string string) (t3 bool bool float))
+    "SELECT state_hash, session_binding_hash, flow,\n\
+    \          pending_github_installation_id IS NULL,\n\
+    \          consumed_at IS NULL,\n\
+    \          EXTRACT(EPOCH FROM (expires_at - created_at))::float8\n\
+    \   FROM github_onboarding_states WHERE user_id = $1 ORDER BY id"
 
 let q_count_for_user =
   (Caqti_type.int ->! Caqti_type.int)
-  "SELECT COUNT(*) FROM github_onboarding_states WHERE user_id = $1"
+    "SELECT COUNT(*) FROM github_onboarding_states WHERE user_id = $1"
 
 (* A positive user id guaranteed absent from users, for the FK-failure
    case. *)
 let q_absent_user_id =
   (Caqti_type.unit ->! Caqti_type.int)
-  "SELECT COALESCE(MAX(id), 0) + 1000000 FROM users"
+    "SELECT COALESCE(MAX(id), 0) + 1000000 FROM users"
 
 let db_case name f =
   Alcotest.test_case name `Quick (fun () ->
@@ -85,16 +84,14 @@ let tx_case name f =
 
 let issue_ok conn ~user_id ~session_binding_hash =
   let* r =
-    Store.issue conn ~user_id ~session_binding_hash
-      ~flow:GO.Project_onboarding
+    Store.issue conn ~user_id ~session_binding_hash ~flow:GO.Project_onboarding
   in
   match r with
   | Ok state -> Lwt.return state
   | Error e -> Alcotest.failf "issue: %s" (issue_error_str e)
 
 let single_issue_case =
-  tx_case "issue: one row, hashes only, Postgres 15-minute expiry"
-    (fun conn ->
+  tx_case "issue: one row, hashes only, Postgres 15-minute expiry" (fun conn ->
       let (module C : Caqti_lwt.CONNECTION) = conn in
       let* uid = C.find q_insert_user () in
       let* uid = or_fail "user" uid in
@@ -111,32 +108,37 @@ let single_issue_case =
       let* rows = C.collect_list q_rows_for_user uid in
       let* rows = or_fail "rows" rows in
       (match rows with
-      | [ ( (state_hash, stored_binding_hash, flow),
-            (pending_null, consumed_null, ttl) ) ] ->
-          Alcotest.(check string) "stored state_hash is the derived hash"
+      | [
+       ( (state_hash, stored_binding_hash, flow),
+         (pending_null, consumed_null, ttl) );
+      ] ->
+          Alcotest.(check string)
+            "stored state_hash is the derived hash"
             (GOC.state_hash_to_string (GOC.hash_state state))
             state_hash;
-          Alcotest.(check string) "stored binding hash is the supplied hash"
+          Alcotest.(check string)
+            "stored binding hash is the supplied hash"
             (GOC.session_binding_hash_to_string binding_hash)
             stored_binding_hash;
           Alcotest.(check string) "flow" "project_onboarding" flow;
           let text_columns =
             String.concat "|" [ state_hash; stored_binding_hash; flow ]
           in
-          Alcotest.(check bool) "raw state absent from text columns" false
+          Alcotest.(check bool)
+            "raw state absent from text columns" false
             (Html_assert.contains_nonempty ~needle:raw_state text_columns);
-          Alcotest.(check bool) "raw binding absent from text columns" false
+          Alcotest.(check bool)
+            "raw binding absent from text columns" false
             (Html_assert.contains_nonempty
                ~needle:(GOC.session_binding_to_string binding)
                text_columns);
-          Alcotest.(check bool) "pending installation id NULL" true
-            pending_null;
+          Alcotest.(check bool) "pending installation id NULL" true pending_null;
           Alcotest.(check bool) "consumed_at NULL" true consumed_null;
-          Alcotest.(check bool) "expiry ~15 minutes after creation" true
+          Alcotest.(check bool)
+            "expiry ~15 minutes after creation" true
             (Float.abs (ttl -. 900.) <= 5.)
       | rows ->
-          Alcotest.failf "expected exactly one row, found %d"
-            (List.length rows));
+          Alcotest.failf "expected exactly one row, found %d" (List.length rows));
       Lwt.return_unit)
 
 let multiplicity_case =
@@ -158,17 +160,19 @@ let multiplicity_case =
       let* rows = C.collect_list q_rows_for_user uid in
       let* rows = or_fail "rows" rows in
       (match rows with
-      | [ ((hash_a, _, _), (_, consumed_a, _));
-          ((hash_b, _, _), (_, consumed_b, _)) ] ->
+      | [
+       ((hash_a, _, _), (_, consumed_a, _)); ((hash_b, _, _), (_, consumed_b, _));
+      ] ->
           Alcotest.(check bool) "first row unconsumed" true consumed_a;
           Alcotest.(check bool) "second row unconsumed" true consumed_b;
-          Alcotest.(check bool) "distinct state hashes" false
+          Alcotest.(check bool)
+            "distinct state hashes" false
             (String.equal hash_a hash_b);
           (* Rows are id-ordered, so they pair with issuance order. *)
-          Alcotest.(check string) "first row is the first state"
-            (hash_of first) hash_a;
-          Alcotest.(check string) "second row is the second state"
-            (hash_of second) hash_b
+          Alcotest.(check string)
+            "first row is the first state" (hash_of first) hash_a;
+          Alcotest.(check string)
+            "second row is the second state" (hash_of second) hash_b
       | rows ->
           Alcotest.failf "expected exactly two rows, found %d"
             (List.length rows));
@@ -187,11 +191,10 @@ let invalid_user_case =
         match r with
         | Error Store.Invalid_user_id -> Lwt.return_unit
         | Error Store.Storage_error ->
-            Alcotest.failf "user id %d: expected Invalid_user_id, got \
-                           Storage_error" uid
+            Alcotest.failf
+              "user id %d: expected Invalid_user_id, got Storage_error" uid
         | Ok _ ->
-            Alcotest.failf "user id %d: expected Invalid_user_id, got Ok"
-              uid
+            Alcotest.failf "user id %d: expected Invalid_user_id, got Ok" uid
       in
       let* () = check_rejected 0 in
       check_rejected (-1))
@@ -235,21 +238,23 @@ let missing_user_case =
 
 let q_insert_second_user =
   (Caqti_type.unit ->! Caqti_type.int)
-  "INSERT INTO users (username, email, password_hash, is_email_verified)
-   VALUES ('ghstate_user_b', 'ghstate_user_b@test.invalid', 'x', TRUE) RETURNING id"
+    "INSERT INTO users (username, email, password_hash, is_email_verified)\n\
+    \   VALUES ('ghstate_user_b', 'ghstate_user_b@test.invalid', 'x', TRUE) \
+     RETURNING id"
 
 (* Full persisted row for attach assertions: the three text columns, the
    actual pending id, consumed_at NULL-ness, and the creation/expiry
    epochs — pinning that attachment changes nothing else. *)
 let q_attach_rows_for_user =
-  (Caqti_type.(int ->* t2 (t3 string string string)
-                        (t3 (option int64) bool (t2 float float))))
-  "SELECT state_hash, session_binding_hash, flow,
-          pending_github_installation_id,
-          consumed_at IS NULL,
-          EXTRACT(EPOCH FROM created_at)::float8,
-          EXTRACT(EPOCH FROM expires_at)::float8
-   FROM github_onboarding_states WHERE user_id = $1 ORDER BY id"
+  Caqti_type.(
+    int
+    ->* t2 (t3 string string string) (t3 (option int64) bool (t2 float float)))
+    "SELECT state_hash, session_binding_hash, flow,\n\
+    \          pending_github_installation_id,\n\
+    \          consumed_at IS NULL,\n\
+    \          EXTRACT(EPOCH FROM created_at)::float8,\n\
+    \          EXTRACT(EPOCH FROM expires_at)::float8\n\
+    \   FROM github_onboarding_states WHERE user_id = $1 ORDER BY id"
 
 (* Fixture: push a user's states into the past. created_at moves too,
    both because expires_at > created_at is a CHECK and because NOW() is
@@ -257,15 +262,15 @@ let q_attach_rows_for_user =
    TTL could never make a row expired inside the test. *)
 let q_expire_states_for_user =
   (Caqti_type.int ->. Caqti_type.unit)
-  "UPDATE github_onboarding_states
-   SET created_at = NOW() - INTERVAL '1 hour',
-       expires_at = NOW() - INTERVAL '30 minutes'
-   WHERE user_id = $1"
+    "UPDATE github_onboarding_states\n\
+    \   SET created_at = NOW() - INTERVAL '1 hour',\n\
+    \       expires_at = NOW() - INTERVAL '30 minutes'\n\
+    \   WHERE user_id = $1"
 
 let q_consume_states_for_user =
   (Caqti_type.int ->. Caqti_type.unit)
-  "UPDATE github_onboarding_states SET consumed_at = NOW()
-   WHERE user_id = $1"
+    "UPDATE github_onboarding_states SET consumed_at = NOW()\n\
+    \   WHERE user_id = $1"
 
 let attach conn ~state ~binding_hash id =
   Store.attach_pending_installation conn ~state
@@ -294,9 +299,7 @@ let issued_fixture conn =
   let* uid = or_fail "user" uid in
   let binding = GOC.generate_session_binding () in
   let binding_hash = GOC.hash_session_binding binding in
-  let* state =
-    issue_ok conn ~user_id:uid ~session_binding_hash:binding_hash
-  in
+  let* state = issue_ok conn ~user_id:uid ~session_binding_hash:binding_hash in
   Lwt.return (uid, state, binding, binding_hash)
 
 let single_row conn uid =
@@ -306,17 +309,14 @@ let single_row conn uid =
   match rows with
   | [ row ] -> Lwt.return row
   | rows ->
-      Alcotest.failf "expected exactly one row, found %d"
-        (List.length rows)
+      Alcotest.failf "expected exactly one row, found %d" (List.length rows)
 
 let check_untouched_unconsumed label (_, (pending, consumed_null, _)) =
-  Alcotest.(check (option int64)) (label ^ ": pending still NULL") None
-    pending;
+  Alcotest.(check (option int64)) (label ^ ": pending still NULL") None pending;
   Alcotest.(check bool) (label ^ ": still unconsumed") true consumed_null
 
 let attach_validation_case =
-  db_case "attach: invalid installation ids rejected before SQL"
-    (fun conn ->
+  db_case "attach: invalid installation ids rejected before SQL" (fun conn ->
       let state = GOC.generate_state () in
       let binding_hash =
         GOC.hash_session_binding (GOC.generate_session_binding ())
@@ -340,11 +340,8 @@ let attach_success_case =
   tx_case "attach: first attachment sets only the pending id" (fun conn ->
       let* uid, state, binding, binding_hash = issued_fixture conn in
       let* before = single_row conn uid in
-      let ((state_hash0, binding_hash0, flow0), (pending0, _, times0)) =
-        before
-      in
-      Alcotest.(check (option int64)) "pending NULL before attach" None
-        pending0;
+      let (state_hash0, binding_hash0, flow0), (pending0, _, times0) = before in
+      Alcotest.(check (option int64)) "pending NULL before attach" None pending0;
       (* The call carries only the state, binding hash, flow, and
          installation id — no user id exists in the attach API at all. *)
       let* () = attach_ok conn ~state ~binding_hash 123456789L in
@@ -355,37 +352,36 @@ let attach_success_case =
             (pending, consumed_null, (created, expires)) ) =
         row
       in
-      Alcotest.(check (option int64)) "attached id" (Some 123456789L)
-        pending;
+      Alcotest.(check (option int64)) "attached id" (Some 123456789L) pending;
       Alcotest.(check bool) "consumed_at still NULL" true consumed_null;
       Alcotest.(check string) "state_hash unchanged" state_hash0 state_hash;
-      Alcotest.(check string) "binding hash unchanged" binding_hash0
-        stored_binding_hash;
+      Alcotest.(check string)
+        "binding hash unchanged" binding_hash0 stored_binding_hash;
       Alcotest.(check string) "flow unchanged" flow0 flow;
       let created0, expires0 = times0 in
       Alcotest.(check (float 0.001)) "created_at unchanged" created0 created;
       Alcotest.(check (float 0.001)) "expires_at unchanged" expires0 expires;
       (* Attachment sends only hashes over SQL; the text columns must
          still hold no raw token material. *)
-      let text =
-        String.concat "|" [ state_hash; stored_binding_hash; flow ]
-      in
-      Alcotest.(check bool) "raw state absent from text columns" false
+      let text = String.concat "|" [ state_hash; stored_binding_hash; flow ] in
+      Alcotest.(check bool)
+        "raw state absent from text columns" false
         (Html_assert.contains_nonempty ~needle:(GOC.state_to_string state) text);
-      Alcotest.(check bool) "raw binding absent from text columns" false
-        (Html_assert.contains_nonempty ~needle:(GOC.session_binding_to_string binding) text);
+      Alcotest.(check bool)
+        "raw binding absent from text columns" false
+        (Html_assert.contains_nonempty
+           ~needle:(GOC.session_binding_to_string binding)
+           text);
       Lwt.return_unit)
 
 let attach_idempotent_case =
-  tx_case "attach: identical retry succeeds on the same single row"
-    (fun conn ->
+  tx_case "attach: identical retry succeeds on the same single row" (fun conn ->
       let* uid, state, _, binding_hash = issued_fixture conn in
       let* () = attach_ok conn ~state ~binding_hash 42L in
       let* () = attach_ok conn ~state ~binding_hash 42L in
       (* single_row also proves the retry created no extra row. *)
       let* _, (pending, consumed_null, _) = single_row conn uid in
-      Alcotest.(check (option int64)) "still the same id" (Some 42L)
-        pending;
+      Alcotest.(check (option int64)) "still the same id" (Some 42L) pending;
       Alcotest.(check bool) "still unconsumed" true consumed_null;
       Lwt.return_unit)
 
@@ -397,8 +393,7 @@ let attach_conflict_case =
         attach_unavailable "conflicting id" conn ~state ~binding_hash 43L
       in
       let* _, (pending, consumed_null, _) = single_row conn uid in
-      Alcotest.(check (option int64)) "first id retained" (Some 42L)
-        pending;
+      Alcotest.(check (option int64)) "first id retained" (Some 42L) pending;
       Alcotest.(check bool) "conflict did not consume" true consumed_null;
       Lwt.return_unit)
 
@@ -427,8 +422,7 @@ let attach_missing_state_case =
    attachment untouched. single_row filters on user_id, so retrieving each
    row under its own user is itself the ownership assertion. *)
 let attach_ownership_case =
-  tx_case "attach: touches only its own state, ownership stays put"
-    (fun conn ->
+  tx_case "attach: touches only its own state, ownership stays put" (fun conn ->
       let (module C : Caqti_lwt.CONNECTION) = conn in
       let* uid_a, state_a, _, binding_hash_a = issued_fixture conn in
       let* uid_b = C.find q_insert_second_user () in
@@ -439,10 +433,11 @@ let attach_ownership_case =
       let* _state_b =
         issue_ok conn ~user_id:uid_b ~session_binding_hash:binding_hash_b
       in
-      let* () = attach_ok conn ~state:state_a ~binding_hash:binding_hash_a 42L in
+      let* () =
+        attach_ok conn ~state:state_a ~binding_hash:binding_hash_a 42L
+      in
       let* _, (pending_a, consumed_a, _) = single_row conn uid_a in
-      Alcotest.(check (option int64)) "state A attached" (Some 42L)
-        pending_a;
+      Alcotest.(check (option int64)) "state A attached" (Some 42L) pending_a;
       Alcotest.(check bool) "state A unconsumed" true consumed_a;
       let* row_b = single_row conn uid_b in
       check_untouched_unconsumed "state B" row_b;
@@ -455,8 +450,8 @@ let attach_wrong_binding_case =
         GOC.hash_session_binding (GOC.generate_session_binding ())
       in
       let* () =
-        attach_unavailable "wrong binding" conn ~state
-          ~binding_hash:other_hash 42L
+        attach_unavailable "wrong binding" conn ~state ~binding_hash:other_hash
+          42L
       in
       let* row = single_row conn uid in
       check_untouched_unconsumed "wrong binding" row;
@@ -468,9 +463,7 @@ let attach_expired_case =
       let* uid, state, _, binding_hash = issued_fixture conn in
       let* r = C.exec q_expire_states_for_user uid in
       let* () = or_fail "expire fixture" r in
-      let* () =
-        attach_unavailable "expired" conn ~state ~binding_hash 42L
-      in
+      let* () = attach_unavailable "expired" conn ~state ~binding_hash 42L in
       let* row = single_row conn uid in
       check_untouched_unconsumed "expired" row;
       Lwt.return_unit)
@@ -481,9 +474,7 @@ let attach_consumed_case =
       let* uid, state, _, binding_hash = issued_fixture conn in
       let* r = C.exec q_consume_states_for_user uid in
       let* () = or_fail "consume fixture" r in
-      let* () =
-        attach_unavailable "consumed" conn ~state ~binding_hash 42L
-      in
+      let* () = attach_unavailable "consumed" conn ~state ~binding_hash 42L in
       let* _, (pending, consumed_null, _) = single_row conn uid in
       Alcotest.(check (option int64)) "pending still NULL" None pending;
       Alcotest.(check bool) "row stayed consumed" false consumed_null;
@@ -521,22 +512,22 @@ let consume_error_str : Store.consume_error -> string = function
 
 let q_insert_named_user =
   (Caqti_type.string ->! Caqti_type.int)
-  "INSERT INTO users (username, email, password_hash, is_email_verified)
-   VALUES ($1, $1 || '@test.invalid', 'x', TRUE) RETURNING id"
+    "INSERT INTO users (username, email, password_hash, is_email_verified)\n\
+    \   VALUES ($1, $1 || '@test.invalid', 'x', TRUE) RETURNING id"
 
 let q_delete_named_user =
   (Caqti_type.string ->. Caqti_type.unit)
-  "DELETE FROM users WHERE username = $1"
+    "DELETE FROM users WHERE username = $1"
 
 let q_consumed_epoch_for_user =
-  (Caqti_type.(int ->! option float))
-  "SELECT EXTRACT(EPOCH FROM consumed_at)::float8
-   FROM github_onboarding_states WHERE user_id = $1"
+  Caqti_type.(int ->! option float)
+    "SELECT EXTRACT(EPOCH FROM consumed_at)::float8\n\
+    \   FROM github_onboarding_states WHERE user_id = $1"
 
 let q_consumed_count_for_user =
   (Caqti_type.int ->! Caqti_type.int)
-  "SELECT COUNT(*) FROM github_onboarding_states
-   WHERE user_id = $1 AND consumed_at IS NOT NULL"
+    "SELECT COUNT(*) FROM github_onboarding_states\n\
+    \   WHERE user_id = $1 AND consumed_at IS NOT NULL"
 
 let consume_case name ~users f =
   db_case name (fun conn ->
@@ -558,9 +549,7 @@ let consume_fixture conn username =
   let* uid = or_fail "user" uid in
   let binding = GOC.generate_session_binding () in
   let binding_hash = GOC.hash_session_binding binding in
-  let* state =
-    issue_ok conn ~user_id:uid ~session_binding_hash:binding_hash
-  in
+  let* state = issue_ok conn ~user_id:uid ~session_binding_hash:binding_hash in
   Lwt.return (uid, state, binding, binding_hash)
 
 let do_consume conn ~state ~binding_hash =
@@ -589,42 +578,46 @@ let consume_success_case =
       in
       let* () = attach_ok conn ~state ~binding_hash 123456789L in
       let* before = single_row conn uid in
-      let ((state_hash0, binding_hash0, flow0), (_, _, times0)) = before in
+      let (state_hash0, binding_hash0, flow0), (_, _, times0) = before in
       (* The call carries only the state, binding hash, and flow — no
          caller user id exists in the consume API at all; the owner comes
          back from the locked row. *)
       let* consumed = consume_ok conn ~state ~binding_hash in
-      Alcotest.(check int) "returned user_id is the stored one" uid
-        consumed.Store.user_id;
-      (match consumed.Store.flow with
-      | GO.Project_onboarding -> ());
-      Alcotest.(check int64) "returned pending id is the stored one"
-        123456789L consumed.Store.pending_github_installation_id;
+      Alcotest.(check int)
+        "returned user_id is the stored one" uid consumed.Store.user_id;
+      (match consumed.Store.flow with GO.Project_onboarding -> ());
+      Alcotest.(check int64)
+        "returned pending id is the stored one" 123456789L
+        consumed.Store.pending_github_installation_id;
       let* row = single_row conn uid in
       let ( (state_hash, stored_binding_hash, flow),
             (pending, consumed_null, (created, expires)) ) =
         row
       in
       Alcotest.(check bool) "consumed_at now set" false consumed_null;
-      Alcotest.(check bool) "state_hash unchanged" true
+      Alcotest.(check bool)
+        "state_hash unchanged" true
         (String.equal state_hash0 state_hash);
-      Alcotest.(check bool) "binding hash unchanged" true
+      Alcotest.(check bool)
+        "binding hash unchanged" true
         (String.equal binding_hash0 stored_binding_hash);
       Alcotest.(check string) "flow unchanged" flow0 flow;
-      Alcotest.(check (option int64)) "pending id unchanged"
-        (Some 123456789L) pending;
+      Alcotest.(check (option int64))
+        "pending id unchanged" (Some 123456789L) pending;
       let created0, expires0 = times0 in
       Alcotest.(check (float 0.001)) "created_at unchanged" created0 created;
       Alcotest.(check (float 0.001)) "expires_at unchanged" expires0 expires;
       (* Consumption sends only hashes over SQL; the text columns must
          still hold no raw token material. *)
-      let text =
-        String.concat "|" [ state_hash; stored_binding_hash; flow ]
-      in
-      Alcotest.(check bool) "raw state absent from text columns" false
+      let text = String.concat "|" [ state_hash; stored_binding_hash; flow ] in
+      Alcotest.(check bool)
+        "raw state absent from text columns" false
         (Html_assert.contains_nonempty ~needle:(GOC.state_to_string state) text);
-      Alcotest.(check bool) "raw binding absent from text columns" false
-        (Html_assert.contains_nonempty ~needle:(GOC.session_binding_to_string binding) text);
+      Alcotest.(check bool)
+        "raw binding absent from text columns" false
+        (Html_assert.contains_nonempty
+           ~needle:(GOC.session_binding_to_string binding)
+           text);
       Lwt.return_unit)
 
 let consume_replay_case =
@@ -651,8 +644,8 @@ let consume_replay_case =
       let* second = or_fail "consumed_at after replay" second in
       (* Exact float equality: the stored microsecond timestamp must
          round-trip untouched — any rewrite by the replay would differ. *)
-      Alcotest.(check (option (float 0.))) "original consumed_at kept"
-        (Some first) second;
+      Alcotest.(check (option (float 0.)))
+        "original consumed_at kept" (Some first) second;
       Lwt.return_unit)
 
 let consume_unknown_state_case =
@@ -719,12 +712,12 @@ let consume_ownership_case =
       let* consumed =
         consume_ok conn ~state:state_a ~binding_hash:binding_hash_a
       in
-      Alcotest.(check int) "consumed state belongs to user A" uid_a
-        consumed.Store.user_id;
+      Alcotest.(check int)
+        "consumed state belongs to user A" uid_a consumed.Store.user_id;
       let* _, (pending_a, consumed_a, _) = single_row conn uid_a in
       Alcotest.(check bool) "state A consumed" false consumed_a;
-      Alcotest.(check (option int64)) "state A pending id kept" (Some 42L)
-        pending_a;
+      Alcotest.(check (option int64))
+        "state A pending id kept" (Some 42L) pending_a;
       (* single_row on uid_b proves B still owns its row. *)
       let* row_b = single_row conn uid_b in
       check_untouched_unconsumed "state B" row_b;
@@ -734,16 +727,14 @@ let consume_wrong_binding_case =
   consume_case "consume: session-binding mismatch burns the state"
     ~users:[ "ghconsume_wb" ] (fun conn ->
       let (module C : Caqti_lwt.CONNECTION) = conn in
-      let* uid, state, _, binding_hash =
-        consume_fixture conn "ghconsume_wb"
-      in
+      let* uid, state, _, binding_hash = consume_fixture conn "ghconsume_wb" in
       let* () = attach_ok conn ~state ~binding_hash 42L in
       let other_hash =
         GOC.hash_session_binding (GOC.generate_session_binding ())
       in
       let* () =
-        consume_expect "wrong binding" "Session_binding_mismatch" conn
-          ~state ~binding_hash:other_hash
+        consume_expect "wrong binding" "Session_binding_mismatch" conn ~state
+          ~binding_hash:other_hash
       in
       let* burned_at = C.find q_consumed_epoch_for_user uid in
       let* burned_at = or_fail "consumed_at" burned_at in
@@ -755,25 +746,23 @@ let consume_wrong_binding_case =
       (* The burn is durable: even the rightful binding is locked out,
          and the retry must not rewrite the original burn timestamp. *)
       let* () =
-        consume_expect "correct retry after burn" "State_already_consumed"
-          conn ~state ~binding_hash
+        consume_expect "correct retry after burn" "State_already_consumed" conn
+          ~state ~binding_hash
       in
       let* after = C.find q_consumed_epoch_for_user uid in
       let* after = or_fail "consumed_at after retry" after in
-      Alcotest.(check (option (float 0.))) "original consumed_at kept"
-        (Some burned_at) after;
+      Alcotest.(check (option (float 0.)))
+        "original consumed_at kept" (Some burned_at) after;
       Lwt.return_unit)
 
 let consume_missing_pending_case =
   consume_case "consume: missing installation id burns, blocks attach"
     ~users:[ "ghconsume_mp" ] (fun conn ->
-      let* uid, state, _, binding_hash =
-        consume_fixture conn "ghconsume_mp"
-      in
+      let* uid, state, _, binding_hash = consume_fixture conn "ghconsume_mp" in
       (* Deliberately no attach: the flow never reached the setup return. *)
       let* () =
-        consume_expect "missing pending" "Missing_pending_installation"
-          conn ~state ~binding_hash
+        consume_expect "missing pending" "Missing_pending_installation" conn
+          ~state ~binding_hash
       in
       let* _, (pending, consumed_null, _) = single_row conn uid in
       Alcotest.(check bool) "state burned" false consumed_null;
@@ -810,13 +799,12 @@ let consume_concurrent_case =
           let classify label = function
             | Ok consumed ->
                 Alcotest.(check int64)
-                  (label ^ ": winner sees stored pending id") 42L
-                  consumed.Store.pending_github_installation_id;
+                  (label ^ ": winner sees stored pending id")
+                  42L consumed.Store.pending_github_installation_id;
                 `Won
             | Error Store.State_already_consumed -> `Lost
             | Error e ->
-                Alcotest.failf "%s: unexpected %s" label
-                  (consume_error_str e)
+                Alcotest.failf "%s: unexpected %s" label (consume_error_str e)
           in
           (match (classify "first" r1, classify "second" r2) with
           | `Won, `Lost | `Lost, `Won -> ()
@@ -829,23 +817,38 @@ let consume_concurrent_case =
         (fun () -> C2.disconnect ()))
 
 let suite =
-  [ single_issue_case; multiplicity_case; invalid_user_case;
-    missing_user_case; attach_validation_case; attach_success_case;
-    attach_idempotent_case; attach_conflict_case;
-    attach_missing_state_case; attach_ownership_case;
-    attach_wrong_binding_case; attach_expired_case; attach_consumed_case;
-    consume_success_case; consume_replay_case; consume_unknown_state_case;
-    consume_expired_case; consume_ownership_case;
-    consume_wrong_binding_case; consume_missing_pending_case;
-    consume_concurrent_case ]
+  [
+    single_issue_case;
+    multiplicity_case;
+    invalid_user_case;
+    missing_user_case;
+    attach_validation_case;
+    attach_success_case;
+    attach_idempotent_case;
+    attach_conflict_case;
+    attach_missing_state_case;
+    attach_ownership_case;
+    attach_wrong_binding_case;
+    attach_expired_case;
+    attach_consumed_case;
+    consume_success_case;
+    consume_replay_case;
+    consume_unknown_state_case;
+    consume_expired_case;
+    consume_ownership_case;
+    consume_wrong_binding_case;
+    consume_missing_pending_case;
+    consume_concurrent_case;
+  ]
 
 let suites =
-    (* State issuance: the TTL constant is checkable DB-free; the SQL
+  (* State issuance: the TTL constant is checkable DB-free; the SQL
        contract needs Postgres and follows the EARDE_TEST_DATABASE_URL
        gate (each DB case skips without it). *)
-  [ ( "github_state_store"
-    , Case.quick "ttl_seconds is 900" (fun () ->
-          Alcotest.(check int) "ttl" 900
-            Earde.Github_onboarding_state_store.ttl_seconds)
-      :: suite )
+  [
+    ( "github_state_store",
+      Case.quick "ttl_seconds is 900" (fun () ->
+          Alcotest.(check int)
+            "ttl" 900 Earde.Github_onboarding_state_store.ttl_seconds)
+      :: suite );
   ]

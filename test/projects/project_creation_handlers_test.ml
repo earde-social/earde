@@ -19,35 +19,21 @@ module Pi = Earde.Project_identity
 let ( let* ) = Lwt.bind
 
 open Caqti_request.Infix
-
 module Hrm = Earde.Project_home_setup_read_model
-
 module Php = Earde.Project_home_setup_pages
-
 module Pc = Earde.Project_creation_handlers
-
 module Psh = Earde.Project_setup_handlers
-
 module Store = Earde.Project_onboarding_draft_store
-
 module Gui = Earde.Github_user_installations
 
 let case = Case.quick
-
 let counting_loader = Http_fixture.counting_loader
-
 let ok_loader = Http_fixture.ok_loader
-
 let status_of = Http_fixture.status_of
-
 let or_fail = Db_fixture.or_fail
-
 let insert_user = Db_fixture.insert_user
-
 let exec = Db_fixture.exec
-
 let find = Db_fixture.find
-
 let collect = Db_fixture.collect
 
 let find_opt conn label q arg =
@@ -56,7 +42,6 @@ let find_opt conn label q arg =
   or_fail label r
 
 let post_target = "/projects"
-
 let setup_target slug = Printf.sprintf "/projects/%s/setup" slug
 
 let make_post ~mode ~load_config =
@@ -67,19 +52,18 @@ let make_post ~mode ~load_config =
 let q_cleanup =
   List.map
     (fun sql -> (Caqti_type.unit ->. Caqti_type.unit) sql)
-    [ "DELETE FROM project_home_audit_events \
-       WHERE project_id IN \
-         (SELECT id FROM open_source_projects \
-          WHERE forge_namespace_id BETWEEN 943100001 AND 943100999)"
-      ; "DELETE FROM open_source_projects \
-       WHERE forge_namespace_id BETWEEN 943100001 AND 943100999"
-    ; "DELETE FROM project_onboarding_drafts \
-       WHERE github_installation_record_id IN \
-         (SELECT id FROM github_installations \
-          WHERE github_installation_id BETWEEN 943000001 AND 943000999)"
-    ; "DELETE FROM users WHERE username LIKE 'pcreate_%'"
-    ; "DELETE FROM github_installations \
-       WHERE github_installation_id BETWEEN 943000001 AND 943000999"
+    [
+      "DELETE FROM project_home_audit_events WHERE project_id IN (SELECT id \
+       FROM open_source_projects WHERE forge_namespace_id BETWEEN 943100001 \
+       AND 943100999)";
+      "DELETE FROM open_source_projects WHERE forge_namespace_id BETWEEN \
+       943100001 AND 943100999";
+      "DELETE FROM project_onboarding_drafts WHERE \
+       github_installation_record_id IN (SELECT id FROM github_installations \
+       WHERE github_installation_id BETWEEN 943000001 AND 943000999)";
+      "DELETE FROM users WHERE username LIKE 'pcreate_%'";
+      "DELETE FROM github_installations WHERE github_installation_id BETWEEN \
+       943000001 AND 943000999";
     ]
 
 let db_case name f =
@@ -102,19 +86,18 @@ let db_case name f =
              let* () = cleanup () in
              Lwt.finalize
                (fun () -> f ~url conn)
-               (fun () ->
-                 Lwt.finalize cleanup (fun () -> C.disconnect ()))))
+               (fun () -> Lwt.finalize cleanup (fun () -> C.disconnect ()))))
 
 let repo ?(owner_login = "pcreate-owner") ~account_id ?description
     ?default_branch ?archived ~id name =
-  Github_fixture.gur_repo ~owner_id:account_id ~owner_login ?description ?default_branch
-    ?archived ~id ~name ()
+  Github_fixture.gur_repo ~owner_id:account_id ~owner_login ?description
+    ?default_branch ?archived ~id ~name ()
 
 (* Draft fixtures go through the real store against the real client
    chain, exactly as production writes them. *)
 let make_draft ?(login = "pcreate-owner") ?(target = "User")
-    ?(installation_type = "user") ?token_body ?connected_by conn ~user
-    ~ext_id repos =
+    ?(installation_type = "user") ?token_body ?connected_by conn ~user ~ext_id
+    repos =
   let account_id = Int64.add ext_id 100000L in
   let* inst =
     Project_fixture.insert_installation ~login ~account_type:installation_type
@@ -124,7 +107,9 @@ let make_draft ?(login = "pcreate-owner") ?(target = "User")
     Project_fixture.verified ?token_body ~installation_id:ext_id ~account_id
       ~login ~target ()
   in
-  let* set = Project_fixture.repo_set ?token_body ~installation:v (repos account_id) in
+  let* set =
+    Project_fixture.repo_set ?token_body ~installation:v (repos account_id)
+  in
   let* draft = Project_fixture.refresh_ok "fixture refresh" conn ~user v set in
   Lwt.return (inst, Store.draft_id draft, account_id)
 
@@ -134,21 +119,20 @@ let snapshot_ids conn draft =
 (* Direct permanent-project fixtures for the read-model and destination
    suites, through the schema suite's insert queries — states the
    finalization store deliberately never produces on demand. *)
-let insert_project conn ?(kind = "project") ?(status = "verified")
-    ?description ?website ?source ?creator ?(login = "pcreate-owner")
-    ?(ns_type = "user") ~ns_id ~project_name ~slug () =
+let insert_project conn ?(kind = "project") ?(status = "verified") ?description
+    ?website ?source ?creator ?(login = "pcreate-owner") ?(ns_type = "user")
+    ~ns_id ~project_name ~slug () =
   find conn "insert project" Project_fixture.q_insert_project
     ( ((source, creator), (project_name, slug)),
-      ((description, website), ((kind, "github", ns_id), (login, ns_type, status)))
-    )
+      ( (description, website),
+        ((kind, "github", ns_id), (login, ns_type, status)) ) )
 
 let insert_steward conn ~project ~user ~installation =
   exec conn "insert steward" Project_fixture.q_insert_steward
     (project, user, installation)
 
-let insert_repo conn ~project ~position ?(owner = "pcreate-owner")
-    ?description ?(branch = "main") ?(primary = false) ?(archived = false)
-    ~gh_id name =
+let insert_repo conn ~project ~position ?(owner = "pcreate-owner") ?description
+    ?(branch = "main") ?(primary = false) ?(archived = false) ~gh_id name =
   let full_name = owner ^ "/" ^ name in
   let html_url = "https://github.com/" ^ owner ^ "/" ^ name in
   let* _ =
@@ -161,49 +145,46 @@ let insert_repo conn ~project ~position ?(owner = "pcreate-owner")
 (* Isolated corruption fixtures for invariants the schema does not own. *)
 let q_set_repo_html_url =
   (Caqti_type.(t3 int64 int string) ->. Caqti_type.unit)
-  "UPDATE project_repositories SET html_url = $3 \
-   WHERE project_id = $1 AND position = $2"
+    "UPDATE project_repositories SET html_url = $3 WHERE project_id = $1 AND \
+     position = $2"
 
 let q_poison_repo_description =
   (Caqti_type.(t2 int64 int) ->. Caqti_type.unit)
-  "UPDATE project_repositories \
-   SET description = 'bad' || CHR(1) || 'description' \
-   WHERE project_id = $1 AND position = $2"
+    "UPDATE project_repositories SET description = 'bad' || CHR(1) || \
+     'description' WHERE project_id = $1 AND position = $2"
 
 let q_delete_repo_position =
   (Caqti_type.(t2 int64 int) ->. Caqti_type.unit)
-  "DELETE FROM project_repositories \
-   WHERE project_id = $1 AND position = $2"
+    "DELETE FROM project_repositories WHERE project_id = $1 AND position = $2"
 
 let q_set_project_status =
   (Caqti_type.(t2 int64 string) ->. Caqti_type.unit)
-  "UPDATE open_source_projects SET verification_status = $2 WHERE id = $1"
+    "UPDATE open_source_projects SET verification_status = $2 WHERE id = $1"
 
 let q_set_project_creator =
   (Caqti_type.(t2 int64 (option int)) ->. Caqti_type.unit)
-  "UPDATE open_source_projects SET created_by_user_id = $2 WHERE id = $1"
+    "UPDATE open_source_projects SET created_by_user_id = $2 WHERE id = $1"
 
 let q_draft_status =
   (Caqti_type.int64 ->! Caqti_type.string)
-  "SELECT status FROM project_onboarding_drafts WHERE id = $1"
+    "SELECT status FROM project_onboarding_drafts WHERE id = $1"
 
 (* Race fixtures: the draft row lock serializes finalization, so holding
    it from the test connection makes "selection changed between the
    handler's read and its finalize" deterministic. *)
 let q_lock_draft =
   (Caqti_type.int64 ->! Caqti_type.int64)
-  "SELECT id FROM project_onboarding_drafts WHERE id = $1 FOR UPDATE"
+    "SELECT id FROM project_onboarding_drafts WHERE id = $1 FOR UPDATE"
 
 let q_unselect_primary =
   (Caqti_type.int64 ->. Caqti_type.unit)
-  "UPDATE project_onboarding_draft_repositories \
-   SET is_primary = FALSE, is_selected = FALSE \
-   WHERE draft_id = $1 AND is_primary"
+    "UPDATE project_onboarding_draft_repositories SET is_primary = FALSE, \
+     is_selected = FALSE WHERE draft_id = $1 AND is_primary"
 
 let q_unselect_all =
   (Caqti_type.int64 ->. Caqti_type.unit)
-  "UPDATE project_onboarding_draft_repositories \
-   SET is_selected = FALSE, is_primary = FALSE WHERE draft_id = $1"
+    "UPDATE project_onboarding_draft_repositories SET is_selected = FALSE, \
+     is_primary = FALSE WHERE draft_id = $1"
 
 let tx_start conn =
   let (module C : Caqti_lwt.CONNECTION) = conn in
@@ -224,24 +205,24 @@ let pch_poison_repo_id = 943999999L
 
 let q_create_fail_fn =
   (Caqti_type.unit ->. Caqti_type.unit)
-  "CREATE FUNCTION pch_fail_insert_fn() RETURNS trigger
-   LANGUAGE plpgsql
-   AS 'BEGIN RAISE EXCEPTION ''pch fixture failure''; END'"
+    "CREATE FUNCTION pch_fail_insert_fn() RETURNS trigger\n\
+    \   LANGUAGE plpgsql\n\
+    \   AS 'BEGIN RAISE EXCEPTION ''pch fixture failure''; END'"
 
 let q_create_fail_trigger =
   (Caqti_type.unit ->. Caqti_type.unit)
-  "CREATE TRIGGER pch_fail_insert
-   BEFORE INSERT ON project_repositories
-   FOR EACH ROW WHEN (NEW.github_repository_id = 943999999)
-   EXECUTE FUNCTION pch_fail_insert_fn()"
+    "CREATE TRIGGER pch_fail_insert\n\
+    \   BEFORE INSERT ON project_repositories\n\
+    \   FOR EACH ROW WHEN (NEW.github_repository_id = 943999999)\n\
+    \   EXECUTE FUNCTION pch_fail_insert_fn()"
 
 let q_drop_fail_trigger =
   (Caqti_type.unit ->. Caqti_type.unit)
-  "DROP TRIGGER IF EXISTS pch_fail_insert ON project_repositories"
+    "DROP TRIGGER IF EXISTS pch_fail_insert ON project_repositories"
 
 let q_drop_fail_fn =
   (Caqti_type.unit ->. Caqti_type.unit)
-  "DROP FUNCTION IF EXISTS pch_fail_insert_fn()"
+    "DROP FUNCTION IF EXISTS pch_fail_insert_fn()"
 
 (* === Read model: call helpers === *)
 
@@ -270,11 +251,10 @@ let expect_none label conn ~user ~slug =
 let expect_error label expected conn ~user ~slug =
   let* r = load conn ~user ~slug in
   match r with
-  | Ok _ -> Alcotest.failf "%s: expected %s, got Ok" label
-              (hrm_error_str expected)
+  | Ok _ ->
+      Alcotest.failf "%s: expected %s, got Ok" label (hrm_error_str expected)
   | Error e ->
-      Alcotest.(check string) label (hrm_error_str expected)
-        (hrm_error_str e);
+      Alcotest.(check string) label (hrm_error_str expected) (hrm_error_str e);
       Lwt.return_unit
 
 (* === Read model: database-gated cases === *)
@@ -292,10 +272,21 @@ let rm_input_case =
       in
       Lwt_list.iter_s
         (fun slug ->
-          expect_error ("slug " ^ String.escaped slug) Hrm.Invalid_slug
-            conn ~user:42 ~slug)
-        [ ""; "-lead"; "trail-"; "a--b"; "Upper"; "under_score";
-          "spa ce"; " pch"; "pch "; "pch%2Da"; "héllo";
+          expect_error
+            ("slug " ^ String.escaped slug)
+            Hrm.Invalid_slug conn ~user:42 ~slug)
+        [
+          "";
+          "-lead";
+          "trail-";
+          "a--b";
+          "Upper";
+          "under_score";
+          "spa ce";
+          " pch";
+          "pch ";
+          "pch%2Da";
+          "héllo";
           String.make 81 'a';
         ])
 
@@ -323,43 +314,46 @@ let rm_owner_view_case =
           ~branch:"release/v1" ~archived:true "beta"
       in
       let* view = load_project "owner" conn ~user:uid ~slug:"pch-owner-view" in
-      Alcotest.(check bool) "positive id" true
+      Alcotest.(check bool)
+        "positive id" true
         (Int64.compare (Hrm.project_id view) 0L > 0);
       Alcotest.(check string) "name" "Pch Fixture" (Hrm.name view);
       Alcotest.(check string) "slug" "pch-owner-view" (Hrm.slug view);
-      Alcotest.(check (option string)) "description"
-        (Some "Descrizione — esatta") (Hrm.description view);
-      Alcotest.(check (option string)) "website"
-        (Some "https://example.com/pch?x=1#frag") (Hrm.website_url view);
+      Alcotest.(check (option string))
+        "description" (Some "Descrizione — esatta") (Hrm.description view);
+      Alcotest.(check (option string))
+        "website" (Some "https://example.com/pch?x=1#frag")
+        (Hrm.website_url view);
       Alcotest.(check bool) "kind" true (Hrm.kind view = Pi.Project);
-      Alcotest.(check string) "login" "pcreate-owner"
-        (Hrm.namespace_login view);
-      Alcotest.(check bool) "namespace type" true
+      Alcotest.(check string) "login" "pcreate-owner" (Hrm.namespace_login view);
+      Alcotest.(check bool)
+        "namespace type" true
         (Hrm.namespace_type view = Gui.User);
       let repos = Hrm.repositories view in
       Alcotest.(check int) "two repositories" 2 (List.length repos);
       let first = List.nth repos 0 and second = List.nth repos 1 in
       Alcotest.(check int) "first position" 1 (Hrm.position first);
-      Alcotest.(check string) "first full name" "pcreate-owner/alpha"
-        (Hrm.full_name first);
-      Alcotest.(check string) "first url"
-        "https://github.com/pcreate-owner/alpha" (Hrm.html_url first);
-      Alcotest.(check (option string)) "first description"
-        (Some "Alpha description")
+      Alcotest.(check string)
+        "first full name" "pcreate-owner/alpha" (Hrm.full_name first);
+      Alcotest.(check string)
+        "first url" "https://github.com/pcreate-owner/alpha"
+        (Hrm.html_url first);
+      Alcotest.(check (option string))
+        "first description" (Some "Alpha description")
         (Hrm.repository_description first);
       Alcotest.(check bool) "first primary" true (Hrm.is_primary first);
-      Alcotest.(check bool) "first not archived" false
-        (Hrm.is_archived first);
+      Alcotest.(check bool) "first not archived" false (Hrm.is_archived first);
       Alcotest.(check int) "second position" 2 (Hrm.position second);
-      Alcotest.(check string) "second full name" "pcreate-owner/beta"
-        (Hrm.full_name second);
-      Alcotest.(check string) "second branch" "release/v1"
+      Alcotest.(check string)
+        "second full name" "pcreate-owner/beta" (Hrm.full_name second);
+      Alcotest.(check string)
+        "second branch" "release/v1"
         (Hrm.default_branch second);
-      Alcotest.(check (option string)) "second description" None
+      Alcotest.(check (option string))
+        "second description" None
         (Hrm.repository_description second);
       Alcotest.(check bool) "second archived" true (Hrm.is_archived second);
-      Alcotest.(check bool) "second not primary" false
-        (Hrm.is_primary second);
+      Alcotest.(check bool) "second not primary" false (Hrm.is_primary second);
       (* Nothing credential-shaped can appear in returned text. *)
       let returned =
         String.concat "|"
@@ -377,11 +371,15 @@ let rm_owner_view_case =
       in
       List.iter
         (fun needle ->
-          Alcotest.(check bool) "credential absent from returned text"
-            false
+          Alcotest.(check bool)
+            "credential absent from returned text" false
             (Html_assert.contains_nonempty ~needle returned))
-        [ Project_fixture.pods_access_fixture; Project_fixture.pods_refresh_fixture;
-          Github_fixture.gte_code_string; Github_fixture.gte_verifier_string; Github_fixture.gte_client_secret;
+        [
+          Project_fixture.pods_access_fixture;
+          Project_fixture.pods_refresh_fixture;
+          Github_fixture.gte_code_string;
+          Github_fixture.gte_verifier_string;
+          Github_fixture.gte_client_secret;
         ];
       Lwt.return_unit)
 
@@ -394,18 +392,17 @@ let rm_authorization_case =
       let* outsider = insert_user conn "pcreate_d" in
       let* inst =
         Project_fixture.insert_installation ~login:"pcreate-owner"
-          ~connected_by:creator conn ~ext_id:943000002L
-          ~account_id:943100002L
+          ~connected_by:creator conn ~ext_id:943000002L ~account_id:943100002L
       in
       let* project =
-        insert_project conn ~ns_id:943100002L ~creator
-          ~project_name:"Pch Auth" ~slug:"pch-auth" ()
+        insert_project conn ~ns_id:943100002L ~creator ~project_name:"Pch Auth"
+          ~slug:"pch-auth" ()
       in
       let* () = insert_steward conn ~project ~user:a ~installation:inst in
       let* () = insert_steward conn ~project ~user:b ~installation:inst in
       let* () =
-        insert_repo conn ~project ~position:1 ~gh_id:943600021L
-          ~primary:true "alpha"
+        insert_repo conn ~project ~position:1 ~gh_id:943600021L ~primary:true
+          "alpha"
       in
       let* _ = load_project "owner steward" conn ~user:a ~slug:"pch-auth" in
       let* _ = load_project "second steward" conn ~user:b ~slug:"pch-auth" in
@@ -415,12 +412,11 @@ let rm_authorization_case =
           ~slug:"pch-auth"
       in
       let* () =
-        exec conn "flip creator" q_set_project_creator
-          (project, Some outsider)
+        exec conn "flip creator" q_set_project_creator (project, Some outsider)
       in
       let* () =
-        expect_none "flipped creator still not a steward" conn
-          ~user:outsider ~slug:"pch-auth"
+        expect_none "flipped creator still not a steward" conn ~user:outsider
+          ~slug:"pch-auth"
       in
       let* () =
         expect_none "unrelated user" conn ~user:outsider ~slug:"pch-auth"
@@ -432,9 +428,7 @@ let rm_authorization_case =
          steward as for everyone else. *)
       let* () = exec conn "stale" q_set_project_status (project, "stale") in
       let* () = expect_none "stale project" conn ~user:a ~slug:"pch-auth" in
-      let* () =
-        exec conn "revoked" q_set_project_status (project, "revoked")
-      in
+      let* () = exec conn "revoked" q_set_project_status (project, "revoked") in
       expect_none "revoked project" conn ~user:a ~slug:"pch-auth")
 
 let rm_kind_namespace_case =
@@ -448,8 +442,8 @@ let rm_kind_namespace_case =
       in
       let* org =
         insert_project conn ~kind:"organization" ~ns_id:943100003L
-          ~login:"pcreate-org" ~ns_type:"organization"
-          ~project_name:"Pch Org" ~slug:"pch-org" ()
+          ~login:"pcreate-org" ~ns_type:"organization" ~project_name:"Pch Org"
+          ~slug:"pch-org" ()
       in
       let* () = insert_steward conn ~project:org ~user:uid ~installation:inst in
       (* An organization project needs no primary. *)
@@ -458,14 +452,16 @@ let rm_kind_namespace_case =
           ~owner:"pcreate-org" "alpha"
       in
       let* view = load_project "organization" conn ~user:uid ~slug:"pch-org" in
-      Alcotest.(check bool) "organization kind" true
+      Alcotest.(check bool)
+        "organization kind" true
         (Hrm.kind view = Pi.Organization);
-      Alcotest.(check bool) "organization namespace" true
+      Alcotest.(check bool)
+        "organization namespace" true
         (Hrm.namespace_type view = Gui.Organization);
       let* wg =
         insert_project conn ~kind:"working_group" ~ns_id:943100003L
-          ~login:"pcreate-org" ~ns_type:"organization"
-          ~project_name:"Pch WG" ~slug:"pch-wg" ()
+          ~login:"pcreate-org" ~ns_type:"organization" ~project_name:"Pch WG"
+          ~slug:"pch-wg" ()
       in
       let* () = insert_steward conn ~project:wg ~user:uid ~installation:inst in
       let* () =
@@ -473,7 +469,8 @@ let rm_kind_namespace_case =
           ~owner:"pcreate-org" ~primary:true "beta"
       in
       let* view = load_project "working group" conn ~user:uid ~slug:"pch-wg" in
-      Alcotest.(check bool) "working group kind" true
+      Alcotest.(check bool)
+        "working group kind" true
         (Hrm.kind view = Pi.Working_group);
       Lwt.return_unit)
 
@@ -488,8 +485,7 @@ let rm_inconsistent_case =
       in
       let fixture ~slug =
         let* project =
-          insert_project conn ~ns_id:943100004L ~project_name:"Pch Bad"
-            ~slug ()
+          insert_project conn ~ns_id:943100004L ~project_name:"Pch Bad" ~slug ()
         in
         let* () = insert_steward conn ~project ~user:uid ~installation:inst in
         Lwt.return project
@@ -498,8 +494,8 @@ let rm_inconsistent_case =
          else. *)
       let* _ = fixture ~slug:"pch-zero" in
       let* () =
-        expect_error "zero repositories" Hrm.Inconsistent_data conn
-          ~user:uid ~slug:"pch-zero"
+        expect_error "zero repositories" Hrm.Inconsistent_data conn ~user:uid
+          ~slug:"pch-zero"
       in
       let* () =
         expect_none "zero repositories, other user" conn ~user:other
@@ -550,8 +546,8 @@ let rm_inconsistent_case =
         insert_repo conn ~project:unprimary ~position:1 ~gh_id:943600045L
           "alpha"
       in
-      expect_error "project kind without primary" Hrm.Inconsistent_data
-        conn ~user:uid ~slug:"pch-unprimary")
+      expect_error "project kind without primary" Hrm.Inconsistent_data conn
+        ~user:uid ~slug:"pch-unprimary")
 
 let rm_storage_error_case =
   db_case "read model: a failing statement is a payload-free Storage_error"
@@ -570,8 +566,14 @@ let rm_storage_error_case =
         (fun () -> C2.disconnect ()))
 
 let read_model_db_suite =
-  [ rm_input_case; rm_owner_view_case; rm_authorization_case;
-    rm_kind_namespace_case; rm_inconsistent_case; rm_storage_error_case ]
+  [
+    rm_input_case;
+    rm_owner_view_case;
+    rm_authorization_case;
+    rm_kind_namespace_case;
+    rm_inconsistent_case;
+    rm_storage_error_case;
+  ]
 
 (* === Permanent page renderer (pure, DB-free) === *)
 
@@ -579,26 +581,40 @@ let php_repo ?(full_name = "pcreate-owner/alpha")
     ?(html_url = "https://github.com/pcreate-owner/alpha") ?description
     ?(branch = "main") ?(primary = false) ?(archived = false) () :
     Php.repository =
-  { Php.full_name; html_url; description; default_branch = branch;
-    is_primary = primary; is_archived = archived }
+  {
+    Php.full_name;
+    html_url;
+    description;
+    default_branch = branch;
+    is_primary = primary;
+    is_archived = archived;
+  }
 
 let php_project ?(name = "Fixture Project") ?(slug = "fixture-project")
-    ?description ?website ?(kind = Pi.Project)
-    ?(login = "pcreate-owner") ?(atype = Php.Personal)
-    ?(repos = [ php_repo ~primary:true () ]) () : Php.project =
-  { Php.name; slug; description; website_url = website; kind;
-    namespace_login = login; namespace_type = atype; repositories = repos }
+    ?description ?website ?(kind = Pi.Project) ?(login = "pcreate-owner")
+    ?(atype = Php.Personal) ?(repos = [ php_repo ~primary:true () ]) () :
+    Php.project =
+  {
+    Php.name;
+    slug;
+    description;
+    website_url = website;
+    kind;
+    namespace_login = login;
+    namespace_type = atype;
+    repositories = repos;
+  }
 
 let php_frag project =
   Html_assert.panel_fragment (Php.project_home_setup_page ~project ())
 
 let php_structure_cases =
-  [ case "summary: heading, verification copy, complete project facts"
+  [
+    case "summary: heading, verification copy, complete project facts"
       (fun () ->
         let frag =
           php_frag
-            (php_project
-               ~description:"A useful description"
+            (php_project ~description:"A useful description"
                ~website:"https://example.com/site" ())
         in
         Html_assert.must frag "Project created";
@@ -608,10 +624,10 @@ let php_structure_cases =
         Html_assert.must frag ">Project</dd>";
         Html_assert.must frag "pcreate-owner (Personal account)";
         Html_assert.must frag "A useful description";
-        Html_assert.must frag "<a href='https://example.com/site' \
-                      class='create-link'>https://example.com/site</a>")
-  ; case "summary: organization namespace and optional fields absent"
-      (fun () ->
+        Html_assert.must frag
+          "<a href='https://example.com/site' \
+           class='create-link'>https://example.com/site</a>");
+    case "summary: organization namespace and optional fields absent" (fun () ->
         let frag =
           php_frag
             (php_project ~kind:Pi.Ecosystem ~atype:Php.Organization
@@ -620,52 +636,56 @@ let php_structure_cases =
         Html_assert.must frag "pcreate-org (Organization)";
         Html_assert.must frag "Ecosystem";
         Html_assert.must_not frag "Website";
-        Html_assert.must_not frag "Description")
-  ; case "repositories: order, markers, branch as text, safe links"
-      (fun () ->
+        Html_assert.must_not frag "Description");
+    case "repositories: order, markers, branch as text, safe links" (fun () ->
         let frag =
           php_frag
             (php_project
                ~repos:
-                 [ php_repo ~primary:true
-                     ~description:"Alpha description" ()
-                 ; php_repo ~full_name:"pcreate-owner/beta"
+                 [
+                   php_repo ~primary:true ~description:"Alpha description" ();
+                   php_repo ~full_name:"pcreate-owner/beta"
                      ~html_url:"https://github.com/pcreate-owner/beta"
-                     ~branch:"release/v1" ~archived:true ()
+                     ~branch:"release/v1" ~archived:true ();
                  ]
                ())
         in
         Html_assert.order frag "pcreate-owner/alpha" "pcreate-owner/beta";
         Html_assert.must frag
-          "<a href='https://github.com/pcreate-owner/alpha' \
-           class='create-link phs-repo-link'>pcreate-owner/alpha</a>";
+          "<a href='https://github.com/pcreate-owner/alpha' class='create-link \
+           phs-repo-link'>pcreate-owner/alpha</a>";
         Html_assert.must frag "phs-repo-primary'>Primary";
         Html_assert.must frag "phs-repo-archived'>Archived";
         Html_assert.must frag "Alpha description";
         Html_assert.must frag "<code class='phs-repo-branch'>release/v1</code>";
         (* One primary marker, one archived marker. *)
-        Alcotest.(check int) "one primary" 1
+        Alcotest.(check int)
+          "one primary" 1
           (Html_assert.occurrences frag "phs-repo-primary");
-        Alcotest.(check int) "one archived" 1
-          (Html_assert.occurrences frag "phs-repo-archived"))
-  ; case "continuation: two distinct navigation links, no form" (fun () ->
+        Alcotest.(check int)
+          "one archived" 1
+          (Html_assert.occurrences frag "phs-repo-archived"));
+    case "continuation: two distinct navigation links, no form" (fun () ->
         let frag = php_frag (php_project ()) in
         Html_assert.must frag "Choose a community home";
         (* Both real navigation steps: exact structural links to the two
            permanent routes — and nothing else actionable. *)
         Html_assert.must frag
-          "<a href='/projects/fixture-project/request-home' \
-           class='create-link phs-next-request-link'>Connect to an \
-           existing community</a>";
+          "<a href='/projects/fixture-project/request-home' class='create-link \
+           phs-next-request-link'>Connect to an existing community</a>";
         Html_assert.must frag
           "<a href='/projects/fixture-project/community-home/new' \
            class='create-link phs-next-create-link'>Create a community \
            home</a>";
         (* Visibly distinct: two anchors, two destinations, one each. *)
-        Alcotest.(check int) "two next-step links" 2 (Html_assert.occurrences frag "<a href='/projects/");
-        Alcotest.(check int) "one connect link" 1
+        Alcotest.(check int)
+          "two next-step links" 2
+          (Html_assert.occurrences frag "<a href='/projects/");
+        Alcotest.(check int)
+          "one connect link" 1
           (Html_assert.occurrences frag "phs-next-request-link");
-        Alcotest.(check int) "one create link" 1
+        Alcotest.(check int)
+          "one create link" 1
           (Html_assert.occurrences frag "phs-next-create-link");
         (* The former placeholder copy is gone — the option is real now. *)
         Html_assert.must_not frag "not available yet";
@@ -673,8 +693,8 @@ let php_structure_cases =
         Html_assert.must_not frag "<button";
         Html_assert.must_not frag "<input";
         Html_assert.must_not frag "disabled";
-        Html_assert.must_not frag "<script")
-  ; case "continuation: invalid project slug renders neither navigation link"
+        Html_assert.must_not frag "<script");
+    case "continuation: invalid project slug renders neither navigation link"
       (fun () ->
         let frag = php_frag (php_project ~slug:"Bad Slug!" ()) in
         Html_assert.must frag "Choose a community home";
@@ -686,52 +706,59 @@ let php_structure_cases =
         (* The corrupt slug still renders only as escaped text. *)
         Html_assert.must frag "Bad Slug!";
         Html_assert.must_not frag "<form";
-        Html_assert.must_not frag "<button")
-  ; case "continuation: no project id ever reaches the navigation section"
+        Html_assert.must_not frag "<button");
+    case "continuation: no project id ever reaches the navigation section"
       (fun () ->
         let frag = php_frag (php_project ()) in
-        List.iter (Html_assert.must_not frag)
-          [ "project_id"; "id='"; "value='" ])
+        List.iter
+          (Html_assert.must_not frag)
+          [ "project_id"; "id='"; "value='" ]);
   ]
 
 let php_safety_cases =
-  [ case "escaping: hostile text never reaches markup" (fun () ->
+  [
+    case "escaping: hostile text never reaches markup" (fun () ->
         let hostile = "<script>alert('x')</script>" in
         let frag =
           php_frag
-            (php_project ~name:hostile ~description:hostile
-               ~login:hostile
+            (php_project ~name:hostile ~description:hostile ~login:hostile
                ~repos:
-                 [ php_repo ~full_name:hostile
-                     ~description:hostile ~branch:hostile
-                     ~primary:true ()
+                 [
+                   php_repo ~full_name:hostile ~description:hostile
+                     ~branch:hostile ~primary:true ();
                  ]
                ())
         in
         Html_assert.must_not frag "<script";
-        Html_assert.must frag "&lt;script&gt;")
-  ; case "defense: invalid URLs are never actionable or emitted" (fun () ->
+        Html_assert.must frag "&lt;script&gt;");
+    case "defense: invalid URLs are never actionable or emitted" (fun () ->
         let frag =
           php_frag
-            (php_project
-               ~website:"javascript:alert(1)"
+            (php_project ~website:"javascript:alert(1)"
                ~repos:
-                 [ php_repo ~html_url:"javascript:alert(2)" ~primary:true ()
-                 ]
+                 [ php_repo ~html_url:"javascript:alert(2)" ~primary:true () ]
                ())
         in
         Html_assert.must_not frag "javascript:";
         Html_assert.must_not frag "href='#'";
         (* The repository stays listed as plain text. *)
-        Html_assert.must frag "phs-unlinked'>pcreate-owner/alpha")
-  ; case "copy: no officiality claims, no scripts or inline styles"
-      (fun () ->
+        Html_assert.must frag "phs-unlinked'>pcreate-owner/alpha");
+    case "copy: no officiality claims, no scripts or inline styles" (fun () ->
         let frag = php_frag (php_project ()) in
-        List.iter (Html_assert.must_not frag)
-          [ "Official"; "GitHub-approved"; "GitHub-endorsed"; "<style";
-            "style='"; "style=\""; "<script"; "window.location";
-            "location.href"; "http-equiv";
-          ])
+        List.iter
+          (Html_assert.must_not frag)
+          [
+            "Official";
+            "GitHub-approved";
+            "GitHub-endorsed";
+            "<style";
+            "style='";
+            "style=\"";
+            "<script";
+            "window.location";
+            "location.href";
+            "http-equiv";
+          ]);
   ]
 
 let page_suite = php_structure_cases @ php_safety_cases
@@ -747,8 +774,8 @@ let post_off_case =
       let loader, calls = counting_loader (ok_loader ()) in
       let response =
         Http_fixture.gate_response "off"
-          (post_run ~session:Http_fixture.admin_session ~mode:Ob.Off ~load_config:loader
-             ())
+          (post_run ~session:Http_fixture.admin_session ~mode:Ob.Off
+             ~load_config:loader ())
       in
       Http_fixture.check_clean_redirect "off" "/bring" response;
       Alcotest.(check int) "loader never called" 0 !calls)
@@ -776,13 +803,12 @@ let post_anonymous_case =
       Alcotest.(check int) "loader never called" 0 !calls)
 
 let post_rollout_case =
-  case "POST admins mode: non-admin to /bring before configuration"
-    (fun () ->
+  case "POST admins mode: non-admin to /bring before configuration" (fun () ->
       let loader, calls = counting_loader (ok_loader ()) in
       Http_fixture.check_clean_redirect "non-admin" "/bring"
         (Http_fixture.gate_response "non-admin"
-           (post_run ~session:Http_fixture.logged_in ~mode:Ob.Admins ~load_config:loader
-              ()));
+           (post_run ~session:Http_fixture.logged_in ~mode:Ob.Admins
+              ~load_config:loader ()));
       Alcotest.(check int) "loader never called" 0 !calls;
       (* Passing the gates and the origin check, the missing content type
          is the next rejection: reaching that 400 proves mode,
@@ -797,15 +823,15 @@ let post_rollout_case =
                ~load_config:(fun () -> ok_loader ())
                ())
         in
-        Alcotest.(check int) (label ^ ": 400 content-type") 400
-          (status_of response)
+        Alcotest.(check int)
+          (label ^ ": 400 content-type")
+          400 (status_of response)
       in
       continues "admin continues" Http_fixture.admin_session Ob.Admins;
       continues "public user continues" Http_fixture.logged_in Ob.Public)
 
 let post_config_failure_case =
-  case "POST: configuration error is a generic 503, no form, no SQL"
-    (fun () ->
+  case "POST: configuration error is a generic 503, no form, no SQL" (fun () ->
       let loader, calls =
         counting_loader (Github_fixture.gac_of_values ~origin:None ())
       in
@@ -813,7 +839,8 @@ let post_config_failure_case =
         Http_fixture.gate_response "config failure"
           (post_run ~session:Http_fixture.logged_in
              ~headers:
-               [ ("Origin", "https://earde.com");
+               [
+                 ("Origin", "https://earde.com");
                  ("Content-Type", "application/x-www-form-urlencoded");
                ]
              ~mode:Ob.Public ~load_config:loader ())
@@ -825,7 +852,8 @@ let post_config_failure_case =
         (fun needle ->
           Alcotest.(check bool)
             ("body does not leak " ^ needle)
-            false (Html_assert.contains body needle))
+            false
+            (Html_assert.contains body needle))
         [ "EARDE_PUBLIC_ORIGIN"; "Missing"; "Invalid"; "public_origin" ])
 
 let origin_run label ?sec_fetch_site origin =
@@ -871,12 +899,18 @@ let post_origin_case =
       origin_rejected "none" ~sec_fetch_site:"none" None;
       let response = origin_run "reflection" (Some "https://evil.example") in
       let body = Lwt_main.run (Dream.body response) in
-      Alcotest.(check bool) "origin not reflected" false
+      Alcotest.(check bool)
+        "origin not reflected" false
         (Html_assert.contains body "evil.example"))
 
 let post_gate_suite =
-  [ post_off_case; post_anonymous_case; post_rollout_case;
-    post_config_failure_case; post_origin_case ]
+  [
+    post_off_case;
+    post_anonymous_case;
+    post_rollout_case;
+    post_config_failure_case;
+    post_origin_case;
+  ]
 
 (* --- GET /projects/:slug/setup access gates --- *)
 
@@ -887,14 +921,13 @@ let setup_run ?session ~mode () =
     (Http_fixture.make_setup ~mode)
 
 let setup_off_case =
-  case "GET setup off: clean /bring redirect before params or SQL"
-    (fun () ->
+  case "GET setup off: clean /bring redirect before params or SQL" (fun () ->
       Http_fixture.check_clean_redirect "off" "/bring"
-        (Http_fixture.gate_response "off" (setup_run ~session:Http_fixture.admin_session ~mode:Ob.Off ())))
+        (Http_fixture.gate_response "off"
+           (setup_run ~session:Http_fixture.admin_session ~mode:Ob.Off ())))
 
 let setup_anonymous_case =
-  case "GET setup: anonymous and invalid sessions redirect to /login"
-    (fun () ->
+  case "GET setup: anonymous and invalid sessions redirect to /login" (fun () ->
       Http_fixture.check_clean_redirect "anonymous" "/login"
         (Http_fixture.gate_response "anonymous" (setup_run ~mode:Ob.Public ()));
       List.iter
@@ -905,13 +938,10 @@ let setup_anonymous_case =
         [ "not-a-number"; ""; "0"; "-3" ];
       Http_fixture.check_clean_redirect "is_admin only" "/login"
         (Http_fixture.gate_response "is_admin only"
-           (setup_run
-              ~session:[ ("is_admin", "true") ]
-              ~mode:Ob.Admins ())))
+           (setup_run ~session:[ ("is_admin", "true") ] ~mode:Ob.Admins ())))
 
 let setup_rollout_case =
-  case "GET setup admins mode: non-admin to /bring, admin continues"
-    (fun () ->
+  case "GET setup admins mode: non-admin to /bring, admin continues" (fun () ->
       Http_fixture.check_clean_redirect "non-admin" "/bring"
         (Http_fixture.gate_response "non-admin"
            (setup_run ~session:Http_fixture.logged_in ~mode:Ob.Admins ()));
@@ -919,9 +949,10 @@ let setup_rollout_case =
          which answers as the generic 404 — reaching it proves the gates
          passed with no SQL (no sql_pool is installed). *)
       let continues label session mode =
-        let response = Http_fixture.gate_response label (setup_run ~session ~mode ()) in
-        Alcotest.(check int) (label ^ ": generic 404") 404
-          (status_of response)
+        let response =
+          Http_fixture.gate_response label (setup_run ~session ~mode ())
+        in
+        Alcotest.(check int) (label ^ ": generic 404") 404 (status_of response)
       in
       continues "admin continues" Http_fixture.admin_session Ob.Admins;
       continues "public user continues" Http_fixture.logged_in Ob.Public)
@@ -930,18 +961,15 @@ let setup_gate_suite =
   [ setup_off_case; setup_anonymous_case; setup_rollout_case ]
 
 let csrf_pipeline () =
-  Dream.set_secret Github_fixture.cookie_secret @@ Dream.memory_sessions
+  Dream.set_secret Github_fixture.cookie_secret
+  @@ Dream.memory_sessions
   @@ fun req ->
   let* () = Dream.set_session_field req "user_id" "42" in
   match Dream.method_ req with
   | `GET ->
       Dream.respond
-        (Dream.csrf_token req ^ "\n"
-        ^ Dream.csrf_token ~valid_for:(-60.) req)
-  | _ ->
-      make_post ~mode:Ob.Public
-        ~load_config:(fun () -> ok_loader ())
-        req
+        (Dream.csrf_token req ^ "\n" ^ Dream.csrf_token ~valid_for:(-60.) req)
+  | _ -> make_post ~mode:Ob.Public ~load_config:(fun () -> ok_loader ()) req
 
 let csrf_post ?cookie ?(content_type = true) pipeline fields =
   let headers =
@@ -998,20 +1026,24 @@ let csrf_invalid_form_case =
         (fun (label, fields) ->
           let response =
             Http_fixture.gate_response label
-              (csrf_post ~cookie pipeline
-                 (fields @ [ ("dream.csrf", fresh) ]))
+              (csrf_post ~cookie pipeline (fields @ [ ("dream.csrf", fresh) ]))
           in
           Alcotest.(check int) (label ^ ": 400") 400 (status_of response);
-          Alcotest.(check (option string)) (label ^ ": no redirect") None
+          Alcotest.(check (option string))
+            (label ^ ": no redirect") None
             (Dream.header response "Location");
           let body = Lwt_main.run (Dream.body response) in
-          Alcotest.(check bool) (label ^ ": nothing reflected") false
+          Alcotest.(check bool)
+            (label ^ ": nothing reflected")
+            false
             (Html_assert.contains body "zz9zz"))
-        [ ("missing draft id",
-           List.remove_assoc "draft_id" (Http_fixture.identity_fields ~draft:"1" ()));
+        [
+          ( "missing draft id",
+            List.remove_assoc "draft_id"
+              (Http_fixture.identity_fields ~draft:"1" ()) );
           ("malformed draft id", Http_fixture.identity_fields ~draft:"zz9zz" ());
-          ("duplicate draft id",
-           ("draft_id", "1") :: Http_fixture.identity_fields ~draft:"1" ());
+          ( "duplicate draft id",
+            ("draft_id", "1") :: Http_fixture.identity_fields ~draft:"1" () );
         ];
       (* A recoverable draft id in a malformed form proceeds to the
          owner re-authorization read — the DB boundary here. *)
@@ -1029,24 +1061,24 @@ let post_csrf_suite = [ csrf_case; csrf_invalid_form_case ]
    exactly as in bin/main. /mint exists only to hand replay cases a
    fresh CSRF token for an already-established session. *)
 let app_pipeline ?session_user_id ~url () =
-  Dream.sql_pool url @@ Dream.set_secret Github_fixture.cookie_secret
+  Dream.sql_pool url
+  @@ Dream.set_secret Github_fixture.cookie_secret
   @@ Dream.memory_sessions
   @@ (fun handler request ->
-       match session_user_id with
-       | None -> handler request
-       | Some uid ->
-           let* () =
-             Dream.set_session_field request "user_id" (string_of_int uid)
-           in
-           handler request)
+    match session_user_id with
+    | None -> handler request
+    | Some uid ->
+        let* () =
+          Dream.set_session_field request "user_id" (string_of_int uid)
+        in
+        handler request)
   @@ Dream.router
-       [ Dream.get "/projects/new" (fun req ->
+       [
+         Dream.get "/projects/new" (fun req ->
              Psh.make_new_project_handler ~mode:Ob.Public req);
          Dream.get "/mint" (fun req -> Dream.respond (Dream.csrf_token req));
          Dream.post "/projects" (fun req ->
-             make_post ~mode:Ob.Public
-               ~load_config:(fun () -> ok_loader ())
-               req);
+             make_post ~mode:Ob.Public ~load_config:(fun () -> ok_loader ()) req);
          Dream.get "/projects/:slug/setup" (fun req ->
              Http_fixture.make_setup ~mode:Ob.Public req);
        ]
@@ -1067,8 +1099,8 @@ let open_identity_form label ~draft pipeline =
 let do_post ?(origin = Some "https://earde.com") ~cookie ~fields pipeline =
   let headers =
     (match origin with Some o -> [ ("Origin", o) ] | None -> [])
-    @ [ ("Content-Type", "application/x-www-form-urlencoded");
-        ("Cookie", cookie);
+    @ [
+        ("Content-Type", "application/x-www-form-urlencoded"); ("Cookie", cookie);
       ]
   in
   pipeline
@@ -1076,7 +1108,8 @@ let do_post ?(origin = Some "https://earde.com") ~cookie ~fields pipeline =
        (Http_fixture.form_body fields))
 
 let count_projects conn account_id =
-  find conn "project count" Project_fixture.q_count_projects_for_namespace account_id
+  find conn "project count" Project_fixture.q_count_projects_for_namespace
+    account_id
 
 let check_no_projects label conn account_id =
   let* projects = count_projects conn account_id in
@@ -1088,8 +1121,8 @@ let check_no_projects label conn account_id =
 let ready_draft ?token_body ?(login = "pcreate-owner") ?target
     ?installation_type conn ~user ~ext_id repos ~select ~primary =
   let* inst, draft, account_id =
-    make_draft ?token_body ~login ?target ?installation_type conn ~user
-      ~ext_id repos
+    make_draft ?token_body ~login ?target ?installation_type conn ~user ~ext_id
+      repos
   in
   let* ids = snapshot_ids conn draft in
   let selected = List.map (List.nth ids) select in
@@ -1107,19 +1140,22 @@ let post_success_case =
     (fun ~url conn ->
       let* uid = insert_user conn "pcreate_a" in
       let* inst, draft, account_id, ids =
-        ready_draft ~token_body:Project_fixture.refresh_token_body conn ~user:uid
-          ~ext_id:943000011L
+        ready_draft ~token_body:Project_fixture.refresh_token_body conn
+          ~user:uid ~ext_id:943000011L
           (fun account_id ->
-            [ repo ~account_id ~id:943600111L
-                ~description:{|"Alpha description"|} "alpha"
-            ; repo ~account_id ~id:943600112L "beta"
-            ; repo ~account_id ~id:943600113L ~default_branch:"release/v1"
-                ~archived:true "gamma"
-            ; Github_fixture.gur_repo ~owner_id:account_id ~owner_login:"pcreate-owner"
-                ~private_flag:true ~visibility:"private"
+            [
+              repo ~account_id ~id:943600111L
+                ~description:{|"Alpha description"|} "alpha";
+              repo ~account_id ~id:943600112L "beta";
+              repo ~account_id ~id:943600113L ~default_branch:"release/v1"
+                ~archived:true "gamma";
+              Github_fixture.gur_repo ~owner_id:account_id
+                ~owner_login:"pcreate-owner" ~private_flag:true
+                ~visibility:"private"
                 ~description:
-                  (Printf.sprintf {|"%s"|} Github_fixture.gur_private_description)
-                ~id:943600114L ~name:Github_fixture.gur_private_name ()
+                  (Printf.sprintf {|"%s"|}
+                     Github_fixture.gur_private_description)
+                ~id:943600114L ~name:Github_fixture.gur_private_name ();
             ])
           ~select:[ 0; 2 ] ~primary:(Some 0)
       in
@@ -1135,38 +1171,48 @@ let post_success_case =
             (Http_fixture.identity_fields ~draft:(Int64.to_string draft)
                ~name:"Pch Success Project" ~slug:"pch-success"
                ~description:"Creata — davvero"
-               ~website:"https://example.com/pch"
-               ~primary:(Int64.to_string s1) ()
+               ~website:"https://example.com/pch" ~primary:(Int64.to_string s1)
+               ()
             @ [ ("dream.csrf", token) ])
           pipeline
       in
       (* The permanent PRG destination: canonical slug only — no id, no
          draft, no success flag, no submitted value. *)
       let* () =
-        Http_fixture.check_redirect_lwt "created" "/projects/pch-success/setup" response
+        Http_fixture.check_redirect_lwt "created" "/projects/pch-success/setup"
+          response
       in
       (* Exactly one permanent project, one steward, the selected copies
          renumbered from 1, and a completed draft. *)
       let* projects = count_projects conn account_id in
       Alcotest.(check int) "one project" 1 projects;
       let* project =
-        find_opt conn "project id" Project_fixture.q_project_id_by_slug "pch-success"
+        find_opt conn "project id" Project_fixture.q_project_id_by_slug
+          "pch-success"
       in
       let project =
         match project with
         | Some id -> id
         | None -> Alcotest.fail "created project not found by slug"
       in
-      let* stewards = collect conn "stewards" Project_fixture.q_steward_sigs project in
-      Alcotest.(check (list string)) "one steward"
+      let* stewards =
+        collect conn "stewards" Project_fixture.q_steward_sigs project
+      in
+      Alcotest.(check (list string))
+        "one steward"
         [ Printf.sprintf "%d|%Ld|steward" uid inst ]
         stewards;
-      let* repo_rows = collect conn "repo copies" Project_fixture.q_repo_sigs project in
-      Alcotest.(check (list string)) "selected copies in order"
-        [ Project_fixture.repo_sig ~position:1 ~id:943600111L ~login:"pcreate-owner"
-            ~description:"Alpha description" ~primary:true "alpha"
-        ; Project_fixture.repo_sig ~position:2 ~id:943600113L ~login:"pcreate-owner"
-            ~branch:"release/v1" ~archived:true "gamma"
+      let* repo_rows =
+        collect conn "repo copies" Project_fixture.q_repo_sigs project
+      in
+      Alcotest.(check (list string))
+        "selected copies in order"
+        [
+          Project_fixture.repo_sig ~position:1 ~id:943600111L
+            ~login:"pcreate-owner" ~description:"Alpha description"
+            ~primary:true "alpha";
+          Project_fixture.repo_sig ~position:2 ~id:943600113L
+            ~login:"pcreate-owner" ~branch:"release/v1" ~archived:true "gamma";
         ]
         repo_rows;
       let* status = find conn "draft status" q_draft_status draft in
@@ -1174,7 +1220,9 @@ let post_success_case =
       (* The permanent destination renders the created data for the
          steward. *)
       let* response, body =
-        Http_fixture.do_get ~cookie ~target:(setup_target "pch-success") pipeline
+        Http_fixture.do_get ~cookie
+          ~target:(setup_target "pch-success")
+          pipeline
       in
       Http_fixture.check_page "permanent GET" response;
       let frag = Html_assert.panel_fragment body in
@@ -1195,31 +1243,40 @@ let post_success_case =
       (* No internal, GitHub, or credential identity leaks into the
          permanent page, the stored text, or the redirect. *)
       let* blob =
-        find conn "permanent text blob" Project_fixture.q_permanent_text_blob project
+        find conn "permanent text blob" Project_fixture.q_permanent_text_blob
+          project
       in
       List.iter
         (fun (label, needle) ->
-          Alcotest.(check bool) (label ^ " absent from page") false
+          Alcotest.(check bool)
+            (label ^ " absent from page")
+            false
             (Html_assert.contains_nonempty ~needle body);
-          Alcotest.(check bool) (label ^ " absent from stored text") false
+          Alcotest.(check bool)
+            (label ^ " absent from stored text")
+            false
             (Html_assert.contains_nonempty ~needle blob))
-        [ ("access token", Project_fixture.pods_access_fixture)
-        ; ("refresh token", Project_fixture.pods_refresh_fixture)
-        ; ("authorization code", Github_fixture.gte_code_string)
-        ; ("PKCE verifier", Github_fixture.gte_verifier_string)
-        ; ("client secret", Github_fixture.gte_client_secret)
-        ; ("OAuth state", Github_fixture.goc_fixture 'S')
-        ; ("session binding", Github_fixture.goc_fixture 'B')
-        ; ("private repository name", Github_fixture.gur_private_name)
-        ; ("private repository description", Github_fixture.gur_private_description)
-        ; ("installation id", "943000011")
-        ; ("account id", "943100011")
-        ; ("GitHub repository id", "943600111")
-        ; ("draft id", Int64.to_string draft)
+        [
+          ("access token", Project_fixture.pods_access_fixture);
+          ("refresh token", Project_fixture.pods_refresh_fixture);
+          ("authorization code", Github_fixture.gte_code_string);
+          ("PKCE verifier", Github_fixture.gte_verifier_string);
+          ("client secret", Github_fixture.gte_client_secret);
+          ("OAuth state", Github_fixture.goc_fixture 'S');
+          ("session binding", Github_fixture.goc_fixture 'B');
+          ("private repository name", Github_fixture.gur_private_name);
+          ( "private repository description",
+            Github_fixture.gur_private_description );
+          ("installation id", "943000011");
+          ("account id", "943100011");
+          ("GitHub repository id", "943600111");
+          ("draft id", Int64.to_string draft);
         ];
       (* Refreshing the destination is a plain GET: no second project. *)
       let* response, _ =
-        Http_fixture.do_get ~cookie ~target:(setup_target "pch-success") pipeline
+        Http_fixture.do_get ~cookie
+          ~target:(setup_target "pch-success")
+          pipeline
       in
       Http_fixture.check_page "refresh" response;
       let* projects = count_projects conn account_id in
@@ -1241,14 +1298,15 @@ let post_replay_case =
         open_identity_form "identity step" ~draft pipeline
       in
       let fields =
-        Http_fixture.identity_fields ~draft:(Int64.to_string draft) ~slug:"pch-replay"
-          ~primary:(Int64.to_string s1) ()
+        Http_fixture.identity_fields ~draft:(Int64.to_string draft)
+          ~slug:"pch-replay" ~primary:(Int64.to_string s1) ()
       in
       let* response =
         do_post ~cookie ~fields:(fields @ [ ("dream.csrf", token) ]) pipeline
       in
       let* () =
-        Http_fixture.check_redirect_lwt "created" "/projects/pch-replay/setup" response
+        Http_fixture.check_redirect_lwt "created" "/projects/pch-replay/setup"
+          response
       in
       (* Same body again, fresh valid token: the losing call maps through
          Draft_unavailable and leaks nothing about the permanent
@@ -1258,8 +1316,8 @@ let post_replay_case =
         do_post ~cookie ~fields:(fields @ [ ("dream.csrf", fresh) ]) pipeline
       in
       let* () =
-        Http_fixture.check_redirect_lwt "replay" "/projects/new?selection=unavailable"
-          response
+        Http_fixture.check_redirect_lwt "replay"
+          "/projects/new?selection=unavailable" response
       in
       (match Dream.header response "Location" with
       | Some location ->
@@ -1297,8 +1355,7 @@ let post_no_selection_case =
       in
       let* () =
         Http_fixture.check_redirect_lwt "no selection"
-          (Printf.sprintf "/projects/new?draft=%Ld&selection=required"
-             draft)
+          (Printf.sprintf "/projects/new?draft=%Ld&selection=required" draft)
           response
       in
       check_no_projects "no selection" conn account_id)
@@ -1313,8 +1370,9 @@ let race_case name ~mutate ~selection_suffix =
       let* _, draft, account_id, ids =
         ready_draft conn ~user:uid ~ext_id:943000014L
           (fun account_id ->
-            [ repo ~account_id ~id:943600141L "alpha"
-            ; repo ~account_id ~id:943600142L "beta"
+            [
+              repo ~account_id ~id:943600141L "alpha";
+              repo ~account_id ~id:943600142L "beta";
             ])
           ~select:[ 0; 1 ] ~primary:(Some 0)
       in
@@ -1365,15 +1423,15 @@ let post_invalid_form_case =
       let* _, draft, account_id, ids =
         ready_draft conn ~user:uid ~ext_id:943000015L
           (fun account_id ->
-            [ repo ~account_id ~id:943600151L "alpha"
-            ; repo ~account_id ~id:943600152L "beta"
+            [
+              repo ~account_id ~id:943600151L "alpha";
+              repo ~account_id ~id:943600152L "beta";
             ])
           ~select:[ 0 ] ~primary:None
       in
       let s1 = List.nth ids 0 in
       let* _, foreign, _, _ =
-        ready_draft ~login:"pcreate-foreign" conn ~user:other
-          ~ext_id:943000016L
+        ready_draft ~login:"pcreate-foreign" conn ~user:other ~ext_id:943000016L
           (fun account_id -> [ repo ~account_id ~id:943600161L "theirs" ])
           ~select:[ 0 ] ~primary:None
       in
@@ -1392,7 +1450,8 @@ let post_invalid_form_case =
           pipeline
       in
       Alcotest.(check int) "recovered: 400" 400 (status_of response);
-      Alcotest.(check (option string)) "recovered: no redirect" None
+      Alcotest.(check (option string))
+        "recovered: no redirect" None
         (Dream.header response "Location");
       let* body = Dream.body response in
       let frag = Html_assert.panel_fragment body in
@@ -1413,7 +1472,8 @@ let post_invalid_form_case =
           pipeline
       in
       Alcotest.(check int) "foreign: 400" 400 (status_of response);
-      Alcotest.(check (option string)) "foreign: no redirect" None
+      Alcotest.(check (option string))
+        "foreign: no redirect" None
         (Dream.header response "Location");
       let* body = Dream.body response in
       Html_assert.must_not body (Int64.to_string foreign);
@@ -1431,8 +1491,9 @@ let post_domain_validation_case =
       let* _, draft, account_id, ids =
         ready_draft conn ~user:uid ~ext_id:943000017L
           (fun account_id ->
-            [ repo ~account_id ~id:943600171L "alpha"
-            ; repo ~account_id ~id:943600172L "beta"
+            [
+              repo ~account_id ~id:943600171L "alpha";
+              repo ~account_id ~id:943600172L "beta";
             ])
           ~select:[ 0 ] ~primary:None
       in
@@ -1448,18 +1509,22 @@ let post_domain_validation_case =
       let expect_422 label fields copy =
         let* response = submit fields in
         Alcotest.(check int) (label ^ ": 422") 422 (status_of response);
-        Alcotest.(check (option string)) (label ^ ": no-store")
-          (Some "no-store")
+        Alcotest.(check (option string))
+          (label ^ ": no-store") (Some "no-store")
           (Dream.header response "Cache-Control");
-        Alcotest.(check (option string)) (label ^ ": referrer policy")
+        Alcotest.(check (option string))
+          (label ^ ": referrer policy")
           (Some Earde.Request_origin.referrer_policy)
           (Dream.header response "Referrer-Policy");
-        Alcotest.(check (option string)) (label ^ ": no redirect") None
+        Alcotest.(check (option string))
+          (label ^ ": no redirect") None
           (Dream.header response "Location");
         (* No submitted value enters a cookie. *)
         List.iter
           (fun cookie_header ->
-            Alcotest.(check bool) (label ^ ": value not in cookies") false
+            Alcotest.(check bool)
+              (label ^ ": value not in cookies")
+              false
               (Html_assert.contains cookie_header "Rvx"))
           (Dream.headers response "Set-Cookie");
         let* body = Dream.body response in
@@ -1473,9 +1538,8 @@ let post_domain_validation_case =
         Html_assert.must body Http_fixture.csrf_field_marker;
         Lwt.return_unit
       in
-      let fields ?(kind = "project") ?(slug = "pch-domain")
-          ?(description = "") ?(website = "")
-          ?(primary = Int64.to_string s1) () =
+      let fields ?(kind = "project") ?(slug = "pch-domain") ?(description = "")
+          ?(website = "") ?(primary = Int64.to_string s1) () =
         Http_fixture.identity_fields ~draft:(Int64.to_string draft) ~kind
           ~name:marker_name ~slug ~description ~website ~primary ()
       in
@@ -1483,8 +1547,8 @@ let post_domain_validation_case =
         (* The failing field is the blank name; the marker rides in the
            description so preservation still shows. *)
         expect_422 "invalid name"
-          (Http_fixture.identity_fields ~draft:(Int64.to_string draft) ~name:"   "
-             ~slug:"pch-domain" ~description:marker_name
+          (Http_fixture.identity_fields ~draft:(Int64.to_string draft)
+             ~name:"   " ~slug:"pch-domain" ~description:marker_name
              ~primary:(Int64.to_string s1) ())
           "Enter a valid project name."
       in
@@ -1575,8 +1639,8 @@ let post_slug_conflict_case =
         do_post ~cookie
           ~fields:
             (Http_fixture.identity_fields ~draft:(Int64.to_string draft)
-               ~kind:"ecosystem" ~name:"Pch Slug <Conflict>"
-               ~slug:"pch-taken" ()
+               ~kind:"ecosystem" ~name:"Pch Slug <Conflict>" ~slug:"pch-taken"
+               ()
             @ [ ("dream.csrf", token) ])
           pipeline
       in
@@ -1613,8 +1677,8 @@ let post_claim_conflict_case =
       in
       let* holder = insert_user conn "pcreate_holder" in
       let* () =
-        Project_fixture.hold_actively conn ~project:rival ~holder ~ext_id:943000998L
-          ~account_id:943100998L
+        Project_fixture.hold_actively conn ~project:rival ~holder
+          ~ext_id:943000998L ~account_id:943100998L
       in
       let pipeline = app_pipeline ~session_user_id:uid ~url () in
       let* cookie, token, _ =
@@ -1624,8 +1688,7 @@ let post_claim_conflict_case =
         do_post ~cookie
           ~fields:
             (Http_fixture.identity_fields ~draft:(Int64.to_string draft)
-               ~kind:"ecosystem" ~name:"Pch Claim Conflict"
-               ~slug:"pch-claim" ()
+               ~kind:"ecosystem" ~name:"Pch Claim Conflict" ~slug:"pch-claim" ()
             @ [ ("dream.csrf", token) ])
           pipeline
       in
@@ -1709,10 +1772,12 @@ let post_storage_error_case =
               pipeline
           in
           Alcotest.(check int) "500" 500 (status_of response);
-          Alcotest.(check (option string)) "no Location" None
+          Alcotest.(check (option string))
+            "no Location" None
             (Dream.header response "Location");
           let* body = Dream.body response in
-          List.iter (Html_assert.must_not body)
+          List.iter
+            (Html_assert.must_not body)
             [ "pch fixture failure"; "Caqti"; "PostgreSQL" ];
           (* The transaction rolled back whole: no partial permanent
              state, and the draft is preserved. *)
@@ -1724,12 +1789,20 @@ let post_storage_error_case =
           exec conn "drop fn" q_drop_fail_fn ()))
 
 let post_db_suite =
-  [ post_success_case; post_replay_case; post_no_selection_case;
-    post_stale_primary_case; post_race_unselected_case;
-    post_invalid_form_case; post_domain_validation_case;
-    post_namespace_conflict_case; post_slug_conflict_case;
-    post_claim_conflict_case; post_rejected_no_rows_case;
-    post_storage_error_case ]
+  [
+    post_success_case;
+    post_replay_case;
+    post_no_selection_case;
+    post_stale_primary_case;
+    post_race_unselected_case;
+    post_invalid_form_case;
+    post_domain_validation_case;
+    post_namespace_conflict_case;
+    post_slug_conflict_case;
+    post_claim_conflict_case;
+    post_rejected_no_rows_case;
+    post_storage_error_case;
+  ]
 
 (* === GET /projects/:slug/setup: destination authorization === *)
 
@@ -1747,12 +1820,10 @@ let setup_authorization_case =
         insert_project conn ~ns_id:943100024L ~creator
           ~project_name:"Pch Destination" ~slug:"pch-dest" ()
       in
+      let* () = insert_steward conn ~project ~user:steward ~installation:inst in
       let* () =
-        insert_steward conn ~project ~user:steward ~installation:inst
-      in
-      let* () =
-        insert_repo conn ~project ~position:1 ~gh_id:943600241L
-          ~primary:true "alpha"
+        insert_repo conn ~project ~position:1 ~gh_id:943600241L ~primary:true
+          "alpha"
       in
       let steward_pipeline = app_pipeline ~session_user_id:steward ~url () in
       let* response, body =
@@ -1769,13 +1840,12 @@ let setup_authorization_case =
       Html_assert.must_not body (Int64.to_string project);
       (* An unrelated authenticated user gets the generic 404 with no
          name leak and no redirect to the project. *)
-      let outsider_pipeline =
-        app_pipeline ~session_user_id:outsider ~url ()
-      in
+      let outsider_pipeline = app_pipeline ~session_user_id:outsider ~url () in
       let expect_404 label pipeline target =
         let* response, body = Http_fixture.do_get ~target pipeline in
         Alcotest.(check int) (label ^ ": 404") 404 (status_of response);
-        Alcotest.(check (option string)) (label ^ ": no redirect") None
+        Alcotest.(check (option string))
+          (label ^ ": no redirect") None
           (Dream.header response "Location");
         Html_assert.must_not body "Pch Destination";
         Html_assert.must_not body "pcreate-owner/alpha";
@@ -1795,24 +1865,20 @@ let setup_authorization_case =
         Http_fixture.do_get ~target:(setup_target "pch-dest") anonymous_pipeline
       in
       Alcotest.(check int) "anonymous: 303" 303 (status_of response);
-      Alcotest.(check (option string)) "anonymous: /login" (Some "/login")
+      Alcotest.(check (option string))
+        "anonymous: /login" (Some "/login")
         (Dream.header response "Location");
       (* Malformed slugs are the same generic 404. *)
       let* () =
         Lwt_list.iter_s
           (fun slug ->
-            expect_404 ("slug " ^ slug) steward_pipeline
-              (setup_target slug))
+            expect_404 ("slug " ^ slug) steward_pipeline (setup_target slug))
           [ "Bad_Slug"; "a--b"; "-lead"; "zz9zz-" ]
       in
       (* Stale and revoked projects vanish for the steward too. *)
       let* () = exec conn "stale" q_set_project_status (project, "stale") in
-      let* () =
-        expect_404 "stale" steward_pipeline (setup_target "pch-dest")
-      in
-      let* () =
-        exec conn "revoked" q_set_project_status (project, "revoked")
-      in
+      let* () = expect_404 "stale" steward_pipeline (setup_target "pch-dest") in
+      let* () = exec conn "revoked" q_set_project_status (project, "revoked") in
       expect_404 "revoked" steward_pipeline (setup_target "pch-dest"))
 
 let setup_inconsistent_case =
@@ -1834,7 +1900,8 @@ let setup_inconsistent_case =
         Http_fixture.do_get ~target:(setup_target "pch-corrupt") pipeline
       in
       Alcotest.(check int) "500" 500 (status_of response);
-      Alcotest.(check (option string)) "no-store" (Some "no-store")
+      Alcotest.(check (option string))
+        "no-store" (Some "no-store")
         (Dream.header response "Cache-Control");
       List.iter (Html_assert.must_not body) [ "Caqti"; "PostgreSQL"; "SELECT " ];
       Lwt.return_unit)
@@ -1842,16 +1909,17 @@ let setup_inconsistent_case =
 let setup_db_suite = [ setup_authorization_case; setup_inconsistent_case ]
 
 let suites =
-    (* Permanent project creation: the pure "Project created" page, the
+  (* Permanent project creation: the pure "Project created" page, the
        DB-free access/origin/CSRF gates of POST /projects and the
        permanent GET destination, and the database-gated read-model,
        creation-flow (PRG, replay, conflicts, storage failure), and
        steward-authorization behavior. *)
-  [ ("project_home_page", page_suite)
-  ; ("project_creation_post_gates", post_gate_suite)
-  ; ("project_creation_post_csrf", post_csrf_suite)
-  ; ("project_home_setup_gates", setup_gate_suite)
-  ; ("project_home_read_model_db", read_model_db_suite)
-  ; ("project_creation_post_db", post_db_suite)
-  ; ("project_home_setup_db", setup_db_suite)
+  [
+    ("project_home_page", page_suite);
+    ("project_creation_post_gates", post_gate_suite);
+    ("project_creation_post_csrf", post_csrf_suite);
+    ("project_home_setup_gates", setup_gate_suite);
+    ("project_home_read_model_db", read_model_db_suite);
+    ("project_creation_post_db", post_db_suite);
+    ("project_home_setup_db", setup_db_suite);
   ]

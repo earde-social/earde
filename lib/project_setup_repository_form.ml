@@ -9,13 +9,11 @@
 module Int64_set = Set.Make (Int64)
 
 type t = { draft_id : int64; selected_snapshot_ids : int64 list }
-
 type error = Invalid_form
 
 (* Bounded by the snapshot-store cap: a verified draft never holds more than
    2,000 repositories, so a larger submission is malformed, not large. *)
 let max_repository_fields = 2000
-
 let is_ascii_digit c = c >= '0' && c <= '9'
 
 (* Strict positive decimal int64. The digits-only pre-check rejects
@@ -55,5 +53,4 @@ let of_fields fields =
   walk fields None Int64_set.empty [] 0
 
 let draft_id t = t.draft_id
-
 let selected_snapshot_ids t = t.selected_snapshot_ids

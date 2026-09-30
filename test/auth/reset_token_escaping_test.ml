@@ -12,7 +12,6 @@
    (which never touch the database, so this suite runs ungated). *)
 
 let ( let* ) = Lwt.bind
-
 let case name f = Alcotest.test_case name `Quick f
 
 (* Renders the real page through real session middleware (the page embeds a
@@ -50,14 +49,17 @@ let run_reset_post ~token ~password ~confirm =
            let csrf = Dream.csrf_token req in
            Dream.set_body req
              (form_body
-                [ ("dream.csrf", csrf); ("token", token);
-                  ("password", password); ("confirm_password", confirm) ]);
+                [
+                  ("dream.csrf", csrf);
+                  ("token", token);
+                  ("password", password);
+                  ("confirm_password", confirm);
+                ]);
            Earde.Auth_handlers.reset_password_handler req)
      in
      let request =
        Dream.request ~method_:`POST ~target:"/reset-password"
-         ~headers:
-           [ ("Content-Type", "application/x-www-form-urlencoded") ]
+         ~headers:[ ("Content-Type", "application/x-www-form-urlencoded") ]
          ""
      in
      let* response = pipeline request in
@@ -74,8 +76,13 @@ let escape s = Earde.Html.to_string (Earde.Html.text s)
 
 let unescape s =
   let entities =
-    [ ("&amp;", "&"); ("&lt;", "<"); ("&gt;", ">"); ("&quot;", "\"");
-      ("&#39;", "'") ]
+    [
+      ("&amp;", "&");
+      ("&lt;", "<");
+      ("&gt;", ">");
+      ("&quot;", "\"");
+      ("&#39;", "'");
+    ]
   in
   let buf = Buffer.create (String.length s) in
   let sl = String.length s in
@@ -106,7 +113,9 @@ let token_input_of escaped = token_input_prefix ^ escaped ^ "'>"
 (* Exactly one token input in the region, returned as raw tag text. *)
 let token_tag region =
   match
-    List.filter (fun t -> Html_assert.contains t "name='token'") (Html_assert.input_tags region)
+    List.filter
+      (fun t -> Html_assert.contains t "name='token'")
+      (Html_assert.input_tags region)
   with
   | [ t ] -> t
   | l ->
@@ -144,28 +153,37 @@ let audit_token_tag tag =
 let audit_reset_form page ~token =
   let region = Html_assert.form_region page in
   let escaped = escape token in
-  Alcotest.(check int) "exactly one name='token' field" 1
+  Alcotest.(check int)
+    "exactly one name='token' field" 1
     (Html_assert.occurrences region "name='token'");
   Html_assert.must region (token_input_of escaped);
   let value = audit_token_tag (token_tag region) in
-  Alcotest.(check string) "escaped value decodes back to the raw token"
-    token (unescape value);
-  (match List.filter Html_assert.is_csrf_input (Html_assert.input_tags region) with
+  Alcotest.(check string)
+    "escaped value decodes back to the raw token" token (unescape value);
+  (match
+     List.filter Html_assert.is_csrf_input (Html_assert.input_tags region)
+   with
   | [ _ ] -> ()
   | l ->
       Alcotest.fail
         (Printf.sprintf "expected exactly one CSRF input, found %d"
            (List.length l)));
-  Alcotest.(check int) "input census: csrf + token + 2 passwords" 4
+  Alcotest.(check int)
+    "input census: csrf + token + 2 passwords" 4
     (List.length (Html_assert.input_tags region));
-  Html_assert.must page "<form action='/reset-password' method='POST' class='auth-form'>";
+  Html_assert.must page
+    "<form action='/reset-password' method='POST' class='auth-form'>";
   Html_assert.must region
-    "<input class='auth-input' type='password' id='rp-password' name='password' required minlength='8'>";
+    "<input class='auth-input' type='password' id='rp-password' \
+     name='password' required minlength='8'>";
   Html_assert.must region
-    "<input class='auth-input' type='password' id='rp-confirm' name='confirm_password' required minlength='8'>";
-  Alcotest.(check int) "both password fields keep minlength" 2
+    "<input class='auth-input' type='password' id='rp-confirm' \
+     name='confirm_password' required minlength='8'>";
+  Alcotest.(check int)
+    "both password fields keep minlength" 2
     (Html_assert.occurrences region "minlength='8'");
-  Html_assert.must region "<button type='submit' class='auth-btn'>Reset password</button>";
+  Html_assert.must region
+    "<button type='submit' class='auth-btn'>Reset password</button>";
   Html_assert.must_not region "<script";
   Html_assert.must_not region "<img";
   Html_assert.must_not region "onerror"
@@ -173,7 +191,6 @@ let audit_reset_form page ~token =
 (* Attribute-breakout payload: quote out of the value, then an autofocus +
    event-handler pair that would fire on load if the quote survived. *)
 let breakout_payload = "x'autofocus onfocus='alert(1)"
-
 let script_payload = "'><script>alert(1)</script>"
 
 let single_quote_case =
@@ -200,7 +217,8 @@ let script_tag_case =
       audit_reset_form page ~token:script_payload;
       Html_assert.must_not page "<script>alert";
       Html_assert.must_not page "</script>";
-      Html_assert.must page "value='&#39;&gt;&lt;script&gt;alert(1)&lt;/script&gt;'>")
+      Html_assert.must page
+        "value='&#39;&gt;&lt;script&gt;alert(1)&lt;/script&gt;'>")
 
 let amp_angle_case =
   case "ampersand and angle brackets round-trip as entities" (fun () ->
@@ -219,7 +237,8 @@ let ordinary_token_case =
       audit_reset_form page ~token;
       (* No escapable byte: the attribute must carry the token verbatim. *)
       Html_assert.must page (token_input_of token);
-      Alcotest.(check string) "value is the raw token" token
+      Alcotest.(check string)
+        "value is the raw token" token
         (audit_token_tag (token_tag (Html_assert.form_region page))))
 
 let error_notice_of msg =
@@ -228,9 +247,7 @@ let error_notice_of msg =
 (* The two real handler re-render arms. Both must keep the converted shell,
    the renderer-owned notice, and the escaped token. *)
 let handler_rerender_audit ~password ~confirm ~notice () =
-  let status, page =
-    run_reset_post ~token:script_payload ~password ~confirm
-  in
+  let status, page = run_reset_post ~token:script_payload ~password ~confirm in
   Alcotest.(check int) "re-render status" 200 status;
   Html_assert.must page "<body class='launch-auth launch-reset-password'>";
   Html_assert.must page (error_notice_of notice);
@@ -241,8 +258,8 @@ let handler_rerender_audit ~password ~confirm ~notice () =
 
 let mismatch_rerender_case =
   case "real handler: mismatch re-render escapes the crafted token"
-    (handler_rerender_audit ~password:"password-one-1"
-       ~confirm:"password-two-2" ~notice:"Passwords do not match.")
+    (handler_rerender_audit ~password:"password-one-1" ~confirm:"password-two-2"
+       ~notice:"Passwords do not match.")
 
 let too_short_rerender_case =
   case "real handler: too-short re-render escapes the crafted token"
@@ -256,8 +273,10 @@ let wrapper_case =
       Html_assert.must page "<body class='launch-auth launch-reset-password'>";
       Html_assert.must page "<title>Reset Password - Earde</title>";
       Html_assert.must page "<meta name='robots' content='noindex'>";
-      Html_assert.must page "<link rel='stylesheet' href='/static/css/earde.css'>";
-      Alcotest.(check int) "exactly one stylesheet" 1
+      Html_assert.must page
+        "<link rel='stylesheet' href='/static/css/earde.css'>";
+      Alcotest.(check int)
+        "exactly one stylesheet" 1
         (Html_assert.occurrences page "<link rel='stylesheet'");
       Html_assert.must_not page "auth.css";
       Html_assert.must_not page "tailwind";
@@ -300,13 +319,17 @@ let login_signup_case =
       let login = render_login () in
       Html_assert.must login "<body class='launch-auth launch-login'>";
       Html_assert.must login "<title>Log in - Earde</title>";
-      Html_assert.must login "<form action='/login' method='POST' class='auth__card'>";
       Html_assert.must login
-        "<input class='input input--inset' type='text' id='li-identifier' name='identifier' required>";
+        "<form action='/login' method='POST' class='auth__card'>";
       Html_assert.must login
-        "<input class='input input--inset' type='password' id='li-password' name='password' required>";
+        "<input class='input input--inset' type='text' id='li-identifier' \
+         name='identifier' required>";
+      Html_assert.must login
+        "<input class='input input--inset' type='password' id='li-password' \
+         name='password' required>";
       Html_assert.must login "href='/forgot-password'";
-      Alcotest.(check int) "login input census" 3
+      Alcotest.(check int)
+        "login input census" 3
         (List.length (Html_assert.input_tags (Html_assert.form_region login)));
       Html_assert.must_not login "auth.css";
       Html_assert.must_not login "tailwind";
@@ -314,30 +337,41 @@ let login_signup_case =
       let signup = render_signup () in
       Html_assert.must signup "<body class='launch-auth launch-signup'>";
       Html_assert.must signup "<title>Create an account - Earde</title>";
-      Html_assert.must signup "<form action='/signup' method='POST' class='auth__card'>";
+      Html_assert.must signup
+        "<form action='/signup' method='POST' class='auth__card'>";
       Html_assert.must signup "name='username' required>";
       Html_assert.must signup "name='email' required>";
       Html_assert.must signup "name='password' required>";
-      Html_assert.must signup "id='website' name='website' tabindex='-1' autocomplete='off'>";
-      Html_assert.must signup "id='privacy' name='privacy' type='checkbox' required>";
-      Alcotest.(check int) "signup input census" 6
+      Html_assert.must signup
+        "id='website' name='website' tabindex='-1' autocomplete='off'>";
+      Html_assert.must signup
+        "id='privacy' name='privacy' type='checkbox' required>";
+      Alcotest.(check int)
+        "signup input census" 6
         (List.length (Html_assert.input_tags (Html_assert.form_region signup)));
       Html_assert.must_not signup "auth.css";
       Html_assert.must_not signup "tailwind";
       Html_assert.must_not signup "fonts.googleapis")
 
 let suite =
-  [ single_quote_case; double_quote_case; script_tag_case; amp_angle_case;
-    ordinary_token_case; mismatch_rerender_case; too_short_rerender_case;
-    wrapper_case; login_signup_case ]
+  [
+    single_quote_case;
+    double_quote_case;
+    script_tag_case;
+    amp_angle_case;
+    ordinary_token_case;
+    mismatch_rerender_case;
+    too_short_rerender_case;
+    wrapper_case;
+    login_signup_case;
+  ]
 
 let suites =
-    (* Reset-token attribute escaping (pass 16B): the reset-password
+  (* Reset-token attribute escaping (pass 16B): the reset-password
        renderer's hidden token field escapes the attacker-controlled token
        (quote/script/entity payloads stay inert, decode losslessly, and the
        form's input census is closed), through both the direct renderer and
        the real handler's mismatch / too-short re-render arms, with the
        launch wrapper and the sibling login/signup contracts pinned.
        DB-free. *)
-  [ ("reset_token_attribute_escaping", suite)
-  ]
+  [ ("reset_token_attribute_escaping", suite) ]

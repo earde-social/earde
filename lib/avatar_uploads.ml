@@ -72,7 +72,7 @@ let remove_local_file path =
   with Sys_error _ ->
     (* ENOENT and a real failure both raise Sys_error; only a file that
        verifiably still exists counts as a failure worth logging. *)
-    if (try Sys.file_exists path with Sys_error _ -> false) then `Failed
+    if try Sys.file_exists path with Sys_error _ -> false then `Failed
     else `Absent
 
 let cleanup_deleted_account_avatar avatar_url =

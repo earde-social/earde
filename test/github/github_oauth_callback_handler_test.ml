@@ -26,37 +26,29 @@ let ( let* ) = Lwt.bind
 open Caqti_request.Infix
 
 let case = Case.quick
-
 let path = "/integrations/github/authorize/callback"
 
 let make ~mode ~load_config ~load_credentials ~exchange ~installations
     ~repositories =
   Earde.Github_onboarding_handlers.make_oauth_callback_handler ~mode
     ~load_config ~load_credentials ~exchange_transport:exchange
-    ~installations_transport:installations
-    ~repositories_transport:repositories
+    ~installations_transport:installations ~repositories_transport:repositories
 
 let counting_loader = Http_fixture.counting_loader
-
 let ok_loader = Http_fixture.ok_loader
-
 let status_of = Http_fixture.status_of
-
 let check_safety_headers = Github_handler_fixture.check_safety_headers
-
 let check_deletion = Github_handler_fixture.check_deletion
 
 (* Deterministic printable state fixture, distinct from every other
    suite's. *)
 let fixture_state_string = Github_fixture.goc_fixture 'K'
-
 let fixture_state () = Github_fixture.goc_state_exn fixture_state_string
 
 (* Opaque but raw-query-safe authorization code fixture: parsing splits
    on '&' and '#', so those bytes cannot appear, while '=' inside the
    value must survive byte-for-byte. *)
 let fixture_code = "cb-c0de.fixture~ok=="
-
 let target_of params = path ^ "?" ^ String.concat "&" params
 
 let code_target =
@@ -66,14 +58,12 @@ let error_target =
   target_of [ "state=" ^ fixture_state_string; "error=access_denied" ]
 
 let ok_credentials () = Ok (Github_fixture.gte_credentials ())
-
 let failed_credentials () = Error (GCS.Missing GCS.Client_secret)
 
 (* Success bodies for the fake transports. The token body uses the
    expiring configuration so a refresh token exists and must never leak
    anywhere. *)
 let access_fixture = "ghcb-access.TOKEN~1"
-
 let refresh_fixture = "ghcb-refresh.TOKEN~2"
 
 let token_body =
@@ -120,8 +110,8 @@ let repo_entry ~installation ?private_flag ?visibility ?description
   Github_fixture.gur_repo
     ~owner_id:(Int64.add installation 1L)
     ~owner_login:(repo_owner_login installation)
-    ?private_flag ?visibility ?description ?default_branch ?archived ~id
-    ~name ()
+    ?private_flag ?visibility ?description ?default_branch ?archived ~id ~name
+    ()
 
 let repo_listing ?total entries =
   Ok
@@ -133,14 +123,16 @@ let repo_listing ?total entries =
 (* One-page listing for the success paths: two public repositories plus
    a private and an internal one that must never be stored anywhere. *)
 let default_repo_entries installation =
-  [ repo_entry ~installation ~id:501L ~name:"alpha" ()
-  ; repo_entry ~installation ~id:502L ~name:"beta"
-      ~description:{|"Beta service"|} ()
-  ; repo_entry ~installation ~private_flag:true ~visibility:"private"
-      ~description:(Printf.sprintf {|"%s"|} Github_fixture.gur_private_description)
-      ~id:503L ~name:Github_fixture.gur_private_name ()
-  ; repo_entry ~installation ~visibility:"internal" ~id:504L
-      ~name:"internal-repo" ()
+  [
+    repo_entry ~installation ~id:501L ~name:"alpha" ();
+    repo_entry ~installation ~id:502L ~name:"beta"
+      ~description:{|"Beta service"|} ();
+    repo_entry ~installation ~private_flag:true ~visibility:"private"
+      ~description:
+        (Printf.sprintf {|"%s"|} Github_fixture.gur_private_description)
+      ~id:503L ~name:Github_fixture.gur_private_name ();
+    repo_entry ~installation ~visibility:"internal" ~id:504L
+      ~name:"internal-repo" ();
   ]
 
 (* The exact snapshot the default listing must produce: public entries
@@ -148,9 +140,10 @@ let default_repo_entries installation =
 let default_repo_sigs installation =
   let account_id = Int64.add installation 1L in
   let login = repo_owner_login installation in
-  [ Project_fixture.sig_of ~position:1 ~id:501L ~account_id ~login "alpha"
-  ; Project_fixture.sig_of ~position:2 ~id:502L ~account_id ~login
-      ~description:"Beta service" "beta"
+  [
+    Project_fixture.sig_of ~position:1 ~id:501L ~account_id ~login "alpha";
+    Project_fixture.sig_of ~position:2 ~id:502L ~account_id ~login
+      ~description:"Beta service" "beta";
   ]
 
 (* GET transport wrapper logging each call into a shared order list, so
@@ -178,7 +171,8 @@ let gate_run ?(cookies = []) ?(mode = Ob.Public)
         credentials_result)
       ~exchange:(exchange_stub (Ok (200, token_body)) ex_calls)
       ~installations:(installations_stub [ listing_for 12345L ] inst_calls)
-      ~repositories:(Github_fixture.gur_transport [ repo_listing [] ] repo_captured)
+      ~repositories:
+        (Github_fixture.gur_transport [ repo_listing [] ] repo_captured)
   in
   let headers =
     match cookies with
@@ -187,12 +181,14 @@ let gate_run ?(cookies = []) ?(mode = Ob.Public)
   in
   let request = Dream.request ~method_:`GET ~target ~headers "" in
   let outcome =
-    match Lwt_main.run (Dream.set_secret Github_fixture.cookie_secret handler request) with
+    match
+      Lwt_main.run
+        (Dream.set_secret Github_fixture.cookie_secret handler request)
+    with
     | response -> `Response response
     | exception _ -> `Db_boundary
   in
-  ( outcome,
-    (!cred_calls, !ex_calls, !inst_calls, List.length !repo_captured) )
+  (outcome, (!cred_calls, !ex_calls, !inst_calls, List.length !repo_captured))
 
 let gate_response label = function
   | `Response response -> response
@@ -201,18 +197,18 @@ let gate_response label = function
 let check_db_boundary label = function
   | `Db_boundary -> ()
   | `Response response ->
-      Alcotest.failf "%s: rejected with status %d" label
-        (status_of response)
+      Alcotest.failf "%s: rejected with status %d" label (status_of response)
 
 (* The full clean-failure contract; the Location is always the literal
    failure target, so nothing sensitive can be printed. *)
 let check_failure label response =
   Alcotest.(check int) (label ^ ": exactly 303") 303 (status_of response);
-  Alcotest.(check (option string)) (label ^ ": Location")
-    (Some "/bring?github=failed")
+  Alcotest.(check (option string))
+    (label ^ ": Location") (Some "/bring?github=failed")
     (Dream.header response "Location");
   check_safety_headers label response;
-  Alcotest.(check string) (label ^ ": empty body") ""
+  Alcotest.(check string)
+    (label ^ ": empty body") ""
     (Lwt_main.run (Dream.body response))
 
 let check_no_calls label (cred, ex, inst, repos) =
@@ -228,17 +224,19 @@ let rejected label target =
   let outcome, calls = gate_run ~load_config:loader ~target () in
   let response = gate_response label outcome in
   check_failure label response;
-  Alcotest.(check int) (label ^ ": no Set-Cookie") 0
+  Alcotest.(check int)
+    (label ^ ": no Set-Cookie")
+    0
     (List.length (Dream.headers response "Set-Cookie"));
-  Alcotest.(check int) (label ^ ": config loader never called") 0
-    !config_calls;
+  Alcotest.(check int) (label ^ ": config loader never called") 0 !config_calls;
   check_no_calls label calls
 
 let with_fixture_cookie label f =
   let state = fixture_state () in
   let name, value, _ =
-    Github_fixture.gck_stored (label ^ " cookie") (Github_fixture.gck_https_config ()) state
-      (GSD.create ())
+    Github_fixture.gck_stored (label ^ " cookie")
+      (Github_fixture.gck_https_config ())
+      state (GSD.create ())
   in
   f (name, value)
 
@@ -254,73 +252,75 @@ let off_case =
           check_failure "off" response;
           Alcotest.(check int) "config loader never called" 0 !config_calls;
           check_no_calls "off" calls;
-          Alcotest.(check int) "no Set-Cookie" 0
+          Alcotest.(check int)
+            "no Set-Cookie" 0
             (List.length (Dream.headers response "Set-Cookie"))))
 
 let state_rejection_case =
   case "strict parsing: state problems redirect cleanly" (fun () ->
       List.iter
         (fun (label, params) -> rejected label (target_of params))
-        [ ("missing state", [ "code=" ^ fixture_code ])
-        ; ("blank state", [ "state="; "code=" ^ fixture_code ])
-        ; ("bare state key", [ "state"; "code=" ^ fixture_code ])
-        ; ( "malformed state",
-            [ "state=not+canonical"; "code=" ^ fixture_code ] )
-        ; ( "padded state",
-            [ "state=" ^ fixture_state_string ^ "=";
-              "code=" ^ fixture_code ] )
-        ; ( "duplicate state",
-            [ "state=" ^ fixture_state_string;
-              "state=" ^ fixture_state_string; "code=" ^ fixture_code ] )
-        ; ( "uppercase State does not satisfy the canonical key",
-            [ "State=" ^ fixture_state_string; "code=" ^ fixture_code ] )
+        [
+          ("missing state", [ "code=" ^ fixture_code ]);
+          ("blank state", [ "state="; "code=" ^ fixture_code ]);
+          ("bare state key", [ "state"; "code=" ^ fixture_code ]);
+          ("malformed state", [ "state=not+canonical"; "code=" ^ fixture_code ]);
+          ( "padded state",
+            [ "state=" ^ fixture_state_string ^ "="; "code=" ^ fixture_code ] );
+          ( "duplicate state",
+            [
+              "state=" ^ fixture_state_string;
+              "state=" ^ fixture_state_string;
+              "code=" ^ fixture_code;
+            ] );
+          ( "uppercase State does not satisfy the canonical key",
+            [ "State=" ^ fixture_state_string; "code=" ^ fixture_code ] );
         ];
       rejected "no query at all" path;
       rejected "empty query" (path ^ "?"))
 
 let shape_rejection_case =
-  case "strict parsing: code/error shape problems redirect cleanly"
-    (fun () ->
+  case "strict parsing: code/error shape problems redirect cleanly" (fun () ->
       List.iter
         (fun (label, params) ->
           rejected label
             (target_of (("state=" ^ fixture_state_string) :: params)))
-        [ ("neither code nor error", [])
-        ; ( "both code and error",
-            [ "code=" ^ fixture_code; "error=access_denied" ] )
-        ; ( "duplicate code",
-            [ "code=" ^ fixture_code; "code=" ^ fixture_code ] )
-        ; ( "duplicate error",
-            [ "error=access_denied"; "error=access_denied" ] )
-        ; ( "duplicate code beside a valid error",
-            [ "code=" ^ fixture_code; "code=" ^ fixture_code;
-              "error=access_denied" ] )
-        ; ("blank code", [ "code=" ])
-        ; ("bare code key", [ "code" ])
-        ; ("blank error", [ "error=" ])
-        ; ("bare error key", [ "error" ])
-        ; ("code with a space is invalid", [ "code=bad code" ])
-        ; ("code with a control byte is invalid", [ "code=bad\x01code" ])
-        ; ( "uppercase Code does not satisfy the canonical key",
-            [ "Code=" ^ fixture_code ] )
-        ; ( "uppercase ERROR does not satisfy the canonical key",
-            [ "ERROR=access_denied" ] )
-        ; ( "error_description alone is not an error",
-            [ "error_description=denied" ] )
-        ; ( "fragment cuts the query",
-            [ "state2=x#code=" ^ fixture_code ] )
+        [
+          ("neither code nor error", []);
+          ( "both code and error",
+            [ "code=" ^ fixture_code; "error=access_denied" ] );
+          ("duplicate code", [ "code=" ^ fixture_code; "code=" ^ fixture_code ]);
+          ("duplicate error", [ "error=access_denied"; "error=access_denied" ]);
+          ( "duplicate code beside a valid error",
+            [
+              "code=" ^ fixture_code;
+              "code=" ^ fixture_code;
+              "error=access_denied";
+            ] );
+          ("blank code", [ "code=" ]);
+          ("bare code key", [ "code" ]);
+          ("blank error", [ "error=" ]);
+          ("bare error key", [ "error" ]);
+          ("code with a space is invalid", [ "code=bad code" ]);
+          ("code with a control byte is invalid", [ "code=bad\x01code" ]);
+          ( "uppercase Code does not satisfy the canonical key",
+            [ "Code=" ^ fixture_code ] );
+          ( "uppercase ERROR does not satisfy the canonical key",
+            [ "ERROR=access_denied" ] );
+          ( "error_description alone is not an error",
+            [ "error_description=denied" ] );
+          ("fragment cuts the query", [ "state2=x#code=" ^ fixture_code ]);
         ])
 
 let config_failure_case =
-  case "configuration failure: clean failure, nothing later runs"
-    (fun () ->
+  case "configuration failure: clean failure, nothing later runs" (fun () ->
       let loader, config_calls =
         counting_loader (Github_fixture.gac_of_values ~origin:None ())
       in
       with_fixture_cookie "config failure" (fun cookie ->
           let outcome, calls =
-            gate_run ~load_config:loader ~cookies:[ cookie ]
-              ~target:code_target ()
+            gate_run ~load_config:loader ~cookies:[ cookie ] ~target:code_target
+              ()
           in
           let response = gate_response "config failure" outcome in
           check_failure "config failure" response;
@@ -328,22 +328,27 @@ let config_failure_case =
           check_no_calls "config failure" calls;
           (* Without configuration there is no cookie policy: no deletion
              may be attempted. *)
-          Alcotest.(check int) "no Set-Cookie" 0
+          Alcotest.(check int)
+            "no Set-Cookie" 0
             (List.length (Dream.headers response "Set-Cookie"))))
 
 let missing_cookie_case =
-  case "missing per-flow cookie: failure with no SQL and no deletion"
-    (fun () ->
+  case "missing per-flow cookie: failure with no SQL and no deletion" (fun () ->
       let outcome, calls = gate_run ~target:code_target () in
       let response = gate_response "missing cookie" outcome in
       check_failure "missing cookie" response;
       check_no_calls "missing cookie" calls;
-      Alcotest.(check int) "no Set-Cookie" 0
+      Alcotest.(check int)
+        "no Set-Cookie" 0
         (List.length (Dream.headers response "Set-Cookie"));
       (* Another state's cookie does not satisfy this flow either. *)
-      let other = Github_fixture.goc_state_exn (Github_fixture.goc_fixture 'L') in
+      let other =
+        Github_fixture.goc_state_exn (Github_fixture.goc_fixture 'L')
+      in
       let name, value, _ =
-        Github_fixture.gck_stored "other flow" (Github_fixture.gck_https_config ()) other (GSD.create ())
+        Github_fixture.gck_stored "other flow"
+          (Github_fixture.gck_https_config ())
+          other (GSD.create ())
       in
       let outcome, calls =
         gate_run ~cookies:[ (name, value) ] ~target:code_target ()
@@ -351,7 +356,8 @@ let missing_cookie_case =
       let response = gate_response "other state's cookie" outcome in
       check_failure "other state's cookie" response;
       check_no_calls "other state's cookie" calls;
-      Alcotest.(check int) "still no Set-Cookie" 0
+      Alcotest.(check int)
+        "still no Set-Cookie" 0
         (List.length (Dream.headers response "Set-Cookie")))
 
 let invalid_cookie_case =
@@ -359,7 +365,9 @@ let invalid_cookie_case =
     (fun () ->
       let state = fixture_state () in
       let name, value, _ =
-        Github_fixture.gck_stored "victim" (Github_fixture.gck_https_config ()) state (GSD.create ())
+        Github_fixture.gck_stored "victim"
+          (Github_fixture.gck_https_config ())
+          state (GSD.create ())
       in
       let outcome, calls =
         gate_run ~cookies:[ (name, "AAAA" ^ value) ] ~target:code_target ()
@@ -386,12 +394,16 @@ let github_rejection_case =
               check_no_calls label calls;
               check_deletion label ~cookie_name:name ~stored_value:value
                 response)
-            [ ("rejection", error_target)
-            ; ( "rejection with remote metadata ignored",
+            [
+              ("rejection", error_target);
+              ( "rejection with remote metadata ignored",
                 target_of
-                  [ "state=" ^ fixture_state_string; "error=access_denied";
+                  [
+                    "state=" ^ fixture_state_string;
+                    "error=access_denied";
                     "error_description=The+user+denied+access";
-                    "error_uri=https%3A%2F%2Fdocs.github.com%2Fx" ] )
+                    "error_uri=https%3A%2F%2Fdocs.github.com%2Fx";
+                  ] );
             ]))
 
 let credential_failure_case =
@@ -409,12 +421,12 @@ let credential_failure_case =
           Alcotest.(check int) "repositories never called" 0 repos;
           (* The state is untouched, so the cookie must survive for a
              retry after the deployment is repaired. *)
-          Alcotest.(check int) "no Set-Cookie" 0
+          Alcotest.(check int)
+            "no Set-Cookie" 0
             (List.length (Dream.headers response "Set-Cookie"))))
 
 let sql_boundary_case =
-  case "valid code, cookie, and credentials reach consumption first"
-    (fun () ->
+  case "valid code, cookie, and credentials reach consumption first" (fun () ->
       with_fixture_cookie "boundary" (fun cookie ->
           (* No session middleware is installed anywhere in this suite;
              reaching the SQL boundary in both modes proves no session
@@ -426,11 +438,8 @@ let sql_boundary_case =
                 gate_run ~mode ~cookies:[ cookie ] ~target:code_target ()
               in
               check_db_boundary label outcome;
-              Alcotest.(check int)
-                (label ^ ": credentials loaded once")
-                1 cred;
-              Alcotest.(check int) (label ^ ": exchange not yet called") 0
-                ex;
+              Alcotest.(check int) (label ^ ": credentials loaded once") 1 cred;
+              Alcotest.(check int) (label ^ ": exchange not yet called") 0 ex;
               Alcotest.(check int)
                 (label ^ ": installations not yet called")
                 0 inst;
@@ -446,17 +455,23 @@ let unrelated_params_case =
             gate_run ~cookies:[ cookie ]
               ~target:
                 (target_of
-                   [ "ref=x"; "state=" ^ fixture_state_string;
-                     "setup_action=install"; "State=UP"; "bare";
-                     "code=" ^ fixture_code; "code2=9";
-                     "error_description=ignored"; "error_uri=ignored" ])
+                   [
+                     "ref=x";
+                     "state=" ^ fixture_state_string;
+                     "setup_action=install";
+                     "State=UP";
+                     "bare";
+                     "code=" ^ fixture_code;
+                     "code2=9";
+                     "error_description=ignored";
+                     "error_uri=ignored";
+                   ])
               ()
           in
           check_db_boundary "extras ignored" outcome))
 
 let no_leakage_case =
-  case "failure responses never echo state, code, or error values"
-    (fun () ->
+  case "failure responses never echo state, code, or error values" (fun () ->
       List.iter
         (fun (label, target) ->
           let outcome, _ = gate_run ~target () in
@@ -467,7 +482,8 @@ let no_leakage_case =
           in
           List.iter
             (fun needle ->
-              Alcotest.(check bool) (label ^ ": absent from the body")
+              Alcotest.(check bool)
+                (label ^ ": absent from the body")
                 false
                 (Html_assert.contains_nonempty ~needle body);
               Alcotest.(check bool)
@@ -478,10 +494,19 @@ let no_leakage_case =
         [ ("code shape", code_target); ("error shape", error_target) ])
 
 let gate_suite =
-  [ off_case; state_rejection_case; shape_rejection_case;
-    config_failure_case; missing_cookie_case; invalid_cookie_case;
-    github_rejection_case; credential_failure_case; sql_boundary_case;
-    unrelated_params_case; no_leakage_case ]
+  [
+    off_case;
+    state_rejection_case;
+    shape_rejection_case;
+    config_failure_case;
+    missing_cookie_case;
+    invalid_cookie_case;
+    github_rejection_case;
+    credential_failure_case;
+    sql_boundary_case;
+    unrelated_params_case;
+    no_leakage_case;
+  ]
 
 (* --- Database-gated: the real start + setup-return flow first, then
    the callback over sql_pool + secret, still with no session middleware
@@ -494,22 +519,22 @@ let or_fail = Github_handler_fixture.or_fail
 let q_cleanup =
   List.map
     (fun sql -> (Caqti_type.unit ->. Caqti_type.unit) sql)
-    [ (* The draft-failure case's injected trigger, in case a mid-case
+    [
+      (* The draft-failure case's injected trigger, in case a mid-case
          failure left it behind. *)
-      "DROP TRIGGER IF EXISTS ghoauth_fail_insert \
-       ON project_onboarding_draft_repositories"
-    ; "DROP FUNCTION IF EXISTS ghoauth_fail_insert_fn()"
-    ; "DELETE FROM github_onboarding_states WHERE user_id IN \
-       (SELECT id FROM users WHERE username LIKE 'ghoauth_%')"
+      "DROP TRIGGER IF EXISTS ghoauth_fail_insert ON \
+       project_onboarding_draft_repositories";
+      "DROP FUNCTION IF EXISTS ghoauth_fail_insert_fn()";
+      "DELETE FROM github_onboarding_states WHERE user_id IN (SELECT id FROM \
+       users WHERE username LIKE 'ghoauth_%')"
       (* Drafts first: installations are RESTRICT-protected while
-         referenced; snapshots cascade from drafts. *)
-    ; "DELETE FROM project_onboarding_drafts \
-       WHERE github_installation_record_id IN \
-         (SELECT id FROM github_installations \
-          WHERE github_installation_id BETWEEN 936000001 AND 936000999)"
-    ; "DELETE FROM github_installations \
-       WHERE github_installation_id BETWEEN 936000001 AND 936000999"
-    ; "DELETE FROM users WHERE username LIKE 'ghoauth_%'"
+         referenced; snapshots cascade from drafts. *);
+      "DELETE FROM project_onboarding_drafts WHERE \
+       github_installation_record_id IN (SELECT id FROM github_installations \
+       WHERE github_installation_id BETWEEN 936000001 AND 936000999)";
+      "DELETE FROM github_installations WHERE github_installation_id BETWEEN \
+       936000001 AND 936000999";
+      "DELETE FROM users WHERE username LIKE 'ghoauth_%'";
     ]
 
 let db_case name f =
@@ -541,50 +566,50 @@ let db_case name f =
 let state_hash_of = Github_handler_fixture.state_hash_of
 
 let q_state_row =
-  (Caqti_type.(string ->! t2 (option int64) bool))
-  "SELECT pending_github_installation_id, consumed_at IS NULL
-   FROM github_onboarding_states WHERE state_hash = $1"
+  Caqti_type.(string ->! t2 (option int64) bool)
+    "SELECT pending_github_installation_id, consumed_at IS NULL\n\
+    \   FROM github_onboarding_states WHERE state_hash = $1"
 
 let q_installation_row =
-  (Caqti_type.(int64 ->! t2 (t3 int64 string string) (option int)))
-  "SELECT github_account_id, github_account_login, github_account_type,
-          connected_by_user_id
-   FROM github_installations WHERE github_installation_id = $1"
+  Caqti_type.(int64 ->! t2 (t3 int64 string string) (option int))
+    "SELECT github_account_id, github_account_login, github_account_type,\n\
+    \          connected_by_user_id\n\
+    \   FROM github_installations WHERE github_installation_id = $1"
 
 let q_installation_count =
   (Caqti_type.int64 ->! Caqti_type.int)
-  "SELECT COUNT(*) FROM github_installations
-   WHERE github_installation_id = $1"
+    "SELECT COUNT(*) FROM github_installations\n\
+    \   WHERE github_installation_id = $1"
 
 (* Full rows as one text value each, for boolean secret-absence sweeps
    over everything either table stores. *)
 let q_installation_text =
   (Caqti_type.int64 ->! Caqti_type.string)
-  "SELECT ROW(t.*)::text FROM github_installations t
-   WHERE t.github_installation_id = $1"
+    "SELECT ROW(t.*)::text FROM github_installations t\n\
+    \   WHERE t.github_installation_id = $1"
 
 let q_state_text =
   (Caqti_type.string ->! Caqti_type.string)
-  "SELECT ROW(t.*)::text FROM github_onboarding_states t
-   WHERE t.state_hash = $1"
+    "SELECT ROW(t.*)::text FROM github_onboarding_states t\n\
+    \   WHERE t.state_hash = $1"
 
 let q_installation_record_id =
   (Caqti_type.int64 ->! Caqti_type.int64)
-  "SELECT id FROM github_installations WHERE github_installation_id = $1"
+    "SELECT id FROM github_installations WHERE github_installation_id = $1"
 
 let q_installation_status =
   (Caqti_type.int64 ->! Caqti_type.string)
-  "SELECT status FROM github_installations
-   WHERE github_installation_id = $1"
+    "SELECT status FROM github_installations\n\
+    \   WHERE github_installation_id = $1"
 
 let q_draft_text =
   (Caqti_type.int64 ->! Caqti_type.string)
-  "SELECT ROW(t.*)::text FROM project_onboarding_drafts t WHERE t.id = $1"
+    "SELECT ROW(t.*)::text FROM project_onboarding_drafts t WHERE t.id = $1"
 
 let q_snapshot_text =
   (Caqti_type.int64 ->! Caqti_type.string)
-  "SELECT COALESCE(string_agg(ROW(t.*)::text, '|'), '')
-   FROM project_onboarding_draft_repositories t WHERE t.draft_id = $1"
+    "SELECT COALESCE(string_agg(ROW(t.*)::text, '|'), '')\n\
+    \   FROM project_onboarding_draft_repositories t WHERE t.draft_id = $1"
 
 (* Deterministic draft-store failure for the partial-persistence case:
    the Pod_store trigger mechanism under suite-local names, scoped to one
@@ -594,25 +619,25 @@ let poison_repo_id = 936999999L
 
 let q_create_fail_fn =
   (Caqti_type.unit ->. Caqti_type.unit)
-  "CREATE FUNCTION ghoauth_fail_insert_fn() RETURNS trigger
-   LANGUAGE plpgsql
-   AS 'BEGIN RAISE EXCEPTION ''ghoauth fixture failure''; END'"
+    "CREATE FUNCTION ghoauth_fail_insert_fn() RETURNS trigger\n\
+    \   LANGUAGE plpgsql\n\
+    \   AS 'BEGIN RAISE EXCEPTION ''ghoauth fixture failure''; END'"
 
 let q_create_fail_trigger =
   (Caqti_type.unit ->. Caqti_type.unit)
-  "CREATE TRIGGER ghoauth_fail_insert
-   BEFORE INSERT ON project_onboarding_draft_repositories
-   FOR EACH ROW WHEN (NEW.github_repository_id = 936999999)
-   EXECUTE FUNCTION ghoauth_fail_insert_fn()"
+    "CREATE TRIGGER ghoauth_fail_insert\n\
+    \   BEFORE INSERT ON project_onboarding_draft_repositories\n\
+    \   FOR EACH ROW WHEN (NEW.github_repository_id = 936999999)\n\
+    \   EXECUTE FUNCTION ghoauth_fail_insert_fn()"
 
 let q_drop_fail_trigger =
   (Caqti_type.unit ->. Caqti_type.unit)
-  "DROP TRIGGER IF EXISTS ghoauth_fail_insert
-   ON project_onboarding_draft_repositories"
+    "DROP TRIGGER IF EXISTS ghoauth_fail_insert\n\
+    \   ON project_onboarding_draft_repositories"
 
 let q_drop_fail_fn =
   (Caqti_type.unit ->. Caqti_type.unit)
-  "DROP FUNCTION IF EXISTS ghoauth_fail_insert_fn()"
+    "DROP FUNCTION IF EXISTS ghoauth_fail_insert_fn()"
 
 (* Future-dated lifetime: the row stays live (unexpired, unconsumed),
    but consume's UPDATE of consumed_at = NOW() then violates the
@@ -620,29 +645,29 @@ let q_drop_fail_fn =
    boundary without weakening any production constraint. *)
 let q_future =
   (Caqti_type.string ->. Caqti_type.unit)
-  "UPDATE github_onboarding_states
-   SET created_at = NOW() + INTERVAL '1 hour',
-       expires_at = NOW() + INTERVAL '2 hours'
-   WHERE state_hash = $1"
+    "UPDATE github_onboarding_states\n\
+    \   SET created_at = NOW() + INTERVAL '1 hour',\n\
+    \       expires_at = NOW() + INTERVAL '2 hours'\n\
+    \   WHERE state_hash = $1"
 
 (* Pre-existing terminally revoked row, so a later verified persistence
    of the same installation id must fail without modifying it. *)
 let q_insert_revoked =
-  (Caqti_type.(t2 int64 int64 ->. unit))
-  "INSERT INTO github_installations
-     (github_installation_id, github_account_id, github_account_login,
-      github_account_type, status, revoked_at)
-   VALUES ($1, $2, 'revoked-owner', 'organization', 'revoked', NOW())"
+  Caqti_type.(t2 int64 int64 ->. unit)
+    "INSERT INTO github_installations\n\
+    \     (github_installation_id, github_account_id, github_account_login,\n\
+    \      github_account_type, status, revoked_at)\n\
+    \   VALUES ($1, $2, 'revoked-owner', 'organization', 'revoked', NOW())"
 
 (* Pre-existing ACTIVE personal-account row, so a later organization
    verification of the same installation id must be refused as an
    identity change rather than silently rewriting the kind. *)
 let q_insert_active_user =
-  (Caqti_type.(t2 int64 int64 ->. unit))
-  "INSERT INTO github_installations
-     (github_installation_id, github_account_id, github_account_login,
-      github_account_type, status)
-   VALUES ($1, $2, 'personal-owner-fixture', 'user', 'active')"
+  Caqti_type.(t2 int64 int64 ->. unit)
+    "INSERT INTO github_installations\n\
+    \     (github_installation_id, github_account_id, github_account_login,\n\
+    \      github_account_type, status)\n\
+    \   VALUES ($1, $2, 'personal-owner-fixture', 'user', 'active')"
 
 let fixture_user (module C : Caqti_lwt.CONNECTION) name =
   let* uid = C.find Github_handler_fixture.q_insert_user name in
@@ -705,9 +730,7 @@ let stored_lwt label config state data =
 let onboard ~url ~uid ~installation label =
   let start_handler =
     Dream.memory_sessions (fun req ->
-        let* () =
-          Dream.set_session_field req "user_id" (string_of_int uid)
-        in
+        let* () = Dream.set_session_field req "user_id" (string_of_int uid) in
         Earde.Github_onboarding_handlers.make_start_installation_handler
           ~mode:Ob.Public
           ~load_config:(fun () -> ok_loader ())
@@ -715,8 +738,7 @@ let onboard ~url ~uid ~installation label =
   in
   let* response =
     run_shared ~url start_handler
-      (Dream.request ~method_:`POST
-         ~target:"/integrations/github/install/start"
+      (Dream.request ~method_:`POST ~target:"/integrations/github/install/start"
          ~headers:[ ("Origin", "https://earde.com") ]
          "")
   in
@@ -725,24 +747,27 @@ let onboard ~url ~uid ~installation label =
   in
   let cookie = (name, value) in
   let return_handler =
-    Github_handler_fixture.make_setup_return_handler ~mode:Ob.Public ~load_config:(fun () ->
-        ok_loader ())
+    Github_handler_fixture.make_setup_return_handler ~mode:Ob.Public
+      ~load_config:(fun () -> ok_loader ())
   in
   let* response =
     run_shared ~url return_handler
       (Dream.request ~method_:`GET
          ~target:
            (Github_handler_fixture.target_of
-              [ "state=" ^ GOC.state_to_string state;
-                "installation_id=" ^ Int64.to_string installation ])
+              [
+                "state=" ^ GOC.state_to_string state;
+                "installation_id=" ^ Int64.to_string installation;
+              ])
          ~headers:(cookie_jar_headers [ cookie ])
          "")
   in
-  Alcotest.(check int) (label ^ ": setup return 303") 303
-    (status_of response);
+  Alcotest.(check int) (label ^ ": setup return 303") 303 (status_of response);
   (match Dream.header response "Location" with
   | Some location ->
-      Alcotest.(check bool) (label ^ ": setup return reached GitHub") true
+      Alcotest.(check bool)
+        (label ^ ": setup return reached GitHub")
+        true
         (Html_assert.contains_nonempty ~needle:"github.com" location)
   | None -> Alcotest.fail (label ^ ": setup return had no Location"));
   Lwt.return (state, cookie)
@@ -752,8 +777,8 @@ let callback_target state code =
 
 (* The callback over the real pipeline: shared sql_pool + secret,
    deliberately no session middleware and no session fields. *)
-let run_callback ~url ?(jar = []) ?(credentials = ok_credentials ())
-    ~exchange ~installations ~repositories ~target () =
+let run_callback ~url ?(jar = []) ?(credentials = ok_credentials ()) ~exchange
+    ~installations ~repositories ~target () =
   let handler =
     make ~mode:Ob.Public
       ~load_config:(fun () -> ok_loader ())
@@ -761,14 +786,13 @@ let run_callback ~url ?(jar = []) ?(credentials = ok_credentials ())
       ~exchange ~installations ~repositories
   in
   run_shared ~url handler
-    (Dream.request ~method_:`GET ~target
-       ~headers:(cookie_jar_headers jar)
-       "")
+    (Dream.request ~method_:`GET ~target ~headers:(cookie_jar_headers jar) "")
 
 (* Lwt-safe response contracts. *)
 let check_redirect_lwt label ~location response =
   Alcotest.(check int) (label ^ ": exactly 303") 303 (status_of response);
-  Alcotest.(check (option string)) (label ^ ": Location") (Some location)
+  Alcotest.(check (option string))
+    (label ^ ": Location") (Some location)
     (Dream.header response "Location");
   check_safety_headers label response;
   let* body = Dream.body response in
@@ -820,20 +844,19 @@ let snapshot_sigs (module C : Caqti_lwt.CONNECTION) label draft_id =
 
 (* One terminal failure: generic redirect plus this flow's cookie
    deletion, and no verified installation row. *)
-let check_terminal_failure (module C : Caqti_lwt.CONNECTION) label
-    ~cookie ~installation response =
+let check_terminal_failure (module C : Caqti_lwt.CONNECTION) label ~cookie
+    ~installation response =
   let* () = check_failure_lwt label response in
-  check_deletion label ~cookie_name:(fst cookie)
-    ~stored_value:(snd cookie) response;
+  check_deletion label ~cookie_name:(fst cookie) ~stored_value:(snd cookie)
+    response;
   let* count = installation_count (module C) label installation in
   Alcotest.(check int) (label ^ ": no installation row") 0 count;
   Lwt.return_unit
 
 let success_case =
   db_case
-    "successful callback: consume + exchange + verify + list + persist + \
-     draft + clean redirect"
-    (fun ~url (module C : Caqti_lwt.CONNECTION) ->
+    "successful callback: consume + exchange + verify + list + persist + draft \
+     + clean redirect" (fun ~url (module C : Caqti_lwt.CONNECTION) ->
       let* uid = fixture_user (module C) "ghoauth_user" in
       let installation = 936000001L in
       let config = Github_fixture.gck_https_config () in
@@ -858,22 +881,25 @@ let success_case =
       let* () = check_success_lwt "success" response in
       Alcotest.(check int) "one token exchange" 1 !ex_calls;
       Alcotest.(check int) "one installation listing" 1 !inst_calls;
-      Alcotest.(check int) "one repositories listing" 1
+      Alcotest.(check int)
+        "one repositories listing" 1
         (List.length !repo_captured);
-      Alcotest.(check (list string)) "listing only after verification"
-        [ "verify"; "list" ] !order;
+      Alcotest.(check (list string))
+        "listing only after verification" [ "verify"; "list" ] !order;
       (* The repositories request carried the exchanged token and the
          verified installation's fixed path — the only way either can
          reach the listing client. *)
       (match !repo_captured with
       | [ (uri, headers) ] ->
-          Alcotest.(check bool) "listing path is the installation's" true
+          Alcotest.(check bool)
+            "listing path is the installation's" true
             (Html_assert.contains_nonempty
                ~needle:
                  (Printf.sprintf "/user/installations/%Ld/repositories"
                     installation)
                (Uri.to_string uri));
-          Alcotest.(check bool) "listing bears the exchanged token" true
+          Alcotest.(check bool)
+            "listing bears the exchanged token" true
             (List.exists
                (fun (k, v) ->
                  String.equal (String.lowercase_ascii k) "authorization"
@@ -887,7 +913,8 @@ let success_case =
       (* State consumed; the untrusted pending id was exactly what got
          verified and persisted. *)
       let* pending, consumed_null = state_row (module C) "success" state in
-      Alcotest.(check bool) "pending id retained" true
+      Alcotest.(check bool)
+        "pending id retained" true
         (pending = Some installation);
       Alcotest.(check bool) "state consumed" false consumed_null;
       let* row = C.find q_installation_row installation in
@@ -897,17 +924,18 @@ let success_case =
       (* Identity exactly as the verification response derived it
          (gui_entry: account id = id + 1, login "owner-<id>",
          organization). *)
-      Alcotest.(check bool) "account id from verification" true
+      Alcotest.(check bool)
+        "account id from verification" true
         (account_id = Int64.add installation 1L);
-      Alcotest.(check string) "account login from verification"
+      Alcotest.(check string)
+        "account login from verification"
         (Printf.sprintf "owner-%Ld" installation)
         login;
-      Alcotest.(check string) "organization target" "organization"
-        account_type;
+      Alcotest.(check string) "organization target" "organization" account_type;
       (* The connected user is the start-handler fixture user, read back
          from the consumed state — no session existed at the callback. *)
-      Alcotest.(check (option int)) "connected by the stored owner"
-        (Some uid) connected_by;
+      Alcotest.(check (option int))
+        "connected by the stored owner" (Some uid) connected_by;
       let* count = installation_count (module C) "success" installation in
       Alcotest.(check int) "exactly one installation row" 1 count;
       (* Exactly one active draft, owned by the consumed state's user and
@@ -932,9 +960,7 @@ let success_case =
          row — tokens, code, raw state, raw binding, raw verifier, client
          secret, private-repository metadata. *)
       let* installation_text = C.find q_installation_text installation in
-      let* installation_text =
-        or_fail "installation text" installation_text
-      in
+      let* installation_text = or_fail "installation text" installation_text in
       let* state_text = C.find q_state_text (state_hash_of state) in
       let* state_text = or_fail "state text" state_text in
       let* draft_text = C.find q_draft_text draft in
@@ -952,22 +978,36 @@ let success_case =
       in
       List.iter
         (fun needle ->
-          Alcotest.(check bool) "absent from every stored text value"
-            false
+          Alcotest.(check bool)
+            "absent from every stored text value" false
             (Html_assert.contains_nonempty ~needle stored))
-        [ access_fixture; refresh_fixture; fixture_code;
-          GOC.state_to_string state; raw_binding; raw_verifier;
-          Github_fixture.gte_client_secret; Github_fixture.gur_private_name; Github_fixture.gur_private_description ];
+        [
+          access_fixture;
+          refresh_fixture;
+          fixture_code;
+          GOC.state_to_string state;
+          raw_binding;
+          raw_verifier;
+          Github_fixture.gte_client_secret;
+          Github_fixture.gur_private_name;
+          Github_fixture.gur_private_description;
+        ];
       (* And nothing sensitive in the response itself. *)
       let location =
         Option.value (Dream.header response "Location") ~default:""
       in
       List.iter
         (fun needle ->
-          Alcotest.(check bool) "absent from the Location" false
+          Alcotest.(check bool)
+            "absent from the Location" false
             (Html_assert.contains_nonempty ~needle location))
-        [ GOC.state_to_string state; fixture_code; access_fixture;
-          refresh_fixture; Int64.to_string installation ];
+        [
+          GOC.state_to_string state;
+          fixture_code;
+          access_fixture;
+          refresh_fixture;
+          Int64.to_string installation;
+        ];
       Lwt.return_unit)
 
 let replay_case =
@@ -991,21 +1031,22 @@ let replay_case =
       in
       let target = callback_target state fixture_code in
       let* first =
-        run_callback ~url ~jar:[ cookie ] ~exchange ~installations
-          ~repositories ~target ()
+        run_callback ~url ~jar:[ cookie ] ~exchange ~installations ~repositories
+          ~target ()
       in
       let* () = check_success_lwt "first callback" first in
       (* Identical replay with the original cookie value. *)
       let* second =
-        run_callback ~url ~jar:[ cookie ] ~exchange ~installations
-          ~repositories ~target ()
+        run_callback ~url ~jar:[ cookie ] ~exchange ~installations ~repositories
+          ~target ()
       in
       let* () = check_failure_lwt "replay" second in
       check_deletion "replay" ~cookie_name:(fst cookie)
         ~stored_value:(snd cookie) second;
       Alcotest.(check int) "no second token exchange" 1 !ex_calls;
       Alcotest.(check int) "no second listing" 1 !inst_calls;
-      Alcotest.(check int) "no second repositories listing" 1
+      Alcotest.(check int)
+        "no second repositories listing" 1
         (List.length !repo_captured);
       let* _, consumed_null = state_row (module C) "replay" state in
       Alcotest.(check bool) "state remains consumed" false consumed_null;
@@ -1020,15 +1061,15 @@ let replay_case =
       let* draft = active_draft (module C) "replay" ~uid ~record_id in
       let draft = require_draft "replay" draft in
       let* sigs = snapshot_sigs (module C) "replay" draft in
-      Alcotest.(check (list string)) "snapshot still complete"
+      Alcotest.(check (list string))
+        "snapshot still complete"
         (default_repo_sigs installation)
         sigs;
       Lwt.return_unit)
 
 (* A consume-stage terminal failure: transports must never run and the
    cookie is deleted. [prepare] mutates the issued state row first. *)
-let consume_failure_case name ~username ~installation ~prepare
-    ~check_consumed =
+let consume_failure_case name ~username ~installation ~prepare ~check_consumed =
   db_case name (fun ~url (module C : Caqti_lwt.CONNECTION) ->
       let* uid = fixture_user (module C) username in
       let* state, cookie = onboard ~url ~uid ~installation name in
@@ -1044,13 +1085,10 @@ let consume_failure_case name ~username ~installation ~prepare
           ()
       in
       let* () =
-        check_terminal_failure (module C) name ~cookie ~installation
-          response
+        check_terminal_failure (module C) name ~cookie ~installation response
       in
       Alcotest.(check int) (name ^ ": exchange never called") 0 !ex_calls;
-      Alcotest.(check int)
-        (name ^ ": installations never called")
-        0 !inst_calls;
+      Alcotest.(check int) (name ^ ": installations never called") 0 !inst_calls;
       Alcotest.(check int)
         (name ^ ": repositories never called")
         0
@@ -1066,15 +1104,16 @@ let expired_case =
       let* r = C.exec Github_handler_fixture.q_expire (state_hash_of state) in
       or_fail "expire" r)
     ~check_consumed:(fun consumed_null ->
-      Alcotest.(check bool) "expired row left unconsumed" true
-        consumed_null)
+      Alcotest.(check bool) "expired row left unconsumed" true consumed_null)
 
 let already_consumed_case =
   consume_failure_case
     "already-consumed state: failure, no transport, stays consumed"
     ~username:"ghoauth_consumed" ~installation:936000004L
     ~prepare:(fun (module C : Caqti_lwt.CONNECTION) state ->
-      let* r = C.exec Github_handler_fixture.q_consume_now (state_hash_of state) in
+      let* r =
+        C.exec Github_handler_fixture.q_consume_now (state_hash_of state)
+      in
       or_fail "consume" r)
     ~check_consumed:(fun consumed_null ->
       Alcotest.(check bool) "row stays consumed" false consumed_null)
@@ -1089,7 +1128,9 @@ let binding_mismatch_case =
          material: decrypts fine, but its binding hash cannot match the
          issued row, so consume burns the state. *)
       let* forged_name, forged_value =
-        stored_lwt "forged" (Github_fixture.gck_https_config ()) state (GSD.create ())
+        stored_lwt "forged"
+          (Github_fixture.gck_https_config ())
+          state (GSD.create ())
       in
       let ex_calls = ref 0 and inst_calls = ref 0 in
       let repo_captured = ref [] in
@@ -1103,12 +1144,16 @@ let binding_mismatch_case =
           ()
       in
       let* () =
-        check_terminal_failure (module C) "mismatch"
-          ~cookie:(forged_name, forged_value) ~installation response
+        check_terminal_failure
+          (module C)
+          "mismatch"
+          ~cookie:(forged_name, forged_value)
+          ~installation response
       in
       Alcotest.(check int) "exchange never called" 0 !ex_calls;
       Alcotest.(check int) "installations never called" 0 !inst_calls;
-      Alcotest.(check int) "repositories never called" 0
+      Alcotest.(check int)
+        "repositories never called" 0
         (List.length !repo_captured);
       let* _, consumed_null = state_row (module C) "mismatch" state in
       Alcotest.(check bool) "state durably burned" false consumed_null;
@@ -1142,20 +1187,18 @@ let exchange_failure_case name ~username ~installation ~exchange_result =
           ()
       in
       let* () =
-        check_terminal_failure (module C) name ~cookie ~installation
-          response
+        check_terminal_failure (module C) name ~cookie ~installation response
       in
       Alcotest.(check int) (name ^ ": one exchange attempt") 1 !ex_calls;
-      Alcotest.(check int)
-        (name ^ ": verification never ran")
-        0 !inst_calls;
+      Alcotest.(check int) (name ^ ": verification never ran") 0 !inst_calls;
       Alcotest.(check int)
         (name ^ ": repositories never called")
         0
         (List.length !repo_captured);
       let* _, consumed_null = state_row (module C) name state in
-      Alcotest.(check bool) (name ^ ": state consumed first") false
-        consumed_null;
+      Alcotest.(check bool)
+        (name ^ ": state consumed first")
+        false consumed_null;
       Lwt.return_unit)
 
 let exchange_transport_case =
@@ -1185,8 +1228,7 @@ let verification_failure_case name ~username ~installation ~responses
           ()
       in
       let* () =
-        check_terminal_failure (module C) name ~cookie ~installation
-          response
+        check_terminal_failure (module C) name ~cookie ~installation response
       in
       Alcotest.(check int) (name ^ ": one exchange") 1 !ex_calls;
       Alcotest.(check int)
@@ -1197,8 +1239,9 @@ let verification_failure_case name ~username ~installation ~responses
         0
         (List.length !repo_captured);
       let* _, consumed_null = state_row (module C) name state in
-      Alcotest.(check bool) (name ^ ": state consumed first") false
-        consumed_null;
+      Alcotest.(check bool)
+        (name ^ ": state consumed first")
+        false consumed_null;
       Lwt.return_unit)
 
 let not_accessible_case =
@@ -1209,18 +1252,18 @@ let not_accessible_case =
     ~expected_listing_calls:1
 
 let pagination_limit_case =
-  verification_failure_case
-    "pagination limit: terminal, nothing persisted"
+  verification_failure_case "pagination limit: terminal, nothing persisted"
     ~username:"ghoauth_pagination" ~installation:936000009L
     ~responses:
       (List.init 5 (fun page ->
            Github_fixture.gui_page_of ~total:600
-             (Github_fixture.gui_ids ~from:(Int64.of_int (1000 + (page * 100))) 100)))
+             (Github_fixture.gui_ids
+                ~from:(Int64.of_int (1000 + (page * 100)))
+                100)))
     ~expected_listing_calls:5
 
 let persistence_failure_case =
-  db_case
-    "revoked installation: persistence fails only after every stage"
+  db_case "revoked installation: persistence fails only after every stage"
     (fun ~url (module C : Caqti_lwt.CONNECTION) ->
       let* uid = fixture_user (module C) "ghoauth_revoked" in
       let installation = 936000010L in
@@ -1252,15 +1295,15 @@ let persistence_failure_case =
          and the repository listing all really ran first. *)
       Alcotest.(check int) "one exchange" 1 !ex_calls;
       Alcotest.(check int) "one listing" 1 !inst_calls;
-      Alcotest.(check int) "one repositories listing" 1
+      Alcotest.(check int)
+        "one repositories listing" 1
         (List.length !repo_captured);
       let* _, consumed_null = state_row (module C) "revoked" state in
       Alcotest.(check bool) "state consumed" false consumed_null;
       (* The revoked row is untouched — still revoked, still alone. *)
       let* row = C.find q_installation_row installation in
       let* (_, login, _), _ = or_fail "revoked row" row in
-      Alcotest.(check string) "revoked row untouched" "revoked-owner"
-        login;
+      Alcotest.(check string) "revoked row untouched" "revoked-owner" login;
       let* count = installation_count (module C) "revoked" installation in
       Alcotest.(check int) "still exactly one row" 1 count;
       (* The draft store never ran: no draft, hence no snapshot. *)
@@ -1269,8 +1312,8 @@ let persistence_failure_case =
       Lwt.return_unit)
 
 let consume_storage_error_case =
-  db_case "consume storage error: cookie kept, no transport" (fun ~url
-      (module C : Caqti_lwt.CONNECTION) ->
+  db_case "consume storage error: cookie kept, no transport"
+    (fun ~url (module C : Caqti_lwt.CONNECTION) ->
       let* uid = fixture_user (module C) "ghoauth_storage" in
       let installation = 936000011L in
       let* state, cookie = onboard ~url ~uid ~installation "storage" in
@@ -1288,46 +1331,44 @@ let consume_storage_error_case =
       in
       let* () = check_failure_lwt "storage error" response in
       (* No committed outcome: the cookie must survive for a retry. *)
-      Alcotest.(check int) "no Set-Cookie" 0
+      Alcotest.(check int)
+        "no Set-Cookie" 0
         (List.length (Dream.headers response "Set-Cookie"));
       Alcotest.(check int) "exchange never called" 0 !ex_calls;
       Alcotest.(check int) "installations never called" 0 !inst_calls;
-      Alcotest.(check int) "repositories never called" 0
+      Alcotest.(check int)
+        "repositories never called" 0
         (List.length !repo_captured);
-      let* count =
-        installation_count (module C) "storage error" installation
-      in
+      let* count = installation_count (module C) "storage error" installation in
       Alcotest.(check int) "nothing persisted" 0 count;
       Lwt.return_unit)
 
 let parallel_case =
-  db_case "parallel flows: completing A leaves B fully intact" (fun ~url
-      (module C : Caqti_lwt.CONNECTION) ->
+  db_case "parallel flows: completing A leaves B fully intact"
+    (fun ~url (module C : Caqti_lwt.CONNECTION) ->
       let* uid = fixture_user (module C) "ghoauth_parallel" in
       let installation_a = 936000012L and installation_b = 936000013L in
       let config = Github_fixture.gck_https_config () in
       let entries_a =
-        [ repo_entry ~installation:installation_a ~id:511L ~name:"only-a"
-            ()
-        ]
+        [ repo_entry ~installation:installation_a ~id:511L ~name:"only-a" () ]
       in
       let sigs_a =
-        [ Project_fixture.sig_of ~position:1 ~id:511L
+        [
+          Project_fixture.sig_of ~position:1 ~id:511L
             ~account_id:(Int64.add installation_a 1L)
             ~login:(repo_owner_login installation_a)
-            "only-a"
+            "only-a";
         ]
       in
       let entries_b =
-        [ repo_entry ~installation:installation_b ~id:521L ~name:"only-b"
-            ()
-        ]
+        [ repo_entry ~installation:installation_b ~id:521L ~name:"only-b" () ]
       in
       let sigs_b =
-        [ Project_fixture.sig_of ~position:1 ~id:521L
+        [
+          Project_fixture.sig_of ~position:1 ~id:521L
             ~account_id:(Int64.add installation_b 1L)
             ~login:(repo_owner_login installation_b)
-            "only-b"
+            "only-b";
         ]
       in
       let* state_a, cookie_a =
@@ -1336,7 +1377,8 @@ let parallel_case =
       let* state_b, cookie_b =
         onboard ~url ~uid ~installation:installation_b "flow B"
       in
-      Alcotest.(check bool) "distinct cookie names" false
+      Alcotest.(check bool)
+        "distinct cookie names" false
         (String.equal (fst cookie_a) (fst cookie_b));
       let jar = [ cookie_a; cookie_b ] in
       let ex_calls = ref 0 and inst_calls = ref 0 in
@@ -1345,7 +1387,8 @@ let parallel_case =
           ~exchange:(exchange_stub (Ok (200, token_body)) ex_calls)
           ~installations:
             (installations_stub [ listing_for installation_a ] inst_calls)
-          ~repositories:(Github_fixture.gur_transport [ repo_listing entries_a ] (ref []))
+          ~repositories:
+            (Github_fixture.gur_transport [ repo_listing entries_a ] (ref []))
           ~target:(callback_target state_a fixture_code)
           ()
       in
@@ -1355,28 +1398,32 @@ let parallel_case =
         ~stored_value:(snd cookie_a) response;
       (* Only A's state is consumed; only A's installation exists. *)
       let* pending_a, consumed_a = state_row (module C) "row A" state_a in
-      Alcotest.(check bool) "A pending kept" true
+      Alcotest.(check bool)
+        "A pending kept" true
         (pending_a = Some installation_a);
       Alcotest.(check bool) "A consumed" false consumed_a;
       let* pending_b, consumed_b = state_row (module C) "row B" state_b in
-      Alcotest.(check bool) "B pending kept" true
+      Alcotest.(check bool)
+        "B pending kept" true
         (pending_b = Some installation_b);
       Alcotest.(check bool) "B unconsumed" true consumed_b;
-      let* count_a =
-        installation_count (module C) "flow A" installation_a
-      in
+      let* count_a = installation_count (module C) "flow A" installation_a in
       Alcotest.(check int) "A persisted" 1 count_a;
-      let* count_b =
-        installation_count (module C) "flow B" installation_b
-      in
+      let* count_b = installation_count (module C) "flow B" installation_b in
       Alcotest.(check int) "B not persisted" 0 count_b;
       (* B's cookie still carries B's own material — no crossover. *)
       let* data_a = Github_handler_fixture.load_cookie config state_a jar in
       let* data_b = Github_handler_fixture.load_cookie config state_b jar in
-      Alcotest.(check bool) "distinct verifiers" false
-        (String.equal (Github_fixture.gsd_verifier data_a) (Github_fixture.gsd_verifier data_b));
-      Alcotest.(check bool) "distinct bindings" false
-        (String.equal (Github_fixture.gsd_binding_hash data_a) (Github_fixture.gsd_binding_hash data_b));
+      Alcotest.(check bool)
+        "distinct verifiers" false
+        (String.equal
+           (Github_fixture.gsd_verifier data_a)
+           (Github_fixture.gsd_verifier data_b));
+      Alcotest.(check bool)
+        "distinct bindings" false
+        (String.equal
+           (Github_fixture.gsd_binding_hash data_a)
+           (Github_fixture.gsd_binding_hash data_b));
       (* A's draft carries exactly A's repository set, and it is the only
          draft so far. *)
       let* record_a =
@@ -1387,8 +1434,7 @@ let parallel_case =
       in
       let draft_a = require_draft "draft A" draft_a in
       let* stored_a = snapshot_sigs (module C) "draft A" draft_a in
-      Alcotest.(check (list string)) "A's snapshot is set A" sigs_a
-        stored_a;
+      Alcotest.(check (list string)) "A's snapshot is set A" sigs_a stored_a;
       let* active = active_draft_count (module C) "after A" uid in
       Alcotest.(check int) "one active draft after A" 1 active;
       (* Completing B later still succeeds independently, producing its
@@ -1398,7 +1444,8 @@ let parallel_case =
           ~exchange:(exchange_stub (Ok (200, token_body)) (ref 0))
           ~installations:
             (installations_stub [ listing_for installation_b ] (ref 0))
-          ~repositories:(Github_fixture.gur_transport [ repo_listing entries_b ] (ref []))
+          ~repositories:
+            (Github_fixture.gur_transport [ repo_listing entries_b ] (ref []))
           ~target:(callback_target state_b fixture_code)
           ()
       in
@@ -1412,18 +1459,16 @@ let parallel_case =
         active_draft (module C) "draft B" ~uid ~record_id:record_b
       in
       let draft_b = require_draft "draft B" draft_b in
-      Alcotest.(check bool) "distinct drafts" false
+      Alcotest.(check bool)
+        "distinct drafts" false
         (Int64.equal draft_a draft_b);
       let* stored_b = snapshot_sigs (module C) "draft B" draft_b in
-      Alcotest.(check (list string)) "B's snapshot is set B" sigs_b
-        stored_b;
+      Alcotest.(check (list string)) "B's snapshot is set B" sigs_b stored_b;
       (* A's draft and snapshot survive B's completion untouched. *)
       let* stored_a = snapshot_sigs (module C) "draft A after B" draft_a in
-      Alcotest.(check (list string)) "A's snapshot unchanged" sigs_a
-        stored_a;
+      Alcotest.(check (list string)) "A's snapshot unchanged" sigs_a stored_a;
       let* active = active_draft_count (module C) "after B" uid in
-      Alcotest.(check int) "two active drafts, one per installation" 2
-        active;
+      Alcotest.(check int) "two active drafts, one per installation" 2 active;
       Lwt.return_unit)
 
 (* A repository-listing terminal failure: state already consumed, cookie
@@ -1446,8 +1491,7 @@ let listing_failure_case name ~username ~installation ~responses
           ()
       in
       let* () =
-        check_terminal_failure (module C) name ~cookie ~installation
-          response
+        check_terminal_failure (module C) name ~cookie ~installation response
       in
       Alcotest.(check int) (name ^ ": one exchange") 1 !ex_calls;
       Alcotest.(check int) (name ^ ": one verification") 1 !inst_calls;
@@ -1484,13 +1528,14 @@ let listing_no_public_case =
   listing_failure_case "no public repositories: nothing persisted"
     ~username:"ghoauth_lnopublic" ~installation
     ~responses:
-      [ repo_listing
-          [ repo_entry ~installation ~private_flag:true
-              ~visibility:"private"
+      [
+        repo_listing
+          [
+            repo_entry ~installation ~private_flag:true ~visibility:"private"
               ~description:
                 (Printf.sprintf {|"%s"|} Github_fixture.gur_private_description)
-              ~id:611L ~name:Github_fixture.gur_private_name ()
-          ]
+              ~id:611L ~name:Github_fixture.gur_private_name ();
+          ];
       ]
     ~expected_listing_calls:1
 
@@ -1518,17 +1563,17 @@ let multiple_repositories_case =
          slash-separated default branch, an archived repository, and a
          private entry that must vanish without disturbing positions. *)
       let entries =
-        [ repo_entry ~installation ~id:601L ~name:"core"
-            ~description:{|"Core — servizio principale"|} ()
-        ; repo_entry ~installation ~id:602L ~name:"ops"
-            ~default_branch:"release/v1" ()
-        ; repo_entry ~installation ~private_flag:true
-            ~visibility:"private"
-            ~description:(Printf.sprintf {|"%s"|} Github_fixture.gur_private_description)
-            ~id:603L ~name:Github_fixture.gur_private_name ()
-        ; repo_entry ~installation ~id:604L ~name:"archive" ~archived:true
-            ()
-        ; repo_entry ~installation ~id:605L ~name:"docs" ()
+        [
+          repo_entry ~installation ~id:601L ~name:"core"
+            ~description:{|"Core — servizio principale"|} ();
+          repo_entry ~installation ~id:602L ~name:"ops"
+            ~default_branch:"release/v1" ();
+          repo_entry ~installation ~private_flag:true ~visibility:"private"
+            ~description:
+              (Printf.sprintf {|"%s"|} Github_fixture.gur_private_description)
+            ~id:603L ~name:Github_fixture.gur_private_name ();
+          repo_entry ~installation ~id:604L ~name:"archive" ~archived:true ();
+          repo_entry ~installation ~id:605L ~name:"docs" ();
         ]
       in
       let repo_captured = ref [] in
@@ -1537,27 +1582,30 @@ let multiple_repositories_case =
           ~exchange:(exchange_stub (Ok (200, token_body)) (ref 0))
           ~installations:
             (installations_stub [ listing_for installation ] (ref 0))
-          ~repositories:(Github_fixture.gur_transport [ repo_listing entries ] repo_captured)
+          ~repositories:
+            (Github_fixture.gur_transport
+               [ repo_listing entries ]
+               repo_captured)
           ~target:(callback_target state fixture_code)
           ()
       in
       let* () = check_success_lwt "multi" response in
-      let* record_id =
-        installation_record_id (module C) "multi" installation
-      in
+      let* record_id = installation_record_id (module C) "multi" installation in
       let* draft = active_draft (module C) "multi" ~uid ~record_id in
       let draft = require_draft "multi" draft in
       let* sigs = snapshot_sigs (module C) "multi" draft in
       let account_id = Int64.add installation 1L in
       let login = repo_owner_login installation in
-      Alcotest.(check (list string)) "exact contiguous ordered snapshot"
-        [ Project_fixture.sig_of ~position:1 ~id:601L ~account_id ~login
-            ~description:"Core — servizio principale" "core"
-        ; Project_fixture.sig_of ~position:2 ~id:602L ~account_id ~login
-            ~branch:"release/v1" "ops"
-        ; Project_fixture.sig_of ~position:3 ~id:604L ~account_id ~login
-            ~archived:true "archive"
-        ; Project_fixture.sig_of ~position:4 ~id:605L ~account_id ~login "docs"
+      Alcotest.(check (list string))
+        "exact contiguous ordered snapshot"
+        [
+          Project_fixture.sig_of ~position:1 ~id:601L ~account_id ~login
+            ~description:"Core — servizio principale" "core";
+          Project_fixture.sig_of ~position:2 ~id:602L ~account_id ~login
+            ~branch:"release/v1" "ops";
+          Project_fixture.sig_of ~position:3 ~id:604L ~account_id ~login
+            ~archived:true "archive";
+          Project_fixture.sig_of ~position:4 ~id:605L ~account_id ~login "docs";
         ]
         sigs;
       Lwt.return_unit)
@@ -1575,7 +1623,8 @@ let draft_failure_case =
          later failure must leave untouched. *)
       let* state0, cookie0 = onboard ~url ~uid ~installation "flow 0" in
       let first_sigs =
-        [ Project_fixture.sig_of ~position:1 ~id:801L ~account_id ~login "first"
+        [
+          Project_fixture.sig_of ~position:1 ~id:801L ~account_id ~login "first";
         ]
       in
       let* response =
@@ -1585,8 +1634,9 @@ let draft_failure_case =
             (installations_stub [ listing_for installation ] (ref 0))
           ~repositories:
             (Github_fixture.gur_transport
-               [ repo_listing
-                   [ repo_entry ~installation ~id:801L ~name:"first" () ]
+               [
+                 repo_listing
+                   [ repo_entry ~installation ~id:801L ~name:"first" () ];
                ]
                (ref []))
           ~target:(callback_target state0 fixture_code)
@@ -1613,11 +1663,13 @@ let draft_failure_case =
             (installations_stub [ listing_for installation ] (ref 0))
           ~repositories:
             (Github_fixture.gur_transport
-               [ repo_listing
-                   [ repo_entry ~installation ~id:802L ~name:"second" ()
-                   ; repo_entry ~installation ~id:poison_repo_id
-                       ~name:"poisoned" ()
-                   ]
+               [
+                 repo_listing
+                   [
+                     repo_entry ~installation ~id:802L ~name:"second" ();
+                     repo_entry ~installation ~id:poison_repo_id
+                       ~name:"poisoned" ();
+                   ];
                ]
                (ref []))
           ~target:(callback_target state1 fixture_code)
@@ -1637,13 +1689,13 @@ let draft_failure_case =
       let* status = or_fail "installation status" status in
       Alcotest.(check string) "installation still active" "active" status;
       let* draft1 = active_draft (module C) "flow 1" ~uid ~record_id in
-      Alcotest.(check bool) "previous draft still the active one" true
-        (draft1 = Some draft0);
+      Alcotest.(check bool)
+        "previous draft still the active one" true (draft1 = Some draft0);
       let* drafts = draft_count (module C) "flow 1" uid in
       Alcotest.(check int) "no extra draft" 1 drafts;
       let* sigs = snapshot_sigs (module C) "flow 1" draft0 in
-      Alcotest.(check (list string)) "previous snapshot unchanged"
-        first_sigs sigs;
+      Alcotest.(check (list string))
+        "previous snapshot unchanged" first_sigs sigs;
       (* Remove the injected failure; a completely fresh flow reuses the
          installation idempotently and refreshes the draft with a
          complete new snapshot. *)
@@ -1659,10 +1711,12 @@ let draft_failure_case =
             (installations_stub [ listing_for installation ] (ref 0))
           ~repositories:
             (Github_fixture.gur_transport
-               [ repo_listing
-                   [ repo_entry ~installation ~id:803L ~name:"third" ()
-                   ; repo_entry ~installation ~id:804L ~name:"fourth" ()
-                   ]
+               [
+                 repo_listing
+                   [
+                     repo_entry ~installation ~id:803L ~name:"third" ();
+                     repo_entry ~installation ~id:804L ~name:"fourth" ();
+                   ];
                ]
                (ref []))
           ~target:(callback_target state2 fixture_code)
@@ -1676,10 +1730,12 @@ let draft_failure_case =
       let* draft2 = active_draft (module C) "flow 2" ~uid ~record_id in
       let draft2 = require_draft "flow 2" draft2 in
       let* sigs = snapshot_sigs (module C) "flow 2" draft2 in
-      Alcotest.(check (list string)) "complete retry snapshot"
-        [ Project_fixture.sig_of ~position:1 ~id:803L ~account_id ~login "third"
-        ; Project_fixture.sig_of ~position:2 ~id:804L ~account_id ~login
-            "fourth"
+      Alcotest.(check (list string))
+        "complete retry snapshot"
+        [
+          Project_fixture.sig_of ~position:1 ~id:803L ~account_id ~login "third";
+          Project_fixture.sig_of ~position:2 ~id:804L ~account_id ~login
+            "fourth";
         ]
         sigs;
       Lwt.return_unit)
@@ -1694,9 +1750,8 @@ let draft_failure_case =
 
 let analytics_success_case =
   db_case
-    "analytics: a completed callback captures exactly one \
-     github_app_installed for the state's owner, carrying no GitHub or \
-     OAuth material"
+    "analytics: a completed callback captures exactly one github_app_installed \
+     for the state's owner, carrying no GitHub or OAuth material"
     (fun ~url (module C : Caqti_lwt.CONNECTION) ->
       let* uid = fixture_user (module C) "ghoauth_an_ok" in
       let installation = 936000101L in
@@ -1705,7 +1760,8 @@ let analytics_success_case =
       let repo_captured = ref [] in
       let* response, captured =
         Analytics_fixture.with_sink_lwt (fun () ->
-            run_callback ~url ~jar:[ cookie; Analytics_fixture.an_consent_granted ]
+            run_callback ~url
+              ~jar:[ cookie; Analytics_fixture.an_consent_granted ]
               ~exchange:(exchange_stub (Ok (200, token_body)) ex_calls)
               ~installations:
                 (installations_stub [ listing_for installation ] inst_calls)
@@ -1717,7 +1773,8 @@ let analytics_success_case =
               ())
       in
       let* () = check_success_lwt "analytics success" response in
-      Analytics_fixture.check_single_capture "granted" ~name:"github_app_installed"
+      Analytics_fixture.check_single_capture "granted"
+        ~name:"github_app_installed"
         ~distinct_id:(Printf.sprintf "user:%d" uid)
         ~props:[ ("user_id", `Int uid) ]
         captured;
@@ -1731,22 +1788,27 @@ let analytics_success_case =
       List.iter
         (fun needle ->
           Alcotest.(check bool)
-            "credential-shaped fixture absent from the analytics payload"
-            false
+            "credential-shaped fixture absent from the analytics payload" false
             (Html_assert.contains_nonempty ~needle serialized))
-        [ access_fixture; refresh_fixture; fixture_code; Github_fixture.gte_client_secret;
+        [
+          access_fixture;
+          refresh_fixture;
+          fixture_code;
+          Github_fixture.gte_client_secret;
           GOC.state_to_string state;
           Int64.to_string installation;
           Int64.to_string (Int64.add installation 1L);
           Printf.sprintf "owner-%Ld" installation;
-          Github_fixture.gur_private_name; Github_fixture.gur_private_description; snd cookie
+          Github_fixture.gur_private_name;
+          Github_fixture.gur_private_description;
+          snd cookie;
         ];
       Lwt.return_unit)
 
 let analytics_consent_case =
   db_case
-    "analytics: denied, missing, and disabled configurations capture \
-     nothing while the callback still succeeds"
+    "analytics: denied, missing, and disabled configurations capture nothing \
+     while the callback still succeeds"
     (fun ~url (module C : Caqti_lwt.CONNECTION) ->
       let run label ?(enabled = true) ~username ~installation extra_cookies =
         let* uid = fixture_user (module C) username in
@@ -1776,30 +1838,28 @@ let analytics_consent_case =
           [ Analytics_fixture.an_consent_denied ]
       in
       let* () =
-        run "missing" ~username:"ghoauth_an_missing"
-          ~installation:936000103L []
+        run "missing" ~username:"ghoauth_an_missing" ~installation:936000103L []
       in
-      run "analytics disabled" ~enabled:false
-        ~username:"ghoauth_an_disabled" ~installation:936000104L
+      run "analytics disabled" ~enabled:false ~username:"ghoauth_an_disabled"
+        ~installation:936000104L
         [ Analytics_fixture.an_consent_granted ])
 
 let analytics_no_event_case =
   db_case
     "analytics: a rejected authorization, a failed exchange, a failed \
-     verification, a failed listing, a failed persistence, and a replay \
-     all capture nothing"
-    (fun ~url (module C : Caqti_lwt.CONNECTION) ->
+     verification, a failed listing, a failed persistence, and a replay all \
+     capture nothing" (fun ~url (module C : Caqti_lwt.CONNECTION) ->
       (* One helper per terminal-failure shape, each over the real
          pipeline with granted consent. *)
-      let failing label ~username ~installation ~target ~exchange
-          ~installations ~repositories =
+      let failing label ~username ~installation ~target ~exchange ~installations
+          ~repositories =
         let* uid = fixture_user (module C) username in
         let* state, cookie = onboard ~url ~uid ~installation label in
         let* response, captured =
           Analytics_fixture.with_sink_lwt (fun () ->
-              run_callback ~url ~jar:[ cookie; Analytics_fixture.an_consent_granted ]
-                ~exchange ~installations ~repositories
-                ~target:(target state) ())
+              run_callback ~url
+                ~jar:[ cookie; Analytics_fixture.an_consent_granted ]
+                ~exchange ~installations ~repositories ~target:(target state) ())
         in
         let* () = check_failure_lwt label response in
         Analytics_fixture.check_no_capture label captured;
@@ -1844,8 +1904,7 @@ let analytics_no_event_case =
           ~installation:936000114L
           ~target:(fun state -> callback_target state fixture_code)
           ~exchange:(exchange_stub (Ok (200, token_body)) (ref 0))
-          ~installations:
-            (installations_stub [ listing_for 936000114L ] (ref 0))
+          ~installations:(installations_stub [ listing_for 936000114L ] (ref 0))
           ~repositories:(Github_fixture.gur_transport [ Error () ] (ref []))
       in
       (* A successful callback, then its replay. *)
@@ -1912,31 +1971,29 @@ let listing_as ~account_id ~login ~target installation =
 let projects_new_body ~url ~uid label =
   let handler =
     Dream.memory_sessions (fun req ->
-        let* () =
-          Dream.set_session_field req "user_id" (string_of_int uid)
-        in
-        Earde.Project_setup_handlers.make_new_project_handler
-          ~mode:Ob.Public req)
+        let* () = Dream.set_session_field req "user_id" (string_of_int uid) in
+        Earde.Project_setup_handlers.make_new_project_handler ~mode:Ob.Public
+          req)
   in
   let* response =
     run_shared ~url handler
       (Dream.request ~method_:`GET ~target:"/projects/new" "")
   in
-  Alcotest.(check int) (label ^ ": /projects/new renders") 200
-    (status_of response);
+  Alcotest.(check int)
+    (label ^ ": /projects/new renders")
+    200 (status_of response);
   Dream.body response
 
 (* One account kind, from the GitHub identity through persistence to the
    rendered chooser. [private_name] must never appear anywhere. *)
-let account_kind_case name ~username ~installation ~account_id ~login
-    ~target ~expected_type ~public_name ~private_name =
+let account_kind_case name ~username ~installation ~account_id ~login ~target
+    ~expected_type ~public_name ~private_name =
   db_case name (fun ~url (module C : Caqti_lwt.CONNECTION) ->
       let* uid = fixture_user (module C) username in
       let* state, cookie = onboard ~url ~uid ~installation name in
-      let repo ?(private_flag = false) ?(visibility = "public") ~id
-          repo_name =
-        Github_fixture.gur_repo ~owner_id:account_id ~owner_login:login ~private_flag
-          ~visibility ~id ~name:repo_name ()
+      let repo ?(private_flag = false) ?(visibility = "public") ~id repo_name =
+        Github_fixture.gur_repo ~owner_id:account_id ~owner_login:login
+          ~private_flag ~visibility ~id ~name:repo_name ()
       in
       let inst_calls = ref 0 in
       let repo_captured = ref [] in
@@ -1949,11 +2006,14 @@ let account_kind_case name ~username ~installation ~account_id ~login
                inst_calls)
           ~repositories:
             (Github_fixture.gur_transport
-               [ repo_listing
-                   [ repo ~id:901L public_name
-                   ; repo ~private_flag:true ~visibility:"private"
-                       ~id:902L private_name
-                   ] ]
+               [
+                 repo_listing
+                   [
+                     repo ~id:901L public_name;
+                     repo ~private_flag:true ~visibility:"private" ~id:902L
+                       private_name;
+                   ];
+               ]
                repo_captured)
           ~target:(callback_target state fixture_code)
           ()
@@ -1962,7 +2022,9 @@ let account_kind_case name ~username ~installation ~account_id ~login
          redirect, not the generic failure. *)
       let* () = check_success_lwt name response in
       Alcotest.(check int) (name ^ ": one verification") 1 !inst_calls;
-      Alcotest.(check int) (name ^ ": one repository listing") 1
+      Alcotest.(check int)
+        (name ^ ": one repository listing")
+        1
         (List.length !repo_captured);
       (* The account kind and login are persisted exactly as GitHub
          described them — no defaulting to the other kind. *)
@@ -1970,12 +2032,14 @@ let account_kind_case name ~username ~installation ~account_id ~login
       let* (stored_account_id, stored_login, stored_type), connected_by =
         or_fail (name ^ ": installation row") row
       in
-      Alcotest.(check bool) (name ^ ": account id") true
+      Alcotest.(check bool)
+        (name ^ ": account id") true
         (stored_account_id = account_id);
       Alcotest.(check string) (name ^ ": account login") login stored_login;
-      Alcotest.(check string) (name ^ ": account type") expected_type
-        stored_type;
-      Alcotest.(check (option int)) (name ^ ": connected by the owner")
+      Alcotest.(check string)
+        (name ^ ": account type") expected_type stored_type;
+      Alcotest.(check (option int))
+        (name ^ ": connected by the owner")
         (Some uid) connected_by;
       (* Exactly the public repository is snapshotted, owned by this
          account. *)
@@ -1983,47 +2047,53 @@ let account_kind_case name ~username ~installation ~account_id ~login
       let* draft = active_draft (module C) name ~uid ~record_id in
       let draft = require_draft name draft in
       let* sigs = snapshot_sigs (module C) name draft in
-      Alcotest.(check (list string)) (name ^ ": public snapshot only")
-        [ Project_fixture.sig_of ~position:1 ~id:901L ~account_id ~login
-            public_name ]
+      Alcotest.(check (list string))
+        (name ^ ": public snapshot only")
+        [
+          Project_fixture.sig_of ~position:1 ~id:901L ~account_id ~login
+            public_name;
+        ]
         sigs;
       (* And following the success redirect itself — parameter-free —
          opens this single draft's repository selector, with the private
          repository absent from the page as well as from the snapshot. *)
       let* html = projects_new_body ~url ~uid name in
-      Alcotest.(check bool) (name ^ ": public repository offered") true
+      Alcotest.(check bool)
+        (name ^ ": public repository offered")
+        true
         (Html_assert.contains_nonempty ~needle:(login ^ "/" ^ public_name) html);
-      Alcotest.(check bool) (name ^ ": account login shown") true
+      Alcotest.(check bool)
+        (name ^ ": account login shown")
+        true
         (Html_assert.contains_nonempty ~needle:login html);
-      Alcotest.(check bool) (name ^ ": private repository absent") false
+      Alcotest.(check bool)
+        (name ^ ": private repository absent")
+        false
         (Html_assert.contains_nonempty ~needle:private_name html);
       Lwt.return_unit)
 
 let personal_account_case =
   account_kind_case
-    "personal account: User installation connects and lands on \
-     /projects/new"
-    ~username:"ghoauth_personal" ~installation:936000021L
-    ~account_id:220767424L ~login:"personal-owner-fixture" ~target:"User"
-    ~expected_type:"user" ~public_name:"smoke-personal"
-    ~private_name:"personal-private-fixture"
+    "personal account: User installation connects and lands on /projects/new"
+    ~username:"ghoauth_personal" ~installation:936000021L ~account_id:220767424L
+    ~login:"personal-owner-fixture" ~target:"User" ~expected_type:"user"
+    ~public_name:"smoke-personal" ~private_name:"personal-private-fixture"
 
 let organization_account_case =
   account_kind_case
     "organization: Organization installation with an org-owned public \
      repository connects and lands on /projects/new"
-    ~username:"ghoauth_org" ~installation:936000022L
-    ~account_id:267672683L ~login:"org-owner-fixture"
-    ~target:"Organization" ~expected_type:"organization"
-    ~public_name:"smoke-org" ~private_name:"org-private-fixture"
+    ~username:"ghoauth_org" ~installation:936000022L ~account_id:267672683L
+    ~login:"org-owner-fixture" ~target:"Organization"
+    ~expected_type:"organization" ~public_name:"smoke-org"
+    ~private_name:"org-private-fixture"
 
 (* An organization listing whose repository is owned by a different
    account than the installation: the ownership check must reject the
    page rather than snapshot a foreign repository. *)
 let organization_owner_mismatch_case =
   db_case
-    "organization owner mismatch: foreign repository fails closed with \
-     no rows"
+    "organization owner mismatch: foreign repository fails closed with no rows"
     (fun ~url (module C : Caqti_lwt.CONNECTION) ->
       let* uid = fixture_user (module C) "ghoauth_orgowner" in
       let installation = 936000023L in
@@ -2034,23 +2104,29 @@ let organization_owner_mismatch_case =
           ~exchange:(exchange_stub (Ok (200, token_body)) (ref 0))
           ~installations:
             (installations_stub
-               [ listing_as ~account_id ~login:"org-owner-fixture"
-                   ~target:"Organization" installation ]
+               [
+                 listing_as ~account_id ~login:"org-owner-fixture"
+                   ~target:"Organization" installation;
+               ]
                (ref 0))
           ~repositories:
             (Github_fixture.gur_transport
-               [ repo_listing
-                   [ Github_fixture.gur_repo
-                       ~owner_id:(Int64.add account_id 7L)
+               [
+                 repo_listing
+                   [
+                     Github_fixture.gur_repo ~owner_id:(Int64.add account_id 7L)
                        ~owner_login:"someone-else-fixture" ~id:903L
-                       ~name:"borrowed" () ] ]
+                       ~name:"borrowed" ();
+                   ];
+               ]
                (ref []))
           ~target:(callback_target state fixture_code)
           ()
       in
       let* () =
-        check_terminal_failure (module C) "org owner" ~cookie ~installation
-          response
+        check_terminal_failure
+          (module C)
+          "org owner" ~cookie ~installation response
       in
       let* drafts = draft_count (module C) "org owner" uid in
       Alcotest.(check int) "no draft" 0 drafts;
@@ -2061,8 +2137,8 @@ let organization_owner_mismatch_case =
    refuse, leaving the existing row exactly as it was. *)
 let account_kind_conflict_case =
   db_case
-    "account-kind conflict: an organization verification never rewrites \
-     a recorded personal installation"
+    "account-kind conflict: an organization verification never rewrites a \
+     recorded personal installation"
     (fun ~url (module C : Caqti_lwt.CONNECTION) ->
       let* uid = fixture_user (module C) "ghoauth_kindconflict" in
       let installation = 936000024L in
@@ -2075,15 +2151,21 @@ let account_kind_conflict_case =
           ~exchange:(exchange_stub (Ok (200, token_body)) (ref 0))
           ~installations:
             (installations_stub
-               [ listing_as ~account_id ~login:"org-owner-fixture"
-                   ~target:"Organization" installation ]
+               [
+                 listing_as ~account_id ~login:"org-owner-fixture"
+                   ~target:"Organization" installation;
+               ]
                (ref 0))
           ~repositories:
             (Github_fixture.gur_transport
-               [ repo_listing
-                   [ Github_fixture.gur_repo ~owner_id:account_id
+               [
+                 repo_listing
+                   [
+                     Github_fixture.gur_repo ~owner_id:account_id
                        ~owner_login:"org-owner-fixture" ~id:904L
-                       ~name:"conflicting" () ] ]
+                       ~name:"conflicting" ();
+                   ];
+               ]
                (ref []))
           ~target:(callback_target state fixture_code)
           ()
@@ -2097,10 +2179,11 @@ let account_kind_conflict_case =
       let* (stored_account_id, stored_login, stored_type), _ =
         or_fail "conflict row" row
       in
-      Alcotest.(check bool) "account id unchanged" true
+      Alcotest.(check bool)
+        "account id unchanged" true
         (stored_account_id = account_id);
-      Alcotest.(check string) "login unchanged" "personal-owner-fixture"
-        stored_login;
+      Alcotest.(check string)
+        "login unchanged" "personal-owner-fixture" stored_login;
       Alcotest.(check string) "kind unchanged" "user" stored_type;
       let* count = installation_count (module C) "conflict" installation in
       Alcotest.(check int) "still exactly one row" 1 count;
@@ -2109,25 +2192,44 @@ let account_kind_conflict_case =
       Lwt.return_unit)
 
 let db_suite =
-  [ success_case; replay_case; expired_case; already_consumed_case;
-    personal_account_case; organization_account_case;
-    organization_owner_mismatch_case; account_kind_conflict_case;
-    binding_mismatch_case; exchange_transport_case; oauth_rejected_case;
-    not_accessible_case; pagination_limit_case;
-    listing_transport_error_case; listing_status_case;
-    listing_invalid_case; listing_no_public_case; listing_pagination_case;
-    multiple_repositories_case; persistence_failure_case;
-    draft_failure_case; consume_storage_error_case; parallel_case;
-    analytics_success_case; analytics_consent_case; analytics_no_event_case ]
+  [
+    success_case;
+    replay_case;
+    expired_case;
+    already_consumed_case;
+    personal_account_case;
+    organization_account_case;
+    organization_owner_mismatch_case;
+    account_kind_conflict_case;
+    binding_mismatch_case;
+    exchange_transport_case;
+    oauth_rejected_case;
+    not_accessible_case;
+    pagination_limit_case;
+    listing_transport_error_case;
+    listing_status_case;
+    listing_invalid_case;
+    listing_no_public_case;
+    listing_pagination_case;
+    multiple_repositories_case;
+    persistence_failure_case;
+    draft_failure_case;
+    consume_storage_error_case;
+    parallel_case;
+    analytics_success_case;
+    analytics_consent_case;
+    analytics_no_event_case;
+  ]
 
 let suites =
-    (* OAuth-callback handler gates: DB-free with injected
+  (* OAuth-callback handler gates: DB-free with injected
        mode/config/credentials, real encrypted cookies, and fake
        transports — every outcome must be a clean 303 to one of the two
        generic targets, with no stage distinguishable. *)
-  [ ( "github_oauth_callback_gates", gate_suite )
+  [
+    ("github_oauth_callback_gates", gate_suite)
     (* OAuth callback over the real pipeline (start + setup return first,
        then sql_pool + secret with fake transports, no session
-       middleware); EARDE_TEST_DATABASE_URL gate. *)
-  ; ( "github_oauth_callback_db", db_suite )
+       middleware); EARDE_TEST_DATABASE_URL gate. *);
+    ("github_oauth_callback_db", db_suite);
   ]

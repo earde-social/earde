@@ -28,13 +28,14 @@ let render ?user ?auth ?(title = "Not Found")
   !rendered
 
 let wrapper_case =
-  case "wrapper: neutral launch message document, only local assets"
-    (fun () ->
+  case "wrapper: neutral launch message document, only local assets" (fun () ->
       let page = render () in
       Html_assert.must page "<body class='launch-message-page'>";
       Html_assert.must page "<title>Not Found - Earde</title>";
-      Html_assert.must page "<link rel='stylesheet' href='/static/css/earde.css'>";
-      Alcotest.(check int) "exactly one stylesheet" 1
+      Html_assert.must page
+        "<link rel='stylesheet' href='/static/css/earde.css'>";
+      Alcotest.(check int)
+        "exactly one stylesheet" 1
         (Html_assert.occurrences page "<link rel='stylesheet'");
       Html_assert.must_not page "tailwind";
       Html_assert.must_not page "fonts.googleapis";
@@ -65,7 +66,8 @@ let auth_branch_parity_case =
 
 let viewer_independence_case =
   case "ignored ?user changes nothing" (fun () ->
-      Alcotest.(check string) "anonymous = authenticated" (render ())
+      Alcotest.(check string)
+        "anonymous = authenticated" (render ())
         (render ~user:"qa-viewer" ()))
 
 (* The always-escaped-text contract: no caller-supplied markup in title or
@@ -97,7 +99,9 @@ let go_back_case =
       Html_assert.must page
         "<a href='/c/qa-somewhere/settings' class='launch-msg__back'>Go \
          back</a>";
-      Alcotest.(check int) "exactly one Go back" 1 (Html_assert.occurrences page "Go back"))
+      Alcotest.(check int)
+        "exactly one Go back" 1
+        (Html_assert.occurrences page "Go back"))
 
 (* alert_type keeps its historical mapping: success / info / everything
    else (including unknown values) is the error glyph. *)
@@ -107,10 +111,16 @@ let alert_type_case =
         (fun (alert_type, variant) ->
           let page = render ~alert_type () in
           Html_assert.must page ("launch-msg__icon launch-msg__icon--" ^ variant);
-          Alcotest.(check int) (alert_type ^ ": one glyph") 1
+          Alcotest.(check int)
+            (alert_type ^ ": one glyph")
+            1
             (Html_assert.occurrences page "launch-msg__icon "))
-        [ ("success", "success"); ("info", "info"); ("error", "error");
-          ("banana", "error") ])
+        [
+          ("success", "success");
+          ("info", "info");
+          ("error", "error");
+          ("banana", "error");
+        ])
 
 (* The wrapper must not introduce the substrings the project-home 409
    neutrality tests forbid, nor any resource-derived copy. *)
@@ -118,17 +128,22 @@ let neutral_copy_case =
   case "wrapper adds no forbidden or resource-derived copy" (fun () ->
       let page =
         String.lowercase_ascii
-          (render ~title:"Not Allowed"
-             ~message:"This request is not allowed." ())
+          (render ~title:"Not Allowed" ~message:"This request is not allowed."
+             ())
       in
       Html_assert.must_not page "private";
       Html_assert.must_not page "draft";
       Html_assert.must_not page "legacy")
 
 let suite =
-  [ wrapper_case; auth_branch_parity_case; viewer_independence_case;
-    escaping_case; go_back_case; alert_type_case; neutral_copy_case ]
-
-let suites =
-  [ ("launch_message_page", suite)
+  [
+    wrapper_case;
+    auth_branch_parity_case;
+    viewer_independence_case;
+    escaping_case;
+    go_back_case;
+    alert_type_case;
+    neutral_copy_case;
   ]
+
+let suites = [ ("launch_message_page", suite) ]

@@ -14,9 +14,10 @@ open Caqti_request.Infix
 let q_cleanup =
   List.map
     (fun sql -> (Caqti_type.unit ->. Caqti_type.unit) sql)
-    [ "DROP TRIGGER IF EXISTS rlc_fail_delete ON rate_limits"
-    ; "DROP FUNCTION IF EXISTS rlc_fail_fn()"
-    ; "DELETE FROM rate_limits WHERE ip_address LIKE 'rlc-%'"
+    [
+      "DROP TRIGGER IF EXISTS rlc_fail_delete ON rate_limits";
+      "DROP FUNCTION IF EXISTS rlc_fail_fn()";
+      "DELETE FROM rate_limits WHERE ip_address LIKE 'rlc-%'";
     ]
 
 let or_fail label = function
@@ -47,33 +48,34 @@ let db_case name f =
              let* () = cleanup () in
              Lwt.finalize
                (fun () -> f conn (module C : Caqti_lwt.CONNECTION))
-               (fun () ->
-                 Lwt.finalize cleanup (fun () -> C.disconnect ()))))
+               (fun () -> Lwt.finalize cleanup (fun () -> C.disconnect ()))))
 
 let q_insert_row =
   (Caqti_type.(t2 (t2 string string) (t2 int float)) ->. Caqti_type.unit)
-  "INSERT INTO rate_limits (ip_address, endpoint, attempts, window_start)
-   VALUES ($1, $2, $3, $4)"
+    "INSERT INTO rate_limits (ip_address, endpoint, attempts, window_start)\n\
+    \   VALUES ($1, $2, $3, $4)"
 
 let q_surviving_ips =
   (Caqti_type.unit ->* Caqti_type.string)
-  "SELECT ip_address FROM rate_limits WHERE ip_address LIKE 'rlc-%' ORDER BY ip_address"
+    "SELECT ip_address FROM rate_limits WHERE ip_address LIKE 'rlc-%' ORDER BY \
+     ip_address"
 
 let q_create_fail_fn =
   (Caqti_type.unit ->. Caqti_type.unit)
-  "CREATE OR REPLACE FUNCTION rlc_fail_fn() RETURNS trigger AS 'BEGIN RAISE EXCEPTION ''rlc forced failure''; END' LANGUAGE plpgsql"
+    "CREATE OR REPLACE FUNCTION rlc_fail_fn() RETURNS trigger AS 'BEGIN RAISE \
+     EXCEPTION ''rlc forced failure''; END' LANGUAGE plpgsql"
 
 let q_create_fail_trigger =
   (Caqti_type.unit ->. Caqti_type.unit)
-  "CREATE TRIGGER rlc_fail_delete BEFORE DELETE ON rate_limits FOR EACH ROW EXECUTE FUNCTION rlc_fail_fn()"
+    "CREATE TRIGGER rlc_fail_delete BEFORE DELETE ON rate_limits FOR EACH ROW \
+     EXECUTE FUNCTION rlc_fail_fn()"
 
 let q_drop_fail_trigger =
   (Caqti_type.unit ->. Caqti_type.unit)
-  "DROP TRIGGER IF EXISTS rlc_fail_delete ON rate_limits"
+    "DROP TRIGGER IF EXISTS rlc_fail_delete ON rate_limits"
 
 let q_drop_fail_fn =
-  (Caqti_type.unit ->. Caqti_type.unit)
-  "DROP FUNCTION IF EXISTS rlc_fail_fn()"
+  (Caqti_type.unit ->. Caqti_type.unit) "DROP FUNCTION IF EXISTS rlc_fail_fn()"
 
 (* Pure: the retention rule is derived from the enforcement window, never
    invented — so a longer configured window automatically lengthens
@@ -90,7 +92,7 @@ let derivation_case =
       Alcotest.(check bool)
         "retention can never undercut the window" true
         (Earde.Rate_limit_store.cleanup_after_seconds
-        >= Earde.Rate_limit_store.window_seconds))
+       >= Earde.Rate_limit_store.window_seconds))
 
 let expiry_case =
   db_case "expired rows go, boundary and active rows stay" (fun conn c ->
@@ -139,13 +141,13 @@ let failure_case =
       in
       (* The DELETE binds only a timestamp — no stored IP can surface in
          the bounded error string the middleware would log. *)
-      Alcotest.(check bool) "error carries no fixture IP" false
+      Alcotest.(check bool)
+        "error carries no fixture IP" false
         (Html_assert.contains err "203.0.113");
       (* The limiter's own path is untouched by a broken cleanup. *)
       let* check = Earde.Rate_limit_store.check c "rlc-fresh" "/login" in
       let* check = or_fail_s "check still works" check in
-      Alcotest.(check bool) "fresh request allowed" true
-        (check = `Allowed);
+      Alcotest.(check bool) "fresh request allowed" true (check = `Allowed);
       let* r = C.exec q_drop_fail_trigger () in
       let* () = or_fail "drop trigger" r in
       let* r = C.exec q_drop_fail_fn () in
@@ -157,7 +159,4 @@ let failure_case =
       Lwt.return_unit)
 
 let suite = [ derivation_case; expiry_case; failure_case ]
-
-let suites =
-  [ ("rate_limit_cleanup", suite)
-  ]
+let suites = [ ("rate_limit_cleanup", suite) ]

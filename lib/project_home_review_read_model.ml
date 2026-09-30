@@ -16,17 +16,10 @@
    returned. See the .mli for the full contract. *)
 
 open Lwt.Infix
-
 module Int64_set = Set.Make (Int64)
 
-type project_verification =
-  | Verified
-  | Stale
-  | Revoked
-
-type host_eligibility =
-  | Eligible
-  | Currently_ineligible
+type project_verification = Verified | Stale | Revoked
+type host_eligibility = Eligible | Currently_ineligible
 
 type error =
   | Invalid_user_id
@@ -122,8 +115,8 @@ let single_path_segment value =
 let nonblank value =
   String.exists
     (fun c ->
-      not (c = ' ' || c = '\t' || c = '\r' || c = '\n' || c = '\x0c'
-           || c = '\x0b'))
+      not
+        (c = ' ' || c = '\t' || c = '\r' || c = '\n' || c = '\x0c' || c = '\x0b'))
     value
 
 (* Repository full-name halves are single path segments; branches are opaque
@@ -207,18 +200,12 @@ let community_structurally_valid ~is_network_community ~onboarding_state
 let community_query =
   let open Caqti_request.Infix in
   (Caqti_type.(t2 string int)
-   ->? Caqti_type.(
-         t2 (t4 int string string string) (t4 string bool bool bool)))
-    "SELECT c.id, c.slug, c.name, c.visibility, \
-            c.onboarding_state, c.is_network_community, \
-            c.indexable, c.discoverable \
-     FROM communities c \
-     WHERE c.slug = $1 \
-       AND (EXISTS (SELECT 1 FROM community_moderators m \
-                    WHERE m.user_id = $2 AND m.community_id = c.id \
-                      AND m.role = 'top_mod') \
-            OR EXISTS (SELECT 1 FROM users u \
-                       WHERE u.id = $2 AND u.is_admin))"
+  ->? Caqti_type.(t2 (t4 int string string string) (t4 string bool bool bool)))
+    "SELECT c.id, c.slug, c.name, c.visibility, c.onboarding_state, \
+     c.is_network_community, c.indexable, c.discoverable FROM communities c \
+     WHERE c.slug = $1 AND (EXISTS (SELECT 1 FROM community_moderators m WHERE \
+     m.user_id = $2 AND m.community_id = c.id AND m.role = 'top_mod') OR \
+     EXISTS (SELECT 1 FROM users u WHERE u.id = $2 AND u.is_admin))"
 
 (* The pending home requests for the authorized community, joined to
    permanent project data, the requester's public username (LEFT JOIN: a
@@ -234,25 +221,21 @@ let community_query =
 let pending_requests_query =
   let open Caqti_request.Infix in
   (Caqti_type.int
-   ->* Caqti_type.(
-         t2
-           (t2
-              (t4 int64 string string string)
-              (t4 string string (option string) (option string)))
-           (option (t2 (t4 int string string string) (t2 bool bool)))))
-    "SELECT p.id, p.name, p.slug, p.kind, \
-            p.forge_namespace_login, \
-            project_github_verification(p.id, p.verification_status), \
-            cp.request_note, u.username, \
-            r.position, r.full_name, r.html_url, r.default_branch, \
-            r.is_primary, r.is_archived \
-     FROM community_projects cp \
-     JOIN open_source_projects p ON p.id = cp.project_id \
-     LEFT JOIN users u ON u.id = cp.requested_by_user_id \
-     LEFT JOIN project_repositories r ON r.project_id = p.id \
-     WHERE cp.community_id = $1 \
-       AND cp.relation_type = 'home' AND cp.status = 'pending' \
-     ORDER BY cp.created_at ASC, p.slug ASC, r.position ASC"
+  ->* Caqti_type.(
+        t2
+          (t2
+             (t4 int64 string string string)
+             (t4 string string (option string) (option string)))
+          (option (t2 (t4 int string string string) (t2 bool bool)))))
+    "SELECT p.id, p.name, p.slug, p.kind, p.forge_namespace_login, \
+     project_github_verification(p.id, p.verification_status), \
+     cp.request_note, u.username, r.position, r.full_name, r.html_url, \
+     r.default_branch, r.is_primary, r.is_archived FROM community_projects cp \
+     JOIN open_source_projects p ON p.id = cp.project_id LEFT JOIN users u ON \
+     u.id = cp.requested_by_user_id LEFT JOIN project_repositories r ON \
+     r.project_id = p.id WHERE cp.community_id = $1 AND cp.relation_type = \
+     'home' AND cp.status = 'pending' ORDER BY cp.created_at ASC, p.slug ASC, \
+     r.position ASC"
 
 (* === community mapping === *)
 
@@ -272,8 +255,9 @@ let community_of_row (id, slug, name, visibility_raw)
         then Error ()
         else
           let host_eligibility =
-            if currently_eligible ~is_network_community ~onboarding_state
-                 ~visibility
+            if
+              currently_eligible ~is_network_community ~onboarding_state
+                ~visibility
             then Eligible
             else Currently_ineligible
           in
@@ -290,10 +274,7 @@ let community_of_row (id, slug, name, visibility_raw)
 
 (* Position kept alongside the exposed fields for the cross-row contiguity
    and duplicate rules; dropped from the returned value. *)
-type validated_repo = {
-  vr_position : int;
-  vr_repository : repository;
-}
+type validated_repo = { vr_position : int; vr_repository : repository }
 
 let repository_of_row
     ((position, full_name, html_url, default_branch), (is_primary, is_archived))
@@ -301,9 +282,9 @@ let repository_of_row
   let valid =
     position > 0
     && (match split_full_name full_name with
-       | None -> false
-       | Some (owner_login, name) ->
-           String.equal html_url (canonical_html_url ~owner_login ~name))
+      | None -> false
+      | Some (owner_login, name) ->
+          String.equal html_url (canonical_html_url ~owner_login ~name))
     && valid_branch default_branch
   in
   if valid then
@@ -397,7 +378,7 @@ let group_by_project rows =
   let rec go seen acc current = function
     | [] -> Ok (List.rev (close acc current))
     | (identity, repo_opt) :: rest -> (
-        let ((pid, _, _, _), _) = identity in
+        let (pid, _, _, _), _ = identity in
         match current with
         | Some (cur_id, cur_identity, repos_rev) when Int64.equal cur_id pid ->
             go seen acc
@@ -414,36 +395,40 @@ let group_by_project rows =
   go Int64_set.empty [] None rows
 
 let pending_of_group
-    ( ((project_id, name, slug, kind_raw), (login, verification_raw, note_raw, requester_raw)),
+    ( ( (project_id, name, slug, kind_raw),
+        (login, verification_raw, note_raw, requester_raw) ),
       repo_opts ) =
   match
-    (Project_identity.kind_of_string kind_raw, verification_of_string verification_raw)
+    ( Project_identity.kind_of_string kind_raw,
+      verification_of_string verification_raw )
   with
-  | Some kind, Some verification ->
+  | Some kind, Some verification -> (
       if
         not
           (Int64.compare project_id 0L > 0
           && canonical_project_slug slug
           && single_path_segment login)
       then Error ()
-      else (
+      else
         (* The note must reconstruct byte-exactly through the pure
            constructor — a padded or control-bearing durable note is
            corruption. *)
         match Project_home_relation.create_pending ~request_note:note_raw with
         | Error _ -> Error ()
-        | Ok relation ->
+        | Ok relation -> (
             if Project_home_relation.request_note relation <> note_raw then
               Error ()
-            else (
+            else
               match requester_of_row requester_raw with
               | Error () -> Error ()
               | Ok requester -> (
-                  (* An all-NULL repository half means the LEFT JOIN found no
+                  if
+                    (* An all-NULL repository half means the LEFT JOIN found no
                      permanent repository rows: a verified/stale/revoked
                      project must still have at least one, so a missing set
                      is corruption, never an empty request. *)
-                  if List.exists Option.is_none repo_opts then Error ()
+                    List.exists Option.is_none repo_opts
+                  then Error ()
                   else
                     match
                       validate_repositories ~kind

@@ -10,16 +10,22 @@
    surface); it never enters profile content. Tabs, ?tab= values, default and
    unknown-value fallback, activity ordering and every destination link are
    unchanged. *)
-let user_profile_page ?user ?(rail_communities = []) ~is_admin ~is_globally_banned ~profile_id ~admin_usernames ~moderated_communities ~active_tab user_votes username joined_at bio_opt avatar_url_opt karma posts user_comments community_stats request =
+let user_profile_page ?user ?(rail_communities = []) ~is_admin
+    ~is_globally_banned ~profile_id ~admin_usernames ~moderated_communities
+    ~active_tab user_votes username joined_at bio_opt avatar_url_opt karma posts
+    user_comments community_stats request =
   let csrf_token = Csrf_field.tag request in
-  let bio = Option.value ~default:"This user hasn't written a bio yet." bio_opt in
+  let bio =
+    Option.value ~default:"This user hasn't written a bio yet." bio_opt
+  in
   (* Profile avatar: route the stored URL through Components.user_avatar (Html.image_src) instead
      of raw interpolation. Avatarless profiles now show a local letter tile rather than the old
      external Gravatar "mystery person" default — one fewer third-party image dependency. *)
   let avatar_html =
     Components.user_avatar ~alt:(username ^ " avatar")
       ~img_class:"account-avatar"
-      ~tile_class:"account-avatar flex items-center justify-center text-2xl font-bold"
+      ~tile_class:
+        "account-avatar flex items-center justify-center text-2xl font-bold"
       ~username avatar_url_opt
   in
 
@@ -27,30 +33,39 @@ let user_profile_page ?user ?(rail_communities = []) ~is_admin ~is_globally_bann
      MOD badges iterate moderated_communities — one badge per community the user moderates. *)
   let profile_admin_badge =
     if List.mem username admin_usernames then
-      (Html.static "<span class='account-badge account-badge--admin'>Admin</span>")
+      Html.static
+        "<span class='account-badge account-badge--admin'>Admin</span>"
     else Html.empty
   in
   let mod_badges =
-    (Html.join (Html.static " ")) (List.map (fun (a : Community_types.community) ->
-      (Html.template "<a href='/c/%s' class='account-badge account-badge--mod'>Mod of /c/%s</a>"
-  [ (Html.text a.slug)
-  ; (Html.text a.slug) ])
-    ) moderated_communities)
+    (Html.join (Html.static " "))
+      (List.map
+         (fun (a : Community_types.community) ->
+           Html.template
+             "<a href='/c/%s' class='account-badge account-badge--mod'>Mod of \
+              /c/%s</a>"
+             [ Html.text a.slug; Html.text a.slug ])
+         moderated_communities)
   in
   (* Banned badge: shown on the profile header so any visitor sees the account status.
      Admin controls: Ban ↔ Unban toggle driven by is_globally_banned to prevent
      double-ban confusion and surface the current state clearly. *)
   let globally_banned_badge =
     if is_globally_banned then
-      (Html.static "<span class='account-badge account-badge--banned'>Globally banned</span>")
+      Html.static
+        "<span class='account-badge account-badge--banned'>Globally \
+         banned</span>"
     else Html.empty
   in
   let role_badges =
-    if profile_admin_badge = Html.empty && mod_badges = Html.empty && globally_banned_badge = Html.empty then Html.empty
-    else (Html.template "<div class='account-badges'>%s%s%s</div>"
-  [ profile_admin_badge
-  ; mod_badges
-  ; globally_banned_badge ])
+    if
+      profile_admin_badge = Html.empty
+      && mod_badges = Html.empty
+      && globally_banned_badge = Html.empty
+    then Html.empty
+    else
+      Html.template "<div class='account-badges'>%s%s%s</div>"
+        [ profile_admin_badge; mod_badges; globally_banned_badge ]
   in
   (* Edit Profile: only render when the logged-in user is viewing their own profile.
      Avoids exposing /settings entry point on others' profiles — a cosmetic boundary
@@ -58,7 +73,9 @@ let user_profile_page ?user ?(rail_communities = []) ~is_admin ~is_globally_bann
   let edit_profile_btn =
     match user with
     | Some logged_in when logged_in = username ->
-      (Html.static "<a href='/settings' class='account-btn account-btn--secondary'>Edit profile</a>")
+        Html.static
+          "<a href='/settings' class='account-btn account-btn--secondary'>Edit \
+           profile</a>"
     | _ -> Html.empty
   in
   (* Admin Panel: only render for the logged-in admin on their own profile.
@@ -67,14 +84,17 @@ let user_profile_page ?user ?(rail_communities = []) ~is_admin ~is_globally_bann
   let admin_panel_btn =
     match user with
     | Some logged_in when logged_in = username && is_admin ->
-      (Html.static "<a href='/admin' class='account-btn account-btn--secondary'>Admin panel</a>")
+        Html.static
+          "<a href='/admin' class='account-btn account-btn--secondary'>Admin \
+           panel</a>"
     | _ -> Html.empty
   in
   let header_actions =
-    if edit_profile_btn = Html.empty && admin_panel_btn = Html.empty then Html.empty
-    else (Html.template "<div class='account-actions'>%s%s</div>"
-  [ edit_profile_btn
-  ; admin_panel_btn ])
+    if edit_profile_btn = Html.empty && admin_panel_btn = Html.empty then
+      Html.empty
+    else
+      Html.template "<div class='account-actions'>%s%s</div>"
+        [ edit_profile_btn; admin_panel_btn ]
   in
 
   (* The username is attacker-chosen for accounts created before the signup
@@ -82,56 +102,74 @@ let user_profile_page ?user ?(rail_communities = []) ~is_admin ~is_globally_bann
      as ordinary attribute text, and the inline hook only reads it: no user
      data is ever part of script source. *)
   let admin_controls =
-    if is_admin && (Option.value ~default:"" user) <> username then
+    if is_admin && Option.value ~default:"" user <> username then
       let confirm_text prefix suffix = Html.text (prefix ^ username ^ suffix) in
       let ban_or_unban_btn =
         if is_globally_banned then
-          (Html.template "
-            <form action='/admin/unban/user/%s' method='POST' data-confirm='%s' onsubmit=\"confirmModal(event, this.dataset.confirm)\">
-                %s
-                <button type='submit' class='account-btn account-btn--secondary'>Unban user</button>
-            </form>"
-  [ Html.int (profile_id)
-  ; confirm_text "Lift global ban on u/" "?"
-  ; csrf_token ])
+          Html.template
+            "\n\
+            \            <form action='/admin/unban/user/%s' method='POST' \
+             data-confirm='%s' onsubmit=\"confirmModal(event, \
+             this.dataset.confirm)\">\n\
+            \                %s\n\
+            \                <button type='submit' class='account-btn \
+             account-btn--secondary'>Unban user</button>\n\
+            \            </form>"
+            [
+              Html.int profile_id;
+              confirm_text "Lift global ban on u/" "?";
+              csrf_token;
+            ]
         else
-          (Html.template "
-            <form action='/admin/ban/user/%s' method='POST' data-confirm='%s' onsubmit=\"confirmModal(event, this.dataset.confirm)\">
-                %s
-                <button type='submit' class='account-btn'>Ban user</button>
-            </form>"
-  [ Html.int (profile_id)
-  ; confirm_text "Permanently ban u/"
-      "? They will be blocked from logging in and posting."
-  ; csrf_token ])
+          Html.template
+            "\n\
+            \            <form action='/admin/ban/user/%s' method='POST' \
+             data-confirm='%s' onsubmit=\"confirmModal(event, \
+             this.dataset.confirm)\">\n\
+            \                %s\n\
+            \                <button type='submit' class='account-btn'>Ban \
+             user</button>\n\
+            \            </form>"
+            [
+              Html.int profile_id;
+              confirm_text "Permanently ban u/"
+                "? They will be blocked from logging in and posting.";
+              csrf_token;
+            ]
       in
-      (Html.template "
-        <div class='account-admin'>
-            <h3 class='account-admin-title'>Admin controls</h3>
-            %s
-        </div>"
-  [ ban_or_unban_btn ])
+      Html.template
+        "\n\
+        \        <div class='account-admin'>\n\
+        \            <h3 class='account-admin-title'>Admin controls</h3>\n\
+        \            %s\n\
+        \        </div>"
+        [ ban_or_unban_btn ]
     else Html.empty
   in
 
   let tab_class active =
-    if active_tab = active then "account-tab account-tab--active" else "account-tab"
+    if active_tab = active then "account-tab account-tab--active"
+    else "account-tab"
   in
   (* User-facing label is "Threads"; the query param stays ?tab=posts so existing links,
      the handler's tab dispatch, and bookmarks keep working unchanged. *)
-  let esc_username = (Html.text (username)) in
-  let tab_nav = (Html.template "
-    <div class='account-tabs'>
-        <a href='/u/%s?tab=posts' class='%s'>Threads</a>
-        <a href='/u/%s?tab=comments' class='%s'>Comments</a>
-        <a href='/u/%s?tab=communities' class='%s'>Communities</a>
-    </div>"
-  [ esc_username
-  ; (Html.text (tab_class "posts"))
-  ; esc_username
-  ; (Html.text (tab_class "comments"))
-  ; esc_username
-  ; (Html.text (tab_class "communities")) ])
+  let esc_username = Html.text username in
+  let tab_nav =
+    Html.template
+      "\n\
+      \    <div class='account-tabs'>\n\
+      \        <a href='/u/%s?tab=posts' class='%s'>Threads</a>\n\
+      \        <a href='/u/%s?tab=comments' class='%s'>Comments</a>\n\
+      \        <a href='/u/%s?tab=communities' class='%s'>Communities</a>\n\
+      \    </div>"
+      [
+        esc_username;
+        Html.text (tab_class "posts");
+        esc_username;
+        Html.text (tab_class "comments");
+        esc_username;
+        Html.text (tab_class "communities");
+      ]
   in
 
   (* Profile-specific thread row. The shared render_forum_row markup is scoped to the
@@ -140,148 +178,220 @@ let user_profile_page ?user ?(rail_communities = []) ~is_admin ~is_globally_bann
      down-form, with the optimistic-vote colour classes) so voting behaves identically — only
      the surrounding layout differs. No query / canonical-URL change. *)
   let render_thread_row (post : Post_types.post) =
-    let current_vote = Option.value ~default:0 (List.assoc_opt post.id user_votes) in
-    let up_color = if current_vote = 1 then "text-orange-500" else "text-gray-400 hover:text-orange-500" in
-    let down_color = if current_vote = -1 then "text-[#69C3D2]" else "text-gray-400 hover:text-[#69C3D2]" in
+    let current_vote =
+      Option.value ~default:0 (List.assoc_opt post.id user_votes)
+    in
+    let up_color =
+      if current_vote = 1 then "text-orange-500"
+      else "text-gray-400 hover:text-orange-500"
+    in
+    let down_color =
+      if current_vote = -1 then "text-[#69C3D2]"
+      else "text-gray-400 hover:text-[#69C3D2]"
+    in
     let up_action = if current_vote = 1 then 0 else 1 in
     let down_action = if current_vote = -1 then 0 else -1 in
-    let upvote_html = match user with
-      | Some _ -> (Html.template "<form action='/vote' method='POST'>%s<input type='hidden' name='post_id' value='%s'><input type='hidden' name='direction' value='%s'><button type='submit' class='%s font-bold text-sm leading-none'>▲</button></form>"
-  [ csrf_token
-  ; Html.int (post.id)
-  ; Html.int (up_action)
-  ; (Html.text up_color) ])
-      | None -> (Html.static "<a href='/login' class='text-gray-400 hover:text-orange-500 font-bold text-sm leading-none'>▲</a>")
+    let upvote_html =
+      match user with
+      | Some _ ->
+          Html.template
+            "<form action='/vote' method='POST'>%s<input type='hidden' \
+             name='post_id' value='%s'><input type='hidden' name='direction' \
+             value='%s'><button type='submit' class='%s font-bold text-sm \
+             leading-none'>▲</button></form>"
+            [
+              csrf_token;
+              Html.int post.id;
+              Html.int up_action;
+              Html.text up_color;
+            ]
+      | None ->
+          Html.static
+            "<a href='/login' class='text-gray-400 hover:text-orange-500 \
+             font-bold text-sm leading-none'>▲</a>"
     in
     let downvote_html =
       if not post.allow_downvotes then Html.empty
-      else match user with
-      | Some _ -> (Html.template "<form action='/vote' method='POST'>%s<input type='hidden' name='post_id' value='%s'><input type='hidden' name='direction' value='%s'><button type='submit' class='%s font-bold text-sm leading-none'>▼</button></form>"
-  [ csrf_token
-  ; Html.int (post.id)
-  ; Html.int (down_action)
-  ; (Html.text down_color) ])
-      | None -> (Html.static "<a href='/login' class='text-gray-400 hover:text-[#69C3D2] font-bold text-sm leading-none'>▼</a>")
+      else
+        match user with
+        | Some _ ->
+            Html.template
+              "<form action='/vote' method='POST'>%s<input type='hidden' \
+               name='post_id' value='%s'><input type='hidden' name='direction' \
+               value='%s'><button type='submit' class='%s font-bold text-sm \
+               leading-none'>▼</button></form>"
+              [
+                csrf_token;
+                Html.int post.id;
+                Html.int down_action;
+                Html.text down_color;
+              ]
+        | None ->
+            Html.static
+              "<a href='/login' class='text-gray-400 hover:text-[#69C3D2] \
+               font-bold text-sm leading-none'>▼</a>"
     in
-    let domain_html = match post.url with
-      | Some u -> (match Post_cards.extract_domain u with
-          | Some d -> (Html.template "<a class='account-thread-domain' href='%s' target='_blank' rel='noopener'>%s ↗</a>"
-  [ (Html.external_url (u))
-  ; (Html.text (d)) ])
+    let domain_html =
+      match post.url with
+      | Some u -> (
+          match Post_cards.extract_domain u with
+          | Some d ->
+              Html.template
+                "<a class='account-thread-domain' href='%s' target='_blank' \
+                 rel='noopener'>%s ↗</a>"
+                [ Html.external_url u; Html.text d ]
           | None -> Html.empty)
       | None -> Html.empty
     in
-    let preview_html = match post.content with
-      | Some c when String.trim c <> "" -> (Html.template "<div class='account-thread-preview'>%s</div>"
-  [ (Html.text (c)) ])
+    let preview_html =
+      match post.content with
+      | Some c when String.trim c <> "" ->
+          Html.template "<div class='account-thread-preview'>%s</div>"
+            [ Html.text c ]
       | _ -> Html.empty
     in
     (* Each row names its origin community/section, since a profile spans communities. *)
     let context_html =
-      let section_html = match post.section_name, post.section_slug with
+      let section_html =
+        match (post.section_name, post.section_slug) with
         | Some name, Some slug when String.trim name <> "" ->
-            (Html.template "<span class='sec'>§</span> <a href='/c/%s/s/%s'>%s</a> <span class='dot'>·</span> "
-  [ (Html.text (post.community_slug))
-  ; (Html.text (slug))
-  ; (Html.text (name)) ])
+            Html.template
+              "<span class='sec'>§</span> <a href='/c/%s/s/%s'>%s</a> <span \
+               class='dot'>·</span> "
+              [ Html.text post.community_slug; Html.text slug; Html.text name ]
         | _ -> Html.empty
       in
-      (Html.template "<div class='account-thread-ctx'>%s<a href='/c/%s'>/c/%s</a></div>"
-  [ section_html
-  ; (Html.text (post.community_slug))
-  ; (Html.text (post.community_slug)) ])
+      Html.template
+        "<div class='account-thread-ctx'>%s<a href='/c/%s'>/c/%s</a></div>"
+        [
+          section_html;
+          Html.text post.community_slug;
+          Html.text post.community_slug;
+        ]
     in
-    let thread_href = Post_cards.canonical_thread_path post.community_slug post.id post.title in
-    (Html.template "
-        <div class='account-thread'>
-            <div class='account-thread-vote'>%s<span class='account-thread-score'>%s</span>%s</div>
-            <div class='account-thread-main'>
-                %s
-                <div class='account-thread-title'><a href='%s'>%s</a></div>
-                %s
-                <div class='account-thread-meta'>%s<span>by %s</span><span>%s</span><a href='%s'>💬 %s</a></div>
-            </div>
-        </div>"
-  [ upvote_html
-  ; Html.int (post.score)
-  ; downvote_html
-  ; context_html
-  ; (Html.text thread_href)
-  ; (Html.text (post.title))
-  ; preview_html
-  ; domain_html
-  ; (Components.render_author ~admin_usernames post.username)
-  ; (Html.text (Components.time_ago post.created_at))
-  ; (Html.text thread_href)
-  ; Html.int (post.comment_count) ])
+    let thread_href =
+      Post_cards.canonical_thread_path post.community_slug post.id post.title
+    in
+    Html.template
+      "\n\
+      \        <div class='account-thread'>\n\
+      \            <div class='account-thread-vote'>%s<span \
+       class='account-thread-score'>%s</span>%s</div>\n\
+      \            <div class='account-thread-main'>\n\
+      \                %s\n\
+      \                <div class='account-thread-title'><a \
+       href='%s'>%s</a></div>\n\
+      \                %s\n\
+      \                <div class='account-thread-meta'>%s<span>by \
+       %s</span><span>%s</span><a href='%s'>💬 %s</a></div>\n\
+      \            </div>\n\
+      \        </div>"
+      [
+        upvote_html;
+        Html.int post.score;
+        downvote_html;
+        context_html;
+        Html.text thread_href;
+        Html.text post.title;
+        preview_html;
+        domain_html;
+        Components.render_author ~admin_usernames post.username;
+        Html.text (Components.time_ago post.created_at);
+        Html.text thread_href;
+        Html.int post.comment_count;
+      ]
   in
 
   let posts_html =
     if posts = [] then
-      (Html.static "<div class='account-empty'>This user hasn't started any threads yet.</div>")
+      Html.static
+        "<div class='account-empty'>This user hasn't started any threads \
+         yet.</div>"
     else
-      (Html.template "<div class='account-threads'>%s</div>"
-  [ ((Html.join (Html.static "\n")) (List.map render_thread_row posts)) ])
+      Html.template "<div class='account-threads'>%s</div>"
+        [ (Html.join (Html.static "\n")) (List.map render_thread_row posts) ]
   in
 
   let comments_html =
     if user_comments = [] then
-      (Html.static "<div class='account-empty'>This user hasn't commented anything yet.</div>")
+      Html.static
+        "<div class='account-empty'>This user hasn't commented anything \
+         yet.</div>"
     else
-      (Html.join (Html.static "\n")) (List.map (fun (_id, content, created_at, post_id, post_title, score) ->
-        (Html.template "
-          <div class='account-comment'>
-              <div class='account-comment-meta'>
-                  <span>%s</span>
-                  <span class='dot'>·</span>
-                  <span>%s points</span>
-              </div>
-              <div class='account-comment-body'>%s</div>
-              <a href='/p/%s' class='account-comment-link'>&#8618; Commented on: %s</a>
-          </div>"
-  [ Html.text created_at
-  ; Html.int (score)
-  ; (Html.text (content))
-  ; Html.int (post_id)
-  ; (Html.text (post_title)) ])
-      ) user_comments)
+      (Html.join (Html.static "\n"))
+        (List.map
+           (fun (_id, content, created_at, post_id, post_title, score) ->
+             Html.template
+               "\n\
+               \          <div class='account-comment'>\n\
+               \              <div class='account-comment-meta'>\n\
+               \                  <span>%s</span>\n\
+               \                  <span class='dot'>·</span>\n\
+               \                  <span>%s points</span>\n\
+               \              </div>\n\
+               \              <div class='account-comment-body'>%s</div>\n\
+               \              <a href='/p/%s' \
+                class='account-comment-link'>&#8618; Commented on: %s</a>\n\
+               \          </div>"
+               [
+                 Html.text created_at;
+                 Html.int score;
+                 Html.text content;
+                 Html.int post_id;
+                 Html.text post_title;
+               ])
+           user_comments)
   in
 
   let communities_html =
     if community_stats = [] then
-      (Html.static "<div class='account-empty'>No community activity yet.</div>")
+      Html.static "<div class='account-empty'>No community activity yet.</div>"
     else begin
-      let cards = (Html.join (Html.static "\n")) (List.map (fun (s : Community_user_stats_store.community_user_stat) ->
-        let total = s.local_post_count + s.local_comment_count in
-        let active_since =
-          match s.first_active_at with
-          | None -> Html.empty
-          | Some ts ->
-              (Html.template "<div class='account-comm-sub'>active since %s</div>"
-  [ (Html.text (Components.format_month_year ts)) ])
-        in
-        (Html.template "
-          <a href='/c/%s' class='account-comm-card'>
-              <div class='account-comm-name'>%s</div>
-              <div class='account-comm-slug'>/c/%s</div>
-              <div class='account-comm-stat'><strong>%s</strong> local karma</div>
-              <div class='account-comm-stat'><strong>%s</strong> contributions here</div>
-              <div class='account-comm-sub'>%s posts &middot; %s comments</div>
-              %s
-          </a>"
-  [ (Html.text s.community_slug)
-  ; (Html.text (s.community_name))
-  ; (Html.text s.community_slug)
-  ; Html.int (s.local_karma)
-  ; Html.int (total)
-  ; Html.int (s.local_post_count)
-  ; Html.int (s.local_comment_count)
-  ; active_since ])
-      ) community_stats) in
-      (Html.template "
-        <h3 class='account-section-title'>Community reputation</h3>
-        <div class='account-comm-grid'>%s</div>"
-  [ cards ])
+      let cards =
+        (Html.join (Html.static "\n"))
+          (List.map
+             (fun (s : Community_user_stats_store.community_user_stat) ->
+               let total = s.local_post_count + s.local_comment_count in
+               let active_since =
+                 match s.first_active_at with
+                 | None -> Html.empty
+                 | Some ts ->
+                     Html.template
+                       "<div class='account-comm-sub'>active since %s</div>"
+                       [ Html.text (Components.format_month_year ts) ]
+               in
+               Html.template
+                 "\n\
+                 \          <a href='/c/%s' class='account-comm-card'>\n\
+                 \              <div class='account-comm-name'>%s</div>\n\
+                 \              <div class='account-comm-slug'>/c/%s</div>\n\
+                 \              <div \
+                  class='account-comm-stat'><strong>%s</strong> local \
+                  karma</div>\n\
+                 \              <div \
+                  class='account-comm-stat'><strong>%s</strong> contributions \
+                  here</div>\n\
+                 \              <div class='account-comm-sub'>%s posts \
+                  &middot; %s comments</div>\n\
+                 \              %s\n\
+                 \          </a>"
+                 [
+                   Html.text s.community_slug;
+                   Html.text s.community_name;
+                   Html.text s.community_slug;
+                   Html.int s.local_karma;
+                   Html.int total;
+                   Html.int s.local_post_count;
+                   Html.int s.local_comment_count;
+                   active_since;
+                 ])
+             community_stats)
+      in
+      Html.template
+        "\n\
+        \        <h3 class='account-section-title'>Community reputation</h3>\n\
+        \        <div class='account-comm-grid'>%s</div>"
+        [ cards ]
     end
   in
 
@@ -291,47 +401,53 @@ let user_profile_page ?user ?(rail_communities = []) ~is_admin ~is_globally_bann
     else posts_html
   in
 
-  let body = (Html.template "
-    <div class='account-wrap'>
-        <div class='account-panel'>
-            <div class='account-prof'>
-                %s
-                <div class='account-prof-body'>
-                    <h1 class='account-name'>u/%s</h1>
-                    %s
-                    <div class='account-stats'>
-                        <span><strong>%s</strong> karma</span>
-                        <span>Joined %s</span>
-                    </div>
-                    %s
-                </div>
-            </div>
-            <div class='account-bio'>%s</div>
-            %s
-        </div>
-
-        %s
-        %s
-    </div>"
-  [ avatar_html
-  ; esc_username
-  ; role_badges
-  ; Html.int (karma)
-  ; Html.text joined_at
-  ; header_actions
-  ; (Html.text (bio))
-  ; admin_controls
-  ; tab_nav
-  ; feed_html ])
+  let body =
+    Html.template
+      "\n\
+      \    <div class='account-wrap'>\n\
+      \        <div class='account-panel'>\n\
+      \            <div class='account-prof'>\n\
+      \                %s\n\
+      \                <div class='account-prof-body'>\n\
+      \                    <h1 class='account-name'>u/%s</h1>\n\
+      \                    %s\n\
+      \                    <div class='account-stats'>\n\
+      \                        <span><strong>%s</strong> karma</span>\n\
+      \                        <span>Joined %s</span>\n\
+      \                    </div>\n\
+      \                    %s\n\
+      \                </div>\n\
+      \            </div>\n\
+      \            <div class='account-bio'>%s</div>\n\
+      \            %s\n\
+      \        </div>\n\n\
+      \        %s\n\
+      \        %s\n\
+      \    </div>"
+      [
+        avatar_html;
+        esc_username;
+        role_badges;
+        Html.int karma;
+        Html.text joined_at;
+        header_actions;
+        Html.text bio;
+        admin_controls;
+        tab_nav;
+        feed_html;
+      ]
   in
   (* Standard launch scroller column around the untouched account-* fragments;
      no noindex — the profile stays a public, crawlable discovery surface. *)
   let content =
-    (Html.template "<div class='scroll'><div class='container container--list'>%s</div></div>"
-  [ body ])
+    Html.template
+      "<div class='scroll'><div class='container \
+       container--list'>%s</div></div>"
+      [ body ]
   in
   Page_shell.launch_app_page ?user ~request ~rail_communities
-    ~page_class:"launch-user-profile" ~title:(username ^ "'s Profile") ~content ()
+    ~page_class:"launch-user-profile" ~title:(username ^ "'s Profile") ~content
+    ()
 
 (* /settings — the account-global settings surface, on the launch app chrome
    (Components.launch_app_page: earde.css only, no legacy per-page CSS).
@@ -361,124 +477,151 @@ let user_profile_page ?user ?(rail_communities = []) ~is_admin ~is_globally_bann
    [avatar_url]; it just no longer travels back as an input. *)
 let settings_page ?user ?(rail_communities = []) bio avatar_url request =
   let csrf_token = Csrf_field.tag request in
-  let current_bio = (Html.text ((Option.value ~default:"" bio))) in
+  let current_bio = Html.text (Option.value ~default:"" bio) in
 
   (* Read-only preview of the stored avatar above the upload input. Same Components.user_avatar
      gate (Html.image_src) + letter-tile fallback as the profile header, so a missing/unsafe
      avatar shows the local tile rather than a broken image. Does not change the upload form. *)
   let avatar_preview =
-    Components.user_avatar ~alt:"Current avatar"
-      ~img_class:"account-avatar"
-      ~tile_class:"account-avatar flex items-center justify-center text-2xl font-bold"
-      ~username:(Option.value ~default:"" user) avatar_url
+    Components.user_avatar ~alt:"Current avatar" ~img_class:"account-avatar"
+      ~tile_class:
+        "account-avatar flex items-center justify-center text-2xl font-bold"
+      ~username:(Option.value ~default:"" user)
+      avatar_url
   in
 
   let identity_line =
     match user with
     | Some u ->
-        (Html.template "<p class='account-ident'>u/%s</p>"
-  [ (Html.text (u)) ])
+        Html.template "<p class='account-ident'>u/%s</p>" [ Html.text u ]
     | None -> Html.empty
   in
   let view_profile_link =
     match user with
     | Some u ->
-        (Html.template "<a class='account-view-profile' href='/u/%s'>View public profile &#8599;</a>"
-  [ (Html.text (u)) ])
+        Html.template
+          "<a class='account-view-profile' href='/u/%s'>View public profile \
+           &#8599;</a>"
+          [ Html.text u ]
     | None -> Html.empty
   in
   let page_head =
-    (Html.template "<div class='page__head'><div class='page__head-inner page__head-inner--list account-head-launch'>\
-       <div><h1 class='page__title page__title--sm'>Account settings</h1>%s</div>\
-       %s</div></div>"
-  [ identity_line
-  ; view_profile_link ])
+    Html.template
+      "<div class='page__head'><div class='page__head-inner \
+       page__head-inner--list account-head-launch'><div><h1 class='page__title \
+       page__title--sm'>Account settings</h1>%s</div>%s</div></div>"
+      [ identity_line; view_profile_link ]
   in
 
-  let body = (Html.template "
-    <div class='account-wrap account-wrap--narrow'>
-        <div class='account-panel account-panel--card'>
-            <h2 class='account-section-title'>Profile information</h2>
-            <form action='/settings' method='POST' enctype='multipart/form-data' class='account-form'>
-                %s
-                <div class='account-field'>
-                    <label class='account-label'>Avatar <span class='account-label-opt'>(optional)</span></label>
-                    <div class='account-avatar-row'>
-                        %s
-                        <div class='account-avatar-ctl'>
-                            <input type='file' name='avatar_url' accept='image/*' class='account-file'>
-                            <span class='account-hint'>PNG or JPG &middot; square images look best</span>
-                        </div>
-                    </div>
-                </div>
-                <div class='account-field'>
-                    <label class='account-label'>Bio</label>
-                    <textarea name='bio' rows='4' class='account-textarea' placeholder='Tell the community a bit about yourself...'>%s</textarea>
-                </div>
-                <button type='submit' class='account-btn'>Save profile</button>
-            </form>
-        </div>
-
-        <div class='account-panel account-panel--card'>
-            <h2 class='account-section-title'>Change password</h2>
-            <form action='/settings/password' method='POST' class='account-form'>
-                %s
-                <div class='account-field'>
-                    <label class='account-label'>Current password</label>
-                    <input type='password' name='old_password' required class='account-input'>
-                </div>
-                <div class='account-field-pair'>
-                    <div class='account-field'>
-                        <label class='account-label'>New password</label>
-                        <input type='password' name='new_password' required minlength='8' class='account-input'>
-                    </div>
-                    <div class='account-field'>
-                        <label class='account-label'>Confirm new password</label>
-                        <input type='password' name='confirm_password' required minlength='8' class='account-input'>
-                    </div>
-                </div>
-                <button type='submit' class='account-btn account-btn--secondary'>Update password</button>
-            </form>
-        </div>
-
-        <div class='account-panel account-panel--card'>
-            <h2 class='account-section-title'>Your data</h2>
-            <p class='account-section-desc'>Export your account data as JSON.</p>
-            <a href='/export-data' class='account-btn account-btn--secondary'>&#8595; Download my data</a>
-        </div>
-
-        <div class='account-panel account-panel--card' data-analytics-settings hidden>
-            <h2 class='account-section-title'>Analytics</h2>
-            <p class='account-section-desc'>Control whether Earde may collect optional product-usage analytics (PostHog) in your browser. Nothing is collected without your consent &mdash; see the <a href='/privacy#cookies-analytics'>Privacy Policy</a> for what analytics covers.</p>
-            <div class='account-form'>
-                <span data-analytics-state class='account-hint'></span>
-                <div>
-                    <button type='button' data-analytics-accept class='account-btn account-btn--secondary'>Enable analytics</button>
-                    <button type='button' data-analytics-refuse class='account-btn account-btn--secondary'>Disable analytics</button>
-                </div>
-                <span data-analytics-error hidden class='account-hint' style='color:#C94C4C;'>Couldn&#39;t save your choice &mdash; please try again.</span>
-            </div>
-        </div>
-
-        <div class='account-panel account-danger'>
-            <h2 class='account-section-title'>Danger zone</h2>
-            <p class='account-section-desc'>Permanently delete your account and personal data. Your posts and comments will remain, but their author will be anonymized as <strong>[deleted]</strong>. This action is irreversible.</p>
-            <form action='/delete-account' method='POST' onsubmit=\"confirmModal(event, 'WARNING: Permanently delete your personal data? This action is irreversible.')\">
-                %s
-                <button type='submit' class='account-btn account-btn--danger'>Delete account</button>
-            </form>
-        </div>
-    </div>"
-  [ csrf_token
-  ; avatar_preview
-  ; current_bio
-  ; csrf_token
-  ; csrf_token ])
+  let body =
+    Html.template
+      "\n\
+      \    <div class='account-wrap account-wrap--narrow'>\n\
+      \        <div class='account-panel account-panel--card'>\n\
+      \            <h2 class='account-section-title'>Profile information</h2>\n\
+      \            <form action='/settings' method='POST' \
+       enctype='multipart/form-data' class='account-form'>\n\
+      \                %s\n\
+      \                <div class='account-field'>\n\
+      \                    <label class='account-label'>Avatar <span \
+       class='account-label-opt'>(optional)</span></label>\n\
+      \                    <div class='account-avatar-row'>\n\
+      \                        %s\n\
+      \                        <div class='account-avatar-ctl'>\n\
+      \                            <input type='file' name='avatar_url' \
+       accept='image/*' class='account-file'>\n\
+      \                            <span class='account-hint'>PNG or JPG \
+       &middot; square images look best</span>\n\
+      \                        </div>\n\
+      \                    </div>\n\
+      \                </div>\n\
+      \                <div class='account-field'>\n\
+      \                    <label class='account-label'>Bio</label>\n\
+      \                    <textarea name='bio' rows='4' \
+       class='account-textarea' placeholder='Tell the community a bit about \
+       yourself...'>%s</textarea>\n\
+      \                </div>\n\
+      \                <button type='submit' class='account-btn'>Save \
+       profile</button>\n\
+      \            </form>\n\
+      \        </div>\n\n\
+      \        <div class='account-panel account-panel--card'>\n\
+      \            <h2 class='account-section-title'>Change password</h2>\n\
+      \            <form action='/settings/password' method='POST' \
+       class='account-form'>\n\
+      \                %s\n\
+      \                <div class='account-field'>\n\
+      \                    <label class='account-label'>Current password</label>\n\
+      \                    <input type='password' name='old_password' required \
+       class='account-input'>\n\
+      \                </div>\n\
+      \                <div class='account-field-pair'>\n\
+      \                    <div class='account-field'>\n\
+      \                        <label class='account-label'>New password</label>\n\
+      \                        <input type='password' name='new_password' \
+       required minlength='8' class='account-input'>\n\
+      \                    </div>\n\
+      \                    <div class='account-field'>\n\
+      \                        <label class='account-label'>Confirm new \
+       password</label>\n\
+      \                        <input type='password' name='confirm_password' \
+       required minlength='8' class='account-input'>\n\
+      \                    </div>\n\
+      \                </div>\n\
+      \                <button type='submit' class='account-btn \
+       account-btn--secondary'>Update password</button>\n\
+      \            </form>\n\
+      \        </div>\n\n\
+      \        <div class='account-panel account-panel--card'>\n\
+      \            <h2 class='account-section-title'>Your data</h2>\n\
+      \            <p class='account-section-desc'>Export your account data as \
+       JSON.</p>\n\
+      \            <a href='/export-data' class='account-btn \
+       account-btn--secondary'>&#8595; Download my data</a>\n\
+      \        </div>\n\n\
+      \        <div class='account-panel account-panel--card' \
+       data-analytics-settings hidden>\n\
+      \            <h2 class='account-section-title'>Analytics</h2>\n\
+      \            <p class='account-section-desc'>Control whether Earde may \
+       collect optional product-usage analytics (PostHog) in your browser. \
+       Nothing is collected without your consent &mdash; see the <a \
+       href='/privacy#cookies-analytics'>Privacy Policy</a> for what analytics \
+       covers.</p>\n\
+      \            <div class='account-form'>\n\
+      \                <span data-analytics-state class='account-hint'></span>\n\
+      \                <div>\n\
+      \                    <button type='button' data-analytics-accept \
+       class='account-btn account-btn--secondary'>Enable analytics</button>\n\
+      \                    <button type='button' data-analytics-refuse \
+       class='account-btn account-btn--secondary'>Disable analytics</button>\n\
+      \                </div>\n\
+      \                <span data-analytics-error hidden class='account-hint' \
+       style='color:#C94C4C;'>Couldn&#39;t save your choice &mdash; please try \
+       again.</span>\n\
+      \            </div>\n\
+      \        </div>\n\n\
+      \        <div class='account-panel account-danger'>\n\
+      \            <h2 class='account-section-title'>Danger zone</h2>\n\
+      \            <p class='account-section-desc'>Permanently delete your \
+       account and personal data. Your posts and comments will remain, but \
+       their author will be anonymized as <strong>[deleted]</strong>. This \
+       action is irreversible.</p>\n\
+      \            <form action='/delete-account' method='POST' \
+       onsubmit=\"confirmModal(event, 'WARNING: Permanently delete your \
+       personal data? This action is irreversible.')\">\n\
+      \                %s\n\
+      \                <button type='submit' class='account-btn \
+       account-btn--danger'>Delete account</button>\n\
+      \            </form>\n\
+      \        </div>\n\
+      \    </div>"
+      [ csrf_token; avatar_preview; current_bio; csrf_token; csrf_token ]
   in
   let content =
-    (Html.template "%s<div class='scroll'><div class='container container--list'>%s</div></div>"
-  [ page_head
-  ; body ])
+    Html.template
+      "%s<div class='scroll'><div class='container \
+       container--list'>%s</div></div>"
+      [ page_head; body ]
   in
   Page_shell.launch_app_page ~noindex:true ?user ~request ~rail_communities
     ~page_class:"launch-account-settings" ~title:"Settings" ~content ()
@@ -494,9 +637,12 @@ let settings_page ?user ?(rail_communities = []) bio avatar_url request =
    integration section at the end of earde.css. The handoff's filter tabs and
    "mark all read" POST are deliberately absent — no such routes exist; the
    GET itself marks everything read (Notification_store.mark_notifs_read) exactly as before. *)
-let notifications_page ?user ?(rail_communities = []) (notifs : Notification_store.notification list) request =
+let notifications_page ?user ?(rail_communities = [])
+    (notifs : Notification_store.notification list) request =
   let render_notif (n : Notification_store.notification) =
-    let unread_class = if n.is_read then Html.empty else Html.static " account-notif--unread" in
+    let unread_class =
+      if n.is_read then Html.empty else Html.static " account-notif--unread"
+    in
     (* Project-home notifications are structured: no stored prose, so the
        label and destination derive from the durable kind and the joined
        current project/community identity. Names and slugs are escaped at
@@ -511,26 +657,29 @@ let notifications_page ?user ?(rail_communities = []) (notifs : Notification_sto
       match n.notif_type with
       | "project_home_requested" | "project_home_accepted"
       | "project_home_rejected" | "project_home_removed" -> (
-          match (n.project_name, n.project_slug, n.community_name, n.community_slug) with
-          | Some project_name, Some project_slug, Some community_name, Some community_slug ->
+          match
+            (n.project_name, n.project_slug, n.community_name, n.community_slug)
+          with
+          | ( Some project_name,
+              Some project_slug,
+              Some community_name,
+              Some community_slug ) ->
               let p = Html.text project_name in
               let c = Html.text community_name in
               let label, href =
                 match n.notif_type with
                 | "project_home_requested" ->
-                    ( Html.template
-                        "%s requested %s as its community home"
+                    ( Html.template "%s requested %s as its community home"
                         [ p; c ],
-                      Printf.sprintf "/c/%s/project-home-requests" community_slug )
+                      Printf.sprintf "/c/%s/project-home-requests"
+                        community_slug )
                 | "project_home_accepted" ->
                     ( Html.template
-                        "%s accepted the community-home request for %s"
-                        [ c; p ],
+                        "%s accepted the community-home request for %s" [ c; p ],
                       Printf.sprintf "/projects/%s/request-home" project_slug )
                 | "project_home_rejected" ->
                     ( Html.template
-                        "%s rejected the community-home request for %s"
-                        [ c; p ],
+                        "%s rejected the community-home request for %s" [ c; p ],
                       Printf.sprintf "/projects/%s/request-home" project_slug )
                 | _ ->
                     (* Removal is the one kind whose recipients span BOTH
@@ -544,8 +693,7 @@ let notifications_page ?user ?(rail_communities = []) (notifs : Notification_sto
                        Connected-projects section is also where the removal
                        is actually visible to either side. *)
                     ( Html.template
-                        "%s is no longer connected to %s as its home"
-                        [ p; c ],
+                        "%s is no longer connected to %s as its home" [ p; c ],
                       Printf.sprintf "/c/%s" community_slug )
               in
               Some (label, Some href)
@@ -573,19 +721,23 @@ let notifications_page ?user ?(rail_communities = []) (notifs : Notification_sto
               let label =
                 match n.notif_type with
                 | "community_connection_requested" ->
-                    Html.template "%s wants to connect with your community." [ other ]
+                    Html.template "%s wants to connect with your community."
+                      [ other ]
                 | "community_connection_accepted" ->
-                    Html.template "%s accepted your connection request." [ other ]
+                    Html.template "%s accepted your connection request."
+                      [ other ]
                 | "community_connection_rejected" ->
-                    Html.template "%s rejected your connection request." [ other ]
+                    Html.template "%s rejected your connection request."
+                      [ other ]
                 | _ ->
-                    Html.template "%s removed the community connection." [ other ]
+                    Html.template "%s removed the community connection."
+                      [ other ]
               in
               Some
                 ( label,
                   Some
-                    (Printf.sprintf "/c/%s/settings/connections"
-                       context_slug) )
+                    (Printf.sprintf "/c/%s/settings/connections" context_slug)
+                )
           | _ -> Some (Html.static "A community connection update", None))
       | _ -> None
     in
@@ -614,15 +766,12 @@ let notifications_page ?user ?(rail_communities = []) (notifs : Notification_sto
       | "shared_thread_rejected" | "shared_thread_removed"
       | "shared_thread_withdrawn" -> (
           match
-            ( ( n.st_post_id, n.st_post_title, n.st_origin_name,
-                n.st_origin_slug ),
-              ( n.st_destination_name, n.st_destination_slug,
-                n.st_origin_context ),
+            ( (n.st_post_id, n.st_post_title, n.st_origin_name, n.st_origin_slug),
+              (n.st_destination_name, n.st_destination_slug, n.st_origin_context),
               (n.st_origin_visible, n.st_destination_visible) )
           with
-          | ( ( Some post_id, Some title, Some origin_name, Some origin_slug ),
-              ( Some destination_name, Some destination_slug,
-                Some origin_context ),
+          | ( (Some post_id, Some title, Some origin_name, Some origin_slug),
+              (Some destination_name, Some destination_slug, Some origin_context),
               (Some true, Some true) ) ->
               let t = Html.text title in
               let o = Html.text origin_name in
@@ -646,8 +795,7 @@ let notifications_page ?user ?(rail_communities = []) (notifs : Notification_sto
                 if n.st_manage_capable = Some true then
                   Some
                     (Printf.sprintf "/c/%s/settings/shared-threads%s"
-                       destination_slug
-                       suffix)
+                       destination_slug suffix)
                 else None
               in
               let label, href =
@@ -658,14 +806,10 @@ let notifications_page ?user ?(rail_communities = []) (notifs : Notification_sto
                         [ o; t; d ],
                       destination_settings "#incoming" )
                 | "shared_thread_accepted" ->
-                    ( Html.template
-                        "%s accepted &#8220;%s&#8221;"
-                        [ d; t ],
+                    ( Html.template "%s accepted &#8220;%s&#8221;" [ d; t ],
                       Some share_or_thread )
                 | "shared_thread_rejected" ->
-                    ( Html.template
-                        "%s declined &#8220;%s&#8221;"
-                        [ d; t ],
+                    ( Html.template "%s declined &#8220;%s&#8221;" [ d; t ],
                       Some share_or_thread )
                 | "shared_thread_withdrawn" ->
                     ( Html.template
@@ -679,8 +823,7 @@ let notifications_page ?user ?(rail_communities = []) (notifs : Notification_sto
                        destination-context ones to their management
                        surface. *)
                     ( Html.template
-                        "&#8220;%s&#8221; is no longer shared with %s"
-                        [ t; d ],
+                        "&#8220;%s&#8221; is no longer shared with %s" [ t; d ],
                       if origin_context then Some share_or_thread
                       else destination_settings "" )
               in
@@ -701,21 +844,27 @@ let notifications_page ?user ?(rail_communities = []) (notifs : Notification_sto
           | None -> shared_thread_label_link)
     in
     let message = Option.value n.message ~default:"" in
-    let icon = match n.notif_type with
-      | "mention"    -> Html.static "&#64;"   (* @ symbol — avoids mojibake in Printf *)
+    let icon =
+      match n.notif_type with
+      | "mention" ->
+          Html.static "&#64;" (* @ symbol — avoids mojibake in Printf *)
       | "mod_action" -> Html.static "&#9888;" (* ⚠ warning sign *)
       | "project_home_requested" | "project_home_accepted"
-      | "project_home_rejected" | "project_home_removed" -> Html.static "&#127968;" (* 🏠 *)
+      | "project_home_rejected" | "project_home_removed" ->
+          Html.static "&#127968;" (* 🏠 *)
       | "community_connection_requested" | "community_connection_accepted"
       | "community_connection_rejected" | "community_connection_removed" ->
-          (Html.static "&#8644;") (* ⇄ — the same sigil the Connections nav entry uses *)
+          Html.static "&#8644;"
+          (* ⇄ — the same sigil the Connections nav entry uses *)
       | "shared_thread_requested" | "shared_thread_accepted"
       | "shared_thread_rejected" | "shared_thread_removed"
-      | "shared_thread_withdrawn" -> Html.static "&#128279;" (* 🔗 — one thread, linked elsewhere *)
+      | "shared_thread_withdrawn" ->
+          Html.static "&#128279;" (* 🔗 — one thread, linked elsewhere *)
       | _ ->
           (* Legacy comment_reply: distinguish post vs comment reply by message suffix. *)
           let len = String.length message in
-          if len >= 5 && String.sub message (len - 5) 5 = "post." then Html.static "&#128221;" (* 📝 *)
+          if len >= 5 && String.sub message (len - 5) 5 = "post." then
+            Html.static "&#128221;" (* 📝 *)
           else Html.static "&#128172;" (* 💬 *)
     in
     (* Structured labels escape their names above; legacy prose is escaped
@@ -725,12 +874,15 @@ let notifications_page ?user ?(rail_communities = []) (notifs : Notification_sto
       | Some (label, _) -> label
       | None -> Html.text message
     in
-    let inner = Html.template "
-        <div class='account-notif-icon'>%s</div>
-        <div class='account-notif-body'>
-            <div class='account-notif-msg'>%s</div>
-            <div class='account-notif-time'>%s</div>
-        </div>" [ icon; msg_html; Html.text (Components.time_ago n.created_at) ]
+    let inner =
+      Html.template
+        "\n\
+        \        <div class='account-notif-icon'>%s</div>\n\
+        \        <div class='account-notif-body'>\n\
+        \            <div class='account-notif-msg'>%s</div>\n\
+        \            <div class='account-notif-time'>%s</div>\n\
+        \        </div>"
+        [ icon; msg_html; Html.text (Components.time_ago n.created_at) ]
     in
     let link =
       match structured_label_link with
@@ -745,33 +897,40 @@ let notifications_page ?user ?(rail_communities = []) (notifs : Notification_sto
        the onclick is a purely cosmetic clear of the unread accent on this visit. *)
     match link with
     | Some href ->
-        Html.template "
-    <a href='%s' onclick=\"this.classList.remove('account-notif--unread');\" class='account-notif%s'>%s
-    </a>" [ Html.internal_path href; unread_class; inner ]
+        Html.template
+          "\n\
+          \    <a href='%s' \
+           onclick=\"this.classList.remove('account-notif--unread');\" \
+           class='account-notif%s'>%s\n\
+          \    </a>"
+          [ Html.internal_path href; unread_class; inner ]
     | None ->
-        Html.template "
-    <div class='account-notif%s'>%s
-    </div>" [ unread_class; inner ]
+        Html.template "\n    <div class='account-notif%s'>%s\n    </div>"
+          [ unread_class; inner ]
   in
   let list_html =
-    if notifs = [] then (Html.static "<div class='account-empty'>No notifications yet.</div>")
-    else (Html.template "<div class='account-notifs'>%s</div>"
-  [ Html.join (Html.static "\n") (List.map render_notif notifs) ])
+    if notifs = [] then
+      Html.static "<div class='account-empty'>No notifications yet.</div>"
+    else
+      Html.template "<div class='account-notifs'>%s</div>"
+        [ Html.join (Html.static "\n") (List.map render_notif notifs) ]
   in
   (* Launch chrome renders outside the pinned row fragments: serif page head
      (the legacy in-page Settings/Notifications nav is superseded by the
      topbar user menu), then the standard scroller column. The sub line names
      only kinds the backend actually produces — no "promotions". *)
   let page_head =
-    (Html.static "<div class='page__head'><div class='page__head-inner page__head-inner--list'>\
-     <h1 class='page__title'>Notifications</h1>\
-     <p class='page__sub'>Replies, mentions, moderation decisions and project requests.</p>\
-     </div></div>")
+    Html.static
+      "<div class='page__head'><div class='page__head-inner \
+       page__head-inner--list'><h1 class='page__title'>Notifications</h1><p \
+       class='page__sub'>Replies, mentions, moderation decisions and project \
+       requests.</p></div></div>"
   in
   let content =
-    (Html.template "%s<div class='scroll'><div class='container container--list'>%s</div></div>"
-  [ page_head
-  ; list_html ])
+    Html.template
+      "%s<div class='scroll'><div class='container \
+       container--list'>%s</div></div>"
+      [ page_head; list_html ]
   in
   Page_shell.launch_app_page ~noindex:true ?user ~request ~rail_communities
     ~page_class:"launch-notifications" ~title:"Notifications" ~content ()

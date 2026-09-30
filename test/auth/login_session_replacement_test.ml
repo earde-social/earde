@@ -16,9 +16,11 @@ open Caqti_request.Infix
 let q_cleanup =
   List.map
     (fun sql -> (Caqti_type.unit ->. Caqti_type.unit) sql)
-    [ "DELETE FROM notifications WHERE user_id IN (SELECT id FROM users WHERE username LIKE 'asr_%')"
-    ; "DELETE FROM pending_signups WHERE username LIKE 'asr_%'"
-    ; "DELETE FROM users WHERE username LIKE 'asr_%'"
+    [
+      "DELETE FROM notifications WHERE user_id IN (SELECT id FROM users WHERE \
+       username LIKE 'asr_%')";
+      "DELETE FROM pending_signups WHERE username LIKE 'asr_%'";
+      "DELETE FROM users WHERE username LIKE 'asr_%'";
     ]
 
 let or_fail label = function
@@ -49,13 +51,13 @@ let db_case name f =
              let* () = cleanup () in
              Lwt.finalize
                (fun () -> f ~url (module C : Caqti_lwt.CONNECTION))
-               (fun () ->
-                 Lwt.finalize cleanup (fun () -> C.disconnect ()))))
+               (fun () -> Lwt.finalize cleanup (fun () -> C.disconnect ()))))
 
 let q_insert_user =
   (Caqti_type.(t3 string string bool) ->! Caqti_type.int)
-    "INSERT INTO users (username, email, password_hash, is_email_verified, is_admin)
-     VALUES ($1, $1 || '@test.invalid', $2, TRUE, $3) RETURNING id"
+    "INSERT INTO users (username, email, password_hash, is_email_verified, \
+     is_admin)\n\
+    \     VALUES ($1, $1 || '@test.invalid', $2, TRUE, $3) RETURNING id"
 
 let q_is_banned =
   (Caqti_type.int ->! Caqti_type.bool)
@@ -67,8 +69,10 @@ let q_set_banned =
 
 let q_insert_pending =
   (Caqti_type.(t2 string string) ->. Caqti_type.unit)
-    "INSERT INTO pending_signups (username, email, password_hash, token_hash, expires_at)
-     VALUES ($1, $1 || '@test.invalid', 'x', $2, NOW() + INTERVAL '1 hour')"
+    "INSERT INTO pending_signups (username, email, password_hash, token_hash, \
+     expires_at)\n\
+    \     VALUES ($1, $1 || '@test.invalid', 'x', $2, NOW() + INTERVAL '1 \
+     hour')"
 
 let form_body fields =
   String.concat "&"
@@ -105,29 +109,30 @@ let make_client ~url ~poison_fields =
   let pipeline =
     Dream.sql_pool url @@ Dream.memory_sessions
     @@ Dream.router
-         [ Dream.get "/login" Earde.Auth_handlers.login_page
-         ; Dream.post "/login" (with_form Earde.Auth_handlers.login_handler)
-         ; Dream.post "/logout" Earde.Auth_handlers.logout_handler
-         ; Dream.get "/confirm" Earde.Auth_handlers.confirm_email_handler
-         ; Dream.get "/admin" Earde.Admin_handlers.admin_dashboard_handler
-         ; Dream.post "/admin/ban/user/:id"
-             (with_form Earde.Admin_handlers.ban_user_handler)
-         ; Dream.post "/admin/unban/user/:id"
-             (with_form Earde.Admin_handlers.unban_user_global_handler)
-         ; Dream.get "/whoami" (fun req ->
+         [
+           Dream.get "/login" Earde.Auth_handlers.login_page;
+           Dream.post "/login" (with_form Earde.Auth_handlers.login_handler);
+           Dream.post "/logout" Earde.Auth_handlers.logout_handler;
+           Dream.get "/confirm" Earde.Auth_handlers.confirm_email_handler;
+           Dream.get "/admin" Earde.Admin_handlers.admin_dashboard_handler;
+           Dream.post "/admin/ban/user/:id"
+             (with_form Earde.Admin_handlers.ban_user_handler);
+           Dream.post "/admin/unban/user/:id"
+             (with_form Earde.Admin_handlers.unban_user_global_handler);
+           Dream.get "/whoami" (fun req ->
                Dream.respond
                  (String.concat "\n"
                     (List.sort compare
                        (List.map
                           (fun (k, v) -> k ^ "=" ^ v)
-                          (Dream.all_session_fields req)))))
-         ; Dream.get "/poison" (fun req ->
+                          (Dream.all_session_fields req)))));
+           Dream.get "/poison" (fun req ->
                let* () =
                  Lwt_list.iter_s
                    (fun (k, v) -> Dream.set_session_field req k v)
                    poison_fields
                in
-               Dream.respond "poisoned")
+               Dream.respond "poisoned");
          ]
   in
   { pipeline; jar = ref []; pending_form }
@@ -152,11 +157,12 @@ let send client ?(method_ = `GET) ?form target =
   client.pending_form := form;
   let headers =
     (match !(client.jar) with
-    | [] -> []
-    | pairs ->
-        [ ( "Cookie",
-            String.concat "; "
-              (List.map (fun (n, v) -> n ^ "=" ^ v) pairs) ) ])
+      | [] -> []
+      | pairs ->
+          [
+            ( "Cookie",
+              String.concat "; " (List.map (fun (n, v) -> n ^ "=" ^ v) pairs) );
+          ])
     @
     match form with
     | Some _ -> [ ("Content-Type", "application/x-www-form-urlencoded") ]
@@ -179,8 +185,7 @@ let check_session label expected body =
   Alcotest.(check string) (label ^ ": exact session fields") expected body
 
 let session_of ~uid ~username ~is_admin =
-  Printf.sprintf "is_admin=%b\nuser_id=%d\nusername=%s" is_admin uid
-    username
+  Printf.sprintf "is_admin=%b\nuser_id=%d\nusername=%s" is_admin uid username
 
 let login client ~identifier ~password =
   send client ~method_:`POST
@@ -201,8 +206,7 @@ let fixture_users (module C : Caqti_lwt.CONNECTION) =
 let admin_then_user_case =
   db_case
     "admin then non-admin login in one browser session drops all admin \
-     authorization"
-    (fun ~url c ->
+     authorization" (fun ~url c ->
       let (module C : Caqti_lwt.CONNECTION) = c in
       let* admin, user, victim = fixture_users c in
       let client = make_client ~url ~poison_fields:[] in
@@ -215,7 +219,8 @@ let admin_then_user_case =
       in
       Alcotest.(check bool) "admin login redirects" true (status / 100 = 3);
       let admin_cookie = session_cookie client in
-      Alcotest.(check bool) "login rotates the pre-auth session id" false
+      Alcotest.(check bool)
+        "login rotates the pre-auth session id" false
         (String.equal pre_auth_cookie admin_cookie);
       let* _, body = send client "/whoami" in
       check_session "admin session"
@@ -248,7 +253,8 @@ let admin_then_user_case =
       in
       Alcotest.(check bool) "user login redirects" true (status / 100 = 3);
       let user_cookie = session_cookie client in
-      Alcotest.(check bool) "re-login rotates the session id" false
+      Alcotest.(check bool)
+        "re-login rotates the session id" false
         (String.equal admin_cookie user_cookie);
       let* _, body = send client "/whoami" in
       check_session "non-admin session inherits nothing"
@@ -257,11 +263,11 @@ let admin_then_user_case =
       let* status, _ = send client "/admin" in
       Alcotest.(check int) "admin dashboard now denied" 403 status;
       let* status, body =
-        send client ~method_:`POST
-          (Printf.sprintf "/admin/ban/user/%d" victim)
+        send client ~method_:`POST (Printf.sprintf "/admin/ban/user/%d" victim)
       in
       Alcotest.(check int) "ban denied status" 200 status;
-      Alcotest.(check bool) "ban denied body" true
+      Alcotest.(check bool)
+        "ban denied body" true
         (Html_assert.contains body "not an Admin");
       let* banned = C.find q_is_banned victim in
       let* banned = or_fail "still unbanned" banned in
@@ -269,14 +275,11 @@ let admin_then_user_case =
       Lwt.return_unit)
 
 let user_then_admin_case =
-  db_case
-    "non-admin then admin login gains admin; logout clears the session"
+  db_case "non-admin then admin login gains admin; logout clears the session"
     (fun ~url c ->
       let* admin, user, _victim = fixture_users c in
       let client = make_client ~url ~poison_fields:[] in
-      let* _ =
-        login client ~identifier:"asr_user" ~password:"asr password"
-      in
+      let* _ = login client ~identifier:"asr_user" ~password:"asr password" in
       let* status, _ = send client "/admin" in
       Alcotest.(check int) "user denied admin" 403 status;
       let* status, _ =
@@ -297,9 +300,7 @@ let user_then_admin_case =
       let* status, _ = send client "/admin" in
       Alcotest.(check int) "admin denied after logout" 403 status;
       (* Login after logout derives only from the new user. *)
-      let* _ =
-        login client ~identifier:"asr_user" ~password:"asr password"
-      in
+      let* _ = login client ~identifier:"asr_user" ~password:"asr password" in
       let* _, body = send client "/whoami" in
       check_session "post-logout login is only the new user"
         (session_of ~uid:user ~username:"asr_user" ~is_admin:false)
@@ -308,16 +309,13 @@ let user_then_admin_case =
 
 let failed_login_case =
   db_case
-    "failed and banned logins authenticate no one and leave the prior \
-     session unmixed"
-    (fun ~url c ->
+    "failed and banned logins authenticate no one and leave the prior session \
+     unmixed" (fun ~url c ->
       let (module C : Caqti_lwt.CONNECTION) = c in
       let* admin, _user, victim = fixture_users c in
       (* Failed attempt from a clean browser: no identity, no admin. *)
       let clean = make_client ~url ~poison_fields:[] in
-      let* status, _ =
-        login clean ~identifier:"asr_user" ~password:"wrong"
-      in
+      let* status, _ = login clean ~identifier:"asr_user" ~password:"wrong" in
       Alcotest.(check int) "failed login status" 200 status;
       let* _, body = send clean "/whoami" in
       check_session "failed login leaves no identity" "" body;
@@ -326,12 +324,8 @@ let failed_login_case =
       (* Failed attempt while an admin session exists: the old session
          survives intact — no mixed identity, no privilege change. *)
       let client = make_client ~url ~poison_fields:[] in
-      let* _ =
-        login client ~identifier:"asr_admin" ~password:"asr password"
-      in
-      let* status, _ =
-        login client ~identifier:"asr_user" ~password:"wrong"
-      in
+      let* _ = login client ~identifier:"asr_admin" ~password:"asr password" in
+      let* status, _ = login client ~identifier:"asr_user" ~password:"wrong" in
       Alcotest.(check int) "failed re-login status" 200 status;
       let* _, body = send client "/whoami" in
       check_session "prior admin session unchanged"
@@ -342,8 +336,7 @@ let failed_login_case =
       let* () = or_fail "ban victim" r in
       let banned_client = make_client ~url ~poison_fields:[] in
       let* status, _ =
-        login banned_client ~identifier:"asr_victim"
-          ~password:"asr password"
+        login banned_client ~identifier:"asr_victim" ~password:"asr password"
       in
       Alcotest.(check int) "banned login status" 200 status;
       let* _, body = send banned_client "/whoami" in
@@ -352,8 +345,7 @@ let failed_login_case =
 
 let poisoned_session_case =
   db_case
-    "stale pre-authentication session fields cannot survive a successful \
-     login"
+    "stale pre-authentication session fields cannot survive a successful login"
     (fun ~url c ->
       let* admin, user, _victim = fixture_users c in
       (* Plant the exact pre-fix stale state: an authenticated admin
@@ -361,18 +353,17 @@ let poisoned_session_case =
       let client =
         make_client ~url
           ~poison_fields:
-            [ ("user_id", string_of_int admin)
-            ; ("username", "asr_admin")
-            ; ("is_admin", "true")
+            [
+              ("user_id", string_of_int admin);
+              ("username", "asr_admin");
+              ("is_admin", "true");
             ]
       in
       let* status, _ = send client "/poison" in
       Alcotest.(check int) "poison probe" 200 status;
       let* status, _ = send client "/admin" in
       Alcotest.(check int) "poisoned session is admin-capable" 200 status;
-      let* _ =
-        login client ~identifier:"asr_user" ~password:"asr password"
-      in
+      let* _ = login client ~identifier:"asr_user" ~password:"asr password" in
       let* _, body = send client "/whoami" in
       check_session "login replaced every stale field"
         (session_of ~uid:user ~username:"asr_user" ~is_admin:false)
@@ -398,16 +389,19 @@ let confirm_no_session_case =
       Lwt.return_unit)
 
 let suite =
-  [ admin_then_user_case; user_then_admin_case; failed_login_case;
-    poisoned_session_case; confirm_no_session_case
+  [
+    admin_then_user_case;
+    user_then_admin_case;
+    failed_login_case;
+    poisoned_session_case;
+    confirm_no_session_case;
   ]
 
 let suites =
-    (* Successful login replaces the presented session wholesale: fresh
+  (* Successful login replaces the presented session wholesale: fresh
        session id, every canonical field rewritten from the new user's
        row (is_admin unconditionally, including false), so an
        admin → non-admin re-login in the same browser keeps no admin
        authorization, logout leaves nothing behind, and failed, banned,
        and signup-confirmation paths authenticate no one. Database-gated. *)
-  [ ("login_session_replacement", suite)
-  ]
+  [ ("login_session_replacement", suite) ]

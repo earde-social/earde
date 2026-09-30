@@ -14,11 +14,15 @@ open Caqti_request.Infix
 let q_cleanup =
   List.map
     (fun sql -> (Caqti_type.unit ->. Caqti_type.unit) sql)
-    [ "DELETE FROM posts WHERE community_id IN (SELECT id FROM communities WHERE slug LIKE 'fshr-%')"
-    ; "DELETE FROM community_members WHERE community_id IN (SELECT id FROM communities WHERE slug LIKE 'fshr-%')"
-    ; "DELETE FROM community_moderators WHERE community_id IN (SELECT id FROM communities WHERE slug LIKE 'fshr-%')"
-    ; "DELETE FROM communities WHERE slug LIKE 'fshr-%'"
-    ; "DELETE FROM users WHERE username LIKE 'fshr_%'"
+    [
+      "DELETE FROM posts WHERE community_id IN (SELECT id FROM communities \
+       WHERE slug LIKE 'fshr-%')";
+      "DELETE FROM community_members WHERE community_id IN (SELECT id FROM \
+       communities WHERE slug LIKE 'fshr-%')";
+      "DELETE FROM community_moderators WHERE community_id IN (SELECT id FROM \
+       communities WHERE slug LIKE 'fshr-%')";
+      "DELETE FROM communities WHERE slug LIKE 'fshr-%'";
+      "DELETE FROM users WHERE username LIKE 'fshr_%'";
     ]
 
 let or_fail label = function
@@ -45,36 +49,30 @@ let db_case name f =
              let* () = cleanup () in
              Lwt.finalize
                (fun () -> f ~url (module C : Caqti_lwt.CONNECTION))
-               (fun () ->
-                 Lwt.finalize cleanup (fun () -> C.disconnect ()))))
+               (fun () -> Lwt.finalize cleanup (fun () -> C.disconnect ()))))
 
 let q_insert_user =
   (Caqti_type.string ->! Caqti_type.int)
-    "INSERT INTO users (username, email, password_hash, is_email_verified)
-     VALUES ($1, $1 || '@test.invalid', 'x', TRUE) RETURNING id"
+    "INSERT INTO users (username, email, password_hash, is_email_verified)\n\
+    \     VALUES ($1, $1 || '@test.invalid', 'x', TRUE) RETURNING id"
 
 (* sections_enabled drives the /c/:slug branch under test: FALSE = the
    converted flat feed, TRUE = the (stable) structured overview. *)
 let q_insert_community =
   (Caqti_type.(t3 string bool string) ->! Caqti_type.int)
-    "INSERT INTO communities (slug, name, sections_enabled, visibility)
-     VALUES ($1, $1, $2, $3) RETURNING id"
+    "INSERT INTO communities (slug, name, sections_enabled, visibility)\n\
+    \     VALUES ($1, $1, $2, $3) RETURNING id"
 
 let q_insert_post =
   (Caqti_type.(t3 string int int) ->! Caqti_type.int)
-    "INSERT INTO posts (title, content, community_id, user_id)
-     VALUES ($1, $1 || ' body', $2, $3) RETURNING id"
+    "INSERT INTO posts (title, content, community_id, user_id)\n\
+    \     VALUES ($1, $1 || ' body', $2, $3) RETURNING id"
 
 let q_add_member =
   (Caqti_type.(t2 int int) ->. Caqti_type.unit)
     "INSERT INTO community_members (user_id, community_id) VALUES ($1, $2)"
 
-type fx = {
-  author : int;
-  outsider : int;
-  post_a : int;
-  post_b : int;
-}
+type fx = { author : int; outsider : int; post_a : int; post_b : int }
 
 let make_fixtures (module C : Caqti_lwt.CONNECTION) =
   let user name =
@@ -101,44 +99,46 @@ let make_fixtures (module C : Caqti_lwt.CONNECTION) =
    request-independent and must appear verbatim in the page document. *)
 let router =
   Dream.router
-    [ Dream.get "/c/:slug" Earde.Community_handlers.community_page_handler
-    ; Dream.get "/feed" Earde.Public_handlers.feed_handler
-    ; Dream.get "/search" Earde.Public_handlers.search_handler
-    ; Dream.get "/u/:username" Earde.Account_handlers.view_profile_handler
-    ; Dream.get "/probe/rows/:slug" (fun req ->
+    [
+      Dream.get "/c/:slug" Earde.Community_handlers.community_page_handler;
+      Dream.get "/feed" Earde.Public_handlers.feed_handler;
+      Dream.get "/search" Earde.Public_handlers.search_handler;
+      Dream.get "/u/:username" Earde.Account_handlers.view_profile_handler;
+      Dream.get "/probe/rows/:slug" (fun req ->
           Dream.sql req (fun db ->
               let slug = Dream.param req "slug" in
-              let* community = Earde.Community_store.get_community_by_slug db slug in
+              let* community =
+                Earde.Community_store.get_community_by_slug db slug
+              in
               match community with
-              | Ok (Some community) ->
+              | Ok (Some community) -> (
                   let* posts =
                     Earde.Post_store.get_posts_by_community db community.id
                       Earde.Post_types.Hot 20 0
                   in
-                  (match posts with
-                   | Ok posts ->
-                       (* The probe pins the community's OWN rows: a
+                  match posts with
+                  | Ok posts ->
+                      (* The probe pins the community's OWN rows: a
                           fi_shared = None item must splice byte-identically
                           through the plain render_post call. *)
-                       Dream.respond
-                         (Earde.Html.to_string
-                            (Earde.Html.join (Earde.Html.static "\n")
-                            (List.map
-                               (fun (item : Earde.Post_types.feed_item) ->
-                                 Earde.Post_cards.render_post req []
-                                   item.Earde.Post_types.fi_post)
-                               posts)))
-                   | Error _ -> Dream.respond ~status:`Internal_Server_Error "")
-              | _ -> Dream.respond ~status:`Not_Found ""))
+                      Dream.respond
+                        (Earde.Html.to_string
+                           (Earde.Html.join (Earde.Html.static "\n")
+                              (List.map
+                                 (fun (item : Earde.Post_types.feed_item) ->
+                                   Earde.Post_cards.render_post req []
+                                     item.Earde.Post_types.fi_post)
+                                 posts)))
+                  | Error _ -> Dream.respond ~status:`Internal_Server_Error "")
+              | _ -> Dream.respond ~status:`Not_Found ""));
     ]
 
 let run ~url ?(session = []) target =
   let pipeline =
-    Dream.sql_pool url @@ Dream.memory_sessions @@ fun req ->
+    Dream.sql_pool url @@ Dream.memory_sessions
+    @@ fun req ->
     let* () =
-      Lwt_list.iter_s
-        (fun (k, v) -> Dream.set_session_field req k v)
-        session
+      Lwt_list.iter_s (fun (k, v) -> Dream.set_session_field req k v) session
     in
     router req
   in
@@ -147,36 +147,44 @@ let run ~url ?(session = []) target =
   let* body = Dream.body response in
   Lwt.return (Dream.status_to_int (Dream.status response), body)
 
-let session_of uid name =
-  [ ("user_id", string_of_int uid); ("username", name) ]
+let session_of uid name = [ ("user_id", string_of_int uid); ("username", name) ]
 
 let share_onclick post_id =
   Printf.sprintf
-    "data-share-path='/p/%d' onclick='copyPostLink(this.dataset.sharePath, this)'"
+    "data-share-path='/p/%d' onclick='copyPostLink(this.dataset.sharePath, \
+     this)'"
     post_id
 
 (* 1: an anonymous public flat page carries exactly one working
    copyPostLink definition, wired to the canonical /p/:id path, with no
    notification fetch and none of the authenticated-only behavior. *)
 let guest_case =
-  db_case "anonymous flat page: one copyPostLink, no notif fetch, no auth \
-           behavior" (fun ~url c ->
+  db_case
+    "anonymous flat page: one copyPostLink, no notif fetch, no auth behavior"
+    (fun ~url c ->
       let* fx = make_fixtures c in
       let* status, body = run ~url "/c/fshr-flat" in
       Alcotest.(check int) "200" 200 status;
-      Alcotest.(check int) "exactly one copyPostLink definition" 1
+      Alcotest.(check int)
+        "exactly one copyPostLink definition" 1
         (Html_assert.occurrences body "function copyPostLink");
-      Alcotest.(check int) "share button wired to post A" 1
+      Alcotest.(check int)
+        "share button wired to post A" 1
         (Html_assert.occurrences body (share_onclick fx.post_a));
-      Alcotest.(check int) "share button wired to post B" 1
+      Alcotest.(check int)
+        "share button wired to post B" 1
         (Html_assert.occurrences body (share_onclick fx.post_b));
-      Alcotest.(check int) "no notification fetch" 0
+      Alcotest.(check int)
+        "no notification fetch" 0
         (Html_assert.occurrences body "/api/unread-notifs");
-      Alcotest.(check int) "no notif badge markup or init" 0
+      Alcotest.(check int)
+        "no notif badge markup or init" 0
         (Html_assert.occurrences body "notif-badge");
-      Alcotest.(check int) "no authenticated confirm modal" 0
+      Alcotest.(check int)
+        "no authenticated confirm modal" 0
         (Html_assert.occurrences body "function confirmModal");
-      Alcotest.(check int) "no vote handler wiring" 0
+      Alcotest.(check int)
+        "no vote handler wiring" 0
         (Html_assert.occurrences body "form[action='/vote']");
       Lwt.return_unit)
 
@@ -184,19 +192,24 @@ let guest_case =
    still exactly one copyPostLink definition (no duplicate from the guest
    script). *)
 let member_case =
-  db_case "authenticated flat page: full behavior script, still exactly one \
-           copyPostLink" (fun ~url c ->
+  db_case
+    "authenticated flat page: full behavior script, still exactly one \
+     copyPostLink" (fun ~url c ->
       let* fx = make_fixtures c in
       let session = session_of fx.author "fshr_author" in
       let* status, body = run ~url ~session "/c/fshr-flat" in
       Alcotest.(check int) "200" 200 status;
-      Alcotest.(check int) "exactly one copyPostLink definition" 1
+      Alcotest.(check int)
+        "exactly one copyPostLink definition" 1
         (Html_assert.occurrences body "function copyPostLink");
-      Alcotest.(check int) "no notification fetch (badge is server-rendered)" 0
+      Alcotest.(check int)
+        "no notification fetch (badge is server-rendered)" 0
         (Html_assert.occurrences body "/api/unread-notifs");
-      Alcotest.(check int) "confirm modal present" 1
+      Alcotest.(check int)
+        "confirm modal present" 1
         (Html_assert.occurrences body "function confirmModal");
-      Alcotest.(check int) "share button wired" 1
+      Alcotest.(check int)
+        "share button wired" 1
         (Html_assert.occurrences body (share_onclick fx.post_a));
       Lwt.return_unit)
 
@@ -204,24 +217,28 @@ let member_case =
    probe route renders Components.render_post for the same posts under the
    same anonymous viewer state, and that fragment appears verbatim. *)
 let row_bytes_case =
-  db_case "anonymous flat rows are byte-identical to the shared render_post \
-           output" (fun ~url c ->
+  db_case
+    "anonymous flat rows are byte-identical to the shared render_post output"
+    (fun ~url c ->
       let* _fx = make_fixtures c in
       let* pstatus, fragment = run ~url "/probe/rows/fshr-flat" in
       Alcotest.(check int) "probe 200" 200 pstatus;
-      Alcotest.(check bool) "probe rendered rows" true
+      Alcotest.(check bool)
+        "probe rendered rows" true
         (String.length fragment > 0);
       let* status, body = run ~url "/c/fshr-flat" in
       Alcotest.(check int) "page 200" 200 status;
-      Alcotest.(check bool) "row fragment spliced verbatim" true
+      Alcotest.(check bool)
+        "row fragment spliced verbatim" true
         (Html_assert.index_from body fragment 0 <> None);
       Lwt.return_unit)
 
 (* 4: the guest share script is flat-route-only — the structured overview
    and the other anonymous launch documents stay script-free. *)
 let siblings_case =
-  db_case "structured overview, feed, search and profile stay free of the \
-           share script" (fun ~url c ->
+  db_case
+    "structured overview, feed, search and profile stay free of the share \
+     script" (fun ~url c ->
       let (module C : Caqti_lwt.CONNECTION) = c in
       let* _fx = make_fixtures c in
       let* structured =
@@ -232,25 +249,32 @@ let siblings_case =
         (fun (label, target) ->
           let* status, body = run ~url target in
           Alcotest.(check int) (label ^ ": 200") 200 status;
-          Alcotest.(check int) (label ^ ": no copyPostLink") 0
+          Alcotest.(check int)
+            (label ^ ": no copyPostLink")
+            0
             (Html_assert.occurrences body "function copyPostLink");
-          Alcotest.(check int) (label ^ ": no notif fetch") 0
+          Alcotest.(check int)
+            (label ^ ": no notif fetch")
+            0
             (Html_assert.occurrences body "/api/unread-notifs");
           Lwt.return_unit)
-        [ ("structured overview", "/c/fshr-struct"); ("feed", "/feed");
-          ("search", "/search?q=fshr"); ("profile", "/u/fshr_author") ])
+        [
+          ("structured overview", "/c/fshr-struct");
+          ("feed", "/feed");
+          ("search", "/search?q=fshr");
+          ("profile", "/u/fshr_author");
+        ])
 
 (* 5: private flat communities keep the canonical anti-enumeration 404 —
    byte-identical to a missing slug, with no share script and no title
    leak. *)
 let private_case =
-  db_case "private flat community: outsider gets the canonical 404, no \
-           script, no leak" (fun ~url c ->
+  db_case
+    "private flat community: outsider gets the canonical 404, no script, no \
+     leak" (fun ~url c ->
       let (module C : Caqti_lwt.CONNECTION) = c in
       let* fx = make_fixtures c in
-      let* priv =
-        C.find q_insert_community ("fshr-priv", false, "private")
-      in
+      let* priv = C.find q_insert_community ("fshr-priv", false, "private") in
       let* priv = or_fail "private community" priv in
       let* secret =
         C.find q_insert_post ("FSHR-PRIV-SECRET title", priv, fx.author)
@@ -260,18 +284,22 @@ let private_case =
       let* s1, denied = run ~url ~session:outsider "/c/fshr-priv" in
       let* s2, missing = run ~url ~session:outsider "/c/fshr-missing" in
       Alcotest.(check (list int)) "both 404" [ 404; 404 ] [ s1; s2 ];
-      Alcotest.(check bool) "denied == missing byte-identical" true
+      Alcotest.(check bool)
+        "denied == missing byte-identical" true
         (String.equal denied missing);
-      Alcotest.(check bool) "generic copy" true
+      Alcotest.(check bool)
+        "generic copy" true
         (Html_assert.contains denied "This community does not exist.");
       (* The 404 is the legacy msg_page, whose layout script has always
          carried its own copyPostLink — the byte-equality above pins that
          the guest share script changed nothing about this response. *)
-      Alcotest.(check bool) "no secret title" false
+      Alcotest.(check bool)
+        "no secret title" false
         (Html_assert.contains denied "FSHR-PRIV-SECRET");
       let* s3, anon = run ~url "/c/fshr-priv" in
       Alcotest.(check int) "anonymous 404" 404 s3;
-      Alcotest.(check bool) "anonymous no secret" false
+      Alcotest.(check bool)
+        "anonymous no secret" false
         (Html_assert.contains anon "FSHR-PRIV-SECRET");
       Lwt.return_unit)
 
@@ -279,7 +307,7 @@ let suite =
   [ guest_case; member_case; row_bytes_case; siblings_case; private_case ]
 
 let suites =
-    (* Flat-community guest Share: the byte-pinned rows' Share control
+  (* Flat-community guest Share: the byte-pinned rows' Share control
        works for anonymous viewers via the guest-only share script (one
        shared copyPostLink source, no notification fetch, no
        authenticated-only behavior), the authenticated document still holds
@@ -287,5 +315,4 @@ let suites =
        renderer, sibling documents stay script-free, and private flat
        communities keep the canonical anti-enumeration 404.
        Database-gated. *)
-  [ ("flat_community_share_script", suite)
-  ]
+  [ ("flat_community_share_script", suite) ]

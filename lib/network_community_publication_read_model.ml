@@ -124,10 +124,11 @@ let valid_network_description = function
   | None -> true
   | Some text ->
       let n = String.length text in
-      let is_forbidden c = (c < '\x20' && c <> '\n' && c <> '\t') || c = '\x7f' in
+      let is_forbidden c =
+        (c < '\x20' && c <> '\n' && c <> '\t') || c = '\x7f'
+      in
       let is_edge c = c = ' ' || c = '\t' || c = '\n' in
-      n > 0
-      && String.is_valid_utf_8 text
+      n > 0 && String.is_valid_utf_8 text
       && (not (String.exists is_forbidden text))
       && (not (is_edge text.[0]))
       && (not (is_edge text.[n - 1]))
@@ -154,7 +155,8 @@ let canonical_project_slug value =
 let nonblank value =
   String.exists
     (fun c ->
-      not (c = ' ' || c = '\t' || c = '\r' || c = '\n' || c = '\x0c' || c = '\x0b'))
+      not
+        (c = ' ' || c = '\t' || c = '\r' || c = '\n' || c = '\x0c' || c = '\x0b'))
     value
 
 (* The closed verification vocabulary of a permanent project. Validated as a
@@ -181,29 +183,20 @@ let known_verification = function
 let community_query =
   let open Caqti_request.Infix in
   (Caqti_type.(t2 string int)
-   ->? Caqti_type.(
-         t2
-           (t4 int string string (option string))
-           (t2 (t3 string string bool) (t4 bool bool bool bool))))
-    "SELECT c.id, c.slug, c.name, c.description, \
-            c.visibility, c.onboarding_state, c.is_network_community, \
-            c.indexable, c.discoverable, \
-            EXISTS (SELECT 1 FROM community_moderators m \
-                    WHERE m.user_id = $2 AND m.community_id = c.id \
-                      AND m.role = 'top_mod'), \
-            EXISTS (SELECT 1 FROM users u WHERE u.id = $2 AND u.is_admin) \
-     FROM communities c \
-     WHERE c.slug = $1 \
-       AND c.is_network_community = TRUE \
-       AND c.onboarding_state = 'draft' \
-       AND c.visibility = 'private' \
-       AND c.indexable = FALSE \
-       AND c.discoverable = FALSE \
-       AND (EXISTS (SELECT 1 FROM community_moderators m \
-                    WHERE m.user_id = $2 AND m.community_id = c.id \
-                      AND m.role = 'top_mod') \
-            OR EXISTS (SELECT 1 FROM users u \
-                       WHERE u.id = $2 AND u.is_admin))"
+  ->? Caqti_type.(
+        t2
+          (t4 int string string (option string))
+          (t2 (t3 string string bool) (t4 bool bool bool bool))))
+    "SELECT c.id, c.slug, c.name, c.description, c.visibility, \
+     c.onboarding_state, c.is_network_community, c.indexable, c.discoverable, \
+     EXISTS (SELECT 1 FROM community_moderators m WHERE m.user_id = $2 AND \
+     m.community_id = c.id AND m.role = 'top_mod'), EXISTS (SELECT 1 FROM \
+     users u WHERE u.id = $2 AND u.is_admin) FROM communities c WHERE c.slug = \
+     $1 AND c.is_network_community = TRUE AND c.onboarding_state = 'draft' AND \
+     c.visibility = 'private' AND c.indexable = FALSE AND c.discoverable = \
+     FALSE AND (EXISTS (SELECT 1 FROM community_moderators m WHERE m.user_id = \
+     $2 AND m.community_id = c.id AND m.role = 'top_mod') OR EXISTS (SELECT 1 \
+     FROM users u WHERE u.id = $2 AND u.is_admin))"
 
 (* Every accepted home relation of the authorized community, joined to
    permanent project data. The join drops a relation whose project row is
@@ -214,15 +207,11 @@ let community_query =
 let accepted_project_query =
   let open Caqti_request.Infix in
   (Caqti_type.int
-   ->* Caqti_type.(t2 (t3 int64 string string) (t3 string string string)))
-    "SELECT p.id, p.name, p.slug, \
-            p.kind, p.forge_namespace_login, p.verification_status \
-     FROM community_projects cp \
-     JOIN open_source_projects p ON p.id = cp.project_id \
-     WHERE cp.community_id = $1 \
-       AND cp.relation_type = 'home' \
-       AND cp.status = 'accepted' \
-     ORDER BY p.id"
+  ->* Caqti_type.(t2 (t3 int64 string string) (t3 string string string)))
+    "SELECT p.id, p.name, p.slug, p.kind, p.forge_namespace_login, \
+     p.verification_status FROM community_projects cp JOIN \
+     open_source_projects p ON p.id = cp.project_id WHERE cp.community_id = $1 \
+     AND cp.relation_type = 'home' AND cp.status = 'accepted' ORDER BY p.id"
 
 (* The complete-draft shape in one bounded aggregate read: the community must
    still have a member and a top moderator, exactly the two shell rows the
@@ -233,30 +222,24 @@ let accepted_project_query =
 let draft_state_query =
   let open Caqti_request.Infix in
   (Caqti_type.(t2 int int64)
-   ->! Caqti_type.(t2 (t4 int int int int) (t3 int int int)))
-    "SELECT \
-       (SELECT COUNT(*) FROM community_members WHERE community_id = $1), \
-       (SELECT COUNT(*) FROM community_moderators \
-        WHERE community_id = $1 AND role = 'top_mod'), \
-       (SELECT COUNT(*) FROM community_sections \
-        WHERE community_id = $1 AND slug = 'general'), \
-       (SELECT COUNT(*) FROM channels \
-        WHERE community_id = $1 AND slug = 'general' AND NOT is_archived), \
-       (SELECT COUNT(*) FROM community_projects \
-        WHERE community_id = $1 AND relation_type = 'home' \
-          AND status = 'accepted'), \
-       (SELECT COUNT(*) FROM community_projects \
-        WHERE community_id = $1 AND relation_type = 'home' \
-          AND status IN ('pending', 'accepted')), \
-       (SELECT COUNT(*) FROM community_projects \
-        WHERE project_id = $2 AND relation_type = 'home' \
-          AND status IN ('pending', 'accepted'))"
+  ->! Caqti_type.(t2 (t4 int int int int) (t3 int int int)))
+    "SELECT (SELECT COUNT(*) FROM community_members WHERE community_id = $1), \
+     (SELECT COUNT(*) FROM community_moderators WHERE community_id = $1 AND \
+     role = 'top_mod'), (SELECT COUNT(*) FROM community_sections WHERE \
+     community_id = $1 AND slug = 'general'), (SELECT COUNT(*) FROM channels \
+     WHERE community_id = $1 AND slug = 'general' AND NOT is_archived), \
+     (SELECT COUNT(*) FROM community_projects WHERE community_id = $1 AND \
+     relation_type = 'home' AND status = 'accepted'), (SELECT COUNT(*) FROM \
+     community_projects WHERE community_id = $1 AND relation_type = 'home' AND \
+     status IN ('pending', 'accepted')), (SELECT COUNT(*) FROM \
+     community_projects WHERE project_id = $2 AND relation_type = 'home' AND \
+     status IN ('pending', 'accepted'))"
 
 (* === row mapping === *)
 
 let community_of_row supplied_slug (id, stored_slug, name, description)
-    ((visibility_raw, onboarding_raw, is_network), (indexable, discoverable, is_top_mod, is_admin))
-    =
+    ( (visibility_raw, onboarding_raw, is_network),
+      (indexable, discoverable, is_top_mod, is_admin) ) =
   match
     ( Community_types.community_visibility_of_string visibility_raw,
       Community_types.community_onboarding_state_of_string onboarding_raw )
@@ -272,8 +255,7 @@ let community_of_row supplied_slug (id, stored_slug, name, description)
           && is_network
           && visibility = Community_types.Community_private
           && onboarding_state = Community_types.Community_draft
-          && (not indexable)
-          && (not discoverable)
+          && (not indexable) && (not discoverable)
           (* The whole-state invariant, re-asserted through the frozen
              domain rather than restated: a leaking draft is corruption. *)
           && Network_communities.lifecycle_state_valid
@@ -287,9 +269,10 @@ let community_of_row supplied_slug (id, stored_slug, name, description)
       else
         Ok
           ( id,
-            { community_name = name;
+            {
+              community_name = name;
               community_slug = stored_slug;
-              community_description = description
+              community_description = description;
             },
             is_top_mod,
             is_admin )
@@ -303,17 +286,17 @@ let project_of_row ((row_id, name, slug), (kind_raw, login, verification)) =
         not
           (Int64.compare row_id 0L > 0
           && canonical_project_slug slug
-          && nonblank name
-          && single_path_segment login
+          && nonblank name && single_path_segment login
           && known_verification verification)
       then Error ()
       else
         Ok
           ( row_id,
-            { project_name = name;
+            {
+              project_name = name;
               project_slug = slug;
               project_namespace_login = login;
-              project_kind = kind
+              project_kind = kind;
             } )
 
 let load_for_publisher (module C : Caqti_lwt.CONNECTION) ~user_id

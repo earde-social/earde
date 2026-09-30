@@ -36,21 +36,35 @@ let shadow = "stad_shadow"
 let q_cleanup =
   List.map
     (fun sql -> (Caqti_type.unit ->. Caqti_type.unit) sql)
-    [ "DROP SCHEMA IF EXISTS stad_shadow CASCADE"
-    ; "DELETE FROM notifications WHERE user_id IN (SELECT id FROM users WHERE username LIKE 'stad\\_%')"
-    ; "DELETE FROM comments WHERE post_id IN (SELECT id FROM posts WHERE community_id IN (SELECT id FROM communities WHERE slug LIKE 'stad-%'))"
-    ; "DELETE FROM posts WHERE community_id IN (SELECT id FROM communities WHERE slug LIKE 'stad-%')"
-    ; "DELETE FROM chat_messages WHERE channel_id IN (SELECT id FROM channels WHERE community_id IN (SELECT id FROM communities WHERE slug LIKE 'stad-%'))"
-    ; "DELETE FROM channels WHERE community_id IN (SELECT id FROM communities WHERE slug LIKE 'stad-%')"
-    ; "DELETE FROM community_sections WHERE community_id IN (SELECT id FROM communities WHERE slug LIKE 'stad-%')"
-    ; "DELETE FROM community_bans WHERE community_id IN (SELECT id FROM communities WHERE slug LIKE 'stad-%')"
-    ; "DELETE FROM community_members WHERE community_id IN (SELECT id FROM communities WHERE slug LIKE 'stad-%')"
-    ; "DELETE FROM community_moderators WHERE community_id IN (SELECT id FROM communities WHERE slug LIKE 'stad-%')"
-    ; "DELETE FROM community_user_stats WHERE community_id IN (SELECT id FROM communities WHERE slug LIKE 'stad-%')"
-    ; "DELETE FROM posthog_group_cleanup_jobs WHERE group_key IN (SELECT 'community:' || c.id::text FROM communities c WHERE c.slug LIKE 'stad-%')"
-    ; "DELETE FROM communities WHERE slug LIKE 'stad-%'"
-    ; "DELETE FROM dream_session WHERE payload LIKE '%stad\\_%'"
-    ; "DELETE FROM users WHERE username LIKE 'stad\\_%'"
+    [
+      "DROP SCHEMA IF EXISTS stad_shadow CASCADE";
+      "DELETE FROM notifications WHERE user_id IN (SELECT id FROM users WHERE \
+       username LIKE 'stad\\_%')";
+      "DELETE FROM comments WHERE post_id IN (SELECT id FROM posts WHERE \
+       community_id IN (SELECT id FROM communities WHERE slug LIKE 'stad-%'))";
+      "DELETE FROM posts WHERE community_id IN (SELECT id FROM communities \
+       WHERE slug LIKE 'stad-%')";
+      "DELETE FROM chat_messages WHERE channel_id IN (SELECT id FROM channels \
+       WHERE community_id IN (SELECT id FROM communities WHERE slug LIKE \
+       'stad-%'))";
+      "DELETE FROM channels WHERE community_id IN (SELECT id FROM communities \
+       WHERE slug LIKE 'stad-%')";
+      "DELETE FROM community_sections WHERE community_id IN (SELECT id FROM \
+       communities WHERE slug LIKE 'stad-%')";
+      "DELETE FROM community_bans WHERE community_id IN (SELECT id FROM \
+       communities WHERE slug LIKE 'stad-%')";
+      "DELETE FROM community_members WHERE community_id IN (SELECT id FROM \
+       communities WHERE slug LIKE 'stad-%')";
+      "DELETE FROM community_moderators WHERE community_id IN (SELECT id FROM \
+       communities WHERE slug LIKE 'stad-%')";
+      "DELETE FROM community_user_stats WHERE community_id IN (SELECT id FROM \
+       communities WHERE slug LIKE 'stad-%')";
+      "DELETE FROM posthog_group_cleanup_jobs WHERE group_key IN (SELECT \
+       'community:' || c.id::text FROM communities c WHERE c.slug LIKE \
+       'stad-%')";
+      "DELETE FROM communities WHERE slug LIKE 'stad-%'";
+      "DELETE FROM dream_session WHERE payload LIKE '%stad\\_%'";
+      "DELETE FROM users WHERE username LIKE 'stad\\_%'";
     ]
 
 let db_case name f =
@@ -81,53 +95,59 @@ let password = "stad password"
 
 let q_user =
   (Caqti_type.(t3 string string bool) ->! Caqti_type.int)
-  "INSERT INTO users (username, email, password_hash, is_email_verified, is_admin)
-   VALUES ($1, $1 || '@stad.invalid', $2, TRUE, $3) RETURNING id"
+    "INSERT INTO users (username, email, password_hash, is_email_verified, \
+     is_admin)\n\
+    \   VALUES ($1, $1 || '@stad.invalid', $2, TRUE, $3) RETURNING id"
 
 let q_set_admin =
   (Caqti_type.(t2 int bool) ->. Caqti_type.unit)
-  "UPDATE users SET is_admin = $2 WHERE id = $1"
+    "UPDATE users SET is_admin = $2 WHERE id = $1"
 
-let q_is_admin = (Caqti_type.int ->! Caqti_type.bool)
-  "SELECT is_admin FROM users WHERE id = $1"
+let q_is_admin =
+  (Caqti_type.int ->! Caqti_type.bool)
+    "SELECT is_admin FROM users WHERE id = $1"
 
-let q_is_banned = (Caqti_type.int ->! Caqti_type.bool)
-  "SELECT is_banned FROM users WHERE id = $1"
+let q_is_banned =
+  (Caqti_type.int ->! Caqti_type.bool)
+    "SELECT is_banned FROM users WHERE id = $1"
 
 let q_community =
   (Caqti_type.(t2 string string) ->! Caqti_type.int)
-  "INSERT INTO communities (slug, name, visibility, sections_enabled)
-   VALUES ($1, $1, $2, FALSE) RETURNING id"
+    "INSERT INTO communities (slug, name, visibility, sections_enabled)\n\
+    \   VALUES ($1, $1, $2, FALSE) RETURNING id"
 
 let q_channel =
   (Caqti_type.(t2 string int) ->! Caqti_type.int)
-  "INSERT INTO channels (slug, name, community_id) VALUES ($1, $1, $2)
-   RETURNING id"
+    "INSERT INTO channels (slug, name, community_id) VALUES ($1, $1, $2)\n\
+    \   RETURNING id"
 
 let q_member =
   (Caqti_type.(t2 int int) ->. Caqti_type.unit)
-  "INSERT INTO community_members (user_id, community_id) VALUES ($1, $2)
-   ON CONFLICT DO NOTHING"
+    "INSERT INTO community_members (user_id, community_id) VALUES ($1, $2)\n\
+    \   ON CONFLICT DO NOTHING"
 
 let q_moderator =
   (Caqti_type.(t3 int int string) ->. Caqti_type.unit)
-  "INSERT INTO community_moderators (user_id, community_id, role)
-   VALUES ($1, $2, $3) ON CONFLICT DO NOTHING"
+    "INSERT INTO community_moderators (user_id, community_id, role)\n\
+    \   VALUES ($1, $2, $3) ON CONFLICT DO NOTHING"
 
 let q_post =
   (Caqti_type.(t3 string int int) ->! Caqti_type.int)
-  "INSERT INTO posts (title, content, community_id, user_id)
-   VALUES ($1, 'stad body', $2, $3) RETURNING id"
+    "INSERT INTO posts (title, content, community_id, user_id)\n\
+    \   VALUES ($1, 'stad body', $2, $3) RETURNING id"
 
-let q_post_state = (Caqti_type.int ->! Caqti_type.(t2 string (option string)))
-  "SELECT title, content FROM posts WHERE id = $1"
+let q_post_state =
+  (Caqti_type.int ->! Caqti_type.(t2 string (option string)))
+    "SELECT title, content FROM posts WHERE id = $1"
 
-let q_count_mods = (Caqti_type.int ->! Caqti_type.int)
-  "SELECT COUNT(*)::int FROM community_moderators WHERE community_id = $1"
+let q_count_mods =
+  (Caqti_type.int ->! Caqti_type.int)
+    "SELECT COUNT(*)::int FROM community_moderators WHERE community_id = $1"
 
-let q_count_sessions = (Caqti_type.string ->! Caqti_type.int)
-  "SELECT COUNT(*)::int FROM dream_session
-    WHERE payload::jsonb ->> 'user_id' = $1"
+let q_count_sessions =
+  (Caqti_type.string ->! Caqti_type.int)
+    "SELECT COUNT(*)::int FROM dream_session\n\
+    \    WHERE payload::jsonb ->> 'user_id' = $1"
 
 (* Argon2 is deliberately expensive, so the fixture password is hashed once
    for the whole module rather than once per user. *)
@@ -143,7 +163,9 @@ let password_hash () =
          reach the column or the login lookup compares the wrong string. *)
       let hash =
         let n = ref (String.length hash) in
-        while !n > 0 && hash.[!n - 1] = '\000' do decr n done;
+        while !n > 0 && hash.[!n - 1] = '\000' do
+          decr n
+        done;
         String.sub hash 0 !n
       in
       shared_hash := Some hash;
@@ -165,42 +187,45 @@ let secret = "stad-test-secret-value"
 let build_pipeline ~url pending_form =
   let with_form handler req =
     (match !pending_form with
-     | None -> ()
-     | Some fields ->
-         pending_form := None;
-         let csrf = Dream.csrf_token req in
-         Dream.set_body req
-           (String.concat "&"
-              (List.map
-                 (fun (k, v) ->
-                   Dream.to_percent_encoded k ^ "="
-                   ^ Dream.to_percent_encoded v)
-                 (("dream.csrf", csrf) :: fields))));
+    | None -> ()
+    | Some fields ->
+        pending_form := None;
+        let csrf = Dream.csrf_token req in
+        Dream.set_body req
+          (String.concat "&"
+             (List.map
+                (fun (k, v) ->
+                  Dream.to_percent_encoded k ^ "=" ^ Dream.to_percent_encoded v)
+                (("dream.csrf", csrf) :: fields))));
     handler req
   in
   Dream.sql_pool ~size:4 url @@ Dream.set_secret secret @@ Dream.sql_sessions
   @@ Dream.router
-       [ Dream.post "/login" (with_form Earde.Auth_handlers.login_handler)
-       ; Dream.get "/admin" Earde.Admin_handlers.admin_dashboard_handler
-       ; Dream.post "/admin/ban/user/:id"
-           (with_form Earde.Admin_handlers.ban_user_handler)
-       ; Dream.get "/debug-state" Earde.Admin_handlers.debug_state_handler
-       ; Dream.post "/delete-post" (with_form Earde.Post_handlers.delete_post_handler)
-       ; Dream.get "/c/:slug" Earde.Community_handlers.community_page_handler
-       ; Dream.get "/c/:slug/ch/:channel_slug/realtime-token"
-           Earde.Chat_handlers.realtime_token_handler
-       ; Dream.get "/c/:slug/settings" Earde.Community_settings_handlers.community_settings_handler
-       ; Dream.post "/c/:slug/manage-mods/add"
-           (with_form Earde.Moderation_handlers.manage_mods_add_handler)
-       ; Dream.get "/probe" (fun req ->
+       [
+         Dream.post "/login" (with_form Earde.Auth_handlers.login_handler);
+         Dream.get "/admin" Earde.Admin_handlers.admin_dashboard_handler;
+         Dream.post "/admin/ban/user/:id"
+           (with_form Earde.Admin_handlers.ban_user_handler);
+         Dream.get "/debug-state" Earde.Admin_handlers.debug_state_handler;
+         Dream.post "/delete-post"
+           (with_form Earde.Post_handlers.delete_post_handler);
+         Dream.get "/c/:slug" Earde.Community_handlers.community_page_handler;
+         Dream.get "/c/:slug/ch/:channel_slug/realtime-token"
+           Earde.Chat_handlers.realtime_token_handler;
+         Dream.get "/c/:slug/settings"
+           Earde.Community_settings_handlers.community_settings_handler;
+         Dream.post "/c/:slug/manage-mods/add"
+           (with_form Earde.Moderation_handlers.manage_mods_add_handler);
+         Dream.get "/probe" (fun req ->
              match Dream.session_field req "user_id" with
              | Some uid ->
                  Dream.respond
                    (uid ^ "|"
-                   ^ (match Dream.session_field req "is_admin" with
-                      | Some v -> v
-                      | None -> "-"))
-             | None -> Dream.respond ~status:`Unauthorized "anon")
+                   ^
+                   match Dream.session_field req "is_admin" with
+                   | Some v -> v
+                   | None -> "-")
+             | None -> Dream.respond ~status:`Unauthorized "anon");
        ]
 
 (* One [client] models one browser: its own pipeline instance plus a cookie
@@ -214,8 +239,7 @@ type client = {
 
 let make_client ~url =
   let pending_form = ref None in
-  { pipeline = build_pipeline ~url pending_form; jar = ref [];
-    pending_form }
+  { pipeline = build_pipeline ~url pending_form; jar = ref []; pending_form }
 
 let update_jar jar response =
   List.iter
@@ -225,7 +249,9 @@ let update_jar jar response =
           match String.index_opt pair '=' with
           | Some i ->
               let name = String.sub pair 0 i in
-              let value = String.sub pair (i + 1) (String.length pair - i - 1) in
+              let value =
+                String.sub pair (i + 1) (String.length pair - i - 1)
+              in
               jar := (name, value) :: List.remove_assoc name !jar
           | None -> ())
       | [] -> ())
@@ -235,13 +261,16 @@ let send client ?(method_ = `GET) ?form target =
   client.pending_form := form;
   let headers =
     (match !(client.jar) with
-     | [] -> []
-     | pairs ->
-         [ ("Cookie",
-            String.concat "; " (List.map (fun (n, v) -> n ^ "=" ^ v) pairs)) ])
-    @ (match form with
-       | Some _ -> [ ("Content-Type", "application/x-www-form-urlencoded") ]
-       | None -> [])
+      | [] -> []
+      | pairs ->
+          [
+            ( "Cookie",
+              String.concat "; " (List.map (fun (n, v) -> n ^ "=" ^ v) pairs) );
+          ])
+    @
+    match form with
+    | Some _ -> [ ("Content-Type", "application/x-www-form-urlencoded") ]
+    | None -> []
   in
   let* response =
     client.pipeline (Dream.request ~method_ ~target ~headers "")
@@ -262,8 +291,9 @@ let logged_in_admin ~url username =
   let* status, _, _ = login client username in
   Alcotest.(check bool) (username ^ ": login redirects") true (status / 100 = 3);
   let* _, _, probe = send client "/probe" in
-  Alcotest.(check bool) (username ^ ": session claims admin") true
-    (contains probe "|true");
+  Alcotest.(check bool)
+    (username ^ ": session claims admin")
+    true (contains probe "|true");
   Lwt.return client
 
 let demote (module C : Caqti_lwt.CONNECTION) uid =
@@ -277,16 +307,15 @@ let demote (module C : Caqti_lwt.CONNECTION) uid =
 
 let still_claims_admin client =
   let* _, _, probe = send client "/probe" in
-  Alcotest.(check bool) "the stale session still claims admin" true
-    (contains probe "|true");
+  Alcotest.(check bool)
+    "the stale session still claims admin" true (contains probe "|true");
   Lwt.return_unit
 
 (* === A — GET /admin === *)
 
 let admin_dashboard_case =
   db_case
-    "stale admin: GET /admin is refused and returns none of its protected \
-     data"
+    "stale admin: GET /admin is refused and returns none of its protected data"
     (fun ~url (module C : Caqti_lwt.CONNECTION) ->
       let* admin = make_user (module C) ~admin:true "stad_dashadmin" in
       (* A distinctive row the dashboard would list if it rendered. *)
@@ -294,7 +323,8 @@ let admin_dashboard_case =
       let* client = logged_in_admin ~url "stad_dashadmin" in
       let* status, _, body = send client "/admin" in
       Alcotest.(check int) "durable admin sees the dashboard" 200 status;
-      Alcotest.(check bool) "control: the dashboard really lists users" true
+      Alcotest.(check bool)
+        "control: the dashboard really lists users" true
         (contains body "stad_dashlisted");
 
       let* () = demote (module C) admin in
@@ -302,9 +332,11 @@ let admin_dashboard_case =
       let* status, _, body = send client "/admin" in
       Alcotest.(check int) "stale claim is forbidden" 403 status;
       Alcotest.(check bool) "denial copy" true (contains body "not an Admin");
-      Alcotest.(check bool) "no listed username" false
+      Alcotest.(check bool)
+        "no listed username" false
         (contains body "stad_dashlisted");
-      Alcotest.(check bool) "no address column" false
+      Alcotest.(check bool)
+        "no address column" false
         (contains body "@stad.invalid");
       (* The sibling admin-only JSON route answers the same way. *)
       let* status, _, body = send client "/debug-state" in
@@ -317,8 +349,7 @@ let admin_dashboard_case =
 let global_ban_case =
   db_case
     "stale admin: the global ban writes nothing and leaves the target's \
-     session alive"
-    (fun ~url (module C : Caqti_lwt.CONNECTION) ->
+     session alive" (fun ~url (module C : Caqti_lwt.CONNECTION) ->
       let* admin = make_user (module C) ~admin:true "stad_banadmin" in
       let* victim = make_user (module C) ~admin:false "stad_banvictim" in
       let* control = make_user (module C) ~admin:false "stad_bancontrol" in
@@ -337,8 +368,7 @@ let global_ban_case =
         send client ~method_:`POST ~form:[]
           (Printf.sprintf "/admin/ban/user/%d" control)
       in
-      Alcotest.(check bool) "durable admin ban redirects" true
-        (status / 100 = 3);
+      Alcotest.(check bool) "durable admin ban redirects" true (status / 100 = 3);
       let* banned = C.find q_is_banned control in
       let* banned = or_fail "control banned" banned in
       Alcotest.(check bool) "control really banned" true banned;
@@ -365,8 +395,7 @@ let global_ban_case =
 
 let admin_delete_case =
   db_case
-    "stale admin: /delete-post on a foreign post leaves the content \
-     untouched"
+    "stale admin: /delete-post on a foreign post leaves the content untouched"
     (fun ~url (module C : Caqti_lwt.CONNECTION) ->
       let* admin = make_user (module C) ~admin:true "stad_deladmin" in
       let* author = make_user (module C) ~admin:false "stad_delauthor" in
@@ -384,12 +413,13 @@ let admin_delete_case =
           ~form:[ ("post_id", string_of_int control_post) ]
           "/delete-post"
       in
-      Alcotest.(check bool) "durable admin removal redirects" true
+      Alcotest.(check bool)
+        "durable admin removal redirects" true
         (status / 100 = 3);
       let* state = C.find q_post_state control_post in
       let* _title, content = or_fail "control state" state in
-      Alcotest.(check (option string)) "control tombstoned"
-        (Some "[removed by admin]") content;
+      Alcotest.(check (option string))
+        "control tombstoned" (Some "[removed by admin]") content;
 
       let* () = demote (module C) admin in
       let* () = still_claims_admin client in
@@ -410,8 +440,8 @@ let admin_delete_case =
       let* state = C.find q_post_state target_post in
       let* title, content = or_fail "target state" state in
       Alcotest.(check string) "title unchanged" "stad target post" title;
-      Alcotest.(check (option string)) "body unchanged" (Some "stad body")
-        content;
+      Alcotest.(check (option string))
+        "body unchanged" (Some "stad body") content;
       Lwt.return_unit)
 
 (* === D + E — the private-community read gate and the token that
@@ -419,8 +449,7 @@ let admin_delete_case =
 
 let private_read_case =
   db_case
-    "stale admin: a private community stays hidden and mints no realtime \
-     token"
+    "stale admin: a private community stays hidden and mints no realtime token"
     (fun ~url (module C : Caqti_lwt.CONNECTION) ->
       let* admin = make_user (module C) ~admin:true "stad_readadmin" in
       let* cid = C.find q_community ("stad-secret", "private") in
@@ -430,36 +459,42 @@ let private_read_case =
 
       let* client = logged_in_admin ~url "stad_readadmin" in
       let* status, _, body = send client "/c/stad-secret" in
-      Alcotest.(check int) "durable admin reads the private community" 200
-        status;
-      Alcotest.(check bool) "control: the page really names it" true
+      Alcotest.(check int)
+        "durable admin reads the private community" 200 status;
+      Alcotest.(check bool)
+        "control: the page really names it" true
         (contains body "stad-secret");
       let* status, _, body =
         send client "/c/stad-secret/ch/stad-secretchan/realtime-token"
       in
-      Alcotest.(check bool) "durable admin gets a token answer" true
+      Alcotest.(check bool)
+        "durable admin gets a token answer" true
         (status = 200 || status = 503);
       if status = 200 then
-        Alcotest.(check bool) "control: a token was minted" true
+        Alcotest.(check bool)
+          "control: a token was minted" true
           (contains body "\"token\"");
 
       let* () = demote (module C) admin in
       let* () = still_claims_admin client in
       let* status, _, denied = send client "/c/stad-secret" in
       Alcotest.(check int) "hidden from the stale claim" 404 status;
-      Alcotest.(check bool) "no community name" false
+      Alcotest.(check bool)
+        "no community name" false
         (contains denied "stad-secret");
       (* Anti-oracle: the refusal is the route's existing hidden answer, so
          it is byte-identical to a slug that never existed. *)
       let* _, _, missing = send client "/c/stad-nothing-here" in
-      Alcotest.(check string) "hidden reads exactly like nonexistent"
+      Alcotest.(check string)
+        "hidden reads exactly like nonexistent"
         (Html_assert.without_csrf_inputs missing)
         (Html_assert.without_csrf_inputs denied);
       let* status, _, body =
         send client "/c/stad-secret/ch/stad-secretchan/realtime-token"
       in
       Alcotest.(check int) "no token for the stale claim" 404 status;
-      Alcotest.(check bool) "no token in the body" false
+      Alcotest.(check bool)
+        "no token in the body" false
         (contains body "\"token\"");
       Lwt.return_unit)
 
@@ -467,8 +502,7 @@ let private_read_case =
    private community — through the membership policy, which the admin
    override never replaced. *)
 let private_member_fallback_case =
-  db_case
-    "stale admin who is also a member still reads the private community"
+  db_case "stale admin who is also a member still reads the private community"
     (fun ~url (module C : Caqti_lwt.CONNECTION) ->
       let* admin = make_user (module C) ~admin:true "stad_memberadmin" in
       let* cid = C.find q_community ("stad-memberpriv", "private") in
@@ -479,7 +513,8 @@ let private_member_fallback_case =
       let* () = demote (module C) admin in
       let* status, _, body = send client "/c/stad-memberpriv" in
       Alcotest.(check int) "membership still admits" 200 status;
-      Alcotest.(check bool) "the page renders" true
+      Alcotest.(check bool)
+        "the page renders" true
         (contains body "stad-memberpriv");
       Lwt.return_unit)
 
@@ -500,7 +535,8 @@ let settings_case =
         send client "/c/stad-settings/settings?panel=members"
       in
       Alcotest.(check int) "durable admin opens settings" 200 status;
-      Alcotest.(check bool) "control: the member roster rendered" true
+      Alcotest.(check bool)
+        "control: the member roster rendered" true
         (contains body "stad_setbanned");
 
       let* () = demote (module C) admin in
@@ -509,9 +545,11 @@ let settings_case =
         send client "/c/stad-settings/settings?panel=members"
       in
       Alcotest.(check int) "stale claim is forbidden" 403 status;
-      Alcotest.(check bool) "denial copy" true
+      Alcotest.(check bool)
+        "denial copy" true
         (contains body "You must be a moderator");
-      Alcotest.(check bool) "no member roster" false
+      Alcotest.(check bool)
+        "no member roster" false
         (contains body "stad_setbanned");
       Lwt.return_unit)
 
@@ -533,20 +571,22 @@ let manage_mods_case =
       let* client = logged_in_admin ~url "stad_modadmin" in
       (* Control: the durable admin really can appoint a moderator. *)
       let* status, _, _ =
-        send client ~method_:`POST ~form:[ ("username", "stad_modcontrol") ]
+        send client ~method_:`POST
+          ~form:[ ("username", "stad_modcontrol") ]
           "/c/stad-mods/manage-mods/add"
       in
-      Alcotest.(check bool) "durable admin add redirects" true
-        (status / 100 = 3);
+      Alcotest.(check bool) "durable admin add redirects" true (status / 100 = 3);
 
       let* () = demote (module C) admin in
       let* () = still_claims_admin client in
       let* status, _, body =
-        send client ~method_:`POST ~form:[ ("username", "stad_modtarget") ]
+        send client ~method_:`POST
+          ~form:[ ("username", "stad_modtarget") ]
           "/c/stad-mods/manage-mods/add"
       in
       Alcotest.(check int) "stale claim is forbidden" 403 status;
-      Alcotest.(check bool) "denial copy" true
+      Alcotest.(check bool)
+        "denial copy" true
         (contains body "Only Top Mods and Admins");
       let* after = C.find q_count_mods cid in
       let* after = or_fail "mods after" after in
@@ -557,9 +597,8 @@ let manage_mods_case =
 
 let promotion_requires_relogin_case =
   db_case
-    "promoted admin with an old non-admin session stays refused until a \
-     fresh login"
-    (fun ~url (module C : Caqti_lwt.CONNECTION) ->
+    "promoted admin with an old non-admin session stays refused until a fresh \
+     login" (fun ~url (module C : Caqti_lwt.CONNECTION) ->
       let* uid = make_user (module C) ~admin:false "stad_promoted" in
       let client = make_client ~url in
       let* status, _, _ = login client "stad_promoted" in
@@ -599,10 +638,11 @@ let make_shadow (module C : Caqti_lwt.CONNECTION) ~omit =
   let* relations =
     C.collect_list
       ((Caqti_type.unit ->* Caqti_type.string)
-         "SELECT c.relname FROM pg_class c
-           JOIN pg_namespace n ON n.oid = c.relnamespace
-          WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p', 'v', 'm', 'f')
-          ORDER BY c.relname")
+         "SELECT c.relname FROM pg_class c\n\
+         \           JOIN pg_namespace n ON n.oid = c.relnamespace\n\
+         \          WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p', \
+          'v', 'm', 'f')\n\
+         \          ORDER BY c.relname")
       ()
   in
   let* relations = or_fail "public relations" relations in
@@ -631,21 +671,27 @@ let generic = "A database error occurred. Please try again later."
    because the community 404 the anti-oracle assertion depends on says
    exactly that in its own product copy. *)
 let db_needles =
-  [ "stad_shadow"; "search_path"; "postgresql"; "caqti"; "relation";
-    "select "; "pg_" ]
+  [
+    "stad_shadow";
+    "search_path";
+    "postgresql";
+    "caqti";
+    "relation";
+    "select ";
+    "pg_";
+  ]
 
 let no_leak label body =
   List.iter
     (fun s ->
-      if contains (String.lowercase_ascii body) (String.lowercase_ascii s)
-      then Alcotest.failf "%s: body leaks %S" label s)
+      if contains (String.lowercase_ascii body) (String.lowercase_ascii s) then
+        Alcotest.failf "%s: body leaks %S" label s)
     db_needles
 
 let storage_failure_case =
   db_case
-    "a current-admin lookup that cannot be answered grants nothing and \
-     opens no existence oracle"
-    (fun ~url (module C : Caqti_lwt.CONNECTION) ->
+    "a current-admin lookup that cannot be answered grants nothing and opens \
+     no existence oracle" (fun ~url (module C : Caqti_lwt.CONNECTION) ->
       let* _admin = make_user (module C) ~admin:true "stad_failadmin" in
       let* victim = make_user (module C) ~admin:false "stad_failvictim" in
       let* cid = C.find q_community ("stad-failpriv", "private") in
@@ -676,23 +722,32 @@ let storage_failure_case =
          never existed. *)
       let* status, _, denied = send broken "/c/stad-failpriv" in
       Alcotest.(check int) "private read stays a 404" 404 status;
-      Alcotest.(check bool) "no community name" false
+      Alcotest.(check bool)
+        "no community name" false
         (contains denied "stad-failpriv");
       no_leak "private read" denied;
       let* _, _, missing = send broken "/c/stad-nothing-here" in
-      Alcotest.(check string) "still byte-identical to nonexistent"
+      Alcotest.(check string)
+        "still byte-identical to nonexistent"
         (Html_assert.without_csrf_inputs missing)
         (Html_assert.without_csrf_inputs denied);
       Lwt.return_unit)
 
 let suite =
-  [ admin_dashboard_case; global_ban_case; admin_delete_case;
-    private_read_case; private_member_fallback_case; settings_case;
-    manage_mods_case; promotion_requires_relogin_case;
-    storage_failure_case ]
+  [
+    admin_dashboard_case;
+    global_ban_case;
+    admin_delete_case;
+    private_read_case;
+    private_member_fallback_case;
+    settings_case;
+    manage_mods_case;
+    promotion_requires_relogin_case;
+    storage_failure_case;
+  ]
 
 let suites =
-    (* Stale global-admin sessions: a cached is_admin claim, replayed after
+  (* Stale global-admin sessions: a cached is_admin claim, replayed after
        the durable users.is_admin row was cleared, no longer grants an
        admin-only page, an admin-only mutation, admin content removal, the
        private-community read gate (or the realtime token that inherits
@@ -701,5 +756,4 @@ let suites =
        stale-false-after-promotion is pinned as requiring re-login, and a
        failing current-admin lookup grants nothing and opens no existence
        oracle. *)
-  [ ("security_stale_admin_boundary", suite)
-  ]
+  [ ("security_stale_admin_boundary", suite) ]

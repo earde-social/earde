@@ -15,10 +15,7 @@
    any value that cannot be proven canonical drops the form it would have
    carried rather than becoming a broken or guessable action. *)
 
-type verification =
-  | Verified
-  | Stale
-  | Revoked
+type verification = Verified | Stale | Revoked
 
 type connected_project = {
   name : string;
@@ -26,7 +23,6 @@ type connected_project = {
   namespace_login : string;
   verification : verification;
 }
-
 
 (* The same canonical permanent grammar the routes, the read models, and
    the removal store require. A project slug outside it never reaches an
@@ -75,9 +71,7 @@ let association_only_copy =
    community, or community content."
 
 let warning_html cls =
-  (Html.template "<p class='%s'>%s</p>"
-  [ cls
-  ; (Html.text association_only_copy) ])
+  Html.template "<p class='%s'>%s</p>" [ cls; Html.text association_only_copy ]
 
 (* The copy both surfaces show instead of a removal control while the home
    belongs to an unpublished dedicated-community setup draft. It states the
@@ -87,17 +81,19 @@ let warning_html cls =
    There is no hidden field and no script behind it — the control is absent,
    not merely disabled, and the store refuses the POST regardless. *)
 let draft_integrity_copy =
-  "This project home is part of an unpublished community setup draft. \
-   Complete setup and publish the community before detaching it."
+  "This project home is part of an unpublished community setup draft. Complete \
+   setup and publish the community before detaching it."
 
 (* Both slugs are validated before an action path is built, so escaping
    here is defense-in-depth over values already known canonical. *)
 let project_side_action ~project_slug ~community_slug =
-  (Html.text ((Printf.sprintf "/projects/%s/community-home/%s/remove" project_slug
-       community_slug)))
+  Html.text
+    (Printf.sprintf "/projects/%s/community-home/%s/remove" project_slug
+       community_slug)
 
 let community_side_action ~community_slug ~project_slug =
-  (Html.text ((Printf.sprintf "/c/%s/projects/%s/remove-home" community_slug project_slug)))
+  Html.text
+    (Printf.sprintf "/c/%s/projects/%s/remove-home" community_slug project_slug)
 
 (* One form shape for both surfaces: the route path carries both
    identities, so no application field and no hidden identifier exists, and
@@ -108,11 +104,11 @@ let removal_form ~request ~action ~cls =
   match request with
   | None -> Html.empty
   | Some request ->
-      (Html.template "<form method='POST' action='%s' class='phrm-removal-form %s'>%s\
-         <button type='submit' class='phrm-btn'>Remove home</button></form>"
-  [ action
-  ; cls
-  ; (Csrf_field.tag request) ])
+      Html.template
+        "<form method='POST' action='%s' class='phrm-removal-form \
+         %s'>%s<button type='submit' class='phrm-btn'>Remove \
+         home</button></form>"
+        [ action; cls; Csrf_field.tag request ]
 
 (* --- Project side: the steward's control for the one accepted home --- *)
 
@@ -123,10 +119,11 @@ let project_side_removal_form ?request ~removal_allowed ~project_slug
        so nothing a forged submission could be lifted from is emitted. The
        heading drops "Remove" with it: naming an action the store refuses
        would be the same lie the form itself would be. *)
-    (Html.template "<div class='phrm-removal phrm-removal--protected'>\
-       <h2 class='phrm-removal-title'>Community home</h2>\
-       <p class='phrm-removal-copy'>%s</p></div>"
-  [ (Html.text draft_integrity_copy) ])
+    Html.template
+      "<div class='phrm-removal phrm-removal--protected'><h2 \
+       class='phrm-removal-title'>Community home</h2><p \
+       class='phrm-removal-copy'>%s</p></div>"
+      [ Html.text draft_integrity_copy ]
   else
     let form =
       (* Without both canonical slugs there is no POST target to build, so
@@ -139,31 +136,35 @@ let project_side_removal_form ?request ~removal_allowed ~project_slug
           ~cls:(Html.static "phrm-project-side")
       else Html.empty
     in
-    (Html.template "<div class='phrm-removal'>\
-       <h2 class='phrm-removal-title'>Remove community home</h2>%s%s</div>"
-  [ (warning_html (Html.static "phrm-removal-copy"))
-  ; form ])
+    Html.template
+      "<div class='phrm-removal'><h2 class='phrm-removal-title'>Remove \
+       community home</h2>%s%s</div>"
+      [ warning_html (Html.static "phrm-removal-copy"); form ]
 
 (* --- Community side: the settings management section --- *)
 
 let project_identity_html (p : connected_project) =
-  let label = if nonblank p.name then (Html.text (p.name)) else (Html.static "Open-source project") in
-  (Html.template "<div class='phrm-identity'>\
-     <h3 class='phrm-project-name'>%s</h3>\
-     <p class='phrm-project-slug'>%s</p>\
-     <p class='phrm-namespace'>%s</p>\
-     <p class='phrm-verification'>%s</p></div>"
-  [ label
-  ; (Html.text (p.slug))
-  ; (Html.text (p.namespace_login))
-  ; (verification_copy p.verification) ])
+  let label =
+    if nonblank p.name then Html.text p.name
+    else Html.static "Open-source project"
+  in
+  Html.template
+    "<div class='phrm-identity'><h3 class='phrm-project-name'>%s</h3><p \
+     class='phrm-project-slug'>%s</p><p class='phrm-namespace'>%s</p><p \
+     class='phrm-verification'>%s</p></div>"
+    [
+      label;
+      Html.text p.slug;
+      Html.text p.namespace_login;
+      verification_copy p.verification;
+    ]
 
 (* Actionability is decided per project: the community slug must be
    addressable, the project slug canonical, and this the first occurrence
    of that slug — so a duplicated slug leaves at most one actionable row
    and a corrupt one leaves the identity visible but inert. *)
-let project_row_html ~request ~community_slug ~actionable (p : connected_project)
-    =
+let project_row_html ~request ~community_slug ~actionable
+    (p : connected_project) =
   let form =
     if actionable then
       removal_form ~request
@@ -171,9 +172,8 @@ let project_row_html ~request ~community_slug ~actionable (p : connected_project
         ~cls:(Html.static "phrm-community-side")
     else Html.empty
   in
-  (Html.template "<li class='phrm-project'>%s%s</li>"
-  [ (project_identity_html p)
-  ; form ])
+  Html.template "<li class='phrm-project'>%s%s</li>"
+    [ project_identity_html p; form ]
 
 let community_side_management_section ?request ~removal_allowed ~community_slug
     ~projects () =
@@ -202,18 +202,22 @@ let community_side_management_section ?request ~removal_allowed ~community_slug
     (* A settings panel is permanent navigation, so the empty state gets
        restrained copy rather than vanishing the way the public
        connected-projects fragment does. *)
-    | [] -> (Html.static "<p class='phrm-none'>No connected projects.</p>")
+    | [] -> Html.static "<p class='phrm-none'>No connected projects.</p>"
     | rows ->
-        (Html.template "%s<ul class='phrm-projects'>%s</ul>"
-  [ (if removal_allowed then warning_html (Html.static "phrm-section-copy")
-           else
-             (* The association-only warning describes a control this
+        Html.template "%s<ul class='phrm-projects'>%s</ul>"
+          [
+            (if removal_allowed then
+               warning_html (Html.static "phrm-section-copy")
+             else
+               (* The association-only warning describes a control this
                 surface does not offer; the draft-integrity reason takes
                 its place. *)
-             (Html.template "<p class='phrm-section-copy'>%s</p>"
-  [ (Html.text draft_integrity_copy) ]))
-  ; ((Html.join (Html.static "\n")) rows) ])
+               Html.template "<p class='phrm-section-copy'>%s</p>"
+                 [ Html.text draft_integrity_copy ]);
+            (Html.join (Html.static "\n")) rows;
+          ]
   in
-  (Html.template "<section class='phrm-section'>\
-     <h2 class='phrm-section-title'>Connected projects</h2>%s</section>"
-  [ body ])
+  Html.template
+    "<section class='phrm-section'><h2 class='phrm-section-title'>Connected \
+     projects</h2>%s</section>"
+    [ body ]

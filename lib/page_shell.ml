@@ -15,17 +15,20 @@ open Html.Infix
    desktop flow, so a phone-width visitor gets the gate instead of an entry point into it.
    Auth/legal/marketing pages (including /privacy) are left usable. The HTML always renders,
    so crawlers/SSR are unaffected. *)
-let mobile_gate_css_link = (Html.static "<link rel='stylesheet' href='/static/css/mobile-gate.css'>")
+let mobile_gate_css_link =
+  Html.static "<link rel='stylesheet' href='/static/css/mobile-gate.css'>"
 
 let mobile_desktop_gate =
-  (Html.static "<div class='mobile-gate' role='dialog' aria-label='Desktop only'>\
-     <div class='mobile-gate-card'>\
-       <div class='mobile-gate-brand'><img src='/static/images/logo-mark.svg' alt='' class='mobile-gate-logo-mark'><img src='/static/images/logo-wordmark.svg' alt='Earde' class='mobile-gate-logo-wordmark'></div>\
-       <h1 class='mobile-gate-title'>Desktop only for now</h1>\
-       <p class='mobile-gate-body'>Earde is currently built for laptop and desktop screens. Open this page on a larger screen to use the full app.</p>\
-       <p class='mobile-gate-note'>Mobile support is coming later.</p>\
-     </div>\
-   </div>")
+  Html.static
+    "<div class='mobile-gate' role='dialog' aria-label='Desktop only'><div \
+     class='mobile-gate-card'><div class='mobile-gate-brand'><img \
+     src='/static/images/logo-mark.svg' alt='' \
+     class='mobile-gate-logo-mark'><img src='/static/images/logo-wordmark.svg' \
+     alt='Earde' class='mobile-gate-logo-wordmark'></div><h1 \
+     class='mobile-gate-title'>Desktop only for now</h1><p \
+     class='mobile-gate-body'>Earde is currently built for laptop and desktop \
+     screens. Open this page on a larger screen to use the full app.</p><p \
+     class='mobile-gate-note'>Mobile support is coming later.</p></div></div>"
 
 (* PostHog browser integration (spec §2): emitted only when analytics is
    enabled with valid public config — otherwise no script, no banner, no
@@ -40,53 +43,67 @@ let mobile_desktop_gate =
    launch_* document so all of them carry the exact same analytics assets. *)
 let analytics_assets ?request ?analytics_community () =
   match Analytics.browser_config () with
-    | None -> (Html.empty, Html.empty)
-    | Some cfg ->
-        let identity_attr =
-          match request with
-          | None -> Html.empty
-          | Some req -> (
-              (* Absence of session middleware (tests) or a malformed session
+  | None -> (Html.empty, Html.empty)
+  | Some cfg ->
+      let identity_attr =
+        match request with
+        | None -> Html.empty
+        | Some req -> (
+            (* Absence of session middleware (tests) or a malformed session
                  value must safely mean "no identity". *)
-              match (try Dream.session_field req "user_id" with _ -> None) with
-              | None -> Html.empty
-              | Some uid_str -> (
-                  match int_of_string_opt uid_str with
-                  | Some id ->
-                      Html.template " data-analytics-user='%s'"
-                        [ Html.text (Analytics.distinct_id_of_user_id id) ]
-                  | None -> Html.empty))
-        in
-        (* Community context arrives as (id, authoritative visibility) — the
+            match try Dream.session_field req "user_id" with _ -> None with
+            | None -> Html.empty
+            | Some uid_str -> (
+                match int_of_string_opt uid_str with
+                | Some id ->
+                    Html.template " data-analytics-user='%s'"
+                      [ Html.text (Analytics.distinct_id_of_user_id id) ]
+                | None -> Html.empty))
+      in
+      (* Community context arrives as (id, authoritative visibility) — the
            pair comes from the Community_types.community record the page already holds, so
            the §13 private marker can never be derived from URL shape and a
            call site cannot pass the id without stating visibility. The
            marker value is only "true": no name, no slug. On marked
            documents analytics.js records consent but never loads the SDK. *)
-        let group_attr, private_attr =
-          match analytics_community with
-          | Some (community_id, visibility) ->
-              ( Html.template " data-analytics-group='%s'"
-                  [ Html.text (Analytics.community_group_key community_id) ],
-                if Community_types.community_is_private visibility then
-                  (Html.static " data-analytics-private-community='true'")
-                else Html.empty )
-          | None -> (Html.empty, Html.empty)
-        in
-        ( (Html.static "<script src='/static/js/analytics.js' defer></script>"),
-          Html.template
-            "<div id='analytics-consent' hidden data-ph-token='%s' data-ph-api-host='%s' data-ph-deployment-environment='%s'%s%s%s class='fixed bottom-4 left-1/2 -translate-x-1/2 z-50 w-[calc(100%-2rem)] max-w-md bg-white border border-[#E0D9CC] rounded-2xl shadow-xl p-4'>\
-               <p class='text-sm text-gray-700 mb-3'>Earde can collect optional usage analytics (PostHog) to improve the product. Nothing is collected until you choose, and you can change your choice at any time on the <a href='/privacy#cookies-analytics'>privacy page</a>.</p>\
-               <div class='flex items-center gap-2'>\
-                 <button type='button' data-analytics-accept class='px-4 py-1.5 text-sm font-semibold bg-[#C94C4C] text-white rounded-full hover:bg-[#A83A3A] transition'>Accept</button>\
-                 <button type='button' data-analytics-refuse class='px-4 py-1.5 text-sm font-semibold text-gray-600 bg-gray-100 rounded-full hover:bg-gray-200 transition'>Refuse</button>\
-                 <span data-analytics-error hidden class='text-xs text-red-600'>Couldn&#39;t save &mdash; try again.</span>\
-               </div>\
-             </div>"
-            [ Html.text cfg.Analytics.browser_token
-            ; Html.text cfg.Analytics.browser_api_host
-            ; Html.text cfg.Analytics.browser_deployment_environment
-            ; identity_attr; group_attr; private_attr ] )
+      let group_attr, private_attr =
+        match analytics_community with
+        | Some (community_id, visibility) ->
+            ( Html.template " data-analytics-group='%s'"
+                [ Html.text (Analytics.community_group_key community_id) ],
+              if Community_types.community_is_private visibility then
+                Html.static " data-analytics-private-community='true'"
+              else Html.empty )
+        | None -> (Html.empty, Html.empty)
+      in
+      ( Html.static "<script src='/static/js/analytics.js' defer></script>",
+        Html.template
+          "<div id='analytics-consent' hidden data-ph-token='%s' \
+           data-ph-api-host='%s' data-ph-deployment-environment='%s'%s%s%s \
+           class='fixed bottom-4 left-1/2 -translate-x-1/2 z-50 \
+           w-[calc(100%-2rem)] max-w-md bg-white border border-[#E0D9CC] \
+           rounded-2xl shadow-xl p-4'><p class='text-sm text-gray-700 \
+           mb-3'>Earde can collect optional usage analytics (PostHog) to \
+           improve the product. Nothing is collected until you choose, and you \
+           can change your choice at any time on the <a \
+           href='/privacy#cookies-analytics'>privacy page</a>.</p><div \
+           class='flex items-center gap-2'><button type='button' \
+           data-analytics-accept class='px-4 py-1.5 text-sm font-semibold \
+           bg-[#C94C4C] text-white rounded-full hover:bg-[#A83A3A] \
+           transition'>Accept</button><button type='button' \
+           data-analytics-refuse class='px-4 py-1.5 text-sm font-semibold \
+           text-gray-600 bg-gray-100 rounded-full hover:bg-gray-200 \
+           transition'>Refuse</button><span data-analytics-error hidden \
+           class='text-xs text-red-600'>Couldn&#39;t save &mdash; try \
+           again.</span></div></div>"
+          [
+            Html.text cfg.Analytics.browser_token;
+            Html.text cfg.Analytics.browser_api_host;
+            Html.text cfg.Analytics.browser_deployment_environment;
+            identity_attr;
+            group_attr;
+            private_attr;
+          ] )
 
 (* The pre-launch page furniture (the warm Tailwind `Site navbar + footer, the
    mono `App command bar, and the focused `Auth card) is gone. Every live
@@ -108,19 +125,19 @@ let analytics_assets ?request ?analytics_community () =
    keeps the explicit full-label primary action, and suppresses this compact
    one because it would self-link. *)
 let launch_connect_cta =
-  (Html.static "<a class='btn btn--connect-github' href='/bring' \
-   title='Connect an open-source project'>\
-   <svg width='15' height='15' viewBox='0 0 16 16' fill='currentColor' \
-   aria-hidden='true'><path d='M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 \
-   5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 \
-   1.08.58 1.23.82.72 1.21 1.87.87 \
-   2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 \
-   0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 \
-   7.6 0 0 1 4 0c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 \
-   2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 \
-   3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 \
-   .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z'/></svg>\
-   <span>Connect a project</span></a>")
+  Html.static
+    "<a class='btn btn--connect-github' href='/bring' title='Connect an \
+     open-source project'><svg width='15' height='15' viewBox='0 0 16 16' \
+     fill='currentColor' aria-hidden='true'><path d='M8 0C3.58 0 0 3.58 0 8c0 \
+     3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 \
+     0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 \
+     1.08.58 1.23.82.72 1.21 1.87.87 \
+     2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 \
+     0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 \
+     0 0 1 4 0c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 \
+     1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 \
+     1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 \
+     8c0-4.42-3.58-8-8-8Z'/></svg><span>Connect a project</span></a>"
 
 (* The one global footer: a slim, viewer-independent legal strip rendered as
    the .app column's last child (below .shell) by every chrome-bearing launch
@@ -134,11 +151,10 @@ let launch_connect_cta =
    scripts, and the Analytics-preferences target is the /privacy section
    hosting the working consent controls. *)
 let launch_footer =
-  (Html.static "<footer class='launch-footer'>\
-   <a href='/privacy'>Privacy</a>\
-   <span class='launch-footer__sep' aria-hidden='true'>&middot;</span>\
-   <a href='/privacy#cookies-analytics'>Analytics preferences</a>\
-   </footer>")
+  Html.static
+    "<footer class='launch-footer'><a href='/privacy'>Privacy</a><span \
+     class='launch-footer__sep' aria-hidden='true'>&middot;</span><a \
+     href='/privacy#cookies-analytics'>Analytics preferences</a></footer>"
 
 (* The one anonymous topbar action cluster: the shared Connect CTA plus the
    two authentication controls. One value used by every launch wrapper with
@@ -146,8 +162,9 @@ let launch_footer =
    byte-identical CTA and only the surrounding controls differ. *)
 let topbar_anon_actions =
   launch_connect_cta
-  ++ (Html.static "<a class='btn btn--secondary btn--auth' href='/login'>Log in</a>\
-     <a class='btn btn--primary btn--auth' href='/signup'>Sign up</a>")
+  ++ Html.static
+       "<a class='btn btn--secondary btn--auth' href='/login'>Log in</a><a \
+        class='btn btn--primary btn--auth' href='/signup'>Sign up</a>"
 
 (* Entry-chrome topbar policy, chosen per route:
    - [Entry_connect_cta] (default): the viewer-independent chrome — the shared
@@ -157,9 +174,7 @@ let topbar_anon_actions =
      the two auth links; members get the bell and the plain user-chip link
      (never the <details> menu with its logout POST: /bring's non-ready
      states assert zero <form> elements document-wide). *)
-type entry_topbar =
-  | Entry_connect_cta
-  | Entry_viewer of string option
+type entry_topbar = Entry_connect_cta | Entry_viewer of string option
 
 (* Cartographic Civic launch entry document (/bring). A complete,
    self-contained HTML document that loads only the launch stylesheet
@@ -187,98 +202,108 @@ let launch_entry_page ?(noindex = false) ?request ?(topbar = Entry_connect_cta)
     ?(desktop_only = false) ~page_class ~title ~content () =
   let analytics_head, analytics_banner = analytics_assets ?request () in
   let robots_meta =
-    if noindex then (Html.static "<meta name='robots' content='noindex'>") else Html.empty
+    if noindex then Html.static "<meta name='robots' content='noindex'>"
+    else Html.empty
   in
   (* Both halves of the gate carry their own trailing newline, so a document
      that opts out is byte-identical to the pre-option rendering. *)
-  let gate_css = if desktop_only then mobile_gate_css_link ++ (Html.static "\n") else Html.empty in
-  let gate_panel = if desktop_only then mobile_desktop_gate ++ (Html.static "\n") else Html.empty in
+  let gate_css =
+    if desktop_only then mobile_gate_css_link ++ Html.static "\n"
+    else Html.empty
+  in
+  let gate_panel =
+    if desktop_only then mobile_desktop_gate ++ Html.static "\n" else Html.empty
+  in
   let house_icon =
-    (Html.static "<svg width='18' height='18' viewBox='0 0 24 24' fill='none' \
-     stroke='currentColor' stroke-width='1.7' stroke-linecap='round' \
-     stroke-linejoin='round' aria-hidden='true'><path d='M3 10.5 12 3l9 \
-     7.5'></path><path d='M5 9.5V21h14V9.5'></path></svg>")
+    Html.static
+      "<svg width='18' height='18' viewBox='0 0 24 24' fill='none' \
+       stroke='currentColor' stroke-width='1.7' stroke-linecap='round' \
+       stroke-linejoin='round' aria-hidden='true'><path d='M3 10.5 12 3l9 \
+       7.5'></path><path d='M5 9.5V21h14V9.5'></path></svg>"
   in
   let bell_icon =
-    (Html.static "<svg width='16' height='16' viewBox='0 0 24 24' fill='none' \
-     stroke='currentColor' stroke-width='1.7' stroke-linecap='round' \
-     stroke-linejoin='round' aria-hidden='true'><path d='M18 8a6 6 0 0 \
-     0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9'></path><path d='M10 21h4'></path></svg>")
+    Html.static
+      "<svg width='16' height='16' viewBox='0 0 24 24' fill='none' \
+       stroke='currentColor' stroke-width='1.7' stroke-linecap='round' \
+       stroke-linejoin='round' aria-hidden='true'><path d='M18 8a6 6 0 0 0-12 \
+       0c0 7-3 7-3 9h18c0-2-3-2-3-9'></path><path d='M10 21h4'></path></svg>"
   in
   let actions =
     match topbar with
     | Entry_connect_cta -> launch_connect_cta
     | Entry_viewer (Some username) ->
-        let u = (Html.text (username)) in
+        let u = Html.text username in
         let initial =
-          if String.length username > 0
-          then (Html.text ((String.sub (String.uppercase_ascii username) 0 1)))
-          else (Html.static "?")
+          if String.length username > 0 then
+            Html.text (String.sub (String.uppercase_ascii username) 0 1)
+          else Html.static "?"
         in
         (* Form-free member cluster (the onboarding wrapper's, minus the CTA):
            badge server-rendered from the request's unread count, user chip a
            plain link — no <details> menu, no logout form. *)
-        (Html.template "<a class='bell' href='/notifications' title='Notifications' aria-label='Notifications'>%s%s</a>\
-           <a class='userchip' href='/u/%s'><span class='avatar avatar--24'>%s</span><span class='userchip__name'>u/%s</span></a>"
-  [ bell_icon
-  ; (Notification_badge.badge_html ?request ())
-  ; u
-  ; initial
-  ; u ])
+        Html.template
+          "<a class='bell' href='/notifications' title='Notifications' \
+           aria-label='Notifications'>%s%s</a><a class='userchip' \
+           href='/u/%s'><span class='avatar avatar--24'>%s</span><span \
+           class='userchip__name'>u/%s</span></a>"
+          [
+            bell_icon; Notification_badge.badge_html ?request (); u; initial; u;
+          ]
     | Entry_viewer None ->
-        (Html.static "<a class='btn btn--secondary btn--auth' href='/login'>Log in</a>\
-         <a class='btn btn--primary btn--auth' href='/signup'>Sign up</a>")
+        Html.static
+          "<a class='btn btn--secondary btn--auth' href='/login'>Log in</a><a \
+           class='btn btn--primary btn--auth' href='/signup'>Sign up</a>"
   in
-  Html.to_string (Html.template "<!DOCTYPE html>\n\
-     <html lang='en'>\n\
-     <head>\n\
-     <meta charset='UTF-8'>\n\
-     <meta name='viewport' content='width=device-width, initial-scale=1.0'>\n\
-     <title>%s - Earde</title>\n\
-     %s\n\
-     <link rel='stylesheet' href='/static/css/earde.css'>\n\
-     %s%s\n\
-     </head>\n\
-     <body class='%s'>\n\
-     <div class='app'>\n\
-     <header class='topbar'>\
-     <a class='topbar__brand' href='/feed' aria-label='Earde feed'>\
-     <img class='topbar__mark' src='/static/images/logo-mark.svg' alt=''>\
-     <img class='topbar__wordmark' src='/static/images/logo-wordmark.svg' alt='Earde'>\
-     </a>\
-     <a class='search launch-search' href='/search' aria-label='Search Earde'>\
-     <span class='search__sigil' aria-hidden='true'>/</span>\
-     <span class='launch-search__hint'>grep threads &middot; projects &middot; communities&hellip;</span>\
-     <span class='launch-search__enter' aria-hidden='true'>&#8629;</span>\
-     </a>\
-     <div class='topbar__actions'>%s</div>\
-     </header>\n\
-     <div class='shell'>\
-     <nav class='rail' aria-label='Primary'>\
-     <a class='rail__item' href='/feed' title='Feed' aria-label='Feed'>%s</a>\
-     <span class='rail__spacer'></span>\
-     <a class='rail__item rail__item--add' href='/bring' title='Connect a project' aria-label='Connect a project'>&#65291;</a>\
-     </nav>\
-     <main class='main'><div class='scroll'><div class='container--form'>\n\
-     %s\n\
-     </div></div></main>\
-     </div>\n\
-     %s\n\
-     </div>\n\
-     %s%s\n\
-     </body>\n\
-     </html>"
-  [ (Html.text (title))
-  ; robots_meta
-  ; gate_css
-  ; analytics_head
-  ; Html.text page_class
-  ; actions
-  ; house_icon
-  ; content
-  ; launch_footer
-  ; gate_panel
-  ; analytics_banner ])
+  Html.to_string
+    (Html.template
+       "<!DOCTYPE html>\n\
+        <html lang='en'>\n\
+        <head>\n\
+        <meta charset='UTF-8'>\n\
+        <meta name='viewport' content='width=device-width, initial-scale=1.0'>\n\
+        <title>%s - Earde</title>\n\
+        %s\n\
+        <link rel='stylesheet' href='/static/css/earde.css'>\n\
+        %s%s\n\
+        </head>\n\
+        <body class='%s'>\n\
+        <div class='app'>\n\
+        <header class='topbar'><a class='topbar__brand' href='/feed' \
+        aria-label='Earde feed'><img class='topbar__mark' \
+        src='/static/images/logo-mark.svg' alt=''><img \
+        class='topbar__wordmark' src='/static/images/logo-wordmark.svg' \
+        alt='Earde'></a><a class='search launch-search' href='/search' \
+        aria-label='Search Earde'><span class='search__sigil' \
+        aria-hidden='true'>/</span><span class='launch-search__hint'>grep \
+        threads &middot; projects &middot; communities&hellip;</span><span \
+        class='launch-search__enter' aria-hidden='true'>&#8629;</span></a><div \
+        class='topbar__actions'>%s</div></header>\n\
+        <div class='shell'><nav class='rail' aria-label='Primary'><a \
+        class='rail__item' href='/feed' title='Feed' \
+        aria-label='Feed'>%s</a><span class='rail__spacer'></span><a \
+        class='rail__item rail__item--add' href='/bring' title='Connect a \
+        project' aria-label='Connect a project'>&#65291;</a></nav><main \
+        class='main'><div class='scroll'><div class='container--form'>\n\
+        %s\n\
+        </div></div></main></div>\n\
+        %s\n\
+        </div>\n\
+        %s%s\n\
+        </body>\n\
+        </html>"
+       [
+         Html.text title;
+         robots_meta;
+         gate_css;
+         analytics_head;
+         Html.text page_class;
+         actions;
+         house_icon;
+         content;
+         launch_footer;
+         gate_panel;
+         analytics_banner;
+       ])
 
 (* Cartographic Civic launch auth document (/login and /signup).
    Like [launch_entry_page], a complete self-contained document that loads only
@@ -296,53 +321,55 @@ let launch_entry_page ?(noindex = false) ?request ?(topbar = Entry_connect_cta)
    on <body> next to the shared "launch-auth" scope root that the integration
    CSS at the end of earde.css keys on. Existing wrappers and their callers
    are untouched. *)
-let launch_auth_page ?(noindex = false) ?request ~page_class ~title ~content () =
+let launch_auth_page ?(noindex = false) ?request ~page_class ~title ~content ()
+    =
   let analytics_head, analytics_banner = analytics_assets ?request () in
   let robots_meta =
-    if noindex then (Html.static "<meta name='robots' content='noindex'>") else Html.empty
+    if noindex then Html.static "<meta name='robots' content='noindex'>"
+    else Html.empty
   in
-  Html.to_string (Html.template "<!DOCTYPE html>\n\
-     <html lang='en'>\n\
-     <head>\n\
-     <meta charset='UTF-8'>\n\
-     <meta name='viewport' content='width=device-width, initial-scale=1.0'>\n\
-     <title>%s - Earde</title>\n\
-     %s\n\
-     <link rel='stylesheet' href='/static/css/earde.css'>\n\
-     %s\n\
-     </head>\n\
-     <body class='launch-auth %s'>\n\
-     <div class='app'>\n\
-     <header class='topbar'>\
-     <a class='topbar__brand' href='/feed' aria-label='Earde feed'>\
-     <img class='topbar__mark' src='/static/images/logo-mark.svg' alt=''>\
-     <img class='topbar__wordmark' src='/static/images/logo-wordmark.svg' alt='Earde'>\
-     </a>\
-     <a class='search launch-search' href='/search' aria-label='Search Earde'>\
-     <span class='search__sigil' aria-hidden='true'>/</span>\
-     <span class='launch-search__hint'>grep threads &middot; projects &middot; communities&hellip;</span>\
-     <span class='launch-search__enter' aria-hidden='true'>&#8629;</span>\
-     </a>\
-     <div class='topbar__actions topbar__actions--anon'>%s</div>\
-     </header>\n\
-     <div class='shell'>\
-     <main class='main main--paper'><div class='scroll'>\n\
-     %s\n\
-     </div></main>\
-     </div>\n\
-     %s\n\
-     </div>\n\
-     %s\n\
-     </body>\n\
-     </html>"
-  [ (Html.text (title))
-  ; robots_meta
-  ; analytics_head
-  ; Html.text page_class
-  ; topbar_anon_actions
-  ; content
-  ; launch_footer
-  ; analytics_banner ])
+  Html.to_string
+    (Html.template
+       "<!DOCTYPE html>\n\
+        <html lang='en'>\n\
+        <head>\n\
+        <meta charset='UTF-8'>\n\
+        <meta name='viewport' content='width=device-width, initial-scale=1.0'>\n\
+        <title>%s - Earde</title>\n\
+        %s\n\
+        <link rel='stylesheet' href='/static/css/earde.css'>\n\
+        %s\n\
+        </head>\n\
+        <body class='launch-auth %s'>\n\
+        <div class='app'>\n\
+        <header class='topbar'><a class='topbar__brand' href='/feed' \
+        aria-label='Earde feed'><img class='topbar__mark' \
+        src='/static/images/logo-mark.svg' alt=''><img \
+        class='topbar__wordmark' src='/static/images/logo-wordmark.svg' \
+        alt='Earde'></a><a class='search launch-search' href='/search' \
+        aria-label='Search Earde'><span class='search__sigil' \
+        aria-hidden='true'>/</span><span class='launch-search__hint'>grep \
+        threads &middot; projects &middot; communities&hellip;</span><span \
+        class='launch-search__enter' aria-hidden='true'>&#8629;</span></a><div \
+        class='topbar__actions topbar__actions--anon'>%s</div></header>\n\
+        <div class='shell'><main class='main main--paper'><div class='scroll'>\n\
+        %s\n\
+        </div></main></div>\n\
+        %s\n\
+        </div>\n\
+        %s\n\
+        </body>\n\
+        </html>"
+       [
+         Html.text title;
+         robots_meta;
+         analytics_head;
+         Html.text page_class;
+         topbar_anon_actions;
+         content;
+         launch_footer;
+         analytics_banner;
+       ])
 
 (* Cartographic Civic launch message document (the shared
    Site_pages.msg_page). Like the other launch documents, complete and
@@ -363,34 +390,33 @@ let launch_auth_page ?(noindex = false) ?request ~page_class ~title ~content () 
 let launch_message_page ?(noindex = false) ?request ~title ~content () =
   let analytics_head, analytics_banner = analytics_assets ?request () in
   let robots_meta =
-    if noindex then (Html.static "<meta name='robots' content='noindex'>") else Html.empty
+    if noindex then Html.static "<meta name='robots' content='noindex'>"
+    else Html.empty
   in
-  Html.to_string (Html.template "<!DOCTYPE html>\n\
-     <html lang='en'>\n\
-     <head>\n\
-     <meta charset='UTF-8'>\n\
-     <meta name='viewport' content='width=device-width, initial-scale=1.0'>\n\
-     <title>%s - Earde</title>\n\
-     %s\n\
-     <link rel='stylesheet' href='/static/css/earde.css'>\n\
-     %s\n\
-     </head>\n\
-     <body class='launch-message-page'>\n\
-     <div class='app'>\n\
-     <div class='shell'>\
-     <main class='main main--paper'><div class='scroll'>\n\
-     %s\n\
-     </div></main>\
-     </div>\n\
-     </div>\n\
-     %s\n\
-     </body>\n\
-     </html>"
-  [ (Html.text (title))
-  ; robots_meta
-  ; analytics_head
-  ; content
-  ; analytics_banner ])
+  Html.to_string
+    (Html.template
+       "<!DOCTYPE html>\n\
+        <html lang='en'>\n\
+        <head>\n\
+        <meta charset='UTF-8'>\n\
+        <meta name='viewport' content='width=device-width, initial-scale=1.0'>\n\
+        <title>%s - Earde</title>\n\
+        %s\n\
+        <link rel='stylesheet' href='/static/css/earde.css'>\n\
+        %s\n\
+        </head>\n\
+        <body class='launch-message-page'>\n\
+        <div class='app'>\n\
+        <div class='shell'><main class='main main--paper'><div class='scroll'>\n\
+        %s\n\
+        </div></main></div>\n\
+        </div>\n\
+        %s\n\
+        </body>\n\
+        </html>"
+       [
+         Html.text title; robots_meta; analytics_head; content; analytics_banner;
+       ])
 
 (* Deterministic launch-palette colour for a community tile/avatar. The
    database stores no per-community colour, so the launch chrome derives a
@@ -421,7 +447,9 @@ let launch_tile_color slug =
    behavior script below and the guest-only [launch_share_script] — the
    Share button render_post emits is the SAME byte-pinned control for both
    viewer states, so the two documents must never ship diverging copies. *)
-let launch_share_snippet = (Html.static {js|        /* Clipboard write is async; we optimistically swap innerHTML and class list
+let launch_share_snippet =
+  Html.static
+    {js|        /* Clipboard write is async; we optimistically swap innerHTML and class list
            rather than disabling the button — avoids layout shift on fast connections. */
         function copyPostLink(path, btn) {
           var fullUrl = window.location.origin + path;
@@ -436,16 +464,20 @@ let launch_share_snippet = (Html.static {js|        /* Clipboard write is async;
               btn.classList.add('text-gray-500', 'hover:text-gray-900');
             }, 2000);
           }).catch(function(err) { console.error('Failed to copy: ', err); });
-        }|js})
+        }|js}
 
 (* Guest-only public-interaction script: exactly the shared copyPostLink and
    nothing else — no confirm modal and no vote handler (anonymous documents
    must fire zero requests beyond assets). Emitted per route (currently the flat community home,
    whose byte-pinned rows show Share to every viewer); the doc builders'
    anonymous default stays script-free. *)
-let launch_share_script = (Html.static "<script>\n") ++ launch_share_snippet ++ (Html.static "\n      </script>")
+let launch_share_script =
+  Html.static "<script>\n" ++ launch_share_snippet
+  ++ Html.static "\n      </script>"
 
-let launch_behavior_script = (Html.static {js|<script>
+let launch_behavior_script =
+  Html.static
+    {js|<script>
         /* Custom confirmation modal: replaces native window.confirm() — the browser's
            built-in dialog is synchronous, unstyled, and blocks the JS thread. */
         function confirmModal(event, message) {
@@ -481,7 +513,10 @@ let launch_behavior_script = (Html.static {js|<script>
           /* form.submit() bypasses the submit event so onsubmit won't re-fire. */
           document.getElementById('confirm-btn').onclick = () => { close(); form.submit(); };
         }
-|js}) ++ launch_share_snippet ++ (Html.static {js|
+|js}
+  ++ launch_share_snippet
+  ++ Html.static
+       {js|
         /* Optimistic vote update: mutate DOM immediately, then fire-and-forget XHR.
            If the request fails the server state is authoritative on next page load —
            acceptable UX trade-off for a forum where stale scores are low-stakes. */
@@ -553,7 +588,7 @@ let launch_behavior_script = (Html.static {js|<script>
                 scoreSpan.innerText = score;
             });
         });
-      </script>|js})
+      </script>|js}
 
 (* Cartographic Civic launch app document (/feed). Like the entry and
    auth documents, a complete self-contained page loading only earde.css — no
@@ -576,71 +611,80 @@ let launch_app_page ?(noindex = false) ?request ?user ?(rail_communities = [])
     analytics_assets ?request ?analytics_community ()
   in
   let robots_meta =
-    if noindex then (Html.static "<meta name='robots' content='noindex'>") else Html.empty
+    if noindex then Html.static "<meta name='robots' content='noindex'>"
+    else Html.empty
   in
-  let is_admin = match request with
-    | Some req -> (try Dream.session_field req "is_admin" = Some "true" with _ -> false)
+  let is_admin =
+    match request with
+    | Some req -> (
+        try Dream.session_field req "is_admin" = Some "true" with _ -> false)
     | None -> false
   in
   let house_icon =
-    (Html.static "<svg width='18' height='18' viewBox='0 0 24 24' fill='none' \
-     stroke='currentColor' stroke-width='1.7' stroke-linecap='round' \
-     stroke-linejoin='round' aria-hidden='true'><path d='M3 10.5 12 3l9 \
-     7.5'></path><path d='M5 9.5V21h14V9.5'></path></svg>")
+    Html.static
+      "<svg width='18' height='18' viewBox='0 0 24 24' fill='none' \
+       stroke='currentColor' stroke-width='1.7' stroke-linecap='round' \
+       stroke-linejoin='round' aria-hidden='true'><path d='M3 10.5 12 3l9 \
+       7.5'></path><path d='M5 9.5V21h14V9.5'></path></svg>"
   in
   let bell_icon =
-    (Html.static "<svg width='16' height='16' viewBox='0 0 24 24' fill='none' \
-     stroke='currentColor' stroke-width='1.7' stroke-linecap='round' \
-     stroke-linejoin='round' aria-hidden='true'><path d='M18 8a6 6 0 0 \
-     0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9'></path><path d='M10 21h4'></path></svg>")
+    Html.static
+      "<svg width='16' height='16' viewBox='0 0 24 24' fill='none' \
+       stroke='currentColor' stroke-width='1.7' stroke-linecap='round' \
+       stroke-linejoin='round' aria-hidden='true'><path d='M18 8a6 6 0 0 0-12 \
+       0c0 7-3 7-3 9h18c0-2-3-2-3-9'></path><path d='M10 21h4'></path></svg>"
   in
   (* Same /search route + ?q= contract (and `required`) as both legacy search
      forms; only the skin is the handoff command field. *)
   let search_form =
-    (Html.static "<form class='topbar__search-cell' action='/search' method='GET' role='search'>\
-     <div class='search'>\
-     <span class='search__sigil' aria-hidden='true'>/</span>\
-     <label class='sr-only' for='q'>Search Earde</label>\
-     <input class='search__input' id='q' type='text' name='q' required placeholder='grep threads &middot; projects &middot; communities&hellip;'>\
-     <button class='search__enter' type='submit' aria-label='Search'>&#8629;</button>\
-     </div>\
-     </form>")
+    Html.static
+      "<form class='topbar__search-cell' action='/search' method='GET' \
+       role='search'><div class='search'><span class='search__sigil' \
+       aria-hidden='true'>/</span><label class='sr-only' for='q'>Search \
+       Earde</label><input class='search__input' id='q' type='text' name='q' \
+       required placeholder='grep threads &middot; projects &middot; \
+       communities&hellip;'><button class='search__enter' type='submit' \
+       aria-label='Search'>&#8629;</button></div></form>"
   in
   let actions =
     match user with
     | Some username ->
-        let u = (Html.text (username)) in
+        let u = Html.text username in
         (* /admin is admin-only; the handler re-checks is_admin, so offering
            the link to a flagged session leaks nothing. *)
-        let admin_item = if is_admin then (Html.static "<a href='/admin'>Admin</a>") else Html.empty in
+        let admin_item =
+          if is_admin then Html.static "<a href='/admin'>Admin</a>"
+          else Html.empty
+        in
         let initial =
-          if String.length username > 0
-          then (Html.text ((String.sub (String.uppercase_ascii username) 0 1)))
-          else (Html.static "?")
+          if String.length username > 0 then
+            Html.text (String.sub (String.uppercase_ascii username) 0 1)
+          else Html.static "?"
         in
         (* User menu is a pure-CSS <details>; Log out stays a POST form with
            its existing action/semantics. The bell's badge is server-rendered
            from the request's unread count and is simply absent at zero — see
            [Notification_badge]. *)
-        (Html.template "%s\
-           <a class='bell' href='/notifications' title='Notifications' aria-label='Notifications'>%s%s</a>\
-           <details class='launch-user'>\
-           <summary class='userchip'><span class='avatar avatar--24'>%s</span><span class='userchip__name'>u/%s</span></summary>\
-           <div class='launch-user__menu'>\
-           <a href='/u/%s'>Profile</a>\
-           <a href='/settings'>Settings</a>\
-           <a href='/notifications'>Notifications</a>\
-           %s\
-           <form action='/logout' method='POST'><button type='submit'>Log out</button></form>\
-           </div>\
-           </details>"
-  [ launch_connect_cta
-  ; bell_icon
-  ; (Notification_badge.badge_html ?request ())
-  ; initial
-  ; u
-  ; u
-  ; admin_item ])
+        Html.template
+          "%s<a class='bell' href='/notifications' title='Notifications' \
+           aria-label='Notifications'>%s%s</a><details \
+           class='launch-user'><summary class='userchip'><span class='avatar \
+           avatar--24'>%s</span><span \
+           class='userchip__name'>u/%s</span></summary><div \
+           class='launch-user__menu'><a href='/u/%s'>Profile</a><a \
+           href='/settings'>Settings</a><a \
+           href='/notifications'>Notifications</a>%s<form action='/logout' \
+           method='POST'><button type='submit'>Log \
+           out</button></form></div></details>"
+          [
+            launch_connect_cta;
+            bell_icon;
+            Notification_badge.badge_html ?request ();
+            initial;
+            u;
+            u;
+            admin_item;
+          ]
     | None ->
         (* Anonymous cluster (04-ROUTES): no bell, no user chip, no logout,
            and therefore no notification fetch anywhere in the document. *)
@@ -665,89 +709,91 @@ let launch_app_page ?(noindex = false) ?request ?user ?(rail_communities = [])
           | Some url -> (
               match Html.image_src_opt url with
               | Some src ->
-                  Html.template "<img class='launch-rail__img' src='%s' alt=''>" [ src ]
+                  Html.template "<img class='launch-rail__img' src='%s' alt=''>"
+                    [ src ]
               | None -> Html.text (tile_glyph c.slug))
           | None -> Html.text (tile_glyph c.slug)
         in
-        (Html.template "<a class='rail__item rail__item--community' href='/c/%s/ch/general' title='/c/%s' style='background:%s'>%s</a>"
-  [ (Html.text (c.slug))
-  ; (Html.text (c.slug))
-  ; (Html.text (launch_tile_color c.slug))
-  ; face ]))
+        Html.template
+          "<a class='rail__item rail__item--community' href='/c/%s/ch/general' \
+           title='/c/%s' style='background:%s'>%s</a>"
+          [
+            Html.text c.slug;
+            Html.text c.slug;
+            Html.text (launch_tile_color c.slug);
+            face;
+          ])
       rail_communities
   in
   let divider =
-    if rail_communities = [] then Html.empty else (Html.static "<span class='rail__divider'></span>")
+    if rail_communities = [] then Html.empty
+    else Html.static "<span class='rail__divider'></span>"
   in
   let rail =
-    (Html.template "<nav class='rail' aria-label='Primary'>\
-       <a class='rail__item' href='/feed' title='Feed' aria-label='Feed'><span class='rail__marker'></span>%s</a>\
-       %s%s\
-       <span class='rail__spacer'></span>\
-       <a class='rail__item rail__item--add' href='/bring' title='Connect a project' aria-label='Connect a project'>&#65291;</a>\
-       </nav>"
-  [ house_icon
-  ; divider
-  ; (Html.concat tiles) ])
+    Html.template
+      "<nav class='rail' aria-label='Primary'><a class='rail__item' \
+       href='/feed' title='Feed' aria-label='Feed'><span \
+       class='rail__marker'></span>%s</a>%s%s<span \
+       class='rail__spacer'></span><a class='rail__item rail__item--add' \
+       href='/bring' title='Connect a project' aria-label='Connect a \
+       project'>&#65291;</a></nav>"
+      [ house_icon; divider; Html.concat tiles ]
   in
   let aside_html =
     if Html.is_empty aside then Html.empty
-    else (Html.template "<aside class='aside' aria-label='Secondary'>%s</aside>"
-  [ aside ])
+    else
+      Html.template "<aside class='aside' aria-label='Secondary'>%s</aside>"
+        [ aside ]
   in
-  let behavior_script = match user with
-    | Some _ -> launch_behavior_script
-    | None -> Html.empty
+  let behavior_script =
+    match user with Some _ -> launch_behavior_script | None -> Html.empty
   in
-  Html.to_string (Html.template "<!DOCTYPE html>\n\
-     <html lang='en'>\n\
-     <head>\n\
-     <meta charset='UTF-8'>\n\
-     <meta name='viewport' content='width=device-width, initial-scale=1.0'>\n\
-     <title>%s - Earde</title>\n\
-     %s\n\
-     <link rel='stylesheet' href='/static/css/earde.css'>\n\
-     %s\n\
-     %s\n\
-     </head>\n\
-     <body class='%s'>\n\
-     <div class='app'>\n\
-     <header class='topbar'>\
-     <a class='topbar__brand' href='/feed' aria-label='Earde feed'>\
-     <img class='topbar__mark' src='/static/images/logo-mark.svg' alt=''>\
-     <img class='topbar__wordmark' src='/static/images/logo-wordmark.svg' alt='Earde'>\
-     </a>\
-     %s\
-     <div class='topbar__actions'>%s</div>\
-     </header>\n\
-     <div class='shell'>\
-     %s\
-     <main class='main'>\n\
-     %s\n\
-     </main>\
-     %s\
-     </div>\n\
-     %s\n\
-     </div>\n\
-     %s\n\
-     %s\n\
-     %s\n\
-     </body>\n\
-     </html>"
-  [ (Html.text (title))
-  ; robots_meta
-  ; mobile_gate_css_link
-  ; analytics_head
-  ; Html.text page_class
-  ; search_form
-  ; actions
-  ; rail
-  ; content
-  ; aside_html
-  ; launch_footer
-  ; mobile_desktop_gate
-  ; analytics_banner
-  ; behavior_script ])
+  Html.to_string
+    (Html.template
+       "<!DOCTYPE html>\n\
+        <html lang='en'>\n\
+        <head>\n\
+        <meta charset='UTF-8'>\n\
+        <meta name='viewport' content='width=device-width, initial-scale=1.0'>\n\
+        <title>%s - Earde</title>\n\
+        %s\n\
+        <link rel='stylesheet' href='/static/css/earde.css'>\n\
+        %s\n\
+        %s\n\
+        </head>\n\
+        <body class='%s'>\n\
+        <div class='app'>\n\
+        <header class='topbar'><a class='topbar__brand' href='/feed' \
+        aria-label='Earde feed'><img class='topbar__mark' \
+        src='/static/images/logo-mark.svg' alt=''><img \
+        class='topbar__wordmark' src='/static/images/logo-wordmark.svg' \
+        alt='Earde'></a>%s<div class='topbar__actions'>%s</div></header>\n\
+        <div class='shell'>%s<main class='main'>\n\
+        %s\n\
+        </main>%s</div>\n\
+        %s\n\
+        </div>\n\
+        %s\n\
+        %s\n\
+        %s\n\
+        </body>\n\
+        </html>"
+       [
+         Html.text title;
+         robots_meta;
+         mobile_gate_css_link;
+         analytics_head;
+         Html.text page_class;
+         search_form;
+         actions;
+         rail;
+         content;
+         aside_html;
+         launch_footer;
+         mobile_desktop_gate;
+         analytics_banner;
+         behavior_script;
+       ])
 
 (* Cartographic Civic launch onboarding document (/projects/new).
    Like the other launch documents, a complete self-contained page loading only
@@ -777,107 +823,112 @@ let launch_app_page ?(noindex = false) ?request ?user ?(rail_communities = [])
    (e.g. "launch-project-new") is the scoping root stamped on <body> for the
    route's integration CSS at the end of earde.css. Used only by
    [Project_setup_pages.project_setup_page]. *)
-let launch_onboarding_page ?(noindex = false) ?request ?user ?(stepper = Html.empty)
-    ~page_class ~title ~content () =
+let launch_onboarding_page ?(noindex = false) ?request ?user
+    ?(stepper = Html.empty) ~page_class ~title ~content () =
   let analytics_head, analytics_banner = analytics_assets ?request () in
   let robots_meta =
-    if noindex then (Html.static "<meta name='robots' content='noindex'>") else Html.empty
+    if noindex then Html.static "<meta name='robots' content='noindex'>"
+    else Html.empty
   in
   let house_icon =
-    (Html.static "<svg width='18' height='18' viewBox='0 0 24 24' fill='none' \
-     stroke='currentColor' stroke-width='1.7' stroke-linecap='round' \
-     stroke-linejoin='round' aria-hidden='true'><path d='M3 10.5 12 3l9 \
-     7.5'></path><path d='M5 9.5V21h14V9.5'></path></svg>")
+    Html.static
+      "<svg width='18' height='18' viewBox='0 0 24 24' fill='none' \
+       stroke='currentColor' stroke-width='1.7' stroke-linecap='round' \
+       stroke-linejoin='round' aria-hidden='true'><path d='M3 10.5 12 3l9 \
+       7.5'></path><path d='M5 9.5V21h14V9.5'></path></svg>"
   in
   let bell_icon =
-    (Html.static "<svg width='16' height='16' viewBox='0 0 24 24' fill='none' \
-     stroke='currentColor' stroke-width='1.7' stroke-linecap='round' \
-     stroke-linejoin='round' aria-hidden='true'><path d='M18 8a6 6 0 0 \
-     0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9'></path><path d='M10 21h4'></path></svg>")
+    Html.static
+      "<svg width='16' height='16' viewBox='0 0 24 24' fill='none' \
+       stroke='currentColor' stroke-width='1.7' stroke-linecap='round' \
+       stroke-linejoin='round' aria-hidden='true'><path d='M18 8a6 6 0 0 0-12 \
+       0c0 7-3 7-3 9h18c0-2-3-2-3-9'></path><path d='M10 21h4'></path></svg>"
   in
   let actions =
     match user with
     | Some username ->
-        let u = (Html.text (username)) in
+        let u = Html.text username in
         let initial =
-          if String.length username > 0
-          then (Html.text ((String.sub (String.uppercase_ascii username) 0 1)))
-          else (Html.static "?")
+          if String.length username > 0 then
+            Html.text (String.sub (String.uppercase_ascii username) 0 1)
+          else Html.static "?"
         in
         (* The bell's badge is server-rendered from the request's unread count
            and is simply absent at zero (see [Notification_badge]); the user
            chip is the reference markup's plain link — no menu, no extra
            form. *)
-        (Html.template "%s\
-           <a class='bell' href='/notifications' title='Notifications' aria-label='Notifications'>%s%s</a>\
-           <a class='userchip' href='/u/%s'><span class='avatar avatar--24'>%s</span><span class='userchip__name'>u/%s</span></a>"
-  [ launch_connect_cta
-  ; bell_icon
-  ; (Notification_badge.badge_html ?request ())
-  ; u
-  ; initial
-  ; u ])
-    | None ->
-        topbar_anon_actions
+        Html.template
+          "%s<a class='bell' href='/notifications' title='Notifications' \
+           aria-label='Notifications'>%s%s</a><a class='userchip' \
+           href='/u/%s'><span class='avatar avatar--24'>%s</span><span \
+           class='userchip__name'>u/%s</span></a>"
+          [
+            launch_connect_cta;
+            bell_icon;
+            Notification_badge.badge_html ?request ();
+            u;
+            initial;
+            u;
+          ]
+    | None -> topbar_anon_actions
   in
-  let behavior_script = match user with
-    | Some _ -> launch_behavior_script
-    | None -> Html.empty
+  let behavior_script =
+    match user with Some _ -> launch_behavior_script | None -> Html.empty
   in
-  Html.to_string (Html.template "<!DOCTYPE html>\n\
-     <html lang='en'>\n\
-     <head>\n\
-     <meta charset='UTF-8'>\n\
-     <meta name='viewport' content='width=device-width, initial-scale=1.0'>\n\
-     <title>%s - Earde</title>\n\
-     %s\n\
-     <link rel='stylesheet' href='/static/css/earde.css'>\n\
-     %s\n\
-     %s\n\
-     </head>\n\
-     <body class='%s'>\n\
-     <div class='app'>\n\
-     <header class='topbar'>\
-     <a class='topbar__brand' href='/feed' aria-label='Earde feed'>\
-     <img class='topbar__mark' src='/static/images/logo-mark.svg' alt=''>\
-     <img class='topbar__wordmark' src='/static/images/logo-wordmark.svg' alt='Earde'>\
-     </a>\
-     <a class='search launch-search' href='/search' aria-label='Search Earde'>\
-     <span class='search__sigil' aria-hidden='true'>/</span>\
-     <span class='launch-search__hint'>grep threads &middot; projects &middot; communities&hellip;</span>\
-     <span class='launch-search__enter' aria-hidden='true'>&#8629;</span>\
-     </a>\
-     <div class='topbar__actions'>%s</div>\
-     </header>\n\
-     <div class='shell'>\
-     <nav class='rail' aria-label='Primary'>\
-     <a class='rail__item' href='/feed' title='Feed' aria-label='Feed'>%s</a>\
-     <span class='rail__spacer'></span>\
-     <a class='rail__item rail__item--add' href='/bring' title='Connect a project' aria-label='Connect a project'>&#65291;</a>\
-     </nav>\
-     <main class='main'><div class='scroll'><div class='container--form'>\n\
-     %s<div class='create-shell'>%s</div></div></div></main>\
-     </div>\n\
-     %s\n\
-     </div>\n\
-     %s\n\
-     %s\n\
-     %s\n\
-     </body>\n\
-     </html>"
-  [ (Html.text (title))
-  ; robots_meta
-  ; mobile_gate_css_link
-  ; analytics_head
-  ; Html.text page_class
-  ; actions
-  ; house_icon
-  ; stepper
-  ; content
-  ; launch_footer
-  ; mobile_desktop_gate
-  ; analytics_banner
-  ; behavior_script ])
+  Html.to_string
+    (Html.template
+       "<!DOCTYPE html>\n\
+        <html lang='en'>\n\
+        <head>\n\
+        <meta charset='UTF-8'>\n\
+        <meta name='viewport' content='width=device-width, initial-scale=1.0'>\n\
+        <title>%s - Earde</title>\n\
+        %s\n\
+        <link rel='stylesheet' href='/static/css/earde.css'>\n\
+        %s\n\
+        %s\n\
+        </head>\n\
+        <body class='%s'>\n\
+        <div class='app'>\n\
+        <header class='topbar'><a class='topbar__brand' href='/feed' \
+        aria-label='Earde feed'><img class='topbar__mark' \
+        src='/static/images/logo-mark.svg' alt=''><img \
+        class='topbar__wordmark' src='/static/images/logo-wordmark.svg' \
+        alt='Earde'></a><a class='search launch-search' href='/search' \
+        aria-label='Search Earde'><span class='search__sigil' \
+        aria-hidden='true'>/</span><span class='launch-search__hint'>grep \
+        threads &middot; projects &middot; communities&hellip;</span><span \
+        class='launch-search__enter' aria-hidden='true'>&#8629;</span></a><div \
+        class='topbar__actions'>%s</div></header>\n\
+        <div class='shell'><nav class='rail' aria-label='Primary'><a \
+        class='rail__item' href='/feed' title='Feed' \
+        aria-label='Feed'>%s</a><span class='rail__spacer'></span><a \
+        class='rail__item rail__item--add' href='/bring' title='Connect a \
+        project' aria-label='Connect a project'>&#65291;</a></nav><main \
+        class='main'><div class='scroll'><div class='container--form'>\n\
+        %s<div class='create-shell'>%s</div></div></div></main></div>\n\
+        %s\n\
+        </div>\n\
+        %s\n\
+        %s\n\
+        %s\n\
+        </body>\n\
+        </html>"
+       [
+         Html.text title;
+         robots_meta;
+         mobile_gate_css_link;
+         analytics_head;
+         Html.text page_class;
+         actions;
+         house_icon;
+         stepper;
+         content;
+         launch_footer;
+         mobile_desktop_gate;
+         analytics_banner;
+         behavior_script;
+       ])
 
 (* === REPLAY PRIVACY ===
    The multi-pane legacy shell (global_shell / community_shell / feed_shell,
@@ -891,6 +942,6 @@ let launch_onboarding_page ?(noindex = false) ?request ?user ?(stepper = Html.em
    blocked from session replay entirely via PostHog's built-in ph-no-capture
    class, on top of the selector-based text masking. *)
 let private_replay_guard ~(community : Community_types.community) body =
-  if community.Community_types.visibility = Community_types.Community_private then
-    Html.static "<div class='ph-no-capture'>" ++ body ++ Html.static "</div>"
+  if community.Community_types.visibility = Community_types.Community_private
+  then Html.static "<div class='ph-no-capture'>" ++ body ++ Html.static "</div>"
   else body

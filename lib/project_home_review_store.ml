@@ -12,10 +12,7 @@
 
 open Lwt.Infix
 
-type decision =
-  | Accept
-  | Reject
-
+type decision = Accept | Reject
 type reviewed_request = { resulting_status : Project_home_relation.status }
 
 let resulting_status { resulting_status } = resulting_status
@@ -75,11 +72,9 @@ let canonical_community_slug value =
 let lock_project_query =
   let open Caqti_request.Infix in
   (Caqti_type.string ->? Caqti_type.(t3 int64 string string))
-  "SELECT p.id, p.slug, \
-          project_github_verification(p.id, p.verification_status) \
-   FROM open_source_projects p \
-   WHERE p.slug = $1 \
-   FOR UPDATE OF p"
+    "SELECT p.id, p.slug, project_github_verification(p.id, \
+     p.verification_status) FROM open_source_projects p WHERE p.slug = $1 FOR \
+     UPDATE OF p"
 
 (* The exact closed schema vocabulary (mirrors the open_source_projects
    verification CHECK); anything else in the durable column is
@@ -97,15 +92,13 @@ let known_verification_status = function
 let lock_community_query =
   let open Caqti_request.Infix in
   (Caqti_type.string
-   ->? Caqti_type.(
-         t2
-           (t2 (t2 int string) (t2 string string))
-           (t2 string (t3 bool bool bool))))
-  "SELECT id, slug, name, visibility, onboarding_state, \
-          is_network_community, indexable, discoverable \
-   FROM communities \
-   WHERE slug = $1 \
-   FOR UPDATE"
+  ->? Caqti_type.(
+        t2
+          (t2 (t2 int string) (t2 string string))
+          (t2 string (t3 bool bool bool))))
+    "SELECT id, slug, name, visibility, onboarding_state, \
+     is_network_community, indexable, discoverable FROM communities WHERE slug \
+     = $1 FOR UPDATE"
 
 (* Reviewer authorization, third, both checked and locked inside SQL so a
    concurrent role removal or downgrade serializes through the row lock
@@ -114,9 +107,8 @@ let lock_community_query =
 let lock_top_moderator_query =
   let open Caqti_request.Infix in
   (Caqti_type.(t2 int int) ->? Caqti_type.string)
-  "SELECT role FROM community_moderators \
-   WHERE user_id = $1 AND community_id = $2 AND role = 'top_mod' \
-   FOR UPDATE"
+    "SELECT role FROM community_moderators WHERE user_id = $1 AND community_id \
+     = $2 AND role = 'top_mod' FOR UPDATE"
 
 (* ...then, only when no top moderator row exists, the durable global
    administrator flag on the users row — the only durable representation
@@ -125,9 +117,7 @@ let lock_top_moderator_query =
 let lock_admin_query =
   let open Caqti_request.Infix in
   (Caqti_type.int ->? Caqti_type.bool)
-  "SELECT is_admin FROM users \
-   WHERE id = $1 AND is_admin \
-   FOR UPDATE"
+    "SELECT is_admin FROM users WHERE id = $1 AND is_admin FOR UPDATE"
 
 (* The exact pending relation, locked last. The partial unique active-home
    index caps this at one row; every zero-row cause (no relation, another
@@ -136,17 +126,14 @@ let lock_admin_query =
 let lock_pending_relation_query =
   let open Caqti_request.Infix in
   (Caqti_type.(t2 int64 int)
-   ->? Caqti_type.(
-         t2
-           (t2 (t2 int64 string) (t2 string (option string)))
-           (t2 (t2 (option int) (option int)) (t2 bool bool))))
-  "SELECT id, relation_type, status, request_note, \
-          requested_by_user_id, reviewed_by_user_id, \
-          reviewed_at IS NULL, removed_at IS NULL \
-   FROM community_projects \
-   WHERE project_id = $1 AND community_id = $2 \
-     AND relation_type = 'home' AND status = 'pending' \
-   FOR UPDATE"
+  ->? Caqti_type.(
+        t2
+          (t2 (t2 int64 string) (t2 string (option string)))
+          (t2 (t2 (option int) (option int)) (t2 bool bool))))
+    "SELECT id, relation_type, status, request_note, requested_by_user_id, \
+     reviewed_by_user_id, reviewed_at IS NULL, removed_at IS NULL FROM \
+     community_projects WHERE project_id = $1 AND community_id = $2 AND \
+     relation_type = 'home' AND status = 'pending' FOR UPDATE"
 
 (* The one mutation: the locked row, guarded again on pending so a zero
    count is a completed concurrent review, never a second write. The
@@ -158,14 +145,10 @@ let lock_pending_relation_query =
 let update_relation_query =
   let open Caqti_request.Infix in
   (Caqti_type.(t3 int64 string int) ->* Caqti_type.(t2 int64 string))
-  "UPDATE community_projects \
-   SET status = $2, \
-       reviewed_by_user_id = $3, \
-       reviewed_at = GREATEST(NOW(), created_at), \
-       removed_at = NULL, \
-       updated_at = GREATEST(NOW(), created_at) \
-   WHERE id = $1 AND status = 'pending' \
-   RETURNING id, status"
+    "UPDATE community_projects SET status = $2, reviewed_by_user_id = $3, \
+     reviewed_at = GREATEST(NOW(), created_at), removed_at = NULL, updated_at \
+     = GREATEST(NOW(), created_at) WHERE id = $1 AND status = 'pending' \
+     RETURNING id, status"
 
 (* Current-eligibility predicate for acceptance — exactly the established
    host-eligibility rule the request store filters on: a published,
@@ -213,7 +196,7 @@ let review (module C : Caqti_lwt.CONNECTION) ~reviewer_user_id ~project_slug
         C.find_opt lock_project_query project_slug >>= function
         | Error _ -> rollback_to Storage_error
         | Ok None -> rollback_to Project_unavailable
-        | Ok (Some (project_id, stored_project_slug, stored_verification)) ->
+        | Ok (Some (project_id, stored_project_slug, stored_verification)) -> (
             if
               not
                 (positive project_id
@@ -228,24 +211,23 @@ let review (module C : Caqti_lwt.CONNECTION) ~reviewer_user_id ~project_slug
               let project_verified =
                 String.equal stored_verification "verified"
               in
-              (
-              C.find_opt lock_community_query target_community_slug
-              >>= function
+              C.find_opt lock_community_query target_community_slug >>= function
               | Error _ -> rollback_to Storage_error
               | Ok None -> rollback_to Community_unavailable
               | Ok
                   (Some
-                    ( ( (community_id, stored_community_slug),
-                        (community_name, visibility_raw) ),
-                      ( onboarding_raw,
-                        (is_network_community, indexable, discoverable) ) ))
+                     ( ( (community_id, stored_community_slug),
+                         (community_name, visibility_raw) ),
+                       ( onboarding_raw,
+                         (is_network_community, indexable, discoverable) ) ))
                 -> (
                   (* Closed-value validation only — a valid ineligible
                      lifecycle is not corruption at this step. *)
                   match
-                    ( Community_types.community_visibility_of_string visibility_raw,
-                      Community_types.community_onboarding_state_of_string onboarding_raw
-                    )
+                    ( Community_types.community_visibility_of_string
+                        visibility_raw,
+                      Community_types.community_onboarding_state_of_string
+                        onboarding_raw )
                   with
                   | None, _ | _, Error _ -> rollback_to Inconsistent_data
                   | Some visibility, Ok onboarding_state ->
@@ -255,9 +237,9 @@ let review (module C : Caqti_lwt.CONNECTION) ~reviewer_user_id ~project_slug
                           && String.equal stored_community_slug
                                target_community_slug
                           && String.length community_name > 0
-                          && community_structurally_valid
-                               ~is_network_community ~onboarding_state
-                               ~visibility ~indexable ~discoverable)
+                          && community_structurally_valid ~is_network_community
+                               ~onboarding_state ~visibility ~indexable
+                               ~discoverable)
                       then rollback_to Inconsistent_data
                       else
                         (* Reviewer authorization: top moderator row
@@ -289,11 +271,11 @@ let review (module C : Caqti_lwt.CONNECTION) ~reviewer_user_id ~project_slug
                             | Ok None -> rollback_to Review_unavailable
                             | Ok
                                 (Some
-                                  ( ( (relation_id, relation_type),
-                                      (status_raw, stored_note) ),
-                                    ( (requested_by, reviewed_by),
-                                      (reviewed_at_null, removed_at_null) )
-                                  )) -> (
+                                   ( ( (relation_id, relation_type),
+                                       (status_raw, stored_note) ),
+                                     ( (requested_by, reviewed_by),
+                                       (reviewed_at_null, removed_at_null) ) ))
+                              -> (
                                 (* The locked row must be a well-formed
                                    pending request, and its note must
                                    reconstruct byte-exactly through the
@@ -305,8 +287,8 @@ let review (module C : Caqti_lwt.CONNECTION) ~reviewer_user_id ~project_slug
                                   && String.equal relation_type "home"
                                   && String.equal status_raw "pending"
                                   && (match requested_by with
-                                     | None -> true
-                                     | Some id -> id > 0)
+                                    | None -> true
+                                    | Some id -> id > 0)
                                   && reviewed_by = None && reviewed_at_null
                                   && removed_at_null
                                 in
@@ -317,15 +299,14 @@ let review (module C : Caqti_lwt.CONNECTION) ~reviewer_user_id ~project_slug
                                 match (row_shape_ok, reconstructed) with
                                 | false, _ | _, Error _ ->
                                     rollback_to Inconsistent_data
-                                | true, Ok pending_relation ->
+                                | true, Ok pending_relation -> (
                                     if
                                       Project_home_relation.request_note
                                         pending_relation
                                       <> stored_note
                                     then rollback_to Inconsistent_data
                                     else if
-                                      decision = Accept
-                                      && not project_verified
+                                      decision = Accept && not project_verified
                                     then
                                       (* Stale and revoked collapse into
                                          the same variant as a missing
@@ -354,17 +335,17 @@ let review (module C : Caqti_lwt.CONNECTION) ~reviewer_user_id ~project_slug
                                         | Accept -> Project_home_relation.Accept
                                         | Reject -> Project_home_relation.Reject
                                       in
-                                      (match
-                                         Project_home_relation.apply
-                                           pending_relation action
-                                       with
+                                      match
+                                        Project_home_relation.apply
+                                          pending_relation action
+                                      with
                                       | Error _ ->
                                           (* The row was locked pending;
                                              a refused Pending+Accept/
                                              Reject transition can only
                                              mean domain/durable drift. *)
                                           rollback_to Inconsistent_data
-                                      | Ok transitioned ->
+                                      | Ok transitioned -> (
                                           let new_status =
                                             Project_home_relation.status
                                               transitioned
@@ -373,8 +354,7 @@ let review (module C : Caqti_lwt.CONNECTION) ~reviewer_user_id ~project_slug
                                             Project_home_relation
                                             .string_of_status new_status
                                           in
-                                          C.collect_list
-                                            update_relation_query
+                                          C.collect_list update_relation_query
                                             ( relation_id,
                                               status_string,
                                               reviewer_user_id )
@@ -391,16 +371,14 @@ let review (module C : Caqti_lwt.CONNECTION) ~reviewer_user_id ~project_slug
                                           | Ok [] ->
                                               rollback_to Review_unavailable
                                           | Ok [ (updated_id, updated_status) ]
-                                            ->
+                                            -> (
                                               if
                                                 not
                                                   (Int64.equal updated_id
                                                      relation_id
-                                                  && String.equal
-                                                       updated_status
+                                                  && String.equal updated_status
                                                        status_string)
-                                              then
-                                                rollback_to Inconsistent_data
+                                              then rollback_to Inconsistent_data
                                               else
                                                 (* The audit event rides
                                                    the same transaction:
@@ -442,32 +420,29 @@ let review (module C : Caqti_lwt.CONNECTION) ~reviewer_user_id ~project_slug
                                                 let decision_recipients =
                                                   match requested_by with
                                                   | Some id
-                                                    when id
-                                                         <> reviewer_user_id
+                                                    when id <> reviewer_user_id
                                                     ->
                                                       [ id ]
                                                   | Some _ | None -> []
                                                 in
-                                                (Project_home_audit.insert
-                                                   (module C)
-                                                   ~action:audit_action
-                                                   ~actor_user_id:
-                                                     reviewer_user_id
-                                                   ~project_id ~community_id
-                                                   ~relation_id
-                                                 >>= function
-                                                 | Error
-                                                     Project_home_audit
-                                                     .Inconsistent_data ->
-                                                     rollback_to
-                                                       Inconsistent_data
-                                                 | Error
-                                                     Project_home_audit
-                                                     .Storage_error ->
-                                                     rollback_to
-                                                       Storage_error
-                                                 | Ok () -> (
-                                                     (* The durable
+                                                Project_home_audit.insert
+                                                  (module C)
+                                                  ~action:audit_action
+                                                  ~actor_user_id:
+                                                    reviewer_user_id ~project_id
+                                                  ~community_id ~relation_id
+                                                >>= function
+                                                | Error
+                                                    Project_home_audit
+                                                    .Inconsistent_data ->
+                                                    rollback_to
+                                                      Inconsistent_data
+                                                | Error
+                                                    Project_home_audit
+                                                    .Storage_error ->
+                                                    rollback_to Storage_error
+                                                | Ok () -> (
+                                                    (* The durable
                                                         notification
                                                         rides the same
                                                         transaction: a
@@ -479,44 +454,40 @@ let review (module C : Caqti_lwt.CONNECTION) ~reviewer_user_id ~project_slug
                                                         private request
                                                         note never
                                                         reaches it. *)
-                                                     Project_home_notifications
-                                                     .insert_many
-                                                       (module C)
-                                                       ~kind:
-                                                         notification_kind
-                                                       ~actor_user_id:
-                                                         reviewer_user_id
-                                                       ~project_id
-                                                       ~community_id
-                                                       ~relation_id
-                                                       ~recipient_user_ids:
-                                                         decision_recipients
-                                                     >>= function
-                                                     | Error
-                                                         Project_home_notifications
-                                                         .Inconsistent_data
-                                                       ->
-                                                         rollback_to
-                                                           Inconsistent_data
-                                                     | Error
-                                                         Project_home_notifications
-                                                         .Storage_error ->
-                                                         rollback_to
-                                                           Storage_error
-                                                     | Ok () -> (
-                                                         C.commit ()
-                                                         >>= function
-                                                         | Error _ ->
-                                                             Lwt.return
-                                                               (Error
-                                                                  Storage_error)
-                                                         | Ok () ->
-                                                             Lwt.return
-                                                               (Ok
-                                                                  {
-                                                                    resulting_status =
-                                                                      new_status;
-                                                                  }))))
+                                                    Project_home_notifications
+                                                    .insert_many
+                                                      (module C)
+                                                      ~kind:notification_kind
+                                                      ~actor_user_id:
+                                                        reviewer_user_id
+                                                      ~project_id ~community_id
+                                                      ~relation_id
+                                                      ~recipient_user_ids:
+                                                        decision_recipients
+                                                    >>= function
+                                                    | Error
+                                                        Project_home_notifications
+                                                        .Inconsistent_data ->
+                                                        rollback_to
+                                                          Inconsistent_data
+                                                    | Error
+                                                        Project_home_notifications
+                                                        .Storage_error ->
+                                                        rollback_to
+                                                          Storage_error
+                                                    | Ok () -> (
+                                                        C.commit () >>= function
+                                                        | Error _ ->
+                                                            Lwt.return
+                                                              (Error
+                                                                 Storage_error)
+                                                        | Ok () ->
+                                                            Lwt.return
+                                                              (Ok
+                                                                 {
+                                                                   resulting_status =
+                                                                     new_status;
+                                                                 }))))
                                           | Ok (_ :: _ :: _) ->
-                                              rollback_to Inconsistent_data)
-                                )))))
+                                              rollback_to Inconsistent_data)))))
+            ))

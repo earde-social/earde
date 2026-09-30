@@ -8,15 +8,8 @@
 
 open Lwt.Infix
 
-type kind =
-  | Home_requested
-  | Home_accepted
-  | Home_rejected
-  | Home_removed
-
-type error =
-  | Inconsistent_data
-  | Storage_error
+type kind = Home_requested | Home_accepted | Home_rejected | Home_removed
+type error = Inconsistent_data | Storage_error
 
 (* Private: the durable vocabulary, byte-for-byte the table's CHECK. *)
 let string_of_kind = function
@@ -37,23 +30,21 @@ let string_of_kind = function
 let top_moderators_query =
   let open Caqti_request.Infix in
   (Caqti_type.int ->* Caqti_type.int)
-  "SELECT user_id FROM community_moderators \
-   WHERE community_id = $1 AND role = 'top_mod' \
-   ORDER BY user_id"
+    "SELECT user_id FROM community_moderators WHERE community_id = $1 AND role \
+     = 'top_mod' ORDER BY user_id"
 
 let stewards_query =
   let open Caqti_request.Infix in
   (Caqti_type.int64 ->* Caqti_type.int)
-  "SELECT user_id FROM project_stewards \
-   WHERE project_id = $1 AND role = 'steward' \
-   ORDER BY user_id"
+    "SELECT user_id FROM project_stewards WHERE project_id = $1 AND role = \
+     'steward' ORDER BY user_id"
 
 let validated_ids rows =
   if List.for_all (fun id -> id > 0) rows then Ok rows
   else Error Inconsistent_data
 
-let community_top_moderator_ids (module C : Caqti_lwt.CONNECTION)
-    ~community_id =
+let community_top_moderator_ids (module C : Caqti_lwt.CONNECTION) ~community_id
+    =
   if community_id <= 0 then Lwt.return (Error Inconsistent_data)
   else
     C.collect_list top_moderators_query community_id >>= function
@@ -61,8 +52,7 @@ let community_top_moderator_ids (module C : Caqti_lwt.CONNECTION)
     | Ok rows -> Lwt.return (validated_ids rows)
 
 let project_steward_ids (module C : Caqti_lwt.CONNECTION) ~project_id =
-  if Int64.compare project_id 0L <= 0 then
-    Lwt.return (Error Inconsistent_data)
+  if Int64.compare project_id 0L <= 0 then Lwt.return (Error Inconsistent_data)
   else
     C.collect_list stewards_query project_id >>= function
     | Error _ -> Lwt.return (Error Storage_error)
@@ -77,12 +67,10 @@ let project_steward_ids (module C : Caqti_lwt.CONNECTION) ~project_id =
 let insert_notification_query =
   let open Caqti_request.Infix in
   (Caqti_type.(t2 (t3 int string int) (t3 int64 int int64))
-   ->? Caqti_type.(t3 int string int))
-  "INSERT INTO notifications \
-     (user_id, notif_type, actor_user_id, project_id, community_id, \
-      relation_id) \
-   VALUES ($1, $2, $3, $4, $5, $6) \
-   RETURNING id, notif_type, user_id"
+  ->? Caqti_type.(t3 int string int))
+    "INSERT INTO notifications (user_id, notif_type, actor_user_id, \
+     project_id, community_id, relation_id) VALUES ($1, $2, $3, $4, $5, $6) \
+     RETURNING id, notif_type, user_id"
 
 let insert_many (module C : Caqti_lwt.CONNECTION) ~kind ~actor_user_id
     ~project_id ~community_id ~relation_id ~recipient_user_ids =

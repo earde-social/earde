@@ -38,7 +38,8 @@ let counted_path target =
         | None -> target)
   in
   let has_prefix p =
-    String.length path >= String.length p && String.sub path 0 (String.length p) = p
+    String.length path >= String.length p
+    && String.sub path 0 (String.length p) = p
   in
   let has_suffix s =
     let n = String.length s and l = String.length path in
@@ -46,7 +47,8 @@ let counted_path target =
   in
   not
     (has_prefix "/static/" || has_prefix "/css/" || has_prefix "/js/"
-   || has_suffix ".json" || has_suffix "/realtime-token")
+   || has_suffix ".json"
+    || has_suffix "/realtime-token")
 
 let middleware inner_handler request =
   let%lwt () =

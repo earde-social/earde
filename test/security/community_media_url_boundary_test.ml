@@ -17,13 +17,9 @@ let ( let* ) = Lwt.bind
 open Caqti_request.Infix
 
 let must = Security_fixture.must
-
 let must_not = Security_fixture.must_not
-
 let contains = Html_assert.contains
-
 let community_slug = "cmub-media"
-
 let mod_username = "cmub_mod"
 
 (* The two values a client would try to smuggle in. Both are shapes the
@@ -31,7 +27,6 @@ let mod_username = "cmub_mod"
    external https origin, and a well-formed uploads path this community
    does not own. Neither may survive the handler. *)
 let forged_avatar = "https://attacker.invalid/beacon.png"
-
 let forged_banner = "/static/uploads/earde_1700000009999_999001.webp"
 
 (* Authoritative stored values. Deliberately NOT pipeline-shaped: they name
@@ -41,7 +36,6 @@ let forged_banner = "/static/uploads/earde_1700000009999_999001.webp"
    their full force, and the reserved .invalid TLD cannot resolve, so
    nothing ever fetches them. *)
 let stored_avatar = "https://stored.invalid/cmub-avatar.png"
-
 let stored_banner = "https://stored.invalid/cmub-banner.png"
 
 (* The peer every /update-community request below is sent from. The handler
@@ -58,39 +52,51 @@ let client_peer = "198.51.100.242:4242"
 let cmub_secret = "cmub-test-secret-value"
 
 let form_community : Earde.Community_types.community =
-  { id = 7710; slug = community_slug; name = "Cmub Media";
-    description = None; rules = None;
-    avatar_url = Some stored_avatar; banner_url = Some stored_banner;
-    allow_downvotes = true; sections_enabled = false;
-    visibility = Earde.Community_types.Community_public; indexable = true;
+  {
+    id = 7710;
+    slug = community_slug;
+    name = "Cmub Media";
+    description = None;
+    rules = None;
+    avatar_url = Some stored_avatar;
+    banner_url = Some stored_banner;
+    allow_downvotes = true;
+    sections_enabled = false;
+    visibility = Earde.Community_types.Community_public;
+    indexable = true;
     is_network_community = false;
-    onboarding_state = Earde.Community_types.Community_published; discoverable = true }
+    onboarding_state = Earde.Community_types.Community_published;
+    discoverable = true;
+  }
 
 let render_settings () =
   let captured = ref None in
   let pipeline =
-    Dream.set_secret cmub_secret @@ Dream.memory_sessions
+    Dream.set_secret cmub_secret
+    @@ Dream.memory_sessions
     @@ fun req ->
     captured :=
       Some
-        (Earde.Community_settings_pages.community_settings_page ~is_admin:false ~is_top_mod:true
-           ~open_reports_count:0 ~community:form_community ~mods:[]
-           ~banned_users:[] ~members:[] ~sections:[] ~channels:[] req);
+        (Earde.Community_settings_pages.community_settings_page ~is_admin:false
+           ~is_top_mod:true ~open_reports_count:0 ~community:form_community
+           ~mods:[] ~banned_users:[] ~members:[] ~sections:[] ~channels:[] req);
     Dream.html ""
   in
   ignore
     (Lwt_main.run
        (pipeline
           (Dream.request ~method_:`GET
-             ~target:("/c/" ^ community_slug ^ "/settings?panel=profile") "")));
+             ~target:("/c/" ^ community_slug ^ "/settings?panel=profile")
+             "")));
   match !captured with
   | Some html -> html
   | None -> Alcotest.fail "settings renderer did not run"
 
 let form_fields_case =
   Alcotest.test_case
-    "settings form: no avatar or banner fallback field is rendered, and \
-     both previews and file inputs remain" `Quick (fun () ->
+    "settings form: no avatar or banner fallback field is rendered, and both \
+     previews and file inputs remain"
+    `Quick (fun () ->
       let html = render_settings () in
       (* The record carries BOTH stored values, so their absence from any
          hidden input is the fix rather than an empty fixture. *)
@@ -113,33 +119,34 @@ let or_fail label = function
 
 let q_user =
   (Caqti_type.string ->! Caqti_type.int)
-  "INSERT INTO users (username, email, password_hash, is_email_verified)
-   VALUES ($1, $1 || '@cmub.invalid', 'x', TRUE) RETURNING id"
+    "INSERT INTO users (username, email, password_hash, is_email_verified)\n\
+    \   VALUES ($1, $1 || '@cmub.invalid', 'x', TRUE) RETURNING id"
 
 let q_community =
   (Caqti_type.(t3 string (option string) (option string)) ->! Caqti_type.int)
-  "INSERT INTO communities (slug, name, visibility, avatar_url, banner_url)
-   VALUES ($1, 'Cmub Media', 'public', $2, $3) RETURNING id"
+    "INSERT INTO communities (slug, name, visibility, avatar_url, banner_url)\n\
+    \   VALUES ($1, 'Cmub Media', 'public', $2, $3) RETURNING id"
 
 let q_moderator =
   (Caqti_type.(t2 int int) ->. Caqti_type.unit)
-  "INSERT INTO community_moderators (user_id, community_id) VALUES ($1, $2)
-   ON CONFLICT DO NOTHING"
+    "INSERT INTO community_moderators (user_id, community_id) VALUES ($1, $2)\n\
+    \   ON CONFLICT DO NOTHING"
 
 let q_member =
   (Caqti_type.(t2 int int) ->. Caqti_type.unit)
-  "INSERT INTO community_members (user_id, community_id) VALUES ($1, $2)
-   ON CONFLICT DO NOTHING"
+    "INSERT INTO community_members (user_id, community_id) VALUES ($1, $2)\n\
+    \   ON CONFLICT DO NOTHING"
 
 let q_media =
   (Caqti_type.int ->! Caqti_type.(t2 (option string) (option string)))
-  "SELECT avatar_url, banner_url FROM communities WHERE id = $1"
+    "SELECT avatar_url, banner_url FROM communities WHERE id = $1"
 
 (* Exact ip and exact purpose: the upload limiter's bucket for this suite's
    own fixed peer, never another suite's and never the whole table. *)
 let q_clear_upload_rate =
   (Caqti_type.string ->. Caqti_type.unit)
-  "DELETE FROM rate_limits WHERE ip_address = $1 AND endpoint = 'image-upload'"
+    "DELETE FROM rate_limits WHERE ip_address = $1 AND endpoint = \
+     'image-upload'"
 
 (* Exact slug and exact username throughout; the one LIKE is over an
    explicitly escaped namespace, matching the session payload this suite
@@ -147,15 +154,22 @@ let q_clear_upload_rate =
 let q_cleanup =
   List.map
     (fun sql -> (Caqti_type.unit ->. Caqti_type.unit) sql)
-    [ "DELETE FROM community_user_stats WHERE community_id IN (SELECT id FROM communities WHERE slug = 'cmub-media')"
-    ; "DELETE FROM community_members WHERE community_id IN (SELECT id FROM communities WHERE slug = 'cmub-media')"
-    ; "DELETE FROM community_moderators WHERE community_id IN (SELECT id FROM communities WHERE slug = 'cmub-media')"
-    ; "DELETE FROM community_sections WHERE community_id IN (SELECT id FROM communities WHERE slug = 'cmub-media')"
-    ; "DELETE FROM channels WHERE community_id IN (SELECT id FROM communities WHERE slug = 'cmub-media')"
-    ; "DELETE FROM posthog_group_cleanup_jobs WHERE group_key IN (SELECT 'community:' || id::text FROM communities WHERE slug = 'cmub-media')"
-    ; "DELETE FROM communities WHERE slug = 'cmub-media'"
-    ; "DELETE FROM dream_session WHERE payload LIKE '%cmub\\_mod%'"
-    ; "DELETE FROM users WHERE username = 'cmub_mod'"
+    [
+      "DELETE FROM community_user_stats WHERE community_id IN (SELECT id FROM \
+       communities WHERE slug = 'cmub-media')";
+      "DELETE FROM community_members WHERE community_id IN (SELECT id FROM \
+       communities WHERE slug = 'cmub-media')";
+      "DELETE FROM community_moderators WHERE community_id IN (SELECT id FROM \
+       communities WHERE slug = 'cmub-media')";
+      "DELETE FROM community_sections WHERE community_id IN (SELECT id FROM \
+       communities WHERE slug = 'cmub-media')";
+      "DELETE FROM channels WHERE community_id IN (SELECT id FROM communities \
+       WHERE slug = 'cmub-media')";
+      "DELETE FROM posthog_group_cleanup_jobs WHERE group_key IN (SELECT \
+       'community:' || id::text FROM communities WHERE slug = 'cmub-media')";
+      "DELETE FROM communities WHERE slug = 'cmub-media'";
+      "DELETE FROM dream_session WHERE payload LIKE '%cmub\\_mod%'";
+      "DELETE FROM users WHERE username = 'cmub_mod'";
     ]
 
 let db_case name f =
@@ -186,13 +200,11 @@ let db_case name f =
              let* () = cleanup () in
              Lwt.finalize
                (fun () -> f ~url (module C : Caqti_lwt.CONNECTION))
-               (fun () ->
-                 Lwt.finalize cleanup (fun () -> C.disconnect ()))))
+               (fun () -> Lwt.finalize cleanup (fun () -> C.disconnect ()))))
 
 (* === the routed pipeline === *)
 
 let next_uid = ref (None : int option)
-
 let shared_pipeline = ref None
 
 let pipeline_for ~url =
@@ -200,10 +212,12 @@ let pipeline_for ~url =
   | Some p -> p
   | None ->
       let p =
-        Dream.sql_pool ~size:4 url @@ Dream.set_secret cmub_secret
+        Dream.sql_pool ~size:4 url
+        @@ Dream.set_secret cmub_secret
         @@ Dream.sql_sessions
         @@ Dream.router
-             [ (* Mints the durable session a real login would create, and
+             [
+               (* Mints the durable session a real login would create, and
                   hands back a CSRF token minted inside it. *)
                Dream.get "/session" (fun req ->
                    let* () =
@@ -221,7 +235,8 @@ let pipeline_for ~url =
                    Dream.respond (Dream.csrf_token req));
                Dream.post "/update-community"
                  Earde.Community_settings_handlers.update_community_handler;
-               Dream.get "/c/:slug" Earde.Community_handlers.community_page_handler
+               Dream.get "/c/:slug"
+                 Earde.Community_handlers.community_page_handler;
              ]
       in
       shared_pipeline := Some p;
@@ -235,9 +250,7 @@ let session_cookie label response =
   with
   | None -> Alcotest.fail (label ^ ": no session cookie")
   | Some v -> (
-      match String.index_opt v ';' with
-      | Some i -> String.sub v 0 i
-      | None -> v)
+      match String.index_opt v ';' with Some i -> String.sub v 0 i | None -> v)
 
 let login ~url uid =
   next_uid := Some uid;
@@ -252,13 +265,16 @@ let boundary = "cmubboundary"
 
 let part_field (k, v) =
   Printf.sprintf
-    "--%s\r\nContent-Disposition: form-data; name=\"%s\"\r\n\r\n%s\r\n"
-    boundary k v
+    "--%s\r\nContent-Disposition: form-data; name=\"%s\"\r\n\r\n%s\r\n" boundary
+    k v
 
 let part_file (field, filename, bytes) =
   Printf.sprintf
-    "--%s\r\nContent-Disposition: form-data; name=\"%s\"; \
-     filename=\"%s\"\r\nContent-Type: image/png\r\n\r\n%s\r\n"
+    "--%s\r\n\
+     Content-Disposition: form-data; name=\"%s\"; filename=\"%s\"\r\n\
+     Content-Type: image/png\r\n\
+     \r\n\
+     %s\r\n"
     boundary field filename bytes
 
 let multipart_body ~files fields =
@@ -270,8 +286,9 @@ let post_update ~url ~cookie ~token ?(files = []) fields =
   let p = pipeline_for ~url in
   let body = multipart_body ~files (("dream.csrf", token) :: fields) in
   let headers =
-    [ ("Content-Type", "multipart/form-data; boundary=" ^ boundary);
-      ("Cookie", cookie)
+    [
+      ("Content-Type", "multipart/form-data; boundary=" ^ boundary);
+      ("Cookie", cookie);
     ]
   in
   let request =
@@ -299,13 +316,10 @@ let get_public_page ~url =
    values — the starting state every gated case needs, except that one
    case stores its avatar as SQL NULL to prove an absent value stays
    absent. *)
-let fixture ?(avatar = Some stored_avatar) (module C : Caqti_lwt.CONNECTION)
-    =
+let fixture ?(avatar = Some stored_avatar) (module C : Caqti_lwt.CONNECTION) =
   let* uid = C.find q_user mod_username in
   let* uid = or_fail "user" uid in
-  let* cid =
-    C.find q_community (community_slug, avatar, Some stored_banner)
-  in
+  let* cid = C.find q_community (community_slug, avatar, Some stored_banner) in
   let* cid = or_fail "community" cid in
   let* r = C.exec q_member (uid, cid) in
   let* () = or_fail "member" r in
@@ -321,14 +335,15 @@ let read_media (module C : Caqti_lwt.CONNECTION) cid =
 
 let forged_fallback_case =
   db_case
-    "update-community: submitted avatar and banner fallback URLs are \
-     ignored and never reach the database or the public page"
+    "update-community: submitted avatar and banner fallback URLs are ignored \
+     and never reach the database or the public page"
     (fun ~url (module C : Caqti_lwt.CONNECTION) ->
       let* uid, cid = fixture (module C) in
       let* cookie, token = login ~url uid in
       let* status, response, _ =
         post_update ~url ~cookie ~token
-          [ ("community_id", string_of_int cid);
+          [
+            ("community_id", string_of_int cid);
             ("community_slug", community_slug);
             ("description", "cmub description");
             ("rules", "");
@@ -336,7 +351,7 @@ let forged_fallback_case =
             ("avatar_url", "");
             ("banner_url", "");
             ("existing_avatar_url", forged_avatar);
-            ("existing_banner_url", forged_banner)
+            ("existing_banner_url", forged_banner);
           ]
       in
       (* The success semantics are unchanged: still a 303 to the
@@ -432,8 +447,8 @@ let local_path_of label url_value =
 
 let new_upload_case =
   db_case
-    "update-community: a real upload replaces both the avatar and the \
-     banner with fresh server-generated paths"
+    "update-community: a real upload replaces both the avatar and the banner \
+     with fresh server-generated paths"
     (fun ~url (module C : Caqti_lwt.CONNECTION) ->
       let* uid, cid = fixture (module C) in
       let* cookie, token = login ~url uid in
@@ -441,17 +456,19 @@ let new_upload_case =
           let* status, response, _ =
             post_update ~url ~cookie ~token
               ~files:
-                [ ("avatar_url", "cmub-avatar.png", Security_fixture.real_png);
-                  ("banner_url", "cmub-banner.png", Security_fixture.real_png)
+                [
+                  ("avatar_url", "cmub-avatar.png", Security_fixture.real_png);
+                  ("banner_url", "cmub-banner.png", Security_fixture.real_png);
                 ]
-              [ ("community_id", string_of_int cid);
+              [
+                ("community_id", string_of_int cid);
                 ("community_slug", community_slug);
                 ("description", "cmub description");
                 ("rules", "");
                 (* Present and hostile, to prove the new values come from
                    the pipeline and not from anything submitted. *)
                 ("existing_avatar_url", forged_avatar);
-                ("existing_banner_url", forged_banner)
+                ("existing_banner_url", forged_banner);
               ]
           in
           Alcotest.(check int) "303" 303 status;
@@ -472,26 +489,31 @@ let new_upload_case =
           in
           (* Fresh, rooted, server-generated: neither the previous stored
              value nor either submitted fallback decided the result. *)
-          must "avatar is a rooted uploads path" avatar
-            "/static/uploads/earde_";
-          must "banner is a rooted uploads path" banner
-            "/static/uploads/earde_";
-          Alcotest.(check bool) "avatar replaced" false
+          must "avatar is a rooted uploads path" avatar "/static/uploads/earde_";
+          must "banner is a rooted uploads path" banner "/static/uploads/earde_";
+          Alcotest.(check bool)
+            "avatar replaced" false
             (String.equal avatar stored_avatar);
-          Alcotest.(check bool) "banner replaced" false
+          Alcotest.(check bool)
+            "banner replaced" false
             (String.equal banner stored_banner);
-          Alcotest.(check bool) "avatar is not the submitted fallback" false
+          Alcotest.(check bool)
+            "avatar is not the submitted fallback" false
             (String.equal avatar forged_avatar);
-          Alcotest.(check bool) "banner is not the submitted fallback" false
+          Alcotest.(check bool)
+            "banner is not the submitted fallback" false
             (String.equal banner forged_banner);
           (* The pipeline mints one destination name per conversion. *)
-          Alcotest.(check bool) "avatar and banner are distinct files" false
+          Alcotest.(check bool)
+            "avatar and banner are distinct files" false
             (String.equal avatar banner);
           let avatar_path = local_path_of "avatar" avatar in
           let banner_path = local_path_of "banner" banner in
-          Alcotest.(check bool) "avatar file exists" true
+          Alcotest.(check bool)
+            "avatar file exists" true
             (Sys.file_exists avatar_path);
-          Alcotest.(check bool) "banner file exists" true
+          Alcotest.(check bool)
+            "banner file exists" true
             (Sys.file_exists banner_path);
           (* And those two are all it wrote: the row names every file the
              request produced, so no conversion was orphaned. *)
@@ -511,13 +533,14 @@ let new_upload_case =
 let post_single_upload ~url ~cookie ~token ~cid ~uploaded ~empty =
   post_update ~url ~cookie ~token
     ~files:[ (uploaded, "cmub-single.png", Security_fixture.real_png) ]
-    [ ("community_id", string_of_int cid);
+    [
+      ("community_id", string_of_int cid);
       ("community_slug", community_slug);
       ("description", "cmub description");
       ("rules", "");
       (empty, "");
       ("existing_avatar_url", forged_avatar);
-      ("existing_banner_url", forged_banner)
+      ("existing_banner_url", forged_banner);
     ]
 
 let check_authoritative_success status response =
@@ -538,10 +561,14 @@ let check_sole_fresh_upload label value =
     | Some v -> v
     | None -> Alcotest.failf "%s was cleared instead of replaced" label
   in
-  Alcotest.(check bool) (label ^ " is not the submitted avatar fallback")
-    false (String.equal v forged_avatar);
-  Alcotest.(check bool) (label ^ " is not the submitted banner fallback")
-    false (String.equal v forged_banner);
+  Alcotest.(check bool)
+    (label ^ " is not the submitted avatar fallback")
+    false
+    (String.equal v forged_avatar);
+  Alcotest.(check bool)
+    (label ^ " is not the submitted banner fallback")
+    false
+    (String.equal v forged_banner);
   let path = local_path_of label v in
   Alcotest.(check bool) (label ^ " file exists") true (Sys.file_exists path);
   Alcotest.(check (list string))
@@ -552,15 +579,14 @@ let check_sole_fresh_upload label value =
 
 let avatar_only_case =
   db_case
-    "update-community: an avatar-only upload replaces the avatar and keeps \
-     the stored banner"
-    (fun ~url (module C : Caqti_lwt.CONNECTION) ->
+    "update-community: an avatar-only upload replaces the avatar and keeps the \
+     stored banner" (fun ~url (module C : Caqti_lwt.CONNECTION) ->
       let* uid, cid = fixture (module C) in
       let* cookie, token = login ~url uid in
       with_private_uploads (fun () ->
           let* status, response, _ =
-            post_single_upload ~url ~cookie ~token ~cid
-              ~uploaded:"avatar_url" ~empty:"banner_url"
+            post_single_upload ~url ~cookie ~token ~cid ~uploaded:"avatar_url"
+              ~empty:"banner_url"
           in
           check_authoritative_success status response;
           let* avatar, banner = read_media (module C) cid in
@@ -571,9 +597,8 @@ let avatar_only_case =
 
 let banner_only_null_avatar_case =
   db_case
-    "update-community: a banner-only upload replaces the banner and keeps \
-     a NULL avatar NULL"
-    (fun ~url (module C : Caqti_lwt.CONNECTION) ->
+    "update-community: a banner-only upload replaces the banner and keeps a \
+     NULL avatar NULL" (fun ~url (module C : Caqti_lwt.CONNECTION) ->
       let* uid, cid = fixture ~avatar:None (module C) in
       (* The precondition is the row itself, not an empty rendering. *)
       let* before = read_media (module C) cid in
@@ -583,26 +608,29 @@ let banner_only_null_avatar_case =
       let* cookie, token = login ~url uid in
       with_private_uploads (fun () ->
           let* status, response, _ =
-            post_single_upload ~url ~cookie ~token ~cid
-              ~uploaded:"banner_url" ~empty:"avatar_url"
+            post_single_upload ~url ~cookie ~token ~cid ~uploaded:"banner_url"
+              ~empty:"avatar_url"
           in
           check_authoritative_success status response;
           let* avatar, banner = read_media (module C) cid in
           (* Exactly None: an empty string, or either forged value, is a
              different option and fails here. *)
-          Alcotest.(check (option string))
-            "avatar stays SQL NULL" None avatar;
+          Alcotest.(check (option string)) "avatar stays SQL NULL" None avatar;
           check_sole_fresh_upload "banner" banner;
           Lwt.return_unit))
 
 let suite =
-  [ form_fields_case; forged_fallback_case; new_upload_case;
-    avatar_only_case; banner_only_null_avatar_case ]
+  [
+    form_fields_case;
+    forged_fallback_case;
+    new_upload_case;
+    avatar_only_case;
+    banner_only_null_avatar_case;
+  ]
 
 let suites =
-    (* Community media URL boundary: with no new upload, the stored avatar
+  (* Community media URL boundary: with no new upload, the stored avatar
        and banner come only from the community row the handler loaded. A
        submitted fallback URL — the hidden inputs the form no longer emits —
        must reach neither the database nor any visitor's browser. *)
-  [ ("security_community_media_url_boundary", suite)
-  ]
+  [ ("security_community_media_url_boundary", suite) ]

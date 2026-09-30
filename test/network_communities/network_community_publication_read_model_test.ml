@@ -16,9 +16,7 @@ module Pi = Earde.Project_identity
 let ( let* ) = Lwt.bind
 
 open Caqti_request.Infix
-
 module Rm = Earde.Network_community_publication_read_model
-
 module Pv = Earde.Project_home_provisioning_store
 
 let error_str : Rm.error -> string = function
@@ -28,122 +26,113 @@ let error_str : Rm.error -> string = function
   | Rm.Storage_error -> "Storage_error"
 
 let or_fail = Db_fixture.or_fail
-
 let insert_user = Db_fixture.insert_user
-
 let exec = Db_fixture.exec
-
 let find = Db_fixture.find
-
 let make_project = Home_provisioning_fixture.make_project
-
 let insert_community = Community_fixture.insert_community
 
 (* Distinctive credential-shaped fixtures. None may appear in any public
    value this read model produces. *)
 let credential_markers =
-  [ ("access token", "gho_NCPR_ACCESS_TOKEN_SECRET");
+  [
+    ("access token", "gho_NCPR_ACCESS_TOKEN_SECRET");
     ("refresh token", "ghr_NCPR_REFRESH_TOKEN");
     ("client secret", "NCPR_CLIENT_SECRET_VALUE");
     ("external installation id", "952000001");
-    ("external account id", "952100001")
+    ("external account id", "952100001");
   ]
 
 let q_cleanup =
   List.map
     (fun sql -> (Caqti_type.unit ->. Caqti_type.unit) sql)
-    [ "DELETE FROM project_home_audit_events \
-       WHERE project_id IN \
-         (SELECT id FROM open_source_projects \
-          WHERE forge_namespace_id BETWEEN 952100001 AND 952100999)"
-      ; "DELETE FROM open_source_projects \
-       WHERE forge_namespace_id BETWEEN 952100001 AND 952100999"
-    ; "DELETE FROM project_onboarding_drafts \
-       WHERE github_installation_record_id IN \
-         (SELECT id FROM github_installations \
-          WHERE github_installation_id BETWEEN 952000001 AND 952000999)"
-    ; "DELETE FROM communities WHERE slug LIKE 'ncpr-%'"
-    ; "DELETE FROM users WHERE username LIKE 'ncpr_%'"
-    ; "DELETE FROM github_installations \
-       WHERE github_installation_id BETWEEN 952000001 AND 952000999"
+    [
+      "DELETE FROM project_home_audit_events WHERE project_id IN (SELECT id \
+       FROM open_source_projects WHERE forge_namespace_id BETWEEN 952100001 \
+       AND 952100999)";
+      "DELETE FROM open_source_projects WHERE forge_namespace_id BETWEEN \
+       952100001 AND 952100999";
+      "DELETE FROM project_onboarding_drafts WHERE \
+       github_installation_record_id IN (SELECT id FROM github_installations \
+       WHERE github_installation_id BETWEEN 952000001 AND 952000999)";
+      "DELETE FROM communities WHERE slug LIKE 'ncpr-%'";
+      "DELETE FROM users WHERE username LIKE 'ncpr_%'";
+      "DELETE FROM github_installations WHERE github_installation_id BETWEEN \
+       952000001 AND 952000999";
     ]
 
 let q_set_visibility =
   (Caqti_type.(t2 int string) ->. Caqti_type.unit)
-  "UPDATE communities SET visibility = $2 WHERE id = $1"
+    "UPDATE communities SET visibility = $2 WHERE id = $1"
 
 let q_set_indexable =
   (Caqti_type.(t2 int bool) ->. Caqti_type.unit)
-  "UPDATE communities SET indexable = $2 WHERE id = $1"
+    "UPDATE communities SET indexable = $2 WHERE id = $1"
 
 let q_set_discoverable =
   (Caqti_type.(t2 int bool) ->. Caqti_type.unit)
-  "UPDATE communities SET discoverable = $2 WHERE id = $1"
+    "UPDATE communities SET discoverable = $2 WHERE id = $1"
 
 let q_set_legacy =
   (Caqti_type.int ->. Caqti_type.unit)
-  "UPDATE communities SET is_network_community = FALSE WHERE id = $1"
+    "UPDATE communities SET is_network_community = FALSE WHERE id = $1"
 
 let q_delete_members =
   (Caqti_type.int ->. Caqti_type.unit)
-  "DELETE FROM community_members WHERE community_id = $1"
+    "DELETE FROM community_members WHERE community_id = $1"
 
 let q_delete_top_mods =
   (Caqti_type.int ->. Caqti_type.unit)
-  "DELETE FROM community_moderators \
-   WHERE community_id = $1 AND role = 'top_mod'"
+    "DELETE FROM community_moderators WHERE community_id = $1 AND role = \
+     'top_mod'"
 
 let q_duplicate_section =
   (Caqti_type.int ->. Caqti_type.unit)
-  "INSERT INTO community_sections \
-     (community_id, name, slug, description, position, default_sort, \
-      is_introduction_section) \
-   VALUES ($1, 'General', 'general', 'Duplicate', 1, 'new', FALSE)"
+    "INSERT INTO community_sections (community_id, name, slug, description, \
+     position, default_sort, is_introduction_section) VALUES ($1, 'General', \
+     'general', 'Duplicate', 1, 'new', FALSE)"
 
 let q_unarchive_channels =
   (Caqti_type.int ->. Caqti_type.unit)
-  "UPDATE channels SET is_archived = FALSE WHERE community_id = $1"
+    "UPDATE channels SET is_archived = FALSE WHERE community_id = $1"
 
 let q_archive_channels =
   (Caqti_type.int ->. Caqti_type.unit)
-  "UPDATE channels SET is_archived = TRUE WHERE community_id = $1"
+    "UPDATE channels SET is_archived = TRUE WHERE community_id = $1"
 
 let q_delete_relations =
   (Caqti_type.int ->. Caqti_type.unit)
-  "DELETE FROM community_projects WHERE community_id = $1"
+    "DELETE FROM community_projects WHERE community_id = $1"
 
 (* Audit history deliberately RESTRICT-protects relation rows; a probe
    that drops a store-created relation must purge its trail first. *)
 let q_purge_audit =
   (Caqti_type.int ->. Caqti_type.unit)
-  "DELETE FROM project_home_audit_events WHERE community_id = $1"
+    "DELETE FROM project_home_audit_events WHERE community_id = $1"
 
 let q_set_relation_pending =
   (Caqti_type.int ->. Caqti_type.unit)
-  "UPDATE community_projects \
-   SET status = 'pending', reviewed_at = NULL, reviewed_by_user_id = NULL \
-   WHERE community_id = $1"
+    "UPDATE community_projects SET status = 'pending', reviewed_at = NULL, \
+     reviewed_by_user_id = NULL WHERE community_id = $1"
 
 (* A second accepted home, from a different project: the partial unique
    index is per project, so the community side is where the contradiction
    shows up. Shape matches what the provisioning store writes. *)
 let q_second_accepted =
   (Caqti_type.(t2 int64 int) ->. Caqti_type.unit)
-  "INSERT INTO community_projects \
-     (project_id, community_id, relation_type, status, reviewed_at) \
-   VALUES ($1, $2, 'home', 'accepted', NOW())"
+    "INSERT INTO community_projects (project_id, community_id, relation_type, \
+     status, reviewed_at) VALUES ($1, $2, 'home', 'accepted', NOW())"
 
 let q_set_verification = Home_request_fixture.q_set_verification
-
 let q_corrupt_login = Home_provisioning_fixture.q_corrupt_login
 
 let q_corrupt_community_name =
   (Caqti_type.int ->. Caqti_type.unit)
-  "UPDATE communities SET name = 'Ncpr' || chr(1) || 'Name' WHERE id = $1"
+    "UPDATE communities SET name = 'Ncpr' || chr(1) || 'Name' WHERE id = $1"
 
 let q_corrupt_community_description =
   (Caqti_type.int ->. Caqti_type.unit)
-  "UPDATE communities SET description = ' padded ' WHERE id = $1"
+    "UPDATE communities SET description = ' padded ' WHERE id = $1"
 
 (* Off-enum verification requires the permanent-project CHECK to step
    aside for the length of one probe; it is restored under
@@ -152,14 +141,14 @@ let ddl sql = (Caqti_type.unit ->. Caqti_type.unit) sql
 
 let q_drop_verification_check =
   ddl
-    "ALTER TABLE open_source_projects \
-     DROP CONSTRAINT IF EXISTS open_source_projects_verification_status_check"
+    "ALTER TABLE open_source_projects DROP CONSTRAINT IF EXISTS \
+     open_source_projects_verification_status_check"
 
 let q_restore_verification_check =
   ddl
-    "ALTER TABLE open_source_projects \
-     ADD CONSTRAINT open_source_projects_verification_status_check CHECK ( \
-       verification_status IN ('verified', 'stale', 'revoked'))"
+    "ALTER TABLE open_source_projects ADD CONSTRAINT \
+     open_source_projects_verification_status_check CHECK ( \
+     verification_status IN ('verified', 'stale', 'revoked'))"
 
 (* Emptying search_path hides the unqualified tables, so the query fails
    at the SQL layer and Caqti returns an Error the read model maps to
@@ -191,8 +180,7 @@ let db_case name f =
              let* () = cleanup () in
              Lwt.finalize
                (fun () -> f conn)
-               (fun () ->
-                 Lwt.finalize cleanup (fun () -> C.disconnect ()))))
+               (fun () -> Lwt.finalize cleanup (fun () -> C.disconnect ()))))
 
 (* db_case with the scoped lifecycle CHECK (migration 20260726130000)
    dropped for the whole case: these fixtures deliberately write drift
@@ -202,7 +190,8 @@ let db_case name f =
 let db_case_lifecycle_relaxed name f =
   db_case name (fun conn ->
       Network_community_lifecycle_constraint.around conn
-        ~cleanup:(fun () -> Network_community_lifecycle_constraint.run_cleanup conn q_cleanup)
+        ~cleanup:(fun () ->
+          Network_community_lifecycle_constraint.run_cleanup conn q_cleanup)
         (fun () -> f conn))
 
 (* The one way a valid draft is built: the real atomic provisioning
@@ -219,7 +208,8 @@ let provision_draft ?name ?description conn ~actor ~project_slug ~slug =
   | Error _ -> Alcotest.failf "provisioning fixture failed for %s" slug
 
 let add_role conn ~user ~community role =
-  exec conn "role fixture" Community_fixture.q_insert_moderator (user, community, role)
+  exec conn "role fixture" Community_fixture.q_insert_moderator
+    (user, community, role)
 
 let add_member conn ~user ~community =
   exec conn "member fixture" Community_fixture.q_insert_member (user, community)
@@ -276,9 +266,7 @@ let pure_inputs_case =
       let* () = Dead.disconnect () in
       let expect label e ~user ~slug = load_expect label e dead ~user ~slug in
       let* () = expect "user 0" Rm.Invalid_user_id ~user:0 ~slug:"ncpr-a" in
-      let* () =
-        expect "user -1" Rm.Invalid_user_id ~user:(-1) ~slug:"ncpr-a"
-      in
+      let* () = expect "user -1" Rm.Invalid_user_id ~user:(-1) ~slug:"ncpr-a" in
       (* The user id is checked first: a doubly invalid call never reaches
          the slug rule. *)
       let* () =
@@ -286,18 +274,27 @@ let pure_inputs_case =
       in
       Lwt_list.iter_s
         (fun slug ->
-          expect ("slug " ^ String.escaped slug) Rm.Invalid_community_slug
-            ~user:1 ~slug)
-        [ ""; " ncpr-a"; "ncpr-a "; "ncpr a"; "ncpr/a"; "ncpr\ta";
-          "ncpr\na"; "ncpr\x00"; "ncpr\x7f"
+          expect
+            ("slug " ^ String.escaped slug)
+            Rm.Invalid_community_slug ~user:1 ~slug)
+        [
+          "";
+          " ncpr-a";
+          "ncpr-a ";
+          "ncpr a";
+          "ncpr/a";
+          "ncpr\ta";
+          "ncpr\na";
+          "ncpr\x00";
+          "ncpr\x7f";
         ])
 
 (* === authorization === *)
 
 let authorization_case =
-  db_case "publication read: only a current top moderator or a durable \
-           global admin sees the draft; every other identity is the same \
-           absence" (fun conn ->
+  db_case
+    "publication read: only a current top moderator or a durable global admin \
+     sees the draft; every other identity is the same absence" (fun conn ->
       let* owner = insert_user conn "ncpr_owner" in
       let* second = insert_user conn "ncpr_second" in
       let* member = insert_user conn "ncpr_member" in
@@ -316,25 +313,30 @@ let authorization_case =
       in
       (* The creating steward is the initial top moderator. *)
       let* view = load_view "creator" conn ~user:owner ~slug:"ncpr-auth-home" in
-      Alcotest.(check bool) "creator is top mod" true
+      Alcotest.(check bool)
+        "creator is top mod" true
         (Rm.publisher_is_top_moderator view);
-      Alcotest.(check bool) "creator is not a durable admin" false
+      Alcotest.(check bool)
+        "creator is not a durable admin" false
         (Rm.publisher_is_durable_admin view);
       (* A second current top moderator is equally authorized. *)
       let* () = add_role conn ~user:second ~community "top_mod" in
       let* second_view =
         load_view "second top mod" conn ~user:second ~slug:"ncpr-auth-home"
       in
-      Alcotest.(check bool) "second is top mod" true
+      Alcotest.(check bool)
+        "second is top mod" true
         (Rm.publisher_is_top_moderator second_view);
       (* A durable global administrator is authorized without any local
          role, and says so. *)
       let* admin_view =
         load_view "durable admin" conn ~user:admin ~slug:"ncpr-auth-home"
       in
-      Alcotest.(check bool) "admin is durable admin" true
+      Alcotest.(check bool)
+        "admin is durable admin" true
         (Rm.publisher_is_durable_admin admin_view);
-      Alcotest.(check bool) "admin holds no local role" false
+      Alcotest.(check bool)
+        "admin holds no local role" false
         (Rm.publisher_is_top_moderator admin_view);
       (* Everyone else collapses to the same absence. A session-shaped
          admin claim is invisible here: only users.is_admin counts, and
@@ -346,10 +348,15 @@ let authorization_case =
       let* () = add_role conn ~user:elsewhere ~community:other "top_mod" in
       let* () =
         Lwt_list.iter_s
-          (fun (label, user) -> load_none label conn ~user ~slug:"ncpr-auth-home")
-          [ ("ordinary member", member); ("mod", moddy);
-            ("legacy_mod", legacy); ("moderator of another community", elsewhere);
-            ("stranger", stranger); ("session-shaped admin", stranger)
+          (fun (label, user) ->
+            load_none label conn ~user ~slug:"ncpr-auth-home")
+          [
+            ("ordinary member", member);
+            ("mod", moddy);
+            ("legacy_mod", legacy);
+            ("moderator of another community", elsewhere);
+            ("stranger", stranger);
+            ("session-shaped admin", stranger);
           ]
       in
       (* A removed top moderator loses access with no distinguishable
@@ -358,11 +365,16 @@ let authorization_case =
         exec conn "downgrade" Community_fixture.q_set_moderator_role
           (second, community, "mod")
       in
-      let* () = load_none "downgraded top mod" conn ~user:second ~slug:"ncpr-auth-home" in
       let* () =
-        exec conn "remove" Community_fixture.q_remove_moderator (second, community)
+        load_none "downgraded top mod" conn ~user:second ~slug:"ncpr-auth-home"
       in
-      let* () = load_none "removed top mod" conn ~user:second ~slug:"ncpr-auth-home" in
+      let* () =
+        exec conn "remove" Community_fixture.q_remove_moderator
+          (second, community)
+      in
+      let* () =
+        load_none "removed top mod" conn ~user:second ~slug:"ncpr-auth-home"
+      in
       (* A revoked durable admin flag revokes access too. *)
       let* () = set_admin conn ~user:admin false in
       load_none "revoked durable admin" conn ~user:admin ~slug:"ncpr-auth-home")
@@ -370,8 +382,9 @@ let authorization_case =
 (* === availability and lifecycle === *)
 
 let lifecycle_case =
-  db_case_lifecycle_relaxed "publication read: only an exact private network setup draft is \
-           loadable; every other lifecycle is the same absence" (fun conn ->
+  db_case_lifecycle_relaxed
+    "publication read: only an exact private network setup draft is loadable; \
+     every other lifecycle is the same absence" (fun conn ->
       let* owner = insert_user conn "ncpr_lifeowner" in
       let* _inst, _project =
         make_project conn ~user:owner ~ext_id:952000002L ~slug:"ncpr-life"
@@ -385,39 +398,59 @@ let lifecycle_case =
       let* () = load_none "missing" conn ~user:owner ~slug:"ncpr-nothing" in
       (* A legacy community is never loadable, even for its own top
          moderator. *)
-      let* legacy_community = insert_community ~network:false conn "ncpr-legacy" in
-      let* () = add_role conn ~user:owner ~community:legacy_community "top_mod" in
-      let* () = load_none "legacy community" conn ~user:owner ~slug:"ncpr-legacy" in
+      let* legacy_community =
+        insert_community ~network:false conn "ncpr-legacy"
+      in
+      let* () =
+        add_role conn ~user:owner ~community:legacy_community "top_mod"
+      in
+      let* () =
+        load_none "legacy community" conn ~user:owner ~slug:"ncpr-legacy"
+      in
       (* Each individual lifecycle drift removes the draft from view; the
          row is restored between probes so the drifts are independent. *)
       let restore () =
-        let* () = exec conn "restore visibility" q_set_visibility (community, "private") in
-        let* () = exec conn "restore indexable" q_set_indexable (community, false) in
+        let* () =
+          exec conn "restore visibility" q_set_visibility (community, "private")
+        in
+        let* () =
+          exec conn "restore indexable" q_set_indexable (community, false)
+        in
         let* () =
           exec conn "restore discoverable" q_set_discoverable (community, false)
         in
         Lwt.return_unit
       in
       let* () = exec conn "public" q_set_visibility (community, "public") in
-      let* () = load_none "public draft" conn ~user:owner ~slug:"ncpr-life-home" in
+      let* () =
+        load_none "public draft" conn ~user:owner ~slug:"ncpr-life-home"
+      in
       let* () = restore () in
       let* () = exec conn "indexable" q_set_indexable (community, true) in
-      let* () = load_none "indexable draft" conn ~user:owner ~slug:"ncpr-life-home" in
+      let* () =
+        load_none "indexable draft" conn ~user:owner ~slug:"ncpr-life-home"
+      in
       let* () = restore () in
       let* () = exec conn "discoverable" q_set_discoverable (community, true) in
       let* () =
         load_none "discoverable draft" conn ~user:owner ~slug:"ncpr-life-home"
       in
       let* () = restore () in
-      let* _ = load_view "restored draft" conn ~user:owner ~slug:"ncpr-life-home" in
+      let* _ =
+        load_view "restored draft" conn ~user:owner ~slug:"ncpr-life-home"
+      in
       (* Publication ends the surface for good. *)
-      let* () = exec conn "publish" Network_community_fixture.q_publish community in
+      let* () =
+        exec conn "publish" Network_community_fixture.q_publish community
+      in
       let* () =
         load_none "published network community" conn ~user:owner
           ~slug:"ncpr-life-home"
       in
       (* Dropping the network marker is equally final. *)
-      let* () = exec conn "publish undo" q_set_visibility (community, "private") in
+      let* () =
+        exec conn "publish undo" q_set_visibility (community, "private")
+      in
       let* () = exec conn "unindex" q_set_indexable (community, false) in
       let* () = exec conn "undiscover" q_set_discoverable (community, false) in
       let* () = exec conn "legacy" q_set_legacy community in
@@ -426,9 +459,9 @@ let lifecycle_case =
 (* === the connected project === *)
 
 let project_case =
-  db_case "publication read: exactly one accepted home project is exposed \
-           by identity, and verification drift does not gate the view"
-    (fun conn ->
+  db_case
+    "publication read: exactly one accepted home project is exposed by \
+     identity, and verification drift does not gate the view" (fun conn ->
       let* owner = insert_user conn "ncpr_projowner" in
       let* _inst, project =
         make_project conn ~user:owner ~ext_id:952000003L ~slug:"ncpr-proj"
@@ -440,38 +473,49 @@ let project_case =
       in
       let* view = load_view "project" conn ~user:owner ~slug:"ncpr-proj-home" in
       let loaded = Rm.project view in
-      Alcotest.(check string) "project name" "Ncpr Proj"
-        (Rm.project_name loaded);
-      Alcotest.(check string) "project slug" "ncpr-proj"
-        (Rm.project_slug loaded);
-      Alcotest.(check string) "namespace login" "pfin-owner"
+      Alcotest.(check string)
+        "project name" "Ncpr Proj" (Rm.project_name loaded);
+      Alcotest.(check string)
+        "project slug" "ncpr-proj" (Rm.project_slug loaded);
+      Alcotest.(check string)
+        "namespace login" "pfin-owner"
         (Rm.project_namespace_login loaded);
-      Alcotest.(check string) "kind" "project"
+      Alcotest.(check string)
+        "kind" "project"
         (Pi.string_of_kind (Rm.project_kind loaded));
       (* The community identity is the draft's own, byte-exact. *)
       let community = Rm.community view in
-      Alcotest.(check string) "community name" "Ncpr Home"
+      Alcotest.(check string)
+        "community name" "Ncpr Home"
         (Rm.community_name community);
-      Alcotest.(check string) "community slug" "ncpr-proj-home"
+      Alcotest.(check string)
+        "community slug" "ncpr-proj-home"
         (Rm.community_slug community);
-      Alcotest.(check (option string)) "community description" None
+      Alcotest.(check (option string))
+        "community description" None
         (Rm.community_description community);
       (* Stale and revoked verification are validated as known values and
          deliberately do not withdraw the view: the project was verified
          when the home was established, and a private draft must not be
          stranded unpublishable by later token drift. *)
       let* () = exec conn "stale" q_set_verification (project, "stale") in
-      let* _ = load_view "stale project" conn ~user:owner ~slug:"ncpr-proj-home" in
+      let* _ =
+        load_view "stale project" conn ~user:owner ~slug:"ncpr-proj-home"
+      in
       let* () = exec conn "revoked" q_set_verification (project, "revoked") in
-      let* _ = load_view "revoked project" conn ~user:owner ~slug:"ncpr-proj-home" in
+      let* _ =
+        load_view "revoked project" conn ~user:owner ~slug:"ncpr-proj-home"
+      in
       let* () = exec conn "verified" q_set_verification (project, "verified") in
-      let* _ = load_view "verified again" conn ~user:owner ~slug:"ncpr-proj-home" in
+      let* _ =
+        load_view "verified again" conn ~user:owner ~slug:"ncpr-proj-home"
+      in
       Lwt.return_unit)
 
 let relation_corruption_case =
-  db_case "publication read: a missing, pending, duplicated, or malformed \
-           accepted home relation is inconsistent durable state"
-    (fun conn ->
+  db_case
+    "publication read: a missing, pending, duplicated, or malformed accepted \
+     home relation is inconsistent durable state" (fun conn ->
       let* owner = insert_user conn "ncpr_relowner" in
       let* _inst, project =
         make_project conn ~user:owner ~ext_id:952000004L ~slug:"ncpr-rel"
@@ -483,7 +527,9 @@ let relation_corruption_case =
         provision_draft conn ~actor:owner ~project_slug:"ncpr-rel"
           ~slug:"ncpr-rel-home"
       in
-      let expect label e = load_expect label e conn ~user:owner ~slug:"ncpr-rel-home" in
+      let expect label e =
+        load_expect label e conn ~user:owner ~slug:"ncpr-rel-home"
+      in
       let* _ = load_view "one home" conn ~user:owner ~slug:"ncpr-rel-home" in
       (* A second accepted home from a different project: the partial
          unique index is per project, so the contradiction shows up on the
@@ -499,12 +545,15 @@ let relation_corruption_case =
       let* () = expect "no accepted home" Rm.Inconsistent_data in
       (* Reinstating exactly one restores the view. *)
       let* () = exec conn "reinstate" q_second_accepted (project, community) in
-      let* _ = load_view "one home again" conn ~user:owner ~slug:"ncpr-rel-home" in
+      let* _ =
+        load_view "one home again" conn ~user:owner ~slug:"ncpr-rel-home"
+      in
       Lwt.return_unit)
 
 let pending_relation_case =
-  db_case "publication read: a home relation demoted to pending leaves the \
-           draft inconsistent, never silently homeless" (fun conn ->
+  db_case
+    "publication read: a home relation demoted to pending leaves the draft \
+     inconsistent, never silently homeless" (fun conn ->
       let* owner = insert_user conn "ncpr_pendowner" in
       let* _inst, _project =
         make_project conn ~user:owner ~ext_id:952000006L ~slug:"ncpr-pend"
@@ -529,8 +578,9 @@ let pending_relation_case =
 (* === complete-draft and identity corruption === *)
 
 let shell_corruption_case =
-  db_case "publication read: an incomplete community shell is inconsistent \
-           durable state" (fun conn ->
+  db_case
+    "publication read: an incomplete community shell is inconsistent durable \
+     state" (fun conn ->
       let* owner = insert_user conn "ncpr_shellowner" in
       let* admin = insert_user conn "ncpr_shelladmin" in
       let* () = set_admin conn ~user:admin true in
@@ -541,23 +591,31 @@ let shell_corruption_case =
         provision_draft conn ~actor:owner ~project_slug:"ncpr-shell"
           ~slug:"ncpr-shell-home"
       in
-      let expect label e = load_expect label e conn ~user:admin ~slug:"ncpr-shell-home" in
+      let expect label e =
+        load_expect label e conn ~user:admin ~slug:"ncpr-shell-home"
+      in
       (* Membership is required in its own right. *)
       let* () = exec conn "drop members" q_delete_members community in
       let* () = expect "no member" Rm.Inconsistent_data in
       let* () = add_member conn ~user:owner ~community in
-      let* _ = load_view "member restored" conn ~user:admin ~slug:"ncpr-shell-home" in
+      let* _ =
+        load_view "member restored" conn ~user:admin ~slug:"ncpr-shell-home"
+      in
       (* A draft with no top moderator is corrupt even for a durable
          admin, who can still reach it. *)
       let* () = exec conn "drop top mods" q_delete_top_mods community in
       let* () = expect "no top mod" Rm.Inconsistent_data in
       let* () = add_role conn ~user:owner ~community "top_mod" in
-      let* _ = load_view "top mod restored" conn ~user:admin ~slug:"ncpr-shell-home" in
+      let* _ =
+        load_view "top mod restored" conn ~user:admin ~slug:"ncpr-shell-home"
+      in
       (* The required general channel must exist and be active. *)
       let* () = exec conn "archive channels" q_archive_channels community in
       let* () = expect "archived general channel" Rm.Inconsistent_data in
       let* () = exec conn "unarchive channels" q_unarchive_channels community in
-      let* _ = load_view "channel restored" conn ~user:admin ~slug:"ncpr-shell-home" in
+      let* _ =
+        load_view "channel restored" conn ~user:admin ~slug:"ncpr-shell-home"
+      in
       (* The required General section. Duplication is not reachable through
          the durable model — community_sections and channels each carry a
          unique (community_id, slug) key — so the "exactly one" rule can
@@ -568,12 +626,16 @@ let shell_corruption_case =
       (match duplicate with
       | Error _ -> ()
       | Ok () -> Alcotest.fail "a duplicate General section was accepted");
-      let* () = exec conn "drop sections" Network_community_fixture.q_delete_sections community in
+      let* () =
+        exec conn "drop sections" Network_community_fixture.q_delete_sections
+          community
+      in
       expect "no General section" Rm.Inconsistent_data)
 
 let identity_corruption_case =
-  db_case "publication read: a community identity outside the scoped \
-           network policy is inconsistent durable state" (fun conn ->
+  db_case
+    "publication read: a community identity outside the scoped network policy \
+     is inconsistent durable state" (fun conn ->
       let* owner = insert_user conn "ncpr_idowner" in
       let* _inst, _project =
         make_project conn ~user:owner ~ext_id:952000008L ~slug:"ncpr-id"
@@ -597,10 +659,13 @@ let identity_corruption_case =
               ~user:owner ~slug:"ncpr-id-home"
           in
           let* () =
-            exec conn "recanonicalize" Network_community_constraints.q_recanonicalize
+            exec conn "recanonicalize"
+              Network_community_constraints.q_recanonicalize
               (community, "ncpr-id-home", "Ncpr Home")
           in
-          let* _ = load_view "name restored" conn ~user:owner ~slug:"ncpr-id-home" in
+          let* _ =
+            load_view "name restored" conn ~user:owner ~slug:"ncpr-id-home"
+          in
           let* () =
             exec conn "padded description" q_corrupt_community_description
               community
@@ -612,14 +677,16 @@ let identity_corruption_case =
           Lwt.return_unit)
         (fun () ->
           let* () =
-            exec conn "recanonicalize" Network_community_constraints.q_recanonicalize
+            exec conn "recanonicalize"
+              Network_community_constraints.q_recanonicalize
               (community, "ncpr-id-home", "Ncpr Home")
           in
           Network_community_constraints.restore conn))
 
 let project_corruption_case =
-  db_case "publication read: a malformed or off-enum project identity is \
-           inconsistent durable state" (fun conn ->
+  db_case
+    "publication read: a malformed or off-enum project identity is \
+     inconsistent durable state" (fun conn ->
       let* owner = insert_user conn "ncpr_pcowner" in
       let* _inst, project =
         make_project conn ~user:owner ~ext_id:952000009L ~slug:"ncpr-pc"
@@ -637,9 +704,12 @@ let project_corruption_case =
           ~user:owner ~slug:"ncpr-pc-home"
       in
       let* () =
-        exec conn "restore login" Home_provisioning_fixture.q_restore_project project
+        exec conn "restore login" Home_provisioning_fixture.q_restore_project
+          project
       in
-      let* _ = load_view "login restored" conn ~user:owner ~slug:"ncpr-pc-home" in
+      let* _ =
+        load_view "login restored" conn ~user:owner ~slug:"ncpr-pc-home"
+      in
       (* An off-enum verification status needs the permanent CHECK to step
          aside for the length of one probe. *)
       let (module C : Caqti_lwt.CONNECTION) = conn in
@@ -665,8 +735,8 @@ let project_corruption_case =
 (* === storage failure === *)
 
 let storage_case =
-  db_case "publication read: a query failure is the payload-free storage \
-           error" (fun conn ->
+  db_case "publication read: a query failure is the payload-free storage error"
+    (fun conn ->
       let* owner = insert_user conn "ncpr_stowner" in
       let* _inst, _project =
         make_project conn ~user:owner ~ext_id:952000010L ~slug:"ncpr-st"
@@ -686,8 +756,9 @@ let storage_case =
 (* === privacy sweep === *)
 
 let privacy_case =
-  db_case "publication read: no identifier, credential, or private \
-           workflow value crosses the public surface" (fun conn ->
+  db_case
+    "publication read: no identifier, credential, or private workflow value \
+     crosses the public surface" (fun conn ->
       let* owner = insert_user conn "ncpr_privowner" in
       let* _inst, _project =
         make_project conn ~user:owner ~ext_id:952000001L ~slug:"ncpr-priv"
@@ -705,39 +776,51 @@ let privacy_case =
          reachable through the abstract types. *)
       let surface =
         String.concat "|"
-          [ Rm.community_name community; Rm.community_slug community;
+          [
+            Rm.community_name community;
+            Rm.community_slug community;
             Option.value ~default:"" (Rm.community_description community);
-            Rm.project_name project; Rm.project_slug project;
+            Rm.project_name project;
+            Rm.project_slug project;
             Rm.project_namespace_login project;
             Pi.string_of_kind (Rm.project_kind project);
             string_of_bool (Rm.publisher_is_top_moderator view);
-            string_of_bool (Rm.publisher_is_durable_admin view)
+            string_of_bool (Rm.publisher_is_durable_admin view);
           ]
       in
       List.iter
         (fun (what, needle) ->
-          Alcotest.(check bool) ("view free of " ^ what) false
+          Alcotest.(check bool)
+            ("view free of " ^ what) false
             (Html_assert.contains surface needle))
         credential_markers;
       (* No internal identifier can appear either: the actor's own id, the
          community id, and the project id are all absent by construction. *)
-      Alcotest.(check bool) "no actor id" false
+      Alcotest.(check bool)
+        "no actor id" false
         (Html_assert.contains surface (string_of_int owner));
       Lwt.return_unit)
 
 let suite =
-  [ pure_inputs_case; authorization_case; lifecycle_case; project_case;
-    relation_corruption_case; pending_relation_case; shell_corruption_case;
-    identity_corruption_case; project_corruption_case; storage_case;
-    privacy_case
+  [
+    pure_inputs_case;
+    authorization_case;
+    lifecycle_case;
+    project_case;
+    relation_corruption_case;
+    pending_relation_case;
+    shell_corruption_case;
+    identity_corruption_case;
+    project_corruption_case;
+    storage_case;
+    privacy_case;
   ]
 
 let suites =
-    (* Publisher-authorized setup read model: pure input validation before
+  (* Publisher-authorized setup read model: pure input validation before
        SQL, top-mod-or-durable-admin authorization with no session bypass,
        the exact private-draft lifecycle, the single accepted home project
        and its verification-drift tolerance, complete-draft and identity
        revalidation, storage failure, and the privacy sweep.
        Database-gated. *)
-  [ ("network_community_publication_read_model", suite)
-  ]
+  [ ("network_community_publication_read_model", suite) ]

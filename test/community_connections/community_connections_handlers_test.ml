@@ -6,53 +6,38 @@
 let ( let* ) = Lwt.bind
 
 open Caqti_request.Infix
-
 module H = Earde.Community_connections_handlers
-
 module Store = Earde.Community_connections_store
-
 module Cc = Earde.Community_connections
 
 let or_fail = Db_fixture.or_fail
-
 let insert_user = Db_fixture.insert_user
-
 let exec = Db_fixture.exec
-
 let find = Db_fixture.find
-
 let insert_community = Community_fixture.insert_community
-
 let contains haystack needle = Html_assert.occurs haystack ~needle
-
 let status_of = Http_fixture.status_of
-
 let must = Html_assert.must
-
 let must_not = Html_assert.must_not
-
 let base slug = Printf.sprintf "/c/%s/settings/connections" slug
-
-let action ~slug ~id verb =
-  Printf.sprintf "%s/%Ld/%s" (base slug) id verb
+let action ~slug ~id verb = Printf.sprintf "%s/%Ld/%s" (base slug) id verb
 
 (* --- Fixtures --- *)
 
 let q_cleanup =
   List.map
     (fun sql -> (Caqti_type.unit ->. Caqti_type.unit) sql)
-    [ "DELETE FROM community_connection_audit_events \
-       WHERE requester_community_id IN \
-               (SELECT id FROM communities WHERE slug LIKE 'ccnh-%') \
-          OR recipient_community_id IN \
-               (SELECT id FROM communities WHERE slug LIKE 'ccnh-%')"
-    ; "DELETE FROM community_connections \
-       WHERE requester_community_id IN \
-               (SELECT id FROM communities WHERE slug LIKE 'ccnh-%') \
-          OR recipient_community_id IN \
-               (SELECT id FROM communities WHERE slug LIKE 'ccnh-%')"
-    ; "DELETE FROM communities WHERE slug LIKE 'ccnh-%'"
-    ; "DELETE FROM users WHERE username LIKE 'ccnh_%'"
+    [
+      "DELETE FROM community_connection_audit_events WHERE \
+       requester_community_id IN (SELECT id FROM communities WHERE slug LIKE \
+       'ccnh-%') OR recipient_community_id IN (SELECT id FROM communities \
+       WHERE slug LIKE 'ccnh-%')";
+      "DELETE FROM community_connections WHERE requester_community_id IN \
+       (SELECT id FROM communities WHERE slug LIKE 'ccnh-%') OR \
+       recipient_community_id IN (SELECT id FROM communities WHERE slug LIKE \
+       'ccnh-%')";
+      "DELETE FROM communities WHERE slug LIKE 'ccnh-%'";
+      "DELETE FROM users WHERE username LIKE 'ccnh_%'";
     ]
 
 let db_case name f =
@@ -75,11 +60,11 @@ let db_case name f =
              let* () = cleanup () in
              Lwt.finalize
                (fun () -> f ~url conn)
-               (fun () ->
-                 Lwt.finalize cleanup (fun () -> C.disconnect ()))))
+               (fun () -> Lwt.finalize cleanup (fun () -> C.disconnect ()))))
 
 let add_role conn ~user ~community role =
-  exec conn "role fixture" Community_fixture.q_insert_moderator (user, community, role)
+  exec conn "role fixture" Community_fixture.q_insert_moderator
+    (user, community, role)
 
 let add_top_mod conn ~user ~community = add_role conn ~user ~community "top_mod"
 
@@ -91,28 +76,30 @@ let set_admin conn ~user flag =
 
 (* Lifecycle drift written directly, exactly as the durable columns
    represent it — the same fixtures the choice-read-model suite uses. *)
-let make_private conn cid = exec conn "private" Community_fixture.q_make_private cid
+let make_private conn cid =
+  exec conn "private" Community_fixture.q_make_private cid
 
-let make_unlisted conn cid = exec conn "unlisted" Community_fixture.q_make_unlisted cid
+let make_unlisted conn cid =
+  exec conn "unlisted" Community_fixture.q_make_unlisted cid
 
-let make_draft conn cid = exec conn "draft" Community_fixture.q_make_draft_state cid
+let make_draft conn cid =
+  exec conn "draft" Community_fixture.q_make_draft_state cid
 
 let q_status =
   (Caqti_type.int64 ->! Caqti_type.string)
-  "SELECT status FROM community_connections WHERE id = $1"
+    "SELECT status FROM community_connections WHERE id = $1"
 
 let q_count_pair =
   (Caqti_type.(t2 int int) ->! Caqti_type.int)
-  "SELECT COUNT(*) FROM community_connections \
-   WHERE LEAST(requester_community_id, recipient_community_id) \
-         = LEAST($1, $2) \
-     AND GREATEST(requester_community_id, recipient_community_id) \
-         = GREATEST($1, $2)"
+    "SELECT COUNT(*) FROM community_connections WHERE \
+     LEAST(requester_community_id, recipient_community_id) = LEAST($1, $2) AND \
+     GREATEST(requester_community_id, recipient_community_id) = GREATEST($1, \
+     $2)"
 
 let q_event_count =
   (Caqti_type.int64 ->! Caqti_type.int)
-  "SELECT COUNT(*) FROM community_connection_audit_events \
-   WHERE connection_id = $1"
+    "SELECT COUNT(*) FROM community_connection_audit_events WHERE \
+     connection_id = $1"
 
 let check_status label conn id expected =
   let* status = find conn (label ^ ": status") q_status id in
@@ -152,25 +139,28 @@ let sql_pool url =
       middleware
 
 let app_pipeline ?session_user_id ?(session_admin = false) ~url () =
-  sql_pool url @@ Dream.set_secret Github_fixture.cookie_secret @@ Dream.memory_sessions
+  sql_pool url
+  @@ Dream.set_secret Github_fixture.cookie_secret
+  @@ Dream.memory_sessions
   @@ (fun handler request ->
-       match session_user_id with
-       | None -> handler request
-       | Some uid ->
-           let* () =
-             Dream.set_session_field request "user_id" (string_of_int uid)
-           in
-           let* () =
-             if session_admin then
-               Dream.set_session_field request "is_admin" "true"
-             else Lwt.return_unit
-           in
-           handler request)
+    match session_user_id with
+    | None -> handler request
+    | Some uid ->
+        let* () =
+          Dream.set_session_field request "user_id" (string_of_int uid)
+        in
+        let* () =
+          if session_admin then
+            Dream.set_session_field request "is_admin" "true"
+          else Lwt.return_unit
+        in
+        handler request)
   @@ Dream.router
-       [ Dream.get "/mint" (fun req ->
+       [
+         Dream.get "/mint" (fun req ->
              Dream.respond
                (Dream.csrf_token req ^ "\n"
-              ^ Dream.csrf_token ~valid_for:(-60.) req));
+               ^ Dream.csrf_token ~valid_for:(-60.) req));
          Dream.get "/c/:slug/settings/connections"
            H.make_connections_page_handler;
          Dream.get "/c/:slug/settings/connections/new"
@@ -186,9 +176,7 @@ let app_pipeline ?session_user_id ?(session_admin = false) ~url () =
        ]
 
 let mint label pipeline =
-  let* response =
-    pipeline (Dream.request ~method_:`GET ~target:"/mint" "")
-  in
+  let* response = pipeline (Dream.request ~method_:`GET ~target:"/mint" "") in
   let cookie = Http_fixture.session_cookie label response in
   let* body = Dream.body response in
   match String.split_on_char '\n' body with
@@ -206,7 +194,8 @@ let post ?(content_type = true) ~cookie ~target ~fields pipeline =
   in
   let* response =
     pipeline
-      (Dream.request ~method_:`POST ~target ~headers (Http_fixture.form_body fields))
+      (Dream.request ~method_:`POST ~target ~headers
+         (Http_fixture.form_body fields))
   in
   let* body = Dream.body response in
   Lwt.return (response, body)
@@ -224,8 +213,9 @@ let acting label ~url ~uid ?(admin = false) () =
 (* === GET: authorization matrix === *)
 
 let get_authz_case =
-  db_case "GET connections: exactly top_mod and durable admins; everyone \
-           else is one generic 404" (fun ~url conn ->
+  db_case
+    "GET connections: exactly top_mod and durable admins; everyone else is one \
+     generic 404" (fun ~url conn ->
       let* top = insert_user conn "ccnh_top" in
       let* admin = insert_user conn "ccnh_admin" in
       let* modu = insert_user conn "ccnh_mod" in
@@ -278,20 +268,24 @@ let get_authz_case =
       let* () =
         denied "session-only admin claim" sonly ~admin:true ~slug:"ccnh-home"
       in
-      let* () = denied "missing community" top ~admin:false ~slug:"ccnh-absent" in
+      let* () =
+        denied "missing community" top ~admin:false ~slug:"ccnh-absent"
+      in
       (* Anonymous callers never reach the read model at all. *)
       let anon = app_pipeline ~url () in
       let* response, _ = get ~target:(base "ccnh-home") anon in
       Alcotest.(check int) "anonymous: 303" 303 (status_of response);
-      Alcotest.(check (option string)) "to /login" (Some "/login")
+      Alcotest.(check (option string))
+        "to /login" (Some "/login")
         (Dream.header response "Location");
       Lwt.return_unit)
 
 (* === GET: the three sections over real rows === *)
 
 let get_sections_case =
-  db_case "GET connections: accepted reads symmetrically, pending rows carry \
-           their private note, nothing names a person" (fun ~url conn ->
+  db_case
+    "GET connections: accepted reads symmetrically, pending rows carry their \
+     private note, nothing names a person" (fun ~url conn ->
       let* top = insert_user conn "ccnh_s_top" in
       let* peer = insert_user conn "ccnh_s_peer" in
       let* home = insert_community ~name:"Ccnh Sections" conn "ccnh-sec" in
@@ -301,18 +295,19 @@ let get_sections_case =
       let* () = add_top_mod conn ~user:top ~community:home in
       (* Accepted, requested by the OTHER side — it must still appear. *)
       let* accepted_id =
-        Http_fixture.request_direct conn ~actor:peer ~requester:friend ~recipient:home ()
+        Http_fixture.request_direct conn ~actor:peer ~requester:friend
+          ~recipient:home ()
       in
       let* () = accept_direct conn ~actor:top ~id:accepted_id ~recipient:home in
       (* Incoming, with a hostile note. *)
       let* incoming_id =
-        Http_fixture.request_direct conn ~actor:peer ~requester:asker ~recipient:home
-          ~note:"<script>x</script> joint reading group" ()
+        Http_fixture.request_direct conn ~actor:peer ~requester:asker
+          ~recipient:home ~note:"<script>x</script> joint reading group" ()
       in
       (* Outgoing. *)
       let* outgoing_id =
-        Http_fixture.request_direct conn ~actor:top ~requester:home ~recipient:wanted
-          ~note:"we admire your work" ()
+        Http_fixture.request_direct conn ~actor:top ~requester:home
+          ~recipient:wanted ~note:"we admire your work" ()
       in
       let pipeline = session ~url ~uid:top () in
       let* response, body = get ~target:(base "ccnh-sec") pipeline in
@@ -333,20 +328,30 @@ let get_sections_case =
       must body "we admire your work";
       (* No person is named anywhere in the connections fragment. *)
       let frag = Html_assert.panel_fragment body in
-      List.iter (fun n -> must_not frag n)
-        [ "ccnh_s_top"; "ccnh_s_peer"; "Accepted by"; "Requested by"
-        ; "Reviewed by"; "Removed by" ];
+      List.iter
+        (fun n -> must_not frag n)
+        [
+          "ccnh_s_top";
+          "ccnh_s_peer";
+          "Accepted by";
+          "Requested by";
+          "Reviewed by";
+          "Removed by";
+        ];
       Lwt.return_unit)
 
 (* === GET: target search exclusions === *)
 
 let search_case =
-  db_case "GET search: only eligible, unconnected, other communities are \
-           offered" (fun ~url conn ->
+  db_case
+    "GET search: only eligible, unconnected, other communities are offered"
+    (fun ~url conn ->
       let* top = insert_user conn "ccnh_q_top" in
       let* peer = insert_user conn "ccnh_q_peer" in
       let* home = insert_community ~name:"Ccnh Query" conn "ccnh-q-home" in
-      let* _good = insert_community ~name:"Ccnh Query Good" conn "ccnh-q-good" in
+      let* _good =
+        insert_community ~name:"Ccnh Query Good" conn "ccnh-q-good"
+      in
       let* privc =
         insert_community ~network:false ~name:"Ccnh Query Priv" conn
           "ccnh-q-priv"
@@ -409,9 +414,15 @@ let search_case =
         (fun slug ->
           must_not body ("target=" ^ slug);
           must_not body ("/c/" ^ slug))
-        [ "ccnh-q-priv"; "ccnh-q-draft"; "ccnh-q-unlisted"; "ccnh-q-pending"
-        ; "ccnh-q-accepted" ];
-      List.iter (fun n -> must_not body n)
+        [
+          "ccnh-q-priv";
+          "ccnh-q-draft";
+          "ccnh-q-unlisted";
+          "ccnh-q-pending";
+          "ccnh-q-accepted";
+        ];
+      List.iter
+        (fun n -> must_not body n)
         [ "Ccnh Query Priv"; "Ccnh Query Draft"; "Ccnh Query Unlisted" ];
       (* A blank query is the unsearched page; a matching-nothing query is
          the empty one. Neither states a count. *)
@@ -441,8 +452,7 @@ let search_case =
          this community's own state, visible on its own management page —
          while a withheld community stays collapsed above. *)
       let* _, active =
-        get ~target:(base "ccnh-q-home" ^ "/new?target=ccnh-q-pending")
-          pipeline
+        get ~target:(base "ccnh-q-home" ^ "/new?target=ccnh-q-pending") pipeline
       in
       must active "already connected";
       must_not active "<textarea";
@@ -456,15 +466,18 @@ let search_case =
 (* === POST request: authorization and eligibility === *)
 
 let request_authz_case =
-  db_case "POST request: only the source community's top_mod or a durable \
-           admin may send one" (fun ~url conn ->
+  db_case
+    "POST request: only the source community's top_mod or a durable admin may \
+     send one" (fun ~url conn ->
       let* top = insert_user conn "ccnh_r_top" in
       let* admin = insert_user conn "ccnh_r_admin" in
       let* modu = insert_user conn "ccnh_r_mod" in
       let* member = insert_user conn "ccnh_r_member" in
       let* stranger = insert_user conn "ccnh_r_stranger" in
       let* home = insert_community ~name:"Ccnh Req" conn "ccnh-r-home" in
-      let* target = insert_community ~name:"Ccnh Req Target" conn "ccnh-r-target" in
+      let* target =
+        insert_community ~name:"Ccnh Req Target" conn "ccnh-r-target"
+      in
       let* target2 =
         insert_community ~name:"Ccnh Req Target Two" conn "ccnh-r-target2"
       in
@@ -473,14 +486,15 @@ let request_authz_case =
       let* () = add_role conn ~user:modu ~community:home "mod" in
       let* () = add_member conn ~user:member ~community:home in
       let send label uid ~admin ~target_slug =
-        let* pipeline, cookie, token, _ =
-          acting label ~url ~uid ~admin ()
-        in
+        let* pipeline, cookie, token, _ = acting label ~url ~uid ~admin () in
         post ~cookie
           ~target:(base "ccnh-r-home" ^ "/request")
           ~fields:
-            [ ("dream.csrf", token); ("target", target_slug);
-              ("note", "please connect") ]
+            [
+              ("dream.csrf", token);
+              ("target", target_slug);
+              ("note", "please connect");
+            ]
           pipeline
       in
       (* The two authorized identities each succeed once. *)
@@ -488,7 +502,8 @@ let request_authz_case =
         send "top mod" top ~admin:false ~target_slug:"ccnh-r-target"
       in
       Alcotest.(check int) "top mod: 303" 303 (status_of response);
-      Alcotest.(check (option string)) "back to the management page"
+      Alcotest.(check (option string))
+        "back to the management page"
         (Some (base "ccnh-r-home"))
         (Dream.header response "Location");
       let* n = find conn "pair" q_count_pair (home, target) in
@@ -501,7 +516,9 @@ let request_authz_case =
       Alcotest.(check int) "admin's row" 1 n;
       (* Everyone else is refused before any store call. *)
       let refused label uid ~admin =
-        let* response, body = send label uid ~admin ~target_slug:"ccnh-r-target" in
+        let* response, body =
+          send label uid ~admin ~target_slug:"ccnh-r-target"
+        in
         Alcotest.(check int) (label ^ ": 404") 404 (status_of response);
         must body "This page does not exist.";
         Lwt.return_unit
@@ -519,13 +536,16 @@ let request_authz_case =
       in
       Alcotest.(check int) "duplicate: 409" 409 (status_of response);
       must body "already connected";
-      let* n = find conn "still one after duplicate" q_count_pair (home, target) in
+      let* n =
+        find conn "still one after duplicate" q_count_pair (home, target)
+      in
       Alcotest.(check int) "no extra rows" 1 n;
       Lwt.return_unit)
 
 let request_eligibility_case =
-  db_case "POST request: an ineligible source or target is refused at the \
-           transaction boundary" (fun ~url conn ->
+  db_case
+    "POST request: an ineligible source or target is refused at the \
+     transaction boundary" (fun ~url conn ->
       let* top = insert_user conn "ccnh_e_top" in
       let* home =
         insert_community ~network:false ~name:"Ccnh Elig" conn "ccnh-e-home"
@@ -544,7 +564,9 @@ let request_eligibility_case =
       in
       (* The target goes private after the page was rendered. *)
       let* () = make_private conn target in
-      let* response, body = send "private target" ~target_slug:"ccnh-e-target" in
+      let* response, body =
+        send "private target" ~target_slug:"ccnh-e-target"
+      in
       Alcotest.(check int) "409" 409 (status_of response);
       must body "not available to connect";
       (* The refusal never says why, and never that the community exists. *)
@@ -554,7 +576,9 @@ let request_eligibility_case =
       (* Now the source itself becomes ineligible. *)
       let* () = exec conn "restore" Community_fixture.q_make_listed target in
       let* () = make_unlisted conn home in
-      let* response, body = send "unlisted source" ~target_slug:"ccnh-e-target" in
+      let* response, body =
+        send "unlisted source" ~target_slug:"ccnh-e-target"
+      in
       Alcotest.(check int) "409" 409 (status_of response);
       must body "cannot create or accept new connections";
       let* n = find conn "still nothing" q_count_pair (home, target) in
@@ -571,8 +595,9 @@ let request_eligibility_case =
 (* === POST accept/reject: subject binding === *)
 
 let review_authz_case =
-  db_case "POST accept/reject: only the recipient community's authority, \
-           and only over its own connection" (fun ~url conn ->
+  db_case
+    "POST accept/reject: only the recipient community's authority, and only \
+     over its own connection" (fun ~url conn ->
       let* rtop = insert_user conn "ccnh_v_rtop" in
       let* stop = insert_user conn "ccnh_v_stop" in
       let* xtop = insert_user conn "ccnh_v_xtop" in
@@ -586,7 +611,8 @@ let review_authz_case =
       let* () = set_admin conn ~user:admin true in
       let* () = add_top_mod conn ~user:admin ~community:outsider in
       let* id =
-        Http_fixture.request_direct conn ~actor:stop ~requester:source ~recipient ()
+        Http_fixture.request_direct conn ~actor:stop ~requester:source
+          ~recipient ()
       in
       let review label uid ~admin ~slug verb =
         let* pipeline, cookie, token, _ = acting label ~url ~uid ~admin () in
@@ -597,42 +623,56 @@ let review_authz_case =
       in
       (* The requesting side cannot review its own request, even though it
          is a top_mod of a community in the pair. *)
-      let* response, body = review "requester side" stop ~admin:false ~slug:"ccnh-v-src" "accept" in
+      let* response, body =
+        review "requester side" stop ~admin:false ~slug:"ccnh-v-src" "accept"
+      in
       Alcotest.(check int) "404" 404 (status_of response);
       must body "This page does not exist.";
       let* () = check_status "untouched" conn id "pending" in
       (* An unrelated community's top mod, addressing it through their own
          route, cannot reach it either. *)
-      let* response, _ = review "outsider" xtop ~admin:false ~slug:"ccnh-v-out" "accept" in
+      let* response, _ =
+        review "outsider" xtop ~admin:false ~slug:"ccnh-v-out" "accept"
+      in
       Alcotest.(check int) "404" 404 (status_of response);
       let* () = check_status "untouched" conn id "pending" in
       (* A global admin operating from an unrelated community context is
          refused too: authority does not remove the subject binding. *)
-      let* response, _ = review "admin, wrong context" admin ~admin:true ~slug:"ccnh-v-out" "accept" in
+      let* response, _ =
+        review "admin, wrong context" admin ~admin:true ~slug:"ccnh-v-out"
+          "accept"
+      in
       Alcotest.(check int) "404" 404 (status_of response);
       let* () = check_status "untouched" conn id "pending" in
       (* Only one audit event so far: the request. *)
       let* () = check_events "no review yet" conn id 1 in
       (* The recipient's top mod succeeds. *)
-      let* response, _ = review "recipient top mod" rtop ~admin:false ~slug:"ccnh-v-rec" "accept" in
+      let* response, _ =
+        review "recipient top mod" rtop ~admin:false ~slug:"ccnh-v-rec" "accept"
+      in
       Alcotest.(check int) "303" 303 (status_of response);
       let* () = check_status "accepted" conn id "accepted" in
       let* () = check_events "request + accept" conn id 2 in
       (* A stale duplicate submission is a stable conflict, never a second
          write. *)
-      let* response, body = review "duplicate" rtop ~admin:false ~slug:"ccnh-v-rec" "accept" in
+      let* response, body =
+        review "duplicate" rtop ~admin:false ~slug:"ccnh-v-rec" "accept"
+      in
       Alcotest.(check int) "409" 409 (status_of response);
       must body "no longer pending";
       let* () = check_events "still two" conn id 2 in
-      let* response, body = review "late reject" rtop ~admin:false ~slug:"ccnh-v-rec" "reject" in
+      let* response, body =
+        review "late reject" rtop ~admin:false ~slug:"ccnh-v-rec" "reject"
+      in
       Alcotest.(check int) "409" 409 (status_of response);
       must body "no longer pending";
       let* () = check_events "still two" conn id 2 in
       Lwt.return_unit)
 
 let review_eligibility_case =
-  db_case "POST accept: blocked once either side loses eligibility; reject \
-           stays available" (fun ~url conn ->
+  db_case
+    "POST accept: blocked once either side loses eligibility; reject stays \
+     available" (fun ~url conn ->
       let* stop = insert_user conn "ccnh_w_stop" in
       let* rtop = insert_user conn "ccnh_w_rtop" in
       let* source =
@@ -643,10 +683,14 @@ let review_eligibility_case =
       in
       let* () = add_top_mod conn ~user:stop ~community:source in
       let* () = add_top_mod conn ~user:rtop ~community:recipient in
-      let* id = Http_fixture.request_direct conn ~actor:stop ~requester:source ~recipient () in
+      let* id =
+        Http_fixture.request_direct conn ~actor:stop ~requester:source
+          ~recipient ()
+      in
       let review label verb =
         let* pipeline, cookie, token, _ = acting label ~url ~uid:rtop () in
-        post ~cookie ~target:(action ~slug:"ccnh-w-rec" ~id verb)
+        post ~cookie
+          ~target:(action ~slug:"ccnh-w-rec" ~id verb)
           ~fields:[ ("dream.csrf", token) ]
           pipeline
       in
@@ -657,7 +701,9 @@ let review_eligibility_case =
       must body "not available to connect";
       let* () = check_status "still pending" conn id "pending" in
       (* Now the reviewing community loses eligibility too. *)
-      let* () = exec conn "restore source" Community_fixture.q_make_listed source in
+      let* () =
+        exec conn "restore source" Community_fixture.q_make_listed source
+      in
       let* () = make_unlisted conn recipient in
       let* response, body = review "accept, recipient unlisted" "accept" in
       Alcotest.(check int) "409" 409 (status_of response);
@@ -678,8 +724,9 @@ let review_eligibility_case =
 (* === POST remove === *)
 
 let removal_case =
-  db_case "POST remove: either side may detach, an outsider may not, and \
-           eligibility is irrelevant" (fun ~url conn ->
+  db_case
+    "POST remove: either side may detach, an outsider may not, and eligibility \
+     is irrelevant" (fun ~url conn ->
       let* stop = insert_user conn "ccnh_x_stop" in
       let* rtop = insert_user conn "ccnh_x_rtop" in
       let* xtop = insert_user conn "ccnh_x_xtop" in
@@ -691,11 +738,15 @@ let removal_case =
       let* () = add_top_mod conn ~user:stop ~community:source in
       let* () = add_top_mod conn ~user:rtop ~community:recipient in
       let* () = add_top_mod conn ~user:xtop ~community:outsider in
-      let* first = Http_fixture.request_direct conn ~actor:stop ~requester:source ~recipient () in
+      let* first =
+        Http_fixture.request_direct conn ~actor:stop ~requester:source
+          ~recipient ()
+      in
       let* () = accept_direct conn ~actor:rtop ~id:first ~recipient in
       let remove label uid ~slug ~id =
         let* pipeline, cookie, token, _ = acting label ~url ~uid () in
-        post ~cookie ~target:(action ~slug ~id "remove")
+        post ~cookie
+          ~target:(action ~slug ~id "remove")
           ~fields:[ ("dream.csrf", token) ]
           pipeline
       in
@@ -705,21 +756,30 @@ let removal_case =
       Alcotest.(check int) "404" 404 (status_of response);
       let* () = check_status "still accepted" conn first "accepted" in
       (* The recipient side removes it. *)
-      let* response, _ = remove "recipient side" rtop ~slug:"ccnh-x-rec" ~id:first in
+      let* response, _ =
+        remove "recipient side" rtop ~slug:"ccnh-x-rec" ~id:first
+      in
       Alcotest.(check int) "303" 303 (status_of response);
       let* () = check_status "removed" conn first "removed" in
       let* () = check_events "three events" conn first 3 in
       (* A stale duplicate removal is a stable conflict. *)
-      let* response, body = remove "duplicate" rtop ~slug:"ccnh-x-rec" ~id:first in
+      let* response, body =
+        remove "duplicate" rtop ~slug:"ccnh-x-rec" ~id:first
+      in
       Alcotest.(check int) "409" 409 (status_of response);
       must body "no longer active";
       let* () = check_events "still three" conn first 3 in
       (* A fresh connection, removed from the requesting side, while that
          side is no longer eligible. *)
-      let* second = Http_fixture.request_direct conn ~actor:stop ~requester:source ~recipient () in
+      let* second =
+        Http_fixture.request_direct conn ~actor:stop ~requester:source
+          ~recipient ()
+      in
       let* () = accept_direct conn ~actor:rtop ~id:second ~recipient in
       let* () = make_private conn source in
-      let* response, _ = remove "requester side, ineligible" stop ~slug:"ccnh-x-src" ~id:second in
+      let* response, _ =
+        remove "requester side, ineligible" stop ~slug:"ccnh-x-src" ~id:second
+      in
       Alcotest.(check int) "303" 303 (status_of response);
       let* () = check_status "removed" conn second "removed" in
       Lwt.return_unit)
@@ -736,14 +796,22 @@ let csrf_case =
       let* () = add_top_mod conn ~user:stop ~community:source in
       let* () = add_top_mod conn ~user:rtop ~community:recipient in
       let* pending_id =
-        Http_fixture.request_direct conn ~actor:stop ~requester:source ~recipient ()
+        Http_fixture.request_direct conn ~actor:stop ~requester:source
+          ~recipient ()
       in
       let* accepted_id =
-        Http_fixture.request_direct conn ~actor:stop ~requester:source ~recipient:free ()
+        Http_fixture.request_direct conn ~actor:stop ~requester:source
+          ~recipient:free ()
       in
-      let* () = accept_direct conn ~actor:stop ~id:accepted_id ~recipient:free in
-      let* pipeline, cookie, _token, expired = acting "mint" ~url ~uid:rtop () in
-      let* spipe, scookie, _stoken, sexpired = acting "mint2" ~url ~uid:stop () in
+      let* () =
+        accept_direct conn ~actor:stop ~id:accepted_id ~recipient:free
+      in
+      let* pipeline, cookie, _token, expired =
+        acting "mint" ~url ~uid:rtop ()
+      in
+      let* spipe, scookie, _stoken, sexpired =
+        acting "mint2" ~url ~uid:stop ()
+      in
       let refused label ~pipeline ~cookie ~target ~fields =
         let* response, body = post ~cookie ~target ~fields pipeline in
         Alcotest.(check int) (label ^ ": 403") 403 (status_of response);
@@ -756,7 +824,10 @@ let csrf_case =
       let reject_target = action ~slug:"ccnh-c-rec" ~id:pending_id "reject" in
       let remove_target = action ~slug:"ccnh-c-src" ~id:accepted_id "remove" in
       let request_target = base "ccnh-c-src" ^ "/request" in
-      let* () = refused "accept, no token" ~pipeline ~cookie ~target:accept_target ~fields:[] in
+      let* () =
+        refused "accept, no token" ~pipeline ~cookie ~target:accept_target
+          ~fields:[]
+      in
       let* () =
         refused "accept, junk token" ~pipeline ~cookie ~target:accept_target
           ~fields:[ ("dream.csrf", "not-a-token") ]
@@ -765,7 +836,10 @@ let csrf_case =
         refused "accept, expired token" ~pipeline ~cookie ~target:accept_target
           ~fields:[ ("dream.csrf", expired) ]
       in
-      let* () = refused "reject, no token" ~pipeline ~cookie ~target:reject_target ~fields:[] in
+      let* () =
+        refused "reject, no token" ~pipeline ~cookie ~target:reject_target
+          ~fields:[]
+      in
       let* () =
         refused "remove, no token" ~pipeline:spipe ~cookie:scookie
           ~target:remove_target ~fields:[]
@@ -784,28 +858,41 @@ let csrf_case =
 (* === the settings entry point, and the surfaces it must not disturb === *)
 
 let settings_community ~is_network : Earde.Community_types.community =
-  { id = 5150; slug = "ccnh-nav"; name = "Ccnh Nav"; description = None;
-    rules = None; avatar_url = None; banner_url = None; allow_downvotes = true;
-    sections_enabled = false; visibility = Earde.Community_types.Community_public;
-    indexable = true; is_network_community = is_network;
-    onboarding_state = Earde.Community_types.Community_published; discoverable = true }
+  {
+    id = 5150;
+    slug = "ccnh-nav";
+    name = "Ccnh Nav";
+    description = None;
+    rules = None;
+    avatar_url = None;
+    banner_url = None;
+    allow_downvotes = true;
+    sections_enabled = false;
+    visibility = Earde.Community_types.Community_public;
+    indexable = true;
+    is_network_community = is_network;
+    onboarding_state = Earde.Community_types.Community_published;
+    discoverable = true;
+  }
 
 let render_settings ~is_admin ~is_top_mod =
   let captured = ref None in
   let pipeline =
-    Dream.set_secret Github_fixture.cookie_secret @@ Dream.memory_sessions
+    Dream.set_secret Github_fixture.cookie_secret
+    @@ Dream.memory_sessions
     @@ fun req ->
     captured :=
       Some
-        (Earde.Community_settings_pages.community_settings_page ~is_admin ~is_top_mod
-           ~open_reports_count:0
+        (Earde.Community_settings_pages.community_settings_page ~is_admin
+           ~is_top_mod ~open_reports_count:0
            ~community:(settings_community ~is_network:false)
            ~mods:[] ~banned_users:[] ~members:[] ~sections:[] ~channels:[] req);
     Dream.html ""
   in
   ignore
     (Lwt_main.run
-       (pipeline (Dream.request ~method_:`GET ~target:"/c/ccnh-nav/settings" "")));
+       (pipeline
+          (Dream.request ~method_:`GET ~target:"/c/ccnh-nav/settings" "")));
   match !captured with
   | Some html -> html
   | None -> Alcotest.fail "settings renderer did not run"
@@ -813,7 +900,8 @@ let render_settings ~is_admin ~is_top_mod =
 let settings_nav_case =
   Alcotest.test_case
     "settings: the connections entry appears for top mods and admins only, \
-     beside the untouched project-home entry" `Quick (fun () ->
+     beside the untouched project-home entry"
+    `Quick (fun () ->
       let link = "href='/c/ccnh-nav/settings/connections'" in
       let top = render_settings ~is_admin:false ~is_top_mod:true in
       Alcotest.(check bool) "top_mod sees it" true (contains top link);
@@ -829,14 +917,24 @@ let settings_nav_case =
             (label ^ ": project-home entry unchanged")
             expected
             (contains html "href='/c/ccnh-nav/project-home-requests'"))
-        [ ("top mod", top, true); ("admin", admin, true)
-        ; ("ordinary mod", plain, false) ])
+        [
+          ("top mod", top, true);
+          ("admin", admin, true);
+          ("ordinary mod", plain, false);
+        ])
 
 let suite =
-  [ get_authz_case; get_sections_case; search_case; request_authz_case
-  ; request_eligibility_case; review_authz_case; review_eligibility_case
-  ; removal_case; csrf_case; settings_nav_case ]
-
-let suites =
-  [ ("community_connections_http", suite)
+  [
+    get_authz_case;
+    get_sections_case;
+    search_case;
+    request_authz_case;
+    request_eligibility_case;
+    review_authz_case;
+    review_eligibility_case;
+    removal_case;
+    csrf_case;
+    settings_nav_case;
   ]
+
+let suites = [ ("community_connections_http", suite) ]

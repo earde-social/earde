@@ -87,10 +87,8 @@ let positive id = Int64.compare id 0L > 0
 let lock_project_query =
   let open Caqti_request.Infix in
   (Caqti_type.string ->? Caqti_type.(t3 int64 string string))
-  "SELECT p.id, p.slug, p.verification_status \
-   FROM open_source_projects p \
-   WHERE p.slug = $1 \
-   FOR UPDATE OF p"
+    "SELECT p.id, p.slug, p.verification_status FROM open_source_projects p \
+     WHERE p.slug = $1 FOR UPDATE OF p"
 
 (* The exact closed schema vocabulary (mirrors the open_source_projects
    verification CHECK); anything else in the durable column is corruption,
@@ -106,15 +104,13 @@ let known_verification_status = function
 let lock_community_query =
   let open Caqti_request.Infix in
   (Caqti_type.string
-   ->? Caqti_type.(
-         t2
-           (t2 (t2 int string) (t2 string string))
-           (t2 string (t3 bool bool bool))))
-  "SELECT id, slug, name, visibility, onboarding_state, \
-          is_network_community, indexable, discoverable \
-   FROM communities \
-   WHERE slug = $1 \
-   FOR UPDATE"
+  ->? Caqti_type.(
+        t2
+          (t2 (t2 int string) (t2 string string))
+          (t2 string (t3 bool bool bool))))
+    "SELECT id, slug, name, visibility, onboarding_state, \
+     is_network_community, indexable, discoverable FROM communities WHERE slug \
+     = $1 FOR UPDATE"
 
 (* Structural validity of the locked community. The shared lifecycle rule
    decides most shapes; the one drifted shape it rejects but removal must
@@ -158,9 +154,8 @@ let unpublished_setup_draft ~is_network_community ~onboarding_state ~visibility
 let lock_steward_query =
   let open Caqti_request.Infix in
   (Caqti_type.(t2 int64 int) ->? Caqti_type.string)
-  "SELECT role FROM project_stewards \
-   WHERE project_id = $1 AND user_id = $2 \
-   FOR UPDATE"
+    "SELECT role FROM project_stewards WHERE project_id = $1 AND user_id = $2 \
+     FOR UPDATE"
 
 (* ...then the community-side current top moderator role of the locked
    community ('mod' and 'legacy_mod' do not qualify, and ordinary
@@ -168,9 +163,8 @@ let lock_steward_query =
 let lock_top_moderator_query =
   let open Caqti_request.Infix in
   (Caqti_type.(t2 int int) ->? Caqti_type.string)
-  "SELECT role FROM community_moderators \
-   WHERE user_id = $1 AND community_id = $2 AND role = 'top_mod' \
-   FOR UPDATE"
+    "SELECT role FROM community_moderators WHERE user_id = $1 AND community_id \
+     = $2 AND role = 'top_mod' FOR UPDATE"
 
 (* ...then the durable global administrator flag on the users row — the
    only durable representation of Earde administrators. A session-only
@@ -178,9 +172,7 @@ let lock_top_moderator_query =
 let lock_admin_query =
   let open Caqti_request.Infix in
   (Caqti_type.int ->? Caqti_type.bool)
-  "SELECT is_admin FROM users \
-   WHERE id = $1 AND is_admin \
-   FOR UPDATE"
+    "SELECT is_admin FROM users WHERE id = $1 AND is_admin FOR UPDATE"
 
 (* The exact accepted relation, locked last. The partial unique active-home
    index caps this at one row; every zero-row cause (no relation, pending,
@@ -191,21 +183,16 @@ let lock_admin_query =
 let lock_accepted_relation_query =
   let open Caqti_request.Infix in
   (Caqti_type.(t2 int64 int)
-   ->? Caqti_type.(
-         t2
-           (t2 (t2 int64 string) (t2 string (option string)))
-           (t2
-              (t2 (option int) (option int))
-              (t2 (t2 bool bool) (t2 bool bool)))))
-  "SELECT id, relation_type, status, request_note, \
-          requested_by_user_id, reviewed_by_user_id, \
-          reviewed_at IS NOT NULL, removed_at IS NULL, \
-          COALESCE(reviewed_at >= created_at, FALSE), \
-          updated_at >= created_at \
-   FROM community_projects \
-   WHERE project_id = $1 AND community_id = $2 \
-     AND relation_type = 'home' AND status = 'accepted' \
-   FOR UPDATE"
+  ->? Caqti_type.(
+        t2
+          (t2 (t2 int64 string) (t2 string (option string)))
+          (t2 (t2 (option int) (option int)) (t2 (t2 bool bool) (t2 bool bool))))
+  )
+    "SELECT id, relation_type, status, request_note, requested_by_user_id, \
+     reviewed_by_user_id, reviewed_at IS NOT NULL, removed_at IS NULL, \
+     COALESCE(reviewed_at >= created_at, FALSE), updated_at >= created_at FROM \
+     community_projects WHERE project_id = $1 AND community_id = $2 AND \
+     relation_type = 'home' AND status = 'accepted' FOR UPDATE"
 
 (* The one mutation: the locked row, guarded again on accepted so a zero
    count is a completed concurrent removal, never a second write. The
@@ -219,17 +206,12 @@ let lock_accepted_relation_query =
 let update_relation_query =
   let open Caqti_request.Infix in
   (Caqti_type.(t2 int64 string)
-   ->* Caqti_type.(t2 (t2 int64 string) (t2 (t2 bool bool) (t2 bool bool))))
-  "UPDATE community_projects \
-   SET status = $2, \
-       removed_at = GREATEST(NOW(), reviewed_at, created_at), \
-       updated_at = GREATEST(NOW(), reviewed_at, created_at) \
-   WHERE id = $1 AND status = 'accepted' \
-   RETURNING id, status, \
-             removed_at IS NOT NULL, \
-             COALESCE(removed_at >= reviewed_at, FALSE), \
-             removed_at >= created_at, \
-             updated_at >= created_at"
+  ->* Caqti_type.(t2 (t2 int64 string) (t2 (t2 bool bool) (t2 bool bool))))
+    "UPDATE community_projects SET status = $2, removed_at = GREATEST(NOW(), \
+     reviewed_at, created_at), updated_at = GREATEST(NOW(), reviewed_at, \
+     created_at) WHERE id = $1 AND status = 'accepted' RETURNING id, status, \
+     removed_at IS NOT NULL, COALESCE(removed_at >= reviewed_at, FALSE), \
+     removed_at >= created_at, updated_at >= created_at"
 
 (* The abstract accepted state, reconstructed through the public pure API
    only: the canonical note through the pending constructor, then the
@@ -239,19 +221,19 @@ let update_relation_query =
 let removed_status_of_note stored_note =
   match Project_home_relation.create_pending ~request_note:stored_note with
   | Error _ -> None
-  | Ok pending ->
+  | Ok pending -> (
       if Project_home_relation.request_note pending <> stored_note then None
-      else (
+      else
         match
           Project_home_relation.apply pending Project_home_relation.Accept
         with
         | Error _ -> None
-        | Ok accepted ->
+        | Ok accepted -> (
             if
               Project_home_relation.status accepted
               <> Project_home_relation.Accepted
             then None
-            else (
+            else
               match
                 Project_home_relation.apply accepted
                   Project_home_relation.Remove
@@ -287,9 +269,11 @@ let remove (module C : Caqti_lwt.CONNECTION) ~actor_user_id ~project_slug
       | Ok [] -> rollback_to Removal_unavailable
       | Ok (_ :: _ :: _) -> rollback_to Inconsistent_data
       | Ok
-          [ ( (updated_id, updated_status),
+          [
+            ( (updated_id, updated_status),
               ( (removed_present, removed_after_reviewed),
-                (removed_after_created, updated_after_created) ) ) ] ->
+                (removed_after_created, updated_after_created) ) );
+          ] -> (
           if
             not
               (Int64.equal updated_id relation_id
@@ -299,7 +283,7 @@ let remove (module C : Caqti_lwt.CONNECTION) ~actor_user_id ~project_slug
               && removed_present && removed_after_reviewed
               && removed_after_created && updated_after_created)
           then rollback_to Inconsistent_data
-          else (
+          else
             (* The audit event rides the same transaction: inserted only
                after the guarded accepted→removed update validated, and
                any audit failure rolls the whole removal back. Only the
@@ -307,8 +291,8 @@ let remove (module C : Caqti_lwt.CONNECTION) ~actor_user_id ~project_slug
                authorization sources qualified. *)
             Project_home_audit.insert
               (module C)
-              ~action:Project_home_audit.Home_removed
-              ~actor_user_id ~project_id ~community_id ~relation_id
+              ~action:Project_home_audit.Home_removed ~actor_user_id ~project_id
+              ~community_id ~relation_id
             >>= function
             | Error Project_home_audit.Inconsistent_data ->
                 rollback_to Inconsistent_data
@@ -346,13 +330,10 @@ let remove (module C : Caqti_lwt.CONNECTION) ~actor_user_id ~project_slug
                         Project_home_notifications.insert_many
                           (module C)
                           ~kind:Project_home_notifications.Home_removed
-                          ~actor_user_id ~project_id ~community_id
-                          ~relation_id
-                          ~recipient_user_ids:
-                            (steward_ids @ top_moderator_ids)
+                          ~actor_user_id ~project_id ~community_id ~relation_id
+                          ~recipient_user_ids:(steward_ids @ top_moderator_ids)
                         >>= function
-                        | Error Project_home_notifications.Inconsistent_data
-                          ->
+                        | Error Project_home_notifications.Inconsistent_data ->
                             rollback_to Inconsistent_data
                         | Error Project_home_notifications.Storage_error ->
                             rollback_to Storage_error
@@ -371,10 +352,10 @@ let remove (module C : Caqti_lwt.CONNECTION) ~actor_user_id ~project_slug
       | Ok None -> rollback_to Removal_unavailable
       | Ok
           (Some
-            ( ((relation_id, relation_type), (status_raw, stored_note)),
-              ( (requested_by, reviewed_by),
-                ((has_reviewed_at, removed_at_null), (reviewed_ge, updated_ge))
-              ) )) ->
+             ( ((relation_id, relation_type), (status_raw, stored_note)),
+               ( (requested_by, reviewed_by),
+                 ((has_reviewed_at, removed_at_null), (reviewed_ge, updated_ge))
+               ) )) -> (
           (* Requester and reviewer are both legitimately NULL — an
              auto-provisioned home never had either, and both foreign keys
              are ON DELETE SET NULL — so nullability proves nothing about
@@ -414,12 +395,12 @@ let remove (module C : Caqti_lwt.CONNECTION) ~actor_user_id ~project_slug
                  rolls back whole. *)
               rollback_to Removal_unavailable
             else rollback_to Inconsistent_data
-          else (
+          else
             match removed_status_of_note stored_note with
             | None -> rollback_to Inconsistent_data
             | Some new_status ->
-                write_removal ~project_id ~community_id ~relation_id
-                  ~new_status)
+                write_removal ~project_id ~community_id ~relation_id ~new_status
+          )
     in
     (* Step 3: every authorization row is locked, in this fixed order,
        before any of them decides anything — short-circuiting would make
@@ -429,7 +410,7 @@ let remove (module C : Caqti_lwt.CONNECTION) ~actor_user_id ~project_slug
     let authorize ~project_id ~community_id k =
       C.find_opt lock_steward_query (project_id, actor_user_id) >>= function
       | Error _ -> rollback_to Storage_error
-      | Ok steward_row ->
+      | Ok steward_row -> (
           if
             not
               (match steward_row with
@@ -439,9 +420,9 @@ let remove (module C : Caqti_lwt.CONNECTION) ~actor_user_id ~project_slug
           else
             let steward_ok = steward_row <> None in
             C.find_opt lock_top_moderator_query (actor_user_id, community_id)
-            >>= (function
+            >>= function
             | Error _ -> rollback_to Storage_error
-            | Ok moderator_row ->
+            | Ok moderator_row -> (
                 if
                   not
                     (match moderator_row with
@@ -458,7 +439,7 @@ let remove (module C : Caqti_lwt.CONNECTION) ~actor_user_id ~project_slug
                       else
                         let admin_ok = admin_row = Some true in
                         if steward_ok || top_mod_ok || admin_ok then k ()
-                        else rollback_to Actor_unauthorized)
+                        else rollback_to Actor_unauthorized))
     in
     (* Step 2: the exact community, under the held project lock. *)
     let lock_community ~project_id =
@@ -467,16 +448,17 @@ let remove (module C : Caqti_lwt.CONNECTION) ~actor_user_id ~project_slug
       | Ok None -> rollback_to Community_unavailable
       | Ok
           (Some
-            ( ( (community_id, stored_community_slug),
-                (community_name, visibility_raw) ),
-              (onboarding_raw, (is_network_community, indexable, discoverable))
-            )) -> (
+             ( ( (community_id, stored_community_slug),
+                 (community_name, visibility_raw) ),
+               (onboarding_raw, (is_network_community, indexable, discoverable))
+             )) -> (
           (* Closed-value validation only — valid lifecycle drift is not
              corruption at this step, and removal never requires current
              host eligibility. *)
           match
             ( Community_types.community_visibility_of_string visibility_raw,
-              Community_types.community_onboarding_state_of_string onboarding_raw )
+              Community_types.community_onboarding_state_of_string
+                onboarding_raw )
           with
           | None, _ | _, Error _ -> rollback_to Inconsistent_data
           | Some visibility, Ok onboarding_state ->
