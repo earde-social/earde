@@ -126,12 +126,10 @@ type feedback =
 val share_page :
   ?user:string ->
   ?request:Dream.request ->
-  ?shell:Community_types.community * Community_types.community list * string ->
+  ?shell:Community_types.community *
+         Community_types.community list * Html.t ->
   state:share_state ->
-  notice:notice option ->
-  feedback:feedback option ->
-  unit ->
-  string
+  notice:notice option -> feedback:feedback option -> unit -> string
 (** The per-thread Share page: the request form (destination select and the
     optional private note) over the thread's current placements. When no
     destination is available the form gives way to a quiet empty state —
@@ -143,12 +141,10 @@ val share_page :
 val management_page :
   ?user:string ->
   ?request:Dream.request ->
-  ?shell:Community_types.community * Community_types.community list * string ->
+  ?shell:Community_types.community *
+         Community_types.community list * Html.t ->
   state:management_state ->
-  notice:notice option ->
-  feedback:feedback option ->
-  unit ->
-  string
+  notice:notice option -> feedback:feedback option -> unit -> string
 (** The community management page, four sections in fixed order: incoming
     requests, outgoing requests, shared into this community, shared from
     this community. Sectioned destinations render one section select per

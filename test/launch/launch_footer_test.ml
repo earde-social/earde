@@ -22,38 +22,38 @@ let footer_documents () =
   let community = Launch_fixture.nav_test_community in
   [ ( "launch_entry_page (default chrome)"
     , Earde.Page_shell.launch_entry_page ~page_class:"launch-privacy"
-        ~title:"T" ~content:"B" () )
+        ~title:"T" ~content:(Earde.Html.static "B") () )
   ; ( "launch_entry_page (viewer, member)"
     , Earde.Page_shell.launch_entry_page
         ~topbar:(Earde.Page_shell.Entry_viewer (Some "alice"))
-        ~page_class:"launch-bring" ~title:"T" ~content:"B" () )
+        ~page_class:"launch-bring" ~title:"T" ~content:(Earde.Html.static "B") () )
   ; ( "launch_entry_page (viewer, anonymous)"
     , Earde.Page_shell.launch_entry_page
         ~topbar:(Earde.Page_shell.Entry_viewer None)
-        ~page_class:"launch-bring" ~title:"T" ~content:"B" () )
+        ~page_class:"launch-bring" ~title:"T" ~content:(Earde.Html.static "B") () )
   ; ( "launch_auth_page (login)"
     , Earde.Page_shell.launch_auth_page ~page_class:"launch-login"
-        ~title:"T" ~content:"B" () )
+        ~title:"T" ~content:(Earde.Html.static "B") () )
   ; ( "launch_app_page (member)"
     , Earde.Page_shell.launch_app_page ~user:"alice"
-        ~page_class:"launch-feed" ~title:"T" ~content:"B" () )
+        ~page_class:"launch-feed" ~title:"T" ~content:(Earde.Html.static "B") () )
   ; ( "launch_app_page (anonymous)"
     , Earde.Page_shell.launch_app_page ~page_class:"launch-feed" ~title:"T"
-        ~content:"B" () )
+        ~content:(Earde.Html.static "B") () )
   ; ( "launch_onboarding_page (member)"
     , Earde.Page_shell.launch_onboarding_page ~user:"alice"
-        ~page_class:"launch-project-new" ~title:"T" ~content:"B" () )
+        ~page_class:"launch-project-new" ~title:"T" ~content:(Earde.Html.static "B") () )
   ; ( "launch_community_page (member)"
     , Earde.Community_shell.launch_community_page ~user:"alice" ~community
-        ~sidebar:"S" ~page_class:"launch-community-overview" ~title:"T"
-        ~content:"B" () )
+        ~sidebar:(Earde.Html.static "S") ~page_class:"launch-community-overview" ~title:"T"
+        ~content:(Earde.Html.static "B") () )
   ; ( "launch_community_page (anonymous)"
-    , Earde.Community_shell.launch_community_page ~community ~sidebar:"S"
-        ~page_class:"launch-community-overview" ~title:"T" ~content:"B" () )
+    , Earde.Community_shell.launch_community_page ~community ~sidebar:(Earde.Html.static "S")
+        ~page_class:"launch-community-overview" ~title:"T" ~content:(Earde.Html.static "B") () )
   ; ( "launch_community_surface_page (member)"
     , Earde.Community_shell.launch_community_surface_page ~user:"alice"
-        ~community ~sidebar:"S" ~page_class:"launch-community-channel"
-        ~title:"T" ~main_el:"<main class='cs-main'>B</main>" () )
+        ~community ~sidebar:(Earde.Html.static "S") ~page_class:"launch-community-channel"
+        ~title:"T" ~main_el:(Earde.Html.static "<main class='cs-main'>B</main>") () )
   ]
 
 let presence_case =
@@ -92,20 +92,20 @@ let outside_main_case =
 let inert_case =
   fc_case "footer is links-only: no nested interactive controls" (fun () ->
       let footer = Earde.Page_shell.launch_footer in
-      Alcotest.(check bool) "no form" false (Html_assert.contains footer "<form");
-      Alcotest.(check bool) "no button" false (Html_assert.contains footer "<button");
-      Alcotest.(check bool) "no input" false (Html_assert.contains footer "<input");
-      Alcotest.(check bool) "no script" false (Html_assert.contains footer "<script");
-      Alcotest.(check int) "exactly two links" 2 (Html_assert.count_sub footer "<a ");
+      Alcotest.(check bool) "no form" false (Html_assert.contains (Earde.Html.to_string footer) "<form");
+      Alcotest.(check bool) "no button" false (Html_assert.contains (Earde.Html.to_string footer) "<button");
+      Alcotest.(check bool) "no input" false (Html_assert.contains (Earde.Html.to_string footer) "<input");
+      Alcotest.(check bool) "no script" false (Html_assert.contains (Earde.Html.to_string footer) "<script");
+      Alcotest.(check int) "exactly two links" 2 (Html_assert.count_sub (Earde.Html.to_string footer) "<a ");
       Alcotest.(check bool) "privacy link" true
-        (Html_assert.contains footer privacy_link);
+        (Html_assert.contains (Earde.Html.to_string footer) privacy_link);
       Alcotest.(check bool) "preferences target is exact" true
-        (Html_assert.contains footer preferences_link))
+        (Html_assert.contains (Earde.Html.to_string footer) preferences_link))
 
 let message_sheet_case =
   fc_case "the chrome-free message sheet renders no footer" (fun () ->
       let html =
-        Earde.Page_shell.launch_message_page ~title:"T" ~content:"B" ()
+        Earde.Page_shell.launch_message_page ~title:"T" ~content:(Earde.Html.static "B") ()
       in
       Alcotest.(check int) "no footer" 0 (Html_assert.count_sub html footer_open);
       Alcotest.(check int) "no preferences link" 0

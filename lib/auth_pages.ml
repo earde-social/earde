@@ -1,21 +1,23 @@
 let signup_form ?user:_ ?error ?turnstile_site_key request =
-  let csrf_token = Dream.csrf_tag request in
+  let csrf_token = Csrf_field.tag request in
   (* Server-authored messages only (never user input); rendered as the flat
      rejected notice above the card — no toast, no animation. *)
   let error_html = match error with
-    | None -> ""
-    | Some msg -> Printf.sprintf "<p class='notice notice--rejected launch-auth__alert'>%s</p>" msg
+    | None -> Html.empty
+    | Some msg -> (Html.template "<p class='notice notice--rejected launch-auth__alert'>%s</p>"
+  [ msg ])
   in
   (* Turnstile widget is rendered only when a site key is configured. The site key
      is public; still escape it as defense-in-depth. The challenge needs JS to
      solve, but the surrounding SSR form is unaffected when JS is off. *)
   let turnstile_widget, turnstile_script = match turnstile_site_key with
-    | None -> "", ""
+    | None -> Html.empty, Html.empty
     | Some key ->
-        Printf.sprintf "<div class='cf-turnstile' data-sitekey='%s'></div>" (Components.html_escape key),
-        "<script src='https://challenges.cloudflare.com/turnstile/v0/api.js' async defer></script>"
+        (Html.template "<div class='cf-turnstile' data-sitekey='%s'></div>"
+  [ (Html.text (key)) ]),
+        (Html.static "<script src='https://challenges.cloudflare.com/turnstile/v0/api.js' async defer></script>")
   in
-  let content = Printf.sprintf "
+  let content = (Html.template "
         <div class='auth'>
           <div class='auth__head'>
             <img class='auth__mark' src='/static/images/logo-mark.svg' alt=''>
@@ -66,7 +68,10 @@ let signup_form ?user:_ ?error ?turnstile_site_key request =
           <p class='notice launch-auth__notice'>Maintainers: create your account first, then <a href='/bring'>connect a project through GitHub</a>.</p>
           <p class='auth__foot'>Already have an account? <a href='/login'>Log in &#8594;</a></p>
         </div>"
-    error_html csrf_token turnstile_widget turnstile_script
+  [ error_html
+  ; csrf_token
+  ; turnstile_widget
+  ; turnstile_script ])
   in
   Page_shell.launch_auth_page ~request ~page_class:"launch-signup"
     ~title:"Create an account" ~content ()
@@ -77,8 +82,8 @@ let signup_form ?user:_ ?error ?turnstile_site_key request =
    remember-me is added (unsupported). Failures still render through the
    legacy msg_page, untouched by this pass. ?user ignored as in signup_form. *)
 let login_form ?user:_ request =
-  let csrf_token = Dream.csrf_tag request in
-  let content = Printf.sprintf "
+  let csrf_token = Csrf_field.tag request in
+  let content = (Html.template "
         <div class='auth'>
           <div class='auth__head'>
             <img class='auth__mark' src='/static/images/logo-mark.svg' alt=''>
@@ -103,7 +108,7 @@ let login_form ?user:_ request =
           <p class='notice launch-auth__notice'>Maintaining an open-source project? <a href='/bring'>Connect it through GitHub</a> after logging in.</p>
           <p class='auth__foot'>No account? <a href='/signup'>Create one &#8594;</a></p>
         </div>"
-    csrf_token
+  [ csrf_token ])
   in
   Page_shell.launch_auth_page ~request ~page_class:"launch-login"
     ~title:"Log in" ~content ()
@@ -118,8 +123,8 @@ let login_form ?user:_ request =
    anti-enumeration contract lives in the handler and stays msg_page-rendered,
    untouched). noindex preserved from the legacy auth_page call. *)
 let forgot_password_page request =
-  let csrf_token = Dream.csrf_tag request in
-  let content = Printf.sprintf "
+  let csrf_token = Csrf_field.tag request in
+  let content = (Html.template "
         <div class='auth'>
           <div class='auth__head'>
             <img class='auth__mark' src='/static/images/logo-mark.svg' alt=''>
@@ -136,7 +141,7 @@ let forgot_password_page request =
           </form>
           <div class='auth-foot'><a href='/login' class='auth-link'>Back to login</a></div>
         </div>"
-    csrf_token
+  [ csrf_token ])
   in
   Page_shell.launch_auth_page ~noindex:true ~request
     ~page_class:"launch-forgot-password" ~title:"Forgot Password" ~content ()
@@ -153,12 +158,13 @@ let forgot_password_page request =
    messages stay server-authored constants. Missing/invalid/expired-token
    branches still render through the legacy msg_page, untouched. *)
 let reset_password_page ~token ?error request =
-  let csrf_token = Dream.csrf_tag request in
+  let csrf_token = Csrf_field.tag request in
   let error_html = match error with
-    | None -> ""
-    | Some msg -> Printf.sprintf "<div class='auth-alert auth-alert--error'>%s</div>" msg
+    | None -> Html.empty
+    | Some msg -> (Html.template "<div class='auth-alert auth-alert--error'>%s</div>"
+  [ msg ])
   in
-  let content = Printf.sprintf "
+  let content = (Html.template "
         <div class='auth'>
           <div class='auth__head'>
             <img class='auth__mark' src='/static/images/logo-mark.svg' alt=''>
@@ -181,7 +187,9 @@ let reset_password_page ~token ?error request =
           </form>
           <div class='auth-foot'><a href='/login' class='auth-link'>Back to login</a></div>
         </div>"
-    error_html csrf_token (Components.html_escape token)
+  [ error_html
+  ; csrf_token
+  ; (Html.text (token)) ])
   in
   Page_shell.launch_auth_page ~noindex:true ~request
     ~page_class:"launch-reset-password" ~title:"Reset Password" ~content ()

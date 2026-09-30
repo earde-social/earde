@@ -2025,7 +2025,7 @@ let notifications_page_for ~url ~label user_id =
 let badge_probe request =
   Dream.html
     (Earde.Page_shell.launch_app_page ~request ~user:"phnt_probe"
-       ~page_class:"launch-feed" ~title:"probe" ~content:"" ())
+       ~page_class:"launch-feed" ~title:"probe" ~content:Earde.Html.empty ())
 
 let badge_for ~url ~label user_id expected =
   let* response =

@@ -51,10 +51,7 @@ type connected_project = {
 val project_side_removal_form :
   ?request:Dream.request ->
   removal_allowed:bool ->
-  project_slug:string ->
-  community_slug:string ->
-  unit ->
-  string
+  project_slug:string -> community_slug:string -> unit -> Html.t
 (** The steward-facing removal control for the project's one accepted home,
     for insertion into the accepted state of the home-choice page.
 
@@ -89,9 +86,7 @@ val community_side_management_section :
   ?request:Dream.request ->
   removal_allowed:bool ->
   community_slug:string ->
-  projects:connected_project list ->
-  unit ->
-  string
+  projects:connected_project list -> unit -> Html.t
 (** The "Connected projects" management section for the existing community
     settings surface, listing each accepted connected project's public
     identity and its removal control.

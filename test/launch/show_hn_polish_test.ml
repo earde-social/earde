@@ -171,7 +171,7 @@ let nav_grouping_case =
       in
       (* Group headings in canonical order. *)
       let pos needle =
-        match index_of nav needle 0 with
+        match index_of (Earde.Html.to_string nav) needle 0 with
         | Some i -> i
         | None -> Alcotest.failf "nav lacks %s" needle
       in
@@ -188,7 +188,7 @@ let nav_grouping_case =
           Alcotest.(check int)
             ("one entry for " ^ suffix)
             1
-            (Html_assert.count_sub nav ("href='/c/polish" ^ suffix ^ "'")))
+            (Html_assert.count_sub (Earde.Html.to_string nav) ("href='/c/polish" ^ suffix ^ "'")))
         all_items;
       (* Exactly one active item, whichever item is active. *)
       List.iter
@@ -200,18 +200,18 @@ let nav_grouping_case =
           Alcotest.(check int)
             ("one active for " ^ suffix)
             1
-            (Html_assert.count_sub nav "cm-index-link--active");
+            (Html_assert.count_sub (Earde.Html.to_string nav) "cm-index-link--active");
           Alcotest.(check bool)
             ("active is " ^ suffix)
             true
-            (Html_assert.contains nav
+            (Html_assert.contains (Earde.Html.to_string nav)
                ("cm-index-link--active' href='/c/polish" ^ suffix ^ "'")))
         all_items;
       (* Danger styling stays confined to Bans. *)
       Alcotest.(check int) "one danger link" 1
-        (Html_assert.count_sub nav "cm-index-link--danger");
+        (Html_assert.count_sub (Earde.Html.to_string nav) "cm-index-link--danger");
       Alcotest.(check bool) "danger is Bans" true
-        (Html_assert.contains nav
+        (Html_assert.contains (Earde.Html.to_string nav)
            "cm-index-link--danger' href='/c/polish/settings?panel=bans'"))
 
 let nav_role_subset_case =
@@ -221,20 +221,20 @@ let nav_role_subset_case =
           ~can_complete_setup:false ~network_manager:false ()
       in
       (* No Network group, no entry the viewer categorically cannot open. *)
-      must_not nav ">Network</p>";
-      must_not nav "/project-home-requests";
-      must_not nav "/settings/connections";
-      must_not nav "/settings/shared-threads";
-      must_not nav "?panel=projects";
-      must_not nav "/manage-mods";
-      must_not nav "/setup'";
+      must_not (Earde.Html.to_string nav) ">Network</p>";
+      must_not (Earde.Html.to_string nav) "/project-home-requests";
+      must_not (Earde.Html.to_string nav) "/settings/connections";
+      must_not (Earde.Html.to_string nav) "/settings/shared-threads";
+      must_not (Earde.Html.to_string nav) "?panel=projects";
+      must_not (Earde.Html.to_string nav) "/manage-mods";
+      must_not (Earde.Html.to_string nav) "/setup'";
       (* The rest of the groups survive intact. *)
-      List.iter (must nav)
+      List.iter (must (Earde.Html.to_string nav))
         [ ">Community</p>"; ">Structure</p>"; ">People</p>";
           "?panel=profile"; "?panel=visibility"; "?panel=channels";
           "?panel=members"; "?panel=moderation"; "?panel=bans" ];
       Alcotest.(check int) "one active" 1
-        (Html_assert.count_sub nav "cm-index-link--active"))
+        (Html_assert.count_sub (Earde.Html.to_string nav) "cm-index-link--active"))
 
 let nav_setup_case =
   case "grouped nav: the setup link renders only for eligible drafts"
@@ -243,14 +243,14 @@ let nav_setup_case =
         Shell.nav ~slug:"polish" ~active:Shell.Profile
           ~can_complete_setup:false ~network_manager:true ()
       in
-      must_not without "Complete setup and publish";
+      must_not (Earde.Html.to_string without) "Complete setup and publish";
       let with_setup =
         Shell.nav ~slug:"polish" ~active:Shell.Profile
           ~can_complete_setup:true ~network_manager:true ()
       in
       Alcotest.(check int) "one setup link" 1
-        (Html_assert.count_sub with_setup "href='/c/polish/setup'");
-      must with_setup ">Complete setup and publish</a>")
+        (Html_assert.count_sub (Earde.Html.to_string with_setup) "href='/c/polish/setup'");
+      must (Earde.Html.to_string with_setup) ">Complete setup and publish</a>")
 
 (* --- 5. settings surfaces: the shared DOM contract ---------------------- *)
 
@@ -381,8 +381,9 @@ let reports_case =
 let mgmt_shell =
   ( polish_community,
     [ polish_community ],
-    "<aside class='sidebar' aria-label='Polish community'><a class='navitem \
-     navitem--pad navitem--active' href='/c/polish/settings'>Settings</a></aside>"
+    Earde.Html.static
+      "<aside class='sidebar' aria-label='Polish community'><a class='navitem \
+       navitem--pad navitem--active' href='/c/polish/settings'>Settings</a></aside>"
   )
 
 let connections_case =

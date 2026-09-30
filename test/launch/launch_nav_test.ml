@@ -18,7 +18,7 @@ let nav_launch_doc ?user ?rail_communities ?session () =
   match session with
   | None ->
       Earde.Page_shell.launch_app_page ?user ?rail_communities
-        ~page_class:"launch-feed" ~title:"Feed" ~content:"" ()
+        ~page_class:"launch-feed" ~title:"Feed" ~content:Earde.Html.empty ()
   | Some fields ->
       let rendered = ref "" in
       let (_ : Dream.response) =
@@ -33,7 +33,7 @@ let nav_launch_doc ?user ?rail_communities ?session () =
                    rendered :=
                      Earde.Page_shell.launch_app_page ~request:req ?user
                        ?rail_communities ~page_class:"launch-feed"
-                       ~title:"Feed" ~content:"" ();
+                       ~title:"Feed" ~content:Earde.Html.empty ();
                    Dream.html ""))
              (Dream.request ~method_:`GET ~target:"/feed" ""))
       in

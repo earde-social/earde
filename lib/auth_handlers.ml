@@ -91,7 +91,7 @@ let auth_mail : Email.message Auth_mail_dispatcher.t =
 let username_unavailable_form ?turnstile_site_key request =
   let user = Dream.session_field request "username" in
   Dream.html (Auth_pages.signup_form ?user ?turnstile_site_key
-                ~error:"That username is already taken." request)
+                ~error:(Html.static "That username is already taken.") request)
 
 let make_signup_handler ~mail request =
   (* Gate first: closed signup creates no pending row, no user, and sends no email. *)
@@ -116,7 +116,7 @@ let make_signup_handler ~mail request =
       | `Failed site_key ->
           let user = Dream.session_field request "username" in
           Dream.html (Auth_pages.signup_form ?user ~turnstile_site_key:site_key
-                        ~error:"Human verification failed. Please try again." request)
+                        ~error:(Html.static "Human verification failed. Please try again.") request)
       | `Passed turnstile_site_key ->
 
       (* Validate before hashing — argon2 is expensive, reject obvious bad input early. *)
@@ -365,9 +365,9 @@ let reset_password_handler request =
       if token = "" then
         Dream.html (Site_pages.msg_page ~auth:true ~title:"Invalid Request" ~message:"Token is missing. Please use the link from your email." ~alert_type:"error" ~return_url:"/forgot-password" request)
       else if password <> confirm then
-        Dream.html (Auth_pages.reset_password_page ~token ~error:"Passwords do not match." request)
+        Dream.html (Auth_pages.reset_password_page ~token ~error:(Html.static "Passwords do not match.") request)
       else if String.length password < 8 then
-        Dream.html (Auth_pages.reset_password_page ~token ~error:"Password must be at least 8 characters." request)
+        Dream.html (Auth_pages.reset_password_page ~token ~error:(Html.static "Password must be at least 8 characters.") request)
       else
         (match%lwt Auth.hash_password password with
         | Error err ->

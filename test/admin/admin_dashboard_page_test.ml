@@ -105,15 +105,12 @@ let unban_form_case =
             ] ()
       in
       Html_assert.must page
-        "<form class='admin-act-form' action='/admin/unban/user/41' method='POST' onsubmit=\"confirmModal(event, 'Lift global ban on u/marge?')\">";
-      (* The apostrophe is BACKSLASHED before it is entity-encoded. The
-         previous expectation here was the bare "u/o&#39;brien", which is
-         what the vulnerability looked like: the HTML parser decodes the
-         entity before JavaScript parses the attribute, so an unescaped
-         &#39; closes the string literal and everything after it in the
-         username becomes executable. *)
+        "<form class='admin-act-form' action='/admin/unban/user/41' method='POST' data-confirm='Lift global ban on u/marge?' onsubmit=\"confirmModal(event, this.dataset.confirm)\">";
+      (* The username travels only in the data attribute, escaped as
+         attribute text; the hook's script source is the same constant for
+         every user, so no name can reach a JavaScript literal. *)
       Html_assert.must page
-        "<form class='admin-act-form' action='/admin/unban/user/42' method='POST' onsubmit=\"confirmModal(event, 'Lift global ban on u/o\\&#39;brien?')\">";
+        "<form class='admin-act-form' action='/admin/unban/user/42' method='POST' data-confirm='Lift global ban on u/o&#39;brien?' onsubmit=\"confirmModal(event, this.dataset.confirm)\">";
       Alcotest.(check int) "exactly two unban forms" 2
         (Html_assert.occurrences page "action='/admin/unban/user/");
       Alcotest.(check int) "one Unban button per form" 2
@@ -127,7 +124,7 @@ let unban_form_case =
            (List.filter Html_assert.is_csrf_input (Html_assert.input_tags page))))
 
 (* Usernames and emails reach three different tables; all render through
-   html_escape in both text and attribute contexts. *)
+   Html.text in both text and attribute contexts. *)
 let escaping_case =
   case "hostile usernames and emails stay escaped everywhere" (fun () ->
       let u = "ban<script>me" and e = "evil&<x>\"@qa" in

@@ -42,7 +42,9 @@ valuable discussion can be kept and found later rather than scrolling away.
 - Match the existing Caqti patterns. For large Caqti decoders/encoders, use nested
   tuples rather than changing the style.
 - Prefer closed variants for values that drive dynamic SQL or sorting.
-- Escape all rendered output with the existing HTML and URL escaping helpers.
+- Build rendered output through `Html`: text with `Html.text`, URLs with the policy
+  for their context, markup only as a string literal (`Html.template`,
+  `Html.static`). See docs/features/safe-rendering.md.
 - Comments should explain *why*, not restate *what*.
 
 ## SSR and JavaScript rules

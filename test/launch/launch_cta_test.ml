@@ -27,36 +27,36 @@ let github_path = "<path d='M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59"
 let cta_documents () =
   [ ( "launch_entry_page (default chrome)"
     , Earde.Page_shell.launch_entry_page ~page_class:"launch-privacy"
-        ~title:"T" ~content:"B" () )
+        ~title:"T" ~content:(Earde.Html.static "B") () )
   ; ( "launch_app_page (member)"
     , Earde.Page_shell.launch_app_page ~user:"alice"
-        ~page_class:"launch-feed" ~title:"T" ~content:"B" () )
+        ~page_class:"launch-feed" ~title:"T" ~content:(Earde.Html.static "B") () )
   ; ( "launch_app_page (anonymous)"
     , Earde.Page_shell.launch_app_page ~page_class:"launch-feed" ~title:"T"
-        ~content:"B" () )
+        ~content:(Earde.Html.static "B") () )
   ; ( "launch_onboarding_page (member)"
     , Earde.Page_shell.launch_onboarding_page ~user:"alice"
-        ~page_class:"launch-project-new" ~title:"T" ~content:"B" () )
+        ~page_class:"launch-project-new" ~title:"T" ~content:(Earde.Html.static "B") () )
   ; ( "launch_onboarding_page (anonymous)"
     , Earde.Page_shell.launch_onboarding_page
-        ~page_class:"launch-project-new" ~title:"T" ~content:"B" () )
+        ~page_class:"launch-project-new" ~title:"T" ~content:(Earde.Html.static "B") () )
   ; ( "launch_community_page (member)"
     , Earde.Community_shell.launch_community_page ~user:"alice" ~community
-        ~sidebar:"S" ~page_class:"launch-community-overview" ~title:"T"
-        ~content:"B" () )
+        ~sidebar:(Earde.Html.static "S") ~page_class:"launch-community-overview" ~title:"T"
+        ~content:(Earde.Html.static "B") () )
   ; ( "launch_community_page (anonymous)"
-    , Earde.Community_shell.launch_community_page ~community ~sidebar:"S"
-        ~page_class:"launch-community-overview" ~title:"T" ~content:"B" () )
+    , Earde.Community_shell.launch_community_page ~community ~sidebar:(Earde.Html.static "S")
+        ~page_class:"launch-community-overview" ~title:"T" ~content:(Earde.Html.static "B") () )
   ; ( "launch_community_surface_page (member)"
     , Earde.Community_shell.launch_community_surface_page ~user:"alice" ~community
-        ~sidebar:"S" ~page_class:"launch-community-channel" ~title:"T"
-        ~main_el:"<main class='cs-main'>B</main>" () )
+        ~sidebar:(Earde.Html.static "S") ~page_class:"launch-community-channel" ~title:"T"
+        ~main_el:(Earde.Html.static "<main class='cs-main'>B</main>") () )
   ; ( "launch_auth_page (login)"
     , Earde.Page_shell.launch_auth_page ~page_class:"launch-login"
-        ~title:"T" ~content:"B" () )
+        ~title:"T" ~content:(Earde.Html.static "B") () )
   ; ( "launch_auth_page (signup)"
     , Earde.Page_shell.launch_auth_page ~page_class:"launch-signup"
-        ~title:"T" ~content:"B" () )
+        ~title:"T" ~content:(Earde.Html.static "B") () )
   ]
 
 (* The shape of the control itself, on every wrapper and viewer arm that
@@ -135,7 +135,7 @@ let no_external_asset_case =
       let cta =
         cta_element
           (Earde.Page_shell.launch_app_page ~user:"alice"
-             ~page_class:"launch-feed" ~title:"T" ~content:"B" ())
+             ~page_class:"launch-feed" ~title:"T" ~content:(Earde.Html.static "B") ())
       in
       List.iter
         (fun needle ->
@@ -154,11 +154,11 @@ let identical_across_viewers_case =
     (fun () ->
       let anon =
         Earde.Page_shell.launch_app_page ~page_class:"launch-feed"
-          ~title:"T" ~content:"B" ()
+          ~title:"T" ~content:(Earde.Html.static "B") ()
       in
       let member =
         Earde.Page_shell.launch_app_page ~user:"alice"
-          ~page_class:"launch-feed" ~title:"T" ~content:"B" ()
+          ~page_class:"launch-feed" ~title:"T" ~content:(Earde.Html.static "B") ()
       in
       Alcotest.(check string) "same rendered element"
         (cta_element anon) (cta_element member);
@@ -187,7 +187,7 @@ let chromeless_case =
   cc_case "the message document keeps no application Connect action"
     (fun () ->
       let html =
-        Earde.Page_shell.launch_message_page ~title:"T" ~content:"B" ()
+        Earde.Page_shell.launch_message_page ~title:"T" ~content:(Earde.Html.static "B") ()
       in
       List.iter
         (fun needle ->

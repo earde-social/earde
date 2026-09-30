@@ -59,7 +59,7 @@ let check_summary name expected msgs =
    collapses to "#"; passed values are always html-escaped so they can't break the attribute. *)
 let check_img name expected raw =
   Alcotest.test_case name `Quick (fun () ->
-      Alcotest.(check string) name expected (Earde.Components.safe_img_src raw))
+      Alcotest.(check string) name expected (Earde.Html.to_string (Earde.Html.image_src raw)))
 
 (* Report enum conversions (Slice A): pure, no DB. Closed variant -> string -> variant must
    round-trip, and any off-enum string must be rejected with None. [to_s]/[of_s] are the

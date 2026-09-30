@@ -218,7 +218,8 @@ let form_contract_case =
            (Printf.sprintf "<form action='/admin/ban/user/%d' method='POST'"
               target));
       Alcotest.(check bool) "ban confirm hook" true
-        (Html_assert.contains body "confirmModal(event, 'Permanently ban u/gab_target?");
+        (Html_assert.contains body
+           "data-confirm='Permanently ban u/gab_target? They will be blocked from logging in and posting.' onsubmit=\"confirmModal(event, this.dataset.confirm)\"");
       let* _ = Lwt.return (Http_fixture.csrf_of_page "profile ban form CSRF" body) in
       let* response, body = do_get ~url ~cookie ~target:"/admin" () in
       Alcotest.(check int) "/admin 200" 200 (status_of response);
@@ -229,7 +230,8 @@ let form_contract_case =
                method='POST'"
               banned));
       Alcotest.(check bool) "unban confirm hook" true
-        (Html_assert.contains body "confirmModal(event, 'Lift global ban on u/gab_banned?");
+        (Html_assert.contains body
+           "data-confirm='Lift global ban on u/gab_banned?' onsubmit=\"confirmModal(event, this.dataset.confirm)\"");
       let* _ = Lwt.return (Http_fixture.csrf_of_page "/admin unban form CSRF" body) in
       Lwt.return_unit)
 

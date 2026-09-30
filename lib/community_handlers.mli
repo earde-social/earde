@@ -13,7 +13,7 @@ val with_settings_connected_projects :
   community_slug:string ->
   authorized:bool ->
   removal_allowed:bool ->
-  (string -> Dream.response Dream.promise) -> Dream.response Dream.promise
+  (Html.t -> Dream.response Dream.promise) -> Dream.response Dream.promise
 
 val community_page_handler : Dream.handler
 

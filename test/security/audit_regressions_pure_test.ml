@@ -87,37 +87,48 @@ let msg_page_preserves_internal_paths =
 (* --- Fix 3: username escaping and the new signup syntax ---------------- *)
 
 let js_attr_escaping =
-  case "js_single_quoted_attr: the literal cannot be closed" (fun () ->
-      let esc = Earde.Components.js_single_quoted_attr in
-      (* html_escape alone is NOT enough here: &#39; decodes back to a live
-         apostrophe before JavaScript parses the attribute. The apostrophe
-         must survive as a backslash escape. *)
-      let out = esc "x'); alert(1); ('" in
-      (* After HTML decoding the browser hands JavaScript a BACKSLASHED
-         apostrophe, so the entity is present but never unescaped: every
-         &#39; in the attribute must be preceded by a backslash. *)
-      Security_fixture.must "quote" out "\\&#39;";
-      let rec no_bare_quote i =
-        match Html_assert.index_from out "&#39;" i with
-        | None -> ()
-        | Some j ->
-            if j = 0 || out.[j - 1] <> '\\' then
-              Alcotest.fail "an unescaped apostrophe reaches the JS literal"
-            else no_bare_quote (j + 1)
+  case "confirm hooks: user data never enters script source" (fun () ->
+      let hostile =
+        [ "x'); alert(1); ('"; "</script><svg onload=alert(1)>";
+          "a\\b\"c\nd" ]
       in
-      no_bare_quote 0;
-      let markup = esc "</script><svg onload=alert(1)>" in
-      Security_fixture.must_not "markup" markup "<svg";
-      Security_fixture.must_not "markup" markup "</script";
-      Security_fixture.must "markup" markup "\\x3C";
-      (* A backslash must be escaped first, or it would escape our escape. *)
-      Alcotest.(check string) "backslash" "a\\\\b" (esc "a\\b");
-      (* Line terminators are syntax errors inside a literal. *)
-      Security_fixture.must "newline" (esc "a\nb") "\\n";
-      Security_fixture.must "carriage return" (esc "a\rb") "\\r";
-      Security_fixture.must "control byte" (esc "a\x01b") "\\x01";
-      (* An ordinary name passes through untouched. *)
-      Alcotest.(check string) "ordinary" "alice_1-x" (esc "alice_1-x"))
+      let banned =
+        List.mapi
+          (fun i username ->
+            ({ id = 900 + i; username; email = Printf.sprintf "u%d@example.invalid" i }
+              : Earde.User_store.user))
+          hostile
+      in
+      let page =
+        let rendered = ref "" in
+        let (_ : Dream.response) =
+          Lwt_main.run
+            (Dream.memory_sessions
+               (fun req ->
+                 let ( let* ) = Lwt.bind in
+                 let* () = Dream.set_session_field req "user_id" "1" in
+                 rendered :=
+                   Earde.Admin_pages.admin_dashboard_page ~user:"qa-admin"
+                     ~signups_enabled:true ~turnstile:`Configured
+                     ~brevo_configured:true ~recent_users:[] ~pending:[]
+                     ~banned_users:banned req;
+                 Dream.html "")
+               (Dream.request ~method_:`GET ~target:"/admin" ""))
+        in
+        !rendered
+      in
+      (* Every hook is the one constant script; the names live only in
+         escaped attribute text. *)
+      Alcotest.(check int) "one hook per banned user" (List.length hostile)
+        (Html_assert.occurrences page
+           "onsubmit=\"confirmModal(event, this.dataset.confirm)\"");
+      Alcotest.(check int) "no call passes a script literal" 0
+        (Html_assert.occurrences page "confirmModal(event, '");
+      Security_fixture.must "apostrophe" page
+        "data-confirm='Lift global ban on u/x&#39;); alert(1); (&#39;?'";
+      Security_fixture.must_not "markup" page "<svg onload";
+      Security_fixture.must_not "script end" page "</script><svg";
+      Security_fixture.must "quote" page "a\\b&quot;c")
 
 let username_syntax =
   case "is_valid_new_username: route-safe ASCII only" (fun () ->
@@ -160,16 +171,17 @@ let hostile_username_profile_render =
         "href='/u/x&#39;&gt;&lt;svg onload=alert(1)&gt;?tab=comments'";
       Security_fixture.must "anonymous profile" anon
         "href='/u/x&#39;&gt;&lt;svg onload=alert(1)&gt;?tab=communities'";
-      (* Admin view additionally renders the two confirmModal handlers,
-         where html_escape alone would decode back into live JavaScript. *)
+      (* Admin view additionally renders the ban confirmation hook. Its
+         script source is a constant; the name only travels in the
+         escaped data attribute the hook reads. *)
       let admin = render ~is_admin:true ~viewer:(Some "someadmin") in
       Security_fixture.must_not "admin profile" admin "<svg onload";
       Security_fixture.must_not "admin profile" admin "x'>";
-      Security_fixture.must "admin profile" admin "confirmModal(event,";
-      (* Inside the onsubmit the apostrophe must be a JS escape, not an
-         HTML entity that decodes back to a live quote. *)
-      Security_fixture.must "admin profile" admin "\\&#39;";
-      Security_fixture.must "admin profile" admin "\\x3C")
+      Security_fixture.must "admin profile" admin
+        "onsubmit=\"confirmModal(event, this.dataset.confirm)\"";
+      Security_fixture.must "admin profile" admin
+        "data-confirm='Permanently ban u/x&#39;&gt;&lt;svg onload=alert(1)&gt;?";
+      Security_fixture.must_not "admin profile" admin "confirmModal(event, '")
 
 let ordinary_username_profile_render =
   case "user_profile_page: ordinary tabs and controls still target the user"

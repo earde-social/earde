@@ -1,3 +1,5 @@
+open Html.Infix
+
 (* Cartographic Civic launch community document (pass 8: the structured
    /c/:slug overview only). Like the pass 1-7 documents, a complete
    self-contained page loading only earde.css plus the shared desktop-only
@@ -26,58 +28,57 @@
    [launch_community_surface_page] (pass 9 channel), so the two routes'
    global rails can never diverge. *)
 let launch_community_doc ?(noindex = false) ?request ?user
-    ?(rail_communities = []) ?(head_extra = "") ?(aside = "")
+    ?(rail_communities = []) ?(head_extra = Html.empty) ?(aside = Html.empty)
     ~(community : Community_types.community) ~sidebar ~page_class ~title ~main_el () =
   let analytics_head, analytics_banner =
     Page_shell.analytics_assets ?request
       ~analytics_community:(community.id, community.visibility) ()
   in
   let robots_meta =
-    if noindex then "<meta name='robots' content='noindex'>" else ""
+    if noindex then (Html.static "<meta name='robots' content='noindex'>") else Html.empty
   in
   let is_admin = match request with
     | Some req -> (try Dream.session_field req "is_admin" = Some "true" with _ -> false)
     | None -> false
   in
   let house_icon =
-    "<svg width='18' height='18' viewBox='0 0 24 24' fill='none' \
+    (Html.static "<svg width='18' height='18' viewBox='0 0 24 24' fill='none' \
      stroke='currentColor' stroke-width='1.7' stroke-linecap='round' \
      stroke-linejoin='round' aria-hidden='true'><path d='M3 10.5 12 3l9 \
-     7.5'></path><path d='M5 9.5V21h14V9.5'></path></svg>"
+     7.5'></path><path d='M5 9.5V21h14V9.5'></path></svg>")
   in
   let bell_icon =
-    "<svg width='16' height='16' viewBox='0 0 24 24' fill='none' \
+    (Html.static "<svg width='16' height='16' viewBox='0 0 24 24' fill='none' \
      stroke='currentColor' stroke-width='1.7' stroke-linecap='round' \
      stroke-linejoin='round' aria-hidden='true'><path d='M18 8a6 6 0 0 \
-     0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9'></path><path d='M10 21h4'></path></svg>"
+     0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9'></path><path d='M10 21h4'></path></svg>")
   in
   (* Same /search route + ?q= contract (and `required`) as the legacy search
      forms; no /c/:slug test counts page-wide forms, so the real command
      field is safe here (unlike the onboarding wrappers' link variant). *)
   let search_form =
-    "<form class='topbar__search-cell' action='/search' method='GET' role='search'>\
+    (Html.static "<form class='topbar__search-cell' action='/search' method='GET' role='search'>\
      <div class='search'>\
      <span class='search__sigil' aria-hidden='true'>/</span>\
      <label class='sr-only' for='q'>Search Earde</label>\
      <input class='search__input' id='q' type='text' name='q' required placeholder='grep threads &middot; projects &middot; communities&hellip;'>\
      <button class='search__enter' type='submit' aria-label='Search'>&#8629;</button>\
      </div>\
-     </form>"
+     </form>")
   in
   let actions =
     match user with
     | Some username ->
-        let u = Components.html_escape username in
-        let admin_item = if is_admin then "<a href='/admin'>Admin</a>" else "" in
+        let u = (Html.text (username)) in
+        let admin_item = if is_admin then (Html.static "<a href='/admin'>Admin</a>") else Html.empty in
         let initial =
           if String.length username > 0
-          then Components.html_escape (String.sub (String.uppercase_ascii username) 0 1)
-          else "?"
+          then (Html.text ((String.sub (String.uppercase_ascii username) 0 1)))
+          else (Html.static "?")
         in
         (* Badge server-rendered from the request's unread count; absent at
            zero (see [Notification_badge]). *)
-        Printf.sprintf
-          "%s\
+        (Html.template "%s\
            <a class='bell' href='/notifications' title='Notifications' aria-label='Notifications'>%s%s</a>\
            <details class='launch-user'>\
            <summary class='userchip'><span class='avatar avatar--24'>%s</span><span class='userchip__name'>u/%s</span></summary>\
@@ -89,9 +90,13 @@ let launch_community_doc ?(noindex = false) ?request ?user
            <form action='/logout' method='POST'><button type='submit'>Log out</button></form>\
            </div>\
            </details>"
-          Page_shell.launch_connect_cta bell_icon
-          (Notification_badge.badge_html ?request ())
-          initial u u admin_item
+  [ Page_shell.launch_connect_cta
+  ; bell_icon
+  ; (Notification_badge.badge_html ?request ())
+  ; initial
+  ; u
+  ; u
+  ; admin_item ])
     | None ->
         Page_shell.topbar_anon_actions
   in
@@ -112,11 +117,12 @@ let launch_community_doc ?(noindex = false) ?request ?user
   in
   let tile_face_of (c : Community_types.community) =
     match c.avatar_url with
-    | Some url when String.trim url <> "" ->
-        let src = Components.safe_img_src url in
-        if src = "#" then Components.html_escape (tile_glyph c.slug)
-        else Printf.sprintf "<img class='launch-rail__img' src='%s' alt=''>" src
-    | _ -> Components.html_escape (tile_glyph c.slug)
+    | Some url -> (
+        match Html.image_src_opt url with
+        | Some src ->
+            Html.template "<img class='launch-rail__img' src='%s' alt=''>" [ src ]
+        | None -> Html.text (tile_glyph c.slug))
+    | None -> Html.text (tile_glyph c.slug)
   in
   (* One tile per community in the run; the current community carries the
      white active marker wherever it sits (in its joined slot when the viewer
@@ -126,13 +132,15 @@ let launch_community_doc ?(noindex = false) ?request ?user
   let rail_tile (c : Community_types.community) =
     let marker =
       if c.slug = community.slug
-      then "<span class='rail__marker rail__marker--community'></span>"
-      else ""
+      then (Html.static "<span class='rail__marker rail__marker--community'></span>")
+      else Html.empty
     in
-    Printf.sprintf
-      "<a class='rail__item rail__item--community' href='/c/%s' title='/c/%s' style='background:%s'>%s%s</a>"
-      (Components.html_escape c.slug) (Components.html_escape c.slug)
-      (Page_shell.launch_tile_color c.slug) marker (tile_face_of c)
+    (Html.template "<a class='rail__item rail__item--community' href='/c/%s' title='/c/%s' style='background:%s'>%s%s</a>"
+  [ (Html.text (c.slug))
+  ; (Html.text (c.slug))
+  ; (Html.text (Page_shell.launch_tile_color c.slug))
+  ; marker
+  ; (tile_face_of c) ])
   in
   let rail_run =
     if List.exists (fun (c : Community_types.community) -> c.slug = community.slug) rail_communities
@@ -140,16 +148,15 @@ let launch_community_doc ?(noindex = false) ?request ?user
     else rail_communities @ [community]
   in
   let rail =
-    Printf.sprintf
-      "<nav class='rail' aria-label='Primary'>\
+    (Html.template "<nav class='rail' aria-label='Primary'>\
        <a class='rail__item' href='/feed' title='Feed' aria-label='Feed'>%s</a>\
        <span class='rail__divider'></span>\
        %s\
        <span class='rail__spacer'></span>\
        <a class='rail__item rail__item--add' href='/bring' title='Connect a project' aria-label='Connect a project'>&#65291;</a>\
        </nav>"
-      house_icon
-      (String.concat "" (List.map rail_tile rail_run))
+  [ house_icon
+  ; (Html.concat (List.map rail_tile rail_run)) ])
   in
   (* Replay privacy on the existing shell element — class only, no wrapper. *)
   let shell_cls =
@@ -158,10 +165,9 @@ let launch_community_doc ?(noindex = false) ?request ?user
   in
   let behavior_script = match user with
     | Some _ -> Page_shell.launch_behavior_script
-    | None -> ""
+    | None -> Html.empty
   in
-  Printf.sprintf
-    "<!DOCTYPE html>\n\
+  Html.to_string (Html.template "<!DOCTYPE html>\n\
      <html lang='en'>\n\
      <head>\n\
      <meta charset='UTF-8'>\n\
@@ -195,10 +201,22 @@ let launch_community_doc ?(noindex = false) ?request ?user
      %s\n\
      </body>\n\
      </html>"
-    (Components.html_escape title) robots_meta Page_shell.mobile_gate_css_link
-    (analytics_head ^ head_extra)
-    page_class search_form actions shell_cls rail sidebar main_el aside
-    Page_shell.launch_footer Page_shell.mobile_desktop_gate analytics_banner behavior_script
+  [ (Html.text (title))
+  ; robots_meta
+  ; Page_shell.mobile_gate_css_link
+  ; (analytics_head ++ head_extra)
+  ; Html.text page_class
+  ; search_form
+  ; actions
+  ; (Html.text shell_cls)
+  ; rail
+  ; sidebar
+  ; main_el
+  ; aside
+  ; Page_shell.launch_footer
+  ; Page_shell.mobile_desktop_gate
+  ; analytics_banner
+  ; behavior_script ])
 
 (* Public pass-8 entry point: the overview content is wrapped in the exact
    `<main class='main'>` element (same newlines) the pre-extraction template
@@ -212,7 +230,7 @@ let launch_community_page ?noindex ?request ?user ?rail_communities ?head_extra
     ~(community : Community_types.community) ~sidebar ~page_class ~title ~content () =
   launch_community_doc ?noindex ?request ?user ?rail_communities ?head_extra
     ~community ~sidebar ~page_class
-    ~title ~main_el:("<main class='main'>\n" ^ content ^ "\n</main>") ()
+    ~title ~main_el:((Html.static "<main class='main'>\n") ++ content ++ (Html.static "\n</main>")) ()
 
 (* Pass-9 channel-safe variant: identical launch chrome (topbar, rail,
    analytics assets, behavior script, mobile gate, tile colours) but the

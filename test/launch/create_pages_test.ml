@@ -542,7 +542,7 @@ let degraded_render ?user ?(state = Home_review_fixture.phrp_state ()) () =
 let launch_shell : Phrp.launch_shell =
   { Phrp.community_record = Launch_fixture.nav_test_community;
     rail_communities = [ Launch_fixture.nav_test_community ];
-    sidebar = "<div class='ncl-sidebar-mark'></div>" }
+    sidebar = (Earde.Html.static "<div class='ncl-sidebar-mark'></div>") }
 
 let launch_render ?user ?(state = Home_review_fixture.phrp_state ()) () =
   Phrp.project_home_review_page ?user ~shell:launch_shell ~state

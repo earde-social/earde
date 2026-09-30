@@ -28,7 +28,7 @@ val can_complete_setup : community:Community_types.community -> authorized:bool 
 (** The shared settings header band (community identity + the canonical
     back-to-community link). [slug] is the raw canonical slug; escaping is
     internal. *)
-val header : slug:string -> string
+val header : slug:string -> Html.t
 
 (** The grouped internal settings navigation (Community / Network /
     Structure / People). [network_manager] is the surface's own
@@ -40,7 +40,7 @@ val nav :
   can_complete_setup:bool ->
   network_manager:bool ->
   unit ->
-  string
+  Html.t
 
 (** Header + nav + panel column, wrapped in the cm-wrap--settings scope the
     shared shell CSS keys on. *)
@@ -49,6 +49,6 @@ val wrap :
   active:item ->
   can_complete_setup:bool ->
   network_manager:bool ->
-  panel:string ->
+  panel:Html.t ->
   unit ->
-  string
+  Html.t

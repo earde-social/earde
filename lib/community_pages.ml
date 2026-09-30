@@ -1,10 +1,12 @@
+open Html.Infix
+
 (* [connected_projects] is the pre-rendered Connected-projects fragment supplied by the
-   community route (Community_connected_projects_pages), or "" when the community has no
-   accepted project home — and always "" on the section feeds, which are not /c/:slug.
-   [connected_communities] is its community↔community counterpart
-   (Community_connected_communities_pages), "" when nothing is publicly connected and "" for
-   every community that is not itself connection-eligible — that decision belongs to the read
-   model, not to this template. Both default to "" so every existing caller is unchanged. *)
+   community route (Community_connected_projects_pages), empty when the community has no
+   accepted project home and always empty on the section feeds, which are not /c/:slug.
+   [connected_communities] is its community-to-community counterpart
+   (Community_connected_communities_pages), empty when nothing is publicly connected or the
+   community is not itself connection-eligible; that decision belongs to the read model,
+   not to this template. *)
 (* Launch sidebar for the flat (sections_enabled = false) community home — the
    pass-8/9 grammar reduced to what a single-feed community really has: the
    identity head, the one Feed surface (always current — /c/:slug IS the feed),
@@ -16,8 +18,7 @@
    suites count those links per document); Manage moderators keeps its legacy
    placement inside the Moderators panel instead. *)
 let launch_flat_community_sidebar ~(community : Community_types.community) ~can_manage () =
-  let esc = Components.html_escape in
-  let slug = esc community.slug in
+  let slug = (Html.text (community.slug)) in
   let tile_glyph =
     String.capitalize_ascii
       (if String.length community.slug >= 2 then String.sub community.slug 0 2
@@ -26,45 +27,50 @@ let launch_flat_community_sidebar ~(community : Community_types.community) ~can_
   let side_face =
     match community.avatar_url with
     | Some url when String.trim url <> "" ->
-        (match Components.safe_img_src url with
-         | "#" ->
-             Printf.sprintf "<span class='avatar avatar--32' style='background:%s'>%s</span>"
-               (Page_shell.launch_tile_color community.slug) (esc tile_glyph)
-         | src ->
-             Printf.sprintf "<span class='avatar avatar--32'><img class='launch-avatar-img' src='%s' alt=''></span>" src)
+        (match Html.image_src_opt (url) with
+         | None ->
+             (Html.template "<span class='avatar avatar--32' style='background:%s'>%s</span>"
+  [ (Html.text (Page_shell.launch_tile_color community.slug))
+  ; (Html.text (tile_glyph)) ])
+         | Some src ->
+             (Html.template "<span class='avatar avatar--32'><img class='launch-avatar-img' src='%s' alt=''></span>"
+  [ src ]))
     | _ ->
-        Printf.sprintf "<span class='avatar avatar--32' style='background:%s'>%s</span>"
-          (Page_shell.launch_tile_color community.slug) (esc tile_glyph)
+        (Html.template "<span class='avatar avatar--32' style='background:%s'>%s</span>"
+  [ (Html.text (Page_shell.launch_tile_color community.slug))
+  ; (Html.text (tile_glyph)) ])
   in
   let side_head =
-    Printf.sprintf
-      "<a class='sidebar__head' href='/c/%s'>%s<span class='launch-side-id'><span class='sidebar__name'>%s</span><span class='sidebar__slug'>/c/%s</span></span></a>"
-      slug side_face (esc community.name) slug
+    (Html.template "<a class='sidebar__head' href='/c/%s'>%s<span class='launch-side-id'><span class='sidebar__name'>%s</span><span class='sidebar__slug'>/c/%s</span></span></a>"
+  [ slug
+  ; side_face
+  ; (Html.text (community.name))
+  ; slug ])
   in
   let nav_feed =
-    Printf.sprintf
-      "<a class='navitem navitem--pad navitem--active' href='/c/%s'><span class='navitem__sigil navitem__sigil--box'>&#8962;</span>Feed</a>"
-      slug
+    (Html.template "<a class='navitem navitem--pad navitem--active' href='/c/%s'><span class='navitem__sigil navitem__sigil--box'>&#8962;</span>Feed</a>"
+  [ slug ])
   in
   let vis_note =
     if community.visibility = Community_types.Community_private then
-      "<div class='launch-side-vis'>private community</div>"
-    else ""
+      (Html.static "<div class='launch-side-vis'>private community</div>")
+    else Html.empty
   in
   let nav_network =
-    "<p class='kicker sidebar__group'>Network</p>"
-    ^ Printf.sprintf
-        "<a class='navitem navitem--pad' href='/c/%s/modlog'><span class='navitem__sigil navitem__sigil--box'>&#9776;</span>Moderation log</a>"
-        slug
-    ^ (if can_manage then
-         Printf.sprintf
-           "<a class='navitem navitem--pad' href='/c/%s/settings'><span class='navitem__sigil navitem__sigil--box'>&#9881;</span>Settings</a>"
-           slug
-       else "")
+    (Html.static "<p class='kicker sidebar__group'>Network</p>")
+    ++ (Html.template "<a class='navitem navitem--pad' href='/c/%s/modlog'><span class='navitem__sigil navitem__sigil--box'>&#9776;</span>Moderation log</a>"
+  [ slug ])
+    ++ (if can_manage then
+         (Html.template "<a class='navitem navitem--pad' href='/c/%s/settings'><span class='navitem__sigil navitem__sigil--box'>&#9881;</span>Settings</a>"
+  [ slug ])
+       else Html.empty)
   in
-  Printf.sprintf
-    "<aside class='sidebar' aria-label='%s community'>%s<div class='sidebar__body'>%s%s%s</div></aside>"
-    (esc community.name) side_head nav_feed vis_note nav_network
+  (Html.template "<aside class='sidebar' aria-label='%s community'>%s<div class='sidebar__body'>%s%s%s</div></aside>"
+  [ (Html.text (community.name))
+  ; side_head
+  ; nav_feed
+  ; vis_note
+  ; nav_network ])
 
 (* /c/:slug (flat, sections_enabled = false) — the single-feed community home,
    now on the Cartographic Civic launch chrome (Components.launch_community_page:
@@ -86,11 +92,10 @@ let launch_flat_community_sidebar ~(community : Community_types.community) ~can_
      modlog and the top-mod/admin downvote toggle keep their gates and routes;
    - the pre-rendered ccp-* connected-projects fragment is spliced verbatim
      (its markup is pinned by the fragment suites) and restyled by CSS only. *)
-let community_page ?user ?(noindex=false) ?(connected_projects="") ?(connected_communities="") ~is_member ~is_current_user_mod ~is_current_user_top_mod ~mod_usernames ~admin_usernames ~banned_usernames ~user_communities ~moderated_communities user_votes current_page sort_mode (community : Community_types.community) (posts : Post_types.feed_item list) request =
-  let csrf_token = Dream.csrf_tag request in
+let community_page ?user ?(noindex=false) ?(connected_projects = Html.empty) ?(connected_communities = Html.empty) ~is_member ~is_current_user_mod ~is_current_user_top_mod ~mod_usernames ~admin_usernames ~banned_usernames ~user_communities ~moderated_communities user_votes current_page sort_mode (community : Community_types.community) (posts : Post_types.feed_item list) request =
+  let csrf_token = Csrf_field.tag request in
   let is_admin = Dream.session_field request "is_admin" = Some "true" in
-  let esc = Components.html_escape in
-  let slug = esc community.slug in
+  let slug = (Html.text (community.slug)) in
   (* Fed only the legacy left sidebar; the launch shell's global rail owns
      joined-community navigation now. Kept in the signature so the handler
      call site (shared with the structured branch's data load) stays intact. *)
@@ -101,56 +106,78 @@ let community_page ?user ?(noindex=false) ?(connected_projects="") ?(connected_c
      slug as its destination context so its links stay local and its
      provenance/section chips come from the placement, not the origin. *)
   let posts_html =
-    if posts = [] then "<div class='bg-gray-50 p-12 text-center rounded-xl border border-dashed border-[#D0C9BC] text-gray-500'>No posts yet. Be the first to share something!</div>"
-    else String.concat "\n" (List.map (fun (item : Post_types.feed_item) ->
+    if posts = [] then (Html.static "<div class='bg-gray-50 p-12 text-center rounded-xl border border-dashed border-[#D0C9BC] text-gray-500'>No posts yet. Be the first to share something!</div>")
+    else (Html.join (Html.static "\n")) (List.map (fun (item : Post_types.feed_item) ->
       let shared = Option.map (fun ctx -> (community.slug, ctx)) item.fi_shared in
       Post_cards.render_post ~is_current_user_mod ~mod_usernames ~admin_usernames ~banned_usernames ?shared request user_votes item.fi_post) posts)
   in
 
-  let base_url = Printf.sprintf "/c/%s" slug in
+  let base_url = Printf.sprintf "/c/%s" (community.slug) in
 
   (* Sort chips — the exact hrefs and accepted values of the legacy tabs
      (hot/new/top; the handler maps anything else to hot). *)
   let chip mode label =
     let cls = if mode = sort_mode then "chip chip--active" else "chip" in
-    Printf.sprintf "<a class='%s' href='%s?sort=%s'>%s</a>" cls base_url mode label
+    (Html.template "<a class='%s' href='%s?sort=%s'>%s</a>"
+  [ (Html.text cls)
+  ; (Html.text base_url)
+  ; Html.text mode
+  ; label ])
   in
   let sort_bar =
-    Printf.sprintf
-      "<div class='tabbar launch-flat-sortbar'><div class='chips' aria-label='Sort'>%s%s%s</div></div>"
-      (chip "hot" "Hot") (chip "new" "New") (chip "top" "Top")
+    (Html.template "<div class='tabbar launch-flat-sortbar'><div class='chips' aria-label='Sort'>%s%s%s</div></div>"
+  [ (chip "hot" (Html.static "Hot"))
+  ; (chip "new" (Html.static "New"))
+  ; (chip "top" (Html.static "Top")) ])
   in
 
   (* Pager — same ?sort=&page= URLs and the same presence rules as before. *)
-  let prev_btn = if current_page <= 1 then "" else Printf.sprintf "<a class='btn btn--secondary btn--sm' href='%s?sort=%s&page=%d'>&larr; Previous</a>" base_url sort_mode (current_page - 1) in
-  let next_btn = if not has_next then "" else Printf.sprintf "<a class='btn btn--secondary btn--sm' href='%s?sort=%s&page=%d'>Next &rarr;</a>" base_url sort_mode (current_page + 1) in
-  let pager = Printf.sprintf "<div class='pager launch-pager'>%s<span>Page %d</span>%s</div>" prev_btn current_page next_btn in
+  let prev_btn = if current_page <= 1 then Html.empty else (Html.template "<a class='btn btn--secondary btn--sm' href='%s?sort=%s&page=%s'>&larr; Previous</a>"
+  [ (Html.text base_url)
+  ; Html.text sort_mode
+  ; Html.int ((current_page - 1)) ]) in
+  let next_btn = if not has_next then Html.empty else (Html.template "<a class='btn btn--secondary btn--sm' href='%s?sort=%s&page=%s'>Next &rarr;</a>"
+  [ (Html.text base_url)
+  ; Html.text sort_mode
+  ; Html.int ((current_page + 1)) ]) in
+  let pager = (Html.template "<div class='pager launch-pager'>%s<span>Page %s</span>%s</div>"
+  [ prev_btn
+  ; Html.int (current_page)
+  ; next_btn ]) in
 
   let membership_btn =
     match user with
-    | None -> ""
+    | None -> Html.empty
     | Some _ ->
-        if is_member then Printf.sprintf "<form action='/leave' method='POST'>%s<input type='hidden' name='community_id' value='%d'><input type='hidden' name='redirect_to' value='/c/%s'><button type='submit' class='btn btn--secondary btn--block launch-leave'>Leave</button></form>" csrf_token community.id community.slug
+        if is_member then (Html.template "<form action='/leave' method='POST'>%s<input type='hidden' name='community_id' value='%s'><input type='hidden' name='redirect_to' value='/c/%s'><button type='submit' class='btn btn--secondary btn--block launch-leave'>Leave</button></form>"
+  [ csrf_token
+  ; Html.int (community.id)
+  ; (Html.text community.slug) ])
         (* No self-serve join for private communities (Slice C): a non-member who can see this
            page is a mod/admin; show no misleading Join button (the /join route 404s anyway). *)
-        else if community.visibility = Community_types.Community_private then ""
-        else Printf.sprintf "<form action='/join' method='POST'>%s<input type='hidden' name='community_id' value='%d'><input type='hidden' name='redirect_to' value='/c/%s'><button type='submit' class='btn btn--primary btn--block'>Join</button></form>" csrf_token community.id community.slug
+        else if community.visibility = Community_types.Community_private then Html.empty
+        else (Html.template "<form action='/join' method='POST'>%s<input type='hidden' name='community_id' value='%s'><input type='hidden' name='redirect_to' value='/c/%s'><button type='submit' class='btn btn--primary btn--block'>Join</button></form>"
+  [ csrf_token
+  ; Html.int (community.id)
+  ; (Html.text community.slug) ])
   in
 
   (* Admins see the settings entry without needing mod status — global authority. *)
   let settings_btn =
     if is_current_user_mod || is_admin then
-      Printf.sprintf "<a class='btn btn--secondary' href='/c/%s/settings'>&#9881; Settings</a>" slug
-    else ""
+      (Html.template "<a class='btn btn--secondary' href='/c/%s/settings'>&#9881; Settings</a>"
+  [ slug ])
+    else Html.empty
   in
 
   (* Create Post shortcut keeps its real legacy destination and query parameter
      (/new-post stays a legacy page this pass). Logged-in viewers only. *)
   let create_post_btn =
     match user with
-    | None -> ""
+    | None -> Html.empty
     | Some _ ->
-        Printf.sprintf "<a class='btn btn--primary' href='/new-post?community=%s'>+ New post</a>" community.slug
+        (Html.template "<a class='btn btn--primary' href='/new-post?community=%s'>+ New post</a>"
+  [ (Html.text community.slug) ])
   in
 
   (* Community face: avatar image when set and safe, else the launch tile glyph
@@ -163,16 +190,21 @@ let community_page ?user ?(noindex=false) ?(connected_projects="") ?(connected_c
   let face size_cls =
     match community.avatar_url with
     | Some url when String.trim url <> "" ->
-        (match Components.safe_img_src url with
-         | "#" ->
-             Printf.sprintf "<span class='avatar %s' style='background:%s'>%s</span>"
-               size_cls (Page_shell.launch_tile_color community.slug) (esc tile_glyph)
-         | src ->
-             Printf.sprintf "<span class='avatar %s'><img class='launch-avatar-img' src='%s' alt=''></span>"
-               size_cls src)
+        (match Html.image_src_opt (url) with
+         | None ->
+             (Html.template "<span class='avatar %s' style='background:%s'>%s</span>"
+  [ size_cls
+  ; (Html.text (Page_shell.launch_tile_color community.slug))
+  ; (Html.text (tile_glyph)) ])
+         | Some src ->
+             (Html.template "<span class='avatar %s'><img class='launch-avatar-img' src='%s' alt=''></span>"
+  [ size_cls
+  ; src ]))
     | _ ->
-        Printf.sprintf "<span class='avatar %s' style='background:%s'>%s</span>"
-          size_cls (Page_shell.launch_tile_color community.slug) (esc tile_glyph)
+        (Html.template "<span class='avatar %s' style='background:%s'>%s</span>"
+  [ size_cls
+  ; (Html.text (Page_shell.launch_tile_color community.slug))
+  ; (Html.text (tile_glyph)) ])
   in
 
   (* Optional banner — rendered only when a safe banner_url is present; no
@@ -180,10 +212,11 @@ let community_page ?user ?(noindex=false) ?(connected_projects="") ?(connected_c
   let banner_html =
     match community.banner_url with
     | Some url when String.trim url <> "" ->
-        (match Components.safe_img_src url with
-         | "#" -> ""
-         | src -> Printf.sprintf "<div class='launch-banner'><img src='%s' class='launch-banner-img' alt=''></div>" src)
-    | _ -> ""
+        (match Html.image_src_opt (url) with
+         | None -> Html.empty
+         | Some src -> (Html.template "<div class='launch-banner'><img src='%s' class='launch-banner-img' alt=''></div>"
+  [ src ]))
+    | _ -> Html.empty
   in
 
   (* Header band. Badges are facts the record already states; public is
@@ -191,22 +224,25 @@ let community_page ?user ?(noindex=false) ?(connected_projects="") ?(connected_c
      none are fabricated. *)
   let badges =
     (if community.is_network_community then
-       " <span class='badge badge--network badge--lg'>&#9672; Network community</span>"
-     else "")
-    ^ (if community.visibility = Community_types.Community_private then
-         " <span class='badge badge--plain badge--lg'>Private</span>"
-       else "")
+       (Html.static " <span class='badge badge--network badge--lg'>&#9672; Network community</span>")
+     else Html.empty)
+    ++ (if community.visibility = Community_types.Community_private then
+         (Html.static " <span class='badge badge--plain badge--lg'>Private</span>")
+       else Html.empty)
   in
-  let actions = create_post_btn ^ membership_btn ^ settings_btn in
+  let actions = create_post_btn ++ membership_btn ++ settings_btn in
   let chead =
-    Printf.sprintf
-      "<div class='chead'><div class='chead__row'>%s<div class='launch-chead-id'>\
+    (Html.template "<div class='chead'><div class='chead__row'>%s<div class='launch-chead-id'>\
        <div class='titleline'><h1 class='chead__title'>%s</h1><span class='chead__slug'>/c/%s</span>%s</div>\
        <p class='chead__desc'>%s</p>\
        </div>%s</div></div>"
-      (face "avatar--62") (esc community.name) slug badges
-      (esc (Option.value ~default:"No description." community.description))
-      (if actions = "" then "" else Printf.sprintf "<div class='chead__actions'>%s</div>" actions)
+  [ (face (Html.static "avatar--62"))
+  ; (Html.text (community.name))
+  ; slug
+  ; badges
+  ; (Html.text ((Option.value ~default:"No description." community.description)))
+  ; (if actions = Html.empty then Html.empty else (Html.template "<div class='chead__actions'>%s</div>"
+  [ actions ])) ])
   in
 
   (* Moderators panel. Manage moderators keeps its legacy placement here and
@@ -214,32 +250,33 @@ let community_page ?user ?(noindex=false) ?(connected_projects="") ?(connected_c
      peers, preventing collusion against the council. *)
   let manage_mods_link =
     if is_current_user_top_mod || is_admin then
-      Printf.sprintf "<div class='launch-manage-mods'><a class='btn--link mono' href='/c/%s/manage-mods'>Manage moderators &rarr;</a></div>" slug
-    else ""
+      (Html.template "<div class='launch-manage-mods'><a class='btn--link mono' href='/c/%s/manage-mods'>Manage moderators &rarr;</a></div>"
+  [ slug ])
+    else Html.empty
   in
   let mods_inner =
-    if mod_usernames = [] then "<div class='empty--inline'>No moderators yet.</div>"
+    if mod_usernames = [] then (Html.static "<div class='empty--inline'>No moderators yet.</div>")
     else
-      Printf.sprintf "<div class='launch-mods'>%s</div>"
-        (String.concat "" (List.map (fun u ->
+      (Html.template "<div class='launch-mods'>%s</div>"
+  [ (Html.concat (List.map (fun u ->
           let initial =
-            if String.length u > 0 then esc (String.sub (String.uppercase_ascii u) 0 1) else "?" in
-          Printf.sprintf
-            "<a class='launch-modrow' href='/u/%s'><span class='avatar avatar--22 avatar--mod'>%s</span><span class='launch-mod-name'>u/%s</span></a>"
-            (esc u) initial (esc u)) mod_usernames))
+            if String.length u > 0 then (Html.text ((String.sub (String.uppercase_ascii u) 0 1))) else (Html.static "?") in
+          (Html.template "<a class='launch-modrow' href='/u/%s'><span class='avatar avatar--22 avatar--mod'>%s</span><span class='launch-mod-name'>u/%s</span></a>"
+  [ (Html.text (u))
+  ; initial
+  ; (Html.text (u)) ])) mod_usernames)) ])
   in
   let mods_panel =
-    Printf.sprintf
-      "<section class='panel'><div class='section-head'><span class='kicker'>Moderators</span></div>%s%s</section>"
-      mods_inner manage_mods_link
+    (Html.template "<section class='panel'><div class='section-head'><span class='kicker'>Moderators</span></div>%s%s</section>"
+  [ mods_inner
+  ; manage_mods_link ])
   in
 
   let rules_panel = match community.rules with
     | Some r when r <> "" ->
-        Printf.sprintf
-          "<section class='panel'><div class='section-head'><span class='kicker'>Rules</span></div><div class='panel__body launch-rules'>%s</div></section>"
-          (esc r)
-    | _ -> ""
+        (Html.template "<section class='panel'><div class='section-head'><span class='kicker'>Rules</span></div><div class='panel__body launch-rules'>%s</div></section>"
+  [ (Html.text (r)) ])
+    | _ -> Html.empty
   in
 
   (* Toggle downvotes: exposed only to top_mod/admin to prevent vote manipulation arms races
@@ -251,10 +288,13 @@ let community_page ?user ?(noindex=false) ?(connected_projects="") ?(connected_c
         if community.allow_downvotes then ("false", "Disable downvotes", "enabled")
         else ("true", "Enable downvotes", "disabled")
       in
-      Printf.sprintf
-        "<section class='panel'><div class='section-head'><span class='kicker'>Mod tools</span></div><div class='panel__body'><p class='launch-modtool-state'>Downvotes are currently %s.</p><form action='/c/%s/toggle_downvotes' method='POST'>%s<input type='hidden' name='allow_downvotes' value='%s'><button type='submit' class='btn btn--secondary btn--sm'>%s</button></form></div></section>"
-        state slug csrf_token next_val label
-    else ""
+      (Html.template "<section class='panel'><div class='section-head'><span class='kicker'>Mod tools</span></div><div class='panel__body'><p class='launch-modtool-state'>Downvotes are currently %s.</p><form action='/c/%s/toggle_downvotes' method='POST'>%s<input type='hidden' name='allow_downvotes' value='%s'><button type='submit' class='btn btn--secondary btn--sm'>%s</button></form></div></section>"
+  [ (Html.text state)
+  ; slug
+  ; csrf_token
+  ; (Html.text next_val)
+  ; (Html.text label) ])
+    else Html.empty
   in
 
   let sidebar =
@@ -265,12 +305,17 @@ let community_page ?user ?(noindex=false) ?(connected_projects="") ?(connected_c
   (* Single-feed body: the ledger column plus the factual side panels. The
      pre-rendered ccp-* fragment closes the side stack, spliced verbatim. *)
   let content =
-    Printf.sprintf
-      "<div class='scroll'>%s%s<div class='container launch-flat-body'><div class='two-col'><div class='stack'>%s<div class='launch-flat-ledger'>%s</div>%s</div><div class='stack stack--sm'>%s%s%s%s%s</div></div></div></div>"
-      banner_html chead
-      sort_bar posts_html pager
-      mods_panel rules_panel mod_tools_panel connected_projects
-      connected_communities
+    (Html.template "<div class='scroll'>%s%s<div class='container launch-flat-body'><div class='two-col'><div class='stack'>%s<div class='launch-flat-ledger'>%s</div>%s</div><div class='stack stack--sm'>%s%s%s%s%s</div></div></div></div>"
+  [ banner_html
+  ; chead
+  ; sort_bar
+  ; posts_html
+  ; pager
+  ; mods_panel
+  ; rules_panel
+  ; mod_tools_panel
+  ; connected_projects
+  ; connected_communities ])
   in
   (* The byte-pinned rows show Share to every viewer, but only member
      documents carry the full behavior script (which defines copyPostLink).
@@ -279,7 +324,7 @@ let community_page ?user ?(noindex=false) ?(connected_projects="") ?(connected_c
      document holds exactly one definition. *)
   let head_extra = match user with
     | None -> Page_shell.launch_share_script
-    | Some _ -> ""
+    | Some _ -> Html.empty
   in
   Community_shell.launch_community_page ?user ~noindex ~request ~head_extra
     ~rail_communities:user_communities ~community ~sidebar
@@ -315,8 +360,7 @@ let launch_knowledge_sidebar ~(community : Community_types.community) ~(channels
     ?(append_uncategorized = false) ?(settings_active = false)
     ?(moderation_log_active = false)
     ?(show_visibility_note = true) ~can_manage () =
-  let esc = Components.html_escape in
-  let slug = esc community.slug in
+  let slug = (Html.text (community.slug)) in
   let tile_glyph =
     String.capitalize_ascii
       (if String.length community.slug >= 2 then String.sub community.slug 0 2
@@ -325,84 +369,94 @@ let launch_knowledge_sidebar ~(community : Community_types.community) ~(channels
   let side_face =
     match community.avatar_url with
     | Some url when String.trim url <> "" ->
-        (match Components.safe_img_src url with
-         | "#" ->
-             Printf.sprintf "<span class='avatar avatar--32' style='background:%s'>%s</span>"
-               (Page_shell.launch_tile_color community.slug) (esc tile_glyph)
-         | src ->
-             Printf.sprintf "<span class='avatar avatar--32'><img class='launch-avatar-img' src='%s' alt=''></span>" src)
+        (match Html.image_src_opt (url) with
+         | None ->
+             (Html.template "<span class='avatar avatar--32' style='background:%s'>%s</span>"
+  [ (Html.text (Page_shell.launch_tile_color community.slug))
+  ; (Html.text (tile_glyph)) ])
+         | Some src ->
+             (Html.template "<span class='avatar avatar--32'><img class='launch-avatar-img' src='%s' alt=''></span>"
+  [ src ]))
     | _ ->
-        Printf.sprintf "<span class='avatar avatar--32' style='background:%s'>%s</span>"
-          (Page_shell.launch_tile_color community.slug) (esc tile_glyph)
+        (Html.template "<span class='avatar avatar--32' style='background:%s'>%s</span>"
+  [ (Html.text (Page_shell.launch_tile_color community.slug))
+  ; (Html.text (tile_glyph)) ])
   in
   let side_head =
-    Printf.sprintf
-      "<a class='sidebar__head' href='/c/%s'>%s<span class='launch-side-id'><span class='sidebar__name'>%s</span><span class='sidebar__slug'>/c/%s</span></span></a>"
-      slug side_face (esc community.name) slug
+    (Html.template "<a class='sidebar__head' href='/c/%s'>%s<span class='launch-side-id'><span class='sidebar__name'>%s</span><span class='sidebar__slug'>/c/%s</span></span></a>"
+  [ slug
+  ; side_face
+  ; (Html.text (community.name))
+  ; slug ])
   in
   let nav_overview =
-    Printf.sprintf
-      "<a class='navitem navitem--pad' href='/c/%s'><span class='navitem__sigil navitem__sigil--box'>&#8962;</span>Overview</a>"
-      slug
+    (Html.template "<a class='navitem navitem--pad' href='/c/%s'><span class='navitem__sigil navitem__sigil--box'>&#8962;</span>Overview</a>"
+  [ slug ])
   in
   let vis_note =
     if show_visibility_note && community.visibility = Community_types.Community_private then
-      "<div class='launch-side-vis'>private community</div>"
-    else ""
+      (Html.static "<div class='launch-side-vis'>private community</div>")
+    else Html.empty
   in
   let live_channels = List.filter (fun (c : Channel_store.channel) -> not c.is_archived) channels in
   let nav_live =
-    if live_channels = [] then ""
+    if live_channels = [] then Html.empty
     else
-      "<p class='kicker sidebar__group'>Live</p>"
-      ^ String.concat "" (List.map (fun (c : Channel_store.channel) ->
-          Printf.sprintf
-            "<a class='navitem' href='/c/%s/ch/%s'><span class='navitem__sigil navitem__sigil--live'>#</span>%s</a>"
-            slug (esc c.slug) (esc c.slug))
+      (Html.static "<p class='kicker sidebar__group'>Live</p>")
+      ++ Html.concat (List.map (fun (c : Channel_store.channel) ->
+          (Html.template "<a class='navitem' href='/c/%s/ch/%s'><span class='navitem__sigil navitem__sigil--live'>#</span>%s</a>"
+  [ slug
+  ; (Html.text (c.slug))
+  ; (Html.text (c.slug)) ]))
           live_channels)
   in
   let section_item (s : Section_store.community_section) =
     let cls =
       if active_section_slug = Some s.slug then "navitem navitem--active" else "navitem" in
-    Printf.sprintf
-      "<a class='%s' href='/c/%s/s/%s'><span class='navitem__sigil navitem__sigil--live'>&sect;</span>%s</a>"
-      cls slug (esc s.slug) (esc s.name)
+    (Html.template "<a class='%s' href='/c/%s/s/%s'><span class='navitem__sigil navitem__sigil--live'>&sect;</span>%s</a>"
+  [ (Html.text cls)
+  ; slug
+  ; (Html.text (s.slug))
+  ; (Html.text (s.name)) ])
   in
   let knowledge_items =
     List.map section_item sections
     @ (if append_uncategorized then
-         [ Printf.sprintf
-             "<a class='navitem navitem--active' href='/c/%s/s/uncategorized'><span class='navitem__sigil navitem__sigil--live'>&sect;</span>Uncategorized</a>"
-             slug ]
+         [ (Html.template "<a class='navitem navitem--active' href='/c/%s/s/uncategorized'><span class='navitem__sigil navitem__sigil--live'>&sect;</span>Uncategorized</a>"
+  [ slug ]) ]
        else [])
   in
   let nav_knowledge =
-    if knowledge_items = [] then ""
-    else "<p class='kicker sidebar__group'>Knowledge</p>" ^ String.concat "" knowledge_items
+    if knowledge_items = [] then Html.empty
+    else (Html.static "<p class='kicker sidebar__group'>Knowledge</p>") ++ Html.concat knowledge_items
   in
   let nav_network =
-    "<p class='kicker sidebar__group'>Network</p>"
-    ^ Printf.sprintf
-        "<a class='navitem navitem--pad%s' href='/c/%s/modlog'><span class='navitem__sigil navitem__sigil--box'>&#9776;</span>Moderation log</a>"
-        (if moderation_log_active then " navitem--active" else "") slug
-    ^ (if can_manage then
-         Printf.sprintf
-           "<a class='navitem navitem--pad%s' href='/c/%s/settings'><span class='navitem__sigil navitem__sigil--box'>&#9881;</span>Settings</a>"
-           (if settings_active then " navitem--active" else "") slug
-       else "")
+    (Html.static "<p class='kicker sidebar__group'>Network</p>")
+    ++ (Html.template "<a class='navitem navitem--pad%s' href='/c/%s/modlog'><span class='navitem__sigil navitem__sigil--box'>&#9776;</span>Moderation log</a>"
+  [ (if moderation_log_active then (Html.static " navitem--active") else Html.empty)
+  ; slug ])
+    ++ (if can_manage then
+         (Html.template "<a class='navitem navitem--pad%s' href='/c/%s/settings'><span class='navitem__sigil navitem__sigil--box'>&#9881;</span>Settings</a>"
+  [ (if settings_active then (Html.static " navitem--active") else Html.empty)
+  ; slug ])
+       else Html.empty)
   in
-  Printf.sprintf
-    "<aside class='sidebar' aria-label='%s community'>%s<div class='sidebar__body'>%s%s%s%s%s</div></aside>"
-    (esc community.name) side_head nav_overview vis_note nav_live nav_knowledge nav_network
+  (Html.template "<aside class='sidebar' aria-label='%s community'>%s<div class='sidebar__body'>%s%s%s%s%s</div></aside>"
+  [ (Html.text (community.name))
+  ; side_head
+  ; nav_overview
+  ; vis_note
+  ; nav_live
+  ; nav_knowledge
+  ; nav_network ])
 
 let community_section_shell_page ?user ?(noindex=false) ?thread_count ?last_activity ~is_current_user_mod ~mod_usernames ~admin_usernames
     ~banned_usernames ~(rail_communities : Community_types.community list) ~(channels : Channel_store.channel list)
     ~(sections : Section_store.community_section list)
     ~(section : Section_store.community_section) ~user_votes ~current_page ~sort_mode
     ~(community : Community_types.community) ~(posts : Post_types.feed_item list) request =
-  let esc = Components.html_escape in
   (* base_url drives the sort tabs, the New-thread link, and pagination — all stay on the section URL. *)
-  let base_url = Printf.sprintf "/c/%s/s/%s" (esc community.slug) (esc section.slug) in
+  let base_url = Printf.sprintf "/c/%s/s/%s" (community.slug) (section.slug) in
 
   (* Launch community sidebar (pass-8/9 grammar): the current section is active; the virtual
      Uncategorized feed isn't a real section row, so it is appended (active) only when we're
@@ -421,30 +475,40 @@ let community_section_shell_page ?user ?(noindex=false) ?thread_count ?last_acti
      Uncategorized feed (users cannot post directly into it). Shared by header + right rail. *)
   let new_thread_btn ?(cls="btn sm primary") () =
     match user with
-    | None -> ""
+    | None -> Html.empty
     | Some _ ->
-        if section.slug = "uncategorized" then ""
-        else Printf.sprintf "<a href='/new-post?community=%s&section=%s' class='%s'>+ New thread</a>"
-          (esc community.slug) (esc section.slug) cls
+        if section.slug = "uncategorized" then Html.empty
+        else (Html.template "<a href='/new-post?community=%s&section=%s' class='%s'>+ New thread</a>"
+  [ (Html.text (community.slug))
+  ; (Html.text (section.slug))
+  ; (Html.text cls) ])
   in
 
   (* Sort tabs — Hot/New/Top/Active, active highlighted. No counts (they would be fabricated) and
      no Unanswered (no such state). Preserves the ?sort override + the section's default sort. *)
   let tab mode label =
     let cls = if mode = sort_mode then " class='active'" else "" in
-    Printf.sprintf "<a%s href='%s?sort=%s'>%s</a>" cls base_url mode label
+    (Html.template "<a%s href='%s?sort=%s'>%s</a>"
+  [ (Html.text cls)
+  ; (Html.text base_url)
+  ; Html.text mode
+  ; label ])
   in
-  let ftabs = Printf.sprintf "<div class='ftabs'>%s%s%s%s</div>"
-    (tab "hot" "Hot") (tab "new" "New") (tab "top" "Top") (tab "active" "Active")
+  let ftabs = (Html.template "<div class='ftabs'>%s%s%s%s</div>"
+  [ (tab "hot" (Html.static "Hot"))
+  ; (tab "new" (Html.static "New"))
+  ; (tab "top" (Html.static "Top"))
+  ; (tab "active" (Html.static "Active")) ])
   in
 
   (* Section header: breadcrumb, prominent § title, optional description, New thread, sort tabs.
      It lives outside cs-main-body so it stays put while the thread list scrolls under it. *)
   let desc_html = match section.description with
-    | Some d when String.trim d <> "" -> Printf.sprintf "<div class='fh-desc'>%s</div>" (esc d)
-    | _ -> ""
+    | Some d when String.trim d <> "" -> (Html.template "<div class='fh-desc'>%s</div>"
+  [ (Html.text (d)) ])
+    | _ -> Html.empty
   in
-  let forum_head = Printf.sprintf "
+  let forum_head = (Html.template "
     <div class='forum-head'>
         <div class='fh-crumb'><a href='/c/%s'>/c/%s</a> / <b>§ %s</b></div>
         <div class='fh-top'>
@@ -453,67 +517,95 @@ let community_section_shell_page ?user ?(noindex=false) ?thread_count ?last_acti
         </div>
         %s
     </div>"
-    (esc community.slug) (esc community.slug) (esc section.name)
-    (esc section.name) desc_html
-    (new_thread_btn ())
-    ftabs
+  [ (Html.text (community.slug))
+  ; (Html.text (community.slug))
+  ; (Html.text (section.name))
+  ; (Html.text (section.name))
+  ; desc_html
+  ; (new_thread_btn ())
+  ; ftabs ])
   in
 
   (* Own rows are byte-identical to before; shared rows carry this
      community's slug as their destination link context and their compact
      "Shared from" provenance line. *)
   let posts_html =
-    if posts = [] then "<div class='cs-empty'>No threads here yet — start the first one.</div>"
-    else String.concat "\n" (List.map (fun (item : Post_types.feed_item) ->
+    if posts = [] then (Html.static "<div class='cs-empty'>No threads here yet — start the first one.</div>")
+    else (Html.join (Html.static "\n")) (List.map (fun (item : Post_types.feed_item) ->
       let shared = Option.map (fun ctx -> (community.slug, ctx)) item.fi_shared in
       Post_cards.render_forum_row ~is_current_user_mod ~mod_usernames ~admin_usernames ~banned_usernames ?shared request user_votes item.fi_post) posts)
   in
 
   let has_next = List.length posts = 20 in
-  let prev_btn = if current_page <= 1 then "" else Printf.sprintf "<a class='btn sm' href='%s?sort=%s&page=%d'>&larr; Previous</a>" base_url sort_mode (current_page - 1) in
-  let next_btn = if not has_next then "" else Printf.sprintf "<a class='btn sm' href='%s?sort=%s&page=%d'>Next &rarr;</a>" base_url sort_mode (current_page + 1) in
-  let pager = Printf.sprintf "<div class='cs-pager'><div>%s</div><span class='cs-pager-n'>Page %d</span><div>%s</div></div>" prev_btn current_page next_btn in
+  let prev_btn = if current_page <= 1 then Html.empty else (Html.template "<a class='btn sm' href='%s?sort=%s&page=%s'>&larr; Previous</a>"
+  [ (Html.text base_url)
+  ; Html.text sort_mode
+  ; Html.int ((current_page - 1)) ]) in
+  let next_btn = if not has_next then Html.empty else (Html.template "<a class='btn sm' href='%s?sort=%s&page=%s'>Next &rarr;</a>"
+  [ (Html.text base_url)
+  ; Html.text sort_mode
+  ; Html.int ((current_page + 1)) ]) in
+  let pager = (Html.template "<div class='cs-pager'><div>%s</div><span class='cs-pager-n'>Page %s</span><div>%s</div></div>"
+  [ prev_btn
+  ; Html.int (current_page)
+  ; next_btn ]) in
 
   (* cs-flush zeroes cs-main-body's gutter so thread rows can span full width (their own padding);
      forum_head sits outside the scroll area so it stays put while the list scrolls. *)
-  let main = Printf.sprintf "%s<div class='cs-main-body cs-flush'>%s%s</div>" forum_head posts_html pager in
+  let main = (Html.template "%s<div class='cs-main-body cs-flush'>%s%s</div>"
+  [ forum_head
+  ; posts_html
+  ; pager ]) in
 
   (* Right rail — real section metadata only. Rows whose data we don't have (thread count / last
      activity) are simply omitted; nothing here is fabricated. *)
   let cap s = if s = "" then s else String.make 1 (Char.uppercase_ascii s.[0]) ^ String.sub s 1 (String.length s - 1) in
   let threads_row = match thread_count with
-    | Some n -> Printf.sprintf "<tr><td>Threads</td><td class='num'>%d</td></tr>" n
-    | None -> ""
+    | Some n -> (Html.template "<tr><td>Threads</td><td class='num'>%s</td></tr>"
+  [ Html.int (n) ])
+    | None -> Html.empty
   in
   let activity_row = match last_activity with
-    | Some ts when String.trim ts <> "" -> Printf.sprintf "<tr><td>Last activity</td><td class='num'>%s</td></tr>" (esc (Components.time_ago ts))
-    | _ -> ""
+    | Some ts when String.trim ts <> "" -> (Html.template "<tr><td>Last activity</td><td class='num'>%s</td></tr>"
+  [ (Html.text ((Components.time_ago ts))) ])
+    | _ -> Html.empty
   in
-  let stats_cta = match new_thread_btn ~cls:"btn sm primary block" () with "" -> "" | b -> Printf.sprintf "<div class='ca-cta'>%s</div>" b in
-  let stats_block = Printf.sprintf "
+  let stats_cta =
+    let b = new_thread_btn ~cls:"btn sm primary block" () in
+    if Html.is_empty b then Html.empty
+    else Html.template "<div class='ca-cta'>%s</div>" [ b ]
+  in
+  let stats_block = (Html.template "
     <div class='ca-block'>
         <div class='ca-label'>Section · indexed</div>
         <table class='ca-grid'><tbody>%s<tr><td>Default sort</td><td class='num'>%s</td></tr>%s</tbody></table>
         %s
     </div>"
-    threads_row (esc (cap section.default_sort)) activity_row stats_cta
+  [ threads_row
+  ; (Html.text ((cap section.default_sort)))
+  ; activity_row
+  ; stats_cta ])
   in
   (* community.rules are community-wide, NOT per-section — label them honestly. Sections have no
      rules field of their own yet, so we never imply they do; omitted entirely when unset. *)
   let rules_block = match community.rules with
     | Some r when String.trim r <> "" ->
-        Printf.sprintf "<div class='ca-block'><div class='ca-label'>Community rules</div><div class='ca-rules'>%s</div></div>" (esc r)
-    | _ -> ""
+        (Html.template "<div class='ca-block'><div class='ca-label'>Community rules</div><div class='ca-rules'>%s</div></div>"
+  [ (Html.text (r)) ])
+    | _ -> Html.empty
   in
   let mods_block =
-    if mod_usernames = [] then ""
+    if mod_usernames = [] then Html.empty
     else
-      let rows = String.concat "" (List.map (fun u ->
-        Printf.sprintf "<div class='member'><a href='/u/%s'>%s</a><span class='role mod'>MOD</span></div>" (esc u) (esc u)) mod_usernames)
+      let rows = Html.concat (List.map (fun u ->
+        (Html.template "<div class='member'><a href='/u/%s'>%s</a><span class='role mod'>MOD</span></div>"
+  [ (Html.text (u))
+  ; (Html.text (u)) ])) mod_usernames)
       in
-      Printf.sprintf "<div class='ca-block'><div class='ca-label'>Moderators</div>%s</div>" rows
+      (Html.template "<div class='ca-block'><div class='ca-label'>Moderators</div>%s</div>"
+  [ rows ])
   in
-  let right_pane = stats_block ^ rules_block ^ mods_block in
+  let right_pane = stats_block ++ rules_block ++ mods_block in
 
   let title = Printf.sprintf "%s · %s" section.name community.name in
   (* The complete <main> element, built here so the launch wrapper can never interpose a
@@ -521,11 +613,12 @@ let community_section_shell_page ?user ?(noindex=false) ?thread_count ?last_acti
      children, and for a private community the ph-no-capture replay guard rides on this
      element itself (never a wrapper div — see the chat-layout regression). *)
   let main_el =
-    Printf.sprintf "<main class='%s'>%s</main>"
-      (if community.visibility = Community_types.Community_private then "cs-main ph-no-capture" else "cs-main")
-      main
+    (Html.template "<main class='%s'>%s</main>"
+  [ (if community.visibility = Community_types.Community_private then (Html.static "cs-main ph-no-capture") else (Html.static "cs-main"))
+  ; main ])
   in
-  let aside = Printf.sprintf "<aside class='aside'>%s</aside>" right_pane in
+  let aside = (Html.template "<aside class='aside'>%s</aside>"
+  [ right_pane ]) in
   Community_shell.launch_community_surface_page ?user ~noindex ~request ~rail_communities
     ~aside ~community ~sidebar ~page_class:"launch-community-section" ~title ~main_el ()
 
@@ -558,11 +651,10 @@ let community_overview_page ?user ?(noindex=false) ?(connected_projects_count=0)
     ~mod_usernames ~orphaned ~(rail_communities : Community_types.community list)
     ~(channels : Channel_store.channel list) ~(recent_posts : Post_types.feed_item list)
     (community : Community_types.community) (section_stats : (Section_store.community_section * int * string option) list) request =
-  let csrf_token = Dream.csrf_tag request in
+  let csrf_token = Csrf_field.tag request in
   let is_admin = Dream.session_field request "is_admin" = Some "true" in
-  let esc = Components.html_escape in
   let (orphaned_count, _) = orphaned in
-  let slug = esc community.slug in
+  let slug = (Html.text (community.slug)) in
 
   (* Real stats only. sections/threads/channels are derivable from data already loaded; the
      prototype's "members"/"since" have no backing column/query, so they are omitted. *)
@@ -573,7 +665,7 @@ let community_overview_page ?user ?(noindex=false) ?(connected_projects_count=0)
   let plural n = if n = 1 then "" else "s" in
 
   (* Community face: the avatar image when one is set and passes the gate
-     (safe_img_src accepts the local /static/uploads/ path), else the launch
+     (Html.image_src accepts the local /static/uploads/ path), else the launch
      rail's capitalized 2-letter slug glyph on the deterministic palette
      tone — the same fallback every launch tile uses, so the crest, sidebar
      head, and rail tile all agree. *)
@@ -586,16 +678,21 @@ let community_overview_page ?user ?(noindex=false) ?(connected_projects_count=0)
   let face size_cls =
     match community.avatar_url with
     | Some url when String.trim url <> "" ->
-        (match Components.safe_img_src url with
-         | "#" ->
-             Printf.sprintf "<span class='avatar %s' style='background:%s'>%s</span>"
-               size_cls tile_color (esc tile_glyph)
-         | src ->
-             Printf.sprintf "<span class='avatar %s'><img class='launch-avatar-img' src='%s' alt=''></span>"
-               size_cls src)
+        (match Html.image_src_opt (url) with
+         | None ->
+             (Html.template "<span class='avatar %s' style='background:%s'>%s</span>"
+  [ size_cls
+  ; (Html.text tile_color)
+  ; (Html.text (tile_glyph)) ])
+         | Some src ->
+             (Html.template "<span class='avatar %s'><img class='launch-avatar-img' src='%s' alt=''></span>"
+  [ size_cls
+  ; src ]))
     | _ ->
-        Printf.sprintf "<span class='avatar %s' style='background:%s'>%s</span>"
-          size_cls tile_color (esc tile_glyph)
+        (Html.template "<span class='avatar %s' style='background:%s'>%s</span>"
+  [ size_cls
+  ; (Html.text tile_color)
+  ; (Html.text (tile_glyph)) ])
   in
 
   (* Primary CTA target = the community's General section feed (every community has one after
@@ -624,33 +721,42 @@ let community_overview_page ?user ?(noindex=false) ?(connected_projects_count=0)
   let primary_cta =
     match user with
     | None ->
-        "<a class='btn btn--primary' href='/login'>Log in to join &rarr;</a>"
+        (Html.static "<a class='btn btn--primary' href='/login'>Log in to join &rarr;</a>")
     | Some _ ->
         (match target_channel with
         | Some (c : Channel_store.channel) ->
-            let chat_url = Printf.sprintf "/c/%s/ch/%s" slug (esc c.slug) in
+            let chat_url = Printf.sprintf "/c/%s/ch/%s" (community.slug) (c.slug) in
             (* Private community: anyone seeing this overview is authorized to read it, so link
                straight in — never show a self-join button (Slice C). *)
             if is_member || community.visibility = Community_types.Community_private then
-              Printf.sprintf "<a class='btn btn--primary' href='%s'>Open #%s &rarr;</a>" chat_url (esc c.slug)
+              (Html.template "<a class='btn btn--primary' href='%s'>Open #%s &rarr;</a>"
+  [ (Html.text chat_url)
+  ; (Html.text (c.slug)) ])
             else
-              Printf.sprintf "<form action='/join' method='POST'>%s<input type='hidden' name='community_id' value='%d'><input type='hidden' name='redirect_to' value='%s'><button type='submit' class='btn btn--primary btn--block'>Join &amp; open #%s &rarr;</button></form>"
-                csrf_token community.id chat_url (esc c.slug)
+              (Html.template "<form action='/join' method='POST'>%s<input type='hidden' name='community_id' value='%s'><input type='hidden' name='redirect_to' value='%s'><button type='submit' class='btn btn--primary btn--block'>Join &amp; open #%s &rarr;</button></form>"
+  [ csrf_token
+  ; Html.int (community.id)
+  ; (Html.text chat_url)
+  ; (Html.text (c.slug)) ])
         | None ->
             (* No channels (shouldn't happen post default-structure) — fall back to a section feed. *)
             (match target_section with
              | Some ((s : Section_store.community_section), _, _) ->
-                 let feed_url = Printf.sprintf "/c/%s/s/%s" slug (esc s.slug) in
+                 let feed_url = Printf.sprintf "/c/%s/s/%s" (community.slug) (s.slug) in
                  if is_member || community.visibility = Community_types.Community_private then
-                   Printf.sprintf "<a class='btn btn--primary' href='%s'>Open %s &rarr;</a>"
-                     feed_url (esc s.name)
+                   (Html.template "<a class='btn btn--primary' href='%s'>Open %s &rarr;</a>"
+  [ (Html.text feed_url)
+  ; (Html.text (s.name)) ])
                  else
-                   Printf.sprintf "<form action='/join' method='POST'>%s<input type='hidden' name='community_id' value='%d'><input type='hidden' name='redirect_to' value='%s'><button type='submit' class='btn btn--primary btn--block'>Join &amp; open %s &rarr;</button></form>"
-                     csrf_token community.id feed_url (esc s.name)
+                   (Html.template "<form action='/join' method='POST'>%s<input type='hidden' name='community_id' value='%s'><input type='hidden' name='redirect_to' value='%s'><button type='submit' class='btn btn--primary btn--block'>Join &amp; open %s &rarr;</button></form>"
+  [ csrf_token
+  ; Html.int (community.id)
+  ; (Html.text feed_url)
+  ; (Html.text (s.name)) ])
              | None when orphaned_count > 0 ->
-                 Printf.sprintf "<a class='btn btn--primary' href='/c/%s/s/uncategorized'>Browse threads &rarr;</a>"
-                   slug
-             | None -> ""))
+                 (Html.template "<a class='btn btn--primary' href='/c/%s/s/uncategorized'>Browse threads &rarr;</a>"
+  [ slug ])
+             | None -> Html.empty))
   in
 
   (* The primary CTA already handles joining for non-members, so the secondary slot only needs
@@ -658,14 +764,18 @@ let community_overview_page ?user ?(noindex=false) ?(connected_projects_count=0)
   let membership_btn =
     match user with
     | Some _ when is_member ->
-        Printf.sprintf "<form action='/leave' method='POST'>%s<input type='hidden' name='community_id' value='%d'><input type='hidden' name='redirect_to' value='/c/%s'><button type='submit' class='btn btn--secondary btn--block launch-leave'>Leave</button></form>" csrf_token community.id slug
-    | _ -> ""
+        (Html.template "<form action='/leave' method='POST'>%s<input type='hidden' name='community_id' value='%s'><input type='hidden' name='redirect_to' value='/c/%s'><button type='submit' class='btn btn--secondary btn--block launch-leave'>Leave</button></form>"
+  [ csrf_token
+  ; Html.int (community.id)
+  ; slug ])
+    | _ -> Html.empty
   in
 
   let settings_btn =
     if is_current_user_mod || is_admin then
-      Printf.sprintf "<a class='btn btn--secondary' href='/c/%s/settings'>&#9881; Settings</a>" slug
-    else ""
+      (Html.template "<a class='btn btn--secondary' href='/c/%s/settings'>&#9881; Settings</a>"
+  [ slug ])
+    else Html.empty
   in
 
   (* --- community sidebar: real navigation only. Channels and sections keep
@@ -673,78 +783,83 @@ let community_overview_page ?user ?(noindex=false) ?(connected_projects_count=0)
      Moderation log is intentionally public; Settings and Home requests
      render only under the exact gates their handlers enforce. *)
   let side_head =
-    Printf.sprintf
-      "<a class='sidebar__head' href='/c/%s'>%s<span class='launch-side-id'><span class='sidebar__name'>%s</span><span class='sidebar__slug'>/c/%s</span></span></a>"
-      slug (face "avatar--32") (esc community.name) slug
+    (Html.template "<a class='sidebar__head' href='/c/%s'>%s<span class='launch-side-id'><span class='sidebar__name'>%s</span><span class='sidebar__slug'>/c/%s</span></span></a>"
+  [ slug
+  ; (face (Html.static "avatar--32"))
+  ; (Html.text (community.name))
+  ; slug ])
   in
   let nav_overview =
-    Printf.sprintf
-      "<a class='navitem navitem--pad navitem--active' href='/c/%s'><span class='navitem__sigil navitem__sigil--box'>&#8962;</span>Overview</a>"
-      slug
+    (Html.template "<a class='navitem navitem--pad navitem--active' href='/c/%s'><span class='navitem__sigil navitem__sigil--box'>&#8962;</span>Overview</a>"
+  [ slug ])
   in
   (* Visibility state, stated factually where the viewer already is. Public
      is the default and carries no marker. *)
   let vis_note =
     if community.visibility = Community_types.Community_private then
-      "<div class='launch-side-vis'>private community</div>"
-    else ""
+      (Html.static "<div class='launch-side-vis'>private community</div>")
+    else Html.empty
   in
   let nav_live =
-    if channels = [] then ""
+    if channels = [] then Html.empty
     else
-      "<p class='kicker sidebar__group'>Live</p>"
-      ^ String.concat "" (List.map (fun (c : Channel_store.channel) ->
-          Printf.sprintf
-            "<a class='navitem' href='/c/%s/ch/%s'><span class='navitem__sigil navitem__sigil--live'>#</span>%s</a>"
-            slug (esc c.slug) (esc c.slug))
+      (Html.static "<p class='kicker sidebar__group'>Live</p>")
+      ++ Html.concat (List.map (fun (c : Channel_store.channel) ->
+          (Html.template "<a class='navitem' href='/c/%s/ch/%s'><span class='navitem__sigil navitem__sigil--live'>#</span>%s</a>"
+  [ slug
+  ; (Html.text (c.slug))
+  ; (Html.text (c.slug)) ]))
           channels)
   in
   let nav_sections_items =
     List.map (fun ((s : Section_store.community_section), post_count, _) ->
-        Printf.sprintf
-          "<a class='navitem' href='/c/%s/s/%s'><span class='navitem__sigil navitem__sigil--live'>&sect;</span>%s<span class='navitem__trail'>%d</span></a>"
-          slug (esc s.slug) (esc s.name) post_count)
+        (Html.template "<a class='navitem' href='/c/%s/s/%s'><span class='navitem__sigil navitem__sigil--live'>&sect;</span>%s<span class='navitem__trail'>%s</span></a>"
+  [ slug
+  ; (Html.text (s.slug))
+  ; (Html.text (s.name))
+  ; Html.int (post_count) ]))
       section_stats
     @ (if orphaned_count > 0 then
-         [ Printf.sprintf
-             "<a class='navitem' href='/c/%s/s/uncategorized'><span class='navitem__sigil navitem__sigil--live'>&sect;</span>Uncategorized<span class='navitem__trail'>%d</span></a>"
-             slug orphaned_count ]
+         [ (Html.template "<a class='navitem' href='/c/%s/s/uncategorized'><span class='navitem__sigil navitem__sigil--live'>&sect;</span>Uncategorized<span class='navitem__trail'>%s</span></a>"
+  [ slug
+  ; Html.int (orphaned_count) ]) ]
        else [])
   in
   let nav_knowledge =
-    if nav_sections_items = [] then ""
-    else "<p class='kicker sidebar__group'>Knowledge</p>" ^ String.concat "" nav_sections_items
+    if nav_sections_items = [] then Html.empty
+    else (Html.static "<p class='kicker sidebar__group'>Knowledge</p>") ++ Html.concat nav_sections_items
   in
   let nav_network =
-    "<p class='kicker sidebar__group'>Network</p>"
-    ^ Printf.sprintf
-        "<a class='navitem navitem--pad' href='/c/%s/modlog'><span class='navitem__sigil navitem__sigil--box'>&#9776;</span>Moderation log</a>"
-        slug
-    ^ (if is_current_user_top_mod || is_admin then
+    (Html.static "<p class='kicker sidebar__group'>Network</p>")
+    ++ (Html.template "<a class='navitem navitem--pad' href='/c/%s/modlog'><span class='navitem__sigil navitem__sigil--box'>&#9776;</span>Moderation log</a>"
+  [ slug ])
+    ++ (if is_current_user_top_mod || is_admin then
          (* Same top_mod-or-admin gate the review-queue handler and the
             settings nav apply to /c/:slug/project-home-requests. *)
-         Printf.sprintf
-           "<a class='navitem navitem--pad' href='/c/%s/project-home-requests'><span class='navitem__sigil navitem__sigil--box navitem__sigil--project'>&#9672;</span>Home requests</a>"
-           slug
-       else "")
-    ^ (if is_current_user_top_mod || is_admin then
+         (Html.template "<a class='navitem navitem--pad' href='/c/%s/project-home-requests'><span class='navitem__sigil navitem__sigil--box navitem__sigil--project'>&#9672;</span>Home requests</a>"
+  [ slug ])
+       else Html.empty)
+    ++ (if is_current_user_top_mod || is_admin then
          (* Same top_mod-or-admin gate the connections read model applies in
             SQL to /c/:slug/settings/connections. The link grants nothing —
             that surface reauthorizes from scratch. *)
-         Printf.sprintf
-           "<a class='navitem navitem--pad' href='/c/%s/settings/connections'><span class='navitem__sigil navitem__sigil--box'>&#8644;</span>Connections</a>"
-           slug
-       else "")
-    ^ (if is_current_user_mod || is_admin then
-         Printf.sprintf
-           "<a class='navitem navitem--pad' href='/c/%s/settings'><span class='navitem__sigil navitem__sigil--box'>&#9881;</span>Settings</a>"
-           slug
-       else "")
+         (Html.template "<a class='navitem navitem--pad' href='/c/%s/settings/connections'><span class='navitem__sigil navitem__sigil--box'>&#8644;</span>Connections</a>"
+  [ slug ])
+       else Html.empty)
+    ++ (if is_current_user_mod || is_admin then
+         (Html.template "<a class='navitem navitem--pad' href='/c/%s/settings'><span class='navitem__sigil navitem__sigil--box'>&#9881;</span>Settings</a>"
+  [ slug ])
+       else Html.empty)
   in
   let sidebar =
-    Printf.sprintf
-      "<aside class='sidebar' aria-label='%s community'>%s<div class='sidebar__body'>%s%s%s%s%s</div></aside>"
-      (esc community.name) side_head nav_overview vis_note nav_live nav_knowledge nav_network
+    (Html.template "<aside class='sidebar' aria-label='%s community'>%s<div class='sidebar__body'>%s%s%s%s%s</div></aside>"
+  [ (Html.text (community.name))
+  ; side_head
+  ; nav_overview
+  ; vis_note
+  ; nav_live
+  ; nav_knowledge
+  ; nav_network ])
   in
 
   (* --- header band. Badges are facts the record already states: the network
@@ -752,50 +867,58 @@ let community_overview_page ?user ?(noindex=false) ?(connected_projects_count=0)
      restrained visibility badge. Public is unmarked. *)
   let badges =
     (if community.is_network_community then
-       " <span class='badge badge--network badge--lg'>&#9672; Network community</span>"
-     else "")
-    ^ (if community.visibility = Community_types.Community_private then
-         " <span class='badge badge--plain badge--lg'>Private</span>"
-       else "")
+       (Html.static " <span class='badge badge--network badge--lg'>&#9672; Network community</span>")
+     else Html.empty)
+    ++ (if community.visibility = Community_types.Community_private then
+         (Html.static " <span class='badge badge--plain badge--lg'>Private</span>")
+       else Html.empty)
   in
   let chead =
-    Printf.sprintf
-      "<div class='chead'><div class='chead__row'>%s<div class='launch-chead-id'>\
+    (Html.template "<div class='chead'><div class='chead__row'>%s<div class='launch-chead-id'>\
        <div class='titleline'><h1 class='chead__title'>%s</h1><span class='chead__slug'>/c/%s</span>%s</div>\
        <p class='chead__desc'>%s</p>\
-       <p class='chead__stats'>%d section%s &middot; %d thread%s &middot; %d channel%s</p>\
+       <p class='chead__stats'>%s section%s &middot; %s thread%s &middot; %s channel%s</p>\
        </div><div class='chead__actions'>%s%s%s</div></div></div>"
-      (face "avatar--62") (esc community.name) slug badges
-      (esc (Option.value ~default:"No description." community.description))
-      section_count (plural section_count)
-      thread_count (plural thread_count)
-      channel_count (plural channel_count)
-      primary_cta membership_btn settings_btn
+  [ (face (Html.static "avatar--62"))
+  ; (Html.text (community.name))
+  ; slug
+  ; badges
+  ; (Html.text ((Option.value ~default:"No description." community.description)))
+  ; Html.int (section_count)
+  ; (Html.text (plural section_count))
+  ; Html.int (thread_count)
+  ; (Html.text (plural thread_count))
+  ; Html.int (channel_count)
+  ; (Html.text (plural channel_count))
+  ; primary_cta
+  ; membership_btn
+  ; settings_btn ])
   in
 
   (* --- forum sections: flat panel rows over real per-section counts. --- *)
   let render_section ((s : Section_store.community_section), post_count, _last_activity) =
-    Printf.sprintf
-      "<a class='project-row launch-secrow' href='/c/%s/s/%s'><span class='launch-sec-sigil'>&sect;</span><span class='launch-sec-main'><span class='launch-sec-name'>%s</span>%s</span><span class='launch-sec-count'>%d</span></a>"
-      slug (esc s.slug) (esc s.name)
-      (match s.description with
-       | Some d when d <> "" -> Printf.sprintf "<span class='launch-sec-desc'>%s</span>" (esc d)
-       | _ -> "")
-      post_count
+    (Html.template "<a class='project-row launch-secrow' href='/c/%s/s/%s'><span class='launch-sec-sigil'>&sect;</span><span class='launch-sec-main'><span class='launch-sec-name'>%s</span>%s</span><span class='launch-sec-count'>%s</span></a>"
+  [ slug
+  ; (Html.text (s.slug))
+  ; (Html.text (s.name))
+  ; (match s.description with
+       | Some d when d <> "" -> (Html.template "<span class='launch-sec-desc'>%s</span>"
+  [ (Html.text (d)) ])
+       | _ -> Html.empty)
+  ; Html.int (post_count) ])
   in
   let uncategorized_row =
     if orphaned_count > 0 then
-      Printf.sprintf
-        "<a class='project-row launch-secrow' href='/c/%s/s/uncategorized'><span class='launch-sec-sigil'>&sect;</span><span class='launch-sec-main'><span class='launch-sec-name'>Uncategorized</span><span class='launch-sec-desc'>Posts from deleted sections</span></span><span class='launch-sec-count'>%d</span></a>"
-        slug orphaned_count
-    else ""
+      (Html.template "<a class='project-row launch-secrow' href='/c/%s/s/uncategorized'><span class='launch-sec-sigil'>&sect;</span><span class='launch-sec-main'><span class='launch-sec-name'>Uncategorized</span><span class='launch-sec-desc'>Posts from deleted sections</span></span><span class='launch-sec-count'>%s</span></a>"
+  [ slug
+  ; Html.int (orphaned_count) ])
+    else Html.empty
   in
-  let sections_inner = String.concat "" (List.map render_section section_stats) ^ uncategorized_row in
+  let sections_inner = Html.concat (List.map render_section section_stats) ++ uncategorized_row in
   let sections_panel =
-    Printf.sprintf
-      "<section class='panel'><div class='section-head'><span class='kicker'>Forum sections</span><span class='count-pill'>%d</span></div>%s</section>"
-      section_count
-      (if sections_inner = "" then "<div class='empty--inline'>No sections yet.</div>" else sections_inner)
+    (Html.template "<section class='panel'><div class='section-head'><span class='kicker'>Forum sections</span><span class='count-pill'>%s</span></div>%s</section>"
+  [ Html.int (section_count)
+  ; (if sections_inner = Html.empty then (Html.static "<div class='empty--inline'>No sections yet.</div>") else sections_inner) ])
   in
 
   (* --- recent durable knowledge: real newest rows from the same
@@ -806,9 +929,9 @@ let community_overview_page ?user ?(noindex=false) ?(connected_projects_count=0)
      shows the placement's destination section, and carries the compact
      "Shared from" provenance. --- *)
   let recent_panel =
-    if recent_posts = [] then ""
+    if recent_posts = [] then Html.empty
     else
-      let rows = String.concat "" (List.map (fun (item : Post_types.feed_item) ->
+      let rows = Html.concat (List.map (fun (item : Post_types.feed_item) ->
         let p = item.fi_post in
         let href = match item.fi_shared with
           | Some _ -> Post_cards.canonical_thread_path community.slug p.id p.title
@@ -818,76 +941,78 @@ let community_overview_page ?user ?(noindex=false) ?(connected_projects_count=0)
           | None -> p.section_name in
         let shared_note = match item.fi_shared with
           | Some ctx ->
-              Printf.sprintf "<span class='sth-shared-from'>&#8644; Shared from %s</span>"
-                (esc ctx.fs_origin_name)
-          | None -> "" in
-        Printf.sprintf
-          "<a class='project-row launch-postrow' href='%s'>%s<span class='launch-post-title'>%s</span><span class='launch-post-foot'>&#9650; %d &middot; by %s &middot; %s &middot; &#128172; %d%s</span></a>"
-          (esc href)
-          (match section_name with
-           | Some n when n <> "" -> Printf.sprintf "<span class='launch-post-meta'><span class='launch-post-sec'>&sect; %s</span></span>" (esc n)
-           | _ -> "")
-          (esc p.title) p.score (esc p.username) (Components.time_ago p.created_at) p.comment_count
-          (if shared_note = "" then "" else " &middot; " ^ shared_note))
+              (Html.template "<span class='sth-shared-from'>&#8644; Shared from %s</span>"
+  [ (Html.text (ctx.fs_origin_name)) ])
+          | None -> Html.empty in
+        (Html.template "<a class='project-row launch-postrow' href='%s'>%s<span class='launch-post-title'>%s</span><span class='launch-post-foot'>&#9650; %s &middot; by %s &middot; %s &middot; &#128172; %s%s</span></a>"
+  [ (Html.text (href))
+  ; (match section_name with
+           | Some n when n <> "" -> (Html.template "<span class='launch-post-meta'><span class='launch-post-sec'>&sect; %s</span></span>"
+  [ (Html.text (n)) ])
+           | _ -> Html.empty)
+  ; (Html.text (p.title))
+  ; Html.int (p.score)
+  ; (Html.text (p.username))
+  ; (Html.text (Components.time_ago p.created_at))
+  ; Html.int (p.comment_count)
+  ; (if shared_note = Html.empty then Html.empty else (Html.static " &middot; ") ++ shared_note) ]))
         recent_posts) in
-      Printf.sprintf
-        "<section class='panel'><div class='section-head'><span class='kicker'>Recent durable knowledge</span></div>%s</section>"
-        rows
+      (Html.template "<section class='panel'><div class='section-head'><span class='kicker'>Recent durable knowledge</span></div>%s</section>"
+  [ rows ])
   in
 
   (* --- live channels: real data only, each row links into the SSR chat channel. No fake
      online/talking counts. --- *)
   let channels_panel =
-    if channels = [] then ""
+    if channels = [] then Html.empty
     else
-      let rows = String.concat "" (List.map (fun (c : Channel_store.channel) ->
-        Printf.sprintf
-          "<a class='project-row launch-chanrow' href='/c/%s/ch/%s'><span class='launch-chan-line'><span class='launch-chan-hash'>#</span> %s</span>%s</a>"
-          slug (esc c.slug) (esc c.slug)
-          (match c.topic with
-           | Some t when t <> "" -> Printf.sprintf "<span class='launch-chan-topic'>%s</span>" (esc t)
-           | _ -> ""))
+      let rows = Html.concat (List.map (fun (c : Channel_store.channel) ->
+        (Html.template "<a class='project-row launch-chanrow' href='/c/%s/ch/%s'><span class='launch-chan-line'><span class='launch-chan-hash'>#</span> %s</span>%s</a>"
+  [ slug
+  ; (Html.text (c.slug))
+  ; (Html.text (c.slug))
+  ; (match c.topic with
+           | Some t when t <> "" -> (Html.template "<span class='launch-chan-topic'>%s</span>"
+  [ (Html.text (t)) ])
+           | _ -> Html.empty) ]))
         channels) in
-      Printf.sprintf
-        "<section class='panel'><div class='section-head'><span class='kicker'>Live channels</span></div>%s</section>"
-        rows
+      (Html.template "<section class='panel'><div class='section-head'><span class='kicker'>Live channels</span></div>%s</section>"
+  [ rows ])
   in
 
   (* --- moderators. The page knows usernames only (no per-mod roles here), so
      rows carry no role badges — nothing is invented. Moderator management
      stays behind the gated Settings surface. *)
   let mods_inner =
-    if mod_usernames = [] then "<div class='empty--inline'>No moderators yet.</div>"
+    if mod_usernames = [] then (Html.static "<div class='empty--inline'>No moderators yet.</div>")
     else
-      Printf.sprintf "<div class='launch-mods'>%s</div>"
-        (String.concat "" (List.map (fun u ->
+      (Html.template "<div class='launch-mods'>%s</div>"
+  [ (Html.concat (List.map (fun u ->
           let initial =
-            if String.length u > 0 then esc (String.sub (String.uppercase_ascii u) 0 1) else "?" in
-          Printf.sprintf
-            "<a class='launch-modrow' href='/u/%s'><span class='avatar avatar--22 avatar--mod'>%s</span><span class='launch-mod-name'>u/%s</span></a>"
-            (esc u) initial (esc u)) mod_usernames))
+            if String.length u > 0 then (Html.text ((String.sub (String.uppercase_ascii u) 0 1))) else (Html.static "?") in
+          (Html.template "<a class='launch-modrow' href='/u/%s'><span class='avatar avatar--22 avatar--mod'>%s</span><span class='launch-mod-name'>u/%s</span></a>"
+  [ (Html.text (u))
+  ; initial
+  ; (Html.text (u)) ])) mod_usernames)) ])
   in
   let mods_panel =
-    Printf.sprintf
-      "<section class='panel'><div class='section-head'><span class='kicker'>Moderators</span></div>%s</section>"
-      mods_inner
+    (Html.template "<section class='panel'><div class='section-head'><span class='kicker'>Moderators</span></div>%s</section>"
+  [ mods_inner ])
   in
 
   let rules_panel = match community.rules with
     | Some r when r <> "" ->
-        Printf.sprintf
-          "<section class='panel'><div class='section-head'><span class='kicker'>Rules</span></div><div class='panel__body launch-rules'>%s</div></section>"
-          (esc r)
-    | _ -> ""
+        (Html.template "<section class='panel'><div class='section-head'><span class='kicker'>Rules</span></div><div class='panel__body launch-rules'>%s</div></section>"
+  [ (Html.text (r)) ])
+    | _ -> Html.empty
   in
 
   (* Public moderation log card. /c/:slug/modlog is intentionally public (no permission check in
      modlog_handler) so the community's moderation history is transparent; this is a plain link —
      no embedded log, no new query. *)
   let modlog_panel =
-    Printf.sprintf
-      "<section class='panel'><div class='section-head'><span class='kicker'>Moderation log</span></div><div class='panel__body'><p class='launch-modlog-desc'>A public record of moderation actions in this community, kept open for transparency.</p><a class='btn--link mono launch-modlog-link' href='/c/%s/modlog'>View moderation log &rarr;</a></div></section>"
-      slug
+    (Html.template "<section class='panel'><div class='section-head'><span class='kicker'>Moderation log</span></div><div class='panel__body'><p class='launch-modlog-desc'>A public record of moderation actions in this community, kept open for transparency.</p><a class='btn--link mono launch-modlog-link' href='/c/%s/modlog'>View moderation log &rarr;</a></div></section>"
+  [ slug ])
   in
 
   (* Optional banner — rendered only when a safe banner_url is present; absent => no block at
@@ -895,10 +1020,11 @@ let community_overview_page ?user ?(noindex=false) ?(connected_projects_count=0)
   let banner_html =
     match community.banner_url with
     | Some url when String.trim url <> "" ->
-        (match Components.safe_img_src url with
-         | "#" -> ""
-         | src -> Printf.sprintf "<div class='launch-banner'><img src='%s' class='launch-banner-img' alt=''></div>" src)
-    | _ -> ""
+        (match Html.image_src_opt (url) with
+         | None -> Html.empty
+         | Some src -> (Html.template "<div class='launch-banner'><img src='%s' class='launch-banner-img' alt=''></div>"
+  [ src ]))
+    | _ -> Html.empty
   in
 
   (* Compact network entry point. Two stable navigation rows — a zero count is
@@ -909,9 +1035,11 @@ let community_overview_page ?user ?(noindex=false) ?(connected_projects_count=0)
      from assistive technology. Both rows lead to the same public page, at the
      block they name. *)
   let network_row ~anchor ~label ~count =
-    Printf.sprintf
-      "<a class='project-row launch-netrow' href='/c/%s/network#%s'><span class='launch-net-label'>%s</span><span class='launch-net-count'>%d</span><span class='launch-net-go' aria-hidden='true'>&rarr;</span></a>"
-      slug anchor label count
+    (Html.template "<a class='project-row launch-netrow' href='/c/%s/network#%s'><span class='launch-net-label'>%s</span><span class='launch-net-count'>%s</span><span class='launch-net-go' aria-hidden='true'>&rarr;</span></a>"
+  [ slug
+  ; anchor
+  ; label
+  ; Html.int (count) ])
   in
   (* Same top-mod-or-admin gate the sidebar applies to this exact destination,
      and the same non-authorization: the connections surface re-decides in SQL.
@@ -919,19 +1047,17 @@ let community_overview_page ?user ?(noindex=false) ?(connected_projects_count=0)
      is only a way in. *)
   let network_cta =
     if is_current_user_top_mod || is_admin then
-      Printf.sprintf
-        "<div class='panel__body launch-net-cta'><a class='btn--link mono' href='/c/%s/settings/connections/new'>Connect a community &rarr;</a></div>"
-        slug
-    else ""
+      (Html.template "<div class='panel__body launch-net-cta'><a class='btn--link mono' href='/c/%s/settings/connections/new'>Connect a community &rarr;</a></div>"
+  [ slug ])
+    else Html.empty
   in
   let network_panel =
-    Printf.sprintf
-      "<section class='panel'><div class='section-head'><span class='kicker'>Network</span></div>%s%s%s</section>"
-      (network_row ~anchor:"projects" ~label:"Connected projects"
+    (Html.template "<section class='panel'><div class='section-head'><span class='kicker'>Network</span></div>%s%s%s</section>"
+  [ (network_row ~anchor:(Html.static "projects") ~label:(Html.static "Connected projects")
          ~count:connected_projects_count)
-      (network_row ~anchor:"communities" ~label:"Connected communities"
+  ; (network_row ~anchor:(Html.static "communities") ~label:(Html.static "Connected communities")
          ~count:connected_communities_count)
-      network_cta
+  ; network_cta ])
   in
 
   (* Group sibling panels under one wrapper. Absent panels never leave a frame
@@ -939,17 +1065,16 @@ let community_overview_page ?user ?(noindex=false) ?(connected_projects_count=0)
      its own rather than inside a one-child group — which is also why the CSS
      needs no count-dependent rule to fill a half-empty track. *)
   let group cls panels =
-    match List.filter (fun p -> p <> "") panels with
-    | [] -> ""
+    match List.filter (fun p -> not (Html.is_empty p)) panels with
+    | [] -> Html.empty
     | [ only ] -> only
-    | present ->
-        Printf.sprintf "<div class='%s'>%s</div>" cls (String.concat "" present)
+    | present -> Html.template "<div class='%s'>%s</div>" [ cls; Html.concat present ]
   in
   (* Community spaces: live chat and durable forum structure are the two ways to
      take part here, so they are one composition of equal siblings — channels
      left, sections right — rather than two panels that happened to land in
      different columns. *)
-  let spaces_block = group "launch-spaces" [ channels_panel; sections_panel ] in
+  let spaces_block = group (Html.static "launch-spaces") [ channels_panel; sections_panel ] in
 
   (* The overview's right column is page content inside the main scroller
      (two-col), not the shell's `.aside` pane — exactly the reference's
@@ -957,11 +1082,15 @@ let community_overview_page ?user ?(noindex=false) ?(connected_projects_count=0)
      its own rules, then governance (moderators + the public moderation log),
      and last the way out to its external network. *)
   let content =
-    Printf.sprintf
-      "<div class='scroll'>%s%s<div class='container launch-overview-body'><div class='two-col'><div class='stack'>%s%s</div><div class='stack stack--sm'>%s%s%s%s</div></div></div></div>"
-      banner_html chead
-      spaces_block recent_panel
-      rules_panel mods_panel modlog_panel network_panel
+    (Html.template "<div class='scroll'>%s%s<div class='container launch-overview-body'><div class='two-col'><div class='stack'>%s%s</div><div class='stack stack--sm'>%s%s%s%s</div></div></div></div>"
+  [ banner_html
+  ; chead
+  ; spaces_block
+  ; recent_panel
+  ; rules_panel
+  ; mods_panel
+  ; modlog_panel
+  ; network_panel ])
   in
   Community_shell.launch_community_page ?user ~noindex ~request ~rail_communities
     ~community ~sidebar ~page_class:"launch-community-overview" ~title:community.name ~content ()

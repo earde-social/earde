@@ -1,3 +1,5 @@
+open Html.Infix
+
 (* Pure helpers for "Start thread from chat". Extracted from the handler so the
    title/body prefill, checkbox-id parsing, and channel-row marker classification are
    unit-testable without a DB or a live request (see test/test_earde.ml). Placed here,
@@ -148,9 +150,8 @@ let community_channel_shell_page ?user ?realtime_token ?(noindex=false) ~is_memb
     ~(channels : Channel_store.channel list) ~(sections : Section_store.community_section list)
     ~(channel : Channel_store.channel) ~(messages : (Chat_store.chat_message * string option) list)
     ~(community : Community_types.community) request =
-  let esc = Components.html_escape in
-  let csrf_token = Dream.csrf_tag request in
-  let channel_url = Printf.sprintf "/c/%s/ch/%s" (esc community.slug) (esc channel.slug) in
+  let csrf_token = Csrf_field.tag request in
+  let channel_url = Printf.sprintf "/c/%s/ch/%s" (community.slug) (channel.slug) in
 
   (* Launch community sidebar (pass-8 grammar, channel variant): identity
      head, Overview link, factual visibility marker, Live channels with the
@@ -167,67 +168,79 @@ let community_channel_shell_page ?user ?realtime_token ?(noindex=false) ~is_memb
   let side_face =
     match community.avatar_url with
     | Some url when String.trim url <> "" ->
-        (match Components.safe_img_src url with
-         | "#" ->
-             Printf.sprintf "<span class='avatar avatar--32' style='background:%s'>%s</span>"
-               (Page_shell.launch_tile_color community.slug) (esc tile_glyph)
-         | src ->
-             Printf.sprintf "<span class='avatar avatar--32'><img class='launch-avatar-img' src='%s' alt=''></span>" src)
+        (match Html.image_src_opt (url) with
+         | None ->
+             (Html.template "<span class='avatar avatar--32' style='background:%s'>%s</span>"
+  [ (Html.text (Page_shell.launch_tile_color community.slug))
+  ; (Html.text (tile_glyph)) ])
+         | Some src ->
+             (Html.template "<span class='avatar avatar--32'><img class='launch-avatar-img' src='%s' alt=''></span>"
+  [ src ]))
     | _ ->
-        Printf.sprintf "<span class='avatar avatar--32' style='background:%s'>%s</span>"
-          (Page_shell.launch_tile_color community.slug) (esc tile_glyph)
+        (Html.template "<span class='avatar avatar--32' style='background:%s'>%s</span>"
+  [ (Html.text (Page_shell.launch_tile_color community.slug))
+  ; (Html.text (tile_glyph)) ])
   in
   let side_head =
-    Printf.sprintf
-      "<a class='sidebar__head' href='/c/%s'>%s<span class='launch-side-id'><span class='sidebar__name'>%s</span><span class='sidebar__slug'>/c/%s</span></span></a>"
-      (esc community.slug) side_face (esc community.name) (esc community.slug)
+    (Html.template "<a class='sidebar__head' href='/c/%s'>%s<span class='launch-side-id'><span class='sidebar__name'>%s</span><span class='sidebar__slug'>/c/%s</span></span></a>"
+  [ (Html.text (community.slug))
+  ; side_face
+  ; (Html.text (community.name))
+  ; (Html.text (community.slug)) ])
   in
   let nav_overview =
-    Printf.sprintf
-      "<a class='navitem navitem--pad' href='/c/%s'><span class='navitem__sigil navitem__sigil--box'>&#8962;</span>Overview</a>"
-      (esc community.slug)
+    (Html.template "<a class='navitem navitem--pad' href='/c/%s'><span class='navitem__sigil navitem__sigil--box'>&#8962;</span>Overview</a>"
+  [ (Html.text (community.slug)) ])
   in
   let vis_note =
     if community.visibility = Community_types.Community_private then
-      "<div class='launch-side-vis'>private community</div>"
-    else ""
+      (Html.static "<div class='launch-side-vis'>private community</div>")
+    else Html.empty
   in
   let nav_live =
-    if channels = [] then ""
+    if channels = [] then Html.empty
     else
-      "<p class='kicker sidebar__group'>Live</p>"
-      ^ String.concat "" (List.map (fun (c : Channel_store.channel) ->
+      (Html.static "<p class='kicker sidebar__group'>Live</p>")
+      ++ Html.concat (List.map (fun (c : Channel_store.channel) ->
           let cls = if c.slug = channel.slug then "navitem navitem--active" else "navitem" in
-          Printf.sprintf
-            "<a class='%s' href='/c/%s/ch/%s'><span class='navitem__sigil navitem__sigil--live'>#</span>%s</a>"
-            cls (esc community.slug) (esc c.slug) (esc c.slug))
+          (Html.template "<a class='%s' href='/c/%s/ch/%s'><span class='navitem__sigil navitem__sigil--live'>#</span>%s</a>"
+  [ (Html.text cls)
+  ; (Html.text (community.slug))
+  ; (Html.text (c.slug))
+  ; (Html.text (c.slug)) ]))
           channels)
   in
   let nav_knowledge =
-    if sections = [] then ""
+    if sections = [] then Html.empty
     else
-      "<p class='kicker sidebar__group'>Knowledge</p>"
-      ^ String.concat "" (List.map (fun (s : Section_store.community_section) ->
-          Printf.sprintf
-            "<a class='navitem' href='/c/%s/s/%s'><span class='navitem__sigil navitem__sigil--live'>&sect;</span>%s</a>"
-            (esc community.slug) (esc s.slug) (esc s.name))
+      (Html.static "<p class='kicker sidebar__group'>Knowledge</p>")
+      ++ Html.concat (List.map (fun (s : Section_store.community_section) ->
+          (Html.template "<a class='navitem' href='/c/%s/s/%s'><span class='navitem__sigil navitem__sigil--live'>&sect;</span>%s</a>"
+  [ (Html.text (community.slug))
+  ; (Html.text (s.slug))
+  ; (Html.text (s.name)) ]))
           sections)
   in
   let nav_network =
-    "<p class='kicker sidebar__group'>Network</p>"
-    ^ Printf.sprintf
-        "<a class='navitem navitem--pad' href='/c/%s/modlog'><span class='navitem__sigil navitem__sigil--box'>&#9776;</span>Moderation log</a>"
-        (esc community.slug)
+    (Html.static "<p class='kicker sidebar__group'>Network</p>")
+    ++ (Html.template "<a class='navitem navitem--pad' href='/c/%s/modlog'><span class='navitem__sigil navitem__sigil--box'>&#9776;</span>Moderation log</a>"
+  [ (Html.text (community.slug)) ])
   in
   let sidebar =
-    Printf.sprintf
-      "<aside class='sidebar' aria-label='%s community'>%s<div class='sidebar__body'>%s%s%s%s%s</div></aside>"
-      (esc community.name) side_head nav_overview vis_note nav_live nav_knowledge nav_network
+    (Html.template "<aside class='sidebar' aria-label='%s community'>%s<div class='sidebar__body'>%s%s%s%s%s</div></aside>"
+  [ (Html.text (community.name))
+  ; side_head
+  ; nav_overview
+  ; vis_note
+  ; nav_live
+  ; nav_knowledge
+  ; nav_network ])
   in
 
   let topic_html = match channel.topic with
-    | Some t when t <> "" -> Printf.sprintf "<span class='cs-ch-topic'>%s</span>" (esc t)
-    | _ -> ""
+    | Some t when t <> "" -> (Html.template "<span class='cs-ch-topic'>%s</span>"
+  [ (Html.text (t)) ])
+    | _ -> Html.empty
   in
   (* Shared cursors are opt-in and community-gated: the server decides whether
      the control exists at all (Features allow-list), so the browser can't
@@ -236,14 +249,14 @@ let community_channel_shell_page ?user ?realtime_token ?(noindex=false) ~is_memb
      itself only governs broadcasting; seeing others' cursors needs no opt-in. *)
   let share_control =
     if user <> None && Features.shared_cursors_enabled ~community_slug:community.slug then
-      Printf.sprintf
-        "<label class='cs-cursor-share' id='chat-cursor-share' data-community-slug='%s'><input type='checkbox' id='chat-cursor-share-toggle'>Share cursor</label>"
-        (esc community.slug)
-    else ""
+      (Html.template "<label class='cs-cursor-share' id='chat-cursor-share' data-community-slug='%s'><input type='checkbox' id='chat-cursor-share-toggle'>Share cursor</label>"
+  [ (Html.text (community.slug)) ])
+    else Html.empty
   in
-  let head = Printf.sprintf
-    "<div class='cs-main-head'><span class='cs-hash'>#</span><span>%s</span>%s%s</div>"
-    (esc channel.name) topic_html share_control
+  let head = (Html.template "<div class='cs-main-head'><span class='cs-hash'>#</span><span>%s</span>%s%s</div>"
+  [ (Html.text (channel.name))
+  ; topic_html
+  ; share_control ])
   in
 
   (* Stream oldest → newest (the DB read already returns ascending), so newest sits at the
@@ -256,8 +269,8 @@ let community_channel_shell_page ?user ?realtime_token ?(noindex=false) ~is_memb
       then String.uppercase_ascii (String.sub name 0 1) else "?"
     in
     let body =
-      if m.deleted_at <> None then "<span class='cs-msg-deleted'>[message deleted]</span>"
-      else esc m.content
+      if m.deleted_at <> None then (Html.static "<span class='cs-msg-deleted'>[message deleted]</span>")
+      else (Html.text (m.content))
     in
     (* Per-message thread action, from this message's thread-source links. A seed links
        to its thread ("Thread ->") and suppresses "Start thread". A message only
@@ -274,42 +287,58 @@ let community_channel_shell_page ?user ?realtime_token ?(noindex=false) ~is_memb
        message can't be promoted twice (the "Thread ->" marker below already links its thread).
        Referenced-only messages (Mk_referenced) are still startable. *)
     let already_promoted = match marker with Start_thread.Mk_seed _ -> true | _ -> false in
-    let promote_url = Printf.sprintf "/c/%s/ch/%s/messages/%Ld/start-thread" (esc community.slug) (esc channel.slug) m.id in
+    let promote_url = Printf.sprintf "/c/%s/ch/%s/messages/%Ld/start-thread" (community.slug) (channel.slug) m.id in
     let start_link =
       if can_start && m.deleted_at = None && m.user_id <> None && not already_promoted then
-        Printf.sprintf "<a class='cs-msg-start' href='%s' data-promote-url='%s'>Start thread</a>" promote_url promote_url
-      else "" in
+        (Html.template "<a class='cs-msg-start' href='%s' data-promote-url='%s'>Start thread</a>"
+  [ (Html.text promote_url)
+  ; (Html.text promote_url) ])
+      else Html.empty in
     (* Minute precision, matching chat_message_json, so SSR rows and rows the
        JS appends later (live, catch-up, composer response) display alike. *)
     let time_text = Start_thread.minute_of_ts m.created_at in
     let time_html =
-      if start_link = "" then Printf.sprintf "<span class='cs-msg-time'>%s</span>" (esc time_text)
-      else Printf.sprintf "<span class='cs-msg-time-slot'><span class='cs-msg-time'>%s</span>%s</span>" (esc time_text) start_link
+      if start_link = Html.empty then (Html.template "<span class='cs-msg-time'>%s</span>"
+  [ (Html.text (time_text)) ])
+      else (Html.template "<span class='cs-msg-time-slot'><span class='cs-msg-time'>%s</span>%s</span>"
+  [ (Html.text (time_text))
+  ; start_link ])
     in
     (* Provenance markers stay attached under the message text. Start thread is rendered
        in the meta row beside the timestamp so hover never changes message height. *)
     let action =
       match marker with
       | Start_thread.Mk_seed (post_id, title) ->
-          Printf.sprintf "<a class='cs-msg-thread' href='%s'>Started thread &rarr; %s</a>"
-            (Post_cards.canonical_thread_path community.slug post_id title) (esc (short title))
+          (Html.template "<a class='cs-msg-thread' href='%s'>Started thread &rarr; %s</a>"
+  [ (Html.text (Post_cards.canonical_thread_path community.slug post_id title))
+  ; (Html.text ((short title))) ])
       | Start_thread.Mk_referenced (post_id, title, count) ->
-          let extra = if count > 1 then Printf.sprintf " <span class='cs-msg-refmore'>+%d</span>" (count - 1) else "" in
-          Printf.sprintf "<a class='cs-msg-ref' href='%s'>Included in thread &rarr; %s</a>%s"
-            (Post_cards.canonical_thread_path community.slug post_id title) (esc (short title)) extra
-      | Start_thread.Mk_no_link -> ""
+          let extra = if count > 1 then (Html.template " <span class='cs-msg-refmore'>+%s</span>"
+  [ Html.int ((count - 1)) ]) else Html.empty in
+          (Html.template "<a class='cs-msg-ref' href='%s'>Included in thread &rarr; %s</a>%s"
+  [ (Html.text (Post_cards.canonical_thread_path community.slug post_id title))
+  ; (Html.text ((short title)))
+  ; extra ])
+      | Start_thread.Mk_no_link -> Html.empty
     in
-    let actions_row = if action = "" then "" else Printf.sprintf "<div class='cs-msg-actions'>%s</div>" action in
+    let actions_row = if action = Html.empty then Html.empty else (Html.template "<div class='cs-msg-actions'>%s</div>"
+  [ action ]) in
     (* id='msg-<id>' makes per-message deep links (#msg-…) work with JS off; the reverse-
        navigation highlighter also targets rows through it. *)
-    Printf.sprintf
-      "<div class='cs-msg' id='msg-%Ld' data-message-id='%Ld' data-has-thread='%s'><div class='cs-msg-avatar'>%s</div><div class='cs-msg-body'><div class='cs-msg-meta'><span class='cs-msg-author'>%s</span>%s</div><div class='cs-msg-text'>%s</div>%s</div></div>"
-      m.id m.id (if already_promoted then "true" else "false") (esc initial) (esc name) time_html body actions_row
+    (Html.template "<div class='cs-msg' id='msg-%s' data-message-id='%s' data-has-thread='%s'><div class='cs-msg-avatar'>%s</div><div class='cs-msg-body'><div class='cs-msg-meta'><span class='cs-msg-author'>%s</span>%s</div><div class='cs-msg-text'>%s</div>%s</div></div>"
+  [ Html.int64 (m.id)
+  ; Html.int64 (m.id)
+  ; (if already_promoted then (Html.static "true") else (Html.static "false"))
+  ; (Html.text (initial))
+  ; (Html.text (name))
+  ; time_html
+  ; body
+  ; actions_row ])
   in
   let messages_html =
     if messages = [] then
-      "<div class='cs-msg-empty'>No messages yet. Be the first to say something.</div>"
-    else String.concat "\n" (List.map render_message messages)
+      (Html.static "<div class='cs-msg-empty'>No messages yet. Be the first to say something.</div>")
+    else (Html.join (Html.static "\n")) (List.map render_message messages)
   in
 
   (* Composer is a real <form method=POST> (works with JS off). Three states:
@@ -318,18 +347,23 @@ let community_channel_shell_page ?user ?realtime_token ?(noindex=false) ~is_memb
   let composer =
     match user with
     | None ->
-        Printf.sprintf "<div class='cs-composer cs-composer-prompt'>Please <a href='/login'>log in</a> to chat in #%s.</div>"
-          (esc channel.slug)
+        (Html.template "<div class='cs-composer cs-composer-prompt'>Please <a href='/login'>log in</a> to chat in #%s.</div>"
+  [ (Html.text (channel.slug)) ])
     | Some _ when not is_member && community.visibility = Community_types.Community_private ->
         (* Private community: a non-member viewing this is an authorized mod/admin; they still
            can't chat without membership, but show no self-join button (Slice C). *)
-        "<div class='cs-composer cs-composer-prompt'><span>Only members can chat in this private community.</span></div>"
+        (Html.static "<div class='cs-composer cs-composer-prompt'><span>Only members can chat in this private community.</span></div>")
     | Some _ when not is_member ->
-        Printf.sprintf "<div class='cs-composer cs-composer-prompt'><span>Join this community to chat.</span><form action='/join' method='POST'>%s<input type='hidden' name='community_id' value='%d'><input type='hidden' name='redirect_to' value='%s'><button type='submit' class='cs-send'>Join &amp; chat</button></form></div>"
-          csrf_token community.id channel_url
+        (Html.template "<div class='cs-composer cs-composer-prompt'><span>Join this community to chat.</span><form action='/join' method='POST'>%s<input type='hidden' name='community_id' value='%s'><input type='hidden' name='redirect_to' value='%s'><button type='submit' class='cs-send'>Join &amp; chat</button></form></div>"
+  [ csrf_token
+  ; Html.int (community.id)
+  ; (Html.text channel_url) ])
     | Some _ ->
-        Printf.sprintf "<div class='cs-composer'><form action='/messages' method='POST'>%s<input type='hidden' name='community_slug' value='%s'><input type='hidden' name='channel_slug' value='%s'><textarea name='content' rows='1' maxlength='4000' placeholder='Message #%s' required></textarea><button type='submit' class='cs-send'>Send</button></form></div>"
-          csrf_token (esc community.slug) (esc channel.slug) (esc channel.slug)
+        (Html.template "<div class='cs-composer'><form action='/messages' method='POST'>%s<input type='hidden' name='community_slug' value='%s'><input type='hidden' name='channel_slug' value='%s'><textarea name='content' rows='1' maxlength='4000' placeholder='Message #%s' required></textarea><button type='submit' class='cs-send'>Send</button></form></div>"
+  [ csrf_token
+  ; (Html.text (community.slug))
+  ; (Html.text (channel.slug))
+  ; (Html.text (channel.slug)) ])
   in
 
   let realtime_socket_url =
@@ -341,8 +375,8 @@ let community_channel_shell_page ?user ?realtime_token ?(noindex=false) ~is_memb
         ""
   in
   let realtime_signed_token =
-    if realtime_socket_url = "" then ""
-    else Option.value realtime_token ~default:""
+    if realtime_socket_url = "" then Html.empty
+    else Html.text (Option.value realtime_token ~default:"")
   in
   (* Reverse navigation (?source_thread=<post_id>): an SSR-visible context notice plus
      data attributes the page JS uses to scroll to the first source message and flash the
@@ -350,19 +384,22 @@ let community_channel_shell_page ?user ?realtime_token ?(noindex=false) ~is_memb
      the links still work; without source_focus the page is byte-identical to before. *)
   let source_notice, source_data_attrs =
     match source_focus with
-    | None -> ("", "")
+    | None -> (Html.empty, Html.empty)
     | Some (post_id, post_title, highlight_ids) ->
         let thread_href = Post_cards.canonical_thread_path community.slug post_id post_title in
         let short_title =
           if String.length post_title > 60 then String.sub post_title 0 59 ^ "\xe2\x80\xa6" else post_title in
-        let notice = Printf.sprintf
-          "<div class='cs-source-notice'><span class='cs-source-notice-text'>Viewing the conversation promoted to <b>%s</b></span><span class='cs-source-notice-actions'><a href='%s'>&larr; Back to thread</a><a href='%s'>Jump to latest &darr;</a></span></div>"
-          (esc short_title) thread_href channel_url in
+        let notice = (Html.template "<div class='cs-source-notice'><span class='cs-source-notice-text'>Viewing the conversation promoted to <b>%s</b></span><span class='cs-source-notice-actions'><a href='%s'>&larr; Back to thread</a><a href='%s'>Jump to latest &darr;</a></span></div>"
+  [ (Html.text (short_title))
+  ; (Html.text thread_href)
+  ; (Html.text channel_url) ]) in
         let attrs = match highlight_ids with
-          | [] -> ""
+          | [] -> Html.empty
           | first :: _ ->
-              Printf.sprintf " data-source-anchor-id='%Ld' data-source-highlight-ids='%s'"
-                first (Start_thread.highlight_ids_attr highlight_ids) in
+              Html.template
+                " data-source-anchor-id='%s' data-source-highlight-ids='%s'"
+                [ Html.int64 first;
+                  Html.text (Start_thread.highlight_ids_attr highlight_ids) ] in
         (notice, attrs)
   in
   (* The typing row sits between the scrolling message body and the composer
@@ -371,40 +408,41 @@ let community_channel_shell_page ?user ?realtime_token ?(noindex=false) ~is_memb
      cs-chat-stage wraps the scroller with a sibling shared-cursor overlay
      covering its visible box; both are empty/inert without JS. *)
   let main =
-    Printf.sprintf
-      "%s%s<div class='cs-chat-stage'><div id='chat-live-root' class='cs-main-body cs-chat-body' data-channel-id='%d' data-can-start='%s' data-socket-url='%s' data-signed-token='%s'%s>%s</div><div class='cs-cursor-overlay' id='chat-cursor-overlay' aria-hidden='true'></div></div><div class='cs-typing' id='chat-typing' hidden></div>%s"
-      head
-      source_notice
-      channel.id
-      (if can_start then "true" else "false")
-      (Components.html_escape realtime_socket_url)
-      (Components.html_escape realtime_signed_token)
-      source_data_attrs
-      messages_html
-      composer
+    (Html.template "%s%s<div class='cs-chat-stage'><div id='chat-live-root' class='cs-main-body cs-chat-body' data-channel-id='%s' data-can-start='%s' data-socket-url='%s' data-signed-token='%s'%s>%s</div><div class='cs-cursor-overlay' id='chat-cursor-overlay' aria-hidden='true'></div></div><div class='cs-typing' id='chat-typing' hidden></div>%s"
+  [ head
+  ; source_notice
+  ; Html.int (channel.id)
+  ; (if can_start then (Html.static "true") else (Html.static "false"))
+  ; (Html.text (realtime_socket_url))
+  ; (realtime_signed_token)
+  ; source_data_attrs
+  ; messages_html
+  ; composer ])
   in
   (* Presence pane: markup (classes + every #chat-presence-* id chat_live.js
      fills) unchanged; only the outer wrapper is the launch `.aside--chat`
      column instead of the legacy `.cs-aside` grid cell. *)
   let presence_pane =
-    "<div class='cs-presence' id='chat-presence'>\
+    (Html.static "<div class='cs-presence' id='chat-presence'>\
        <div class='ca-label' id='chat-presence-heading'>In this channel</div>\
        <div class='cs-presence-status' id='chat-presence-status'>Connecting&#8230;</div>\
        <ul class='cs-presence-list' id='chat-presence-list'></ul>\
-     </div>"
+     </div>")
   in
-  let aside = Printf.sprintf "<aside class='aside aside--chat'>%s</aside>" presence_pane in
+  let aside = (Html.template "<aside class='aside aside--chat'>%s</aside>"
+  [ presence_pane ]) in
   let title = Printf.sprintf "#%s · %s" channel.name community.name in
   (* The parameterized reverse-navigation view canonicalizes to the clean channel URL so
      crawlers never index per-thread duplicates of the same channel page. *)
   let canonical_link =
-    if source_focus = None then ""
-    else Printf.sprintf "<link rel='canonical' href='%s'>" channel_url
+    if source_focus = None then Html.empty
+    else (Html.template "<link rel='canonical' href='%s'>"
+  [ (Html.text channel_url) ])
   in
   let head_extra =
-    canonical_link ^
-    "<script src='/static/js/phoenix.js' defer></script>\
-     <script src='/static/js/chat_live.js' defer></script>"
+    canonical_link ++
+    (Html.static "<script src='/static/js/phoenix.js' defer></script>\
+     <script src='/static/js/chat_live.js' defer></script>")
   in
   (* The complete <main> element, built here so the launch wrapper can never
      interpose a box: .cs-main is a flex column whose head / chat stage /
@@ -412,9 +450,9 @@ let community_channel_shell_page ?user ?realtime_token ?(noindex=false) ~is_memb
      community the ph-no-capture replay guard rides on this element itself
      (never a wrapper div — see the chat-layout regression). *)
   let main_el =
-    Printf.sprintf "<main class='%s'>%s</main>"
-      (if community.visibility = Community_types.Community_private then "cs-main ph-no-capture" else "cs-main")
-      main
+    (Html.template "<main class='%s'>%s</main>"
+  [ (if community.visibility = Community_types.Community_private then (Html.static "cs-main ph-no-capture") else (Html.static "cs-main"))
+  ; main ])
   in
   Community_shell.launch_community_surface_page ?user ~noindex ~request ~rail_communities
     ~head_extra ~aside ~community ~sidebar

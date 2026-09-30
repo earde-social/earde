@@ -1,3 +1,5 @@
+open Html.Infix
+
 (* The three /new-post states below (community chooser, join gate, creation
    form) moved onto the Cartographic launch shell (pass 15B). The create-*
    fragments are kept verbatim — every field name/id/value, the hidden
@@ -12,7 +14,7 @@
    the wrapper's [analytics_community], exactly what create_page received. *)
 let choose_community_page ?user ?request ?(rail_communities = []) (communities : Community_types.community list) =
   let render_option (community : Community_types.community) =
-    Printf.sprintf "
+    (Html.template "
     <a href='/new-post?community=%s' class='create-comm'>
         <span>
             <span class='create-comm-name'>%s</span>
@@ -20,12 +22,14 @@ let choose_community_page ?user ?request ?(rail_communities = []) (communities :
         </span>
         <span class='create-comm-go'>Post here &rarr;</span>
     </a>"
-    community.slug (Components.html_escape community.name) community.slug
+  [ (Html.text community.slug)
+  ; (Html.text (community.name))
+  ; (Html.text community.slug) ])
   in
 
-  let list_html = String.concat "\n" (List.map render_option communities) in
+  let list_html = (Html.join (Html.static "\n")) (List.map render_option communities) in
 
-  let content = Printf.sprintf "
+  let content = (Html.template "
     <div class='create-wrap'>
       <div class='create-panel'>
         <div class='create-head'>
@@ -42,15 +46,16 @@ let choose_community_page ?user ?request ?(rail_communities = []) (communities :
         </div>
       </div>
     </div>"
-    list_html
+  [ list_html ])
   in
   Page_shell.launch_app_page ?user ?request ~rail_communities
     ~page_class:"launch-post-creation" ~title:"Choose Community"
-    ~content:(Printf.sprintf "<div class='create-shell'>%s</div>" content) ()
+    ~content:(Html.template "<div class='create-shell'>%s</div>"
+  [ content ]) ()
 
 let join_to_post_page ?user ?(rail_communities = []) (community : Community_types.community) request =
-  let csrf_token = Dream.csrf_tag request in
-  let content = Printf.sprintf "
+  let csrf_token = Csrf_field.tag request in
+  let content = (Html.template "
     <div class='create-wrap create-wrap--narrow'>
       <div class='create-panel'>
         <div class='create-gate'>
@@ -64,7 +69,7 @@ let join_to_post_page ?user ?(rail_communities = []) (community : Community_type
 
             <form action='/join' method='POST' class='create-form'>
                 %s
-                <input type='hidden' name='community_id' value='%d'>
+                <input type='hidden' name='community_id' value='%s'>
                 <input type='hidden' name='redirect_to' value='/new-post?community=%s'>
 
                 <button type='submit' class='create-btn create-btn--block'>Join community &amp; post</button>
@@ -76,12 +81,16 @@ let join_to_post_page ?user ?(rail_communities = []) (community : Community_type
         </div>
       </div>
     </div>"
-    (Components.html_escape community.slug) csrf_token community.id community.slug
+  [ (Html.text (community.slug))
+  ; csrf_token
+  ; Html.int (community.id)
+  ; (Html.text community.slug) ])
   in
   Page_shell.launch_app_page ?user ~request ~rail_communities
     ~analytics_community:(community.id, community.visibility)
     ~page_class:"launch-post-creation" ~title:("Join " ^ community.name)
-    ~content:(Printf.sprintf "<div class='create-shell'>%s</div>" content) ()
+    ~content:(Html.template "<div class='create-shell'>%s</div>"
+  [ content ]) ()
 
 (* GET form for "Start thread from chat", on the Cartographic launch shell
    (pass 16A). The seed message is shown selected + locked; nearby messages are
@@ -96,22 +105,25 @@ let start_thread_form ?user ?error ?(rail_communities = [])
     ~(seed_id : int64) ~(candidates : (Chat_store.chat_message * string option) list)
     ~(sections : Section_store.community_section list)
     ~(default_section_id : int) ~default_title ~default_body request =
-  let esc = Components.html_escape in
-  let csrf_token = Dream.csrf_tag request in
+  let csrf_token = Csrf_field.tag request in
   let action = Printf.sprintf "/c/%s/ch/%s/messages/%Ld/start-thread"
-    (esc community.slug) (esc channel.slug) seed_id in
+    (community.slug) (channel.slug) seed_id in
   let section_dropdown =
-    if sections = [] then ""
+    if sections = [] then Html.empty
     else begin
-      let options = String.concat "\n" (List.map (fun (s : Section_store.community_section) ->
-        let selected = if s.section_id = default_section_id then " selected" else "" in
-        Printf.sprintf "<option value='%d'%s>%s</option>" s.section_id selected (esc s.name)
+      let options = (Html.join (Html.static "\n")) (List.map (fun (s : Section_store.community_section) ->
+        let selected = if s.section_id = default_section_id then Html.static " selected" else Html.empty in
+        (Html.template "<option value='%s'%s>%s</option>"
+  [ Html.int (s.section_id)
+  ; selected
+  ; (Html.text (s.name)) ])
       ) sections) in
-      Printf.sprintf "
+      (Html.template "
             <div class='create-field'>
                 <label class='create-label'>Section <span class='req'>*</span></label>
                 <select name='section_id' required class='create-select'>%s</select>
-            </div>" options
+            </div>"
+  [ options ])
     end
   in
   let render_candidate ((m : Chat_store.chat_message), (author : string option)) =
@@ -119,24 +131,30 @@ let start_thread_form ?user ?error ?(rail_communities = [])
     let is_seed = m.id = seed_id in
     let checkbox =
       if is_seed then
-        Printf.sprintf "<input type='checkbox' checked disabled class='st-check'><input type='hidden' name='seed' value='%Ld'>" m.id
+        (Html.template "<input type='checkbox' checked disabled class='st-check'><input type='hidden' name='seed' value='%s'>"
+  [ Html.int64 (m.id) ])
       else
-        Printf.sprintf "<input type='checkbox' name='msg_%Ld' value='on' class='st-check'>" m.id
+        (Html.template "<input type='checkbox' name='msg_%s' value='on' class='st-check'>"
+  [ Html.int64 (m.id) ])
     in
-    let seed_tag = if is_seed then "<span class='st-seed-tag'>seed</span>" else "" in
-    Printf.sprintf
-      "<label class='st-msg%s'>%s<span class='st-msg-body'><span class='st-msg-meta'><span class='st-msg-author'>%s</span><span class='st-msg-time'>%s</span>%s</span><span class='st-msg-text'>%s</span></span></label>"
-      (if is_seed then " st-msg--seed" else "")
-      checkbox (esc name) (esc m.created_at) seed_tag (esc m.content)
+    let seed_tag = if is_seed then (Html.static "<span class='st-seed-tag'>seed</span>") else Html.empty in
+    (Html.template "<label class='st-msg%s'>%s<span class='st-msg-body'><span class='st-msg-meta'><span class='st-msg-author'>%s</span><span class='st-msg-time'>%s</span>%s</span><span class='st-msg-text'>%s</span></span></label>"
+  [ (if is_seed then (Html.static " st-msg--seed") else Html.empty)
+  ; checkbox
+  ; (Html.text (name))
+  ; (Html.text (m.created_at))
+  ; seed_tag
+  ; (Html.text (m.content)) ])
   in
   let candidates_html =
-    if candidates = [] then "<p class='create-hint'>No nearby messages.</p>"
-    else String.concat "\n" (List.map render_candidate candidates)
+    if candidates = [] then (Html.static "<p class='create-hint'>No nearby messages.</p>")
+    else (Html.join (Html.static "\n")) (List.map render_candidate candidates)
   in
   let error_html = match error with
-    | Some e when e <> "" -> Printf.sprintf "<div class='st-error'>%s</div>" (esc e)
-    | _ -> "" in
-  let content = Printf.sprintf "
+    | Some e when e <> "" -> (Html.template "<div class='st-error'>%s</div>"
+  [ (Html.text (e)) ])
+    | _ -> Html.empty in
+  let content = (Html.template "
     <div class='create-wrap'>
       <div class='create-panel'>
         <div class='create-head'>
@@ -192,15 +210,16 @@ let start_thread_form ?user ?error ?(rail_communities = [])
       update();
     })();
     </script>"
-    (esc channel.name)
-    error_html
-    action
-    csrf_token
-    candidates_html
-    section_dropdown
-    (esc default_title)
-    (esc default_body)
-    (esc community.slug) (esc channel.slug)
+  [ (Html.text (channel.name))
+  ; error_html
+  ; (Html.text action)
+  ; csrf_token
+  ; candidates_html
+  ; section_dropdown
+  ; (Html.text (default_title))
+  ; (Html.text (default_body))
+  ; (Html.text (community.slug))
+  ; (Html.text (channel.slug)) ])
   in
   (* Cartographic launch shell (pass 16A): the same four-pane chrome as the
      sibling community routes, wrapping the promotion form verbatim — the
@@ -221,10 +240,12 @@ let start_thread_form ?user ?error ?(rail_communities = [])
      same community-id/visibility pair the legacy wrapper received and marks
      .shell ph-no-capture for private communities. *)
   let crumb =
-    Printf.sprintf
-      "<div class='launch-st-context'><a href='/c/%s'>/c/%s</a> <span class='launch-st-context__sep'>/</span> <a href='/c/%s/ch/%s'>#%s</a> <span class='launch-st-context__sep'>/</span> <b>start thread</b></div>"
-      (esc community.slug) (esc community.slug)
-      (esc community.slug) (esc channel.slug) (esc channel.slug)
+    (Html.template "<div class='launch-st-context'><a href='/c/%s'>/c/%s</a> <span class='launch-st-context__sep'>/</span> <a href='/c/%s/ch/%s'>#%s</a> <span class='launch-st-context__sep'>/</span> <b>start thread</b></div>"
+  [ (Html.text (community.slug))
+  ; (Html.text (community.slug))
+  ; (Html.text (community.slug))
+  ; (Html.text (channel.slug))
+  ; (Html.text (channel.slug)) ])
   in
   let sidebar =
     Community_pages.launch_knowledge_sidebar ~community ~channels ~sections ~can_manage ()
@@ -233,31 +254,35 @@ let start_thread_form ?user ?error ?(rail_communities = [])
     ~community ~sidebar
     ~page_class:"launch-start-thread"
     ~title:("Start thread — #" ^ channel.name)
-    ~content:(crumb ^ Printf.sprintf "<div class='create-shell'>%s</div>" content) ()
+    ~content:(crumb ++ (Html.template "<div class='create-shell'>%s</div>"
+  [ content ])) ()
 
 let new_post_form ?user ?preselected_section_id ?(rail_communities = [])
     ?(share_candidates : (string * string) list = [])
     (sections : Section_store.community_section list) (community : Community_types.community) request =
-  let csrf_token = Dream.csrf_tag request in
+  let csrf_token = Csrf_field.tag request in
   let section_dropdown =
-    if sections = [] then ""
+    if sections = [] then Html.empty
     else begin
-      let options = String.concat "\n" (List.map (fun (s : Section_store.community_section) ->
+      let options = (Html.join (Html.static "\n")) (List.map (fun (s : Section_store.community_section) ->
         let selected = match preselected_section_id with
-          | Some id when id = s.section_id -> " selected"
-          | _ -> ""
+          | Some id when id = s.section_id -> Html.static " selected"
+          | _ -> Html.empty
         in
-        Printf.sprintf "<option value='%d'%s>%s</option>"
-          s.section_id selected (Components.html_escape s.name)
+        (Html.template "<option value='%s'%s>%s</option>"
+  [ Html.int (s.section_id)
+  ; selected
+  ; (Html.text (s.name)) ])
       ) sections) in
-      Printf.sprintf "
+      (Html.template "
             <div class='create-field'>
                 <label class='create-label'>Section <span class='req'>*</span></label>
                 <select name='section_id' required class='create-select'>
                     <option value=''>-- Select a section --</option>
                     %s
                 </select>
-            </div>" options
+            </div>"
+  [ options ])
     end
   in
   (* Optional Shared thread area (slice 4). Rendered only when at least one
@@ -269,13 +294,14 @@ let new_post_form ?user ?preselected_section_id ?(rail_communities = [])
      request (not automatically by the thread author) and must never surface
      publicly, so the copy marks it private here at the point of entry. *)
   let share_area =
-    if share_candidates = [] then ""
+    if share_candidates = [] then Html.empty
     else begin
-      let options = String.concat "\n" (List.map (fun (slug, name) ->
-        Printf.sprintf "<option value='%s'>%s</option>"
-          (Components.html_escape slug) (Components.html_escape name)
+      let options = (Html.join (Html.static "\n")) (List.map (fun (slug, name) ->
+        (Html.template "<option value='%s'>%s</option>"
+  [ (Html.text (slug))
+  ; (Html.text (name)) ])
       ) share_candidates) in
-      Printf.sprintf "
+      (Html.template "
             <div class='create-field'>
                 <label class='create-label' for='share-destination'>Share with a connected community <span class='create-label-opt'>(optional)</span></label>
                 <select name='share_destination' id='share-destination' class='create-select'>
@@ -289,10 +315,12 @@ let new_post_form ?user ?preselected_section_id ?(rail_communities = [])
                 <label class='create-label' for='share-note'>Private request note <span class='create-label-opt'>(optional)</span></label>
                 <textarea name='share_note' id='share-note' maxlength='2000' class='create-textarea' style='min-height:80px;' placeholder='A short note for the reviewing moderators (optional).'></textarea>
                 <p class='create-hint'>Visible only to the requester and authorized moderators. Never shown on the thread, in feeds, or in notifications. Up to 2,000 characters.</p>
-            </div>" options (Components.html_escape community.slug)
+            </div>"
+  [ options
+  ; (Html.text (community.slug)) ])
     end
   in
-  let content = Printf.sprintf "
+  let content = (Html.template "
     <div class='create-wrap'>
       <div class='create-panel'>
         <div class='create-head'>
@@ -302,7 +330,7 @@ let new_post_form ?user ?preselected_section_id ?(rail_communities = [])
 
         <form action='/posts' method='POST' enctype='multipart/form-data' class='create-form'>
             %s
-            <input type='hidden' name='community_id' value='%d'>
+            <input type='hidden' name='community_id' value='%s'>
 
             %s
 
@@ -334,16 +362,17 @@ let new_post_form ?user ?preselected_section_id ?(rail_communities = [])
         </form>
       </div>
     </div>"
-    (Components.html_escape community.slug)
-    csrf_token
-    community.id
-    section_dropdown
-    share_area
+  [ (Html.text (community.slug))
+  ; csrf_token
+  ; Html.int (community.id)
+  ; section_dropdown
+  ; share_area ])
   in
   Page_shell.launch_app_page ?user ~request ~rail_communities
     ~analytics_community:(community.id, community.visibility)
     ~page_class:"launch-post-creation" ~title:("Post to " ^ community.name)
-    ~content:(Printf.sprintf "<div class='create-shell'>%s</div>" content) ()
+    ~content:(Html.template "<div class='create-shell'>%s</div>"
+  [ content ]) ()
 
 (* The legacy /p/:id fallback (pass 20A), reachable only for the pathological
    unmappable post (community_slug = "" — view_post_handler 301s every mappable
@@ -362,7 +391,7 @@ let new_post_form ?user ?preselected_section_id ?(rail_communities = [])
    notification fetch); guests get the share-only script so the byte-pinned
    Share control keeps working, and zero notification fetches. *)
 let post_page ?user ?(noindex=false) ~is_member ~is_current_user_mod ~mod_usernames ~admin_usernames ~banned_usernames ~community ~user_communities ~moderated_communities:_ user_post_votes user_comment_votes (post : Post_types.post) (comments : Comment_store.comment list) request =
-  let csrf_token = Dream.csrf_tag request in
+  let csrf_token = Csrf_field.tag request in
   let current_user = Dream.session_field request "username" in
 
   (* Recursive comment tree: children filtered at render time rather than
@@ -370,7 +399,7 @@ let post_page ?user ?(noindex=false) ~is_member ~is_current_user_mod ~mod_userna
   let rec render_comment_tree all_comments current_parent_id =
     let children = List.filter (fun (c : Comment_store.comment) -> c.parent_id = current_parent_id) all_comments in
 
-    if children = [] then ""
+    if children = [] then Html.empty
     else
       let children_html = List.map (fun (c : Comment_store.comment) ->
         let nested_html = render_comment_tree all_comments (Some c.id) in
@@ -379,24 +408,29 @@ let post_page ?user ?(noindex=false) ~is_member ~is_current_user_mod ~mod_userna
            action bar flex container clean — form spans full width below the bar. *)
         let reply_button =
           if is_member then
-            Printf.sprintf "<button type='button' onclick=\"document.getElementById('reply-form-%d').classList.toggle('hidden')\" class='flex items-center gap-1 text-xs font-bold text-gray-500 hover:text-gray-900 bg-transparent'>💬 Reply</button>"
-              c.id
-          else ""
+            (Html.template "<button type='button' onclick=\"document.getElementById('reply-form-%s').classList.toggle('hidden')\" class='flex items-center gap-1 text-xs font-bold text-gray-500 hover:text-gray-900 bg-transparent'>💬 Reply</button>"
+  [ Html.int (c.id) ])
+          else Html.empty
         in
         let reply_form_html =
           if is_member then
-            Printf.sprintf "
-            <form id='reply-form-%d' action='/comments' method='POST' class='hidden w-full mt-3 mb-2'>
+            (Html.template "
+            <form id='reply-form-%s' action='/comments' method='POST' class='hidden w-full mt-3 mb-2'>
                 %s
-                <input type='hidden' name='post_id' value='%d'>
-                <input type='hidden' name='parent_id' value='%d'>
+                <input type='hidden' name='post_id' value='%s'>
+                <input type='hidden' name='parent_id' value='%s'>
                 <textarea name='content' required rows='3' class='w-full p-3 border border-[#E0D9CC] rounded-xl shadow-sm focus:outline-none focus:ring-1 focus:ring-[#C94C4C] focus:border-[#C94C4C] text-sm' placeholder='Write a reply...'></textarea>
                 <div class='flex justify-end gap-2 mt-2'>
-                    <button type='button' onclick=\"document.getElementById('reply-form-%d').classList.toggle('hidden')\" class='text-sm text-gray-500 font-medium hover:text-gray-700 px-3 py-1.5'>Cancel</button>
+                    <button type='button' onclick=\"document.getElementById('reply-form-%s').classList.toggle('hidden')\" class='text-sm text-gray-500 font-medium hover:text-gray-700 px-3 py-1.5'>Cancel</button>
                     <button type='submit' class='bg-[#C94C4C] text-white text-sm font-medium px-4 py-1.5 rounded-full hover:bg-[#A83A3A] transition'>Post Reply</button>
                 </div>
-            </form>" c.id csrf_token post.id c.id c.id
-          else ""
+            </form>"
+  [ Html.int (c.id)
+  ; csrf_token
+  ; Html.int (post.id)
+  ; Html.int (c.id)
+  ; Html.int (c.id) ])
+          else Html.empty
         in
 
         let current_vote = Option.value ~default:0 (List.assoc_opt c.id user_comment_votes) in
@@ -420,27 +454,29 @@ let post_page ?user ?(noindex=false) ~is_member ~is_current_user_mod ~mod_userna
            Rule A: own comment → personal Delete. Rule B: mod (not own, not admin target) → Mod Remove dialog.
            Rule C: admin acting without mod role (not own, not admin target) → Admin Remove dialog. *)
         let delete_comment_btn =
-          if is_comment_deleted then ""
+          if is_comment_deleted then Html.empty
           else match current_user with
-          | None -> ""
+          | None -> Html.empty
           | Some u ->
               if u = c.username then
                 (* Rule A: personal delete — no audit trail needed *)
-                Printf.sprintf "<form action='/delete-comment' method='POST' class='inline m-0 p-0' onsubmit=\"confirmModal(event, 'Do you really want to delete this comment? This action cannot be undone.')\">
-                    %s <input type='hidden' name='comment_id' value='%d'>
+                (Html.template "<form action='/delete-comment' method='POST' class='inline m-0 p-0' onsubmit=\"confirmModal(event, 'Do you really want to delete this comment? This action cannot be undone.')\">
+                    %s <input type='hidden' name='comment_id' value='%s'>
                     <button type='submit' class='text-xs text-red-500 hover:text-red-700 font-bold'>🗑️</button>
-                </form>" csrf_token c.id
+                </form>"
+  [ csrf_token
+  ; Html.int (c.id) ])
               else if is_current_user_mod && not comment_target_is_admin then
                 (* Rule B: mod removal — dialog enforces a public reason in the mod log *)
-                Printf.sprintf "
-                  <button onclick=\"document.getElementById('mod-modal-comment-%d').showModal()\" class='text-xs font-bold text-amber-700 hover:text-amber-900 border border-amber-300 bg-amber-50 hover:bg-amber-100 rounded px-2 py-0.5 transition-colors'>🛡️ Mod Remove</button>
-                  <dialog id='mod-modal-comment-%d' class='rounded-2xl shadow-2xl p-0 w-full max-w-md backdrop:bg-black/60 backdrop:backdrop-blur-sm border-0'>
+                (Html.template "
+                  <button onclick=\"document.getElementById('mod-modal-comment-%s').showModal()\" class='text-xs font-bold text-amber-700 hover:text-amber-900 border border-amber-300 bg-amber-50 hover:bg-amber-100 rounded px-2 py-0.5 transition-colors'>🛡️ Mod Remove</button>
+                  <dialog id='mod-modal-comment-%s' class='rounded-2xl shadow-2xl p-0 w-full max-w-md backdrop:bg-black/60 backdrop:backdrop-blur-sm border-0'>
                     <div class='bg-white rounded-2xl overflow-hidden'>
                       <div class='bg-amber-50 border-b border-amber-200 px-6 py-4'>
                         <h3 class='text-base font-bold text-amber-900'>🛡️ Moderator Removal</h3>
                         <p class='text-xs text-amber-700 mt-0.5'>This action is logged publicly in the mod log.</p>
                       </div>
-                      <form action='/c/%s/comments/%d/mod_delete' method='POST' class='px-6 py-5 flex flex-col gap-4'>
+                      <form action='/c/%s/comments/%s/mod_delete' method='POST' class='px-6 py-5 flex flex-col gap-4'>
                         %s
                         <label class='flex flex-col gap-1.5'>
                           <span class='text-sm font-semibold text-gray-700'>Reason <span class='text-red-500'>*</span></span>
@@ -449,7 +485,7 @@ let post_page ?user ?(noindex=false) ~is_member ~is_current_user_mod ~mod_userna
                             class='w-full rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400 resize-none'></textarea>
                         </label>
                         <div class='flex justify-end gap-2 pt-1'>
-                          <button type='button' onclick=\"document.getElementById('mod-modal-comment-%d').close()\"
+                          <button type='button' onclick=\"document.getElementById('mod-modal-comment-%s').close()\"
                             class='px-4 py-2 rounded-xl text-sm font-semibold text-gray-600 bg-gray-100 hover:bg-gray-200 transition-colors'>Cancel</button>
                           <button type='submit'
                             class='px-4 py-2 rounded-xl text-sm font-bold text-white bg-red-600 hover:bg-red-700 transition-colors shadow-sm'>Confirm Removal</button>
@@ -457,18 +493,23 @@ let post_page ?user ?(noindex=false) ~is_member ~is_current_user_mod ~mod_userna
                       </form>
                     </div>
                   </dialog>"
-                  c.id c.id post.community_slug c.id csrf_token c.id
+  [ Html.int (c.id)
+  ; Html.int (c.id)
+  ; (Html.text post.community_slug)
+  ; Html.int (c.id)
+  ; csrf_token
+  ; Html.int (c.id) ])
               else if is_admin && not comment_target_is_admin then
                 (* Rule C: admin override — logged as admin_delete_comment in mod_actions *)
-                Printf.sprintf "
-                  <button onclick=\"document.getElementById('mod-modal-comment-%d').showModal()\" class='text-xs font-bold text-red-700 hover:text-red-900 border border-red-300 bg-red-50 hover:bg-red-100 rounded px-2 py-0.5 transition-colors'>⚡ Admin Remove</button>
-                  <dialog id='mod-modal-comment-%d' class='rounded-2xl shadow-2xl p-0 w-full max-w-md backdrop:bg-black/60 backdrop:backdrop-blur-sm border-0'>
+                (Html.template "
+                  <button onclick=\"document.getElementById('mod-modal-comment-%s').showModal()\" class='text-xs font-bold text-red-700 hover:text-red-900 border border-red-300 bg-red-50 hover:bg-red-100 rounded px-2 py-0.5 transition-colors'>⚡ Admin Remove</button>
+                  <dialog id='mod-modal-comment-%s' class='rounded-2xl shadow-2xl p-0 w-full max-w-md backdrop:bg-black/60 backdrop:backdrop-blur-sm border-0'>
                     <div class='bg-white rounded-2xl overflow-hidden'>
                       <div class='bg-red-50 border-b border-red-200 px-6 py-4'>
                         <h3 class='text-base font-bold text-red-900'>⚡ Admin Intervention</h3>
                         <p class='text-xs text-red-700 mt-0.5'>This action is logged publicly as an admin override.</p>
                       </div>
-                      <form action='/c/%s/comments/%d/mod_delete' method='POST' class='px-6 py-5 flex flex-col gap-4'>
+                      <form action='/c/%s/comments/%s/mod_delete' method='POST' class='px-6 py-5 flex flex-col gap-4'>
                         %s
                         <label class='flex flex-col gap-1.5'>
                           <span class='text-sm font-semibold text-gray-700'>Reason <span class='text-red-500'>*</span></span>
@@ -477,7 +518,7 @@ let post_page ?user ?(noindex=false) ~is_member ~is_current_user_mod ~mod_userna
                             class='w-full rounded-xl border border-red-300 bg-red-50 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-400 resize-none'></textarea>
                         </label>
                         <div class='flex justify-end gap-2 pt-1'>
-                          <button type='button' onclick=\"document.getElementById('mod-modal-comment-%d').close()\"
+                          <button type='button' onclick=\"document.getElementById('mod-modal-comment-%s').close()\"
                             class='px-4 py-2 rounded-xl text-sm font-semibold text-gray-600 bg-gray-100 hover:bg-gray-200 transition-colors'>Cancel</button>
                           <button type='submit'
                             class='px-4 py-2 rounded-xl text-sm font-bold text-white bg-red-600 hover:bg-red-700 transition-colors shadow-sm'>Confirm Removal</button>
@@ -485,8 +526,13 @@ let post_page ?user ?(noindex=false) ~is_member ~is_current_user_mod ~mod_userna
                       </form>
                     </div>
                   </dialog>"
-                  c.id c.id post.community_slug c.id csrf_token c.id
-              else ""
+  [ Html.int (c.id)
+  ; Html.int (c.id)
+  ; (Html.text post.community_slug)
+  ; Html.int (c.id)
+  ; csrf_token
+  ; Html.int (c.id) ])
+              else Html.empty
         in
 
         (* Ban button mirrors render_post's ban_btn logic; closed over post.community_id.
@@ -497,12 +543,12 @@ let post_page ?user ?(noindex=false) ~is_member ~is_current_user_mod ~mod_userna
             match current_user with
             | Some u when u <> c.username && not (Components.is_deleted_user c.username) ->
                 if List.mem c.username banned_usernames then
-                  "<span class='text-xs text-red-600 font-bold'>🚫 Banned</span>"
+                  (Html.static "<span class='text-xs text-red-600 font-bold'>🚫 Banned</span>")
                 else if is_current_user_mod then
                   (* Rule B: mod/top_mod ban — dialog enforces a public reason *)
-                  Printf.sprintf "
-                    <button onclick=\"document.getElementById('ban-modal-comment-%d').showModal()\" class='text-xs font-bold text-amber-700 hover:text-amber-900 border border-amber-300 bg-amber-50 hover:bg-amber-100 rounded px-2 py-0.5 transition-colors'>🔨 Mod Ban</button>
-                    <dialog id='ban-modal-comment-%d' class='rounded-2xl shadow-2xl p-0 w-full max-w-md backdrop:bg-black/60 backdrop:backdrop-blur-sm border-0'>
+                  (Html.template "
+                    <button onclick=\"document.getElementById('ban-modal-comment-%s').showModal()\" class='text-xs font-bold text-amber-700 hover:text-amber-900 border border-amber-300 bg-amber-50 hover:bg-amber-100 rounded px-2 py-0.5 transition-colors'>🔨 Mod Ban</button>
+                    <dialog id='ban-modal-comment-%s' class='rounded-2xl shadow-2xl p-0 w-full max-w-md backdrop:bg-black/60 backdrop:backdrop-blur-sm border-0'>
                       <div class='bg-white rounded-2xl overflow-hidden'>
                         <div class='bg-amber-50 border-b border-amber-200 px-6 py-4'>
                           <h3 class='text-base font-bold text-amber-900'>🔨 Mod Ban</h3>
@@ -511,7 +557,7 @@ let post_page ?user ?(noindex=false) ~is_member ~is_current_user_mod ~mod_userna
                         <form action='/ban-community-user' method='POST' class='px-6 py-5 flex flex-col gap-4'>
                           %s
                           <input type='hidden' name='target_username' value='%s'>
-                          <input type='hidden' name='community_id' value='%d'>
+                          <input type='hidden' name='community_id' value='%s'>
                           <label class='flex flex-col gap-1.5'>
                             <span class='text-sm font-semibold text-gray-700'>Reason <span class='text-red-500'>*</span></span>
                             <textarea name='reason' required rows='4'
@@ -519,7 +565,7 @@ let post_page ?user ?(noindex=false) ~is_member ~is_current_user_mod ~mod_userna
                               class='w-full rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400 resize-none'></textarea>
                           </label>
                           <div class='flex justify-end gap-2 pt-1'>
-                            <button type='button' onclick=\"document.getElementById('ban-modal-comment-%d').close()\"
+                            <button type='button' onclick=\"document.getElementById('ban-modal-comment-%s').close()\"
                               class='px-4 py-2 rounded-xl text-sm font-semibold text-gray-600 bg-gray-100 hover:bg-gray-200 transition-colors'>Cancel</button>
                             <button type='submit'
                               class='px-4 py-2 rounded-xl text-sm font-bold text-white bg-amber-600 hover:bg-amber-700 transition-colors shadow-sm'>Confirm Ban</button>
@@ -527,13 +573,17 @@ let post_page ?user ?(noindex=false) ~is_member ~is_current_user_mod ~mod_userna
                         </form>
                       </div>
                     </dialog>"
-                    c.id c.id csrf_token (Components.html_escape c.username)
-                    post.community_id c.id
+  [ Html.int (c.id)
+  ; Html.int (c.id)
+  ; csrf_token
+  ; (Html.text (c.username))
+  ; Html.int (post.community_id)
+  ; Html.int (c.id) ])
                 else
                   (* Rule C: admin acting without mod role — handler prefixes reason as admin override *)
-                  Printf.sprintf "
-                    <button onclick=\"document.getElementById('ban-modal-comment-%d').showModal()\" class='text-xs font-bold text-red-700 hover:text-red-900 border border-red-300 bg-red-50 hover:bg-red-100 rounded px-2 py-0.5 transition-colors'>⚡ Admin Ban</button>
-                    <dialog id='ban-modal-comment-%d' class='rounded-2xl shadow-2xl p-0 w-full max-w-md backdrop:bg-black/60 backdrop:backdrop-blur-sm border-0'>
+                  (Html.template "
+                    <button onclick=\"document.getElementById('ban-modal-comment-%s').showModal()\" class='text-xs font-bold text-red-700 hover:text-red-900 border border-red-300 bg-red-50 hover:bg-red-100 rounded px-2 py-0.5 transition-colors'>⚡ Admin Ban</button>
+                    <dialog id='ban-modal-comment-%s' class='rounded-2xl shadow-2xl p-0 w-full max-w-md backdrop:bg-black/60 backdrop:backdrop-blur-sm border-0'>
                       <div class='bg-white rounded-2xl overflow-hidden'>
                         <div class='bg-red-50 border-b border-red-200 px-6 py-4'>
                           <h3 class='text-base font-bold text-red-900'>⚡ Admin Ban</h3>
@@ -542,7 +592,7 @@ let post_page ?user ?(noindex=false) ~is_member ~is_current_user_mod ~mod_userna
                         <form action='/ban-community-user' method='POST' class='px-6 py-5 flex flex-col gap-4'>
                           %s
                           <input type='hidden' name='target_username' value='%s'>
-                          <input type='hidden' name='community_id' value='%d'>
+                          <input type='hidden' name='community_id' value='%s'>
                           <label class='flex flex-col gap-1.5'>
                             <span class='text-sm font-semibold text-gray-700'>Reason <span class='text-red-500'>*</span></span>
                             <textarea name='reason' required rows='4'
@@ -550,7 +600,7 @@ let post_page ?user ?(noindex=false) ~is_member ~is_current_user_mod ~mod_userna
                               class='w-full rounded-xl border border-red-300 bg-red-50 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-400 resize-none'></textarea>
                           </label>
                           <div class='flex justify-end gap-2 pt-1'>
-                            <button type='button' onclick=\"document.getElementById('ban-modal-comment-%d').close()\"
+                            <button type='button' onclick=\"document.getElementById('ban-modal-comment-%s').close()\"
                               class='px-4 py-2 rounded-xl text-sm font-semibold text-gray-600 bg-gray-100 hover:bg-gray-200 transition-colors'>Cancel</button>
                             <button type='submit'
                               class='px-4 py-2 rounded-xl text-sm font-bold text-white bg-red-600 hover:bg-red-700 transition-colors shadow-sm'>Confirm Ban</button>
@@ -558,13 +608,17 @@ let post_page ?user ?(noindex=false) ~is_member ~is_current_user_mod ~mod_userna
                         </form>
                       </div>
                     </dialog>"
-                    c.id c.id csrf_token (Components.html_escape c.username)
-                    post.community_id c.id
-            | _ -> ""
-          else ""
+  [ Html.int (c.id)
+  ; Html.int (c.id)
+  ; csrf_token
+  ; (Html.text (c.username))
+  ; Html.int (post.community_id)
+  ; Html.int (c.id) ])
+            | _ -> Html.empty
+          else Html.empty
         in
 
-        (* safe_img_src (via user_avatar) replaces the prior raw interpolation of the stored
+        (* Html.image_src (via user_avatar) replaces the prior raw interpolation of the stored
            avatar_url; same markup, same letter-tile fallback. *)
         let avatar_html =
           Components.user_avatar ~alt:"Avatar"
@@ -574,35 +628,42 @@ let post_page ?user ?(noindex=false) ~is_member ~is_current_user_mod ~mod_userna
         in
 
         let upvote_html = match current_user with
-          | Some _ -> Printf.sprintf "<form action='/vote-comment' method='POST' class='m-0 p-0'>%s<input type='hidden' name='comment_id' value='%d'><input type='hidden' name='direction' value='%d'><button type='submit' class='%s text-xs font-bold leading-none'>▲</button></form>" csrf_token c.id up_action up_color
-          | None -> "<a href='/login' class='text-gray-400 hover:text-orange-500 text-xs font-bold leading-none'>▲</a>"
+          | Some _ -> (Html.template "<form action='/vote-comment' method='POST' class='m-0 p-0'>%s<input type='hidden' name='comment_id' value='%s'><input type='hidden' name='direction' value='%s'><button type='submit' class='%s text-xs font-bold leading-none'>▲</button></form>"
+  [ csrf_token
+  ; Html.int (c.id)
+  ; Html.int (up_action)
+  ; (Html.text up_color) ])
+          | None -> (Html.static "<a href='/login' class='text-gray-400 hover:text-orange-500 text-xs font-bold leading-none'>▲</a>")
         in
         let downvote_html =
-          if not post.allow_downvotes then ""
+          if not post.allow_downvotes then Html.empty
           else match current_user with
-          | Some _ -> Printf.sprintf "<form action='/vote-comment' method='POST' class='m-0 p-0'>%s<input type='hidden' name='comment_id' value='%d'><input type='hidden' name='direction' value='%d'><button type='submit' class='%s text-xs font-bold leading-none'>▼</button></form>" csrf_token c.id down_action down_color
-          | None -> "<a href='/login' class='text-gray-400 hover:text-[#69C3D2] text-xs font-bold leading-none'>▼</a>"
+          | Some _ -> (Html.template "<form action='/vote-comment' method='POST' class='m-0 p-0'>%s<input type='hidden' name='comment_id' value='%s'><input type='hidden' name='direction' value='%s'><button type='submit' class='%s text-xs font-bold leading-none'>▼</button></form>"
+  [ csrf_token
+  ; Html.int (c.id)
+  ; Html.int (down_action)
+  ; (Html.text down_color) ])
+          | None -> (Html.static "<a href='/login' class='text-gray-400 hover:text-[#69C3D2] text-xs font-bold leading-none'>▼</a>")
         in
 
         let op_badge =
           if c.username = post.username then
-            "<span class='ml-1.5 font-bold text-[10px] bg-[#DFF5F8] text-[#69C3D2] px-1.5 py-0.5 rounded'>OP</span>"
-          else ""
+            (Html.static "<span class='ml-1.5 font-bold text-[10px] bg-[#DFF5F8] text-[#69C3D2] px-1.5 py-0.5 rounded'>OP</span>")
+          else Html.empty
         in
 
         (* Separate IDs for content and children so toggleComment can collapse each independently. *)
-        let toggle_btn = Printf.sprintf
-          "<button type='button' onclick='toggleComment(%d, this)' class='text-xs text-gray-400 hover:text-gray-700 font-mono transition-colors'>[-]</button>"
-          c.id
+        let toggle_btn = (Html.template "<button type='button' onclick='toggleComment(%s, this)' class='text-xs text-gray-400 hover:text-gray-700 font-mono transition-colors'>[-]</button>"
+  [ Html.int (c.id) ])
         in
 
         (* comment-children omitted when empty so toggleComment null-guards cleanly.
            ml-2.5 aligns the thread line under the avatar (w-5 = 1.25rem = ml-2.5 + half border). *)
         let comment_children_div =
-          if nested_html = "" then ""
-          else Printf.sprintf
-            "<div id='comment-children-%d' class='pl-3 border-l-2 border-[#E0D9CC] ml-2.5 mt-2'>%s</div>"
-            c.id nested_html
+          if nested_html = Html.empty then Html.empty
+          else (Html.template "<div id='comment-children-%s' class='pl-3 border-l-2 border-[#E0D9CC] ml-2.5 mt-2'>%s</div>"
+  [ Html.int (c.id)
+  ; nested_html ])
         in
 
         let total_comment_contribs = c.author_local_post_count + c.author_local_comment_count in
@@ -610,10 +671,12 @@ let post_page ?user ?(noindex=false) ~is_member ~is_current_user_mod ~mod_userna
           | None | Some "" -> ""
           | Some ts -> Printf.sprintf " · active since %s" (Components.format_month_year ts)
         in
-        let comment_local_stats = Printf.sprintf "<span class='font-semibold text-red-700'>%d</span> local karma · <span class='font-semibold text-red-700'>%d</span> contributions here%s"
-          c.author_local_karma total_comment_contribs comment_active_since
+        let comment_local_stats = (Html.template "<span class='font-semibold text-red-700'>%s</span> local karma · <span class='font-semibold text-red-700'>%s</span> contributions here%s"
+  [ Html.int (c.author_local_karma)
+  ; Html.int (total_comment_contribs)
+  ; (Html.text comment_active_since) ])
         in
-        Printf.sprintf "
+        (Html.template "
         <div class='mt-3 hover:bg-[#EDE9DF] transition rounded-r pr-2 py-1'>
             <div class='flex items-start gap-2 mb-1'>
                 %s
@@ -629,12 +692,12 @@ let post_page ?user ?(noindex=false) ~is_member ~is_current_user_mod ~mod_userna
                     <div class='text-xs text-gray-400 mt-0.5'>%s</div>
                 </div>
             </div>
-            <div id='comment-content-%d'>
+            <div id='comment-content-%s'>
                 <div class='text-sm text-gray-900 whitespace-pre-wrap break-words'>%s</div>
                 <div class='flex items-center gap-3 mt-2'>
                     <div class='flex items-center gap-1.5 bg-gray-50 border border-[#E0D9CC] rounded-full px-2 py-0.5'>
                         %s
-                        <span class='text-xs font-semibold text-gray-700'>%d</span>
+                        <span class='text-xs font-semibold text-gray-700'>%s</span>
                         %s
                     </div>
                     %s
@@ -643,57 +706,73 @@ let post_page ?user ?(noindex=false) ~is_member ~is_current_user_mod ~mod_userna
             </div>
             %s
         </div>"
-        toggle_btn
-        avatar_html (Components.render_author ~mod_usernames ~admin_usernames c.username) op_badge
-        (Components.time_ago c.created_at)
-        delete_comment_btn ban_comment_btn
-        comment_local_stats
-        c.id (Components.html_escape c.content)
-        upvote_html c.score downvote_html
-        reply_button
-        reply_form_html
-        comment_children_div
+  [ toggle_btn
+  ; avatar_html
+  ; (Components.render_author ~mod_usernames ~admin_usernames c.username)
+  ; op_badge
+  ; (Html.text (Components.time_ago c.created_at))
+  ; delete_comment_btn
+  ; ban_comment_btn
+  ; comment_local_stats
+  ; Html.int (c.id)
+  ; (Html.text (c.content))
+  ; upvote_html
+  ; Html.int (c.score)
+  ; downvote_html
+  ; reply_button
+  ; reply_form_html
+  ; comment_children_div ])
       ) children in
-      String.concat "\n" children_html
+      (Html.join (Html.static "\n")) children_html
   in
 
   let comments_html =
-    if comments = [] then "<p class='text-gray-500 italic mt-4'>No comments yet.</p>"
+    if comments = [] then (Html.static "<p class='text-gray-500 italic mt-4'>No comments yet.</p>")
     else render_comment_tree comments None
   in
 
   let action_section =
     if is_member then
-      Printf.sprintf "
+      (Html.template "
       <form action='/comments' method='POST' class='mt-0'>
           %s
-          <input type='hidden' name='post_id' value='%d'>
+          <input type='hidden' name='post_id' value='%s'>
           <textarea name='content' required rows='2' class='w-full border border-[#E0D9CC] rounded-xl px-4 py-3 text-sm bg-gray-50 focus:bg-white focus:ring-1 focus:ring-[#C94C4C] focus:border-[#C94C4C] resize-y transition-colors placeholder-gray-400' placeholder='Add a comment...'></textarea>
           <div class='flex justify-end mt-2 mb-8'>
               <button type='submit' class='px-4 py-1.5 text-sm font-medium bg-[#C94C4C] text-white rounded-full hover:bg-[#A83A3A] transition-colors shadow-sm'>Comment</button>
           </div>
-      </form>" csrf_token post.id
+      </form>"
+  [ csrf_token
+  ; Html.int (post.id) ])
     else
-      Printf.sprintf "
+      (Html.template "
       <div class='mt-6 mb-8 p-6 bg-[#F0EDE4] rounded-xl border border-[#E8E2D9] text-center'>
           <h3 class='text-gray-900 font-bold mb-2'>Join the discussion</h3>
           <p class='text-[#69C3D2] text-sm mb-4'>You must be a member of /c/%s to comment.</p>
           <form action='/join' method='POST'>
               %s
-              <input type='hidden' name='community_id' value='%d'>
-              <input type='hidden' name='redirect_to' value='/p/%d'>
+              <input type='hidden' name='community_id' value='%s'>
+              <input type='hidden' name='redirect_to' value='/p/%s'>
               <button type='submit' class='bg-[#C94C4C] text-white px-6 py-2 rounded-full font-bold hover:bg-[#A83A3A] transition shadow-sm'>Join /c/%s</button>
           </form>
-      </div>" post.community_slug csrf_token post.community_id post.id post.community_slug
+      </div>"
+  [ (Html.text post.community_slug)
+  ; csrf_token
+  ; Html.int (post.community_id)
+  ; Html.int (post.id)
+  ; (Html.text post.community_slug) ])
   in
 
-  let post_content = match post.content with | Some c -> Printf.sprintf "<div class='ph-mask text-sm text-gray-800 leading-relaxed whitespace-pre-wrap break-words mt-2 mb-3'>%s</div>" (Components.html_escape c) | None -> "" in
-  let link_content = match post.url with | Some u -> Printf.sprintf "<div class='mb-6'><a href='%s' target='_blank' class='text-blue-600 hover:underline break-all'>🔗 %s</a></div>" (Components.safe_url u) (Components.html_escape u) | None -> "" in
+  let post_content = match post.content with | Some c -> (Html.template "<div class='ph-mask text-sm text-gray-800 leading-relaxed whitespace-pre-wrap break-words mt-2 mb-3'>%s</div>"
+  [ (Html.text (c)) ]) | None -> Html.empty in
+  let link_content = match post.url with | Some u -> (Html.template "<div class='mb-6'><a href='%s' target='_blank' class='text-blue-600 hover:underline break-all'>🔗 %s</a></div>"
+  [ (Html.external_url (u))
+  ; (Html.text (u)) ]) | None -> Html.empty in
   (* Image stored as /static/uploads/<uuid>.webp — served directly by Dream.static. *)
   let image_content = match post.image_url with
-    | None -> ""
-    | Some img -> Printf.sprintf "<div class='mb-4'><img src='%s' alt='Post image' class='w-full max-h-[700px] object-contain bg-stone-900 rounded-xl border border-[#E0D9CC]'></div>"
-        (Components.html_escape img)
+    | None -> Html.empty
+    | Some img -> (Html.template "<div class='mb-4'><img src='%s' alt='Post image' class='w-full max-h-[700px] object-contain bg-stone-900 rounded-xl border border-[#E0D9CC]'></div>"
+  [ (Html.text (img)) ])
   in
 
   let current_vote_direction = match List.assoc_opt post.id user_post_votes with Some d -> d | None -> 0 in
@@ -706,31 +785,44 @@ let post_page ?user ?(noindex=false) ~is_member ~is_current_user_mod ~mod_userna
      Comments and Share pills share the same action bar to keep post metadata
      actions cohesive and avoid redundant top-of-post share button placement. *)
   let comments_pill =
-    Printf.sprintf "<div class='flex items-center gap-1.5 bg-gray-50 border border-[#E0D9CC] rounded-full px-3 py-1.5 text-sm font-medium text-gray-700'><svg xmlns='http://www.w3.org/2000/svg' class='w-4 h-4' fill='none' viewBox='0 0 24 24' stroke='currentColor' stroke-width='2'><path stroke-linecap='round' stroke-linejoin='round' d='M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z'/></svg>%d</div>"
-      post.comment_count
+    (Html.template "<div class='flex items-center gap-1.5 bg-gray-50 border border-[#E0D9CC] rounded-full px-3 py-1.5 text-sm font-medium text-gray-700'><svg xmlns='http://www.w3.org/2000/svg' class='w-4 h-4' fill='none' viewBox='0 0 24 24' stroke='currentColor' stroke-width='2'><path stroke-linecap='round' stroke-linejoin='round' d='M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z'/></svg>%s</div>"
+  [ Html.int (post.comment_count) ])
   in
   let share_pill =
-    Printf.sprintf "<button type='button' onclick='copyPostLink(\"/p/%d\", this)' class='flex items-center gap-1.5 bg-gray-50 border border-[#E0D9CC] rounded-full px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-100 transition-colors cursor-pointer'><svg xmlns='http://www.w3.org/2000/svg' class='w-4 h-4' fill='none' viewBox='0 0 24 24' stroke='currentColor' stroke-width='2'><path stroke-linecap='round' stroke-linejoin='round' d='M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z'/></svg>Share</button>"
-      post.id
+    (Html.template "<button type='button' data-share-path='/p/%s' onclick='copyPostLink(this.dataset.sharePath, this)' class='flex items-center gap-1.5 bg-gray-50 border border-[#E0D9CC] rounded-full px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-100 transition-colors cursor-pointer'><svg xmlns='http://www.w3.org/2000/svg' class='w-4 h-4' fill='none' viewBox='0 0 24 24' stroke='currentColor' stroke-width='2'><path stroke-linecap='round' stroke-linejoin='round' d='M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z'/></svg>Share</button>"
+  [ Html.int (post.id) ])
   in
   let voting_pill =
     let downvote_btn_logged_in =
       if post.allow_downvotes then
-        Printf.sprintf "<form action='/vote' method='POST' class='m-0 p-0 flex'>%s<input type='hidden' name='post_id' value='%d'><input type='hidden' name='direction' value='%d'><button type='submit' class='%s text-sm font-bold leading-none'>▼</button></form>"
-          csrf_token post.id down_action down_color
-      else ""
+        (Html.template "<form action='/vote' method='POST' class='m-0 p-0 flex'>%s<input type='hidden' name='post_id' value='%s'><input type='hidden' name='direction' value='%s'><button type='submit' class='%s text-sm font-bold leading-none'>▼</button></form>"
+  [ csrf_token
+  ; Html.int (post.id)
+  ; Html.int (down_action)
+  ; (Html.text down_color) ])
+      else Html.empty
     in
     let downvote_btn_logged_out =
-      if post.allow_downvotes then "<a href='/login' class='text-gray-400 hover:text-[#69C3D2] text-sm font-bold leading-none'>▼</a>"
-      else ""
+      if post.allow_downvotes then (Html.static "<a href='/login' class='text-gray-400 hover:text-[#69C3D2] text-sm font-bold leading-none'>▼</a>")
+      else Html.empty
     in
     match current_user with
     | Some _ ->
-        Printf.sprintf "<div class='flex items-center gap-3 mt-2 mb-6'><div class='flex items-center gap-2 bg-gray-50 border border-[#E0D9CC] rounded-full px-3 py-1.5'><form action='/vote' method='POST' class='m-0 p-0 flex'>%s<input type='hidden' name='post_id' value='%d'><input type='hidden' name='direction' value='%d'><button type='submit' class='%s text-sm font-bold leading-none'>▲</button></form><span class='text-sm font-semibold text-gray-700'>%d</span>%s</div>%s%s</div>"
-          csrf_token post.id up_action up_color post.score downvote_btn_logged_in comments_pill share_pill
+        (Html.template "<div class='flex items-center gap-3 mt-2 mb-6'><div class='flex items-center gap-2 bg-gray-50 border border-[#E0D9CC] rounded-full px-3 py-1.5'><form action='/vote' method='POST' class='m-0 p-0 flex'>%s<input type='hidden' name='post_id' value='%s'><input type='hidden' name='direction' value='%s'><button type='submit' class='%s text-sm font-bold leading-none'>▲</button></form><span class='text-sm font-semibold text-gray-700'>%s</span>%s</div>%s%s</div>"
+  [ csrf_token
+  ; Html.int (post.id)
+  ; Html.int (up_action)
+  ; (Html.text up_color)
+  ; Html.int (post.score)
+  ; downvote_btn_logged_in
+  ; comments_pill
+  ; share_pill ])
     | None ->
-        Printf.sprintf "<div class='flex items-center gap-3 mt-2 mb-6'><div class='flex items-center gap-2 bg-gray-50 border border-[#E0D9CC] rounded-full px-3 py-1.5'><a href='/login' class='text-gray-400 hover:text-orange-500 text-sm font-bold leading-none'>▲</a><span class='text-sm font-semibold text-gray-700'>%d</span>%s</div>%s%s</div>"
-          post.score downvote_btn_logged_out comments_pill share_pill
+        (Html.template "<div class='flex items-center gap-3 mt-2 mb-6'><div class='flex items-center gap-2 bg-gray-50 border border-[#E0D9CC] rounded-full px-3 py-1.5'><a href='/login' class='text-gray-400 hover:text-orange-500 text-sm font-bold leading-none'>▲</a><span class='text-sm font-semibold text-gray-700'>%s</span>%s</div>%s%s</div>"
+  [ Html.int (post.score)
+  ; downvote_btn_logged_out
+  ; comments_pill
+  ; share_pill ])
   in
 
   let is_admin = Dream.session_field request "is_admin" = Some "true" in
@@ -748,27 +840,29 @@ let post_page ?user ?(noindex=false) ~is_member ~is_current_user_mod ~mod_userna
      Rule A: own post → personal Delete. Rule B: mod/top_mod (not own post) → Mod Remove dialog.
      Rule C: admin acting without mod role (not own post) → Admin Remove dialog. *)
   let post_action_btn =
-    if is_post_deleted then ""
+    if is_post_deleted then Html.empty
     else match current_user with
-    | None -> ""
+    | None -> Html.empty
     | Some u ->
         if u = post.username then
           (* Rule A: personal delete — no audit required *)
-          Printf.sprintf "<form action='/delete-post' method='POST' class='inline m-0 p-0 ml-3' onsubmit=\"confirmModal(event, 'Do you really want to delete this post? This action cannot be undone.')\">
-              %s <input type='hidden' name='post_id' value='%d'>
+          (Html.template "<form action='/delete-post' method='POST' class='inline m-0 p-0 ml-3' onsubmit=\"confirmModal(event, 'Do you really want to delete this post? This action cannot be undone.')\">
+              %s <input type='hidden' name='post_id' value='%s'>
               <button type='submit' class='text-sm text-red-500 hover:text-red-700 font-bold'>🗑️ Delete</button>
-          </form>" csrf_token post.id
+          </form>"
+  [ csrf_token
+  ; Html.int (post.id) ])
         else if is_current_user_mod && not post_target_is_admin then
           (* Rule B: mod/top_mod removal — dialog enforces a public reason *)
-          Printf.sprintf "
-            <button onclick=\"document.getElementById('mod-modal-%d').showModal()\" class='text-xs font-bold text-amber-700 hover:text-amber-900 border border-amber-300 bg-amber-50 hover:bg-amber-100 rounded px-2 py-1 transition-colors ml-3'>🛡️ Mod Remove</button>
-            <dialog id='mod-modal-%d' class='rounded-2xl shadow-2xl p-0 w-full max-w-md backdrop:bg-black/60 backdrop:backdrop-blur-sm border-0'>
+          (Html.template "
+            <button onclick=\"document.getElementById('mod-modal-%s').showModal()\" class='text-xs font-bold text-amber-700 hover:text-amber-900 border border-amber-300 bg-amber-50 hover:bg-amber-100 rounded px-2 py-1 transition-colors ml-3'>🛡️ Mod Remove</button>
+            <dialog id='mod-modal-%s' class='rounded-2xl shadow-2xl p-0 w-full max-w-md backdrop:bg-black/60 backdrop:backdrop-blur-sm border-0'>
               <div class='bg-white rounded-2xl overflow-hidden'>
                 <div class='bg-amber-50 border-b border-amber-200 px-6 py-4'>
                   <h3 class='text-base font-bold text-amber-900'>🛡️ Moderator Removal</h3>
                   <p class='text-xs text-amber-700 mt-0.5'>This action is logged publicly in the mod log.</p>
                 </div>
-                <form action='/c/%s/posts/%d/mod_delete' method='POST' class='px-6 py-5 flex flex-col gap-4'>
+                <form action='/c/%s/posts/%s/mod_delete' method='POST' class='px-6 py-5 flex flex-col gap-4'>
                   %s
                   <label class='flex flex-col gap-1.5'>
                     <span class='text-sm font-semibold text-gray-700'>Reason <span class='text-red-500'>*</span></span>
@@ -777,7 +871,7 @@ let post_page ?user ?(noindex=false) ~is_member ~is_current_user_mod ~mod_userna
                       class='w-full rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400 resize-none'></textarea>
                   </label>
                   <div class='flex justify-end gap-2 pt-1'>
-                    <button type='button' onclick=\"document.getElementById('mod-modal-%d').close()\"
+                    <button type='button' onclick=\"document.getElementById('mod-modal-%s').close()\"
                       class='px-4 py-2 rounded-xl text-sm font-semibold text-gray-600 bg-gray-100 hover:bg-gray-200 transition-colors'>Cancel</button>
                     <button type='submit'
                       class='px-4 py-2 rounded-xl text-sm font-bold text-white bg-red-600 hover:bg-red-700 transition-colors shadow-sm'>Confirm Removal</button>
@@ -785,18 +879,23 @@ let post_page ?user ?(noindex=false) ~is_member ~is_current_user_mod ~mod_userna
                 </form>
               </div>
             </dialog>"
-            post.id post.id post.community_slug post.id csrf_token post.id
+  [ Html.int (post.id)
+  ; Html.int (post.id)
+  ; (Html.text post.community_slug)
+  ; Html.int (post.id)
+  ; csrf_token
+  ; Html.int (post.id) ])
         else if is_admin && not post_target_is_admin then
           (* Rule C: admin override (not a mod of this community) — logged as admin_delete_post *)
-          Printf.sprintf "
-            <button onclick=\"document.getElementById('mod-modal-%d').showModal()\" class='text-xs font-bold text-red-700 hover:text-red-900 border border-red-300 bg-red-50 hover:bg-red-100 rounded px-2 py-1 transition-colors ml-3'>⚡ Admin Remove</button>
-            <dialog id='mod-modal-%d' class='rounded-2xl shadow-2xl p-0 w-full max-w-md backdrop:bg-black/60 backdrop:backdrop-blur-sm border-0'>
+          (Html.template "
+            <button onclick=\"document.getElementById('mod-modal-%s').showModal()\" class='text-xs font-bold text-red-700 hover:text-red-900 border border-red-300 bg-red-50 hover:bg-red-100 rounded px-2 py-1 transition-colors ml-3'>⚡ Admin Remove</button>
+            <dialog id='mod-modal-%s' class='rounded-2xl shadow-2xl p-0 w-full max-w-md backdrop:bg-black/60 backdrop:backdrop-blur-sm border-0'>
               <div class='bg-white rounded-2xl overflow-hidden'>
                 <div class='bg-red-50 border-b border-red-200 px-6 py-4'>
                   <h3 class='text-base font-bold text-red-900'>⚡ Admin Intervention</h3>
                   <p class='text-xs text-red-700 mt-0.5'>This action is logged publicly as an admin override.</p>
                 </div>
-                <form action='/c/%s/posts/%d/mod_delete' method='POST' class='px-6 py-5 flex flex-col gap-4'>
+                <form action='/c/%s/posts/%s/mod_delete' method='POST' class='px-6 py-5 flex flex-col gap-4'>
                   %s
                   <label class='flex flex-col gap-1.5'>
                     <span class='text-sm font-semibold text-gray-700'>Reason <span class='text-red-500'>*</span></span>
@@ -805,7 +904,7 @@ let post_page ?user ?(noindex=false) ~is_member ~is_current_user_mod ~mod_userna
                       class='w-full rounded-xl border border-red-300 bg-red-50 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-400 resize-none'></textarea>
                   </label>
                   <div class='flex justify-end gap-2 pt-1'>
-                    <button type='button' onclick=\"document.getElementById('mod-modal-%d').close()\"
+                    <button type='button' onclick=\"document.getElementById('mod-modal-%s').close()\"
                       class='px-4 py-2 rounded-xl text-sm font-semibold text-gray-600 bg-gray-100 hover:bg-gray-200 transition-colors'>Cancel</button>
                     <button type='submit'
                       class='px-4 py-2 rounded-xl text-sm font-bold text-white bg-red-600 hover:bg-red-700 transition-colors shadow-sm'>Confirm Removal</button>
@@ -813,8 +912,13 @@ let post_page ?user ?(noindex=false) ~is_member ~is_current_user_mod ~mod_userna
                 </form>
               </div>
             </dialog>"
-            post.id post.id post.community_slug post.id csrf_token post.id
-        else ""
+  [ Html.int (post.id)
+  ; Html.int (post.id)
+  ; (Html.text post.community_slug)
+  ; Html.int (post.id)
+  ; csrf_token
+  ; Html.int (post.id) ])
+        else Html.empty
   in
 
   (* post_page renders the post inline, not via Components.render_post, so ban_post_btn
@@ -827,12 +931,12 @@ let post_page ?user ?(noindex=false) ~is_member ~is_current_user_mod ~mod_userna
       | Some u when u <> post.username
           && not (String.length post.username >= 9 && String.sub post.username 0 9 = "[deleted_") ->
           if List.mem post.username banned_usernames then
-            "<span class='text-sm text-red-600 font-bold ml-1'>🚫 Banned</span>"
+            (Html.static "<span class='text-sm text-red-600 font-bold ml-1'>🚫 Banned</span>")
           else if is_current_user_mod then
             (* Rule B: mod/top_mod ban — dialog enforces a public reason *)
-            Printf.sprintf "
-              <button onclick=\"document.getElementById('ban-modal-postpage-%d').showModal()\" class='text-sm font-bold text-amber-700 hover:text-amber-900 border border-amber-300 bg-amber-50 hover:bg-amber-100 rounded px-2 py-0.5 transition-colors ml-1'>🔨 Mod Ban</button>
-              <dialog id='ban-modal-postpage-%d' class='rounded-2xl shadow-2xl p-0 w-full max-w-md backdrop:bg-black/60 backdrop:backdrop-blur-sm border-0'>
+            (Html.template "
+              <button onclick=\"document.getElementById('ban-modal-postpage-%s').showModal()\" class='text-sm font-bold text-amber-700 hover:text-amber-900 border border-amber-300 bg-amber-50 hover:bg-amber-100 rounded px-2 py-0.5 transition-colors ml-1'>🔨 Mod Ban</button>
+              <dialog id='ban-modal-postpage-%s' class='rounded-2xl shadow-2xl p-0 w-full max-w-md backdrop:bg-black/60 backdrop:backdrop-blur-sm border-0'>
                 <div class='bg-white rounded-2xl overflow-hidden'>
                   <div class='bg-amber-50 border-b border-amber-200 px-6 py-4'>
                     <h3 class='text-base font-bold text-amber-900'>🔨 Mod Ban</h3>
@@ -841,7 +945,7 @@ let post_page ?user ?(noindex=false) ~is_member ~is_current_user_mod ~mod_userna
                   <form action='/ban-community-user' method='POST' class='px-6 py-5 flex flex-col gap-4'>
                     %s
                     <input type='hidden' name='target_username' value='%s'>
-                    <input type='hidden' name='community_id' value='%d'>
+                    <input type='hidden' name='community_id' value='%s'>
                     <label class='flex flex-col gap-1.5'>
                       <span class='text-sm font-semibold text-gray-700'>Reason <span class='text-red-500'>*</span></span>
                       <textarea name='reason' required rows='4'
@@ -849,7 +953,7 @@ let post_page ?user ?(noindex=false) ~is_member ~is_current_user_mod ~mod_userna
                         class='w-full rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400 resize-none'></textarea>
                     </label>
                     <div class='flex justify-end gap-2 pt-1'>
-                      <button type='button' onclick=\"document.getElementById('ban-modal-postpage-%d').close()\"
+                      <button type='button' onclick=\"document.getElementById('ban-modal-postpage-%s').close()\"
                         class='px-4 py-2 rounded-xl text-sm font-semibold text-gray-600 bg-gray-100 hover:bg-gray-200 transition-colors'>Cancel</button>
                       <button type='submit'
                         class='px-4 py-2 rounded-xl text-sm font-bold text-white bg-amber-600 hover:bg-amber-700 transition-colors shadow-sm'>Confirm Ban</button>
@@ -857,12 +961,17 @@ let post_page ?user ?(noindex=false) ~is_member ~is_current_user_mod ~mod_userna
                   </form>
                 </div>
               </dialog>"
-              post.id post.id csrf_token (Components.html_escape post.username) post.community_id post.id
+  [ Html.int (post.id)
+  ; Html.int (post.id)
+  ; csrf_token
+  ; (Html.text (post.username))
+  ; Html.int (post.community_id)
+  ; Html.int (post.id) ])
           else
             (* Rule C: admin acting without mod role — handler prefixes reason as admin override *)
-            Printf.sprintf "
-              <button onclick=\"document.getElementById('ban-modal-postpage-%d').showModal()\" class='text-sm font-bold text-red-700 hover:text-red-900 border border-red-300 bg-red-50 hover:bg-red-100 rounded px-2 py-0.5 transition-colors ml-1'>⚡ Admin Ban</button>
-              <dialog id='ban-modal-postpage-%d' class='rounded-2xl shadow-2xl p-0 w-full max-w-md backdrop:bg-black/60 backdrop:backdrop-blur-sm border-0'>
+            (Html.template "
+              <button onclick=\"document.getElementById('ban-modal-postpage-%s').showModal()\" class='text-sm font-bold text-red-700 hover:text-red-900 border border-red-300 bg-red-50 hover:bg-red-100 rounded px-2 py-0.5 transition-colors ml-1'>⚡ Admin Ban</button>
+              <dialog id='ban-modal-postpage-%s' class='rounded-2xl shadow-2xl p-0 w-full max-w-md backdrop:bg-black/60 backdrop:backdrop-blur-sm border-0'>
                 <div class='bg-white rounded-2xl overflow-hidden'>
                   <div class='bg-red-50 border-b border-red-200 px-6 py-4'>
                     <h3 class='text-base font-bold text-red-900'>⚡ Admin Ban</h3>
@@ -871,7 +980,7 @@ let post_page ?user ?(noindex=false) ~is_member ~is_current_user_mod ~mod_userna
                   <form action='/ban-community-user' method='POST' class='px-6 py-5 flex flex-col gap-4'>
                     %s
                     <input type='hidden' name='target_username' value='%s'>
-                    <input type='hidden' name='community_id' value='%d'>
+                    <input type='hidden' name='community_id' value='%s'>
                     <label class='flex flex-col gap-1.5'>
                       <span class='text-sm font-semibold text-gray-700'>Reason <span class='text-red-500'>*</span></span>
                       <textarea name='reason' required rows='4'
@@ -879,7 +988,7 @@ let post_page ?user ?(noindex=false) ~is_member ~is_current_user_mod ~mod_userna
                         class='w-full rounded-xl border border-red-300 bg-red-50 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-400 resize-none'></textarea>
                     </label>
                     <div class='flex justify-end gap-2 pt-1'>
-                      <button type='button' onclick=\"document.getElementById('ban-modal-postpage-%d').close()\"
+                      <button type='button' onclick=\"document.getElementById('ban-modal-postpage-%s').close()\"
                         class='px-4 py-2 rounded-xl text-sm font-semibold text-gray-600 bg-gray-100 hover:bg-gray-200 transition-colors'>Cancel</button>
                       <button type='submit'
                         class='px-4 py-2 rounded-xl text-sm font-bold text-white bg-red-600 hover:bg-red-700 transition-colors shadow-sm'>Confirm Ban</button>
@@ -887,28 +996,37 @@ let post_page ?user ?(noindex=false) ~is_member ~is_current_user_mod ~mod_userna
                   </form>
                 </div>
               </dialog>"
-              post.id post.id csrf_token (Components.html_escape post.username) post.community_id post.id
-      | _ -> ""
-    else ""
+  [ Html.int (post.id)
+  ; Html.int (post.id)
+  ; csrf_token
+  ; (Html.text (post.username))
+  ; Html.int (post.community_id)
+  ; Html.int (post.id) ])
+      | _ -> Html.empty
+    else Html.empty
   in
 
   let post_rules_html =
     match community.Community_types.rules with
     | Some rules when rules <> "" ->
-        Printf.sprintf "<div class='mt-4 pt-4 border-t border-gray-100'><h3 class='text-xs font-bold text-gray-500 uppercase tracking-wider mb-2'>Rules</h3><p class='text-xs text-gray-600 whitespace-pre-wrap'>%s</p></div>" (Components.html_escape rules)
-    | _ -> ""
+        (Html.template "<div class='mt-4 pt-4 border-t border-gray-100'><h3 class='text-xs font-bold text-gray-500 uppercase tracking-wider mb-2'>Rules</h3><p class='text-xs text-gray-600 whitespace-pre-wrap'>%s</p></div>"
+  [ (Html.text (rules)) ])
+    | _ -> Html.empty
   in
 
   let post_mods_html =
-    if mod_usernames = [] then "<p class='text-xs text-gray-400 italic'>No moderators yet.</p>"
+    if mod_usernames = [] then (Html.static "<p class='text-xs text-gray-400 italic'>No moderators yet.</p>")
     else
-      let links = String.concat "\n" (List.map (fun u ->
-        Printf.sprintf "<li><a href='/u/%s' class='text-sm text-gray-700 hover:text-[#C94C4C] transition'>u/%s</a></li>" (Components.html_escape u) (Components.html_escape u)
+      let links = (Html.join (Html.static "\n")) (List.map (fun u ->
+        (Html.template "<li><a href='/u/%s' class='text-sm text-gray-700 hover:text-[#C94C4C] transition'>u/%s</a></li>"
+  [ (Html.text (u))
+  ; (Html.text (u)) ])
       ) mod_usernames) in
-      Printf.sprintf "<ul class='space-y-1'>%s</ul>" links
+      (Html.template "<ul class='space-y-1'>%s</ul>"
+  [ links ])
   in
 
-  let post_right_sidebar = Printf.sprintf "
+  let post_right_sidebar = (Html.template "
     <div class='bg-white border border-[#E0D9CC] rounded-xl shadow-sm p-5'>
         <h2 class='font-bold text-gray-900 mb-1'>%s</h2>
         <div class='text-xs text-[#C94C4C] font-mono mb-3'>/c/%s</div>
@@ -923,9 +1041,13 @@ let post_page ?user ?(noindex=false) ~is_member ~is_current_user_mod ~mod_userna
             %s
         </div>
     </div>"
-    (Components.html_escape community.name) (Components.html_escape community.slug)
-    (Components.html_escape (Option.value ~default:"No description." community.description))
-    post_rules_html (Components.html_escape community.slug) (Components.html_escape community.slug) post_mods_html
+  [ (Html.text (community.name))
+  ; (Html.text (community.slug))
+  ; (Html.text ((Option.value ~default:"No description." community.description)))
+  ; post_rules_html
+  ; (Html.text (community.slug))
+  ; (Html.text (community.slug))
+  ; post_mods_html ])
   in
 
   (* Escaped like every other letter-tile initial (Components.initial_tile and
@@ -935,8 +1057,7 @@ let post_page ?user ?(noindex=false) ~is_member ~is_current_user_mod ~mod_userna
   let post_author_initial =
     if is_post_deleted then "?"
     else
-      Components.html_escape
-        (String.uppercase_ascii (String.sub post.username 0 1))
+      ((String.uppercase_ascii (String.sub post.username 0 1)))
   in
   let post_local_stats_html =
     let total_contribs = post.author_local_post_count + post.author_local_comment_count in
@@ -944,10 +1065,12 @@ let post_page ?user ?(noindex=false) ~is_member ~is_current_user_mod ~mod_userna
       | None | Some "" -> ""
       | Some ts -> Printf.sprintf " · active since %s" (Components.format_month_year ts)
     in
-    Printf.sprintf "<span class='font-semibold text-red-700'>%d</span> local karma · <span class='font-semibold text-red-700'>%d</span> contributions here%s"
-      post.author_local_karma total_contribs active_since_part
+    (Html.template "<span class='font-semibold text-red-700'>%s</span> local karma · <span class='font-semibold text-red-700'>%s</span> contributions here%s"
+  [ Html.int (post.author_local_karma)
+  ; Html.int (total_contribs)
+  ; (Html.text active_since_part) ])
   in
-  let content = Printf.sprintf "
+  let content = (Html.template "
     <div class='flex flex-col lg:flex-row gap-6 items-start xl:translate-x-20 2xl:translate-x-24'>
         <div class='min-w-0 flex-1'>
             <div class='bg-white border border-[#E0D9CC] rounded-xl shadow-sm p-6 mb-6'>
@@ -982,28 +1105,35 @@ let post_page ?user ?(noindex=false) ~is_member ~is_current_user_mod ~mod_userna
             %s
         </div>
     </div>"
-    post.community_slug post.community_slug
-    (match post.section_name, post.section_slug with
+  [ (Html.text post.community_slug)
+  ; (Html.text post.community_slug)
+  ; (match post.section_name, post.section_slug with
      | Some sn, Some ss ->
-         Printf.sprintf "<span class='text-gray-400 mx-1'>›</span><a href='/c/%s/s/%s' class='font-bold text-[#C94C4C] hover:underline'>%s</a>"
-           (Components.html_escape post.community_slug) (Components.html_escape ss) (Components.html_escape sn)
+         (Html.template "<span class='text-gray-400 mx-1'>›</span><a href='/c/%s/s/%s' class='font-bold text-[#C94C4C] hover:underline'>%s</a>"
+  [ (Html.text (post.community_slug))
+  ; (Html.text (ss))
+  ; (Html.text (sn)) ])
      | _ when post.community_sections_enabled ->
-         Printf.sprintf "<span class='text-gray-400 mx-1'>›</span><a href='/c/%s/s/uncategorized' class='font-bold text-[#C94C4C] hover:underline'>Uncategorized</a>"
-           (Components.html_escape post.community_slug)
-     | _ -> "")
-    post_author_initial
-    (Components.render_author ~mod_usernames ~admin_usernames post.username) (Components.time_ago post.created_at) (post_action_btn ^ ban_post_btn)
-    post_local_stats_html
-    (* The one interpolation in this renderer that reached the document raw —
-       every sibling renderer escapes post.title; pinned by a regression test. *)
-    (Components.html_escape post.title)
-    image_content link_content post_content voting_pill
-    action_section comments_html
-    post_right_sidebar
+         (Html.template "<span class='text-gray-400 mx-1'>›</span><a href='/c/%s/s/uncategorized' class='font-bold text-[#C94C4C] hover:underline'>Uncategorized</a>"
+  [ (Html.text (post.community_slug)) ])
+     | _ -> Html.empty)
+  ; (Html.text post_author_initial)
+  ; (Components.render_author ~mod_usernames ~admin_usernames post.username)
+  ; (Html.text (Components.time_ago post.created_at))
+  ; (post_action_btn ++ ban_post_btn)
+  ; post_local_stats_html
+  ; (Html.text (post.title))
+  ; image_content
+  ; link_content
+  ; post_content
+  ; voting_pill
+  ; action_section
+  ; comments_html
+  ; post_right_sidebar ])
   in
   (* Inline script keeps post_page self-contained; prepended so the function
      is defined before any onclick fires (no DOMContentLoaded needed). *)
-  let toggle_script = {|<script>
+  let toggle_script = (Html.static {|<script>
 function toggleComment(id, btn) {
   const content = document.getElementById('comment-content-' + id);
   const children = document.getElementById('comment-children-' + id);
@@ -1018,7 +1148,7 @@ function toggleComment(id, btn) {
     btn.innerText = '[+]';
   }
 }
-</script>|} in
+</script>|}) in
   (* The byte-pinned voting_pill shows Share to every viewer; only member
      documents carry the wrapper's behavior script (which defines
      copyPostLink). Guests get the share-only script — same single
@@ -1026,10 +1156,10 @@ function toggleComment(id, btn) {
      fragment so each document holds exactly one definition. *)
   let guest_share_script = match user with
     | None -> Page_shell.launch_share_script
-    | Some _ -> ""
+    | Some _ -> Html.empty
   in
   Page_shell.launch_app_page ?user ~noindex ~request
     ~rail_communities:user_communities
     ~analytics_community:(post.community_id, community.visibility)
     ~page_class:"launch-legacy-post" ~title:post.title
-    ~content:(toggle_script ^ content ^ guest_share_script) ()
+    ~content:(toggle_script ++ content ++ guest_share_script) ()

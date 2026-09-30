@@ -17,7 +17,7 @@ let contains hay needle =
 
 (* === DB-free: /search link URL encoding === *)
 
-(* Exact inverse of Components.html_escape (its five entities only), so a
+(* Exact inverse of Html.text (its five entities only), so a
    parsed href can be fed to Uri the way a browser would after entity
    decoding. *)
 let html_unescape s =

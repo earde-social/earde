@@ -7,4 +7,16 @@ val new_community_form : ?user:string -> ?rail_communities:Community_types.commu
     and carries its compact "Shared from" provenance and the placement's
     destination section. *)
 
-val community_settings_page : ?user:string -> ?connected_projects:string -> ?rail_communities:Community_types.community list -> is_admin:bool -> is_top_mod:bool -> open_reports_count:int -> community:Community_types.community -> mods:User_store.user list -> banned_users:User_store.user list -> members:User_store.user list -> sections:Section_store.community_section list -> channels:Channel_store.channel list -> Dream.request -> string
+val community_settings_page :
+  ?user:string ->
+  ?connected_projects:Html.t ->
+  ?rail_communities:Community_types.community list ->
+  is_admin:bool ->
+  is_top_mod:bool ->
+  open_reports_count:int ->
+  community:Community_types.community ->
+  mods:User_store.user list ->
+  banned_users:User_store.user list ->
+  members:User_store.user list ->
+  sections:Section_store.community_section list ->
+  channels:Channel_store.channel list -> Dream.request -> string

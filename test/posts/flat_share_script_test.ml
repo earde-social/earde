@@ -121,12 +121,13 @@ let router =
                           fi_shared = None item must splice byte-identically
                           through the plain render_post call. *)
                        Dream.respond
-                         (String.concat "\n"
+                         (Earde.Html.to_string
+                            (Earde.Html.join (Earde.Html.static "\n")
                             (List.map
                                (fun (item : Earde.Post_types.feed_item) ->
                                  Earde.Post_cards.render_post req []
                                    item.Earde.Post_types.fi_post)
-                               posts))
+                               posts)))
                    | Error _ -> Dream.respond ~status:`Internal_Server_Error "")
               | _ -> Dream.respond ~status:`Not_Found ""))
     ]
@@ -150,7 +151,9 @@ let session_of uid name =
   [ ("user_id", string_of_int uid); ("username", name) ]
 
 let share_onclick post_id =
-  Printf.sprintf "onclick='copyPostLink(\"/p/%d\", this)'" post_id
+  Printf.sprintf
+    "data-share-path='/p/%d' onclick='copyPostLink(this.dataset.sharePath, this)'"
+    post_id
 
 (* 1: an anonymous public flat page carries exactly one working
    copyPostLink definition, wired to the canonical /p/:id path, with no

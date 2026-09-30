@@ -180,7 +180,7 @@ let consent_header = function
    session, for the emission/config cases that must not depend on middleware. *)
 let launch_doc ?analytics_community () =
   Earde.Page_shell.launch_app_page ?analytics_community
-    ~page_class:"launch-feed" ~title:"T" ~content:"<p>body</p>" ()
+    ~page_class:"launch-feed" ~title:"T" ~content:(Earde.Html.static "<p>body</p>") ()
 
 (* Full production-shaped raw values (dummy secrets), installable so
    layout/browser-config tests exercise a validated production config. *)

@@ -31,10 +31,10 @@
     Must run inside [Dream.sql_pool] and [Dream.sql_sessions]. *)
 val middleware : Dream.middleware
 
-(** The badge element, or the empty string.
+(** The badge element, or nothing.
 
     Empty whenever the count is zero or unknown — so a user with nothing
     unread gets a bare bell, with no badge element and no "0" anywhere in the
     document. A positive count renders as itself, capped at ["99+"] so a large
     mailbox cannot widen the top bar. *)
-val badge_html : ?request:Dream.request -> unit -> string
+val badge_html : ?request:Dream.request -> unit -> Html.t
