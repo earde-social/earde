@@ -1,3 +1,5 @@
+open Html.Infix
+
 (* Display-only heuristic for the admin dashboard: flags bot-like usernames (the
    signup incident produced runs of random handles). Deliberately conservative and
    imperfect — it only paints a UI chip, never gates an action or touches the DB. Pure,
@@ -42,8 +44,7 @@ let admin_dashboard_page ?user ?(rail_communities = []) ~signups_enabled
     ~(turnstile : [ `Configured | `Disabled | `Misconfigured ]) ~brevo_configured
     ~(recent_users : Admin_store.admin_recent_user list) ~(pending : Admin_store.pending_signup_row list)
     ~(banned_users : User_store.user list) request =
-  let csrf_token = Dream.csrf_tag request in
-  let esc = Components.html_escape in
+  let csrf_token = Csrf_field.tag request in
   (* "recently created" cutoff as an ISO-ish string; created_at::text sorts lexically the
      same as chronologically, so a string compare avoids any timestamp parsing. *)
   let recent_cutoff =
@@ -53,130 +54,139 @@ let admin_dashboard_page ?user ?(rail_communities = []) ~signups_enabled
       tm.Unix.tm_hour tm.Unix.tm_min tm.Unix.tm_sec
   in
   let stat label cls value =
-    Printf.sprintf
-      "<div class='admin-stat'><span class='admin-stat-label'>%s</span><span class='admin-stat-val %s'>%s</span></div>"
-      label cls value
+    (Html.template "<div class='admin-stat'><span class='admin-stat-label'>%s</span><span class='admin-stat-val %s'>%s</span></div>"
+  [ label
+  ; cls
+  ; value ])
   in
   let status_panel =
     let signups_row =
-      if signups_enabled then stat "signups" "admin-stat-val--ok" "enabled"
-      else stat "signups" "admin-stat-val--off" "closed"
+      if signups_enabled then stat (Html.static "signups") (Html.static "admin-stat-val--ok") (Html.static "enabled")
+      else stat (Html.static "signups") (Html.static "admin-stat-val--off") (Html.static "closed")
     in
     let turnstile_row = match turnstile with
-      | `Configured   -> stat "turnstile (bot check)" "admin-stat-val--ok"   "required &amp; configured"
-      | `Disabled     -> stat "turnstile (bot check)" "admin-stat-val--off"  "disabled · dev bypass"
-      | `Misconfigured -> stat "turnstile (bot check)" "admin-stat-val--bad" "misconfigured"
+      | `Configured   -> stat (Html.static "turnstile (bot check)") (Html.static "admin-stat-val--ok")   (Html.static "required &amp; configured")
+      | `Disabled     -> stat (Html.static "turnstile (bot check)") (Html.static "admin-stat-val--off")  (Html.static "disabled · dev bypass")
+      | `Misconfigured -> stat (Html.static "turnstile (bot check)") (Html.static "admin-stat-val--bad") (Html.static "misconfigured")
     in
     let brevo_row =
-      if brevo_configured then stat "email (brevo)" "admin-stat-val--ok" "configured"
-      else stat "email (brevo)" "admin-stat-val--warn" "not configured"
+      if brevo_configured then stat (Html.static "email (brevo)") (Html.static "admin-stat-val--ok") (Html.static "configured")
+      else stat (Html.static "email (brevo)") (Html.static "admin-stat-val--warn") (Html.static "not configured")
     in
-    Printf.sprintf
-      "<section class='admin-panel'>\
+    (Html.template "<section class='admin-panel'>\
          <h2 class='admin-panel-title'>Signup &amp; security status</h2>\
          <p class='admin-panel-desc'>Operational config flags only — no secret values are shown.</p>\
          <div class='admin-stats'>%s%s%s</div>\
        </section>"
-      signups_row turnstile_row brevo_row
+  [ signups_row
+  ; turnstile_row
+  ; brevo_row ])
   in
   let recent_users_panel =
     let rows =
       if recent_users = [] then
-        "<tr><td colspan='6' class='admin-empty'>No users yet.</td></tr>"
+        (Html.static "<tr><td colspan='6' class='admin-empty'>No users yet.</td></tr>")
       else
-        String.concat "\n" (List.map (fun (u : Admin_store.admin_recent_user) ->
+        Html.join (Html.static "\n") (List.map (fun (u : Admin_store.admin_recent_user) ->
           let badges =
-            (if u.is_admin  then "<span class='admin-badge admin-badge--admin'>admin</span>" else "")
-            ^ (if u.is_banned then "<span class='admin-badge admin-badge--banned'>banned</span>" else "")
+            (if u.is_admin  then (Html.static "<span class='admin-badge admin-badge--admin'>admin</span>") else Html.empty)
+            ++ (if u.is_banned then (Html.static "<span class='admin-badge admin-badge--banned'>banned</span>") else Html.empty)
           in
           let total = u.post_count + u.comment_count + u.message_count in
           let flags =
             let fs =
-              (if total = 0 then ["<span class='admin-flag'>no activity</span>"] else [])
-              @ (if looks_random_username u.username then ["<span class='admin-flag'>random name?</span>"] else [])
-              @ (if u.created_at >= recent_cutoff then ["<span class='admin-flag admin-flag--quiet'>new &lt;24h</span>"] else [])
+              (if total = 0 then [(Html.static "<span class='admin-flag'>no activity</span>")] else [])
+              @ (if looks_random_username u.username then [(Html.static "<span class='admin-flag'>random name?</span>")] else [])
+              @ (if u.created_at >= recent_cutoff then [(Html.static "<span class='admin-flag admin-flag--quiet'>new &lt;24h</span>")] else [])
             in
-            if fs = [] then "<span class='admin-cell-muted'>—</span>" else String.concat "" fs
+            if fs = [] then (Html.static "<span class='admin-cell-muted'>—</span>") else Html.concat fs
           in
-          let num c = Printf.sprintf "<td class='admin-num%s'>%d</td>" (if c = 0 then " admin-num--zero" else "") c in
-          Printf.sprintf
-            "<tr>\
+          let num c = (Html.template "<td class='admin-num%s'>%s</td>"
+  [ (if c = 0 then (Html.static " admin-num--zero") else Html.empty)
+  ; Html.int (c) ]) in
+          (Html.template "<tr>\
                <td><a class='admin-user-link' href='/u/%s'>%s</a>%s</td>\
                <td class='admin-cell-muted'>%s</td>%s%s%s\
                <td>%s</td>\
              </tr>"
-            (esc u.username) (esc u.username) badges
-            (Components.time_ago u.created_at)
-            (num u.post_count) (num u.comment_count) (num u.message_count)
-            flags
+  [ (Html.text (u.username))
+  ; (Html.text (u.username))
+  ; badges
+  ; (Html.text (Components.time_ago u.created_at))
+  ; (num u.post_count)
+  ; (num u.comment_count)
+  ; (num u.message_count)
+  ; flags ])
         ) recent_users)
     in
-    Printf.sprintf
-      "<section class='admin-panel'>\
+    (Html.template "<section class='admin-panel'>\
          <h2 class='admin-panel-title'>Recent users</h2>\
-         <p class='admin-panel-desc'>Latest %d accounts by signup time, with activity counts and quick suspicious-signal flags.</p>\
+         <p class='admin-panel-desc'>Latest %s accounts by signup time, with activity counts and quick suspicious-signal flags.</p>\
          <div class='admin-table-wrap'><table class='admin-table ph-no-capture'>\
            <thead><tr><th>User</th><th>Joined</th><th>Posts</th><th>Comments</th><th>Msgs</th><th>Signals</th></tr></thead>\
            <tbody>%s</tbody>\
          </table></div>\
        </section>"
-      (List.length recent_users) rows
+  [ Html.int ((List.length recent_users))
+  ; rows ])
   in
   let pending_panel =
     let rows =
       if pending = [] then
-        "<tr><td colspan='5' class='admin-empty'>No active pending signups.</td></tr>"
+        (Html.static "<tr><td colspan='5' class='admin-empty'>No active pending signups.</td></tr>")
       else
-        String.concat "\n" (List.map (fun (p : Admin_store.pending_signup_row) ->
-          let ip = match p.ip_address with Some s when s <> "" -> esc s | _ -> "—" in
-          Printf.sprintf
-            "<tr>\
+        Html.join (Html.static "\n") (List.map (fun (p : Admin_store.pending_signup_row) ->
+          let ip = match p.ip_address with Some s when s <> "" -> (Html.text (s)) | _ -> (Html.static "—") in
+          (Html.template "<tr>\
                <td class='admin-cell-mono'>%s</td>\
                <td class='admin-cell-muted'>%s</td>\
                <td class='admin-cell-muted'>%s</td>\
                <td class='admin-cell-muted'>%s</td>\
                <td class='admin-cell-mono'>%s</td>\
              </tr>"
-            (esc p.username) (esc p.email)
-            (Components.time_ago p.created_at) (Components.time_ago p.expires_at) ip
+  [ (Html.text (p.username))
+  ; (Html.text (p.email))
+  ; (Html.text (Components.time_ago p.created_at))
+  ; (Html.text (Components.time_ago p.expires_at))
+  ; ip ])
         ) pending)
     in
-    Printf.sprintf
-      "<section class='admin-panel'>\
+    (Html.template "<section class='admin-panel'>\
          <h2 class='admin-panel-title'>Pending signups</h2>\
-         <p class='admin-panel-desc'>Unconfirmed signups still within their 24h window (latest %d). These have not become user accounts yet.</p>\
+         <p class='admin-panel-desc'>Unconfirmed signups still within their 24h window (latest %s). These have not become user accounts yet.</p>\
          <div class='admin-table-wrap'><table class='admin-table ph-no-capture'>\
            <thead><tr><th>Username</th><th>Email</th><th>Requested</th><th>Expires</th><th>IP</th></tr></thead>\
            <tbody>%s</tbody>\
          </table></div>\
        </section>"
-      (List.length pending) rows
+  [ Html.int ((List.length pending))
+  ; rows ])
   in
   let banned_panel =
     let rows =
       if banned_users = [] then
-        "<tr><td colspan='3' class='admin-empty'>No users are currently globally banned.</td></tr>"
+        (Html.static "<tr><td colspan='3' class='admin-empty'>No users are currently globally banned.</td></tr>")
       else
-        String.concat "\n" (List.map (fun (u : User_store.user) ->
-          Printf.sprintf
-            "<tr>\
+        Html.join (Html.static "\n") (List.map (fun (u : User_store.user) ->
+          (Html.template "<tr>\
                <td><a class='admin-user-link' href='/u/%s'>%s</a></td>\
                <td class='admin-cell-muted'>%s</td>\
                <td>\
-                 <form class='admin-act-form' action='/admin/unban/user/%d' method='POST' onsubmit=\"confirmModal(event, 'Lift global ban on u/%s?')\">\
+                 <form class='admin-act-form' action='/admin/unban/user/%s' method='POST' onsubmit=\"confirmModal(event, 'Lift global ban on u/%s?')\">\
                    %s\
                    <button type='submit' class='admin-btn-unban'>Unban</button>\
                  </form>\
                </td>\
              </tr>"
-            (esc u.username) (esc u.username) (esc u.email) u.id
-            (* JS string literal inside an HTML attribute: html_escape alone
-               decodes back to a live apostrophe before JavaScript parses it. *)
-            (Components.js_single_quoted_attr u.username) csrf_token
+  [ (Html.text (u.username))
+  ; (Html.text (u.username))
+  ; (Html.text (u.email))
+  ; Html.int (u.id)
+  ; (Html.js_string (u.username))
+  ; csrf_token ])
         ) banned_users)
     in
-    Printf.sprintf
-      "<section class='admin-panel'>\
+    (Html.template "<section class='admin-panel'>\
          <h2 class='admin-panel-title'>Globally banned users</h2>\
          <p class='admin-panel-desc'>These accounts are blocked from logging in and posting anywhere on Earde.</p>\
          <div class='admin-table-wrap'><table class='admin-table ph-no-capture'>\
@@ -184,21 +194,24 @@ let admin_dashboard_page ?user ?(rail_communities = []) ~signups_enabled
            <tbody>%s</tbody>\
          </table></div>\
        </section>"
-      rows
+  [ rows ])
   in
   (* Serif civic head band outside the panel stack. KPI monitoring moved to
      PostHog, so the head carries no dashboard link. *)
   let page_head =
-    "<div class='page__head'><div class='page__head-inner page__head-inner--list'>\
+    (Html.static "<div class='page__head'><div class='page__head-inner page__head-inner--list'>\
      <h1 class='page__title'>Administration</h1>\
      <p class='page__sub launch-admin-ctx'>/admin &middot; global registry &mdash; signup status, accounts, bans</p>\
-     </div></div>"
+     </div></div>")
   in
-  let content = Printf.sprintf
-    "%s<div class='scroll'><div class='container container--list'>\
+  let content = (Html.template "%s<div class='scroll'><div class='container container--list'>\
      <div class='admin-wrap'>%s%s%s%s</div>\
      </div></div>"
-    page_head status_panel recent_users_panel pending_panel banned_panel
+  [ page_head
+  ; status_panel
+  ; recent_users_panel
+  ; pending_panel
+  ; banned_panel ])
   in
   Page_shell.launch_app_page ~noindex:true ?user ~request ~rail_communities
     ~page_class:"launch-global-admin" ~title:"Admin Dashboard" ~content ()

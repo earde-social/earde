@@ -123,7 +123,7 @@ let sql_pool url =
 let badge_probe request =
   Dream.html
     (Earde.Page_shell.launch_app_page ~request ~user:"nbdg_probe"
-       ~page_class:"launch-feed" ~title:"probe" ~content:"" ())
+       ~page_class:"launch-feed" ~title:"probe" ~content:Earde.Html.empty ())
 
 let routes =
   Dream.router

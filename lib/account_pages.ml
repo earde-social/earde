@@ -11,7 +11,7 @@
    unknown-value fallback, activity ordering and every destination link are
    unchanged. *)
 let user_profile_page ?user ?(rail_communities = []) ~is_admin ~is_globally_banned ~profile_id ~admin_usernames ~moderated_communities ~active_tab user_votes username joined_at bio_opt avatar_url_opt karma posts user_comments community_stats request =
-  let csrf_token = Dream.csrf_tag request in
+  let csrf_token = Csrf_field.tag request in
   let bio = Option.value ~default:"This user hasn't written a bio yet." bio_opt in
   (* Profile avatar: route the stored URL through Components.user_avatar (safe_img_src) instead
      of raw interpolation. Avatarless profiles now show a local letter tile rather than the old
@@ -27,13 +27,14 @@ let user_profile_page ?user ?(rail_communities = []) ~is_admin ~is_globally_bann
      MOD badges iterate moderated_communities — one badge per community the user moderates. *)
   let profile_admin_badge =
     if List.mem username admin_usernames then
-      "<span class='account-badge account-badge--admin'>Admin</span>"
-    else ""
+      (Html.static "<span class='account-badge account-badge--admin'>Admin</span>")
+    else Html.empty
   in
   let mod_badges =
-    String.concat " " (List.map (fun (a : Community_types.community) ->
-      Printf.sprintf "<a href='/c/%s' class='account-badge account-badge--mod'>Mod of /c/%s</a>"
-        a.slug a.slug
+    (Html.join (Html.static " ")) (List.map (fun (a : Community_types.community) ->
+      (Html.template "<a href='/c/%s' class='account-badge account-badge--mod'>Mod of /c/%s</a>"
+  [ (Html.text a.slug)
+  ; (Html.text a.slug) ])
     ) moderated_communities)
   in
   (* Banned badge: shown on the profile header so any visitor sees the account status.
@@ -41,12 +42,15 @@ let user_profile_page ?user ?(rail_communities = []) ~is_admin ~is_globally_bann
      double-ban confusion and surface the current state clearly. *)
   let globally_banned_badge =
     if is_globally_banned then
-      "<span class='account-badge account-badge--banned'>Globally banned</span>"
-    else ""
+      (Html.static "<span class='account-badge account-badge--banned'>Globally banned</span>")
+    else Html.empty
   in
   let role_badges =
-    if profile_admin_badge = "" && mod_badges = "" && globally_banned_badge = "" then ""
-    else Printf.sprintf "<div class='account-badges'>%s%s%s</div>" profile_admin_badge mod_badges globally_banned_badge
+    if profile_admin_badge = Html.empty && mod_badges = Html.empty && globally_banned_badge = Html.empty then Html.empty
+    else (Html.template "<div class='account-badges'>%s%s%s</div>"
+  [ profile_admin_badge
+  ; mod_badges
+  ; globally_banned_badge ])
   in
   (* Edit Profile: only render when the logged-in user is viewing their own profile.
      Avoids exposing /settings entry point on others' profiles — a cosmetic boundary
@@ -54,8 +58,8 @@ let user_profile_page ?user ?(rail_communities = []) ~is_admin ~is_globally_bann
   let edit_profile_btn =
     match user with
     | Some logged_in when logged_in = username ->
-      "<a href='/settings' class='account-btn account-btn--secondary'>Edit profile</a>"
-    | _ -> ""
+      (Html.static "<a href='/settings' class='account-btn account-btn--secondary'>Edit profile</a>")
+    | _ -> Html.empty
   in
   (* Admin Panel: only render for the logged-in admin on their own profile.
      Gating on both own-profile AND is_admin prevents leaking the /admin route
@@ -63,12 +67,14 @@ let user_profile_page ?user ?(rail_communities = []) ~is_admin ~is_globally_bann
   let admin_panel_btn =
     match user with
     | Some logged_in when logged_in = username && is_admin ->
-      "<a href='/admin' class='account-btn account-btn--secondary'>Admin panel</a>"
-    | _ -> ""
+      (Html.static "<a href='/admin' class='account-btn account-btn--secondary'>Admin panel</a>")
+    | _ -> Html.empty
   in
   let header_actions =
-    if edit_profile_btn = "" && admin_panel_btn = "" then ""
-    else Printf.sprintf "<div class='account-actions'>%s%s</div>" edit_profile_btn admin_panel_btn
+    if edit_profile_btn = Html.empty && admin_panel_btn = Html.empty then Html.empty
+    else (Html.template "<div class='account-actions'>%s%s</div>"
+  [ edit_profile_btn
+  ; admin_panel_btn ])
   in
 
   (* The username is attacker-chosen for accounts created before the signup
@@ -78,27 +84,34 @@ let user_profile_page ?user ?(rail_communities = []) ~is_admin ~is_globally_bann
      so they take js_single_quoted_attr. *)
   let admin_controls =
     if is_admin && (Option.value ~default:"" user) <> username then
-      let js_username = Components.js_single_quoted_attr username in
+      let js_username = (Html.js_string (username)) in
       let ban_or_unban_btn =
         if is_globally_banned then
-          Printf.sprintf "
-            <form action='/admin/unban/user/%d' method='POST' onsubmit=\"confirmModal(event, 'Lift global ban on u/%s?')\">
+          (Html.template "
+            <form action='/admin/unban/user/%s' method='POST' onsubmit=\"confirmModal(event, 'Lift global ban on u/%s?')\">
                 %s
                 <button type='submit' class='account-btn account-btn--secondary'>Unban user</button>
-            </form>" profile_id js_username csrf_token
+            </form>"
+  [ Html.int (profile_id)
+  ; js_username
+  ; csrf_token ])
         else
-          Printf.sprintf "
-            <form action='/admin/ban/user/%d' method='POST' onsubmit=\"confirmModal(event, 'Permanently ban u/%s? They will be blocked from logging in and posting.')\">
+          (Html.template "
+            <form action='/admin/ban/user/%s' method='POST' onsubmit=\"confirmModal(event, 'Permanently ban u/%s? They will be blocked from logging in and posting.')\">
                 %s
                 <button type='submit' class='account-btn'>Ban user</button>
-            </form>" profile_id js_username csrf_token
+            </form>"
+  [ Html.int (profile_id)
+  ; js_username
+  ; csrf_token ])
       in
-      Printf.sprintf "
+      (Html.template "
         <div class='account-admin'>
             <h3 class='account-admin-title'>Admin controls</h3>
             %s
-        </div>" ban_or_unban_btn
-    else ""
+        </div>"
+  [ ban_or_unban_btn ])
+    else Html.empty
   in
 
   let tab_class active =
@@ -106,13 +119,19 @@ let user_profile_page ?user ?(rail_communities = []) ~is_admin ~is_globally_bann
   in
   (* User-facing label is "Threads"; the query param stays ?tab=posts so existing links,
      the handler's tab dispatch, and bookmarks keep working unchanged. *)
-  let esc_username = Components.html_escape username in
-  let tab_nav = Printf.sprintf "
+  let esc_username = (Html.text (username)) in
+  let tab_nav = (Html.template "
     <div class='account-tabs'>
         <a href='/u/%s?tab=posts' class='%s'>Threads</a>
         <a href='/u/%s?tab=comments' class='%s'>Comments</a>
         <a href='/u/%s?tab=communities' class='%s'>Communities</a>
-    </div>" esc_username (tab_class "posts") esc_username (tab_class "comments") esc_username (tab_class "communities")
+    </div>"
+  [ esc_username
+  ; (Html.text (tab_class "posts"))
+  ; esc_username
+  ; (Html.text (tab_class "comments"))
+  ; esc_username
+  ; (Html.text (tab_class "communities")) ])
   in
 
   (* Profile-specific thread row. The shared render_forum_row markup is scoped to the
@@ -127,114 +146,142 @@ let user_profile_page ?user ?(rail_communities = []) ~is_admin ~is_globally_bann
     let up_action = if current_vote = 1 then 0 else 1 in
     let down_action = if current_vote = -1 then 0 else -1 in
     let upvote_html = match user with
-      | Some _ -> Printf.sprintf "<form action='/vote' method='POST'>%s<input type='hidden' name='post_id' value='%d'><input type='hidden' name='direction' value='%d'><button type='submit' class='%s font-bold text-sm leading-none'>▲</button></form>" csrf_token post.id up_action up_color
-      | None -> "<a href='/login' class='text-gray-400 hover:text-orange-500 font-bold text-sm leading-none'>▲</a>"
+      | Some _ -> (Html.template "<form action='/vote' method='POST'>%s<input type='hidden' name='post_id' value='%s'><input type='hidden' name='direction' value='%s'><button type='submit' class='%s font-bold text-sm leading-none'>▲</button></form>"
+  [ csrf_token
+  ; Html.int (post.id)
+  ; Html.int (up_action)
+  ; (Html.text up_color) ])
+      | None -> (Html.static "<a href='/login' class='text-gray-400 hover:text-orange-500 font-bold text-sm leading-none'>▲</a>")
     in
     let downvote_html =
-      if not post.allow_downvotes then ""
+      if not post.allow_downvotes then Html.empty
       else match user with
-      | Some _ -> Printf.sprintf "<form action='/vote' method='POST'>%s<input type='hidden' name='post_id' value='%d'><input type='hidden' name='direction' value='%d'><button type='submit' class='%s font-bold text-sm leading-none'>▼</button></form>" csrf_token post.id down_action down_color
-      | None -> "<a href='/login' class='text-gray-400 hover:text-[#69C3D2] font-bold text-sm leading-none'>▼</a>"
+      | Some _ -> (Html.template "<form action='/vote' method='POST'>%s<input type='hidden' name='post_id' value='%s'><input type='hidden' name='direction' value='%s'><button type='submit' class='%s font-bold text-sm leading-none'>▼</button></form>"
+  [ csrf_token
+  ; Html.int (post.id)
+  ; Html.int (down_action)
+  ; (Html.text down_color) ])
+      | None -> (Html.static "<a href='/login' class='text-gray-400 hover:text-[#69C3D2] font-bold text-sm leading-none'>▼</a>")
     in
     let domain_html = match post.url with
       | Some u -> (match Post_cards.extract_domain u with
-          | Some d -> Printf.sprintf "<a class='account-thread-domain' href='%s' target='_blank' rel='noopener'>%s ↗</a>" (Components.safe_url u) (Components.html_escape d)
-          | None -> "")
-      | None -> ""
+          | Some d -> (Html.template "<a class='account-thread-domain' href='%s' target='_blank' rel='noopener'>%s ↗</a>"
+  [ (Html.external_url (u))
+  ; (Html.text (d)) ])
+          | None -> Html.empty)
+      | None -> Html.empty
     in
     let preview_html = match post.content with
-      | Some c when String.trim c <> "" -> Printf.sprintf "<div class='account-thread-preview'>%s</div>" (Components.html_escape c)
-      | _ -> ""
+      | Some c when String.trim c <> "" -> (Html.template "<div class='account-thread-preview'>%s</div>"
+  [ (Html.text (c)) ])
+      | _ -> Html.empty
     in
     (* Each row names its origin community/section, since a profile spans communities. *)
     let context_html =
       let section_html = match post.section_name, post.section_slug with
         | Some name, Some slug when String.trim name <> "" ->
-            Printf.sprintf "<span class='sec'>§</span> <a href='/c/%s/s/%s'>%s</a> <span class='dot'>·</span> "
-              (Components.html_escape post.community_slug) (Components.html_escape slug) (Components.html_escape name)
-        | _ -> ""
+            (Html.template "<span class='sec'>§</span> <a href='/c/%s/s/%s'>%s</a> <span class='dot'>·</span> "
+  [ (Html.text (post.community_slug))
+  ; (Html.text (slug))
+  ; (Html.text (name)) ])
+        | _ -> Html.empty
       in
-      Printf.sprintf "<div class='account-thread-ctx'>%s<a href='/c/%s'>/c/%s</a></div>"
-        section_html (Components.html_escape post.community_slug) (Components.html_escape post.community_slug)
+      (Html.template "<div class='account-thread-ctx'>%s<a href='/c/%s'>/c/%s</a></div>"
+  [ section_html
+  ; (Html.text (post.community_slug))
+  ; (Html.text (post.community_slug)) ])
     in
     let thread_href = Post_cards.canonical_thread_path post.community_slug post.id post.title in
-    Printf.sprintf "
+    (Html.template "
         <div class='account-thread'>
-            <div class='account-thread-vote'>%s<span class='account-thread-score'>%d</span>%s</div>
+            <div class='account-thread-vote'>%s<span class='account-thread-score'>%s</span>%s</div>
             <div class='account-thread-main'>
                 %s
                 <div class='account-thread-title'><a href='%s'>%s</a></div>
                 %s
-                <div class='account-thread-meta'>%s<span>by %s</span><span>%s</span><a href='%s'>💬 %d</a></div>
+                <div class='account-thread-meta'>%s<span>by %s</span><span>%s</span><a href='%s'>💬 %s</a></div>
             </div>
         </div>"
-      upvote_html post.score downvote_html
-      context_html
-      thread_href (Components.html_escape post.title)
-      preview_html
-      domain_html (Components.render_author ~admin_usernames post.username) (Components.time_ago post.created_at) thread_href post.comment_count
+  [ upvote_html
+  ; Html.int (post.score)
+  ; downvote_html
+  ; context_html
+  ; (Html.text thread_href)
+  ; (Html.text (post.title))
+  ; preview_html
+  ; domain_html
+  ; (Components.render_author ~admin_usernames post.username)
+  ; (Html.text (Components.time_ago post.created_at))
+  ; (Html.text thread_href)
+  ; Html.int (post.comment_count) ])
   in
 
   let posts_html =
     if posts = [] then
-      "<div class='account-empty'>This user hasn't started any threads yet.</div>"
+      (Html.static "<div class='account-empty'>This user hasn't started any threads yet.</div>")
     else
-      Printf.sprintf "<div class='account-threads'>%s</div>"
-        (String.concat "\n" (List.map render_thread_row posts))
+      (Html.template "<div class='account-threads'>%s</div>"
+  [ ((Html.join (Html.static "\n")) (List.map render_thread_row posts)) ])
   in
 
   let comments_html =
     if user_comments = [] then
-      "<div class='account-empty'>This user hasn't commented anything yet.</div>"
+      (Html.static "<div class='account-empty'>This user hasn't commented anything yet.</div>")
     else
-      String.concat "\n" (List.map (fun (_id, content, created_at, post_id, post_title, score) ->
-        Printf.sprintf "
+      (Html.join (Html.static "\n")) (List.map (fun (_id, content, created_at, post_id, post_title, score) ->
+        (Html.template "
           <div class='account-comment'>
               <div class='account-comment-meta'>
                   <span>%s</span>
                   <span class='dot'>·</span>
-                  <span>%d points</span>
+                  <span>%s points</span>
               </div>
               <div class='account-comment-body'>%s</div>
-              <a href='/p/%d' class='account-comment-link'>&#8618; Commented on: %s</a>
-          </div>" created_at score (Components.html_escape content) post_id (Components.html_escape post_title)
+              <a href='/p/%s' class='account-comment-link'>&#8618; Commented on: %s</a>
+          </div>"
+  [ Html.text created_at
+  ; Html.int (score)
+  ; (Html.text (content))
+  ; Html.int (post_id)
+  ; (Html.text (post_title)) ])
       ) user_comments)
   in
 
   let communities_html =
     if community_stats = [] then
-      "<div class='account-empty'>No community activity yet.</div>"
+      (Html.static "<div class='account-empty'>No community activity yet.</div>")
     else begin
-      let cards = String.concat "\n" (List.map (fun (s : Community_user_stats_store.community_user_stat) ->
+      let cards = (Html.join (Html.static "\n")) (List.map (fun (s : Community_user_stats_store.community_user_stat) ->
         let total = s.local_post_count + s.local_comment_count in
         let active_since =
           match s.first_active_at with
-          | None -> ""
+          | None -> Html.empty
           | Some ts ->
-              Printf.sprintf "<div class='account-comm-sub'>active since %s</div>"
-                (Components.format_month_year ts)
+              (Html.template "<div class='account-comm-sub'>active since %s</div>"
+  [ (Html.text (Components.format_month_year ts)) ])
         in
-        Printf.sprintf "
+        (Html.template "
           <a href='/c/%s' class='account-comm-card'>
               <div class='account-comm-name'>%s</div>
               <div class='account-comm-slug'>/c/%s</div>
-              <div class='account-comm-stat'><strong>%d</strong> local karma</div>
-              <div class='account-comm-stat'><strong>%d</strong> contributions here</div>
-              <div class='account-comm-sub'>%d posts &middot; %d comments</div>
+              <div class='account-comm-stat'><strong>%s</strong> local karma</div>
+              <div class='account-comm-stat'><strong>%s</strong> contributions here</div>
+              <div class='account-comm-sub'>%s posts &middot; %s comments</div>
               %s
           </a>"
-          s.community_slug
-          (Components.html_escape s.community_name)
-          s.community_slug
-          s.local_karma
-          total
-          s.local_post_count
-          s.local_comment_count
-          active_since
+  [ (Html.text s.community_slug)
+  ; (Html.text (s.community_name))
+  ; (Html.text s.community_slug)
+  ; Html.int (s.local_karma)
+  ; Html.int (total)
+  ; Html.int (s.local_post_count)
+  ; Html.int (s.local_comment_count)
+  ; active_since ])
       ) community_stats) in
-      Printf.sprintf "
+      (Html.template "
         <h3 class='account-section-title'>Community reputation</h3>
-        <div class='account-comm-grid'>%s</div>" cards
+        <div class='account-comm-grid'>%s</div>"
+  [ cards ])
     end
   in
 
@@ -244,7 +291,7 @@ let user_profile_page ?user ?(rail_communities = []) ~is_admin ~is_globally_bann
     else posts_html
   in
 
-  let body = Printf.sprintf "
+  let body = (Html.template "
     <div class='account-wrap'>
         <div class='account-panel'>
             <div class='account-prof'>
@@ -253,7 +300,7 @@ let user_profile_page ?user ?(rail_communities = []) ~is_admin ~is_globally_bann
                     <h1 class='account-name'>u/%s</h1>
                     %s
                     <div class='account-stats'>
-                        <span><strong>%d</strong> karma</span>
+                        <span><strong>%s</strong> karma</span>
                         <span>Joined %s</span>
                     </div>
                     %s
@@ -265,12 +312,23 @@ let user_profile_page ?user ?(rail_communities = []) ~is_admin ~is_globally_bann
 
         %s
         %s
-    </div>" avatar_html esc_username role_badges karma joined_at header_actions (Components.html_escape bio) admin_controls tab_nav feed_html
+    </div>"
+  [ avatar_html
+  ; esc_username
+  ; role_badges
+  ; Html.int (karma)
+  ; Html.text joined_at
+  ; header_actions
+  ; (Html.text (bio))
+  ; admin_controls
+  ; tab_nav
+  ; feed_html ])
   in
   (* Standard launch scroller column around the untouched account-* fragments;
      no noindex — the profile stays a public, crawlable discovery surface. *)
   let content =
-    Printf.sprintf "<div class='scroll'><div class='container container--list'>%s</div></div>" body
+    (Html.template "<div class='scroll'><div class='container container--list'>%s</div></div>"
+  [ body ])
   in
   Page_shell.launch_app_page ?user ~request ~rail_communities
     ~page_class:"launch-user-profile" ~title:(username ^ "'s Profile") ~content ()
@@ -302,8 +360,8 @@ let user_profile_page ?user ?(rail_communities = []) ~is_admin ~is_globally_bann
    legitimately have supplied. The read-only preview below still renders
    [avatar_url]; it just no longer travels back as an input. *)
 let settings_page ?user ?(rail_communities = []) bio avatar_url request =
-  let csrf_token = Dream.csrf_tag request in
-  let current_bio = Components.html_escape (Option.value ~default:"" bio) in
+  let csrf_token = Csrf_field.tag request in
+  let current_bio = (Html.text ((Option.value ~default:"" bio))) in
 
   (* Read-only preview of the stored avatar above the upload input. Same Components.user_avatar
      gate (safe_img_src) + letter-tile fallback as the profile header, so a missing/unsafe
@@ -318,27 +376,26 @@ let settings_page ?user ?(rail_communities = []) bio avatar_url request =
   let identity_line =
     match user with
     | Some u ->
-        Printf.sprintf "<p class='account-ident'>u/%s</p>"
-          (Components.html_escape u)
-    | None -> ""
+        (Html.template "<p class='account-ident'>u/%s</p>"
+  [ (Html.text (u)) ])
+    | None -> Html.empty
   in
   let view_profile_link =
     match user with
     | Some u ->
-        Printf.sprintf
-          "<a class='account-view-profile' href='/u/%s'>View public profile &#8599;</a>"
-          (Components.html_escape u)
-    | None -> ""
+        (Html.template "<a class='account-view-profile' href='/u/%s'>View public profile &#8599;</a>"
+  [ (Html.text (u)) ])
+    | None -> Html.empty
   in
   let page_head =
-    Printf.sprintf
-      "<div class='page__head'><div class='page__head-inner page__head-inner--list account-head-launch'>\
+    (Html.template "<div class='page__head'><div class='page__head-inner page__head-inner--list account-head-launch'>\
        <div><h1 class='page__title page__title--sm'>Account settings</h1>%s</div>\
        %s</div></div>"
-      identity_line view_profile_link
+  [ identity_line
+  ; view_profile_link ])
   in
 
-  let body = Printf.sprintf "
+  let body = (Html.template "
     <div class='account-wrap account-wrap--narrow'>
         <div class='account-panel account-panel--card'>
             <h2 class='account-section-title'>Profile information</h2>
@@ -412,12 +469,16 @@ let settings_page ?user ?(rail_communities = []) bio avatar_url request =
             </form>
         </div>
     </div>"
-    csrf_token avatar_preview current_bio csrf_token csrf_token
+  [ csrf_token
+  ; avatar_preview
+  ; current_bio
+  ; csrf_token
+  ; csrf_token ])
   in
   let content =
-    Printf.sprintf
-      "%s<div class='scroll'><div class='container container--list'>%s</div></div>"
-      page_head body
+    (Html.template "%s<div class='scroll'><div class='container container--list'>%s</div></div>"
+  [ page_head
+  ; body ])
   in
   Page_shell.launch_app_page ~noindex:true ?user ~request ~rail_communities
     ~page_class:"launch-account-settings" ~title:"Settings" ~content ()
@@ -435,7 +496,7 @@ let settings_page ?user ?(rail_communities = []) bio avatar_url request =
    GET itself marks everything read (Notification_store.mark_notifs_read) exactly as before. *)
 let notifications_page ?user ?(rail_communities = []) (notifs : Notification_store.notification list) request =
   let render_notif (n : Notification_store.notification) =
-    let unread_class = if n.is_read then "" else " account-notif--unread" in
+    let unread_class = if n.is_read then Html.empty else Html.static " account-notif--unread" in
     (* Project-home notifications are structured: no stored prose, so the
        label and destination derive from the durable kind and the joined
        current project/community identity. Names and slugs are escaped at
@@ -452,19 +513,25 @@ let notifications_page ?user ?(rail_communities = []) (notifs : Notification_sto
       | "project_home_rejected" | "project_home_removed" -> (
           match (n.project_name, n.project_slug, n.community_name, n.community_slug) with
           | Some project_name, Some project_slug, Some community_name, Some community_slug ->
-              let p = Components.html_escape project_name in
-              let c = Components.html_escape community_name in
+              let p = Html.text project_name in
+              let c = Html.text community_name in
               let label, href =
                 match n.notif_type with
                 | "project_home_requested" ->
-                    ( Printf.sprintf "%s requested %s as its community home" p c,
-                      Printf.sprintf "/c/%s/project-home-requests" (Components.html_escape community_slug) )
+                    ( Html.template
+                        "%s requested %s as its community home"
+                        [ p; c ],
+                      Printf.sprintf "/c/%s/project-home-requests" community_slug )
                 | "project_home_accepted" ->
-                    ( Printf.sprintf "%s accepted the community-home request for %s" c p,
-                      Printf.sprintf "/projects/%s/request-home" (Components.html_escape project_slug) )
+                    ( Html.template
+                        "%s accepted the community-home request for %s"
+                        [ c; p ],
+                      Printf.sprintf "/projects/%s/request-home" project_slug )
                 | "project_home_rejected" ->
-                    ( Printf.sprintf "%s rejected the community-home request for %s" c p,
-                      Printf.sprintf "/projects/%s/request-home" (Components.html_escape project_slug) )
+                    ( Html.template
+                        "%s rejected the community-home request for %s"
+                        [ c; p ],
+                      Printf.sprintf "/projects/%s/request-home" project_slug )
                 | _ ->
                     (* Removal is the one kind whose recipients span BOTH
                        sides: the removal store notifies every project
@@ -476,11 +543,13 @@ let notifications_page ?user ?(rail_communities = []) (notifs : Notification_sto
                        communities a home can be removed from. Its
                        Connected-projects section is also where the removal
                        is actually visible to either side. *)
-                    ( Printf.sprintf "%s is no longer connected to %s as its home" p c,
-                      Printf.sprintf "/c/%s" (Components.html_escape community_slug) )
+                    ( Html.template
+                        "%s is no longer connected to %s as its home"
+                        [ p; c ],
+                      Printf.sprintf "/c/%s" community_slug )
               in
               Some (label, Some href)
-          | _ -> Some ("A project community-home update", None))
+          | _ -> Some (Html.static "A project community-home update", None))
       | _ -> None
     in
     (* Community-connection notifications are structured the same way: no
@@ -500,24 +569,24 @@ let notifications_page ?user ?(rail_communities = []) (notifs : Notification_sto
       | "community_connection_rejected" | "community_connection_removed" -> (
           match (n.counterpart_name, n.community_slug) with
           | Some counterpart_name, Some context_slug ->
-              let other = Components.html_escape counterpart_name in
+              let other = Html.text counterpart_name in
               let label =
                 match n.notif_type with
                 | "community_connection_requested" ->
-                    Printf.sprintf "%s wants to connect with your community." other
+                    Html.template "%s wants to connect with your community." [ other ]
                 | "community_connection_accepted" ->
-                    Printf.sprintf "%s accepted your connection request." other
+                    Html.template "%s accepted your connection request." [ other ]
                 | "community_connection_rejected" ->
-                    Printf.sprintf "%s rejected your connection request." other
+                    Html.template "%s rejected your connection request." [ other ]
                 | _ ->
-                    Printf.sprintf "%s removed the community connection." other
+                    Html.template "%s removed the community connection." [ other ]
               in
               Some
                 ( label,
                   Some
                     (Printf.sprintf "/c/%s/settings/connections"
-                       (Components.html_escape context_slug)) )
-          | _ -> Some ("A community connection update", None))
+                       context_slug) )
+          | _ -> Some (Html.static "A community connection update", None))
       | _ -> None
     in
     (* Shared-thread notifications are structured the same way: no stored
@@ -555,9 +624,9 @@ let notifications_page ?user ?(rail_communities = []) (notifs : Notification_sto
               ( Some destination_name, Some destination_slug,
                 Some origin_context ),
               (Some true, Some true) ) ->
-              let t = Components.html_escape title in
-              let o = Components.html_escape origin_name in
-              let d = Components.html_escape destination_name in
+              let t = Html.text title in
+              let o = Html.text origin_name in
+              let d = Html.text destination_name in
               (* Read access (checked above) decides what may be named; the
                  two capability booleans decide what may be linked, because
                  both link targets carry stricter gates than reading. A
@@ -570,49 +639,53 @@ let notifications_page ?user ?(rail_communities = []) (notifs : Notification_sto
                 Post_cards.canonical_thread_path origin_slug post_id title
               in
               let share_or_thread =
-                Components.html_escape
-                  (if n.st_share_capable = Some true then
-                     thread_path ^ "/share"
-                   else thread_path)
+                if n.st_share_capable = Some true then thread_path ^ "/share"
+                else thread_path
               in
               let destination_settings suffix =
                 if n.st_manage_capable = Some true then
                   Some
                     (Printf.sprintf "/c/%s/settings/shared-threads%s"
-                       (Components.html_escape destination_slug)
+                       destination_slug
                        suffix)
                 else None
               in
               let label, href =
                 match n.notif_type with
                 | "shared_thread_requested" ->
-                    ( Printf.sprintf
-                        "%s requested to share &#8220;%s&#8221; with %s" o t d,
+                    ( Html.template
+                        "%s requested to share &#8220;%s&#8221; with %s"
+                        [ o; t; d ],
                       destination_settings "#incoming" )
                 | "shared_thread_accepted" ->
-                    ( Printf.sprintf "%s accepted &#8220;%s&#8221;" d t,
+                    ( Html.template
+                        "%s accepted &#8220;%s&#8221;"
+                        [ d; t ],
                       Some share_or_thread )
                 | "shared_thread_rejected" ->
-                    ( Printf.sprintf "%s declined &#8220;%s&#8221;" d t,
+                    ( Html.template
+                        "%s declined &#8220;%s&#8221;"
+                        [ d; t ],
                       Some share_or_thread )
                 | "shared_thread_withdrawn" ->
-                    ( Printf.sprintf
+                    ( Html.template
                         "A request to share &#8220;%s&#8221; with %s was \
                          withdrawn"
-                        t d,
+                        [ t; d ],
                       destination_settings "" )
                 | _ ->
                     (* Removal notifies both sides: origin-context
                        recipients return to the thread's own Share page,
                        destination-context ones to their management
                        surface. *)
-                    ( Printf.sprintf
-                        "&#8220;%s&#8221; is no longer shared with %s" t d,
+                    ( Html.template
+                        "&#8220;%s&#8221; is no longer shared with %s"
+                        [ t; d ],
                       if origin_context then Some share_or_thread
                       else destination_settings "" )
               in
               Some (label, href)
-          | _ -> Some ("A shared thread update", None))
+          | _ -> Some (Html.static "A shared thread update", None))
       | _ -> None
     in
     (* One structured slot: a notification is project-home, community-
@@ -629,35 +702,35 @@ let notifications_page ?user ?(rail_communities = []) (notifs : Notification_sto
     in
     let message = Option.value n.message ~default:"" in
     let icon = match n.notif_type with
-      | "mention"    -> "&#64;"   (* @ symbol — avoids mojibake in Printf *)
-      | "mod_action" -> "&#9888;" (* ⚠ warning sign *)
+      | "mention"    -> Html.static "&#64;"   (* @ symbol — avoids mojibake in Printf *)
+      | "mod_action" -> Html.static "&#9888;" (* ⚠ warning sign *)
       | "project_home_requested" | "project_home_accepted"
-      | "project_home_rejected" | "project_home_removed" -> "&#127968;" (* 🏠 *)
+      | "project_home_rejected" | "project_home_removed" -> Html.static "&#127968;" (* 🏠 *)
       | "community_connection_requested" | "community_connection_accepted"
       | "community_connection_rejected" | "community_connection_removed" ->
-          "&#8644;" (* ⇄ — the same sigil the Connections nav entry uses *)
+          (Html.static "&#8644;") (* ⇄ — the same sigil the Connections nav entry uses *)
       | "shared_thread_requested" | "shared_thread_accepted"
       | "shared_thread_rejected" | "shared_thread_removed"
-      | "shared_thread_withdrawn" -> "&#128279;" (* 🔗 — one thread, linked elsewhere *)
+      | "shared_thread_withdrawn" -> Html.static "&#128279;" (* 🔗 — one thread, linked elsewhere *)
       | _ ->
           (* Legacy comment_reply: distinguish post vs comment reply by message suffix. *)
           let len = String.length message in
-          if len >= 5 && String.sub message (len - 5) 5 = "post." then "&#128221;" (* 📝 *)
-          else "&#128172;" (* 💬 *)
+          if len >= 5 && String.sub message (len - 5) 5 = "post." then Html.static "&#128221;" (* 📝 *)
+          else Html.static "&#128172;" (* 💬 *)
     in
-    (* Structured labels are built above from already-escaped parts; legacy
-       prose is escaped here. *)
+    (* Structured labels escape their names above; legacy prose is escaped
+       here. *)
     let msg_html =
       match structured_label_link with
       | Some (label, _) -> label
-      | None -> Components.html_escape message
+      | None -> Html.text message
     in
-    let inner = Printf.sprintf "
+    let inner = Html.template "
         <div class='account-notif-icon'>%s</div>
         <div class='account-notif-body'>
             <div class='account-notif-msg'>%s</div>
             <div class='account-notif-time'>%s</div>
-        </div>" icon msg_html (Components.time_ago n.created_at)
+        </div>" [ icon; msg_html; Html.text (Components.time_ago n.created_at) ]
     in
     let link =
       match structured_label_link with
@@ -672,31 +745,33 @@ let notifications_page ?user ?(rail_communities = []) (notifs : Notification_sto
        the onclick is a purely cosmetic clear of the unread accent on this visit. *)
     match link with
     | Some href ->
-        Printf.sprintf "
+        Html.template "
     <a href='%s' onclick=\"this.classList.remove('account-notif--unread');\" class='account-notif%s'>%s
-    </a>" href unread_class inner
+    </a>" [ Html.internal_path href; unread_class; inner ]
     | None ->
-        Printf.sprintf "
+        Html.template "
     <div class='account-notif%s'>%s
-    </div>" unread_class inner
+    </div>" [ unread_class; inner ]
   in
   let list_html =
-    if notifs = [] then "<div class='account-empty'>No notifications yet.</div>"
-    else Printf.sprintf "<div class='account-notifs'>%s</div>" (String.concat "\n" (List.map render_notif notifs))
+    if notifs = [] then (Html.static "<div class='account-empty'>No notifications yet.</div>")
+    else (Html.template "<div class='account-notifs'>%s</div>"
+  [ Html.join (Html.static "\n") (List.map render_notif notifs) ])
   in
   (* Launch chrome renders outside the pinned row fragments: serif page head
      (the legacy in-page Settings/Notifications nav is superseded by the
      topbar user menu), then the standard scroller column. The sub line names
      only kinds the backend actually produces — no "promotions". *)
   let page_head =
-    "<div class='page__head'><div class='page__head-inner page__head-inner--list'>\
+    (Html.static "<div class='page__head'><div class='page__head-inner page__head-inner--list'>\
      <h1 class='page__title'>Notifications</h1>\
      <p class='page__sub'>Replies, mentions, moderation decisions and project requests.</p>\
-     </div></div>"
+     </div></div>")
   in
   let content =
-    Printf.sprintf "%s<div class='scroll'><div class='container container--list'>%s</div></div>"
-      page_head list_html
+    (Html.template "%s<div class='scroll'><div class='container container--list'>%s</div></div>"
+  [ page_head
+  ; list_html ])
   in
   Page_shell.launch_app_page ~noindex:true ?user ~request ~rail_communities
     ~page_class:"launch-notifications" ~title:"Notifications" ~content ()

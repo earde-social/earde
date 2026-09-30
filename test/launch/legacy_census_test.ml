@@ -150,28 +150,28 @@ let launch_documents () =
   let community = census_community ~visibility:Earde.Community_types.Community_public in
   [ ( "launch_entry_page"
     , Earde.Page_shell.launch_entry_page ~page_class:"launch-bring"
-        ~title:"T" ~content:"B" () )
+        ~title:"T" ~content:(Earde.Html.static "B") () )
   ; ( "launch_auth_page"
     , Earde.Page_shell.launch_auth_page ~page_class:"launch-login" ~title:"T"
-        ~content:"B" () )
+        ~content:(Earde.Html.static "B") () )
   ; ( "launch_message_page"
-    , Earde.Page_shell.launch_message_page ~title:"T" ~content:"B" () )
+    , Earde.Page_shell.launch_message_page ~title:"T" ~content:(Earde.Html.static "B") () )
   ; ( "launch_app_page (anonymous)"
     , Earde.Page_shell.launch_app_page ~page_class:"launch-feed" ~title:"T"
-        ~content:"B" () )
+        ~content:(Earde.Html.static "B") () )
   ; ( "launch_app_page (member)"
     , Earde.Page_shell.launch_app_page ~user:"alice"
-        ~page_class:"launch-feed" ~title:"T" ~content:"B" () )
+        ~page_class:"launch-feed" ~title:"T" ~content:(Earde.Html.static "B") () )
   ; ( "launch_onboarding_page"
     , Earde.Page_shell.launch_onboarding_page
-        ~page_class:"launch-project-new" ~title:"T" ~content:"B" () )
+        ~page_class:"launch-project-new" ~title:"T" ~content:(Earde.Html.static "B") () )
   ; ( "launch_community_page"
-    , Earde.Community_shell.launch_community_page ~community ~sidebar:"S"
-        ~page_class:"launch-community-overview" ~title:"T" ~content:"B" () )
+    , Earde.Community_shell.launch_community_page ~community ~sidebar:(Earde.Html.static "S")
+        ~page_class:"launch-community-overview" ~title:"T" ~content:(Earde.Html.static "B") () )
   ; ( "launch_community_surface_page"
-    , Earde.Community_shell.launch_community_surface_page ~community ~sidebar:"S"
+    , Earde.Community_shell.launch_community_surface_page ~community ~sidebar:(Earde.Html.static "S")
         ~page_class:"launch-community-channel" ~title:"T"
-        ~main_el:"<main class='cs-main'>B</main>" () )
+        ~main_el:(Earde.Html.static "<main class='cs-main'>B</main>") () )
   ]
 
 let rendered_css_case =

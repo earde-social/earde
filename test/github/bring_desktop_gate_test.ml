@@ -52,7 +52,7 @@ let panel_of label html =
 let canonical_panel () =
   panel_of "launch_app_page"
     (Earde.Page_shell.launch_app_page ~page_class:"launch-feed" ~title:"T"
-       ~content:"B" ())
+       ~content:(Earde.Html.static "B") ())
 
 (* Every /bring document must carry exactly one canonical gate, whatever the
    viewer, mode or callback feedback. *)
@@ -158,7 +158,7 @@ let remove_once label needle haystack =
 let entry_doc ?(desktop_only = false) () =
   Earde.Page_shell.launch_entry_page ~noindex:true ~desktop_only
     ~topbar:(Earde.Page_shell.Entry_viewer (Some "alice"))
-    ~page_class:"launch-bring" ~title:"T" ~content:"B" ()
+    ~page_class:"launch-bring" ~title:"T" ~content:(Earde.Html.static "B") ()
 
 let desktop_unchanged_case =
   case "the gate is purely additive: desktop bytes are unchanged" (fun () ->
@@ -245,14 +245,14 @@ let elsewhere_unchanged_case =
         (fun (label, html) -> check_gated_document label html)
         [ ( "launch_app_page"
           , Earde.Page_shell.launch_app_page ~user:"alice"
-              ~page_class:"launch-feed" ~title:"T" ~content:"B" () )
+              ~page_class:"launch-feed" ~title:"T" ~content:(Earde.Html.static "B") () )
         ; ( "launch_onboarding_page"
           , Earde.Page_shell.launch_onboarding_page ~user:"alice"
-              ~page_class:"launch-project-new" ~title:"T" ~content:"B" () )
+              ~page_class:"launch-project-new" ~title:"T" ~content:(Earde.Html.static "B") () )
         ; ( "launch_community_page"
           , Earde.Community_shell.launch_community_page ~user:"alice" ~community
-              ~sidebar:"S" ~page_class:"launch-community-overview"
-              ~title:"T" ~content:"B" () )
+              ~sidebar:(Earde.Html.static "S") ~page_class:"launch-community-overview"
+              ~title:"T" ~content:(Earde.Html.static "B") () )
         ];
       List.iter
         (fun (label, html) ->
@@ -261,12 +261,12 @@ let elsewhere_unchanged_case =
             0 (Html_assert.count_sub html "mobile-gate"))
         [ ( "launch_entry_page (/privacy)"
           , Earde.Page_shell.launch_entry_page ~page_class:"launch-privacy"
-              ~title:"T" ~content:"B" () )
+              ~title:"T" ~content:(Earde.Html.static "B") () )
         ; ( "launch_auth_page"
           , Earde.Page_shell.launch_auth_page ~page_class:"launch-login"
-              ~title:"T" ~content:"B" () )
+              ~title:"T" ~content:(Earde.Html.static "B") () )
         ; ( "launch_message_page"
-          , Earde.Page_shell.launch_message_page ~title:"T" ~content:"B" () )
+          , Earde.Page_shell.launch_message_page ~title:"T" ~content:(Earde.Html.static "B") () )
         ])
 
 let suite =

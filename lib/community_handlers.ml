@@ -262,7 +262,7 @@ let with_connected_communities db ?user request ~community_slug k =
 let with_settings_connected_projects db ?user request ~community_slug ~authorized
     ~removal_allowed k =
   let module R = Community_connected_projects_read_model in
-  if not authorized then k ""
+  if not authorized then k Html.empty
   else
     match%lwt R.load_for_community db ~community_slug with
     | Ok projects ->

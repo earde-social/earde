@@ -23,12 +23,10 @@ val community_network_page :
   ?noindex:bool ->
   ?rail_communities:Community_types.community list ->
   community:Community_types.community ->
-  sidebar:string ->
-  projects_section:string ->
-  communities_section:string ->
-  can_connect:bool ->
-  Dream.request ->
-  string
+  sidebar:Html.t ->
+  projects_section:Html.t ->
+  communities_section:Html.t ->
+  can_connect:bool -> Dream.request -> string
 (** [projects_section] and [communities_section] are the pre-rendered public
     fragments ([""] when the community has nothing publicly connected of that
     kind, which renders the quiet empty section instead).

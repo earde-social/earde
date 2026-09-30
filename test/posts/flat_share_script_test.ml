@@ -121,12 +121,13 @@ let router =
                           fi_shared = None item must splice byte-identically
                           through the plain render_post call. *)
                        Dream.respond
-                         (String.concat "\n"
+                         (Earde.Html.to_string
+                            (Earde.Html.join (Earde.Html.static "\n")
                             (List.map
                                (fun (item : Earde.Post_types.feed_item) ->
                                  Earde.Post_cards.render_post req []
                                    item.Earde.Post_types.fi_post)
-                               posts))
+                               posts)))
                    | Error _ -> Dream.respond ~status:`Internal_Server_Error "")
               | _ -> Dream.respond ~status:`Not_Found ""))
     ]

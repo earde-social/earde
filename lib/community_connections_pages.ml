@@ -1,3 +1,5 @@
+open Html.Infix
+
 (* The community-connections management surface: the three-section
    management page and the two-step connect flow. Pure rendering over
    handler-supplied view models — no Caqti, no session access, no authority
@@ -41,7 +43,6 @@ type feedback =
   | Note_invalid
   | Action_failed
 
-let esc = Components.html_escape
 
 (* A community slug in an action path must be a single non-empty URL path
    segment; anything else drops every actionable form for that row. *)
@@ -66,77 +67,78 @@ let base_path ~community_slug =
 
 let feedback_copy = function
   | Stale_form ->
-      "This page had been open too long, so the action could no longer be \
+      Html.static "This page had been open too long, so the action could no longer be \
        submitted. Nothing was changed. Try again."
   | Already_connected ->
-      "These communities are already connected, or a request between them is \
+      Html.static "These communities are already connected, or a request between them is \
        already waiting."
-  | Review_unavailable -> "That request is no longer pending."
-  | Removal_unavailable -> "That connection is no longer active."
-  | Target_unavailable -> "That community is not available to connect."
+  | Review_unavailable -> Html.static "That request is no longer pending."
+  | Removal_unavailable -> Html.static "That connection is no longer active."
+  | Target_unavailable -> Html.static "That community is not available to connect."
   | Source_ineligible ->
-      "This community cannot create or accept new connections right now."
+      Html.static "This community cannot create or accept new connections right now."
   | Note_invalid ->
-      "That note could not be saved. Notes are limited to 2,000 characters \
+      Html.static "That note could not be saved. Notes are limited to 2,000 characters \
        of ordinary text."
-  | Action_failed -> "We couldn't complete that action. Try again."
+  | Action_failed -> Html.static "We couldn't complete that action. Try again."
 
 let feedback_html = function
-  | None -> ""
+  | None -> Html.empty
   | Some feedback ->
-      Printf.sprintf "<div class='ccn-alert'><p>%s</p></div>"
-        (feedback_copy feedback)
+      (Html.template "<div class='ccn-alert'><p>%s</p></div>"
+  [ (feedback_copy feedback) ])
 
 (* One generic page-level notice. It states the rule, never which of the
    three facts this community currently fails. *)
 let ineligible_notice_html (community : community) =
-  if community.eligible then ""
+  if community.eligible then Html.empty
   else
-    "<div class='ccn-ineligible'><p>This community cannot create or accept \
+    (Html.static "<div class='ccn-ineligible'><p>This community cannot create or accept \
      new connections right now. Existing connections and requests can still \
-     be reviewed and removed below.</p></div>"
+     be reviewed and removed below.</p></div>")
 
 (* Counterpart identity: the name, with the address underneath. It links to
    the community only when the slug is addressable. *)
 let counterpart_html (c : counterpart) =
-  let name = esc c.counterpart_name in
+  let name = (Html.text (c.counterpart_name)) in
   if valid_community_slug c.counterpart_slug then
-    Printf.sprintf
-      "<div class='ccn-identity'><a class='ccn-name' href='/c/%s'>%s</a><span \
+    (Html.template "<div class='ccn-identity'><a class='ccn-name' href='/c/%s'>%s</a><span \
        class='ccn-slug'>/c/%s</span></div>"
-      (esc c.counterpart_slug) name (esc c.counterpart_slug)
+  [ (Html.text (c.counterpart_slug))
+  ; name
+  ; (Html.text (c.counterpart_slug)) ])
   else
-    Printf.sprintf
-      "<div class='ccn-identity'><span class='ccn-name'>%s</span></div>" name
+    (Html.template "<div class='ccn-identity'><span class='ccn-name'>%s</span></div>"
+  [ name ])
 
 (* Private workflow text: labelled as private, HTML-escaped, and never
    parsed as Markdown or HTML. *)
 let note_html = function
-  | None -> ""
+  | None -> Html.empty
   | Some note ->
-      Printf.sprintf
-        "<div class='ccn-note'><p class='ccn-note-label'>Private note — \
+      (Html.template "<div class='ccn-note'><p class='ccn-note-label'>Private note — \
          visible only to the moderators of the two communities.</p><p \
          class='ccn-note-body'>%s</p></div>"
-        (esc note)
+  [ (Html.text (note)) ])
 
 (* One nameless single-purpose form per action: the route path carries both
    subjects, so no application field and no hidden identifier exist. Dream's
    framework CSRF field is emitted only when a live request is supplied. *)
 let action_form ?request ~action ~cls ~label () =
   let csrf_field =
-    match request with None -> "" | Some request -> Dream.csrf_tag request
+    match request with None -> Html.empty | Some request -> Csrf_field.tag request
   in
-  Printf.sprintf
-    "<form method='POST' action='%s' class='ccn-form %s'>%s<button \
+  (Html.template "<form method='POST' action='%s' class='ccn-form %s'>%s<button \
      type='submit' class='ccn-btn'>%s</button></form>"
-    action cls csrf_field label
+  [ action
+  ; cls
+  ; csrf_field
+  ; label ])
 
 let action_path ~community_slug ~connection_id ~verb =
-  esc
-    (Printf.sprintf "%s/%s/%s"
+  (Html.text ((Printf.sprintf "%s/%s/%s"
        (base_path ~community_slug)
-       connection_id verb)
+       connection_id verb)))
 
 (* --- Section 1: connected communities --- *)
 
@@ -149,27 +151,26 @@ let accepted_row ?request ~(community : community) (a : accepted) =
         ~action:
           (action_path ~community_slug:community.slug
              ~connection_id:a.accepted_id ~verb:"remove")
-        ~cls:"ccn-remove" ~label:"Remove connection" ()
-    else ""
+        ~cls:(Html.static "ccn-remove") ~label:(Html.static "Remove connection") ()
+    else Html.empty
   in
-  Printf.sprintf "<li class='ccn-row ccn-row--accepted'>%s%s</li>"
-    (counterpart_html a.accepted_with)
-    actions
+  (Html.template "<li class='ccn-row ccn-row--accepted'>%s%s</li>"
+  [ (counterpart_html a.accepted_with)
+  ; actions ])
 
 let accepted_section ?request ~(community : community) accepted =
   let body =
     match accepted with
     | [] ->
-        "<p class='ccn-empty'>No connected communities yet.</p>"
+        (Html.static "<p class='ccn-empty'>No connected communities yet.</p>")
     | rows ->
-        Printf.sprintf "<ul class='ccn-list'>%s</ul>"
-          (String.concat "\n"
-             (List.map (accepted_row ?request ~community) rows))
+        (Html.template "<ul class='ccn-list'>%s</ul>"
+  [ ((Html.join (Html.static "\n"))
+             (List.map (accepted_row ?request ~community) rows)) ])
   in
-  Printf.sprintf
-    "<section class='ccn-section'><h2 class='ccn-section-title'>Connected \
+  (Html.template "<section class='ccn-section'><h2 class='ccn-section-title'>Connected \
      communities</h2>%s</section>"
-    body
+  [ body ])
 
 (* --- Section 2: incoming requests --- *)
 
@@ -178,19 +179,19 @@ let incoming_row ?request ~(community : community) (p : pending) =
     valid_community_slug community.slug && valid_connection_id p.pending_id
   in
   let accept =
-    if not actionable then ""
+    if not actionable then Html.empty
     else if not community.eligible then
-      "<p class='ccn-accept-unavailable'>Accepting is unavailable while this \
-       community cannot connect.</p>"
+      (Html.static "<p class='ccn-accept-unavailable'>Accepting is unavailable while this \
+       community cannot connect.</p>")
     else
       action_form ?request
         ~action:
           (action_path ~community_slug:community.slug
              ~connection_id:p.pending_id ~verb:"accept")
-        ~cls:"ccn-accept" ~label:"Accept" ()
+        ~cls:(Html.static "ccn-accept") ~label:(Html.static "Accept") ()
   in
   let reject =
-    if not actionable then ""
+    if not actionable then Html.empty
     else
       (* Rejection stays available on an ineligible community: a pending
          request must always be closable. *)
@@ -198,50 +199,47 @@ let incoming_row ?request ~(community : community) (p : pending) =
         ~action:
           (action_path ~community_slug:community.slug
              ~connection_id:p.pending_id ~verb:"reject")
-        ~cls:"ccn-reject" ~label:"Reject" ()
+        ~cls:(Html.static "ccn-reject") ~label:(Html.static "Reject") ()
   in
-  Printf.sprintf
-    "<li class='ccn-row ccn-row--incoming'>%s%s<div \
+  (Html.template "<li class='ccn-row ccn-row--incoming'>%s%s<div \
      class='ccn-actions'>%s%s</div></li>"
-    (counterpart_html p.pending_with)
-    (note_html p.pending_note)
-    accept reject
+  [ (counterpart_html p.pending_with)
+  ; (note_html p.pending_note)
+  ; accept
+  ; reject ])
 
 let incoming_section ?request ~(community : community) incoming =
   let body =
     match incoming with
-    | [] -> "<p class='ccn-empty'>No incoming requests.</p>"
+    | [] -> (Html.static "<p class='ccn-empty'>No incoming requests.</p>")
     | rows ->
-        Printf.sprintf "<ul class='ccn-list'>%s</ul>"
-          (String.concat "\n"
-             (List.map (incoming_row ?request ~community) rows))
+        (Html.template "<ul class='ccn-list'>%s</ul>"
+  [ ((Html.join (Html.static "\n"))
+             (List.map (incoming_row ?request ~community) rows)) ])
   in
-  Printf.sprintf
-    "<section class='ccn-section'><h2 class='ccn-section-title'>Incoming \
+  (Html.template "<section class='ccn-section'><h2 class='ccn-section-title'>Incoming \
      requests</h2>%s</section>"
-    body
+  [ body ])
 
 (* --- Section 3: outgoing requests --- *)
 
 let outgoing_row (p : pending) =
-  Printf.sprintf
-    "<li class='ccn-row ccn-row--outgoing'>%s%s<p \
+  (Html.template "<li class='ccn-row ccn-row--outgoing'>%s%s<p \
      class='ccn-state'>Waiting for a reply</p></li>"
-    (counterpart_html p.pending_with)
-    (note_html p.pending_note)
+  [ (counterpart_html p.pending_with)
+  ; (note_html p.pending_note) ])
 
 let outgoing_section outgoing =
   let body =
     match outgoing with
-    | [] -> "<p class='ccn-empty'>No outgoing requests.</p>"
+    | [] -> (Html.static "<p class='ccn-empty'>No outgoing requests.</p>")
     | rows ->
-        Printf.sprintf "<ul class='ccn-list'>%s</ul>"
-          (String.concat "\n" (List.map outgoing_row rows))
+        (Html.template "<ul class='ccn-list'>%s</ul>"
+  [ ((Html.join (Html.static "\n")) (List.map outgoing_row rows)) ])
   in
-  Printf.sprintf
-    "<section class='ccn-section'><h2 class='ccn-section-title'>Outgoing \
+  (Html.template "<section class='ccn-section'><h2 class='ccn-section-title'>Outgoing \
      requests</h2>%s</section>"
-    body
+  [ body ])
 
 (* --- The entry point into the search flow --- *)
 
@@ -249,63 +247,63 @@ let outgoing_section outgoing =
    moderator comes here to do, and the three lists below are the record of
    what that produced. *)
 let connect_section ~(community : community) =
-  if not (valid_community_slug community.slug) then ""
+  if not (valid_community_slug community.slug) then Html.empty
   else if not community.eligible then
-    "<section class='ccn-section'><h2 class='ccn-section-title'>Connect a \
+    (Html.static "<section class='ccn-section'><h2 class='ccn-section-title'>Connect a \
      community</h2><p class='ccn-empty'>Unavailable while this community \
-     cannot connect.</p></section>"
+     cannot connect.</p></section>")
   else
     (* The panel's primary action, on the shared .btn/.btn--primary control
        so it reads as an action rather than as prose. Still an ordinary
        link to the same destination: no JavaScript, and nothing outside the
        anchor itself is clickable. *)
-    Printf.sprintf
-      "<section class='ccn-section'><h2 class='ccn-section-title'>Connect a \
+    (Html.template "<section class='ccn-section'><h2 class='ccn-section-title'>Connect a \
        community</h2><p class='ccn-section-desc'>Find a community to connect \
        with. Both sides must agree: they review your request.</p><p \
        class='ccn-cta'><a class='btn btn--primary' href='%s/new'>Find a \
        community</a></p></section>"
-      (esc (base_path ~community_slug:community.slug))
+  [ (Html.text ((base_path ~community_slug:community.slug))) ])
 
 let heading_html =
-  "<div class='create-head'><h1 class='create-title'>Connections</h1><p \
+  (Html.static "<div class='create-head'><h1 class='create-title'>Connections</h1><p \
    class='create-sub ccn-intro'>Mutual connections between this community \
-   and others.</p></div>"
+   and others.</p></div>")
 
 (* Action first, then the record: Connect a community, then the connected
    communities, then the two pending lists. The order is fixed, so an empty
    page and a busy one read the same way. Row order inside each section is
    the read model's. *)
 let management_body ?request ~(state : state) () =
-  Printf.sprintf "%s%s%s%s%s%s" heading_html
-    (ineligible_notice_html state.community)
-    (connect_section ~community:state.community)
-    (accepted_section ?request ~community:state.community state.accepted)
-    (incoming_section ?request ~community:state.community state.incoming)
-    (outgoing_section state.outgoing)
+  Html.concat
+    [ heading_html;
+      ineligible_notice_html state.community;
+      connect_section ~community:state.community;
+      accepted_section ?request ~community:state.community state.accepted;
+      incoming_section ?request ~community:state.community state.incoming;
+      outgoing_section state.outgoing ]
 
 (* --- Search (step one) --- *)
 
 let search_form ~(community : community) ~query =
-  Printf.sprintf
-    "<form method='GET' action='%s/new' class='ccn-search-form'><label \
+  (Html.template "<form method='GET' action='%s/new' class='ccn-search-form'><label \
      class='ccn-label' for='ccn-q'>Search by name or address</label><input \
      id='ccn-q' type='text' name='q' value='%s' maxlength='120' \
      class='ccn-input'><button type='submit' \
      class='ccn-btn'>Search</button></form>"
-    (esc (base_path ~community_slug:community.slug))
-    (esc query)
+  [ (Html.text ((base_path ~community_slug:community.slug)))
+  ; (Html.text (query)) ])
 
 (* A result is a link into the confirmation step, never a submit control and
    never a note field: the note is asked once, on the next page. *)
 let result_row ~(community : community) ~query (t : target) =
   let identity =
-    Printf.sprintf
-      "<span class='ccn-name'>%s</span><span class='ccn-slug'>/c/%s</span>"
-      (esc t.target_name) (esc t.target_slug)
+    (Html.template "<span class='ccn-name'>%s</span><span class='ccn-slug'>/c/%s</span>"
+  [ (Html.text (t.target_name))
+  ; (Html.text (t.target_slug)) ])
   in
   if not (valid_community_slug t.target_slug) then
-    Printf.sprintf "<li class='ccn-row'>%s</li>" identity
+    (Html.template "<li class='ccn-row'>%s</li>"
+  [ identity ])
   else
     let href =
       Uri.to_string
@@ -313,47 +311,45 @@ let result_row ~(community : community) ~query (t : target) =
            (Uri.of_string (base_path ~community_slug:community.slug ^ "/new"))
            [ ("q", query); ("target", t.target_slug) ])
     in
-    Printf.sprintf
-      "<li class='ccn-row'><div class='ccn-identity'>%s</div><a \
+    (Html.template "<li class='ccn-row'><div class='ccn-identity'>%s</div><a \
        class='ccn-link' href='%s'>Continue</a></li>"
-      identity (esc href)
+  [ identity
+  ; (Html.text (href)) ])
 
 let search_body ~(community : community) ~query ~results ~searched =
   let results_html =
     if not searched then
-      "<p class='ccn-empty'>Enter a name or address to search.</p>"
+      (Html.static "<p class='ccn-empty'>Enter a name or address to search.</p>")
     else
       match results with
-      | [] -> "<p class='ccn-empty'>No communities matched.</p>"
+      | [] -> (Html.static "<p class='ccn-empty'>No communities matched.</p>")
       | rows ->
-          Printf.sprintf "<ul class='ccn-list'>%s</ul>"
-            (String.concat "\n"
-               (List.map (result_row ~community ~query) rows))
+          (Html.template "<ul class='ccn-list'>%s</ul>"
+  [ ((Html.join (Html.static "\n"))
+               (List.map (result_row ~community ~query) rows)) ])
   in
-  Printf.sprintf
-    "<div class='create-head'><h1 class='create-title'>Connect a \
+  (Html.template "<div class='create-head'><h1 class='create-title'>Connect a \
      community</h1><p class='create-sub ccn-intro'>Only public, published, \
      discoverable communities you are not already connected to can be \
      found.</p></div>%s%s<p><a class='ccn-link' href='%s'>Back to \
      connections</a></p>"
-    (search_form ~community ~query)
-    results_html
-    (esc (base_path ~community_slug:community.slug))
+  [ (search_form ~community ~query)
+  ; results_html
+  ; (Html.text ((base_path ~community_slug:community.slug))) ])
 
 (* --- Confirmation (step two) --- *)
 
 let confirm_body ?request ~(community : community) ~(target : target) ~note
     () =
   let csrf_field =
-    match request with None -> "" | Some request -> Dream.csrf_tag request
+    match request with None -> Html.empty | Some request -> Csrf_field.tag request
   in
   let form =
     if
       valid_community_slug community.slug
       && valid_community_slug target.target_slug
     then
-      Printf.sprintf
-        "<form method='POST' action='%s/request' \
+      (Html.template "<form method='POST' action='%s/request' \
          class='ccn-confirm-form'>%s<input type='hidden' name='target' \
          value='%s'><label class='ccn-label' for='ccn-note'>Private note \
          (optional)</label><p class='ccn-hint'>Visible only to the \
@@ -361,21 +357,22 @@ let confirm_body ?request ~(community : community) ~(target : target) ~note
          name='note' rows='5' maxlength='2000' \
          class='ccn-textarea'>%s</textarea><button type='submit' \
          class='ccn-btn'>Send request</button></form>"
-        (esc (base_path ~community_slug:community.slug))
-        csrf_field
-        (esc target.target_slug)
-        (esc note)
-    else "<p class='ccn-empty'>This community is not available to connect.</p>"
+  [ (Html.text ((base_path ~community_slug:community.slug)))
+  ; csrf_field
+  ; (Html.text (target.target_slug))
+  ; (Html.text (note)) ])
+    else (Html.static "<p class='ccn-empty'>This community is not available to connect.</p>")
   in
-  Printf.sprintf
-    "<div class='create-head'><h1 class='create-title'>Send a connection \
+  (Html.template "<div class='create-head'><h1 class='create-title'>Send a connection \
      request</h1><p class='create-sub ccn-intro'>%s will be asked to accept \
      or reject this request.</p></div><div class='ccn-identity'><span \
      class='ccn-name'>%s</span><span class='ccn-slug'>/c/%s</span></div>%s<p><a \
      class='ccn-link' href='%s/new'>Choose a different community</a></p>"
-    (esc target.target_name) (esc target.target_name)
-    (esc target.target_slug) form
-    (esc (base_path ~community_slug:community.slug))
+  [ (Html.text (target.target_name))
+  ; (Html.text (target.target_name))
+  ; (Html.text (target.target_slug))
+  ; form
+  ; (Html.text ((base_path ~community_slug:community.slug))) ])
 
 (* --- Documents --- *)
 
@@ -389,15 +386,15 @@ let confirm_body ?request ~(community : community) ~(target : target) ~note
    data. *)
 let document ?user ?request ?shell ~title ~body () =
   let wrapped =
-    Printf.sprintf
-      "<div class='create-wrap community-connections'><div \
+    (Html.template "<div class='create-wrap community-connections'><div \
        class='create-panel'>%s</div></div>"
-      body
+  [ body ])
   in
   match shell with
   | None ->
       Page_shell.launch_message_page ?request ~noindex:true ~title
-        ~content:(Printf.sprintf "<div class='create-shell'>%s</div>" wrapped)
+        ~content:(Html.template "<div class='create-shell'>%s</div>"
+  [ wrapped ])
         ()
   | Some ((community_record : Community_types.community), rail_communities, sidebar) ->
       let content =
@@ -414,7 +411,7 @@ let document ?user ?request ?shell ~title ~body () =
 
 let management_page ?user ?request ?shell ~state ~feedback () =
   document ?user ?request ?shell ~title:"Connections"
-    ~body:(feedback_html feedback ^ management_body ?request ~state ())
+    ~body:(feedback_html feedback ++ management_body ?request ~state ())
     ()
 
 let target_search_page ?user ?request ?shell ~community ~query ~results ~searched
@@ -422,12 +419,12 @@ let target_search_page ?user ?request ?shell ~community ~query ~results ~searche
   document ?user ?request ?shell ~title:"Connect a community"
     ~body:
       (feedback_html feedback
-      ^ search_body ~community ~query ~results ~searched)
+      ++ search_body ~community ~query ~results ~searched)
     ()
 
 let confirm_page ?user ?request ?shell ~community ~target ~note ~feedback () =
   document ?user ?request ?shell ~title:"Send a connection request"
     ~body:
       (feedback_html feedback
-      ^ confirm_body ?request ~community ~target ~note ())
+      ++ confirm_body ?request ~community ~target ~note ())
     ()

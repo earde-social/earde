@@ -107,10 +107,10 @@ let check_inert label html =
 let empty_cases =
   [ case "connected projects: an empty list renders the empty fragment"
       (fun () ->
-        Alcotest.(check string) "empty fragment" "" (render []);
+        Alcotest.(check string) "empty fragment" "" (Earde.Html.to_string (render []));
         (* No placeholder is shown to ordinary visitors. *)
         Alcotest.(check bool) "no empty-state copy" false
-          (Html_assert.contains (render []) "No connected projects"))
+          (Html_assert.contains (Earde.Html.to_string (render [])) "No connected projects"))
   ]
 
 let content_cases =
@@ -121,36 +121,36 @@ let content_cases =
           one ~name:"Ccpp Alpha" ~slug:"ccpp-alpha" ~login:"ccpp-owner" ()
         in
         Alcotest.(check bool) "heading" true
-          (Html_assert.contains html "Connected projects");
+          (Html_assert.contains (Earde.Html.to_string html) "Connected projects");
         Alcotest.(check bool) "supporting copy" true
-          (Html_assert.contains html
+          (Html_assert.contains (Earde.Html.to_string html)
              "Open-source projects that use this community as their Earde \
               home.");
-        Alcotest.(check bool) "project name" true (Html_assert.contains html "Ccpp Alpha");
-        Alcotest.(check bool) "kind copy" true (Html_assert.contains html ">Project<");
+        Alcotest.(check bool) "project name" true (Html_assert.contains (Earde.Html.to_string html) "Ccpp Alpha");
+        Alcotest.(check bool) "kind copy" true (Html_assert.contains (Earde.Html.to_string html) ">Project<");
         Alcotest.(check bool) "namespace login" true
-          (Html_assert.contains html "ccpp-owner");
+          (Html_assert.contains (Earde.Html.to_string html) "ccpp-owner");
         Alcotest.(check bool) "verification copy" true
-          (Html_assert.contains html "Verified through GitHub");
+          (Html_assert.contains (Earde.Html.to_string html) "Verified through GitHub");
         Alcotest.(check bool) "safe provenance copy" true
-          (Html_assert.contains html "Project connected through GitHub");
-        check_no_officiality "content" html;
-        check_inert "content" html)
+          (Html_assert.contains (Earde.Html.to_string html) "Project connected through GitHub");
+        check_no_officiality "content" (Earde.Html.to_string html);
+        check_inert "content" (Earde.Html.to_string html))
   ; case "connected projects: stale and revoked carry their exact copy and \
           stay visible"
       (fun () ->
         let stale = one ~verification:Ccp.Stale () in
         Alcotest.(check bool) "stale copy" true
-          (Html_assert.contains stale "Verification stale");
+          (Html_assert.contains (Earde.Html.to_string stale) "Verification stale");
         Alcotest.(check bool) "stale is not verified copy" false
-          (Html_assert.contains stale "Verified through GitHub");
+          (Html_assert.contains (Earde.Html.to_string stale) "Verified through GitHub");
         let revoked = one ~verification:Ccp.Revoked () in
         Alcotest.(check bool) "revoked copy" true
-          (Html_assert.contains revoked "Verification revoked");
+          (Html_assert.contains (Earde.Html.to_string revoked) "Verification revoked");
         Alcotest.(check bool) "revoked still rendered" true
-          (Html_assert.contains revoked "Ccpp Project");
-        check_no_officiality "stale" stale;
-        check_no_officiality "revoked" revoked)
+          (Html_assert.contains (Earde.Html.to_string revoked) "Ccpp Project");
+        check_no_officiality "stale" (Earde.Html.to_string stale);
+        check_no_officiality "revoked" (Earde.Html.to_string revoked))
   ; case "connected projects: every project kind uses the current product \
           vocabulary"
       (fun () ->
@@ -160,7 +160,7 @@ let content_cases =
             Alcotest.(check bool)
               ("kind copy " ^ copy)
               true
-              (Html_assert.contains html (">" ^ copy ^ "<")))
+              (Html_assert.contains (Earde.Html.to_string html) (">" ^ copy ^ "<")))
           [ (Pi.Project, "Project"); (Pi.Organization, "Organization");
             (Pi.Ecosystem, "Ecosystem"); (Pi.Foundation, "Foundation");
             (Pi.Working_group, "Working group"); (Pi.Other, "Other") ])
@@ -177,8 +177,8 @@ let content_cases =
         in
         let index needle =
           let rec go i =
-            if i + String.length needle > String.length html then -1
-            else if String.sub html i (String.length needle) = needle then i
+            if i + String.length needle > String.length (Earde.Html.to_string html) then -1
+            else if String.sub (Earde.Html.to_string html) i (String.length needle) = needle then i
             else go (i + 1)
           in
           go 0
@@ -187,13 +187,13 @@ let content_cases =
           (index "ccpp-owner/alpha" < index "ccpp-owner/beta");
         Alcotest.(check bool) "beta before gamma" true
           (index "ccpp-owner/beta" < index "ccpp-owner/gamma");
-        Alcotest.(check bool) "primary marker" true (Html_assert.contains html ">Primary<");
+        Alcotest.(check bool) "primary marker" true (Html_assert.contains (Earde.Html.to_string html) ">Primary<");
         Alcotest.(check bool) "archived marker" true
-          (Html_assert.contains html ">Archived<");
+          (Html_assert.contains (Earde.Html.to_string html) ">Archived<");
         Alcotest.(check int) "exactly one primary marker" 1
-          (Html_assert.occurrences html ">Primary<");
+          (Html_assert.occurrences (Earde.Html.to_string html) ">Primary<");
         Alcotest.(check int) "exactly one archived marker" 1
-          (Html_assert.occurrences html ">Archived<"))
+          (Html_assert.occurrences (Earde.Html.to_string html) ">Archived<"))
   ; case "connected projects: multiple projects preserve the supplied order"
       (fun () ->
         let html =
@@ -202,11 +202,11 @@ let content_cases =
               project ~name:"Ccpp Two" ~slug:"ccpp-two" () ]
         in
         Alcotest.(check int) "two project entries" 2
-          (Html_assert.occurrences html "<li class='ccp-project'>");
+          (Html_assert.occurrences (Earde.Html.to_string html) "<li class='ccp-project'>");
         let idx needle =
           let rec go i =
-            if i + String.length needle > String.length html then -1
-            else if String.sub html i (String.length needle) = needle then i
+            if i + String.length needle > String.length (Earde.Html.to_string html) then -1
+            else if String.sub (Earde.Html.to_string html) i (String.length needle) = needle then i
             else go (i + 1)
           in
           go 0
@@ -221,7 +221,7 @@ let link_cases =
       (fun () ->
         let safe = one ~website:"https://ccpp.example/home" () in
         Alcotest.(check bool) "website linked" true
-          (Html_assert.contains safe "href='https://ccpp.example/home'");
+          (Html_assert.contains (Earde.Html.to_string safe) "href='https://ccpp.example/home'");
         (* Each unsafe scheme renders its text but never an href; the
            repository list is dropped so the only possible href would be the
            website's. *)
@@ -231,8 +231,8 @@ let link_cases =
             Alcotest.(check bool)
               ("no href for " ^ bad)
               false
-              (Html_assert.contains html "href=");
-            check_inert ("unsafe website " ^ bad) html)
+              (Html_assert.contains (Earde.Html.to_string html) "href=");
+            check_inert ("unsafe website " ^ bad) (Earde.Html.to_string html))
           [ "javascript:alert(1)"; "data:text/html,x"; "/relative/path";
             "//evil.example/x"; "ftp://ccpp.example/x"; "" ])
   ; case "connected projects: a repository links only at its canonical \
@@ -240,7 +240,7 @@ let link_cases =
       (fun () ->
         let good = one ~repositories:[ repo "ccpp-owner/alpha" ] () in
         Alcotest.(check bool) "canonical repository linked" true
-          (Html_assert.contains good "href='https://github.com/ccpp-owner/alpha'");
+          (Html_assert.contains (Earde.Html.to_string good) "href='https://github.com/ccpp-owner/alpha'");
         List.iter
           (fun bad ->
             let html =
@@ -248,11 +248,11 @@ let link_cases =
             in
             Alcotest.(check bool)
               ("no href for " ^ bad)
-              false (Html_assert.contains html "href=");
+              false (Html_assert.contains (Earde.Html.to_string html) "href=");
             (* The label still renders, inert and escaped. *)
             Alcotest.(check bool) "full name still shown" true
-              (Html_assert.contains html "ccpp-owner/alpha");
-            check_inert ("bad repository url " ^ bad) html)
+              (Html_assert.contains (Earde.Html.to_string html) "ccpp-owner/alpha");
+            check_inert ("bad repository url " ^ bad) (Earde.Html.to_string html))
           [ "https://evil.example/ccpp-owner/alpha";
             "https://github.com.evil.example/ccpp-owner/alpha";
             "http://github.com/ccpp-owner/alpha";
@@ -263,23 +263,23 @@ let link_cases =
       (fun () ->
         let html = one ~slug:"ccpp-alpha" () in
         Alcotest.(check bool) "no setup link" false
-          (Html_assert.contains html "/projects/ccpp-alpha/setup");
+          (Html_assert.contains (Earde.Html.to_string html) "/projects/ccpp-alpha/setup");
         Alcotest.(check bool) "no projects route at all" false
-          (Html_assert.contains html "/projects/");
+          (Html_assert.contains (Earde.Html.to_string html) "/projects/");
         Alcotest.(check bool) "no request-home link" false
-          (Html_assert.contains html "request-home");
+          (Html_assert.contains (Earde.Html.to_string html) "request-home");
         (* The name renders as a heading, never wrapped in an anchor. *)
         Alcotest.(check bool) "name is a heading" true
-          (Html_assert.contains html "<h3 class='ccp-name'>Ccpp Project</h3>"))
+          (Html_assert.contains (Earde.Html.to_string html) "<h3 class='ccp-name'>Ccpp Project</h3>"))
   ; case "connected projects: an empty repository list still renders the \
           project identity"
       (fun () ->
         let html = one ~repositories:[] () in
         Alcotest.(check bool) "identity present" true
-          (Html_assert.contains html "Ccpp Project");
+          (Html_assert.contains (Earde.Html.to_string html) "Ccpp Project");
         Alcotest.(check bool) "no repository list" false
-          (Html_assert.contains html "ccp-repos");
-        Alcotest.(check bool) "no repository link" false (Html_assert.contains html "href="))
+          (Html_assert.contains (Earde.Html.to_string html) "ccp-repos");
+        Alcotest.(check bool) "no repository link" false (Html_assert.contains (Earde.Html.to_string html) "href="))
   ]
 
 let defensive_cases =
@@ -290,9 +290,9 @@ let defensive_cases =
           (fun blank ->
             let html = one ~name:blank () in
             Alcotest.(check bool) "generic label" true
-              (Html_assert.contains html "Open-source project");
+              (Html_assert.contains (Earde.Html.to_string html) "Open-source project");
             Alcotest.(check bool) "no empty heading" false
-              (Html_assert.contains html "<h3 class='ccp-name'></h3>"))
+              (Html_assert.contains (Earde.Html.to_string html) "<h3 class='ccp-name'></h3>"))
           [ ""; "   "; "\t\n" ])
   ; case "connected projects: a duplicated project slug leaves at most one \
           link-carrying group"
@@ -305,23 +305,23 @@ let defensive_cases =
                 ~website:"https://two.example/" () ]
         in
         Alcotest.(check int) "both groups render" 2
-          (Html_assert.occurrences html "<li class='ccp-project'>");
+          (Html_assert.occurrences (Earde.Html.to_string html) "<li class='ccp-project'>");
         Alcotest.(check bool) "first keeps its website link" true
-          (Html_assert.contains html "href='https://one.example/'");
+          (Html_assert.contains (Earde.Html.to_string html) "href='https://one.example/'");
         Alcotest.(check bool) "duplicate carries no website link" false
-          (Html_assert.contains html "href='https://two.example/'");
+          (Html_assert.contains (Earde.Html.to_string html) "href='https://two.example/'");
         Alcotest.(check bool) "duplicate still shows its website text" true
-          (Html_assert.contains html "https://two.example/");
+          (Html_assert.contains (Earde.Html.to_string html) "https://two.example/");
         (* Exactly one repository link survives across the duplicate pair. *)
         Alcotest.(check int) "one repository link" 1
-          (Html_assert.occurrences html "href='https://github.com/ccpp-owner/alpha'"))
+          (Html_assert.occurrences (Earde.Html.to_string html) "href='https://github.com/ccpp-owner/alpha'"))
   ; case "connected projects: an invalid project slug carries no links"
       (fun () ->
         List.iter
           (fun bad ->
             let html = one ~slug:bad ~website:"https://ccpp.example/" () in
             Alcotest.(check bool) "no links at all" false
-              (Html_assert.contains html "href="))
+              (Html_assert.contains (Earde.Html.to_string html) "href="))
           [ ""; "Ccpp-Alpha"; "ccpp alpha"; "-ccpp"; "ccpp-"; "ccpp/alpha";
             "ccpp\x01" ])
   ; case "connected projects: a duplicated repository full name leaves at \
@@ -335,16 +335,16 @@ let defensive_cases =
             ()
         in
         Alcotest.(check int) "both rows render" 2
-          (Html_assert.occurrences html "<li class='ccp-repo'>");
+          (Html_assert.occurrences (Earde.Html.to_string html) "<li class='ccp-repo'>");
         Alcotest.(check int) "only one linked" 1
-          (Html_assert.occurrences html "href='https://github.com/ccpp-owner/alpha'"))
+          (Html_assert.occurrences (Earde.Html.to_string html) "href='https://github.com/ccpp-owner/alpha'"))
   ; case "connected projects: a malformed namespace login is escaped, never \
           executed"
       (fun () ->
         let html = one ~login:"<script>alert(1)</script>" () in
         Alcotest.(check bool) "escaped" true
-          (Html_assert.contains html "&lt;script&gt;");
-        check_inert "malformed login" html)
+          (Html_assert.contains (Earde.Html.to_string html) "&lt;script&gt;");
+        check_inert "malformed login" (Earde.Html.to_string html))
   ]
 
 let escaping_cases =
@@ -358,10 +358,10 @@ let escaping_cases =
               [ repo ~url:"https://github.com/a/b" (hostile ^ "/x") ]
             ()
         in
-        Alcotest.(check bool) "no raw img tag" false (Html_assert.contains html "<img ");
-        Alcotest.(check bool) "escaped lt" true (Html_assert.contains html "&lt;img");
-        Alcotest.(check bool) "escaped amp" true (Html_assert.contains html "&amp;");
-        check_inert "hostile fields" html)
+        Alcotest.(check bool) "no raw img tag" false (Html_assert.contains (Earde.Html.to_string html) "<img ");
+        Alcotest.(check bool) "escaped lt" true (Html_assert.contains (Earde.Html.to_string html) "&lt;img");
+        Alcotest.(check bool) "escaped amp" true (Html_assert.contains (Earde.Html.to_string html) "&amp;");
+        check_inert "hostile fields" (Earde.Html.to_string html))
   ; case "connected projects: no identifier, provenance or private workflow \
           data can appear"
       (fun () ->
@@ -377,12 +377,12 @@ let escaping_cases =
           (fun needle ->
             Alcotest.(check bool)
               ("no " ^ needle)
-              false (Html_assert.contains html needle))
+              false (Html_assert.contains (Earde.Html.to_string html) needle))
           [ "Requested by"; "Reviewed by"; "request note"; "Private";
             "relation"; "installation"; "member"; "star"; "karma";
             "moderator"; "Accept"; "Reject" ];
-        check_no_officiality "identifiers" html;
-        check_inert "identifiers" html)
+        check_no_officiality "identifiers" (Earde.Html.to_string html);
+        check_inert "identifiers" (Earde.Html.to_string html))
   ]
 
 let suites =

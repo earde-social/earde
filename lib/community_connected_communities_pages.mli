@@ -21,13 +21,14 @@ type connected_community = {
           non-empty URL path segment. *)
 }
 
-val connected_communities_section : communities:connected_community list -> string
+val connected_communities_section :
+  communities:connected_community list -> Html.t
 (** The rendered block, or [""] for an empty list — no empty card, no
     placeholder, and no "none yet" copy: a community with nothing publicly
     connected shows nothing at all. The supplied order is preserved exactly;
     nothing is re-sorted here. *)
 
-val empty_communities_section : string
+val empty_communities_section : Html.t
 (** The same block with a quiet "No connected communities yet." line in place
     of the list, for the dedicated Network page — which names both
     destinations whether or not either holds anything. Shares the heading

@@ -88,7 +88,7 @@ let msg_page_preserves_internal_paths =
 
 let js_attr_escaping =
   case "js_single_quoted_attr: the literal cannot be closed" (fun () ->
-      let esc = Earde.Components.js_single_quoted_attr in
+      let esc s = Earde.Html.to_string (Earde.Html.js_string s) in
       (* html_escape alone is NOT enough here: &#39; decodes back to a live
          apostrophe before JavaScript parses the attribute. The apostrophe
          must survive as a backslash escape. *)

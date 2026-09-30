@@ -19,7 +19,7 @@ let render_launch_doc ?session_user ?analytics_community () =
                rendered :=
                  Earde.Page_shell.launch_app_page ~request:req
                    ?analytics_community ~page_class:"launch-feed" ~title:"T"
-                   ~content:"<p>body</p>" ();
+                   ~content:(Earde.Html.static "<p>body</p>") ();
                Dream.html ""))
          (Dream.request ~method_:`GET ~target:"/feed" ""))
   in
@@ -144,9 +144,9 @@ let suites =
                 in
                 let html =
                   Earde.Community_shell.launch_community_page ~community
-                    ~sidebar:"SIDE"
+                    ~sidebar:(Earde.Html.static "SIDE")
                     ~page_class:"launch-community-overview" ~title:"T"
-                    ~content:"MAIN" ()
+                    ~content:(Earde.Html.static "MAIN") ()
                 in
                 Alcotest.(check (option string)) "group attr"
                   (Some "community:9")
@@ -163,9 +163,9 @@ let suites =
                 in
                 let html =
                   Earde.Community_shell.launch_community_page ~community
-                    ~sidebar:"SIDE"
+                    ~sidebar:(Earde.Html.static "SIDE")
                     ~page_class:"launch-community-overview" ~title:"T"
-                    ~content:"MAIN" ()
+                    ~content:(Earde.Html.static "MAIN") ()
                 in
                 Alcotest.(check (option string)) "group attr"
                   (Some "community:9")
@@ -228,16 +228,16 @@ let suites =
                      ~community:
                        (test_community ~id:5
                           ~visibility:Earde.Community_types.Community_public)
-                     ~sidebar:"SIDE"
+                     ~sidebar:(Earde.Html.static "SIDE")
                      ~page_class:"launch-community-overview" ~title:"T"
-                     ~content:"B" ());
+                     ~content:(Earde.Html.static "B") ());
                 check_attr "launch_community_surface_page" (Some "community:6")
                   (Earde.Community_shell.launch_community_surface_page
                      ~community:
                        (test_community ~id:6
                           ~visibility:Earde.Community_types.Community_public)
-                     ~sidebar:"SIDE" ~page_class:"launch-community-channel"
-                     ~title:"T" ~main_el:"<main class='cs-main'>B</main>" ())))
+                     ~sidebar:(Earde.Html.static "SIDE") ~page_class:"launch-community-channel"
+                     ~title:"T" ~main_el:(Earde.Html.static "<main class='cs-main'>B</main>") ())))
       ; Analytics_fixture.an_case "global launch documents emit no group" (fun () ->
             with_enabled_config (fun () ->
                 List.iter
@@ -247,17 +247,17 @@ let suites =
                   [ ("launch_app_page", Analytics_fixture.launch_doc ())
                   ; ( "launch_entry_page",
                       Earde.Page_shell.launch_entry_page
-                        ~page_class:"launch-bring" ~title:"T" ~content:"B" () )
+                        ~page_class:"launch-bring" ~title:"T" ~content:(Earde.Html.static "B") () )
                   ; ( "launch_auth_page",
                       Earde.Page_shell.launch_auth_page
-                        ~page_class:"launch-login" ~title:"T" ~content:"B" () )
+                        ~page_class:"launch-login" ~title:"T" ~content:(Earde.Html.static "B") () )
                   ; ( "launch_message_page",
                       Earde.Page_shell.launch_message_page ~title:"T"
-                        ~content:"B" () )
+                        ~content:(Earde.Html.static "B") () )
                   ; ( "launch_onboarding_page",
                       Earde.Page_shell.launch_onboarding_page
                         ~page_class:"launch-project-new" ~title:"T"
-                        ~content:"B" () )
+                        ~content:(Earde.Html.static "B") () )
                   ]))
       ] )
     (* §2.4 search metadata container: closed values only, emitted only for

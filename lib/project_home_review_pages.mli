@@ -101,7 +101,7 @@ type feedback =
 type launch_shell = {
   community_record : Community_types.community;
   rail_communities : Community_types.community list;
-  sidebar : string;
+  sidebar : Html.t;
 }
 
 val project_home_review_page :

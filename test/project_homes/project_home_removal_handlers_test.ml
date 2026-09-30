@@ -164,34 +164,34 @@ let project_form_cases =
           removal route, with a CSRF field and zero application fields"
       (fun () ->
         let html = live_project_form ~project:"phrh-alpha" ~community:"phrh-home" in
-        check_form_shape "project side" html
+        check_form_shape "project side" (Earde.Html.to_string html)
           ~action:"/projects/phrh-alpha/community-home/phrh-home/remove"
           ~count:1;
         Alcotest.(check bool) "framework CSRF field" true
-          (Html_assert.contains html "name=\"dream.csrf\"");
-        check_zero_application_fields "project side" html;
-        check_inert "project side" html;
+          (Html_assert.contains (Earde.Html.to_string html) "name=\"dream.csrf\"");
+        check_zero_application_fields "project side" (Earde.Html.to_string html);
+        check_inert "project side" (Earde.Html.to_string html);
         Alcotest.(check bool) "heading" true
-          (Html_assert.contains html "Remove community home");
+          (Html_assert.contains (Earde.Html.to_string html) "Remove community home");
         Alcotest.(check bool) "association-only warning" true
-          (Html_assert.contains html warning_copy);
-        Alcotest.(check bool) "submit copy" true (Html_assert.contains html "Remove home"))
+          (Html_assert.contains (Earde.Html.to_string html) warning_copy);
+        Alcotest.(check bool) "submit copy" true (Html_assert.contains (Earde.Html.to_string html) "Remove home"))
   ; case "removal fragment: the project-side form never claims to delete \
           anything else" (fun () ->
         let html = live_project_form ~project:"phrh-alpha" ~community:"phrh-home" in
         List.iter
           (fun needle ->
-            Alcotest.(check bool) ("no " ^ needle) false (Html_assert.contains html needle))
+            Alcotest.(check bool) ("no " ^ needle) false (Html_assert.contains (Earde.Html.to_string html) needle))
           [ "Delete project"; "Delete community"; "moderation"; "membership";
             "repositories"; "verification"; "Official" ])
   ; case "removal fragment: without a live request the project-side form is \
           not rendered, but the copy is" (fun () ->
         let html = project_form ~project:"phrh-alpha" ~community:"phrh-home" () in
-        Alcotest.(check int) "no form" 0 (Html_assert.occurrences html "<form");
+        Alcotest.(check int) "no form" 0 (Html_assert.occurrences (Earde.Html.to_string html) "<form");
         Alcotest.(check bool) "heading survives" true
-          (Html_assert.contains html "Remove community home");
+          (Html_assert.contains (Earde.Html.to_string html) "Remove community home");
         Alcotest.(check bool) "warning survives" true
-          (Html_assert.contains html warning_copy))
+          (Html_assert.contains (Earde.Html.to_string html) warning_copy))
   ; case "removal fragment: a malformed project or community slug \
           suppresses the project-side form and leaks no route value"
       (fun () ->
@@ -203,17 +203,17 @@ let project_form_cases =
           (fun slug ->
             let html = live_project_form ~project:slug ~community:"phrh-home" in
             Alcotest.(check int) ("no form for project " ^ slug) 0
-              (Html_assert.occurrences html "<form");
+              (Html_assert.occurrences (Earde.Html.to_string html) "<form");
             Alcotest.(check bool) ("no action for project " ^ slug) false
-              (Html_assert.contains html "action="))
+              (Html_assert.contains (Earde.Html.to_string html) "action="))
           bad_project;
         List.iter
           (fun slug ->
             let html = live_project_form ~project:"phrh-alpha" ~community:slug in
             Alcotest.(check int) "no form for bad community" 0
-              (Html_assert.occurrences html "<form");
+              (Html_assert.occurrences (Earde.Html.to_string html) "<form");
             Alcotest.(check bool) "no action for bad community" false
-              (Html_assert.contains html "action="))
+              (Html_assert.contains (Earde.Html.to_string html) "action="))
           [ ""; "phrh/home"; "phrh home"; "phrh\thome"; "phrh\127home" ])
   ]
 
@@ -226,22 +226,22 @@ let section_cases =
               [ project ~slug:"phrh-alpha" ~name:"Alpha" ();
                 project ~slug:"phrh-beta" ~name:"Beta" () ]
         in
-        Alcotest.(check int) "two forms" 2 (Html_assert.occurrences html "<form");
+        Alcotest.(check int) "two forms" 2 (Html_assert.occurrences (Earde.Html.to_string html) "<form");
         Alcotest.(check int) "alpha action" 1
-          (Html_assert.occurrences html
+          (Html_assert.occurrences (Earde.Html.to_string html)
              "action='/c/phrh-home/projects/phrh-alpha/remove-home'");
         Alcotest.(check int) "beta action" 1
-          (Html_assert.occurrences html
+          (Html_assert.occurrences (Earde.Html.to_string html)
              "action='/c/phrh-home/projects/phrh-beta/remove-home'");
-        Alcotest.(check int) "POST only" 2 (Html_assert.occurrences html "method='POST'");
-        check_zero_application_fields "section" html;
-        check_inert "section" html;
+        Alcotest.(check int) "POST only" 2 (Html_assert.occurrences (Earde.Html.to_string html) "method='POST'");
+        check_zero_application_fields "section" (Earde.Html.to_string html);
+        check_inert "section" (Earde.Html.to_string html);
         Alcotest.(check bool) "heading" true
-          (Html_assert.contains html "Connected projects");
+          (Html_assert.contains (Earde.Html.to_string html) "Connected projects");
         Alcotest.(check bool) "association-only warning" true
-          (Html_assert.contains html warning_copy);
+          (Html_assert.contains (Earde.Html.to_string html) warning_copy);
         Alcotest.(check int) "submit copy per project" 2
-          (Html_assert.occurrences html ">Remove home<"))
+          (Html_assert.occurrences (Earde.Html.to_string html) ">Remove home<"))
   ; case "removal fragment: identity is public project identity only — \
           never workflow provenance or an internal id" (fun () ->
         let html =
@@ -250,12 +250,12 @@ let section_cases =
               [ project ~slug:"phrh-alpha" ~name:"Alpha"
                   ~namespace:"phrh-owner" () ]
         in
-        Alcotest.(check bool) "name" true (Html_assert.contains html "Alpha");
-        Alcotest.(check bool) "slug" true (Html_assert.contains html "phrh-alpha");
-        Alcotest.(check bool) "namespace" true (Html_assert.contains html "phrh-owner");
+        Alcotest.(check bool) "name" true (Html_assert.contains (Earde.Html.to_string html) "Alpha");
+        Alcotest.(check bool) "slug" true (Html_assert.contains (Earde.Html.to_string html) "phrh-alpha");
+        Alcotest.(check bool) "namespace" true (Html_assert.contains (Earde.Html.to_string html) "phrh-owner");
         List.iter
           (fun needle ->
-            Alcotest.(check bool) ("no " ^ needle) false (Html_assert.contains html needle))
+            Alcotest.(check bool) ("no " ^ needle) false (Html_assert.contains (Earde.Html.to_string html) needle))
           [ "Requested by"; "Reviewed"; "request_note"; "relation_id";
             "Accepted at"; "requester"; "reviewer" ])
   ; case "removal fragment: the three verification labels are exact and \
@@ -266,22 +266,22 @@ let section_cases =
               live_section ~community:"phrh-home"
                 ~projects:[ project ~verification () ]
             in
-            Alcotest.(check bool) ("label " ^ copy) true (Html_assert.contains html copy);
+            Alcotest.(check bool) ("label " ^ copy) true (Html_assert.contains (Earde.Html.to_string html) copy);
             Alcotest.(check int) ("form still present for " ^ copy) 1
-              (Html_assert.occurrences html "<form"))
+              (Html_assert.occurrences (Earde.Html.to_string html) "<form"))
           [ (Rp.Verified, "Verified through GitHub");
             (Rp.Stale, "Verification stale");
             (Rp.Revoked, "Verification revoked") ])
   ; case "removal fragment: no accepted projects renders restrained \
           settings copy and no form" (fun () ->
         let html = live_section ~community:"phrh-home" ~projects:[] in
-        Alcotest.(check int) "no form" 0 (Html_assert.occurrences html "<form");
+        Alcotest.(check int) "no form" 0 (Html_assert.occurrences (Earde.Html.to_string html) "<form");
         Alcotest.(check bool) "section still present" true
-          (Html_assert.contains html "Connected projects");
+          (Html_assert.contains (Earde.Html.to_string html) "Connected projects");
         Alcotest.(check bool) "restrained copy" true
-          (Html_assert.contains html "No connected projects.");
+          (Html_assert.contains (Earde.Html.to_string html) "No connected projects.");
         (* Without a project there is nothing to warn about. *)
-        Alcotest.(check bool) "no warning" false (Html_assert.contains html warning_copy))
+        Alcotest.(check bool) "no warning" false (Html_assert.contains (Earde.Html.to_string html) warning_copy))
   ]
 
 let defensive_cases =
@@ -294,15 +294,15 @@ let defensive_cases =
                 project ~slug:"phrh-dup" ~name:"Second" ();
                 project ~slug:"phrh-dup" ~name:"Third" () ]
         in
-        Alcotest.(check int) "one form" 1 (Html_assert.occurrences html "<form");
+        Alcotest.(check int) "one form" 1 (Html_assert.occurrences (Earde.Html.to_string html) "<form");
         Alcotest.(check int) "one action" 1
-          (Html_assert.occurrences html
+          (Html_assert.occurrences (Earde.Html.to_string html)
              "action='/c/phrh-home/projects/phrh-dup/remove-home'");
         (* Every identity stays visible; only the duplicates lose their
            control. *)
         List.iter
           (fun n ->
-            Alcotest.(check bool) ("identity " ^ n) true (Html_assert.contains html n))
+            Alcotest.(check bool) ("identity " ^ n) true (Html_assert.contains (Earde.Html.to_string html) n))
           [ "First"; "Second"; "Third" ])
   ; case "removal fragment: a malformed project slug renders its identity \
           inert while its siblings stay actionable" (fun () ->
@@ -312,14 +312,14 @@ let defensive_cases =
               [ project ~slug:"Phrh-Bad" ~name:"Bad" ();
                 project ~slug:"phrh-good" ~name:"Good" () ]
         in
-        Alcotest.(check int) "one form" 1 (Html_assert.occurrences html "<form");
+        Alcotest.(check int) "one form" 1 (Html_assert.occurrences (Earde.Html.to_string html) "<form");
         Alcotest.(check int) "good action" 1
-          (Html_assert.occurrences html
+          (Html_assert.occurrences (Earde.Html.to_string html)
              "action='/c/phrh-home/projects/phrh-good/remove-home'");
         Alcotest.(check bool) "no action for the malformed slug" false
-          (Html_assert.contains html "Phrh-Bad/remove-home");
+          (Html_assert.contains (Earde.Html.to_string html) "Phrh-Bad/remove-home");
         Alcotest.(check bool) "malformed identity still escaped-visible" true
-          (Html_assert.contains html "Phrh-Bad"))
+          (Html_assert.contains (Earde.Html.to_string html) "Phrh-Bad"))
   ; case "removal fragment: an unaddressable community slug drops every \
           form on the section" (fun () ->
         List.iter
@@ -329,9 +329,9 @@ let defensive_cases =
                 ~projects:
                   [ project ~slug:"phrh-alpha" (); project ~slug:"phrh-beta" () ]
             in
-            Alcotest.(check int) "no form" 0 (Html_assert.occurrences html "<form");
+            Alcotest.(check int) "no form" 0 (Html_assert.occurrences (Earde.Html.to_string html) "<form");
             Alcotest.(check bool) "no action attribute" false
-              (Html_assert.contains html "action="))
+              (Html_assert.contains (Earde.Html.to_string html) "action="))
           [ ""; "phrh/home"; "phrh home"; "phrh\127home" ])
   ; case "removal fragment: a blank project name degrades to a generic safe \
           label" (fun () ->
@@ -342,9 +342,9 @@ let defensive_cases =
                 ~projects:[ project ~name:blank () ]
             in
             Alcotest.(check bool) "generic label" true
-              (Html_assert.contains html "Open-source project");
+              (Html_assert.contains (Earde.Html.to_string html) "Open-source project");
             Alcotest.(check int) "form still rendered" 1
-              (Html_assert.occurrences html "<form"))
+              (Html_assert.occurrences (Earde.Html.to_string html) "<form"))
           [ ""; "   "; "\t\n" ])
   ; case "removal fragment: caller text is escaped, never markup"
       (fun () ->
@@ -355,13 +355,13 @@ let defensive_cases =
                   ~namespace:"<b>phrh-ns</b>" () ]
         in
         Alcotest.(check bool) "escaped name" true
-          (Html_assert.contains html "&lt;script&gt;phrh_x()&lt;/script&gt;");
+          (Html_assert.contains (Earde.Html.to_string html) "&lt;script&gt;phrh_x()&lt;/script&gt;");
         Alcotest.(check bool) "raw name absent" false
-          (Html_assert.contains html "<script>phrh_x()</script>");
+          (Html_assert.contains (Earde.Html.to_string html) "<script>phrh_x()</script>");
         Alcotest.(check bool) "escaped namespace" true
-          (Html_assert.contains html "&lt;b&gt;phrh-ns&lt;/b&gt;");
+          (Html_assert.contains (Earde.Html.to_string html) "&lt;b&gt;phrh-ns&lt;/b&gt;");
         Alcotest.(check bool) "raw namespace absent" false
-          (Html_assert.contains html "<b>phrh-ns</b>"))
+          (Html_assert.contains (Earde.Html.to_string html) "<b>phrh-ns</b>"))
   ]
 
 let csrf_field_cases =
@@ -371,15 +371,15 @@ let csrf_field_cases =
         let s =
           section ~community:"phrh-home" ~projects:[ project () ] ()
         in
-        Alcotest.(check int) "project side: no form" 0 (Html_assert.occurrences p "<form");
-        Alcotest.(check int) "section: no form" 0 (Html_assert.occurrences s "<form");
+        Alcotest.(check int) "project side: no form" 0 (Html_assert.occurrences (Earde.Html.to_string p) "<form");
+        Alcotest.(check int) "section: no form" 0 (Html_assert.occurrences (Earde.Html.to_string s) "<form");
         Alcotest.(check bool) "project side: no CSRF" false
-          (Html_assert.contains p "dream.csrf");
+          (Html_assert.contains (Earde.Html.to_string p) "dream.csrf");
         Alcotest.(check bool) "section: no CSRF" false
-          (Html_assert.contains s "dream.csrf");
+          (Html_assert.contains (Earde.Html.to_string s) "dream.csrf");
         (* The identity a moderator needs still renders. *)
         Alcotest.(check bool) "section identity survives" true
-          (Html_assert.contains s "Phrh Project"))
+          (Html_assert.contains (Earde.Html.to_string s) "Phrh Project"))
   ; case "removal fragment: with a live request each actionable form \
           carries exactly one framework CSRF field" (fun () ->
         let s =
@@ -387,7 +387,7 @@ let csrf_field_cases =
             ~projects:[ project ~slug:"phrh-a" (); project ~slug:"phrh-b" () ]
         in
         Alcotest.(check int) "two CSRF fields" 2
-          (Html_assert.occurrences s "name=\"dream.csrf\""))
+          (Html_assert.occurrences (Earde.Html.to_string s) "name=\"dream.csrf\""))
   ]
 
 (* ============ DB-free: the protected-draft fragments ============
@@ -411,24 +411,24 @@ let protected_cases =
           live_protected_project_form ~project:"phrh-alpha"
             ~community:"phrh-home"
         in
-        Alcotest.(check int) "no form" 0 (Html_assert.occurrences html "<form");
-        Alcotest.(check int) "no input of any kind" 0 (Html_assert.occurrences html "<input");
+        Alcotest.(check int) "no form" 0 (Html_assert.occurrences (Earde.Html.to_string html) "<form");
+        Alcotest.(check int) "no input of any kind" 0 (Html_assert.occurrences (Earde.Html.to_string html) "<input");
         Alcotest.(check bool) "no action attribute" false
-          (Html_assert.contains html "action=");
+          (Html_assert.contains (Earde.Html.to_string html) "action=");
         (* The action path itself never appears, in any form. *)
         Alcotest.(check bool) "no removal route emitted" false
-          (Html_assert.contains html "community-home");
+          (Html_assert.contains (Earde.Html.to_string html) "community-home");
         Alcotest.(check bool) "no CSRF field" false
-          (Html_assert.contains html "dream.csrf");
+          (Html_assert.contains (Earde.Html.to_string html) "dream.csrf");
         Alcotest.(check bool) "no submit control" false
-          (Html_assert.contains html "Remove home");
+          (Html_assert.contains (Earde.Html.to_string html) "Remove home");
         Alcotest.(check bool) "heading drops the action" false
-          (Html_assert.contains html "Remove community home");
+          (Html_assert.contains (Earde.Html.to_string html) "Remove community home");
         Alcotest.(check bool) "neutral heading" true
-          (Html_assert.contains html "Community home");
+          (Html_assert.contains (Earde.Html.to_string html) "Community home");
         Alcotest.(check bool) "draft-integrity copy" true
-          (Html_assert.contains html draft_copy);
-        check_inert "protected project side" html)
+          (Html_assert.contains (Earde.Html.to_string html) draft_copy);
+        check_inert "protected project side" (Earde.Html.to_string html))
   ; case "removal fragment: the protected project-side copy promises no \
           outcome and offers no destructive alternative" (fun () ->
         let html =
@@ -438,14 +438,14 @@ let protected_cases =
         List.iter
           (fun needle ->
             Alcotest.(check bool) ("no " ^ needle) false
-              (Html_assert.contains html needle))
+              (Html_assert.contains (Earde.Html.to_string html) needle))
           [ "Delete"; "Abandon"; "Discard"; "will be published";
             "guaranteed"; "private"; "draft community"; "top_mod";
             "administrator"; "steward" ];
         (* The association-only warning describes a control that is not
            offered here, so it must not appear. *)
         Alcotest.(check bool) "no association-only warning" false
-          (Html_assert.contains html warning_copy))
+          (Html_assert.contains (Earde.Html.to_string html) warning_copy))
   ; case "removal fragment: a protected draft keeps every connected \
           project's identity in settings but makes every row inert"
       (fun () ->
@@ -455,36 +455,36 @@ let protected_cases =
               [ project ~slug:"phrh-a" ~name:"Phrh Alpha" ();
                 project ~slug:"phrh-b" ~name:"Phrh Beta" () ]
         in
-        Alcotest.(check int) "no form on any row" 0 (Html_assert.occurrences html "<form");
+        Alcotest.(check int) "no form on any row" 0 (Html_assert.occurrences (Earde.Html.to_string html) "<form");
         Alcotest.(check bool) "no action attribute" false
-          (Html_assert.contains html "action=");
+          (Html_assert.contains (Earde.Html.to_string html) "action=");
         Alcotest.(check bool) "no removal route emitted" false
-          (Html_assert.contains html "remove-home");
+          (Html_assert.contains (Earde.Html.to_string html) "remove-home");
         Alcotest.(check bool) "no CSRF field" false
-          (Html_assert.contains html "dream.csrf");
+          (Html_assert.contains (Earde.Html.to_string html) "dream.csrf");
         Alcotest.(check bool) "no submit control" false
-          (Html_assert.contains html "Remove home");
+          (Html_assert.contains (Earde.Html.to_string html) "Remove home");
         (* Identity survives for every project: a moderator still sees
            which projects the draft is connected to. *)
         Alcotest.(check bool) "first identity" true
-          (Html_assert.contains html "Phrh Alpha");
+          (Html_assert.contains (Earde.Html.to_string html) "Phrh Alpha");
         Alcotest.(check bool) "second identity" true
-          (Html_assert.contains html "Phrh Beta");
+          (Html_assert.contains (Earde.Html.to_string html) "Phrh Beta");
         Alcotest.(check bool) "section title" true
-          (Html_assert.contains html "Connected projects");
+          (Html_assert.contains (Earde.Html.to_string html) "Connected projects");
         Alcotest.(check bool) "draft-integrity copy" true
-          (Html_assert.contains html draft_copy);
+          (Html_assert.contains (Earde.Html.to_string html) draft_copy);
         Alcotest.(check bool) "association-only warning replaced" false
-          (Html_assert.contains html warning_copy);
-        check_inert "protected section" html)
+          (Html_assert.contains (Earde.Html.to_string html) warning_copy);
+        check_inert "protected section" (Earde.Html.to_string html))
   ; case "removal fragment: the protected section still renders its \
           restrained empty state" (fun () ->
         let html = live_protected_section ~community:"phrh-home" ~projects:[] in
-        Alcotest.(check int) "no form" 0 (Html_assert.occurrences html "<form");
+        Alcotest.(check int) "no form" 0 (Html_assert.occurrences (Earde.Html.to_string html) "<form");
         Alcotest.(check bool) "empty-state copy" true
-          (Html_assert.contains html "No connected projects.");
+          (Html_assert.contains (Earde.Html.to_string html) "No connected projects.");
         Alcotest.(check bool) "section still present" true
-          (Html_assert.contains html "Connected projects"))
+          (Html_assert.contains (Earde.Html.to_string html) "Connected projects"))
   ; case "removal fragment: removal_allowed:true is byte-for-byte the \
           existing behaviour on both surfaces" (fun () ->
         (* The protection parameter must be the only difference: with it
@@ -492,18 +492,18 @@ let protected_cases =
         let p =
           live_project_form ~project:"phrh-alpha" ~community:"phrh-home"
         in
-        check_form_shape "unprotected project side" p
+        check_form_shape "unprotected project side" (Earde.Html.to_string p)
           ~action:"/projects/phrh-alpha/community-home/phrh-home/remove"
           ~count:1;
-        Alcotest.(check bool) "no draft copy" false (Html_assert.contains p draft_copy);
+        Alcotest.(check bool) "no draft copy" false (Html_assert.contains (Earde.Html.to_string p) draft_copy);
         let s =
           live_section ~community:"phrh-home"
             ~projects:[ project ~slug:"phrh-a" () ]
         in
-        check_form_shape "unprotected section" s
+        check_form_shape "unprotected section" (Earde.Html.to_string s)
           ~action:"/c/phrh-home/projects/phrh-a/remove-home" ~count:1;
         Alcotest.(check bool) "no draft copy in section" false
-          (Html_assert.contains s draft_copy))
+          (Html_assert.contains (Earde.Html.to_string s) draft_copy))
   ]
 
 (* ============ DB-free: the steward home-choice page ============ *)

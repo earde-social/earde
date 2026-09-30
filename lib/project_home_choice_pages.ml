@@ -55,7 +55,6 @@ type feedback =
   | Active_home_exists
   | Request_failed
 
-let esc = Components.html_escape
 
 (* The same canonical grammar the route and read model require. A project
    slug outside it never reaches an action attribute or an app link. *)
@@ -86,37 +85,38 @@ let valid_community_slug value =
    draft, or was never a network community is lifecycle detail this page
    must not reveal. *)
 let visibility_copy = function
-  | Public -> "Public"
-  | Unlisted -> "Unlisted"
-  | Currently_unavailable -> "Currently unavailable"
+  | Public -> Html.static "Public"
+  | Unlisted -> Html.static "Unlisted"
+  | Currently_unavailable -> Html.static "Currently unavailable"
 
 (* /c/<slug>, linked only when the slug is addressable; the identity text
    itself always renders (escaped) so a degraded row stays recognizable. *)
 let community_identity_html (community : community) =
-  let text = esc ("/c/" ^ community.slug) in
+  let text = (Html.text (("/c/" ^ community.slug))) in
   if valid_community_slug community.slug then
-    Printf.sprintf "<a href='%s' class='create-link phc-community-slug'>%s</a>"
-      (Components.safe_internal_path ("/c/" ^ community.slug))
-      text
-  else Printf.sprintf "<span class='phc-community-slug'>%s</span>" text
+    (Html.template "<a href='%s' class='create-link phc-community-slug'>%s</a>"
+  [ (Html.internal_path (("/c/" ^ community.slug)))
+  ; text ])
+  else (Html.template "<span class='phc-community-slug'>%s</span>"
+  [ text ])
 
 let feedback_copy = function
   | Stale_form ->
-      "This page had been open too long, so the form could no longer be \
+      Html.static "This page had been open too long, so the form could no longer be \
        submitted. Nothing was changed. Review it and submit again."
   | Request_form_invalid ->
-      "We couldn't read that request. Review the form and try again."
+      Html.static "We couldn't read that request. Review the form and try again."
   | Community_unavailable ->
-      "That community is no longer available for project requests."
+      Html.static "That community is no longer available for project requests."
   | Active_home_exists ->
-      "This project already has a pending request or community home."
-  | Request_failed -> "We couldn't send the request. Try again."
+      Html.static "This project already has a pending request or community home."
+  | Request_failed -> Html.static "We couldn't send the request. Try again."
 
 let feedback_html = function
-  | None -> ""
+  | None -> Html.empty
   | Some feedback ->
-      Printf.sprintf "<div class='phc-alert'><p>%s</p></div>"
-        (feedback_copy feedback)
+      (Html.template "<div class='phc-alert'><p>%s</p></div>"
+  [ (feedback_copy feedback) ])
 
 (* A chooser row may carry a form control only for a positive id on a
    community that is not Currently_unavailable — that state can only mean
@@ -134,27 +134,27 @@ let community_option_html (community : community) =
   let description =
     match community.description with
     | Some text ->
-        Printf.sprintf "<p class='phc-community-desc'>%s</p>" (esc text)
-    | None -> ""
+        (Html.template "<p class='phc-community-desc'>%s</p>"
+  [ (Html.text (text)) ])
+    | None -> Html.empty
   in
   let identity =
-    Printf.sprintf
-      "<span class='phc-community-name'>%s</span> %s \
+    (Html.template "<span class='phc-community-name'>%s</span> %s \
        <span class='phc-community-visibility'>%s</span>%s"
-      (esc community.name)
-      (community_identity_html community)
-      (visibility_copy community.visibility)
-      description
+  [ (Html.text (community.name))
+  ; (community_identity_html community)
+  ; (visibility_copy community.visibility)
+  ; description ])
   in
   if selectable community then
-    Printf.sprintf
-      "<li class='phc-community'><label>\
-       <input type='radio' name='target_community_id' value='%d'> %s\
+    (Html.template "<li class='phc-community'><label>\
+       <input type='radio' name='target_community_id' value='%s'> %s\
        </label></li>"
-      community.id identity
+  [ Html.int (community.id)
+  ; identity ])
   else
-    Printf.sprintf
-      "<li class='phc-community phc-community--unavailable'>%s</li>" identity
+    (Html.template "<li class='phc-community phc-community--unavailable'>%s</li>"
+  [ identity ])
 
 (* Options that may carry a form control: positive ids, first occurrence
    wins — a duplicated id never renders two actionable inputs. *)
@@ -169,25 +169,25 @@ let dedupe_communities communities =
   keep [] communities
 
 let heading_html =
-  "<div class='create-head'>\
+  (Html.static "<div class='create-head'>\
    <h1 class='create-title'>Connect to an existing community</h1>\
    <p class='create-sub phc-intro'>Request an eligible Earde community to \
    become this project&#39;s home.</p>\
    <p class='phc-verified'>Project connected through GitHub</p>\
-   </div>"
+   </div>")
 
 (* Review copy stays explicit about who decides and what verification does
    not grant. *)
 let review_copy_html =
-  "<p class='phc-review-copy'>The target community&#39;s moderators must \
+  (Html.static "<p class='phc-review-copy'>The target community&#39;s moderators must \
    review and accept this request before the community becomes the \
    project&#39;s home. Project verification grants no community moderation \
-   rights.</p>"
+   rights.</p>")
 
 let note_copy_html =
-  "<p class='phc-note-copy'>This note is visible only to this \
+  (Html.static "<p class='phc-note-copy'>This note is visible only to this \
    project&#39;s stewards, the target community&#39;s moderators, and \
-   administrators.</p>"
+   administrators.</p>")
 
 (* The one request form. No application-owned hidden field exists: the
    route path supplies the project slug, and the POST handler re-derives
@@ -198,11 +198,10 @@ let note_copy_html =
 let request_form_html ?request ~project_slug ~request_note options_html =
   let csrf_field =
     match request with
-    | None -> ""
-    | Some request -> Dream.csrf_tag request
+    | None -> Html.empty
+    | Some request -> Csrf_field.tag request
   in
-  Printf.sprintf
-    "<form method='POST' action='/projects/%s/request-home' \
+  (Html.template "<form method='POST' action='/projects/%s/request-home' \
      class='create-form phc-request-form'>\
      %s<ul class='phc-community-list'>%s</ul>\
      <label class='phc-note-field'>Request note\
@@ -211,8 +210,11 @@ let request_form_html ?request ~project_slug ~request_note options_html =
      <div class='create-actions'><button type='submit' class='create-btn \
      create-btn--block'>Send home request</button></div>\
      </form>"
-    (esc project_slug) csrf_field options_html (esc request_note)
-    note_copy_html
+  [ (Html.text (project_slug))
+  ; csrf_field
+  ; options_html
+  ; (Html.text (request_note))
+  ; note_copy_html ])
 
 let choose_existing_html ?request ~(project : project) ~communities
     ~request_note () =
@@ -224,32 +226,33 @@ let choose_existing_html ?request ~(project : project) ~communities
        page degrades to its copy alone. *)
     if valid_project_slug project.slug && actionable then
       request_form_html ?request ~project_slug:project.slug ~request_note
-        (String.concat "\n" (List.map community_option_html renderable))
-    else ""
+        ((Html.join (Html.static "\n")) (List.map community_option_html renderable))
+    else Html.empty
   in
-  Printf.sprintf
-    "%s<p class='phc-project'>Choosing a home for \
+  (Html.template "%s<p class='phc-project'>Choosing a home for \
      <strong>%s</strong>.</p>%s%s"
-    heading_html (esc project.name) review_copy_html form
+  [ heading_html
+  ; (Html.text (project.name))
+  ; review_copy_html
+  ; form ])
 
 let setup_link_html (project : project) =
   if valid_project_slug project.slug then
-    Printf.sprintf
-      "<p class='phc-back'><a href='%s' class='create-link'>Back to \
+    (Html.template "<p class='phc-back'><a href='%s' class='create-link'>Back to \
        project setup</a></p>"
-      (Components.safe_internal_path ("/projects/" ^ project.slug ^ "/setup"))
-  else ""
+  [ (Html.internal_path (("/projects/" ^ project.slug ^ "/setup"))) ])
+  else Html.empty
 
 let no_eligible_html (project : project) =
-  Printf.sprintf
-    "<div class='create-head'>\
+  (Html.template "<div class='create-head'>\
      <h1 class='create-title'>Connect to an existing community</h1>\
      <p class='create-sub phc-verified'>Project connected through \
      GitHub</p></div>\
      <p class='phc-project'>Choosing a home for <strong>%s</strong>.</p>\
      <p class='phc-none'>No eligible published network community is \
      currently available to request as this project&#39;s home.</p>%s"
-    (esc project.name) (setup_link_html project)
+  [ (Html.text (project.name))
+  ; (setup_link_html project) ])
 
 (* An unavailable active target keeps its name, identity, and relation
    status, gaining only the generic non-actionable marker — never the
@@ -257,21 +260,20 @@ let no_eligible_html (project : project) =
 let availability_html (community : community) =
   match community.visibility with
   | Currently_unavailable ->
-      " <span class='phc-community-availability'>Currently unavailable</span>"
-  | Public | Unlisted -> ""
+      (Html.static " <span class='phc-community-availability'>Currently unavailable</span>")
+  | Public | Unlisted -> Html.empty
 
 (* Active-relation states render no request controls at all: the workflow
    continues with the target community's moderators. *)
 let pending_html (community : community) =
-  Printf.sprintf
-    "<div class='create-head'><h1 class='create-title'>Home request \
+  (Html.template "<div class='create-head'><h1 class='create-title'>Home request \
      pending</h1></div>\
      <p class='phc-pending-copy'>This project has a pending home request \
      to <strong class='phc-community-name'>%s</strong> %s%s. The target \
      community&#39;s moderators must accept or reject it.</p>"
-    (esc community.name)
-    (community_identity_html community)
-    (availability_html community)
+  [ (Html.text (community.name))
+  ; (community_identity_html community)
+  ; (availability_html community) ])
 
 (* The accepted state is the only one that carries a removal control, and
    the only place on this page a mutation form exists besides the chooser.
@@ -287,18 +289,17 @@ let pending_html (community : community) =
    control. Presentation only — the removal store re-decides every POST. *)
 let accepted_html ?request ~(project : project) ~removal_allowed
     (community : community) =
-  Printf.sprintf
-    "<div class='create-head'><h1 class='create-title'>Community home \
+  (Html.template "<div class='create-head'><h1 class='create-title'>Community home \
      connected</h1></div>\
      <p class='phc-accepted-copy'><strong class='phc-community-name'>%s\
      </strong> %s%s is this project&#39;s community home. Community \
      moderation stays with its moderators.</p>%s"
-    (esc community.name)
-    (community_identity_html community)
-    (availability_html community)
-    (Project_home_removal_pages.project_side_removal_form ?request
+  [ (Html.text (community.name))
+  ; (community_identity_html community)
+  ; (availability_html community)
+  ; (Project_home_removal_pages.project_side_removal_form ?request
        ~removal_allowed ~project_slug:project.slug
-       ~community_slug:community.slug ())
+       ~community_slug:community.slug ()) ])
 
 (* Launch onboarding stepper (Cartographic Civic, 04-ROUTES): the same
    five-step sequence the /projects/new wrapper renders, truthfully
@@ -309,7 +310,7 @@ let accepted_html ?request ~(project : project) ~removal_allowed
    fragment, so the byte-exact fragment the test suites slice is untouched.
    Markup only — no form, no field, no script, no inline style. *)
 let stepper_html =
-  let labels = [ "GitHub"; "Project"; "Home"; "Configure"; "Complete" ] in
+  let labels = List.map Html.text [ "GitHub"; "Project"; "Home"; "Configure"; "Complete" ] in
   let active = 2 in
   let step index label =
     let dot_class, dot_text =
@@ -322,13 +323,15 @@ let stepper_html =
       if index = active then "step__label step__label--active"
       else "step__label"
     in
-    Printf.sprintf
-      "<li class='step'><span class='%s'>%s</span><span class='%s'>%s</span></li>"
-      dot_class dot_text label_class label
+    (Html.template "<li class='step'><span class='%s'>%s</span><span class='%s'>%s</span></li>"
+  [ (Html.text dot_class)
+  ; (Html.text dot_text)
+  ; (Html.text label_class)
+  ; label ])
   in
-  Printf.sprintf "<ol class='steps' aria-label='Project onboarding steps'>%s</ol>"
-    (String.concat "<li class='step__rule' aria-hidden='true'></li>"
-       (List.mapi step labels))
+  (Html.template "<ol class='steps' aria-label='Project onboarding steps'>%s</ol>"
+  [ (Html.join (Html.static "<li class='step__rule' aria-hidden='true'></li>")
+       (List.mapi step labels)) ])
 
 let project_home_choice_page ?user ?request ~state ~feedback () =
   let body =
@@ -344,10 +347,10 @@ let project_home_choice_page ?user ?request ~state ~feedback () =
         accepted_html ?request ~project ~removal_allowed community
   in
   let body =
-    Printf.sprintf
-      "<div class='create-wrap project-home-choice'><div \
+    (Html.template "<div class='create-wrap project-home-choice'><div \
        class='create-panel'>%s%s</div></div>"
-      (feedback_html feedback) body
+  [ (feedback_html feedback)
+  ; body ])
   in
   (* noindex: a steward-only workflow surface — not for search indexes. *)
   Page_shell.launch_onboarding_page ?user ?request ~noindex:true

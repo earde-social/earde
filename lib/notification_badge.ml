@@ -72,18 +72,19 @@ let middleware inner_handler request =
 let display_cap = 99
 
 let render count =
-  if count <= 0 then ""
+  if count <= 0 then Html.empty
   else
     let label =
       if count > display_cap then Printf.sprintf "%d+" display_cap
       else string_of_int count
     in
-    Printf.sprintf "<span id='notif-badge' class='bell__count'>%s</span>" label
+    Html.template "<span id='notif-badge' class='bell__count'>%s</span>"
+      [ Html.text label ]
 
 let badge_html ?request () =
   match request with
-  | None -> ""
+  | None -> Html.empty
   | Some request -> (
       match Dream.field request unread_field with
-      | None -> ""
+      | None -> Html.empty
       | Some count -> render count)

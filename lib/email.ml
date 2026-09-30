@@ -75,35 +75,32 @@ let html_body m =
   let url = link m in
   match m.kind with
   | Verification ->
-      Printf.sprintf
-        {|<html><body>
+      (Html.template {|<html><body>
 <p>Welcome to Earde!</p>
 <p>Please verify your email address by clicking the link below:</p>
 <p><a href="%s">Verify my account</a></p>
 <p>Or copy this URL into your browser:<br>%s</p>
 <p>If you did not create an account, you can safely ignore this email.</p>
 </body></html>|}
-        url url
+  [ Html.external_url url; Html.text url ])
   | Signup_confirmation ->
-      Printf.sprintf
-        {|<html><body>
+      (Html.template {|<html><body>
 <p>Welcome to Earde!</p>
 <p>Confirm your email address to finish creating your account:</p>
 <p><a href="%s">Confirm my account</a></p>
 <p>Or copy this URL into your browser:<br>%s</p>
 <p>This link expires in 24 hours. If you did not sign up, you can safely ignore this email.</p>
 </body></html>|}
-        url url
+  [ Html.external_url url; Html.text url ])
   | Password_reset ->
-      Printf.sprintf
-        {|<html><body>
+      (Html.template {|<html><body>
 <p>You requested a password reset for your Earde account.</p>
 <p>Click the link below to set a new password. This link expires in 2 hours.</p>
 <p><a href="%s">Reset my password</a></p>
 <p>Or copy this URL into your browser:<br>%s</p>
 <p>If you did not request a password reset, you can safely ignore this email.</p>
 </body></html>|}
-        url url
+  [ Html.external_url url; Html.text url ])
 
 let payload m =
   Yojson.Safe.to_string
@@ -111,7 +108,7 @@ let payload m =
       [ ("sender", `Assoc [ ("name", `String "Earde"); ("email", `String "noreply@earde.com") ])
       ; ("to", `List [ `Assoc [ ("email", `String m.to_email) ] ])
       ; ("subject", `String (subject m))
-      ; ("htmlContent", `String (html_body m))
+      ; ("htmlContent", `String (Html.to_string (html_body m)))
       ])
 
 let dev_kind_name m =

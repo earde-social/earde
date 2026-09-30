@@ -1,3 +1,5 @@
+open Html.Infix
+
 (* Session reads (current user, is_admin) happen inside a render function to avoid
    threading extra parameters through every call site — coupling is contained here. *)
 (* is_current_user_mod and mod_usernames are optional — callers without community context
@@ -27,27 +29,29 @@ let post_admin_actions ?(is_current_user_mod=false) ?(admin_usernames=[]) ?(bann
      Rule A: own post → personal Delete. Rule B: mod/top_mod (not own post, not admin-only)
      → Mod Remove dialog. Rule C: admin acting without mod role → Admin Remove dialog. *)
   let action_btn =
-    if is_already_deleted then ""
+    if is_already_deleted then Html.empty
     else match current_user with
-    | None -> ""
+    | None -> Html.empty
     | Some u ->
         if u = post.username then
           (* Rule A: personal delete — no audit required *)
-          Printf.sprintf "<form action='/delete-post' method='POST' class='inline m-0 p-0 ml-2' onsubmit=\"confirmModal(event, 'Do you really want to delete this post? This action cannot be undone.')\">
-              %s <input type='hidden' name='post_id' value='%d'>
+          (Html.template "<form action='/delete-post' method='POST' class='inline m-0 p-0 ml-2' onsubmit=\"confirmModal(event, 'Do you really want to delete this post? This action cannot be undone.')\">
+              %s <input type='hidden' name='post_id' value='%s'>
               <button type='submit' class='text-xs text-gray-400 hover:text-red-700 opacity-50 hover:opacity-100 transition'>🗑️</button>
-          </form>" csrf_token post.id
+          </form>"
+  [ csrf_token
+  ; Html.int (post.id) ])
         else if is_current_user_mod && not target_is_admin then
           (* Rule B: mod/top_mod removal — dialog enforces public reason *)
-          Printf.sprintf "
-            <button onclick=\"document.getElementById('mod-modal-%d').showModal()\" class='text-xs font-bold text-amber-700 hover:text-amber-900 border border-amber-300 bg-amber-50 hover:bg-amber-100 rounded px-2 py-0.5 transition-colors ml-2'>🛡️ Mod Remove</button>
-            <dialog id='mod-modal-%d' class='rounded-2xl shadow-2xl p-0 w-full max-w-md backdrop:bg-black/60 backdrop:backdrop-blur-sm border-0'>
+          (Html.template "
+            <button onclick=\"document.getElementById('mod-modal-%s').showModal()\" class='text-xs font-bold text-amber-700 hover:text-amber-900 border border-amber-300 bg-amber-50 hover:bg-amber-100 rounded px-2 py-0.5 transition-colors ml-2'>🛡️ Mod Remove</button>
+            <dialog id='mod-modal-%s' class='rounded-2xl shadow-2xl p-0 w-full max-w-md backdrop:bg-black/60 backdrop:backdrop-blur-sm border-0'>
               <div class='bg-white rounded-2xl overflow-hidden'>
                 <div class='bg-amber-50 border-b border-amber-200 px-6 py-4'>
                   <h3 class='text-base font-bold text-amber-900'>🛡️ Moderator Removal</h3>
                   <p class='text-xs text-amber-700 mt-0.5'>This action is logged publicly in the mod log.</p>
                 </div>
-                <form action='/c/%s/posts/%d/mod_delete' method='POST' class='px-6 py-5 flex flex-col gap-4'>
+                <form action='/c/%s/posts/%s/mod_delete' method='POST' class='px-6 py-5 flex flex-col gap-4'>
                   %s
                   <label class='flex flex-col gap-1.5'>
                     <span class='text-sm font-semibold text-gray-700'>Reason <span class='text-red-500'>*</span></span>
@@ -56,7 +60,7 @@ let post_admin_actions ?(is_current_user_mod=false) ?(admin_usernames=[]) ?(bann
                       class='ph-mask w-full rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400 resize-none'></textarea>
                   </label>
                   <div class='flex justify-end gap-2 pt-1'>
-                    <button type='button' onclick=\"document.getElementById('mod-modal-%d').close()\"
+                    <button type='button' onclick=\"document.getElementById('mod-modal-%s').close()\"
                       class='px-4 py-2 rounded-xl text-sm font-semibold text-gray-600 bg-gray-100 hover:bg-gray-200 transition-colors'>Cancel</button>
                     <button type='submit'
                       class='px-4 py-2 rounded-xl text-sm font-bold text-white bg-red-600 hover:bg-red-700 transition-colors shadow-sm'>Confirm Removal</button>
@@ -64,18 +68,23 @@ let post_admin_actions ?(is_current_user_mod=false) ?(admin_usernames=[]) ?(bann
                 </form>
               </div>
             </dialog>"
-            post.id post.id post.community_slug post.id csrf_token post.id
+  [ Html.int (post.id)
+  ; Html.int (post.id)
+  ; (Html.text post.community_slug)
+  ; Html.int (post.id)
+  ; csrf_token
+  ; Html.int (post.id) ])
         else if is_admin && not target_is_admin then
           (* Rule C: admin override (not a mod of this community) — logged as admin_delete_post *)
-          Printf.sprintf "
-            <button onclick=\"document.getElementById('mod-modal-%d').showModal()\" class='text-xs font-bold text-red-700 hover:text-red-900 border border-red-300 bg-red-50 hover:bg-red-100 rounded px-2 py-0.5 transition-colors ml-2'>⚡ Admin Remove</button>
-            <dialog id='mod-modal-%d' class='rounded-2xl shadow-2xl p-0 w-full max-w-md backdrop:bg-black/60 backdrop:backdrop-blur-sm border-0'>
+          (Html.template "
+            <button onclick=\"document.getElementById('mod-modal-%s').showModal()\" class='text-xs font-bold text-red-700 hover:text-red-900 border border-red-300 bg-red-50 hover:bg-red-100 rounded px-2 py-0.5 transition-colors ml-2'>⚡ Admin Remove</button>
+            <dialog id='mod-modal-%s' class='rounded-2xl shadow-2xl p-0 w-full max-w-md backdrop:bg-black/60 backdrop:backdrop-blur-sm border-0'>
               <div class='bg-white rounded-2xl overflow-hidden'>
                 <div class='bg-red-50 border-b border-red-200 px-6 py-4'>
                   <h3 class='text-base font-bold text-red-900'>⚡ Admin Intervention</h3>
                   <p class='text-xs text-red-700 mt-0.5'>This action is logged publicly as an admin override.</p>
                 </div>
-                <form action='/c/%s/posts/%d/mod_delete' method='POST' class='px-6 py-5 flex flex-col gap-4'>
+                <form action='/c/%s/posts/%s/mod_delete' method='POST' class='px-6 py-5 flex flex-col gap-4'>
                   %s
                   <label class='flex flex-col gap-1.5'>
                     <span class='text-sm font-semibold text-gray-700'>Reason <span class='text-red-500'>*</span></span>
@@ -84,7 +93,7 @@ let post_admin_actions ?(is_current_user_mod=false) ?(admin_usernames=[]) ?(bann
                       class='ph-mask w-full rounded-xl border border-red-300 bg-red-50 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-400 resize-none'></textarea>
                   </label>
                   <div class='flex justify-end gap-2 pt-1'>
-                    <button type='button' onclick=\"document.getElementById('mod-modal-%d').close()\"
+                    <button type='button' onclick=\"document.getElementById('mod-modal-%s').close()\"
                       class='px-4 py-2 rounded-xl text-sm font-semibold text-gray-600 bg-gray-100 hover:bg-gray-200 transition-colors'>Cancel</button>
                     <button type='submit'
                       class='px-4 py-2 rounded-xl text-sm font-bold text-white bg-red-600 hover:bg-red-700 transition-colors shadow-sm'>Confirm Removal</button>
@@ -92,8 +101,13 @@ let post_admin_actions ?(is_current_user_mod=false) ?(admin_usernames=[]) ?(bann
                 </form>
               </div>
             </dialog>"
-            post.id post.id post.community_slug post.id csrf_token post.id
-        else ""
+  [ Html.int (post.id)
+  ; Html.int (post.id)
+  ; (Html.text post.community_slug)
+  ; Html.int (post.id)
+  ; csrf_token
+  ; Html.int (post.id) ])
+        else Html.empty
   in
 
   (* Ban button: mods exile per-community only; suppressed on home/profile feeds where
@@ -106,12 +120,12 @@ let post_admin_actions ?(is_current_user_mod=false) ?(admin_usernames=[]) ?(bann
       match current_user with
       | Some u when u <> post.username && not (Components.is_deleted_user post.username) ->
           if List.mem post.username banned_usernames then
-            "<span class='text-xs text-red-500 font-semibold ml-2'>🚫 Banned</span>"
+            (Html.static "<span class='text-xs text-red-500 font-semibold ml-2'>🚫 Banned</span>")
           else if is_current_user_mod then
             (* Rule B: mod/top_mod ban — dialog enforces a public reason *)
-            Printf.sprintf "
-              <button onclick=\"document.getElementById('ban-modal-post-%d').showModal()\" class='text-xs font-bold text-amber-700 hover:text-amber-900 border border-amber-300 bg-amber-50 hover:bg-amber-100 rounded px-2 py-0.5 transition-colors ml-1'>🔨 Mod Ban</button>
-              <dialog id='ban-modal-post-%d' class='rounded-2xl shadow-2xl p-0 w-full max-w-md backdrop:bg-black/60 backdrop:backdrop-blur-sm border-0'>
+            (Html.template "
+              <button onclick=\"document.getElementById('ban-modal-post-%s').showModal()\" class='text-xs font-bold text-amber-700 hover:text-amber-900 border border-amber-300 bg-amber-50 hover:bg-amber-100 rounded px-2 py-0.5 transition-colors ml-1'>🔨 Mod Ban</button>
+              <dialog id='ban-modal-post-%s' class='rounded-2xl shadow-2xl p-0 w-full max-w-md backdrop:bg-black/60 backdrop:backdrop-blur-sm border-0'>
                 <div class='bg-white rounded-2xl overflow-hidden'>
                   <div class='bg-amber-50 border-b border-amber-200 px-6 py-4'>
                     <h3 class='text-base font-bold text-amber-900'>🔨 Mod Ban</h3>
@@ -120,7 +134,7 @@ let post_admin_actions ?(is_current_user_mod=false) ?(admin_usernames=[]) ?(bann
                   <form action='/ban-community-user' method='POST' class='px-6 py-5 flex flex-col gap-4'>
                     %s
                     <input type='hidden' name='target_username' value='%s'>
-                    <input type='hidden' name='community_id' value='%d'>
+                    <input type='hidden' name='community_id' value='%s'>
                     <label class='flex flex-col gap-1.5'>
                       <span class='text-sm font-semibold text-gray-700'>Reason <span class='text-red-500'>*</span></span>
                       <textarea name='reason' required rows='4'
@@ -128,7 +142,7 @@ let post_admin_actions ?(is_current_user_mod=false) ?(admin_usernames=[]) ?(bann
                         class='ph-mask w-full rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400 resize-none'></textarea>
                     </label>
                     <div class='flex justify-end gap-2 pt-1'>
-                      <button type='button' onclick=\"document.getElementById('ban-modal-post-%d').close()\"
+                      <button type='button' onclick=\"document.getElementById('ban-modal-post-%s').close()\"
                         class='px-4 py-2 rounded-xl text-sm font-semibold text-gray-600 bg-gray-100 hover:bg-gray-200 transition-colors'>Cancel</button>
                       <button type='submit'
                         class='px-4 py-2 rounded-xl text-sm font-bold text-white bg-amber-600 hover:bg-amber-700 transition-colors shadow-sm'>Confirm Ban</button>
@@ -136,12 +150,17 @@ let post_admin_actions ?(is_current_user_mod=false) ?(admin_usernames=[]) ?(bann
                   </form>
                 </div>
               </dialog>"
-              post.id post.id csrf_token (Components.html_escape post.username) post.community_id post.id
+  [ Html.int (post.id)
+  ; Html.int (post.id)
+  ; csrf_token
+  ; (Html.text (post.username))
+  ; Html.int (post.community_id)
+  ; Html.int (post.id) ])
           else
             (* Rule C: admin acting without mod role — handler prefixes reason as admin override *)
-            Printf.sprintf "
-              <button onclick=\"document.getElementById('ban-modal-post-%d').showModal()\" class='text-xs font-bold text-red-700 hover:text-red-900 border border-red-300 bg-red-50 hover:bg-red-100 rounded px-2 py-0.5 transition-colors ml-1'>⚡ Admin Ban</button>
-              <dialog id='ban-modal-post-%d' class='rounded-2xl shadow-2xl p-0 w-full max-w-md backdrop:bg-black/60 backdrop:backdrop-blur-sm border-0'>
+            (Html.template "
+              <button onclick=\"document.getElementById('ban-modal-post-%s').showModal()\" class='text-xs font-bold text-red-700 hover:text-red-900 border border-red-300 bg-red-50 hover:bg-red-100 rounded px-2 py-0.5 transition-colors ml-1'>⚡ Admin Ban</button>
+              <dialog id='ban-modal-post-%s' class='rounded-2xl shadow-2xl p-0 w-full max-w-md backdrop:bg-black/60 backdrop:backdrop-blur-sm border-0'>
                 <div class='bg-white rounded-2xl overflow-hidden'>
                   <div class='bg-red-50 border-b border-red-200 px-6 py-4'>
                     <h3 class='text-base font-bold text-red-900'>⚡ Admin Ban</h3>
@@ -150,7 +169,7 @@ let post_admin_actions ?(is_current_user_mod=false) ?(admin_usernames=[]) ?(bann
                   <form action='/ban-community-user' method='POST' class='px-6 py-5 flex flex-col gap-4'>
                     %s
                     <input type='hidden' name='target_username' value='%s'>
-                    <input type='hidden' name='community_id' value='%d'>
+                    <input type='hidden' name='community_id' value='%s'>
                     <label class='flex flex-col gap-1.5'>
                       <span class='text-sm font-semibold text-gray-700'>Reason <span class='text-red-500'>*</span></span>
                       <textarea name='reason' required rows='4'
@@ -158,7 +177,7 @@ let post_admin_actions ?(is_current_user_mod=false) ?(admin_usernames=[]) ?(bann
                         class='ph-mask w-full rounded-xl border border-red-300 bg-red-50 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-400 resize-none'></textarea>
                     </label>
                     <div class='flex justify-end gap-2 pt-1'>
-                      <button type='button' onclick=\"document.getElementById('ban-modal-post-%d').close()\"
+                      <button type='button' onclick=\"document.getElementById('ban-modal-post-%s').close()\"
                         class='px-4 py-2 rounded-xl text-sm font-semibold text-gray-600 bg-gray-100 hover:bg-gray-200 transition-colors'>Cancel</button>
                       <button type='submit'
                         class='px-4 py-2 rounded-xl text-sm font-bold text-white bg-red-600 hover:bg-red-700 transition-colors shadow-sm'>Confirm Ban</button>
@@ -166,11 +185,16 @@ let post_admin_actions ?(is_current_user_mod=false) ?(admin_usernames=[]) ?(bann
                   </form>
                 </div>
               </dialog>"
-              post.id post.id csrf_token (Components.html_escape post.username) post.community_id post.id
-      | _ -> ""
-    else ""
+  [ Html.int (post.id)
+  ; Html.int (post.id)
+  ; csrf_token
+  ; (Html.text (post.username))
+  ; Html.int (post.community_id)
+  ; Html.int (post.id) ])
+      | _ -> Html.empty
+    else Html.empty
   in
-  action_btn ^ ban_btn
+  action_btn ++ ban_btn
 
 (* URL slug from a thread title — descriptive only. post_id is the authoritative key in
    /c/:slug/t/:post_id-:post_slug, so a stale or missing slug still resolves (the handler 301s
@@ -212,9 +236,9 @@ let canonical_thread_path community_slug post_id title =
 type feed_shared = string * Post_types.feed_shared_context
 
 let shared_from_html (post : Post_types.post) (ctx : Post_types.feed_shared_context) =
-  Printf.sprintf
-    "<span class='sth-shared-from'>&#8644; Shared from <a href='/c/%s'>%s</a></span>"
-    (Components.html_escape post.community_slug) (Components.html_escape ctx.fs_origin_name)
+  (Html.template "<span class='sth-shared-from'>&#8644; Shared from <a href='/c/%s'>%s</a></span>"
+  [ (Html.text (post.community_slug))
+  ; (Html.text (ctx.fs_origin_name)) ])
 
 (* Origin-side provenance, the reverse direction of [shared_from_html]: the
    one centralized copy for "this canonical discussion also lives in an
@@ -227,20 +251,23 @@ let shared_from_html (post : Post_types.post) (ctx : Post_types.feed_shared_cont
    its view model, so changing this wording later touches no data path. *)
 let shared_with_html (destinations : (string * string) list) =
   match destinations with
-  | [] -> ""
+  | [] -> Html.empty
   | (slug, name) :: rest ->
       let more = match List.length rest with
-        | 0 -> ""
-        | n -> Printf.sprintf " and %d more" n
+        | 0 -> Html.empty
+        | n -> Html.text (Printf.sprintf " and %d more" n)
       in
-      Printf.sprintf
-        "<span class='sth-shared-from'>&#8644; Shared with <a href='/c/%s'>%s</a>%s</span>"
-        (Components.html_escape slug) (Components.html_escape name) more
+      (Html.template "<span class='sth-shared-from'>&#8644; Shared with <a href='/c/%s'>%s</a>%s</span>"
+  [ (Html.text (slug))
+  ; (Html.text (name))
+  ; more ])
 
 let render_post ?(is_current_user_mod=false) ?(mod_usernames=[]) ?(admin_usernames=[]) ?(banned_usernames=[]) ?(shared : feed_shared option) request user_votes (post : Post_types.post) =
-  let csrf_token = Dream.csrf_tag request in
+  let csrf_token = Csrf_field.tag request in
   let content_preview = Option.value ~default:"" post.content in
-  let link_part = match post.url with | Some u -> Printf.sprintf "<a href='%s' class='text-xs text-[#C94C4C] hover:underline' target='_blank'>%s ↗</a>" (Components.safe_url u) (Components.html_escape u) | None -> "" in
+  let link_part = match post.url with | Some u -> (Html.template "<a href='%s' class='text-xs text-[#C94C4C] hover:underline' target='_blank'>%s ↗</a>"
+  [ (Html.external_url (u))
+  ; (Html.text (u)) ]) | None -> Html.empty in
   (* Shared rows link into the DESTINATION thread context (server-built from
      the destination slug and canonical post data — no stored URL); the
      community's own rows keep the legacy /p/:id links byte-for-byte. *)
@@ -272,22 +299,31 @@ let render_post ?(is_current_user_mod=false) ?(mod_usernames=[]) ?(admin_usernam
   in
 
   let upvote_html = match current_user with
-    | Some _ -> Printf.sprintf "<form action='/vote' method='POST' class='m-0 p-0'>%s<input type='hidden' name='post_id' value='%d'><input type='hidden' name='direction' value='%d'><button type='submit' class='%s font-bold text-sm leading-none'>▲</button></form>" csrf_token post.id up_action up_color
-    | None -> "<a href='/login' class='text-gray-400 hover:text-orange-500 font-bold text-sm leading-none'>▲</a>"
+    | Some _ -> (Html.template "<form action='/vote' method='POST' class='m-0 p-0'>%s<input type='hidden' name='post_id' value='%s'><input type='hidden' name='direction' value='%s'><button type='submit' class='%s font-bold text-sm leading-none'>▲</button></form>"
+  [ csrf_token
+  ; Html.int (post.id)
+  ; Html.int (up_action)
+  ; (Html.text up_color) ])
+    | None -> (Html.static "<a href='/login' class='text-gray-400 hover:text-orange-500 font-bold text-sm leading-none'>▲</a>")
   in
   let downvote_html =
-    if not post.allow_downvotes then ""
+    if not post.allow_downvotes then Html.empty
     else match current_user with
-    | Some _ -> Printf.sprintf "<form action='/vote' method='POST' class='m-0 p-0'>%s<input type='hidden' name='post_id' value='%d'><input type='hidden' name='direction' value='%d'><button type='submit' class='%s font-bold text-sm leading-none'>▼</button></form>" csrf_token post.id down_action down_color
-    | None -> "<a href='/login' class='text-gray-400 hover:text-[#69C3D2] font-bold text-sm leading-none'>▼</a>"
+    | Some _ -> (Html.template "<form action='/vote' method='POST' class='m-0 p-0'>%s<input type='hidden' name='post_id' value='%s'><input type='hidden' name='direction' value='%s'><button type='submit' class='%s font-bold text-sm leading-none'>▼</button></form>"
+  [ csrf_token
+  ; Html.int (post.id)
+  ; Html.int (down_action)
+  ; (Html.text down_color) ])
+    | None -> (Html.static "<a href='/login' class='text-gray-400 hover:text-[#69C3D2] font-bold text-sm leading-none'>▼</a>")
   in
 
   (* Image thumbnail: capped at 320 px wide in the card — full resolution served from
      static/uploads/; no second resize needed because the file is already ≤1920x1080. *)
   let image_html = match post.image_url with
-    | None -> ""
-    | Some img -> Printf.sprintf "<a href='%s' class='block mt-2 mb-1'><img src='%s' alt='Post image' class='w-full max-h-[512px] object-contain bg-stone-900 rounded-lg border border-[#E0D9CC]'></a>"
-        (Components.html_escape thread_target) (Components.html_escape img)
+    | None -> Html.empty
+    | Some img -> (Html.template "<a href='%s' class='block mt-2 mb-1'><img src='%s' alt='Post image' class='w-full max-h-[512px] object-contain bg-stone-900 rounded-lg border border-[#E0D9CC]'></a>"
+  [ (Html.text (thread_target))
+  ; (Html.text (img)) ])
   in
   (* Meta head: the community's own rows keep the /c/:slug chip and their
      origin-section chip byte-for-byte. A shared row instead leads with the
@@ -295,33 +331,38 @@ let render_post ?(is_current_user_mod=false) ?(mod_usernames=[]) ?(admin_usernam
      section — the effective local context — never the origin's. *)
   let context_chip = match shared with
     | None ->
-        Printf.sprintf "<a href='/c/%s' class='font-semibold text-gray-700 hover:text-[#C94C4C] transition relative z-10'>/c/%s</a>"
-          (Components.html_escape post.community_slug) (Components.html_escape post.community_slug)
+        (Html.template "<a href='/c/%s' class='font-semibold text-gray-700 hover:text-[#C94C4C] transition relative z-10'>/c/%s</a>"
+  [ (Html.text (post.community_slug))
+  ; (Html.text (post.community_slug)) ])
     | Some (_, ctx) -> shared_from_html post ctx
   in
   let section_chip = match shared with
     | None ->
         (match post.section_name, post.section_slug with
          | Some sn, Some ss ->
-             Printf.sprintf "<span class='text-gray-300'>›</span><a href='/c/%s/s/%s' class='font-medium text-[#C94C4C] hover:underline transition relative z-10'>%s</a>"
-               (Components.html_escape post.community_slug) (Components.html_escape ss) (Components.html_escape sn)
+             (Html.template "<span class='text-gray-300'>›</span><a href='/c/%s/s/%s' class='font-medium text-[#C94C4C] hover:underline transition relative z-10'>%s</a>"
+  [ (Html.text (post.community_slug))
+  ; (Html.text (ss))
+  ; (Html.text (sn)) ])
          | _ when post.community_sections_enabled ->
-             Printf.sprintf "<span class='text-gray-300'>›</span><a href='/c/%s/s/uncategorized' class='font-medium text-[#C94C4C] hover:underline transition relative z-10'>Uncategorized</a>"
-               (Components.html_escape post.community_slug)
-         | _ -> "")
+             (Html.template "<span class='text-gray-300'>›</span><a href='/c/%s/s/uncategorized' class='font-medium text-[#C94C4C] hover:underline transition relative z-10'>Uncategorized</a>"
+  [ (Html.text (post.community_slug)) ])
+         | _ -> Html.empty)
     | Some (destination_slug, ctx) ->
         (match ctx.fs_section_name, ctx.fs_section_slug with
          | Some sn, Some ss ->
-             Printf.sprintf "<span class='text-gray-300'>›</span><a href='/c/%s/s/%s' class='font-medium text-[#C94C4C] hover:underline transition relative z-10'>%s</a>"
-               (Components.html_escape destination_slug) (Components.html_escape ss) (Components.html_escape sn)
-         | _ -> "")
+             (Html.template "<span class='text-gray-300'>›</span><a href='/c/%s/s/%s' class='font-medium text-[#C94C4C] hover:underline transition relative z-10'>%s</a>"
+  [ (Html.text (destination_slug))
+  ; (Html.text (ss))
+  ; (Html.text (sn)) ])
+         | _ -> Html.empty)
   in
-  Printf.sprintf "
+  (Html.template "
   <div onclick=\"if(!event.target.closest('a, button, form')) window.location='%s'\" class='cursor-pointer border-b border-[#E8E2D9] py-4 flex gap-4 hover:bg-[#F0EBE0] transition-colors'>
 
       <div class='flex flex-col items-center pt-0.5 w-7 shrink-0 cursor-default' onclick=\"event.stopPropagation()\">
           %s
-          <span class='font-semibold text-gray-600 text-xs my-0.5'>%d</span>
+          <span class='font-semibold text-gray-600 text-xs my-0.5'>%s</span>
           %s
       </div>
 
@@ -347,18 +388,29 @@ let render_post ?(is_current_user_mod=false) ?(mod_usernames=[]) ?(admin_usernam
 
           <div class='flex items-center mt-2 text-xs text-gray-400'>
               <a href='%s' class='hover:text-[#C94C4C] flex items-center gap-1 transition relative z-10'>
-                  <span>💬</span><span>%d comments</span>
+                  <span>💬</span><span>%s comments</span>
               </a>
               <button type='button' onclick='copyPostLink(\"%s\", this)' class='text-xs font-medium text-gray-500 hover:text-gray-900 flex items-center transition-colors cursor-pointer ml-4'>🔗 Share</button>
           </div>
       </div>
   </div>"
-  (Components.html_escape thread_target)
-  upvote_html post.score downvote_html
-  context_chip
-  section_chip
-  (Components.render_author ~mod_usernames ~admin_usernames post.username) (Components.time_ago post.created_at) admin_actions
-  (Components.html_escape thread_target) (Components.html_escape post.title) link_part image_html (Components.html_escape content_preview) (Components.html_escape thread_target) post.comment_count (Components.html_escape thread_target)
+  [ (Html.text (thread_target))
+  ; upvote_html
+  ; Html.int (post.score)
+  ; downvote_html
+  ; context_chip
+  ; section_chip
+  ; (Components.render_author ~mod_usernames ~admin_usernames post.username)
+  ; (Html.text (Components.time_ago post.created_at))
+  ; admin_actions
+  ; (Html.text (thread_target))
+  ; (Html.text (post.title))
+  ; link_part
+  ; image_html
+  ; (Html.text (content_preview))
+  ; (Html.text (thread_target))
+  ; Html.int (post.comment_count)
+  ; (Html.text (thread_target)) ])
 
 (* Compact host for a link post's domain chip: strip scheme + a leading www. and cut at the
    first path/query/fragment. None when it doesn't look like an http(s) URL, so the row shows
@@ -391,7 +443,7 @@ let extract_domain url =
    target) so the caller can omit the menu entirely. Dialog ids are keyed by post.id and never
    collide with render_post because the two renderers never appear on the same page. *)
 let mod_action_controls ~is_current_user_mod ~admin_usernames ~banned_usernames request (post : Post_types.post) =
-  let csrf_token = Dream.csrf_tag request in
+  let csrf_token = Csrf_field.tag request in
   let current_user = Dream.session_field request "username" in
   let is_admin = Dream.session_field request "is_admin" = Some "true" in
   let is_already_deleted =
@@ -404,25 +456,27 @@ let mod_action_controls ~is_current_user_mod ~admin_usernames ~banned_usernames 
   (* Rule A: own post → personal Delete (labelled in the menu, route/CSRF identical to the card).
      Rule B: mod/top_mod → Mod Remove dialog. Rule C: admin without mod role → Admin Remove. *)
   let action_btn =
-    if is_already_deleted then ""
+    if is_already_deleted then Html.empty
     else match current_user with
-    | None -> ""
+    | None -> Html.empty
     | Some u ->
         if u = post.username then
-          Printf.sprintf "<form action='/delete-post' method='POST' class='m-0 p-0' onsubmit=\"confirmModal(event, 'Do you really want to delete this post? This action cannot be undone.')\">
-              %s <input type='hidden' name='post_id' value='%d'>
+          (Html.template "<form action='/delete-post' method='POST' class='m-0 p-0' onsubmit=\"confirmModal(event, 'Do you really want to delete this post? This action cannot be undone.')\">
+              %s <input type='hidden' name='post_id' value='%s'>
               <button type='submit' class='text-xs font-bold text-gray-600 hover:text-red-700 border border-gray-300 bg-gray-50 hover:bg-red-50 rounded px-2 py-0.5 transition-colors'>🗑️ Delete</button>
-          </form>" csrf_token post.id
+          </form>"
+  [ csrf_token
+  ; Html.int (post.id) ])
         else if is_current_user_mod && not target_is_admin then
-          Printf.sprintf "
-            <button onclick=\"document.getElementById('mod-modal-%d').showModal()\" class='text-xs font-bold text-amber-700 hover:text-amber-900 border border-amber-300 bg-amber-50 hover:bg-amber-100 rounded px-2 py-0.5 transition-colors'>🛡️ Mod Remove</button>
-            <dialog id='mod-modal-%d' class='rounded-2xl shadow-2xl p-0 w-full max-w-md backdrop:bg-black/60 backdrop:backdrop-blur-sm border-0'>
+          (Html.template "
+            <button onclick=\"document.getElementById('mod-modal-%s').showModal()\" class='text-xs font-bold text-amber-700 hover:text-amber-900 border border-amber-300 bg-amber-50 hover:bg-amber-100 rounded px-2 py-0.5 transition-colors'>🛡️ Mod Remove</button>
+            <dialog id='mod-modal-%s' class='rounded-2xl shadow-2xl p-0 w-full max-w-md backdrop:bg-black/60 backdrop:backdrop-blur-sm border-0'>
               <div class='bg-white rounded-2xl overflow-hidden'>
                 <div class='bg-amber-50 border-b border-amber-200 px-6 py-4'>
                   <h3 class='text-base font-bold text-amber-900'>🛡️ Moderator Removal</h3>
                   <p class='text-xs text-amber-700 mt-0.5'>This action is logged publicly in the mod log.</p>
                 </div>
-                <form action='/c/%s/posts/%d/mod_delete' method='POST' class='px-6 py-5 flex flex-col gap-4'>
+                <form action='/c/%s/posts/%s/mod_delete' method='POST' class='px-6 py-5 flex flex-col gap-4'>
                   %s
                   <label class='flex flex-col gap-1.5'>
                     <span class='text-sm font-semibold text-gray-700'>Reason <span class='text-red-500'>*</span></span>
@@ -431,7 +485,7 @@ let mod_action_controls ~is_current_user_mod ~admin_usernames ~banned_usernames 
                       class='ph-mask w-full rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400 resize-none'></textarea>
                   </label>
                   <div class='flex justify-end gap-2 pt-1'>
-                    <button type='button' onclick=\"document.getElementById('mod-modal-%d').close()\"
+                    <button type='button' onclick=\"document.getElementById('mod-modal-%s').close()\"
                       class='px-4 py-2 rounded-xl text-sm font-semibold text-gray-600 bg-gray-100 hover:bg-gray-200 transition-colors'>Cancel</button>
                     <button type='submit'
                       class='px-4 py-2 rounded-xl text-sm font-bold text-white bg-red-600 hover:bg-red-700 transition-colors shadow-sm'>Confirm Removal</button>
@@ -439,17 +493,22 @@ let mod_action_controls ~is_current_user_mod ~admin_usernames ~banned_usernames 
                 </form>
               </div>
             </dialog>"
-            post.id post.id post.community_slug post.id csrf_token post.id
+  [ Html.int (post.id)
+  ; Html.int (post.id)
+  ; (Html.text post.community_slug)
+  ; Html.int (post.id)
+  ; csrf_token
+  ; Html.int (post.id) ])
         else if is_admin && not target_is_admin then
-          Printf.sprintf "
-            <button onclick=\"document.getElementById('mod-modal-%d').showModal()\" class='text-xs font-bold text-red-700 hover:text-red-900 border border-red-300 bg-red-50 hover:bg-red-100 rounded px-2 py-0.5 transition-colors'>⚡ Admin Remove</button>
-            <dialog id='mod-modal-%d' class='rounded-2xl shadow-2xl p-0 w-full max-w-md backdrop:bg-black/60 backdrop:backdrop-blur-sm border-0'>
+          (Html.template "
+            <button onclick=\"document.getElementById('mod-modal-%s').showModal()\" class='text-xs font-bold text-red-700 hover:text-red-900 border border-red-300 bg-red-50 hover:bg-red-100 rounded px-2 py-0.5 transition-colors'>⚡ Admin Remove</button>
+            <dialog id='mod-modal-%s' class='rounded-2xl shadow-2xl p-0 w-full max-w-md backdrop:bg-black/60 backdrop:backdrop-blur-sm border-0'>
               <div class='bg-white rounded-2xl overflow-hidden'>
                 <div class='bg-red-50 border-b border-red-200 px-6 py-4'>
                   <h3 class='text-base font-bold text-red-900'>⚡ Admin Intervention</h3>
                   <p class='text-xs text-red-700 mt-0.5'>This action is logged publicly as an admin override.</p>
                 </div>
-                <form action='/c/%s/posts/%d/mod_delete' method='POST' class='px-6 py-5 flex flex-col gap-4'>
+                <form action='/c/%s/posts/%s/mod_delete' method='POST' class='px-6 py-5 flex flex-col gap-4'>
                   %s
                   <label class='flex flex-col gap-1.5'>
                     <span class='text-sm font-semibold text-gray-700'>Reason <span class='text-red-500'>*</span></span>
@@ -458,7 +517,7 @@ let mod_action_controls ~is_current_user_mod ~admin_usernames ~banned_usernames 
                       class='ph-mask w-full rounded-xl border border-red-300 bg-red-50 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-400 resize-none'></textarea>
                   </label>
                   <div class='flex justify-end gap-2 pt-1'>
-                    <button type='button' onclick=\"document.getElementById('mod-modal-%d').close()\"
+                    <button type='button' onclick=\"document.getElementById('mod-modal-%s').close()\"
                       class='px-4 py-2 rounded-xl text-sm font-semibold text-gray-600 bg-gray-100 hover:bg-gray-200 transition-colors'>Cancel</button>
                     <button type='submit'
                       class='px-4 py-2 rounded-xl text-sm font-bold text-white bg-red-600 hover:bg-red-700 transition-colors shadow-sm'>Confirm Removal</button>
@@ -466,8 +525,13 @@ let mod_action_controls ~is_current_user_mod ~admin_usernames ~banned_usernames 
                 </form>
               </div>
             </dialog>"
-            post.id post.id post.community_slug post.id csrf_token post.id
-        else ""
+  [ Html.int (post.id)
+  ; Html.int (post.id)
+  ; (Html.text post.community_slug)
+  ; Html.int (post.id)
+  ; csrf_token
+  ; Html.int (post.id) ])
+        else Html.empty
   in
   (* Ban: mods exile per-community; admins (without mod role) act via the override path. Mutually
      exclusive with the mod path so an admin who is also a mod still goes through the public mod
@@ -477,11 +541,11 @@ let mod_action_controls ~is_current_user_mod ~admin_usernames ~banned_usernames 
       match current_user with
       | Some u when u <> post.username && not (Components.is_deleted_user post.username) ->
           if List.mem post.username banned_usernames then
-            "<span class='text-xs text-red-500 font-semibold'>🚫 Banned</span>"
+            (Html.static "<span class='text-xs text-red-500 font-semibold'>🚫 Banned</span>")
           else if is_current_user_mod then
-            Printf.sprintf "
-              <button onclick=\"document.getElementById('ban-modal-post-%d').showModal()\" class='text-xs font-bold text-amber-700 hover:text-amber-900 border border-amber-300 bg-amber-50 hover:bg-amber-100 rounded px-2 py-0.5 transition-colors'>🔨 Mod Ban</button>
-              <dialog id='ban-modal-post-%d' class='rounded-2xl shadow-2xl p-0 w-full max-w-md backdrop:bg-black/60 backdrop:backdrop-blur-sm border-0'>
+            (Html.template "
+              <button onclick=\"document.getElementById('ban-modal-post-%s').showModal()\" class='text-xs font-bold text-amber-700 hover:text-amber-900 border border-amber-300 bg-amber-50 hover:bg-amber-100 rounded px-2 py-0.5 transition-colors'>🔨 Mod Ban</button>
+              <dialog id='ban-modal-post-%s' class='rounded-2xl shadow-2xl p-0 w-full max-w-md backdrop:bg-black/60 backdrop:backdrop-blur-sm border-0'>
                 <div class='bg-white rounded-2xl overflow-hidden'>
                   <div class='bg-amber-50 border-b border-amber-200 px-6 py-4'>
                     <h3 class='text-base font-bold text-amber-900'>🔨 Mod Ban</h3>
@@ -490,7 +554,7 @@ let mod_action_controls ~is_current_user_mod ~admin_usernames ~banned_usernames 
                   <form action='/ban-community-user' method='POST' class='px-6 py-5 flex flex-col gap-4'>
                     %s
                     <input type='hidden' name='target_username' value='%s'>
-                    <input type='hidden' name='community_id' value='%d'>
+                    <input type='hidden' name='community_id' value='%s'>
                     <label class='flex flex-col gap-1.5'>
                       <span class='text-sm font-semibold text-gray-700'>Reason <span class='text-red-500'>*</span></span>
                       <textarea name='reason' required rows='4'
@@ -498,7 +562,7 @@ let mod_action_controls ~is_current_user_mod ~admin_usernames ~banned_usernames 
                         class='ph-mask w-full rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400 resize-none'></textarea>
                     </label>
                     <div class='flex justify-end gap-2 pt-1'>
-                      <button type='button' onclick=\"document.getElementById('ban-modal-post-%d').close()\"
+                      <button type='button' onclick=\"document.getElementById('ban-modal-post-%s').close()\"
                         class='px-4 py-2 rounded-xl text-sm font-semibold text-gray-600 bg-gray-100 hover:bg-gray-200 transition-colors'>Cancel</button>
                       <button type='submit'
                         class='px-4 py-2 rounded-xl text-sm font-bold text-white bg-amber-600 hover:bg-amber-700 transition-colors shadow-sm'>Confirm Ban</button>
@@ -506,11 +570,16 @@ let mod_action_controls ~is_current_user_mod ~admin_usernames ~banned_usernames 
                   </form>
                 </div>
               </dialog>"
-              post.id post.id csrf_token (Components.html_escape post.username) post.community_id post.id
+  [ Html.int (post.id)
+  ; Html.int (post.id)
+  ; csrf_token
+  ; (Html.text (post.username))
+  ; Html.int (post.community_id)
+  ; Html.int (post.id) ])
           else
-            Printf.sprintf "
-              <button onclick=\"document.getElementById('ban-modal-post-%d').showModal()\" class='text-xs font-bold text-red-700 hover:text-red-900 border border-red-300 bg-red-50 hover:bg-red-100 rounded px-2 py-0.5 transition-colors'>⚡ Admin Ban</button>
-              <dialog id='ban-modal-post-%d' class='rounded-2xl shadow-2xl p-0 w-full max-w-md backdrop:bg-black/60 backdrop:backdrop-blur-sm border-0'>
+            (Html.template "
+              <button onclick=\"document.getElementById('ban-modal-post-%s').showModal()\" class='text-xs font-bold text-red-700 hover:text-red-900 border border-red-300 bg-red-50 hover:bg-red-100 rounded px-2 py-0.5 transition-colors'>⚡ Admin Ban</button>
+              <dialog id='ban-modal-post-%s' class='rounded-2xl shadow-2xl p-0 w-full max-w-md backdrop:bg-black/60 backdrop:backdrop-blur-sm border-0'>
                 <div class='bg-white rounded-2xl overflow-hidden'>
                   <div class='bg-red-50 border-b border-red-200 px-6 py-4'>
                     <h3 class='text-base font-bold text-red-900'>⚡ Admin Ban</h3>
@@ -519,7 +588,7 @@ let mod_action_controls ~is_current_user_mod ~admin_usernames ~banned_usernames 
                   <form action='/ban-community-user' method='POST' class='px-6 py-5 flex flex-col gap-4'>
                     %s
                     <input type='hidden' name='target_username' value='%s'>
-                    <input type='hidden' name='community_id' value='%d'>
+                    <input type='hidden' name='community_id' value='%s'>
                     <label class='flex flex-col gap-1.5'>
                       <span class='text-sm font-semibold text-gray-700'>Reason <span class='text-red-500'>*</span></span>
                       <textarea name='reason' required rows='4'
@@ -527,7 +596,7 @@ let mod_action_controls ~is_current_user_mod ~admin_usernames ~banned_usernames 
                         class='ph-mask w-full rounded-xl border border-red-300 bg-red-50 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-400 resize-none'></textarea>
                     </label>
                     <div class='flex justify-end gap-2 pt-1'>
-                      <button type='button' onclick=\"document.getElementById('ban-modal-post-%d').close()\"
+                      <button type='button' onclick=\"document.getElementById('ban-modal-post-%s').close()\"
                         class='px-4 py-2 rounded-xl text-sm font-semibold text-gray-600 bg-gray-100 hover:bg-gray-200 transition-colors'>Cancel</button>
                       <button type='submit'
                         class='px-4 py-2 rounded-xl text-sm font-bold text-white bg-red-600 hover:bg-red-700 transition-colors shadow-sm'>Confirm Ban</button>
@@ -535,11 +604,16 @@ let mod_action_controls ~is_current_user_mod ~admin_usernames ~banned_usernames 
                   </form>
                 </div>
               </dialog>"
-              post.id post.id csrf_token (Components.html_escape post.username) post.community_id post.id
-      | _ -> ""
-    else ""
+  [ Html.int (post.id)
+  ; Html.int (post.id)
+  ; csrf_token
+  ; (Html.text (post.username))
+  ; Html.int (post.community_id)
+  ; Html.int (post.id) ])
+      | _ -> Html.empty
+    else Html.empty
   in
-  action_btn ^ ban_btn
+  action_btn ++ ban_btn
 
 (* Section-feed thread row — the cool-grey, thread-first counterpart to render_post (warm card).
    Used only by community_section_shell_page. Vote markup is reused verbatim from the card so the
@@ -548,7 +622,7 @@ let mod_action_controls ~is_current_user_mod ~admin_usernames ~banned_usernames 
    the JS toggles. The body is intentionally lighter than the card: strong title, an optional
    single-line preview, a compact monospace meta row, and moderation tucked into a ⋯ menu. *)
 let render_forum_row ?(is_current_user_mod=false) ?(mod_usernames=[]) ?(admin_usernames=[]) ?(banned_usernames=[]) ?(show_context=false) ?(shared : feed_shared option) ?(shared_with=[]) request user_votes (post : Post_types.post) =
-  let csrf_token = Dream.csrf_tag request in
+  let csrf_token = Csrf_field.tag request in
   let current_user = Dream.session_field request "username" in
   let current_vote = Option.value ~default:0 (List.assoc_opt post.id user_votes) in
   let up_color = if current_vote = 1 then "text-orange-500" else "text-gray-400 hover:text-orange-500" in
@@ -556,27 +630,38 @@ let render_forum_row ?(is_current_user_mod=false) ?(mod_usernames=[]) ?(admin_us
   let up_action = if current_vote = 1 then 0 else 1 in
   let down_action = if current_vote = -1 then 0 else -1 in
   let upvote_html = match current_user with
-    | Some _ -> Printf.sprintf "<form action='/vote' method='POST' class='m-0 p-0'>%s<input type='hidden' name='post_id' value='%d'><input type='hidden' name='direction' value='%d'><button type='submit' class='%s font-bold text-sm leading-none'>▲</button></form>" csrf_token post.id up_action up_color
-    | None -> "<a href='/login' class='text-gray-400 hover:text-orange-500 font-bold text-sm leading-none'>▲</a>"
+    | Some _ -> (Html.template "<form action='/vote' method='POST' class='m-0 p-0'>%s<input type='hidden' name='post_id' value='%s'><input type='hidden' name='direction' value='%s'><button type='submit' class='%s font-bold text-sm leading-none'>▲</button></form>"
+  [ csrf_token
+  ; Html.int (post.id)
+  ; Html.int (up_action)
+  ; (Html.text up_color) ])
+    | None -> (Html.static "<a href='/login' class='text-gray-400 hover:text-orange-500 font-bold text-sm leading-none'>▲</a>")
   in
   let downvote_html =
-    if not post.allow_downvotes then ""
+    if not post.allow_downvotes then Html.empty
     else match current_user with
-    | Some _ -> Printf.sprintf "<form action='/vote' method='POST' class='m-0 p-0'>%s<input type='hidden' name='post_id' value='%d'><input type='hidden' name='direction' value='%d'><button type='submit' class='%s font-bold text-sm leading-none'>▼</button></form>" csrf_token post.id down_action down_color
-    | None -> "<a href='/login' class='text-gray-400 hover:text-[#69C3D2] font-bold text-sm leading-none'>▼</a>"
+    | Some _ -> (Html.template "<form action='/vote' method='POST' class='m-0 p-0'>%s<input type='hidden' name='post_id' value='%s'><input type='hidden' name='direction' value='%s'><button type='submit' class='%s font-bold text-sm leading-none'>▼</button></form>"
+  [ csrf_token
+  ; Html.int (post.id)
+  ; Html.int (down_action)
+  ; (Html.text down_color) ])
+    | None -> (Html.static "<a href='/login' class='text-gray-400 hover:text-[#69C3D2] font-bold text-sm leading-none'>▼</a>")
   in
   (* Domain chip: only for link posts with a parseable host; external link opens in a new tab. *)
   let domain_html = match post.url with
     | Some u -> (match extract_domain u with
-        | Some d -> Printf.sprintf "<a class='ft-domain' href='%s' target='_blank' rel='noopener'>%s ↗</a>" (Components.safe_url u) (Components.html_escape d)
-        | None -> "")
-    | None -> ""
+        | Some d -> (Html.template "<a class='ft-domain' href='%s' target='_blank' rel='noopener'>%s ↗</a>"
+  [ (Html.external_url (u))
+  ; (Html.text (d)) ])
+        | None -> Html.empty)
+    | None -> Html.empty
   in
   (* Secondary one-line preview: only when there's real body text (CSS clamps to a single line).
      Omitted entirely for link-only / empty posts — no placeholder. *)
   let preview_html = match post.content with
-    | Some c when String.trim c <> "" -> Printf.sprintf "<div class='ft-preview'>%s</div>" (Components.html_escape c)
-    | _ -> ""
+    | Some c when String.trim c <> "" -> (Html.template "<div class='ft-preview'>%s</div>"
+  [ (Html.text (c)) ])
+    | _ -> Html.empty
   in
   (* ⋯ menu rendered only when the viewer actually has an action (keeps the feed clean, not admin-y).
      On a SHARED row the destination's moderator standing grants nothing over canonical content:
@@ -588,8 +673,9 @@ let render_forum_row ?(is_current_user_mod=false) ?(mod_usernames=[]) ?(admin_us
     | Some _ -> mod_action_controls ~is_current_user_mod:false ~admin_usernames ~banned_usernames:[] request post
   in
   let mod_menu =
-    if mod_controls = "" then ""
-    else Printf.sprintf "<details class='cs-row-mod'><summary>⋯</summary><div class='cs-row-mod-menu'>%s</div></details>" mod_controls
+    if mod_controls = Html.empty then Html.empty
+    else (Html.template "<details class='cs-row-mod'><summary>⋯</summary><div class='cs-row-mod-menu'>%s</div></details>"
+  [ mod_controls ])
   in
   (* Internal links point at the canonical thread URL, not legacy /p/:id (which now 301s here).
      A shared row links into the DESTINATION thread context instead — the reader stays in the
@@ -605,42 +691,55 @@ let render_forum_row ?(is_current_user_mod=false) ?(mod_usernames=[]) ?(admin_us
      instead always carries its one compact provenance line. *)
   let context_html =
     match shared with
-    | Some (_, ctx) -> Printf.sprintf "<div class='ft-ctx'>%s</div>" (shared_from_html post ctx)
+    | Some (_, ctx) -> (Html.template "<div class='ft-ctx'>%s</div>"
+  [ (shared_from_html post ctx) ])
     | None ->
-    if not show_context then ""
+    if not show_context then Html.empty
     else
       let section_html = match post.section_name, post.section_slug with
         | Some name, Some slug when String.trim name <> "" ->
-            Printf.sprintf "<span class='sec'>§</span> <a href='/c/%s/s/%s'>%s</a> <span class='ft-ctx-dot'>·</span> "
-              (Components.html_escape post.community_slug) (Components.html_escape slug) (Components.html_escape name)
-        | _ -> ""
+            (Html.template "<span class='sec'>§</span> <a href='/c/%s/s/%s'>%s</a> <span class='ft-ctx-dot'>·</span> "
+  [ (Html.text (post.community_slug))
+  ; (Html.text (slug))
+  ; (Html.text (name)) ])
+        | _ -> Html.empty
       in
       (* Origin-side provenance rides the same context line the global feed
          already renders; the destination direction (shared = Some) above
          never combines with it — one card, one provenance direction. An
          empty [shared_with] leaves the line byte-identical. *)
-      let shared_with_span = match shared_with_html shared_with with
-        | "" -> ""
-        | span -> " <span class='ft-ctx-dot'>·</span> " ^ span
+      let shared_with_span =
+        let span = shared_with_html shared_with in
+        if Html.is_empty span then Html.empty
+        else Html.static " <span class='ft-ctx-dot'>·</span> " ++ span
       in
-      Printf.sprintf "<div class='ft-ctx'>%s<a class='ft-ctx-c' href='/c/%s'>/c/%s</a>%s</div>"
-        section_html (Components.html_escape post.community_slug) (Components.html_escape post.community_slug)
-        shared_with_span
+      (Html.template "<div class='ft-ctx'>%s<a class='ft-ctx-c' href='/c/%s'>/c/%s</a>%s</div>"
+  [ section_html
+  ; (Html.text (post.community_slug))
+  ; (Html.text (post.community_slug))
+  ; shared_with_span ])
   in
-  Printf.sprintf "
+  (Html.template "
   <div class='cs-thread'>
-      <div class='cs-vote'>%s<span class='cs-vote-score'>%d</span>%s</div>
+      <div class='cs-vote'>%s<span class='cs-vote-score'>%s</span>%s</div>
       <div class='ft-main'>
           %s
           <div class='ft-title'><a href='%s'>%s</a></div>
           %s
-          <div class='ft-meta'>%s<span>by %s</span><span>%s</span><a href='%s'>💬 %d</a></div>
+          <div class='ft-meta'>%s<span>by %s</span><span>%s</span><a href='%s'>💬 %s</a></div>
       </div>
       %s
   </div>"
-    upvote_html post.score downvote_html
-    context_html
-    thread_href (Components.html_escape post.title)
-    preview_html
-    domain_html (Components.render_author ~mod_usernames ~admin_usernames post.username) (Components.time_ago post.created_at) thread_href post.comment_count
-    mod_menu
+  [ upvote_html
+  ; Html.int (post.score)
+  ; downvote_html
+  ; context_html
+  ; (Html.text thread_href)
+  ; (Html.text (post.title))
+  ; preview_html
+  ; domain_html
+  ; (Components.render_author ~mod_usernames ~admin_usernames post.username)
+  ; (Html.text (Components.time_ago post.created_at))
+  ; (Html.text thread_href)
+  ; Html.int (post.comment_count)
+  ; mod_menu ])

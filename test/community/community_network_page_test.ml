@@ -26,8 +26,12 @@ let render ?(projects_section = "") ?(communities_section = "")
     captured :=
       Some
         (Earde.Community_network_pages.community_network_page ~community
-           ~sidebar:"<aside class='sidebar'></aside>" ~projects_section
-           ~communities_section ~can_connect req);
+           ~sidebar:(Earde.Html.static "<aside class='sidebar'></aside>")
+           (* The fixtures stand for fragments the real section renderers
+              produced, so they enter as already-rendered markup. *)
+           ~projects_section:(Earde.Html.trusted projects_section)
+           ~communities_section:(Earde.Html.trusted communities_section)
+           ~can_connect req);
     Dream.html ""
   in
   ignore

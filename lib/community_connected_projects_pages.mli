@@ -44,7 +44,7 @@ type project = {
   repositories : repository list;
 }
 
-val connected_projects_section : projects:project list -> string
+val connected_projects_section : projects:project list -> Html.t
 (** The section fragment, ready for insertion into the current community page,
     with the supplied project order and each project's repository order
     preserved exactly.
@@ -68,7 +68,7 @@ val connected_projects_section : projects:project list -> string
     inline styles, scripts, event handlers, [javascript:] URLs, or refresh
     behavior. *)
 
-val empty_projects_section : string
+val empty_projects_section : Html.t
 (** The same section with a quiet "No connected projects yet." line in place of
     the project list, for the dedicated Network page — which names both
     destinations whether or not either holds anything. Shares the heading

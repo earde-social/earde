@@ -74,14 +74,14 @@ let empty_case =
   Alcotest.test_case "fragment: nothing publicly connected renders no card"
     `Quick (fun () ->
       Alcotest.(check string) "empty string, not an empty panel" ""
-        (render []);
+        (Earde.Html.to_string (render []));
       (* And nothing that could read as a placeholder. *)
       List.iter
         (fun needle ->
           Alcotest.(check bool)
             ("absent: " ^ needle)
             false
-            (contains (render []) needle))
+            (contains (Earde.Html.to_string (render [])) needle))
         [ "Connected communities"; "ccc-section"; "None"; "No " ])
 
 let identity_case =
@@ -91,7 +91,7 @@ let identity_case =
       List.iter
         (fun needle ->
           Alcotest.(check bool) ("present: " ^ needle) true
-            (contains html needle))
+            (contains (Earde.Html.to_string html) needle))
         [ ">Connected communities</h2>"
         ; "href='/c/rust-users'"; ">Rust Users</a>"
         ; "href='/c/ocaml'"; ">Ocaml</a>" ])
@@ -105,15 +105,15 @@ let escaping_case =
           ; c "Broken" "bad slug/with space" ]
       in
       Alcotest.(check bool) "no raw script tag" false
-        (contains html "<script>alert(1)</script>");
+        (contains (Earde.Html.to_string html) "<script>alert(1)</script>");
       Alcotest.(check bool) "escaped instead" true
-        (contains html "&lt;script&gt;");
+        (contains (Earde.Html.to_string html) "&lt;script&gt;");
       Alcotest.(check bool) "the addressable one links" true
-        (contains html "href='/c/safe-slug'");
+        (contains (Earde.Html.to_string html) "href='/c/safe-slug'");
       Alcotest.(check bool) "the unaddressable one does not" false
-        (contains html "bad slug/with space");
+        (contains (Earde.Html.to_string html) "bad slug/with space");
       Alcotest.(check bool) "but is still named" true
-        (contains html ">Broken</p>"))
+        (contains (Earde.Html.to_string html) ">Broken</p>"))
 
 let vocabulary_case =
   Alcotest.test_case "fragment: no status, direction, note, actor, id, or \
@@ -123,7 +123,7 @@ let vocabulary_case =
         (fun needle ->
           Alcotest.(check bool)
             ("never rendered: " ^ needle)
-            false (contains html needle))
+            false (contains (Earde.Html.to_string html) needle))
         [ "pending"; "Pending"; "accepted"; "Accepted"; "rejected"
         ; "removed"; "requested"; "Requester"; "requester"; "reviewer"
         ; "Reviewed"; "note"; "Note"; "depends on"; "used by"

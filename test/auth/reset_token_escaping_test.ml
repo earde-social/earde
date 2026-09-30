@@ -67,10 +67,10 @@ let run_reset_post ~token ~password ~confirm =
      Lwt.return_unit);
   (!status, !body_html)
 
-(* Reference escaping (Components.html_escape's closed entity set) and its
+(* Reference escaping (Html.text's closed entity set) and its
    inverse, so tests can prove the round-trip is lossless rather than only
    spot-checking one entity. *)
-let escape = Earde.Components.html_escape
+let escape s = Earde.Html.to_string (Earde.Html.text s)
 
 let unescape s =
   let entities =

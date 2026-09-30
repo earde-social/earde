@@ -1,37 +1,41 @@
-(** Reusable rendering primitives: escaping and URL policies, avatars and
-    initials tiles, author labels and relative times. *)
+(** Reusable rendering primitives: avatars and initials tiles, author
+    labels, and relative and calendar dates. Escaping and URL policy live
+    in {!Html}. *)
 
-val html_escape : string -> string
+val user_avatar :
+  ?alt:string ->
+  img_class:string ->
+  tile_class:string ->
+  username:string ->
+  string option ->
+  Html.t
+(** The avatar [<img>] when the stored URL passes {!Html.image_src_opt},
+    else the user's initials tile. *)
 
-val safe_url : string -> string
-(** [safe_internal_path p] gates a rooted internal path (e.g. "/c/x/t/1"):
-    passes a single-leading-slash path (html-escaped) and the bare site root "/",
-    rejects ""/"#"/protocol-relative "//host" (and the "/\\host" variant) → "#".
-    Use for app nav targets, NOT [safe_url] (which only passes http(s) and would
-    collapse every relative path to "#").
+val community_avatar :
+  ?alt:string ->
+  img_class:string ->
+  tile_class:string ->
+  name:string ->
+  string option ->
+  Html.t
 
-    Safe for ATTACKER-supplied values as well as server-built ones: it escapes
-    what it passes and refuses anything that could leave the origin, which is
-    what lets the shared message page gate its "Go back" destination once
-    instead of at ~70 call sites. *)
-
-val safe_internal_path : string -> string
-
-val js_single_quoted_attr : string -> string
-
-val safe_img_src : string -> string
-
-val user_avatar : ?alt:string -> img_class:string -> tile_class:string -> username:string -> string option -> string
-
-val community_avatar : ?alt:string -> img_class:string -> tile_class:string -> name:string -> string option -> string
-
-val community_banner : wrap_class:string -> img_class:string -> fallback_class:string -> string option -> string
+val community_banner :
+  wrap_class:string -> img_class:string -> fallback_class:string ->
+  string option -> Html.t
 
 val is_deleted_user : string -> bool
-(** [extract_domain url] → bare host (no scheme/www) for a link post's domain chip, or [None]. *)
+(** The tombstone username that [User_store.anonymize_user] writes. *)
 
-val render_author : ?mod_usernames:string list -> ?admin_usernames:string list -> string -> string
+val render_author :
+  ?mod_usernames:string list -> ?admin_usernames:string list -> string ->
+  Html.t
+(** The author link, or the plain [deleted] label for a tombstone, with the
+    moderator and admin badges when the name is in the given lists. *)
 
 val time_ago : string -> string
+(** A database timestamp as relative plain text ("3 hr ago"); the input
+    unchanged when it does not parse. *)
 
 val format_month_year : string -> string
+(** A database timestamp as plain text month and year. *)

@@ -19,7 +19,7 @@
    control. Styling hooks live in the "privacy policy only" section of
    earde.css, scoped under body.launch-privacy. *)
 let privacy_page ?user:_ request =
-  let content = "
+  let content = (Html.static "
     <div class='privacy-doc'>
 
       <h1>Privacy Policy</h1>
@@ -248,7 +248,7 @@ let privacy_page ?user:_ request =
         </section>
 
       </div>
-    </div>"
+    </div>")
   in
   Page_shell.launch_entry_page ~request ~page_class:"launch-privacy"
     ~title:"Privacy Policy" ~content ()
@@ -284,13 +284,13 @@ let privacy_page ?user:_ request =
 let msg_page ?user:_ ?auth:_ ~title ~message ~alert_type ~return_url request =
   let icon_html = match alert_type with
     | "success" ->
-        "<div class='launch-msg__icon launch-msg__icon--success'><svg viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'><path d='M5 13l4 4L19 7'/></svg></div>"
+        (Html.static "<div class='launch-msg__icon launch-msg__icon--success'><svg viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'><path d='M5 13l4 4L19 7'/></svg></div>")
     | "info" ->
-        "<div class='launch-msg__icon launch-msg__icon--info'><svg viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z'/></svg></div>"
+        (Html.static "<div class='launch-msg__icon launch-msg__icon--info'><svg viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z'/></svg></div>")
     | _ ->
-        "<div class='launch-msg__icon launch-msg__icon--error'><svg viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'><path d='M6 18L18 6M6 6l12 12'/></svg></div>"
+        (Html.static "<div class='launch-msg__icon launch-msg__icon--error'><svg viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'><path d='M6 18L18 6M6 6l12 12'/></svg></div>")
   in
-  let content = Printf.sprintf "
+  let content = (Html.template "
         <div class='auth launch-msg'>
           <div class='auth__head'>
             <a class='launch-msg__brand' href='/feed' aria-label='Earde feed'><img class='auth__mark' src='/static/images/logo-mark.svg' alt=''></a>
@@ -303,7 +303,9 @@ let msg_page ?user:_ ?auth:_ ~title ~message ~alert_type ~return_url request =
             <div class='launch-msg__foot'><a href='%s' class='launch-msg__back'>Go back</a></div>
           </div>
         </div>"
-    (Components.html_escape title) icon_html (Components.html_escape message)
-    (Components.safe_internal_path return_url)
+  [ (Html.text (title))
+  ; icon_html
+  ; (Html.text (message))
+  ; (Html.internal_path (return_url)) ])
   in
   Page_shell.launch_message_page ~request ~title ~content ()

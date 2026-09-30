@@ -911,24 +911,24 @@ let shared_with_copy_case =
     "shared_with_html: exact launch copy and escaping for 0/1/n destinations"
     `Quick (fun () ->
       let render = Earde.Post_cards.shared_with_html in
-      Alcotest.(check string) "empty renders nothing" "" (render []);
+      Alcotest.(check string) "empty renders nothing" "" (Earde.Html.to_string (render []));
       Alcotest.(check string) "one destination"
         "<span class='sth-shared-from'>&#8644; Shared with \
          <a href='/c/dest-a'>Dest A</a></span>"
-        (render [ ("dest-a", "Dest A") ]);
+        (Earde.Html.to_string (render [ ("dest-a", "Dest A") ]));
       Alcotest.(check string) "two destinations"
         "<span class='sth-shared-from'>&#8644; Shared with \
          <a href='/c/dest-a'>Dest A</a> and 1 more</span>"
-        (render [ ("dest-a", "Dest A"); ("dest-b", "Dest B") ]);
+        (Earde.Html.to_string (render [ ("dest-a", "Dest A"); ("dest-b", "Dest B") ]));
       Alcotest.(check string) "three destinations count the tail"
         "<span class='sth-shared-from'>&#8644; Shared with \
          <a href='/c/dest-a'>Dest A</a> and 2 more</span>"
-        (render
-           [ ("dest-a", "Dest A"); ("dest-b", "Dest B"); ("dest-c", "Dest C") ]);
+        (Earde.Html.to_string (render
+           [ ("dest-a", "Dest A"); ("dest-b", "Dest B"); ("dest-c", "Dest C") ]));
       Alcotest.(check string) "name and slug are HTML-escaped"
         "<span class='sth-shared-from'>&#8644; Shared with \
          <a href='/c/x&#39;y'>Ev&lt;il&gt;&amp;</a></span>"
-        (render [ ("x'y", "Ev<il>&") ]))
+        (Earde.Html.to_string (render [ ("x'y", "Ev<il>&") ])))
 
 let origin_indicator_case =
   Shared_thread_http_fixture.db_case "origin surfaces name only currently publicly renderable accepted \

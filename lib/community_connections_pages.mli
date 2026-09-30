@@ -63,11 +63,9 @@ type feedback =
 val management_page :
   ?user:string ->
   ?request:Dream.request ->
-  ?shell:Community_types.community * Community_types.community list * string ->
-  state:state ->
-  feedback:feedback option ->
-  unit ->
-  string
+  ?shell:Community_types.community *
+         Community_types.community list * Html.t ->
+  state:state -> feedback:feedback option -> unit -> string
 (** The management page: connected communities, incoming requests, outgoing
     requests, and the entry point to the search flow. [shell] is the
     Cartographic Civic launch chrome (the durable community record, the
@@ -78,14 +76,12 @@ val management_page :
 val target_search_page :
   ?user:string ->
   ?request:Dream.request ->
-  ?shell:Community_types.community * Community_types.community list * string ->
+  ?shell:Community_types.community *
+         Community_types.community list * Html.t ->
   community:community ->
   query:string ->
   results:target list ->
-  searched:bool ->
-  feedback:feedback option ->
-  unit ->
-  string
+  searched:bool -> feedback:feedback option -> unit -> string
 (** Step one: the server-rendered target search. [searched] distinguishes "no
     query yet" from "this query matched nothing", so an empty page never
     implies that a community was withheld. No result count is rendered. Each
@@ -95,13 +91,10 @@ val target_search_page :
 val confirm_page :
   ?user:string ->
   ?request:Dream.request ->
-  ?shell:Community_types.community * Community_types.community list * string ->
+  ?shell:Community_types.community *
+         Community_types.community list * Html.t ->
   community:community ->
-  target:target ->
-  note:string ->
-  feedback:feedback option ->
-  unit ->
-  string
+  target:target -> note:string -> feedback:feedback option -> unit -> string
 (** Step two: the single confirmation form carrying the chosen target and the
     one optional private note, posting to the request route. [note] is
     redisplayed verbatim (escaped) after a refused submission so nothing the
