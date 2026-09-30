@@ -3024,7 +3024,7 @@ ol, ul { margin: 0; padding: 0; list-style: none; }
    A launch scope is only complete when it carries BOTH halves — the shared
    chrome/anatomy rules every launch surface repeats for its own page class,
    and its feature skin — so the chrome half below is the sibling community
-   surfaces' recipe, re-scoped. The feature half is the same ccp-*/ccc-*
+   surfaces' recipe, re-scoped. The feature half is the same ccp-* and ccc-*
    skinning the community home applies: the fragments are byte-pinned by their
    own suites and spliced verbatim, so both surfaces must dress identical
    markup, and repeating the rules per page class is this file's convention
