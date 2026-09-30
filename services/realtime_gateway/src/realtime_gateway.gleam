@@ -120,7 +120,33 @@ pub fn gateway_config() -> beryl.Config {
 }
 
 pub fn main() -> Nil {
-  let assert Ok(channels) = beryl.start(gateway_config())
+  let _gateway = start(gateway_config(), port)
+  process.sleep_forever()
+}
+
+/// The processes a running gateway is made of, exposed so tests can inject
+/// failures.
+pub type Gateway {
+  Gateway(
+    channels: beryl.Channels,
+    typing: typing.Typing,
+    cursors: cursors.Cursors,
+  )
+}
+
+/// Starts the gateway and serves HTTP and WebSockets on 127.0.0.1:`port`.
+///
+/// Recovery contract. Every essential subsystem (Beryl's coordinator and
+/// handler registry, presence, typing, cursors and the HTTP server's
+/// supervisor) is linked to the calling process, so none of them can die
+/// alone: a crash takes the caller down with it. Under `gleam run` that ends
+/// the VM with a non-zero status, and the service manager starts a fresh
+/// gateway. The listening socket and its acceptors are restarted in place by
+/// the HTTP server's own supervisor. Nothing here is durable: browsers
+/// reconnect with backoff and catch up over HTTP, and PostgreSQL keeps every
+/// committed message.
+pub fn start(config: beryl.Config, port: Int) -> Gateway {
+  let assert Ok(channels) = beryl.start(config)
   io.println("beryl started")
 
   let assert Ok(tracker) =
@@ -151,7 +177,7 @@ pub fn main() -> Nil {
     "realtime gateway listening on http://localhost:" <> int.to_string(port),
   )
 
-  process.sleep_forever()
+  Gateway(channels: channels, typing: typing_tracker, cursors: cursor_tracker)
 }
 
 fn chat_channel(

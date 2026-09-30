@@ -8,7 +8,7 @@
 
 import beryl
 import gleam/dict.{type Dict}
-import gleam/erlang/process.{type Subject}
+import gleam/erlang/process.{type Pid, type Subject}
 import gleam/int
 import gleam/json
 import gleam/list
@@ -185,6 +185,11 @@ pub type Msg {
 
 pub opaque type Typing {
   Typing(subject: Subject(Msg))
+}
+
+/// The actor's process, for failure-injection tests.
+pub fn owner(typing: Typing) -> Result(Pid, Nil) {
+  process.subject_owner(typing.subject)
 }
 
 type ActorState {

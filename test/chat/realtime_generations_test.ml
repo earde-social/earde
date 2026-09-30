@@ -5,8 +5,10 @@
    bump a community's generation whenever read access can shrink, and drive
    the real channel-page, token-refresh, send-message and leave handlers over
    a routed pipeline, with a local stub standing in for the gateway's
-   internal publish endpoint. Fixture names use the rtg_ / rtg- prefixes;
-   every gated case cleans before and after. *)
+   internal publish endpoint. The gateway-failure cases point Dream at a
+   gateway that is down, failing or hanging: a message still commits and
+   catch-up serves it. Fixture names use the rtg_ / rtg- prefixes; every
+   gated case cleans before and after. *)
 
 let ( let* ) = Lwt.bind
 
@@ -289,6 +291,8 @@ let build_pipeline url =
            Earde.Chat_handlers.community_channel_handler;
          Dream.get "/c/:slug/ch/:channel_slug/realtime-token"
            Earde.Chat_handlers.realtime_token_handler;
+         Dream.get "/c/:slug/ch/:channel_slug/messages.json"
+           Earde.Chat_handlers.channel_messages_json_handler;
          Dream.post "/messages" Earde.Chat_handlers.send_message_handler;
          Dream.post "/leave" Earde.Membership_handlers.leave_community_handler;
        ]
@@ -565,10 +569,136 @@ let visibility_case =
             (match again with Error s -> s = 404 | Ok _ -> false);
           Lwt.return_unit))
 
+(* === gateway failure === *)
+
+(* A gateway Dream cannot use: nothing listening, a listener that answers
+   every publish with 500, or one that accepts and never answers. *)
+type broken_gateway = Down | Failing | Hanging
+
+let with_broken_gateway kind f =
+  let listen () =
+    let sock = Lwt_unix.socket Lwt_unix.PF_INET Lwt_unix.SOCK_STREAM 0 in
+    Lwt_unix.setsockopt sock Lwt_unix.SO_REUSEADDR true;
+    let* () =
+      Lwt_unix.bind sock (Lwt_unix.ADDR_INET (Unix.inet_addr_loopback, 0))
+    in
+    Lwt_unix.listen sock 16;
+    match Lwt_unix.getsockname sock with
+    | Unix.ADDR_INET (_, port) -> Lwt.return (sock, port)
+    | _ -> assert false
+  in
+  let rec serve sock reply =
+    let* client, _ = Lwt_unix.accept sock in
+    Lwt.async (fun () -> reply client);
+    serve sock reply
+  in
+  let* port, stop =
+    match kind with
+    | Down ->
+        (* Bound to learn a free port, then closed: connections are refused. *)
+        let* sock, port = listen () in
+        let* () = Lwt_unix.close sock in
+        Lwt.return (port, fun () -> Lwt.return_unit)
+    | Failing | Hanging ->
+        let* sock, port = listen () in
+        let reply client =
+          match kind with
+          | Failing ->
+              let* _ = Lwt_unix.read client (Bytes.create 65536) 0 65536 in
+              let answer =
+                "HTTP/1.1 500 Internal Server Error\r\n\
+                 Content-Length: 0\r\n\
+                 Connection: close\r\n\
+                 \r\n"
+              in
+              let* _ =
+                Lwt_unix.write_string client answer 0 (String.length answer)
+              in
+              Lwt_unix.close client
+          | _ -> fst (Lwt.wait ())
+        in
+        let server = serve sock reply in
+        Lwt.return
+          ( port,
+            fun () ->
+              Lwt.cancel server;
+              Lwt_unix.close sock )
+  in
+  Unix.putenv "REALTIME_GATEWAY_URL" (Printf.sprintf "http://127.0.0.1:%d" port);
+  Unix.putenv "REALTIME_INTERNAL_SECRET" "rtg-internal-secret";
+  Unix.putenv "REALTIME_TOKEN_SECRET" "rtg-token-secret";
+  Unix.putenv "REALTIME_SOCKET_URL" "ws://127.0.0.1:9/socket";
+  Lwt.finalize f stop
+
+let q_message_count =
+  (Caqti_type.(t2 int string) ->! Caqti_type.int)
+    "SELECT count(*)::int FROM chat_messages WHERE channel_id = $1 AND content \
+     = $2"
+
+let json_message_contents body =
+  match Yojson.Safe.from_string body with
+  | `List items | `Assoc [ (_, `List items) ] ->
+      List.filter_map
+        (function
+          | `Assoc fields -> (
+              match List.assoc_opt "content" fields with
+              | Some (`String c) -> Some c
+              | _ -> None)
+          | _ -> None)
+        items
+  | _ -> Alcotest.failf "unexpected catch-up body: %s" body
+
+let gateway_failure_case kind label =
+  db_case
+    (Printf.sprintf "gateway %s: a sent message commits and catch-up serves it"
+       label) (fun ~url c ->
+      with_broken_gateway kind (fun () ->
+          let* cid = find c "community" q_community ("rtg-lab", "private") in
+          let* chan = find c "channel" q_channel (cid, "rtg-room") in
+          let* sender = find c "user" q_user "rtg_sender" in
+          let* reader = find c "user" q_user "rtg_reader" in
+          let* () = exec c "m1" q_member (sender, cid) in
+          let* () = exec c "m2" q_member (reader, cid) in
+          let* cookie, csrf = login ~url sender "rtg_sender" in
+          let* reader_cookie, _ = login ~url reader "rtg_reader" in
+          let content = "rtg while the gateway is " ^ label in
+          let* status, _ =
+            post ~url ~cookie ~csrf
+              ~headers:[ ("Accept", "application/json") ]
+              "/messages"
+              [
+                ("community_slug", "rtg-lab");
+                ("channel_slug", "rtg-room");
+                ("content", content);
+              ]
+          in
+          Alcotest.(check int) "the send succeeds" 200 status;
+          let* stored = find c "stored" q_message_count (chan, content) in
+          Alcotest.(check int) "the message is committed once" 1 stored;
+          (* What a reconnecting client fetches. *)
+          let* status, body =
+            get ~url ~cookie:reader_cookie
+              "/c/rtg-lab/ch/rtg-room/messages.json?after_id=0"
+          in
+          Alcotest.(check int) "catch-up" 200 status;
+          Alcotest.(check (list string))
+            "catch-up serves the message" [ content ]
+            (json_message_contents body);
+          Lwt.return_unit))
+
 let db_suite =
   [ trigger_matrix_case; community_deletion_case; leave_case; visibility_case ]
 
+let gateway_failure_suite =
+  [
+    gateway_failure_case Down "down";
+    gateway_failure_case Failing "failing";
+    gateway_failure_case Hanging "hanging";
+  ]
+
 let suites =
   [
-    ("realtime_generations", pure_suite); ("realtime_generations_db", db_suite);
+    ("realtime_generations", pure_suite);
+    ("realtime_generations_db", db_suite);
+    ("realtime_gateway_failure_db", gateway_failure_suite);
   ]

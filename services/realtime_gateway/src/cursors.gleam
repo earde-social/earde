@@ -14,7 +14,7 @@
 
 import beryl
 import gleam/dict.{type Dict}
-import gleam/erlang/process.{type Subject}
+import gleam/erlang/process.{type Pid, type Subject}
 import gleam/int
 import gleam/json
 import gleam/list
@@ -317,6 +317,11 @@ pub type Msg {
 
 pub opaque type Cursors {
   Cursors(subject: Subject(Msg))
+}
+
+/// The actor's process, for failure-injection tests.
+pub fn owner(cursors: Cursors) -> Result(Pid, Nil) {
+  process.subject_owner(cursors.subject)
 }
 
 /// `visible` is the per-topic snapshot as last broadcast. Diffing against it
