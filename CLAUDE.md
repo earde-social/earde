@@ -54,6 +54,11 @@ valuable discussion can be kept and found later rather than scrolling away.
 - Keep JavaScript small, page-scoped, and loaded only on the pages that need it.
 - No SPA, client-side routing, hydration architecture, or frontend build chain.
 - Do not add npm, Vite, webpack, esbuild, PostCSS, or Sass unless explicitly approved.
+- Styles are plain CSS under `static/css`: pages link only `earde.css`, which
+  imports `base/` then `routes/` in cascade order. Chrome shared by launch routes
+  lives in `routes/chrome.css` (a route joins a rule by being listed in its
+  `:is()`); route-specific rules go in `routes/<area>.css` under the page's body
+  class.
 
 ## Realtime rules
 
@@ -78,7 +83,9 @@ valuable discussion can be kept and found later rather than scrolling away.
 
 - New logic-heavy features should ship with tests, runnable with the normal local
   test setup.
-- Run `dune build` and `dune test` before considering a change complete.
+- Run `dune build` and `dune test` before considering a change complete. The full
+  suite, including database-gated cases, runs with `scripts/test-gated.sh`
+  against a migrated disposable database; CI runs it on every pull request.
 - Keep OCaml and dune files formatted: `dune build @fmt` must pass with the
   ocamlformat version pinned in `.ocamlformat` (`dune fmt` applies it).
 - Run `gleam build` (in `services/realtime_gateway`) when touching the realtime
