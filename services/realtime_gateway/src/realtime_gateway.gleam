@@ -10,8 +10,8 @@ import gleam/bytes_tree
 import gleam/crypto
 import gleam/dynamic.{type Dynamic}
 import gleam/dynamic/decode
-import gleam/float
 import gleam/erlang/process
+import gleam/float
 import gleam/http
 import gleam/http/request.{type Request}
 import gleam/http/response.{type Response}
@@ -197,15 +197,17 @@ fn chat_channel(
       }
     }
   })
-  |> channel.with_handle_in(fn(event, payload, socket: socket.Socket(AuthClaims)) {
-    case event {
-      "typing" -> handle_typing_event(typing_tracker, payload, socket)
-      "cursor" -> handle_cursor_event(cursor_tracker, payload, socket)
-      // Unknown client events are ignored so they can never affect
-      // presence or new_msg fanout.
-      _ -> channel.NoReply(socket)
-    }
-  })
+  |> channel.with_handle_in(
+    fn(event, payload, socket: socket.Socket(AuthClaims)) {
+      case event {
+        "typing" -> handle_typing_event(typing_tracker, payload, socket)
+        "cursor" -> handle_cursor_event(cursor_tracker, payload, socket)
+        // Unknown client events are ignored so they can never affect
+        // presence or new_msg fanout.
+        _ -> channel.NoReply(socket)
+      }
+    },
+  )
   |> channel.with_terminate(fn(_reason, socket: socket.Socket(AuthClaims)) {
     let claims = socket.get_assigns(socket)
     untrack_presence(channels, tracker, claims.topic, socket.id(socket))
@@ -309,7 +311,10 @@ fn handle_cursor_event(
   case
     decode_cursor_payload(payload)
     |> result.try(fn(event) {
-      authorize_cursor_event(shared_cursors: claims.shared_cursors, event: event)
+      authorize_cursor_event(
+        shared_cursors: claims.shared_cursors,
+        event: event,
+      )
     })
   {
     Ok(CursorActive(x, y)) ->
@@ -338,7 +343,8 @@ fn handle_cursor_event(
 /// edges) and are clamped to [0, 1]. Missing or non-numeric coordinates on an
 /// active update reject the whole event.
 pub fn decode_cursor_payload(payload: Dynamic) -> Result(CursorEvent, Nil) {
-  let number = decode.one_of(decode.float, or: [decode.map(decode.int, int.to_float)])
+  let number =
+    decode.one_of(decode.float, or: [decode.map(decode.int, int.to_float)])
   let decoder = {
     use v <- decode.field("v", decode.int)
     use active <- decode.field("active", decode.bool)
@@ -614,7 +620,11 @@ fn claims_decoder() -> decode.Decoder(AuthClaims) {
   use exp <- decode.field("exp", decode.int)
   // Absent on legacy tokens (minted before the capability existed): those
   // stay valid for presence/typing/chat but can never share cursors.
-  use shared_cursors <- decode.optional_field("shared_cursors", False, decode.bool)
+  use shared_cursors <- decode.optional_field(
+    "shared_cursors",
+    False,
+    decode.bool,
+  )
 
   decode.success(AuthClaims(user_id, username, topic, exp, shared_cursors))
 }
