@@ -107,6 +107,7 @@ let () =
            Privacy_page_test.suites;
            Avatar_upload_paths_test.suites;
            Rate_limit_cleanup_test.suites;
+           Rate_limit_window_test.suites;
            Message_page_test.suites;
            Create_pages_test.suites;
            Admin_dashboard_page_test.suites;

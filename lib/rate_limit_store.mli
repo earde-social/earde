@@ -1,8 +1,12 @@
 val check :
+  ?now:float ->
   (module Caqti_lwt.CONNECTION) ->
   string ->
   string ->
   ([ `Allowed | `Blocked ], string) result Lwt.t
+(** Counts one attempt for [(ip, endpoint)] and decides it: [`Blocked] once more
+    than five fall within [window_seconds] of the bucket's first attempt. [?now]
+    (epoch seconds) exists for tests; production callers omit it. *)
 
 val upload_endpoint : string
 (** The image-upload bucket: a constant endpoint name shared by all three
