@@ -223,18 +223,20 @@ let desktop_content_case =
    existing per-route pattern. *)
 let css_contract_case =
   case "one 800px hide rule for launch-bring, no second breakpoint" (fun () ->
-      let earde = read "static/css/earde.css" in
-      let rule =
-        "@media (max-width: 800px) {\n\
-        \  body.launch-bring > .app { display: none !important; }\n\
-         }"
+      let gate = "body.launch-bring > .app" in
+      let hide_rules =
+        List.filter
+          (fun (r : Css_census.rule) ->
+            List.mem gate r.selectors
+            && r.context = [ "@media (max-width: 800px)" ]
+            && r.body = "display: none !important;")
+          Css_census.rules
       in
       Alcotest.(check int)
-        "exactly one launch-bring gate rule" 1
-        (Html_assert.count_sub earde rule);
+        "exactly one launch-bring gate rule" 1 (List.length hide_rules);
       Alcotest.(check int)
         "launch-bring is hidden nowhere else" 1
-        (Html_assert.count_sub earde "body.launch-bring > .app");
+        (List.length (List.filter (( = ) gate) Css_census.selectors));
       (* The panel's own stylesheet keeps the single breakpoint definition:
          invisible above it, the whole viewport below it. *)
       let gate_css = read "static/css/mobile-gate.css" in

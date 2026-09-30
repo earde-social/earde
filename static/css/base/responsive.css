@@ -1,0 +1,158 @@
+/* ==========================================================================
+   MOBILE NAV (≤767px) — bottom bar replaces the icon rail
+   ========================================================================== */
+.mobilenav { display: none; }
+.drawer { display: none; }
+
+/* ==========================================================================
+   RESPONSIVE
+   1440+  reference layout (design width)
+   1024   right aside hidden; 2-col content collapses
+   768    sidebar becomes a drawer; single column; settings nav horizontal
+   390    bottom nav bar; search on its own row; stacked headers
+   ========================================================================== */
+
+/* ---------- ≤1279px : drop the secondary aside ---------- */
+@media (max-width: 1279px) {
+  .aside { display: none; }
+  .two-col, .two-col--wide { grid-template-columns: minmax(0,1fr); }
+  .container { padding-left: var(--sp-11); padding-right: var(--sp-11); }
+}
+
+/* ---------- ≤1023px : tighten panes and grids ---------- */
+@media (max-width: 1023px) {
+  :root { --sidebar-w: 208px; }
+  .page__head, .chead { padding-left: var(--sp-10); padding-right: var(--sp-10); }
+  .container { padding-left: var(--sp-10); padding-right: var(--sp-10); }
+  .project-grid { grid-template-columns: 1fr; }
+  .grid-cards { grid-template-columns: 1fr; }
+  .form-grid { grid-template-columns: 1fr; }
+  .thread { padding-left: var(--sp-11); padding-right: var(--sp-11); }
+  .settings__panel { padding-left: var(--sp-11); padding-right: var(--sp-11); }
+  .chead__row { flex-wrap: wrap; }
+  .chead__actions { flex-direction: row; width: 100%; }
+  .chead__actions .btn { flex: 1; }
+}
+
+/* ---------- ≤767px : one column, drawer nav, bottom bar ---------- */
+@media (max-width: 767px) {
+  .app { height: 100dvh; }
+  /* top bar: two rows — brand+actions, then the command field */
+  .topbar {
+    height: auto; grid-template-columns: 1fr auto; gap: var(--sp-4) var(--sp-5);
+    padding: var(--sp-4) var(--sp-6); row-gap: var(--sp-4);
+  }
+  .topbar__search-cell { grid-column: 1 / -1; order: 3; }
+  .topbar__wordmark { height: 19px; }
+  .topbar__mark { height: 26px; width: 26px; }
+  .topbar__actions .btn--connect-github { display: none; }
+  .userchip__name { display: none; }
+
+  /* rail → fixed bottom bar */
+  .rail {
+    position: fixed; left: 0; right: 0; bottom: 0; z-index: 20;
+    width: auto; height: 56px; flex-direction: row; justify-content: space-around;
+    align-items: center; gap: 0; padding: 0 var(--sp-4);
+    border-top: var(--bw) solid #1b211c; overflow: visible;
+  }
+  .rail__item { width: 44px; height: 44px; }
+  .rail__spacer, .rail__divider { display: none; }
+  .rail__marker { left: 50%; top: auto; bottom: -1px; transform: translateX(-50%); width: 22px; height: 3px; border-radius: var(--r-1) var(--r-1) 0 0; }
+  .rail__item--community { display: none; }         /* communities live in the drawer */
+  .rail__item--add { display: grid; }
+  .shell { padding-bottom: 56px; }
+
+  /* community sidebar → <details> drawer under the top bar */
+  .sidebar { display: none; }
+  .drawer { display: block; flex: none; background: var(--surface2); border-bottom: var(--bw) solid var(--line2); }
+  .drawer > summary {
+    list-style: none; cursor: pointer;
+    display: flex; align-items: center; gap: var(--sp-5);
+    padding: var(--sp-5) var(--sp-7); background: var(--surface);
+    border-bottom: var(--bw) solid var(--line2);
+    font-family: var(--mono); font-weight: 700; font-size: var(--fs-14); color: var(--ink);
+    min-height: 48px;
+  }
+  .drawer > summary::-webkit-details-marker { display: none; }
+  .drawer > summary::after { content: '▾'; margin-left: auto; color: var(--muted); font-size: var(--fs-12); }
+  .drawer[open] > summary::after { content: '▴'; }
+  .drawer__body { max-height: 60vh; overflow-y: auto; padding: var(--sp-4); }
+  .navitem { min-height: 40px; }
+
+  /* content padding + single column */
+  .page__head { padding: var(--sp-6) var(--sp-7) 0; }
+  .chead { padding: var(--sp-8) var(--sp-7); }
+  .container { padding: 0 var(--sp-7) 72px; }
+  .container--form { padding: var(--sp-8) var(--sp-7) 72px; }
+  .thread { padding: 0 var(--sp-7) 72px; }
+  .auth { padding: var(--sp-13) var(--sp-7) 72px; }
+
+  /* horizontally scrollable tab strips instead of wrapping */
+  .tabs, .tabbar, .chips {
+    overflow-x: auto; flex-wrap: nowrap; scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+  }
+  .tabs::-webkit-scrollbar, .tabbar::-webkit-scrollbar, .chips::-webkit-scrollbar { display: none; }
+  .tab { padding: var(--sp-5) var(--sp-5); }
+
+  /* stacked headers */
+  .chead__row { flex-direction: column; gap: var(--sp-6); }
+  .chead__actions { width: 100%; flex-direction: column; }
+  .chead__title { font-size: var(--fs-22); }
+  .page__title { font-size: 21px; }
+  .thread__title { font-size: 20px; }
+  .auth__title { font-size: var(--fs-23); }
+
+  /* settings: nav becomes a scrolling strip above the panel */
+  .settings { flex-direction: column; }
+  .settings__nav {
+    width: 100%; border-right: 0; border-bottom: var(--bw) solid var(--line);
+    display: flex; align-items: center; gap: var(--sp-2);
+    overflow-x: auto; padding: var(--sp-4) var(--sp-6); flex: none;
+  }
+  .settings__nav .navitem { white-space: nowrap; margin-bottom: 0; }
+  .settings__group { display: none; }
+  .settings__panel { padding: var(--sp-8) var(--sp-7) 72px; }
+
+  /* tables → stacked rows */
+  .grid-table__head { display: none; }
+  .grid-table__row { grid-template-columns: 1fr auto; gap: var(--sp-2) var(--sp-5); }
+  .grid-table__row > :nth-child(3) { grid-column: 1 / -1; }
+  .table td:first-child { width: auto; }
+
+  /* chat */
+  .msg { padding-left: var(--sp-7); padding-right: var(--sp-7); }
+  .chat__head { padding: var(--sp-5) var(--sp-7); flex-wrap: wrap; }
+  .chat__topic { display: none; }
+  .composer { padding: var(--sp-5) var(--sp-7); }
+
+  /* onboarding + choices stack */
+  .choice-grid { grid-template-columns: 1fr; }
+  .option-row { flex-direction: column; }
+  .steps { gap: var(--sp-2); overflow-x: auto; }
+  .step__label { display: none; }
+  .step__label--active { display: inline; }
+
+  /* touch targets: never below 44px for primary actions */
+  .btn { min-height: 44px; }
+  .btn--xs, .btn--link, .btn--quiet { min-height: 0; }
+}
+
+/* ---------- ≤400px : narrowest supported (iPhone 390) ---------- */
+@media (max-width: 400px) {
+  .topbar { padding: var(--sp-4) var(--sp-5); }
+  .container, .page__head, .chead, .thread, .settings__panel { padding-left: var(--sp-6); padding-right: var(--sp-6); }
+  .thread-row { gap: var(--sp-5); }
+  .vote { width: 26px; }
+  .thread-row__title { font-size: var(--fs-14); }
+  .notif__ctx { white-space: normal; }
+  .card--pad { padding: var(--sp-7); }
+  .auth__card { padding: var(--sp-8); }
+}
+
+/* ---------- print: documents, not app chrome ---------- */
+@media print {
+  .rail, .sidebar, .aside, .topbar, .composer, .mobilenav { display: none !important; }
+  .app, .shell, .main, .scroll { height: auto; overflow: visible; display: block; }
+  body { background: #fff; }
+}

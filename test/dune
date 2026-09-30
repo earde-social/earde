@@ -7,12 +7,11 @@
  ; dream and yojson are referenced directly by the analytics tests (mock
  ; requests for the consent gate; payload JSON assertions). analytics.js is a
  ; dep so the replay-masking coverage test can read it from the sandbox, and
- ; the production sources + shipped stylesheets are deps so the legacy-asset
- ; census can read them the same way.
+ ; the production sources + shipped stylesheets (the entrypoint and every
+ ; partial) are deps so the legacy-asset and CSS censuses can read them.
  (deps
   ../static/js/analytics.js
-  ../static/css/earde.css
-  ../static/css/mobile-gate.css
+  (glob_files_rec ../static/css/*.css)
   ../bin/main.ml
   (glob_files ../lib/*.ml)
   (glob_files ../lib/*.mli))

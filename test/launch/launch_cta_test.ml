@@ -327,7 +327,7 @@ let single_definition_case =
         (Html_assert.count_sub shells "btn--outline-ochre");
       (* CSS isolation: the modifier exists and is scoped under the top bar,
          and the responsive hide rule followed the class rename. *)
-      let css = Source_census.read "static/css/earde.css" in
+      let css = Css_census.stylesheet in
       Alcotest.(check bool)
         "modifier is topbar-scoped" true
         (Html_assert.contains css ".topbar__actions .btn--connect-github {");

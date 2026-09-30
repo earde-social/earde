@@ -1,0 +1,486 @@
+/* ==========================================================================
+   EARDE INTEGRATION — notifications only
+   Scoped beneath body.launch-notifications: GET /notifications
+   (Pages.notifications_page). Exists only because the real notification
+   center cannot emit the reference markup exactly:
+   - the row anatomy (account-notif / -icon / -body / -msg / -time, the
+     account-notif--unread accent and its cosmetic onclick clear) is pinned
+     by the gated Phnt UI suite and by the replay-masking selector
+     .account-notif-msg in analytics.js, so the legacy rows are spliced
+     verbatim and skinned here onto the approved flat .notif anatomy;
+   - the handoff's filter tabs and "mark all read" POST have no backing
+     routes and are deliberately absent (the GET itself marks rows read);
+   - the row carries no context line and no separate right column, so the
+     mono time sits right-aligned on the message baseline and the unread
+     clay dot is drawn from the time cell — same signals, real fields only;
+   - the notification badge is server-rendered from the request's unread
+     count and is absent entirely at zero, so this scope needs no rule for
+     it (Notification_badge);
+   - the desktop-only gate panel ships in mobile-gate.css; only the
+     launch-scope "hide the app" rule for this route lives here;
+   - the analytics consent banner markup is shared with the legacy layout
+     (styled once for these routes in routes/chrome.css).
+   ========================================================================== */
+
+/* ---- Rows ------------------------------------------------------------------- */
+
+/* Legacy card list recast as the approved flat list: no gap, hairline
+   separators only. */
+.launch-notifications .account-notifs { display: flex; flex-direction: column; }
+
+/* Row = 28px icon tile · message · right-aligned mono time (.notif
+   geometry over the pinned account-notif markup). */
+.launch-notifications .account-notif {
+  display: flex; gap: 13px; padding: 13px var(--sp-3);
+  border-bottom: var(--bw) solid var(--line);
+  text-decoration: none; color: var(--ink);
+}
+.launch-notifications a.account-notif { cursor: pointer; }
+.launch-notifications a.account-notif:hover { background: var(--surface2); }
+.launch-notifications .account-notif--unread {
+  background: color-mix(in srgb, var(--ochre) 7%, var(--surface));
+}
+.launch-notifications .account-notif-icon {
+  width: 28px; height: 28px; flex: none; display: grid; place-items: center;
+  border: var(--bw) solid var(--line2); border-radius: var(--r-3);
+  font-size: var(--fs-13); color: var(--muted); background: var(--surface);
+}
+.launch-notifications .account-notif-body {
+  flex: 1; min-width: 0; display: flex; align-items: baseline; gap: var(--sp-7);
+  padding-top: 1px;
+}
+.launch-notifications .account-notif-msg {
+  flex: 1; min-width: 0; font-size: var(--fs-13-5); line-height: 1.45;
+  color: var(--ink);
+}
+.launch-notifications .account-notif-time {
+  flex: none; display: flex; align-items: center; gap: var(--sp-4);
+  font-family: var(--mono); font-size: var(--fs-11); color: var(--muted);
+  white-space: nowrap; margin: 0;
+}
+/* Unread signal: 7px clay dot beside the time (the row markup has no
+   dedicated dot element; the onclick unread-clear removes both signals). */
+.launch-notifications .account-notif--unread .account-notif-time::after {
+  content: ''; width: 7px; height: 7px; flex: none;
+  border-radius: var(--r-pill); background: var(--clay);
+}
+
+/* Empty state: a mono sentence, nothing else. */
+.launch-notifications .account-empty {
+  padding: 46px var(--sp-3); text-align: center;
+  font-family: var(--mono); font-size: var(--fs-12-5); color: var(--muted);
+}
+
+/* ==========================================================================
+   EARDE INTEGRATION — public user profile only
+   Scoped beneath body.launch-user-profile: GET /u/:username
+   (Pages.user_profile_page). Exists only because the real profile surface
+   cannot emit the reference markup exactly (there is no profile mockup — the
+   approved global shell is extended around the real implementation):
+   - the inner account-* anatomy (account-prof header, account-badges,
+     account-bio, account-tabs, account-thread rows with the /vote form DOM
+     the shared behavior script drives, account-comment, account-comm-card,
+     account-admin) is kept and skinned here onto the flat launch list
+     language; .account-bio is a replay-masking selector in analytics.js;
+   - the vote buttons keep the legacy text-orange-500 / text-[#69C3D2] state
+     classes the optimistic-vote script toggles; they are mapped to the clay
+     and slate accents, exactly as on /feed;
+   - the admin ban/unban forms keep their confirmModal onsubmit; the modal
+     is composed by the shared script from legacy utility class names — the
+     stable .fixed.inset-0 pair and #cancel-btn / #confirm-btn are the hooks;
+   - the ?tab= contract (posts default, comments, communities, unknown →
+     posts) is server-rendered; the tabs are plain links, no client tabs;
+   - the notification badge is server-rendered from the request's unread
+     count and is absent entirely at zero, so this scope needs no rule for
+     it (Notification_badge);
+   - the desktop-only gate panel ships in mobile-gate.css; only the
+     launch-scope "hide the app" rule for this route lives here;
+   - the analytics consent banner markup is shared with the legacy layout
+     (styled once for these routes in routes/chrome.css).
+   ========================================================================== */
+
+/* ---- Profile header ---------------------------------------------------------- */
+
+.launch-user-profile .account-wrap { padding-top: var(--sp-13); }
+
+/* The identity panel: one flat card — avatar · serif u/name · factual meta. */
+.launch-user-profile .account-panel {
+  border: var(--bw) solid var(--line); border-radius: var(--r-3);
+  background: var(--surface); padding: var(--sp-10);
+}
+.launch-user-profile .account-prof {
+  display: flex; gap: var(--sp-9); align-items: flex-start;
+}
+/* Avatar: 64px, tight radius; the letter-tile fallback carries inert legacy
+   utility classes — the grid centering below is what actually styles it. */
+.launch-user-profile .account-avatar {
+  width: 64px; height: 64px; flex: none; border-radius: var(--r-4);
+  object-fit: cover; background: var(--forest);
+}
+.launch-user-profile div.account-avatar {
+  display: grid; place-items: center; color: #fff;
+  font-family: var(--mono); font-weight: 700; font-size: var(--fs-24);
+}
+.launch-user-profile .account-prof-body { flex: 1; min-width: 0; }
+.launch-user-profile .account-name {
+  font-family: var(--serif); font-weight: 600; font-size: var(--fs-24);
+  line-height: var(--lh-tight); color: var(--ink);
+}
+.launch-user-profile .account-badges {
+  display: flex; flex-wrap: wrap; gap: var(--sp-3); margin-top: var(--sp-3);
+}
+.launch-user-profile .account-badge {
+  display: inline-flex; align-items: center;
+  font-family: var(--mono); font-size: var(--fs-10); line-height: 1.7;
+  border: var(--bw) solid currentColor; border-radius: var(--r-1);
+  padding: 1px 5px; text-decoration: none;
+}
+.launch-user-profile .account-badge--admin { color: var(--clay); }
+.launch-user-profile .account-badge--mod { color: var(--moss); }
+.launch-user-profile a.account-badge--mod:hover { background: color-mix(in srgb, var(--moss) 9%, var(--surface)); }
+.launch-user-profile .account-badge--banned { color: var(--danger); }
+.launch-user-profile .account-stats {
+  display: flex; align-items: center; gap: var(--sp-8); margin-top: var(--sp-4);
+  font-family: var(--mono); font-size: var(--fs-11); color: var(--muted);
+}
+.launch-user-profile .account-stats strong { color: var(--ink); font-weight: 700; }
+.launch-user-profile .account-actions {
+  display: flex; gap: var(--sp-5); margin-top: var(--sp-6);
+}
+/* account-btn: bare = destructive (Ban user); --secondary = quiet outline. */
+.launch-user-profile .account-btn {
+  display: inline-flex; align-items: center; cursor: pointer;
+  font-family: var(--sans); font-weight: 600; font-size: var(--fs-12);
+  color: #fff; background: var(--danger);
+  border: var(--bw) solid var(--danger); border-radius: var(--r-2);
+  padding: var(--sp-3) var(--sp-7); text-decoration: none;
+}
+.launch-user-profile .account-btn--secondary {
+  color: var(--muted); background: var(--surface); border-color: var(--line2);
+}
+.launch-user-profile .account-btn--secondary:hover { background: var(--surface2); color: var(--ink); }
+.launch-user-profile .account-bio {
+  margin-top: var(--sp-8); padding-top: var(--sp-7);
+  border-top: var(--bw) solid var(--line);
+  font-size: var(--fs-13-5); line-height: var(--lh-prose); color: var(--muted);
+  white-space: pre-wrap; overflow-wrap: anywhere;
+}
+
+/* Admin controls: a danger-ruled strip inside the panel, admin-only. */
+.launch-user-profile .account-admin {
+  margin-top: var(--sp-8); padding: var(--sp-6) var(--sp-8);
+  border: var(--bw) solid var(--line2);
+  border-left: var(--bw-accent-3) solid var(--danger);
+  border-radius: var(--r-1);
+  background: color-mix(in srgb, var(--danger) 5%, var(--surface));
+  display: flex; align-items: center; gap: var(--sp-8);
+}
+.launch-user-profile .account-admin-title {
+  font-family: var(--mono); font-size: var(--fs-10-5); font-weight: 700;
+  letter-spacing: var(--ls-kicker); text-transform: uppercase;
+  color: var(--danger);
+}
+.launch-user-profile .account-admin form { margin: 0; }
+
+/* ---- Tabs (server-rendered links, ?tab= contract unchanged) ------------------ */
+
+.launch-user-profile .account-tabs {
+  display: flex; gap: var(--sp-1); margin-top: var(--sp-11);
+  border-bottom: var(--bw) solid var(--line);
+}
+.launch-user-profile .account-tab {
+  font-family: var(--mono); font-size: var(--fs-12); padding: var(--sp-4) 13px;
+  color: var(--muted); text-decoration: none;
+  border-bottom: var(--bw-accent) solid transparent; margin-bottom: -1px;
+}
+.launch-user-profile .account-tab:hover { color: var(--ink); }
+.launch-user-profile .account-tab--active { color: var(--ink); border-bottom-color: var(--moss); }
+
+/* ---- Thread rows (flat list, thin separators; vote DOM script-driven) -------- */
+
+.launch-user-profile .account-threads { display: flex; flex-direction: column; }
+.launch-user-profile .account-thread {
+  display: flex; gap: var(--sp-7); padding: 13px var(--sp-3);
+  border-bottom: var(--bw) solid var(--line);
+}
+.launch-user-profile .account-thread-vote {
+  flex: none; width: 30px; display: flex; flex-direction: column;
+  align-items: center; gap: var(--sp-1); padding-top: 2px;
+}
+.launch-user-profile .account-thread-vote form { margin: 0; padding: 0; display: flex; }
+.launch-user-profile .account-thread-vote button,
+.launch-user-profile .account-thread-vote a {
+  background: none; border: 0; padding: 0; cursor: pointer;
+  font-size: var(--fs-12); line-height: 1; color: var(--line2);
+  text-decoration: none;
+}
+.launch-user-profile .account-thread-vote button:hover,
+.launch-user-profile .account-thread-vote a:hover { color: var(--muted); }
+/* Optimistic-vote state classes toggled by the shared script. */
+.launch-user-profile .account-thread-vote button.text-orange-500 { color: var(--clay); }
+.launch-user-profile .account-thread-vote button.text-\[\#69C3D2\] { color: var(--slate); }
+.launch-user-profile .account-thread-score {
+  font-family: var(--mono); font-size: var(--fs-12); font-weight: 700;
+  color: var(--ink);
+}
+.launch-user-profile .account-thread-main { flex: 1; min-width: 0; }
+.launch-user-profile .account-thread-ctx {
+  font-family: var(--mono); font-size: var(--fs-11); color: var(--muted);
+}
+.launch-user-profile .account-thread-ctx .sec { color: var(--moss); font-weight: 700; }
+.launch-user-profile .account-thread-ctx a { color: var(--muted); }
+.launch-user-profile .account-thread-ctx a:hover { color: var(--ink); }
+.launch-user-profile .account-thread-title {
+  margin-top: var(--sp-1);
+  font-size: var(--fs-15-5); font-weight: 600; line-height: var(--lh-title);
+}
+.launch-user-profile .account-thread-title a { color: var(--ink); }
+.launch-user-profile .account-thread-title a:hover { color: var(--moss); }
+.launch-user-profile .account-thread-preview {
+  margin-top: var(--sp-2); font-size: var(--fs-13); line-height: var(--lh-ui);
+  color: var(--muted);
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.launch-user-profile .account-thread-meta {
+  display: flex; align-items: center; gap: var(--sp-7); flex-wrap: wrap;
+  margin-top: var(--sp-3);
+  font-family: var(--mono); font-size: var(--fs-11); color: var(--muted);
+}
+.launch-user-profile .account-thread-meta a { color: var(--muted); }
+.launch-user-profile .account-thread-meta a:hover { color: var(--ink); }
+.launch-user-profile .account-thread-domain { color: var(--slate); }
+.launch-user-profile .mod-badge {
+  font-family: var(--mono); font-size: var(--fs-9); color: var(--clay);
+  margin-left: 4px;
+}
+
+/* ---- Comment rows ------------------------------------------------------------ */
+
+.launch-user-profile .account-comment {
+  padding: 13px var(--sp-3); border-bottom: var(--bw) solid var(--line);
+}
+.launch-user-profile .account-comment-meta {
+  display: flex; align-items: center; gap: var(--sp-4);
+  font-family: var(--mono); font-size: var(--fs-11); color: var(--muted);
+}
+.launch-user-profile .account-comment-body {
+  margin-top: var(--sp-3); font-size: var(--fs-13-5); line-height: var(--lh-body);
+  color: var(--ink); white-space: pre-wrap; overflow-wrap: anywhere;
+}
+.launch-user-profile .account-comment-link {
+  display: inline-block; margin-top: var(--sp-4);
+  font-family: var(--mono); font-size: var(--fs-11); color: var(--slate);
+}
+.launch-user-profile .account-comment-link:hover { color: var(--ink); }
+
+/* ---- Community reputation cards ---------------------------------------------- */
+
+.launch-user-profile .account-section-title {
+  margin-top: var(--sp-10);
+  font-family: var(--mono); font-size: var(--fs-10-5); font-weight: 700;
+  letter-spacing: var(--ls-kicker); text-transform: uppercase;
+  color: var(--muted);
+}
+.launch-user-profile .account-comm-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: var(--sp-7); margin-top: var(--sp-6);
+}
+.launch-user-profile .account-comm-card {
+  display: block; border: var(--bw) solid var(--line); border-radius: var(--r-3);
+  background: var(--surface); padding: var(--sp-8); text-decoration: none;
+}
+.launch-user-profile .account-comm-card:hover { border-color: var(--line2); background: var(--surface2); }
+.launch-user-profile .account-comm-name {
+  font-weight: 700; font-size: var(--fs-14); color: var(--ink);
+}
+.launch-user-profile .account-comm-slug {
+  font-family: var(--mono); font-size: var(--fs-11); color: var(--muted);
+  margin-top: 1px;
+}
+.launch-user-profile .account-comm-stat {
+  font-size: var(--fs-12-5); color: var(--muted); margin-top: var(--sp-3);
+}
+.launch-user-profile .account-comm-stat strong { color: var(--ink); }
+.launch-user-profile .account-comm-sub {
+  font-family: var(--mono); font-size: var(--fs-10-5); color: var(--muted);
+  margin-top: var(--sp-2);
+}
+
+/* ---- Empty state -------------------------------------------------------------- */
+
+.launch-user-profile .account-empty {
+  border: var(--bw) dashed var(--line2); border-radius: var(--r-2);
+  padding: 36px var(--sp-10); text-align: center; margin-top: var(--sp-7);
+  font-family: var(--mono); font-size: var(--fs-12-5); color: var(--muted);
+}
+
+/* ==========================================================================
+   EARDE INTEGRATION — account settings only
+   Scoped beneath body.launch-account-settings: GET /settings
+   (Pages.settings_page). Exists only because the real account surface
+   cannot emit the reference markup exactly:
+   - the five account-panel sections (multipart profile form, password
+     form, data export, the consent-managed analytics panel, the
+     delete-account danger zone) are spliced verbatim — their field names,
+     CSRF positions, data-analytics-* hooks and confirmModal onsubmit are
+     contracts — and skinned here onto the approved flat settings grammar
+     (serif section titles, mono fact labels, inset controls, moss primary,
+     danger-accented destructive section);
+   - analytics.js toggles the analytics panel and its Enable/Disable
+     controls via the `hidden` ATTRIBUTE; author display rules on those
+     elements would defeat the UA default, so the attribute is honoured
+     route-wide;
+   - the confirm-modal overlay (delete account) is composed by the shared
+     behavior script from legacy utility class names; the stable
+     .fixed.inset-0 pair and the #cancel-btn / #confirm-btn ids are the
+     hooks;
+   - the notification badge is server-rendered from the request's unread
+     count and is absent entirely at zero, so this scope needs no rule for
+     it (Notification_badge);
+   - the desktop-only gate panel ships in mobile-gate.css; only the
+     launch-scope "hide the app" rule for this route lives here;
+   - the analytics consent banner markup is shared with the legacy layout
+     (styled once for these routes in routes/chrome.css).
+   ========================================================================== */
+
+/* ---- Launch chrome ---------------------------------------------------------- */
+
+/* analytics.js drives the analytics panel, its Enable/Disable pair and the
+   error line through the `hidden` attribute; the author display rules on
+   .account-btn/.account-panel below would otherwise override the UA
+   [hidden] default. Route-scoped, deliberate. */
+.launch-account-settings [hidden] { display: none !important; }
+
+/* ---- Page head --------------------------------------------------------------- */
+
+/* Serif title + mono account identifier left, view-profile link right. */
+.launch-account-settings .account-head-launch {
+  display: flex; align-items: flex-end; justify-content: space-between;
+  gap: var(--sp-7);
+}
+.launch-account-settings .account-ident {
+  font-family: var(--mono); font-size: var(--fs-12); color: var(--muted);
+  margin-top: var(--sp-1);
+}
+.launch-account-settings .account-view-profile {
+  font-family: var(--mono); font-size: var(--fs-11-5); color: var(--slate);
+  text-decoration: none; white-space: nowrap; padding-bottom: 2px;
+}
+.launch-account-settings .account-view-profile:hover { text-decoration: underline; }
+
+/* ---- Panels ------------------------------------------------------------------ */
+
+/* Legacy card column recast as flat bordered form sections: hairline
+   borders, tight radii, no gradients, no decorative shadows. */
+.launch-account-settings .account-wrap {
+  display: flex; flex-direction: column; gap: var(--sp-8);
+  padding: var(--sp-9) 0 70px;
+}
+.launch-account-settings .account-panel {
+  border: var(--bw) solid var(--line2); border-radius: var(--r-3);
+  background: var(--surface); padding: var(--sp-9) var(--sp-10);
+}
+.launch-account-settings .account-section-title {
+  font-family: var(--serif); font-weight: 600; font-size: var(--fs-19);
+  color: var(--ink); margin-bottom: var(--sp-4);
+}
+.launch-account-settings .account-section-desc {
+  font-size: var(--fs-13); color: var(--muted); line-height: var(--lh-prose);
+  margin-bottom: var(--sp-6); max-width: 62ch;
+}
+.launch-account-settings .account-section-desc strong { color: var(--ink); }
+
+/* Destructive section: danger left accent, danger-toned rule set below. */
+.launch-account-settings .account-danger {
+  border-left: 3px solid var(--danger);
+}
+.launch-account-settings .account-danger .account-section-title { color: var(--danger); }
+
+/* ---- Forms ------------------------------------------------------------------- */
+
+.launch-account-settings .account-form {
+  display: flex; flex-direction: column; gap: var(--sp-7);
+  align-items: flex-start;
+}
+.launch-account-settings .account-field { width: 100%; }
+.launch-account-settings .account-field-pair {
+  display: grid; grid-template-columns: 1fr 1fr;
+  gap: var(--sp-7) var(--sp-9); width: 100%;
+}
+.launch-account-settings .account-label {
+  display: block; font-family: var(--mono); font-size: var(--fs-11);
+  color: var(--muted); margin-bottom: 5px;
+}
+.launch-account-settings .account-label-opt { color: var(--muted); }
+.launch-account-settings .account-input,
+.launch-account-settings .account-textarea {
+  width: 100%; font-family: var(--sans); font-size: var(--fs-14);
+  color: var(--ink); background: var(--surface2);
+  border: var(--bw) solid var(--line2); border-radius: var(--r-2);
+  padding: 9px var(--sp-6); outline: none;
+}
+.launch-account-settings .account-input:focus,
+.launch-account-settings .account-textarea:focus { border-color: var(--moss); }
+.launch-account-settings .account-textarea {
+  min-height: 90px; resize: vertical;
+  font-size: var(--fs-13-5); line-height: var(--lh-prose);
+}
+.launch-account-settings .account-textarea::placeholder { color: var(--muted); opacity: .8; }
+.launch-account-settings .account-hint {
+  font-family: var(--mono); font-size: var(--fs-10-5); color: var(--muted);
+}
+.launch-account-settings .account-file {
+  font-family: var(--mono); font-size: var(--fs-11); color: var(--muted);
+}
+.launch-account-settings .account-file::file-selector-button {
+  font-family: var(--sans); font-weight: 600; font-size: var(--fs-12);
+  color: var(--ink); background: var(--surface);
+  border: var(--bw) solid var(--line2); border-radius: var(--r-2);
+  padding: var(--sp-3) var(--sp-6); margin-right: var(--sp-5); cursor: pointer;
+}
+.launch-account-settings .account-file::file-selector-button:hover { background: var(--surface2); }
+
+/* Avatar preview: fixed square tile; the letter-tile fallback div centres
+   its initial (its legacy utility class names are inert here). */
+.launch-account-settings .account-avatar-row {
+  display: flex; gap: var(--sp-7); align-items: center;
+}
+.launch-account-settings .account-avatar {
+  width: 56px; height: 56px; flex: none;
+  border: var(--bw) solid var(--line2); border-radius: var(--r-3);
+  background: var(--surface3); object-fit: cover; overflow: hidden;
+  display: flex; align-items: center; justify-content: center;
+  font-weight: 700; font-size: var(--fs-19); color: var(--ink);
+}
+.launch-account-settings .account-avatar-ctl {
+  display: flex; flex-direction: column; gap: var(--sp-3); min-width: 0;
+}
+
+/* The analytics panel's button row (plain div inside its .account-form). */
+.launch-account-settings [data-analytics-settings] .account-form > div {
+  display: flex; gap: var(--sp-4);
+}
+
+/* ---- Buttons ----------------------------------------------------------------- */
+
+/* Moss primary; quiet bordered secondary; text-and-border danger that only
+   fills on hover (accents are deliberate, not decorative). The data-export
+   anchor shares the button classes, hence inline-flex + no underline. */
+.launch-account-settings .account-btn {
+  display: inline-flex; align-items: center; gap: var(--sp-3);
+  cursor: pointer; text-decoration: none;
+  font-family: var(--sans); font-weight: 600; font-size: var(--fs-12-5);
+  color: #fff; background: var(--moss);
+  border: var(--bw) solid var(--moss); border-radius: var(--r-2);
+  padding: var(--sp-4) var(--sp-8);
+}
+.launch-account-settings .account-btn:hover { background: var(--forest); border-color: var(--forest); }
+.launch-account-settings .account-btn--secondary {
+  color: var(--ink); background: var(--surface); border-color: var(--line2);
+}
+.launch-account-settings .account-btn--secondary:hover { background: var(--surface2); border-color: var(--line2); }
+.launch-account-settings .account-btn--danger {
+  color: var(--danger); background: var(--surface); border-color: var(--danger);
+}
+.launch-account-settings .account-btn--danger:hover { color: #fff; background: var(--danger); }

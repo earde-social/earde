@@ -1,0 +1,815 @@
+/* Connected projects (ccp-*) and communities (ccc-*): the same fragments on
+   the community home, the structured overview and the network page. */
+:is(.launch-community-overview, .launch-community-network,
+    .launch-flat-community) .ccp-section {
+  border: var(--bw) solid var(--line); border-radius: var(--r-3);
+  background: var(--surface); overflow: hidden;
+}
+:is(.launch-community-overview, .launch-community-network,
+    .launch-flat-community) .ccp-title {
+  font-family: var(--mono); font-size: var(--fs-10-5); font-weight: 600;
+  letter-spacing: var(--ls-kicker); text-transform: uppercase; color: var(--muted);
+  margin: 0; padding: var(--sp-6) var(--sp-8) 2px;
+}
+:is(.launch-community-overview, .launch-community-network,
+    .launch-flat-community) .ccp-sub {
+  font-family: var(--mono); font-size: var(--fs-10-5); color: var(--muted);
+  margin: 0; padding: 0 var(--sp-8) var(--sp-6);
+  border-bottom: var(--bw) solid var(--line);
+}
+:is(.launch-community-overview, .launch-community-network,
+    .launch-flat-community) .ccp-project {
+  background: var(--surface); padding: 11px var(--sp-7); min-width: 0;
+}
+:is(.launch-community-overview, .launch-community-network,
+    .launch-flat-community) .ccp-identity p { margin: 0; }
+:is(.launch-community-overview, .launch-community-network,
+    .launch-flat-community) .ccp-kind {
+  font-size: var(--fs-11); color: var(--muted); margin-top: var(--sp-1);
+}
+:is(.launch-community-overview, .launch-community-network,
+    .launch-flat-community) .ccp-namespace,
+:is(.launch-community-overview, .launch-community-network,
+    .launch-flat-community) .ccp-verification,
+:is(.launch-community-overview, .launch-community-network,
+    .launch-flat-community) .ccp-connected {
+  font-family: var(--mono); font-size: var(--fs-10-5); color: var(--muted);
+  margin-top: var(--sp-1);
+}
+:is(.launch-community-overview, .launch-community-network,
+    .launch-flat-community) .ccp-website {
+  font-size: var(--fs-11); margin-top: var(--sp-1);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+:is(.launch-community-overview, .launch-community-network,
+    .launch-flat-community) .ccp-website-link { color: var(--slate); }
+:is(.launch-community-overview, .launch-community-network,
+    .launch-flat-community) .ccp-repos { list-style: none; margin: var(--sp-2) 0 0; padding: 0; }
+:is(.launch-community-overview, .launch-community-network,
+    .launch-flat-community) .ccp-repo-link { color: var(--slate); }
+:is(.launch-community-overview, .launch-community-network,
+    .launch-flat-community) .ccp-repo-name { color: var(--muted); }
+:is(.launch-community-overview, .launch-community-network,
+    .launch-flat-community) .ccp-marker {
+  font-family: var(--mono); font-size: var(--fs-9); color: var(--muted);
+  border: var(--bw) solid var(--line2); border-radius: var(--r-6); padding: 0 5px;
+}
+:is(.launch-community-overview, .launch-community-network,
+    .launch-flat-community) .ccp-primary { color: var(--moss); border-color: var(--moss); }
+:is(.launch-community-overview, .launch-community-network,
+    .launch-flat-community) .ccc-section {
+  border: var(--bw) solid var(--line); border-radius: var(--r-3);
+  background: var(--surface); overflow: hidden;
+}
+:is(.launch-community-overview, .launch-community-network,
+    .launch-flat-community) .ccc-title {
+  font-family: var(--mono); font-size: var(--fs-10-5); font-weight: 600;
+  letter-spacing: var(--ls-kicker); text-transform: uppercase; color: var(--muted);
+  margin: 0; padding: var(--sp-6) var(--sp-8) 2px;
+}
+:is(.launch-community-overview, .launch-community-network,
+    .launch-flat-community) .ccc-sub {
+  font-family: var(--mono); font-size: var(--fs-10-5); color: var(--muted);
+  margin: 0; padding: 0 var(--sp-8) var(--sp-6);
+  border-bottom: var(--bw) solid var(--line);
+}
+:is(.launch-community-overview, .launch-community-network,
+    .launch-flat-community) .ccc-communities {
+  list-style: none; margin: 0; padding: 0;
+  display: flex; flex-direction: column; gap: var(--bw);
+  background: var(--line);
+}
+:is(.launch-community-overview, .launch-community-network,
+    .launch-flat-community) .ccc-community {
+  background: var(--surface); padding: 11px var(--sp-7); min-width: 0;
+}
+:is(.launch-community-overview, .launch-community-network,
+    .launch-flat-community) .ccc-name {
+  display: block; margin: 0; font-family: var(--sans); font-weight: 600;
+  font-size: var(--fs-13-5); color: var(--ink); overflow-wrap: anywhere;
+}
+:is(.launch-community-overview, .launch-community-network,
+    .launch-flat-community) a.ccc-name:hover { text-decoration: underline; }
+
+/* ==========================================================================
+   EARDE INTEGRATION — /c/:slug/setup only
+   Scoped beneath body.launch-community-publication (GET /c/:slug/setup and
+   every re-render POST /c/:slug/publish produces: 422 validation, 409
+   conflict, and the stale-CSRF 403). Exists only because the real
+   publication page cannot emit the reference markup exactly:
+   - the feature fragment beginning at <div class='create-shell'> is a
+     byte-exact slicing marker for the test suites, so the existing ncp-* /
+     create-* markup is styled in place — the mockup's option-card and rows
+     anatomy is recreated over the pinned form, never rewritten onto new
+     markup;
+   - the handoff's community-setup reference is the mockup flow's
+     post-publication "Complete" celebration (checklist, settings links,
+     Open /c/… buttons); the real route is the Configure step — the
+     review-and-publish form — so this section applies the approved
+     Configure grammar (08-project-community-home-new) to the real
+     contract: name, address, description, and exactly the Public/Unlisted
+     radio pair (no Private card, no structure chips, no preview);
+   - the top-bar command field is a link, not a search form (same
+     zero-extra-form trick as the other launch documents);
+   - the onboarding stepper (.steps, approved sheet above) is rendered by
+     the wrapper before the untouched fragment and needs no extra rules;
+   - the notification badge is server-rendered from the request's unread
+     count and is absent entirely at zero, so this scope needs no rule for
+     it (Notification_badge);
+   - the desktop-only gate panel ships in mobile-gate.css; only the
+     launch-scope "hide the app" rule for this route's document hierarchy
+     lives here;
+   - the analytics consent banner markup is shared with the legacy layout
+     (styled once for these routes in routes/chrome.css).
+   ========================================================================== */
+
+/* ---- Refused-submission feedback ------------------------------------------ */
+
+/* One-time feedback: a flat 1px danger-tinted notice — every ncp variant on
+   this route (validation, conflict, stale form, publication failure) reports
+   a refused submission. Never a shadowed alert. */
+.launch-community-publication .ncp-alert {
+  border: var(--bw) solid var(--danger); border-radius: var(--r-2);
+  background: color-mix(in srgb, var(--danger) 8%, var(--surface));
+  color: var(--ink); font-size: var(--fs-13); line-height: var(--lh-prose);
+  padding: 13px var(--sp-8); margin-bottom: var(--sp-8);
+}
+
+/* ---- Connected-project identity ------------------------------------------- */
+
+/* The project this community is the home of: the read-only surface2 card
+   idiom — serif name over mono facts, the factual GitHub-verification line
+   in moss mono with a decorative check drawn as pseudo-content (the copy
+   itself is pinned). */
+.launch-community-publication .ncp-project {
+  border: var(--bw) solid var(--line); border-radius: var(--r-4);
+  background: var(--surface2); padding: var(--sp-8) var(--sp-9);
+  margin-bottom: var(--sp-8);
+}
+.launch-community-publication .ncp-project-name {
+  font-family: var(--serif); font-weight: 600; font-size: var(--fs-19);
+  color: var(--ink); margin-bottom: var(--sp-2);
+}
+.launch-community-publication .ncp-project-meta {
+  font-family: var(--mono); font-size: var(--fs-12); color: var(--muted);
+}
+.launch-community-publication .ncp-project-note {
+  font-family: var(--mono); font-size: var(--fs-12); color: var(--moss);
+  margin-top: var(--sp-2);
+}
+.launch-community-publication .ncp-project-note::before { content: '\2713\00a0'; }
+
+/* ---- Draft state and publication consequences ----------------------------- */
+
+/* Where this community stands: consequences of publishing — dashed frame,
+   per the approved system (solid = status, dashed = consequence). */
+.launch-community-publication .ncp-explain {
+  border: var(--bw) dashed var(--line2); border-radius: var(--r-3);
+  background: var(--surface); padding: var(--sp-7) var(--sp-8);
+  margin-bottom: var(--sp-8);
+}
+.launch-community-publication .ncp-explain-title {
+  font-family: var(--mono); font-size: var(--fs-10-5); font-weight: 600;
+  letter-spacing: var(--ls-kicker); text-transform: uppercase;
+  color: var(--muted); margin-bottom: var(--sp-4);
+}
+.launch-community-publication .ncp-explain-list li {
+  font-size: var(--fs-12-5); color: var(--muted); line-height: var(--lh-prose);
+  padding-left: var(--sp-6); position: relative; margin-bottom: var(--sp-2);
+}
+.launch-community-publication .ncp-explain-list li::before {
+  content: '\00B7'; position: absolute; left: 0; color: var(--moss);
+  font-weight: 700;
+}
+.launch-community-publication .ncp-explain-list li:last-child { margin-bottom: 0; }
+
+/* The two discovery choices, factually explained before the radio pair: the
+   bordered .rows rhythm — one hairline-separated row per choice, the choice
+   name in ink, the indexing consequence in muted prose, noindex as a mono
+   fact. */
+.launch-community-publication .ncp-choices { margin-bottom: var(--sp-9); }
+.launch-community-publication .ncp-choices-title {
+  font-family: var(--mono); font-size: var(--fs-10-5); font-weight: 600;
+  letter-spacing: var(--ls-kicker); text-transform: uppercase;
+  color: var(--muted); margin-bottom: var(--sp-4);
+}
+.launch-community-publication .ncp-choices-list {
+  border: var(--bw) solid var(--line); border-radius: var(--r-4);
+  background: var(--surface); overflow: hidden;
+}
+.launch-community-publication .ncp-choices-list li {
+  border-bottom: var(--bw) solid var(--line);
+  padding: var(--sp-6) var(--sp-8);
+  font-size: var(--fs-12-5); color: var(--muted); line-height: var(--lh-prose);
+}
+.launch-community-publication .ncp-choices-list li:last-child { border-bottom: 0; }
+.launch-community-publication .ncp-choices-list strong { color: var(--ink); }
+.launch-community-publication .ncp-choices-list code {
+  font-family: var(--mono); font-size: var(--fs-11); color: var(--ink);
+  background: var(--surface2); border-radius: var(--r-1); padding: 0 4px;
+}
+
+/* ---- Identity form -------------------------------------------------------- */
+
+/* Identity fields: mono fact labels over inset sans controls; the community
+   address stays mono — the value is a URL fact. */
+.launch-community-publication .ncp-field {
+  display: block; font-family: var(--mono); font-size: var(--fs-11);
+  color: var(--muted); margin-bottom: var(--sp-8);
+}
+.launch-community-publication .ncp-field input,
+.launch-community-publication .ncp-field textarea {
+  display: block; width: 100%; margin-top: 5px;
+  font-family: var(--sans); font-size: var(--fs-14); color: var(--ink);
+  background: var(--surface); border: var(--bw) solid var(--line2);
+  border-radius: var(--r-2); padding: 9px var(--sp-6); outline: none;
+}
+.launch-community-publication .ncp-field input:focus,
+.launch-community-publication .ncp-field textarea:focus {
+  border-color: var(--moss);
+}
+.launch-community-publication .ncp-field input[name='community_slug'] {
+  font-family: var(--mono); font-size: var(--fs-13);
+}
+.launch-community-publication .ncp-field textarea {
+  min-height: 110px; resize: vertical;
+  font-size: var(--fs-13-5); line-height: var(--lh-prose);
+}
+/* The /c/<address> semantics, as a mono field hint tucked under the address
+   control (the hint follows that field in the pinned markup). */
+.launch-community-publication .ncp-hint {
+  font-family: var(--mono); font-size: var(--fs-10-5); color: var(--muted);
+  line-height: var(--lh-prose); margin: calc(-1 * var(--sp-5)) 0 var(--sp-8);
+}
+
+/* Publish as: mono kicker legend over the Public / Unlisted pair as flat
+   bordered radio cards — the whole label is the hit target, the real radio
+   stays visible (moss accent), and selection is echoed by a moss row tint.
+   No third card exists: the page offers no Private shape. */
+.launch-community-publication .ncp-visibility {
+  border: 0; padding: 0; margin: 0 0 var(--sp-4);
+}
+.launch-community-publication .ncp-legend {
+  font-family: var(--mono); font-size: var(--fs-10-5); font-weight: 600;
+  letter-spacing: var(--ls-kicker); text-transform: uppercase;
+  color: var(--muted); padding: 0; margin-bottom: var(--sp-4);
+}
+.launch-community-publication .ncp-radio {
+  display: block; cursor: pointer;
+  border: var(--bw) solid var(--line2); border-radius: var(--r-3);
+  background: var(--surface); padding: var(--sp-6) var(--sp-8);
+  margin-bottom: var(--sp-4);
+  font-weight: 600; font-size: var(--fs-13-5); color: var(--ink);
+}
+.launch-community-publication .ncp-radio:hover { background: var(--surface2); }
+.launch-community-publication .ncp-radio input[type='radio'] {
+  accent-color: var(--moss); margin: 0 var(--sp-4) 0 0; vertical-align: -1px;
+}
+.launch-community-publication .ncp-radio:has(input:checked) {
+  border-color: var(--moss);
+  background: color-mix(in srgb, var(--moss) 10%, var(--surface));
+}
+.launch-community-publication .ncp-radio:has(input:checked):hover {
+  background: color-mix(in srgb, var(--moss) 13%, var(--surface));
+}
+
+/* The one strong publication action. Inline (the reference footer button),
+   never a full-bleed bar: create-btn--block is pinned markup, restyled here.
+   Moss — publication is the primary action of the whole onboarding flow. */
+
+.launch-community-publication .create-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  gap: var(--sp-3); font-family: var(--sans); font-weight: 600;
+  font-size: var(--fs-13); color: #fff;
+  background: var(--moss); border: var(--bw) solid var(--moss);
+  border-radius: var(--r-3); padding: 9px var(--sp-10); cursor: pointer;
+}
+
+/* ==========================================================================
+   EARDE INTEGRATION — structured /c/:slug overview only
+   Scoped beneath body.launch-community-overview: the structured-community
+   branch of GET /c/:slug (Pages.community_overview_page). Flat communities
+   (sections_enabled = false) render Pages.community_page and are scoped by
+   their own section below; channel/section/thread pages likewise. Exists
+   only because the real overview cannot emit the reference markup exactly:
+   - the connected-projects fragment (ccp-*) is byte-pinned by its fragment
+     suites (tag allow-list, counts, DOM order, escaping), so it is spliced
+     verbatim and skinned here onto the approved panel + 1px-gap
+     project-grid anatomy — no markup inside the fragment changes;
+   - the join/leave controls are the legacy POST forms (exact fields)
+     restyled; the reference's static Joined button is the real Leave form;
+   - the notification badge is server-rendered from the request's unread
+     count and is absent entirely at zero, so this scope needs no rule for
+     it (Notification_badge);
+   - the desktop-only gate panel ships in mobile-gate.css; only the
+     launch-scope "hide the app" rule for this route lives here;
+   - the analytics consent banner markup is shared with the legacy layout
+     (styled once for these routes in routes/chrome.css).
+   ========================================================================== */
+
+/* ---- Header band ----------------------------------------------------------- */
+
+/* Optional banner (real stored image only; no gradient placeholder). */
+.launch-community-overview .launch-banner {
+  border-bottom: var(--bw) solid var(--line2); background: var(--surface2);
+}
+.launch-community-overview .launch-banner-img {
+  display: block; width: 100%; max-height: 180px; object-fit: cover;
+}
+
+/* Identity column mirrors the reference's inline flex:1;min-width:0. */
+.launch-community-overview .launch-chead-id { flex: 1; min-width: 0; }
+
+/* The action column holds real forms (join/leave); each form is one row and
+   its submit control fills it like the reference's static buttons. */
+.launch-community-overview .chead__actions form { display: flex; margin: 0; }
+.launch-community-overview .chead__actions form .btn { flex: 1; }
+
+/* Leave = the reference's Joined affordance: quiet until hover warns. */
+.launch-community-overview .launch-leave:hover {
+  border-color: var(--danger); color: var(--danger); background: var(--surface);
+}
+
+/* ---- Overview body --------------------------------------------------------- */
+
+.launch-community-overview .launch-overview-body { padding-top: 20px; }
+
+/* Hairline between consecutive rows inside a panel (the section-head already
+   carries its own bottom rule). */
+.launch-community-overview .panel > .project-row + .project-row {
+  border-top: var(--bw) solid var(--line);
+}
+
+/* ---- Community spaces + network groups ------------------------------------
+   Live chat and durable forum structure are the two ways to take part, so
+   they render as equal halves of one composition instead of stacking. The
+   wrapper is emitted by Pages only when both panels exist, so there is no
+   half-empty track to prop up with a count-dependent rule, and a lone surface
+   arrives without a wrapper and simply takes the column. `align-items: start`
+   matches .two-col: two honest card lengths, no stretched dead space. */
+.launch-community-overview .launch-spaces {
+  display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr);
+  gap: var(--sp-11); align-items: start;
+}
+/* Below the ladder's grid-tightening step the main column is too narrow to
+   halve, so the two surfaces stack — still equal siblings, one above the
+   other. (The scope's own gate hides the app entirely under 800px.) */
+@media (max-width: 1023px) {
+  .launch-community-overview .launch-spaces {
+    grid-template-columns: minmax(0,1fr);
+  }
+}
+/* ---- Network entry point (secondary column) --------------------------------
+   The full connection lists live at /c/:slug/network; the home carries two
+   navigation rows. They reuse the panel's own .project-row anatomy — same
+   hairline separation, same hover, same global :focus-visible ring — because
+   they are list links like every other row on this page, not a new control.
+   The count sits against the arrow so the two rows align whatever the label
+   length; the arrow is decorative (aria-hidden in the markup). */
+.launch-community-overview .launch-netrow { padding: 10px var(--sp-7); gap: var(--sp-5); }
+.launch-community-overview .launch-net-label {
+  flex: 1; min-width: 0; font-size: var(--fs-13); color: var(--ink);
+  overflow-wrap: anywhere;
+}
+.launch-community-overview .launch-net-count {
+  font-family: var(--mono); font-size: var(--fs-11-5); color: var(--muted);
+  flex: none;
+}
+.launch-community-overview .launch-net-go {
+  font-family: var(--mono); font-size: var(--fs-11-5); color: var(--muted);
+  flex: none;
+}
+.launch-community-overview .launch-netrow:hover .launch-net-go { color: var(--slate); }
+/* The authorized shortcut into the existing connect flow: a quiet link under
+   the rows, never a second primary action. */
+.launch-community-overview .launch-net-cta {
+  padding: var(--sp-6) var(--sp-7); border-top: var(--bw) solid var(--line);
+  font-size: var(--fs-11);
+}
+
+/* Forum-section rows. */
+.launch-community-overview .launch-secrow { padding: 11px var(--sp-7); }
+.launch-community-overview .launch-sec-sigil {
+  font-family: var(--mono); color: var(--moss); width: 15px; text-align: center;
+  flex: none;
+}
+.launch-community-overview .launch-sec-main { min-width: 0; flex: 1; display: block; }
+/* Half-width columns make an unbroken name long enough to escape the panel,
+   so names wrap; the one-line descriptions below keep their ellipsis. */
+.launch-community-overview .launch-sec-name {
+  display: block; font-weight: 600; font-size: var(--fs-13-5); color: var(--ink);
+  overflow-wrap: anywhere;
+}
+.launch-community-overview .launch-sec-desc {
+  display: block; font-size: var(--fs-11); color: var(--muted);
+  margin-top: var(--sp-1);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.launch-community-overview .launch-sec-count {
+  margin-left: auto; flex: none;
+  font-family: var(--mono); font-size: var(--fs-11); color: var(--muted);
+}
+
+/* Recent durable knowledge rows. */
+.launch-community-overview .launch-postrow { display: block; padding: 12px var(--sp-7); }
+.launch-community-overview .launch-post-meta {
+  display: block; font-family: var(--mono); font-size: var(--fs-10-5);
+  color: var(--muted); margin-bottom: 3px;
+}
+.launch-community-overview .launch-post-sec { color: var(--moss); }
+.launch-community-overview .launch-post-title {
+  display: block; font-weight: 600; font-size: var(--fs-14); color: var(--ink);
+}
+.launch-community-overview .launch-post-foot {
+  display: block; font-family: var(--mono); font-size: var(--fs-10-5);
+  color: var(--muted); margin-top: 4px;
+}
+
+/* Live-channel rows. */
+.launch-community-overview .launch-chanrow { display: block; padding: 9px 14px; }
+.launch-community-overview .launch-chan-line {
+  display: block; font-family: var(--mono); font-size: var(--fs-13); color: var(--ink);
+  overflow-wrap: anywhere;
+}
+.launch-community-overview .launch-chan-hash { color: var(--moss); }
+.launch-community-overview .launch-chan-topic {
+  display: block; font-size: var(--fs-11); color: var(--muted);
+  margin-top: var(--sp-1);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+/* Moderators (usernames only — the page holds no per-mod roles). */
+.launch-community-overview .launch-mods { padding: var(--sp-4) 14px; }
+.launch-community-overview .launch-modrow {
+  display: flex; align-items: center; gap: 9px; padding: var(--sp-2) 0;
+  font-size: var(--fs-13); color: var(--ink); text-decoration: none;
+}
+.launch-community-overview .launch-modrow:hover .launch-mod-name { text-decoration: underline; }
+
+/* Rules / moderation-log panel bodies. */
+.launch-community-overview .launch-rules {
+  font-size: var(--fs-13); color: var(--muted); line-height: var(--lh-prose);
+  white-space: pre-wrap; overflow-wrap: anywhere;
+}
+.launch-community-overview .launch-modlog-desc {
+  font-size: var(--fs-12-5); color: var(--muted); line-height: var(--lh-prose);
+  margin: 0 0 var(--sp-4);
+}
+.launch-community-overview .launch-modlog-link { font-size: var(--fs-11); font-family: var(--mono); }
+
+/* ---- Connected projects (pinned ccp-* fragment, skinned in place) ---------- */
+
+/* The approved 1px-gap project grid: the gutter IS the rule. */
+.launch-community-overview .ccp-projects {
+  list-style: none; margin: 0; padding: 0;
+  display: grid; grid-template-columns: 1fr 1fr; gap: var(--bw);
+  background: var(--line);
+}
+
+/* An odd last cell spans the row so no bare gutter shows through. */
+.launch-community-overview .ccp-project:last-child:nth-child(odd) { grid-column: 1 / -1; }
+
+.launch-community-overview .ccp-name {
+  margin: 0; font-family: var(--sans); font-weight: 600;
+  font-size: var(--fs-13-5); color: var(--ink);
+}
+
+/* Facts are mono. Verification copy states verified/stale/revoked itself, so
+   the shared class keeps a neutral tint — revoked is never dressed moss. */
+
+.launch-community-overview .ccp-repo {
+  font-family: var(--mono); font-size: var(--fs-10-5); color: var(--muted);
+}
+
+/* ==========================================================================
+   EARDE INTEGRATION — public community network page only
+   Scoped beneath body.launch-community-network: GET /c/:slug/network
+   (Community_network_pages.community_network_page), where the complete
+   connected-projects and connected-communities lists live now that the
+   community home carries only a compact entry point with their counts.
+
+   A launch scope is only complete when it carries BOTH halves — the shared
+   chrome (listed for this page class in routes/chrome.css) and anatomy, and
+   its feature skin. The anatomy half below is the sibling community
+   surfaces' recipe, re-scoped. The feature half is the ccp-* and ccc-*
+   skinning the community home applies, written once at the top of this file
+   for every page that renders those fragments: they are byte-pinned by their
+   own suites and spliced verbatim, so every surface must dress identical
+   markup. The two blocks keep their home behavior: projects in the 1px-gutter
+   two-up grid, communities one per full-width row.
+   ========================================================================== */
+
+/* ---- Page anatomy ----------------------------------------------------------- */
+
+.launch-community-network .launch-chead-id { flex: 1; min-width: 0; }
+.launch-community-network .cnet-body { padding-top: 20px; }
+
+/* The authorized shortcut into the existing connect flow, under the intro:
+   compact, and never competing with the page's own content. */
+.launch-community-network .cnet-cta { margin-top: var(--sp-6); }
+
+/* ---- Connected projects (pinned ccp-* fragment, skinned in place) ---------- */
+
+.launch-community-network .ccp-projects {
+  list-style: none; margin: 0; padding: 0;
+  display: grid; grid-template-columns: 1fr 1fr; gap: var(--bw);
+  background: var(--line);
+}
+
+/* An odd last cell spans the row so no bare gutter shows through. */
+.launch-community-network .ccp-project:last-child:nth-child(odd) { grid-column: 1 / -1; }
+
+.launch-community-network .ccp-name {
+  margin: 0; font-family: var(--sans); font-weight: 600;
+  font-size: var(--fs-13-5); color: var(--ink); overflow-wrap: anywhere;
+}
+
+.launch-community-network .ccp-repo {
+  font-family: var(--mono); font-size: var(--fs-10-5); color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+/* Quiet empty state: this page names both destinations whether or not either
+   holds anything, so an empty block keeps its frame and heading and says so
+   in one line. */
+.launch-community-network .ccp-empty,
+.launch-community-network .ccc-empty {
+  font-family: var(--mono); font-size: var(--fs-12); color: var(--muted);
+  margin: 0; padding: var(--sp-7) var(--sp-8);
+}
+
+/* ==========================================================================
+   EARDE INTEGRATION — flat community home only
+   Scoped beneath body.launch-flat-community: the flat (sections_enabled =
+   false) branch of GET /c/:slug (Pages.community_page). The structured
+   branch keeps its own earlier section; nothing here may leak outside this
+   root. Exists only because the real single-feed page cannot emit the
+   reference markup exactly:
+   - the feed rows are the untouched shared Components.render_post markup
+     (also used by the legacy / and /all feeds, which must not change), so
+     their legacy utility classes are inert here and the whole row anatomy —
+     vote column, meta line, title, preview, footer — is re-provided by
+     these rules and skinned onto the launch thread-ledger language;
+   - the vote buttons keep the legacy text-orange-500 / text-[#69C3D2] state
+     classes the optimistic-vote script toggles; they map to the clay and
+     slate accents exactly as on the other converted vote surfaces;
+   - the Rule A/B/C moderation dialogs and ban dialogs are legacy <dialog>
+     markup (Tailwind classes inert); they are kept readable and usable;
+   - the connected-projects fragment (ccp-*) is byte-pinned by its fragment
+     suites, so it is spliced verbatim and skinned in place (single-column:
+     it sits in the narrow side stack on this route);
+   - the notification badge is server-rendered from the request's unread
+     count and is absent entirely at zero, so this scope needs no rule for
+     it (Notification_badge);
+   - the desktop-only gate panel ships in mobile-gate.css; only the
+     launch-scope "hide the app" rule for this route lives here;
+   - the analytics consent banner markup is shared with the legacy layout
+     (styled once for these routes in routes/chrome.css).
+   ========================================================================== */
+
+/* ---- Header band ----------------------------------------------------------- */
+
+/* Optional banner (real stored image only; no gradient placeholder). */
+.launch-flat-community .launch-banner {
+  border-bottom: var(--bw) solid var(--line2); background: var(--surface2);
+}
+.launch-flat-community .launch-banner-img {
+  display: block; width: 100%; max-height: 180px; object-fit: cover;
+}
+
+/* Identity column mirrors the reference's inline flex:1;min-width:0. */
+.launch-flat-community .launch-chead-id { flex: 1; min-width: 0; }
+
+/* The action column holds real forms (join/leave); each form is one row and
+   its submit control fills it like the reference's static buttons. */
+.launch-flat-community .chead__actions form { display: flex; margin: 0; }
+.launch-flat-community .chead__actions form .btn { flex: 1; }
+
+/* Leave = the reference's Joined affordance: quiet until hover warns. */
+.launch-flat-community .launch-leave:hover {
+  border-color: var(--danger); color: var(--danger); background: var(--surface);
+}
+
+/* ---- Feed column ------------------------------------------------------------ */
+
+.launch-flat-community .launch-flat-body { padding-top: 20px; }
+.launch-flat-community .launch-flat-sortbar { margin-top: 0; padding-bottom: 12px; }
+.launch-flat-community .launch-pager {
+  display: flex; align-items: center; justify-content: center; gap: var(--sp-7);
+}
+
+/* The ledger: flat rows over hairlines, no cards. Rows are the untouched
+   legacy render_post markup — every rule below re-provides its layout. */
+.launch-flat-community .launch-flat-ledger {
+  border-top: var(--bw) solid var(--line);
+}
+.launch-flat-community .launch-flat-ledger > .cursor-pointer {
+  display: flex; gap: var(--sp-7); padding: 13px var(--sp-3);
+  border-bottom: var(--bw) solid var(--line); cursor: pointer;
+}
+.launch-flat-community .launch-flat-ledger > .cursor-pointer:hover { background: var(--surface2); }
+
+/* Mono empty state (legacy markup, its utility classes inert). */
+.launch-flat-community .launch-flat-ledger > .border-dashed {
+  border: var(--bw) dashed var(--line2); border-radius: var(--r-2);
+  margin-top: var(--sp-7); padding: 36px var(--sp-10); text-align: center;
+  font-family: var(--mono); font-size: var(--fs-12-5); color: var(--muted);
+  cursor: default;
+}
+
+/* Vote column: ▲ muted / ▼ line2 (deliberately asymmetric), mono score. */
+.launch-flat-community .launch-flat-ledger .cursor-pointer > div:first-child {
+  flex: none; width: 30px; display: flex; flex-direction: column;
+  align-items: center; gap: var(--sp-1); padding-top: 2px; cursor: default;
+}
+.launch-flat-community .launch-flat-ledger .cursor-pointer > div:first-child form {
+  margin: 0; padding: 0; display: flex;
+}
+.launch-flat-community .launch-flat-ledger .cursor-pointer > div:first-child button,
+.launch-flat-community .launch-flat-ledger .cursor-pointer > div:first-child > a {
+  background: none; border: 0; padding: 0; cursor: pointer;
+  font-size: var(--fs-12); line-height: 1; color: var(--line2);
+  text-decoration: none;
+}
+.launch-flat-community .launch-flat-ledger .cursor-pointer > div:first-child form:first-child button,
+.launch-flat-community .launch-flat-ledger .cursor-pointer > div:first-child > a:first-child {
+  color: var(--muted);
+}
+.launch-flat-community .launch-flat-ledger .cursor-pointer > div:first-child button:hover,
+.launch-flat-community .launch-flat-ledger .cursor-pointer > div:first-child > a:hover {
+  color: var(--ink);
+}
+/* Optimistic-vote state classes toggled by the shared script. Full-chain
+   selectors so they outweigh the muted/line2 column defaults above. */
+.launch-flat-community .launch-flat-ledger .cursor-pointer > div:first-child form button.text-orange-500 { color: var(--clay); }
+.launch-flat-community .launch-flat-ledger .cursor-pointer > div:first-child form button.text-\[\#69C3D2\] { color: var(--slate); }
+.launch-flat-community .launch-flat-ledger .cursor-pointer > div:first-child > span {
+  font-family: var(--mono); font-size: var(--fs-12); font-weight: 700;
+  color: var(--ink);
+}
+
+/* Main column of a row. */
+.launch-flat-community .launch-flat-ledger .cursor-pointer > .flex-1 { flex: 1; min-width: 0; }
+
+/* Meta line: mono facts; the community self-link a shade heavier. */
+.launch-flat-community .launch-flat-ledger .cursor-pointer > .flex-1 > div:first-child {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 5px;
+  font-family: var(--mono); font-size: var(--fs-11); color: var(--muted);
+}
+.launch-flat-community .launch-flat-ledger .cursor-pointer > .flex-1 > div:first-child a {
+  color: var(--muted); text-decoration: none;
+}
+.launch-flat-community .launch-flat-ledger .cursor-pointer > .flex-1 > div:first-child a:first-child {
+  font-weight: 600; color: var(--ink);
+}
+.launch-flat-community .launch-flat-ledger .cursor-pointer > .flex-1 > div:first-child a:hover {
+  color: var(--ink); text-decoration: underline;
+}
+.launch-flat-community .launch-flat-ledger .text-gray-300 { color: var(--line2); }
+.launch-flat-community .launch-flat-ledger .mod-badge {
+  font-family: var(--mono); font-size: var(--fs-9); color: var(--moss);
+  border: var(--bw) solid currentColor; border-radius: var(--r-1); padding: 0 3px;
+}
+.launch-flat-community .launch-flat-ledger .text-gray-400.italic { font-style: italic; }
+
+/* Moderation controls in the meta line: mono outline chips. Amber (mod) maps
+   to ochre, red (admin) to danger, both text-and-border only. Child-of-span
+   selectors so the buttons INSIDE the sibling <dialog>s are never caught. */
+.launch-flat-community .launch-flat-ledger .cursor-pointer > .flex-1 > div:first-child span > button,
+.launch-flat-community .launch-flat-ledger .cursor-pointer > .flex-1 > div:first-child span > form > button {
+  cursor: pointer; background: var(--surface); color: var(--muted);
+  border: var(--bw) solid var(--line2); border-radius: var(--r-1);
+  font-family: var(--mono); font-size: var(--fs-10); line-height: 1.7;
+  padding: 0 5px;
+}
+.launch-flat-community .launch-flat-ledger .cursor-pointer > .flex-1 > div:first-child span > button:hover,
+.launch-flat-community .launch-flat-ledger .cursor-pointer > .flex-1 > div:first-child span > form > button:hover {
+  color: var(--ink); border-color: var(--muted);
+}
+.launch-flat-community .launch-flat-ledger .cursor-pointer > .flex-1 > div:first-child span > button.text-amber-700 {
+  color: var(--ochre); border-color: currentColor; background: none;
+}
+.launch-flat-community .launch-flat-ledger .cursor-pointer > .flex-1 > div:first-child span > button.text-red-700 {
+  color: var(--danger); border-color: currentColor; background: none;
+}
+.launch-flat-community .launch-flat-ledger .cursor-pointer > .flex-1 > div:first-child span > span.text-red-500 {
+  font-family: var(--mono); font-size: var(--fs-10); color: var(--danger);
+}
+.launch-flat-community .launch-flat-ledger dialog .text-red-500 { color: var(--danger); }
+.launch-flat-community .launch-flat-ledger .cursor-pointer form.inline { display: inline-flex; margin: 0; }
+
+/* Title, link chip, image, preview. (Title scoped as a direct child so the
+   <h3> inside the moderation dialogs keeps its own dialog rules.) */
+.launch-flat-community .launch-flat-ledger .cursor-pointer > .flex-1 > h3 {
+  margin-top: 2px; font-size: var(--fs-15-5); font-weight: 600;
+  line-height: var(--lh-title);
+}
+.launch-flat-community .launch-flat-ledger .cursor-pointer > .flex-1 > h3 a {
+  color: var(--ink); text-decoration: none; overflow-wrap: anywhere;
+}
+.launch-flat-community .launch-flat-ledger .cursor-pointer > .flex-1 > h3 a:hover { color: var(--moss); }
+.launch-flat-community .launch-flat-ledger .cursor-pointer > .flex-1 > .z-10 a {
+  font-family: var(--mono); font-size: var(--fs-11); color: var(--slate);
+  text-decoration: none; overflow-wrap: anywhere;
+}
+.launch-flat-community .launch-flat-ledger .cursor-pointer > .flex-1 > .z-10 a:hover { text-decoration: underline; }
+.launch-flat-community .launch-flat-ledger .cursor-pointer > .flex-1 > a > img {
+  display: block; max-width: 100%; max-height: 320px; object-fit: contain;
+  background: var(--surface3); border: var(--bw) solid var(--line);
+  border-radius: var(--r-2); margin-top: var(--sp-4);
+}
+.launch-flat-community .launch-flat-ledger .cursor-pointer p.ph-mask {
+  margin-top: var(--sp-2); font-size: var(--fs-13); line-height: var(--lh-ui);
+  color: var(--muted); overflow-wrap: anywhere;
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* Row footer: comments link + Share, mono, gap 14. */
+.launch-flat-community .launch-flat-ledger .cursor-pointer > .flex-1 > div:last-child {
+  display: flex; align-items: center; gap: 14px; margin-top: var(--sp-3);
+  font-family: var(--mono); font-size: var(--fs-11); color: var(--muted);
+}
+.launch-flat-community .launch-flat-ledger .cursor-pointer > .flex-1 > div:last-child a {
+  color: var(--muted); text-decoration: none; display: inline-flex;
+  align-items: center; gap: 4px;
+}
+.launch-flat-community .launch-flat-ledger .cursor-pointer > .flex-1 > div:last-child a:hover { color: var(--ink); }
+.launch-flat-community .launch-flat-ledger .cursor-pointer > .flex-1 > div:last-child button {
+  background: none; border: 0; padding: 0; cursor: pointer;
+  font-family: var(--mono); font-size: var(--fs-11); color: var(--muted);
+}
+.launch-flat-community .launch-flat-ledger .cursor-pointer > .flex-1 > div:last-child button:hover { color: var(--ink); }
+.launch-flat-community .launch-flat-ledger .text-emerald-600 { color: var(--moss); }
+
+/* ---- Side panels ------------------------------------------------------------ */
+
+/* Moderators (usernames only — the page holds no per-mod roles). */
+.launch-flat-community .launch-mods { padding: var(--sp-4) 14px; }
+.launch-flat-community .launch-modrow {
+  display: flex; align-items: center; gap: 9px; padding: var(--sp-2) 0;
+  font-size: var(--fs-13); color: var(--ink); text-decoration: none;
+}
+.launch-flat-community .launch-modrow:hover .launch-mod-name { text-decoration: underline; }
+.launch-flat-community .launch-manage-mods {
+  padding: var(--sp-4) 14px var(--sp-6);
+  border-top: var(--bw) solid var(--line);
+}
+.launch-flat-community .launch-manage-mods a { font-size: var(--fs-11); }
+
+/* Rules panel body. */
+.launch-flat-community .launch-rules {
+  font-size: var(--fs-13); color: var(--muted); line-height: var(--lh-prose);
+  white-space: pre-wrap; overflow-wrap: anywhere;
+}
+
+/* Mod tools: factual state line + the real toggle form. */
+.launch-flat-community .launch-modtool-state {
+  font-family: var(--mono); font-size: var(--fs-11); color: var(--muted);
+  margin: 0 0 var(--sp-5);
+}
+.launch-flat-community .panel__body form { margin: 0; }
+
+/* ---- Connected projects (pinned ccp-* fragment, skinned in place) ---------- */
+
+/* The fragment's own <section> becomes the panel frame; in this route's
+   narrow side stack the grid collapses to one column. */
+
+.launch-flat-community .ccp-projects {
+  list-style: none; margin: 0; padding: 0;
+  display: grid; grid-template-columns: 1fr; gap: var(--bw);
+  background: var(--line);
+}
+
+.launch-flat-community .ccp-name {
+  margin: 0; font-family: var(--sans); font-weight: 600;
+  font-size: var(--fs-13-5); color: var(--ink);
+}
+
+.launch-flat-community .ccp-repo {
+  font-family: var(--mono); font-size: var(--fs-10-5); color: var(--muted);
+}
+
+/* ---- Moderation dialogs + shared confirm modal ------------------------------- */
+
+/* Legacy moderation <dialog>s (Tailwind classes inert here): keep them
+   readable and usable; mod/admin-only surface. */
+.launch-flat-community dialog {
+  border: var(--bw) solid var(--line2); border-radius: var(--r-4);
+  padding: var(--sp-9); max-width: 28rem; width: calc(100% - 2rem);
+  background: var(--surface); color: var(--ink); cursor: default;
+}
+
+.launch-flat-community dialog h3 { font-size: var(--fs-15); font-weight: 700; }
+.launch-flat-community dialog p { font-size: var(--fs-12); color: var(--muted); margin-top: var(--sp-1); }
+
+.launch-flat-community dialog label { display: flex; flex-direction: column; gap: var(--sp-2); }
+.launch-flat-community dialog label span { font-size: var(--fs-12-5); font-weight: 600; }
+
+.launch-flat-community dialog form > div.flex { display: flex; justify-content: flex-end; gap: var(--sp-4); }
+.launch-flat-community dialog button {
+  cursor: pointer; border: var(--bw) solid var(--line2);
+  border-radius: var(--r-2); background: var(--surface); color: var(--ink);
+  padding: var(--sp-3) var(--sp-7); font-size: var(--fs-12); font-weight: 600;
+  font-family: var(--sans); line-height: normal;
+}

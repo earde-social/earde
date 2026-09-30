@@ -1,0 +1,624 @@
+/* ==========================================================================
+   EARDE INTEGRATION — section and thread knowledge flow only
+   Scoped beneath body.launch-community-section (GET /c/:slug/s/:section_slug,
+   Pages.community_section_shell_page) and body.launch-community-thread
+   (GET /c/:slug/t/:id-:slug, Pages.thread_shell_page). Settings, modlog,
+   profiles and every other surface have their own scoped sections. The
+   retired shell.css no longer exists, so its load-bearing layout rules are
+   re-provided here 1:1 (same boxes, same scroll owner, same flex chain) and
+   re-skinned onto the approved Cartographic grammar. Exists only because the
+   real pages cannot emit reference markup exactly:
+   - section rows come from the shared render_forum_row renderer, whose markup
+     is a load-bearing contract (optimistic-vote DOM traversal, replay-masking
+     classes .ft-title/.ft-preview, the ⋯ moderation menu, ban/remove
+     dialogs); rows are skinned here, never rewritten;
+   - the optimistic-vote script toggles legacy Tailwind colour class names on
+     the vote buttons; those exact names are mapped to launch accents here;
+   - thread.js and the reply/collapse toggles flip the legacy `hidden` class
+     on comment content/children/reply forms, so a route-scoped equivalent is
+     defined beneath the THREAD root only (plus the badge-element rule both
+     routes share) — still no global .hidden utility;
+   - the shared confirm-modal script composes its overlay from legacy utility
+     class names (inert without Tailwind); the overlay, card and buttons are
+     styled via their stable ids and class pairs;
+   - the security-critical mod/admin/ban <dialog>s keep their legacy Tailwind
+     markup verbatim; they are kept readable and usable via element rules;
+   - the desktop-only gate panel ships in mobile-gate.css; only these routes'
+     launch-scope "hide the app" rule lives here;
+   - the analytics consent banner markup is shared with the legacy layout
+     (styled once for these routes in routes/chrome.css).
+   Section-only compatibility rules sit beneath launch-community-section,
+   thread/comment ones beneath launch-community-thread, shared chrome under
+   grouped selectors of the two roots.
+   ========================================================================== */
+
+/* ---- Main pane frame (both routes; load-bearing, from shell.css) ------------ */
+
+/* .cs-main fills the shell's flexible center column; its panes must remain
+   DIRECT children so the height chain resolves (section: forum head →
+   scrolling list; thread: single scroll pane). Never interpose a wrapper. */
+.launch-community-section .cs-main,
+.launch-community-thread .cs-main {
+  flex: 1; min-width: 0; display: flex; flex-direction: column;
+  overflow: hidden; background: var(--surface);
+}
+
+/* Shared breadcrumb (section head + thread topbar): facts are mono. */
+.launch-community-section .fh-crumb,
+.launch-community-thread .fh-crumb {
+  font-family: var(--mono); font-size: var(--fs-11-5); color: var(--muted);
+  margin-bottom: var(--sp-4);
+}
+.launch-community-section .fh-crumb a,
+.launch-community-thread .fh-crumb a { color: var(--muted); }
+.launch-community-section .fh-crumb a:hover,
+.launch-community-thread .fh-crumb a:hover { color: var(--ink); }
+.launch-community-section .fh-crumb b,
+.launch-community-thread .fh-crumb b { color: var(--ink); }
+
+/* Legacy .btn sm/primary/block variants (page furniture markup is preserved;
+   the global launch .btn supplies the base). Order matters: primary after sm. */
+.launch-community-section .btn.sm,
+.launch-community-thread .btn.sm {
+  font-size: var(--fs-12); padding: 5px 10px;
+  color: var(--muted); background: var(--surface); border-color: var(--line2);
+}
+.launch-community-section .btn.sm:hover,
+.launch-community-thread .btn.sm:hover { background: var(--surface2); color: var(--ink); }
+.launch-community-section .btn.primary,
+.launch-community-thread .btn.primary { color: #fff; background: var(--moss); border-color: var(--moss); }
+.launch-community-section .btn.primary:hover,
+.launch-community-thread .btn.primary:hover { filter: brightness(1.06); color: #fff; }
+.launch-community-section .btn.block,
+.launch-community-thread .btn.block { display: flex; width: 100%; }
+
+/* Empty states: a mono sentence, not a poster. */
+.launch-community-section .cs-empty,
+.launch-community-thread .cs-empty {
+  padding: 40px 22px; text-align: center;
+  font-family: var(--mono); font-size: var(--fs-12-5); color: var(--muted);
+}
+
+/* ---- Vote column (both routes): up form · score · optional down form -------- */
+
+/* DOM order is the optimistic-vote script's contract — style only, never
+   reorder. Asymmetric arrows: ▲ muted, ▼ line2 (available, not encouraged). */
+.launch-community-section .cs-vote,
+.launch-community-thread .cs-vote {
+  display: flex; flex-direction: column; align-items: center;
+  width: 30px; flex: none; padding-top: var(--sp-1);
+}
+.launch-community-section .cs-vote form,
+.launch-community-thread .cs-vote form { margin: 0; padding: 0; display: flex; }
+.launch-community-section .cs-vote button,
+.launch-community-section .cs-vote a,
+.launch-community-thread .cs-vote button,
+.launch-community-thread .cs-vote a {
+  background: none; border: 0; cursor: pointer; padding: 0;
+  font-family: var(--mono); font-weight: 700;
+  font-size: var(--fs-13); line-height: 1; color: var(--muted);
+}
+.launch-community-section .cs-vote form:last-child button,
+.launch-community-section .cs-vote a:last-child,
+.launch-community-thread .cs-vote form:last-child button,
+.launch-community-thread .cs-vote a:last-child { color: var(--line2); }
+.launch-community-section .cs-vote-score,
+.launch-community-thread .cs-vote-score {
+  font-family: var(--mono); font-weight: 600; font-size: var(--fs-13);
+  color: var(--ink); margin: 3px 0;
+}
+/* Active-vote colours: the exact legacy class names the vote script toggles
+   (kept after the base arrow rules so equal specificity resolves to these). */
+.launch-community-section .cs-vote form button.text-orange-500,
+.launch-community-thread .cs-vote form button.text-orange-500 { color: var(--clay); }
+.launch-community-section .cs-vote form button.text-\[\#69C3D2\],
+.launch-community-thread .cs-vote form button.text-\[\#69C3D2\] { color: var(--slate); }
+
+/* Author badges rendered by render_author (legacy Tailwind classes inert). */
+.launch-community-section .mod-badge,
+.launch-community-thread .mod-badge {
+  font-family: var(--mono); font-size: var(--fs-9); color: var(--clay);
+  margin-left: 4px;
+}
+
+/* ---- Right rail context blocks (both routes) -------------------------------- */
+
+.launch-community-section .ca-block,
+.launch-community-thread .ca-block {
+  padding: 15px 16px; border-bottom: var(--bw) solid var(--line);
+}
+.launch-community-section .ca-label,
+.launch-community-thread .ca-label {
+  font-family: var(--mono); font-size: var(--fs-10-5); font-weight: 600;
+  letter-spacing: var(--ls-kicker); text-transform: uppercase; color: var(--muted);
+  margin-bottom: var(--sp-5);
+}
+.launch-community-section .ca-grid,
+.launch-community-thread .ca-grid {
+  width: 100%; border-collapse: collapse; font-size: var(--fs-13);
+}
+.launch-community-section .ca-grid td,
+.launch-community-thread .ca-grid td { padding: var(--sp-2) 0; color: var(--muted); }
+.launch-community-section .ca-grid td.num,
+.launch-community-thread .ca-grid td.num {
+  text-align: right; font-family: var(--mono); color: var(--ink);
+}
+.launch-community-section .ca-cta,
+.launch-community-thread .ca-cta { margin-top: var(--sp-5); }
+.launch-community-section .ca-rules,
+.launch-community-thread .ca-rules {
+  font-size: var(--fs-12-5); color: var(--muted); line-height: var(--lh-prose);
+  white-space: pre-wrap; overflow-wrap: anywhere;
+}
+.launch-community-section .member,
+.launch-community-thread .member {
+  display: flex; align-items: center; gap: 9px; padding: var(--sp-2) 0;
+  font-size: var(--fs-13); color: var(--ink);
+}
+.launch-community-section .member a,
+.launch-community-thread .member a { color: var(--ink); }
+.launch-community-section .member a:hover,
+.launch-community-thread .member a:hover { color: var(--slate); }
+.launch-community-section .member .role,
+.launch-community-thread .member .role { margin-left: auto; }
+.launch-community-section .role,
+.launch-community-thread .role {
+  font-family: var(--mono); font-size: var(--fs-9); font-weight: 700;
+  letter-spacing: var(--ls-badge); text-transform: uppercase;
+  border: var(--bw) solid var(--line2); border-radius: var(--r-1);
+  padding: 0 var(--sp-2); color: var(--muted);
+}
+.launch-community-section .role.mod,
+.launch-community-thread .role.mod { color: var(--moss); border-color: var(--moss); }
+.launch-community-thread .role.op { color: var(--slate); border-color: var(--slate); }
+
+/* ---- SECTION route: forum head, sort tabs, thread rows, pager --------------- */
+
+/* Header sits outside .cs-main-body so it stays put while the list scrolls. */
+.launch-community-section .forum-head {
+  flex-shrink: 0; border-bottom: var(--bw) solid var(--line2);
+  background: var(--surface); padding: 12px 22px 0;
+}
+.launch-community-section .fh-top { display: flex; align-items: flex-start; gap: 14px; }
+.launch-community-section .fh-title {
+  font-family: var(--serif); font-weight: 600; font-size: var(--fs-19);
+  color: var(--ink); display: flex; align-items: center; gap: 9px;
+}
+.launch-community-section .fh-title .sec { font-family: var(--mono); color: var(--moss); }
+.launch-community-section .fh-desc {
+  color: var(--muted); font-size: var(--fs-13); margin-top: var(--sp-2); max-width: 70ch;
+}
+.launch-community-section .fh-actions {
+  margin-left: auto; display: flex; gap: var(--sp-4); flex-shrink: 0;
+}
+
+/* Sort tabs — the approved tab grammar; state is a ?sort parameter. */
+.launch-community-section .ftabs { display: flex; gap: var(--sp-1); margin-top: 14px; }
+.launch-community-section .ftabs a {
+  font-family: var(--mono); font-size: var(--fs-12); padding: 8px 13px;
+  color: var(--muted); border-bottom: var(--bw-accent) solid transparent;
+}
+.launch-community-section .ftabs a:hover { color: var(--ink); }
+.launch-community-section .ftabs a.active {
+  color: var(--ink); border-bottom-color: var(--moss);
+}
+
+/* The scrolling list body; cs-flush zeroes the gutter so rows span full
+   width (rows carry their own 22px padding). */
+.launch-community-section .cs-main-body {
+  flex: 1; overflow-y: auto; scrollbar-width: thin; padding: 14px 18px;
+}
+.launch-community-section .cs-flush { padding: 0; }
+
+/* Flat thread rows (render_forum_row markup, skinned): thin separators. */
+.launch-community-section .cs-thread {
+  display: flex; gap: 14px; padding: 13px 22px;
+  border-bottom: var(--bw) solid var(--line);
+}
+.launch-community-section .cs-thread:hover { background: var(--surface2); }
+.launch-community-section .ft-main { flex: 1; min-width: 0; }
+.launch-community-section .ft-title {
+  font-weight: 600; font-size: var(--fs-15-5); line-height: var(--lh-title);
+  text-wrap: pretty;
+}
+.launch-community-section .ft-title a { color: var(--ink); }
+.launch-community-section .ft-title a:hover { text-decoration: underline; }
+.launch-community-section .ft-preview {
+  font-size: var(--fs-12-5); color: var(--muted); margin-top: 3px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.launch-community-section .ft-meta {
+  font-family: var(--mono); font-size: var(--fs-11); color: var(--muted);
+  display: flex; align-items: center; gap: var(--sp-7); flex-wrap: wrap;
+  margin-top: 8px;
+}
+.launch-community-section .ft-meta a { color: var(--muted); }
+.launch-community-section .ft-meta a:hover { color: var(--ink); }
+.launch-community-section .ft-domain { color: var(--slate); }
+
+/* ⋯ moderation/self-action menu (viewers with an action only). */
+.launch-community-section .cs-row-mod { position: relative; align-self: flex-start; }
+.launch-community-section .cs-row-mod > summary {
+  list-style: none; cursor: pointer; color: var(--muted);
+  font-family: var(--mono); padding: 0 var(--sp-3); border-radius: var(--r-2);
+}
+.launch-community-section .cs-row-mod > summary::-webkit-details-marker { display: none; }
+.launch-community-section .cs-row-mod > summary:hover {
+  background: var(--surface2); color: var(--ink);
+}
+.launch-community-section .cs-row-mod-menu {
+  position: absolute; right: 0; top: calc(100% + 4px); z-index: 30;
+  display: flex; flex-direction: column; align-items: flex-start;
+  gap: var(--sp-3); min-width: 150px;
+  background: var(--surface); border: var(--bw) solid var(--line2);
+  border-radius: var(--r-3); padding: var(--sp-4);
+  box-shadow: var(--shadow-overlay);
+}
+
+/* Pager: real prev/next links around the mono page marker. */
+.launch-community-section .cs-pager {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 16px 22px; border-top: var(--bw) solid var(--line2);
+  background: var(--surface2);
+}
+.launch-community-section .cs-pager-n {
+  font-family: var(--mono); font-size: var(--fs-12); color: var(--muted);
+}
+
+/* ---- THREAD route: readable document + nested discussion tree --------------- */
+
+/* The ONLY scroll pane on the thread route (same containment model as the
+   section list and the channel scroller): .cs-main keeps overflow hidden and
+   this pane mirrors .cs-main-body (flex:1 + overflow-y:auto). */
+.launch-community-thread .thread-shell-main {
+  flex: 1; min-height: 0; overflow-y: auto; scrollbar-width: thin;
+  padding: 0 32px 96px; width: 100%;
+}
+
+/* Topbar: breadcrumb + back-to-section, then the local tab row. */
+.launch-community-thread .th-topbar {
+  padding-top: 18px; border-bottom: var(--bw) solid var(--line2); margin-bottom: 24px;
+}
+.launch-community-thread .th-topbar-row { display: flex; align-items: center; gap: 14px; }
+.launch-community-thread .th-topbar-row .fh-crumb { margin-bottom: 0; flex: 1; min-width: 0; }
+.launch-community-thread .th-back { flex-shrink: 0; }
+.launch-community-thread .th-tabs { display: flex; gap: var(--sp-1); margin-top: 14px; }
+.launch-community-thread .th-tab {
+  font-family: var(--mono); font-size: var(--fs-12); padding: 8px 13px;
+  color: var(--muted); border-bottom: var(--bw-accent) solid transparent;
+}
+.launch-community-thread .th-tab.active { color: var(--ink); border-bottom-color: var(--moss); }
+
+/* Main post: vote column left, title/meta/actions/body stacked beside it.
+   The thread h1 is the deliberate serif exception: sans 700/24. */
+.launch-community-thread .th-head { display: flex; gap: 16px; align-items: flex-start; }
+.launch-community-thread .th-headmain { flex: 1; min-width: 0; }
+.launch-community-thread .th-title {
+  font-family: var(--sans); font-weight: 700; font-size: var(--fs-24);
+  line-height: var(--lh-tight); color: var(--ink); margin: 1px 0 0;
+}
+.launch-community-thread .th-meta {
+  font-family: var(--mono); font-size: var(--fs-11-5); color: var(--muted);
+  margin-top: 11px; display: flex; align-items: center; gap: var(--sp-6); flex-wrap: wrap;
+}
+.launch-community-thread .th-meta a { color: var(--muted); }
+.launch-community-thread .th-meta a:hover { color: var(--ink); }
+.launch-community-thread .th-meta .ft-domain { color: var(--slate); }
+.launch-community-thread .th-actions {
+  display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-top: 12px;
+}
+
+/* Larger vote treatment on the post head; tighter inside comments — both keep
+   the upvote/score/downvote child order the optimistic-vote script walks. */
+.launch-community-thread .th-head .cs-vote { width: 34px; padding-top: var(--sp-1); }
+.launch-community-thread .th-head .cs-vote button,
+.launch-community-thread .th-head .cs-vote a { font-size: var(--fs-16); }
+.launch-community-thread .th-head .cs-vote-score { font-size: var(--fs-14); }
+.launch-community-thread .cmt .cs-vote { width: 22px; }
+.launch-community-thread .cmt .cs-vote button,
+.launch-community-thread .cmt .cs-vote a { font-size: var(--fs-13); }
+.launch-community-thread .cmt .cs-vote-score { font-size: var(--fs-11-5); margin: 1px 0; }
+
+/* Promoted conversation: provenance never gets lost — clay 2px left rule,
+   source channel link, date range, seed badge (approved .provenance grammar). */
+.launch-community-thread .th-src {
+  margin-top: 16px; border: var(--bw) solid var(--line2);
+  border-left: var(--bw-accent) solid var(--clay);
+  background: var(--surface2); border-radius: var(--r-1); padding: 12px 14px;
+}
+.launch-community-thread .th-src-label {
+  font-family: var(--mono); font-size: var(--fs-10-5); font-weight: 700;
+  letter-spacing: var(--ls-kicker); text-transform: uppercase; color: var(--clay);
+}
+.launch-community-thread .th-src-head {
+  font-family: var(--mono); font-size: var(--fs-12-5); color: var(--muted); margin-top: var(--sp-3);
+}
+.launch-community-thread .th-src-head a { color: var(--clay); }
+.launch-community-thread .th-src-head a:hover { text-decoration: underline; }
+.launch-community-thread .th-src-meta {
+  font-family: var(--mono); font-size: var(--fs-11); color: var(--muted); margin-top: 3px;
+}
+.launch-community-thread .th-src-msgs {
+  margin-top: var(--sp-5); display: flex; flex-direction: column; gap: 9px;
+}
+.launch-community-thread .th-src-msg { border-top: var(--bw) solid var(--line); padding-top: 8px; }
+.launch-community-thread .th-src-msg-meta {
+  display: flex; align-items: baseline; gap: var(--sp-4); flex-wrap: wrap;
+}
+.launch-community-thread .th-src-author {
+  font-family: var(--mono); font-size: var(--fs-12); font-weight: 600; color: var(--ink);
+}
+.launch-community-thread .th-src-seed {
+  font-family: var(--mono); font-size: var(--fs-9); font-weight: 700;
+  letter-spacing: var(--ls-badge); text-transform: uppercase; color: var(--clay);
+  border: var(--bw) solid var(--clay); border-radius: var(--r-1); padding: 0 4px;
+}
+.launch-community-thread .th-src-time {
+  font-family: var(--mono); font-size: var(--fs-10-5); color: var(--muted);
+}
+.launch-community-thread .th-src-jump {
+  font-family: var(--mono); font-size: var(--fs-11); color: var(--muted); margin-left: auto;
+}
+.launch-community-thread .th-src-jump:hover { color: var(--clay); text-decoration: underline; }
+.launch-community-thread .th-src-text {
+  margin-top: 3px; font-size: var(--fs-13); line-height: var(--lh-ui); color: var(--ink);
+  white-space: pre-wrap; overflow-wrap: anywhere;
+}
+.launch-community-thread .th-src-msg--gone .th-src-unavailable {
+  font-family: var(--mono); font-size: var(--fs-12); color: var(--muted); font-style: italic;
+}
+.launch-community-thread .th-src-foot {
+  margin-top: 11px; border-top: var(--bw) solid var(--line); padding-top: 9px;
+}
+.launch-community-thread .th-src-foot a {
+  font-family: var(--mono); font-size: var(--fs-11-5); font-weight: 700;
+  letter-spacing: .04em; text-transform: uppercase; color: var(--clay);
+}
+.launch-community-thread .th-src-foot a:hover { text-decoration: underline; }
+.launch-community-thread .th-src-private-note {
+  font-family: var(--mono); font-size: var(--fs-12-5); color: var(--muted);
+  margin-top: var(--sp-3); font-style: italic;
+}
+
+/* Body: post content / image / external link, aligned under the title. */
+.launch-community-thread .th-body {
+  font-size: var(--fs-15); line-height: var(--lh-read); color: var(--ink);
+  margin-top: 18px; white-space: pre-wrap; overflow-wrap: anywhere;
+}
+.launch-community-thread .th-img { margin-top: 18px; }
+.launch-community-thread .th-img img {
+  max-width: 100%; max-height: 700px; object-fit: contain;
+  border: var(--bw) solid var(--line2); border-radius: var(--r-3);
+  background: var(--surface3);
+}
+.launch-community-thread .th-linkrow { margin-top: 16px; }
+
+/* Discussion: divided from the post, with its own header rhythm. */
+.launch-community-thread .th-discussion {
+  margin-top: 28px; border-top: var(--bw) solid var(--line2); padding-top: 22px;
+}
+.launch-community-thread .th-comments-label {
+  font-family: var(--mono); font-size: var(--fs-12); color: var(--muted);
+  letter-spacing: .03em; margin: 0 0 14px;
+}
+
+/* Composer (top-level + inline reply): inset framed block, borderless
+   textarea, footer action bar. */
+.launch-community-thread .ct-composer {
+  margin: 0 0 22px; border: var(--bw) solid var(--line2); border-radius: var(--r-2);
+  background: var(--surface); overflow: hidden;
+}
+.launch-community-thread .ct-composer:focus-within { border-color: var(--moss); }
+.launch-community-thread .ct-composer textarea {
+  display: block; width: 100%; resize: vertical; min-height: 62px;
+  font-family: var(--sans); font-size: var(--fs-13-5); line-height: var(--lh-prose);
+  color: var(--ink); background: var(--surface2); border: 0; padding: 12px 14px;
+}
+.launch-community-thread .ct-composer textarea:focus { outline: none; }
+.launch-community-thread .ct-composer-actions {
+  display: flex; justify-content: flex-end; align-items: center; gap: var(--sp-4);
+  padding: 8px 10px; border-top: var(--bw) solid var(--line); background: var(--surface);
+}
+.launch-community-thread .ct-reply { margin: 10px 0 6px; }
+.launch-community-thread .ct-join {
+  display: flex; align-items: center; gap: var(--sp-6); flex-wrap: wrap;
+  background: var(--surface2); border: var(--bw) solid var(--line2);
+  border-radius: var(--r-2); padding: 13px 15px; margin-bottom: 22px;
+  font-size: var(--fs-13); color: var(--muted);
+}
+.launch-community-thread .ct-join form.inline { display: inline-flex; margin: 0; }
+
+/* Comment rows: a clear nested tree with quiet guide rails. */
+.launch-community-thread .cmt {
+  display: flex; gap: var(--sp-6); padding: 13px 0;
+  border-top: var(--bw) solid var(--line);
+}
+.launch-community-thread .cmt .cbody { flex: 1; min-width: 0; }
+.launch-community-thread .cmeta {
+  display: flex; align-items: center; gap: var(--sp-4); flex-wrap: wrap;
+  font-size: var(--fs-12-5); color: var(--muted);
+}
+.launch-community-thread .cmeta a { color: var(--ink); font-weight: 600; }
+.launch-community-thread .cmeta a:hover { color: var(--slate); }
+.launch-community-thread .ctime {
+  font-family: var(--mono); font-size: var(--fs-10-5); color: var(--muted);
+}
+.launch-community-thread .ctext {
+  font-size: var(--fs-14); line-height: var(--lh-body); color: var(--ink);
+  margin-top: 5px; white-space: pre-wrap; overflow-wrap: anywhere;
+}
+.launch-community-thread .cactions {
+  display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+  margin-top: var(--sp-4); font-family: var(--mono); font-size: var(--fs-11);
+  color: var(--muted);
+}
+/* Inline action buttons: small mono text (moderation visually secondary).
+   border/background zeroed here — legacy pages relied on Tailwind Preflight. */
+.launch-community-thread .ct-act,
+.launch-community-thread .ct-collapse {
+  font-family: var(--mono); font-size: var(--fs-11); cursor: pointer;
+  color: var(--muted); background: none; border: 0; padding: 0; line-height: 1;
+}
+.launch-community-thread .ct-act:hover,
+.launch-community-thread .ct-collapse:hover { color: var(--ink); }
+.launch-community-thread .ct-act-danger { color: var(--danger); }
+.launch-community-thread .ct-act-mod { color: var(--ochre); }
+.launch-community-thread .ct-act-admin { color: var(--danger); }
+.launch-community-thread .cactions form.inline,
+.launch-community-thread .th-actions form.inline { display: inline-flex; margin: 0; padding: 0; }
+
+/* Nested replies: one quiet guide line, small fixed indent, capped after
+   depth 3 (markup adds .cmt-flat) so deep chains never staircase off-screen. */
+.launch-community-thread .cmt-children {
+  margin-left: var(--sp-2); border-left: var(--bw) solid var(--line); padding-left: 14px;
+}
+.launch-community-thread .cmt-children.cmt-flat {
+  margin-left: 0; border-left: 0; padding-left: 0;
+}
+
+/* Route-scoped equivalent of the legacy `hidden` utility toggled by thread.js
+   (collapse) and the reply/cancel buttons. Kept LAST in this block so it wins
+   ties against the display rules above; thread route only — the section route
+   needs only the badge-element rule shared higher up. */
+.launch-community-thread .hidden { display: none; }
+
+/* ==========================================================================
+   EARDE INTEGRATION — post creation only
+   Scoped beneath body.launch-post-creation: the three states of GET
+   /new-post (Pages.new_post_form, Pages.choose_community_page,
+   Pages.join_to_post_page) — the global composer. Exists only because the
+   real creation surface cannot emit the reference markup exactly:
+   - the create-* fragments (the /posts multipart form with its hidden
+     community_id, the required section <select> for structured communities,
+     the title/url/image/content fields, the chooser's community list and
+     the members-only join gate with its real POST /join form) are treated
+     as pinned, so the legacy markup is spliced verbatim inside the
+     .create-shell marker and skinned here onto the approved anatomy: page
+     head band over one restrained form column — drafting a durable
+     community contribution, not posting to a social network;
+   - no drafts, previews, tags, attachments-beyond-image, post types or
+     sections are invented: every control styled here already exists in the
+     renderer, and flat communities simply render no section field;
+   - validation failures answer via the legacy shared msg_page (out of
+     scope), so this section carries no error-notice skin of its own;
+   - the notification badge is server-rendered from the request's unread
+     count and is absent entirely at zero, so this scope needs no rule for
+     it (Notification_badge);
+   - the desktop-only gate panel ships in mobile-gate.css; only the
+     launch-scope "hide the app" rule for this route lives here;
+   - the analytics consent banner markup is shared with the legacy layout
+     (styled once for these routes in routes/chrome.css).
+   ========================================================================== */
+
+/* ---- Composer anatomy ------------------------------------------------------- */
+
+/* Page head band: serif title over the renderer's real subtitle; the
+   destination path (/c/:slug accent in the title) reads as mono moss. */
+
+.launch-post-creation .create-title .accent {
+  font-family: var(--mono); font-weight: 400; font-size: var(--fs-16);
+  color: var(--moss);
+}
+
+/* ---- The creation form (member + community state) --------------------------- */
+
+/* The form is the scroller: one restrained left-aligned column under the
+   band, capped at a reading measure. Direct child of the panel only — the
+   join gate's inner form must keep its card flow. */
+.launch-post-creation .create-panel > .create-form {
+  flex: 1; min-height: 0; overflow-y: auto; scrollbar-width: thin;
+  padding: var(--sp-10) 28px 70px;
+}
+.launch-post-creation .create-panel > .create-form > * { max-width: 620px; }
+
+/* Image input: the native picker restyled as a quiet mono control. */
+.launch-post-creation .create-file {
+  width: 100%; font-family: var(--mono); font-size: var(--fs-11);
+  color: var(--muted); background: var(--surface);
+  border: var(--bw) solid var(--line2); border-radius: var(--r-2);
+  padding: var(--sp-3) var(--sp-4);
+}
+.launch-post-creation .create-file::file-selector-button {
+  font-family: var(--sans); font-weight: 600; font-size: var(--fs-11-5);
+  color: var(--muted); background: var(--surface2);
+  border: var(--bw) solid var(--line2); border-radius: var(--r-2);
+  padding: var(--sp-2) var(--sp-5); margin-right: var(--sp-5); cursor: pointer;
+}
+
+/* Field hints (WebP conversion note): quiet mono metadata. */
+.launch-post-creation .create-hint {
+  font-family: var(--mono); font-size: var(--fs-11); color: var(--muted);
+  margin-top: var(--sp-2);
+}
+
+/* ---- The community chooser (no ?community state) ---------------------------- */
+
+/* The list is the scroller: hairline ledger rows, not cards. Each row is the
+   renderer's real link into /new-post?community=:slug. */
+.launch-post-creation .create-list {
+  flex: 1; min-height: 0; overflow-y: auto; scrollbar-width: thin;
+  padding: var(--sp-6) 28px var(--sp-10);
+}
+.launch-post-creation .create-comm {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: var(--sp-8); max-width: 620px;
+  padding: var(--sp-6) var(--sp-2); border-bottom: var(--bw) solid var(--line);
+}
+.launch-post-creation .create-comm:hover { background: var(--surface2); }
+.launch-post-creation .create-comm-name {
+  display: block; font-weight: 600; font-size: var(--fs-13-5);
+  color: var(--ink); line-height: var(--lh-title);
+}
+.launch-post-creation .create-comm-slug {
+  display: block; font-family: var(--mono); font-size: var(--fs-11);
+  color: var(--muted); margin-top: var(--sp-1);
+}
+.launch-post-creation .create-comm-go {
+  flex: none; font-family: var(--mono); font-size: var(--fs-11-5);
+  color: var(--slate); white-space: nowrap;
+}
+.launch-post-creation .create-comm:hover .create-comm-go { color: var(--ink); }
+
+/* Chooser footer: fixed quiet strip under the list (the /bring fallback). */
+.launch-post-creation .create-panel > .create-foot {
+  flex: none; padding: var(--sp-6) 28px; background: var(--surface);
+  border-top: var(--bw) solid var(--line2);
+  font-family: var(--mono); font-size: var(--fs-11-5); color: var(--muted);
+}
+
+.launch-post-creation .create-link:hover { color: var(--ink); }
+
+/* ---- The members-only join gate (non-member state) -------------------------- */
+
+/* Narrow wrap centres one flat bordered card; the gate's inner form and
+   footer keep their card flow (the scroller rules above are direct-child
+   scoped away from here). */
+.launch-post-creation .create-wrap--narrow {
+  align-items: center; justify-content: center; padding: var(--sp-12);
+}
+.launch-post-creation .create-gate {
+  width: 100%; max-width: 400px; text-align: center;
+  background: var(--surface); border: var(--bw) solid var(--line2);
+  border-radius: var(--r-3); padding: var(--sp-13) var(--sp-12);
+}
+.launch-post-creation .create-gate-icon {
+  width: 40px; height: 40px; margin: 0 auto var(--sp-7);
+  display: flex; align-items: center; justify-content: center;
+  color: var(--muted); background: var(--surface2);
+  border: var(--bw) solid var(--line2); border-radius: var(--r-3);
+}
+.launch-post-creation .create-gate-icon svg { width: 18px; height: 18px; }
+.launch-post-creation .create-gate-text {
+  font-size: var(--fs-13); color: var(--muted); line-height: var(--lh-prose);
+  margin-top: var(--sp-3);
+}
+.launch-post-creation .create-gate-name {
+  font-family: var(--mono); font-size: var(--fs-12); color: var(--moss);
+}
+.launch-post-creation .create-gate .create-form { margin-top: var(--sp-9); }
+.launch-post-creation .create-gate .create-btn--block {
+  display: block; width: 100%; text-align: center;
+}
+.launch-post-creation .create-gate .create-foot {
+  margin-top: var(--sp-7); font-family: var(--mono); font-size: var(--fs-11);
+}
