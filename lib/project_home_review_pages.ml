@@ -66,8 +66,8 @@ type feedback =
    feature fragment between the create-shell marker and </main> is
    byte-identical either way. *)
 type launch_shell = {
-  community_record : Db.community;
-  rail_communities : Db.community list;
+  community_record : Community_types.community;
+  rail_communities : Community_types.community list;
   sidebar : string;
 }
 
@@ -319,7 +319,7 @@ let project_home_review_page ?user ?request ?shell ~state ~feedback () =
          community record could not be re-read for launch chrome AFTER the
          read model already authorized this reviewer (a mid-request deletion
          race or a storage failure in the decorative load). Without a
-         trustworthy Db.community there is no honest community sidebar,
+         trustworthy Community_types.community there is no honest community sidebar,
          rail tile, or analytics group — so the queue body renders inside
          the chrome-free launch message document instead: no fabricated
          community data, no extra queries, no behavior script, no
@@ -339,7 +339,7 @@ let project_home_review_page ?user ?request ?shell ~state ~feedback () =
          panel is the exact body above. *)
       let content =
         Community_settings_shell.wrap
-          ~slug:shell.community_record.Db.slug
+          ~slug:shell.community_record.slug
           ~active:Community_settings_shell.Home_requests
           ~can_complete_setup:
             (Community_settings_shell.can_complete_setup

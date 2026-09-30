@@ -783,12 +783,12 @@ let csrf_case =
 
 (* === the settings entry point, and the surfaces it must not disturb === *)
 
-let settings_community ~is_network : Earde.Db.community =
+let settings_community ~is_network : Earde.Community_types.community =
   { id = 5150; slug = "ccnh-nav"; name = "Ccnh Nav"; description = None;
     rules = None; avatar_url = None; banner_url = None; allow_downvotes = true;
-    sections_enabled = false; visibility = Earde.Db.Community_public;
+    sections_enabled = false; visibility = Earde.Community_types.Community_public;
     indexable = true; is_network_community = is_network;
-    onboarding_state = Earde.Db.Community_published; discoverable = true }
+    onboarding_state = Earde.Community_types.Community_published; discoverable = true }
 
 let render_settings ~is_admin ~is_top_mod =
   let captured = ref None in

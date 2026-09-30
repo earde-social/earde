@@ -281,19 +281,19 @@ let run_visibility ~url ~configure ~uid ~slug ~value ~done_pred () =
 
 let job_state conn key =
   let ( let* ) = Lwt.bind in
-  let* job = Earde.Db.get_posthog_group_cleanup_job conn key in
+  let* job = Earde.Posthog_group_cleanup_job_store.get_by_group_key conn key in
   or_fail_s "job state" job
 
 let job_completed conn key () =
   let ( let* ) = Lwt.bind in
-  let* job = Earde.Db.get_posthog_group_cleanup_job conn key in
+  let* job = Earde.Posthog_group_cleanup_job_store.get_by_group_key conn key in
   match job with
   | Ok (Some (_, "completed", _, _)) -> Lwt.return true
   | _ -> Lwt.return false
 
 let job_has_error conn key () =
   let ( let* ) = Lwt.bind in
-  let* job = Earde.Db.get_posthog_group_cleanup_job conn key in
+  let* job = Earde.Posthog_group_cleanup_job_store.get_by_group_key conn key in
   match job with
   | Ok (Some (_, _, _, Some _)) -> Lwt.return true
   | _ -> Lwt.return false
@@ -436,29 +436,29 @@ let enqueue_semantics_case =
       let* cid = or_fail "community" cid in
       let key = "community:" ^ string_of_int cid in
       let* r =
-        Earde.Db.update_community_visibility_and_enqueue_group_cleanup conn
-          cid Earde.Db.Community_private
+        Earde.Posthog_group_cleanup_job_store.update_visibility_and_enqueue conn
+          cid Earde.Community_types.Community_private
       in
       let* updated, job1 = or_fail_s "first transition" r in
       Alcotest.(check bool) "community returned" true (updated <> None);
       let job1 = Option.get job1 in
       (* Duplicate transition converges on the SAME pending job. *)
-      let* r = Earde.Db.update_community_visibility_and_enqueue_group_cleanup
-          conn cid Earde.Db.Community_private
+      let* r = Earde.Posthog_group_cleanup_job_store.update_visibility_and_enqueue
+          conn cid Earde.Community_types.Community_private
       in
       let* _, job2 = or_fail_s "duplicate transition" r in
       Alcotest.(check int) "same job" job1 (Option.get job2);
       (* ->public enqueues nothing (restore rides $groupidentify). *)
-      let* r = Earde.Db.update_community_visibility_and_enqueue_group_cleanup
-          conn cid Earde.Db.Community_public
+      let* r = Earde.Posthog_group_cleanup_job_store.update_visibility_and_enqueue
+          conn cid Earde.Community_types.Community_public
       in
       let* _, job3 = or_fail_s "back to public" r in
       Alcotest.(check bool) "no job on ->public" true (job3 = None);
       (* Complete, then a NEW ->private transition re-arms it. *)
-      let* m = Earde.Db.complete_posthog_group_cleanup_job conn job1 in
+      let* m = Earde.Posthog_group_cleanup_job_store.mark_completed conn job1 in
       let* () = or_fail_s "complete" m in
-      let* r = Earde.Db.update_community_visibility_and_enqueue_group_cleanup
-          conn cid Earde.Db.Community_private
+      let* r = Earde.Posthog_group_cleanup_job_store.update_visibility_and_enqueue
+          conn cid Earde.Community_types.Community_private
       in
       let* _, job4 = or_fail_s "re-arm" r in
       Alcotest.(check int) "same row re-armed" job1 (Option.get job4);
@@ -511,7 +511,7 @@ let restore_case =
              | Some (`String v) -> Some v
              | _ -> None)
       | None -> Alcotest.fail "no $groupidentify captured");
-      let* job = Earde.Db.get_posthog_group_cleanup_job conn key in
+      let* job = Earde.Posthog_group_cleanup_job_store.get_by_group_key conn key in
       let* job = or_fail_s "job lookup" job in
       Alcotest.(check bool) "no cleanup job for ->public" true (job = None);
       Lwt.return_unit)
@@ -528,7 +528,7 @@ let batch_case =
       let* j3 = C.find q_insert_fake_job "community:999123" in
       let* j3 = or_fail "job3" j3 in
       let* claimed =
-        Earde.Db.claim_posthog_group_cleanup_batch conn ~limit:2 ()
+        Earde.Posthog_group_cleanup_job_store.claim_batch conn ~limit:2 ()
       in
       let* claimed = or_fail_s "bounded claim" claimed in
       Alcotest.(check (list int)) "bounded, oldest first" [ j1; j2 ]
@@ -545,12 +545,12 @@ let batch_case =
           let* summary =
             Earde.Posthog_deletion.process_group_batch
               ~claim:(fun () ->
-                Earde.Db.claim_posthog_group_cleanup_batch conn
+                Earde.Posthog_group_cleanup_job_store.claim_batch conn
                   ~lease_minutes:0 ~limit:10 ())
               ~mark_completed:(fun job_id ->
-                Earde.Db.complete_posthog_group_cleanup_job conn job_id)
+                Earde.Posthog_group_cleanup_job_store.mark_completed conn job_id)
               ~mark_failed:(fun job_id err ->
-                Earde.Db.fail_posthog_group_cleanup_job conn job_id err)
+                Earde.Posthog_group_cleanup_job_store.mark_failed conn job_id err)
               ()
           in
           let* summary = or_fail_s "batch" summary in

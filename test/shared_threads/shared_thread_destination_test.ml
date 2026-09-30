@@ -154,10 +154,10 @@ let feed_ordering_case =
       let* () = exec conn "v5" Shared_thread_http_fixture.q_vote (otop, own_a, 1) in
       let* () = exec conn "v6" Shared_thread_http_fixture.q_vote (author, post, 1) in
       let feed sort limit offset =
-        let* r = Earde.Db.get_posts_by_community conn d sort limit offset in
+        let* r = Earde.Post_store.get_posts_by_community conn d sort limit offset in
         Lwt.return (Shared_thread_http_fixture.ok "feed" r)
       in
-      let* items = feed Earde.Db.Newest 20 0 in
+      let* items = feed Earde.Post_types.Newest 20 0 in
       Alcotest.(check (list int)) "newest"
         [ own_b; post; own_a; shared2 ] (Shared_thread_http_fixture.feed_ids items);
       (* No duplication across the two arms. *)
@@ -165,31 +165,31 @@ let feed_ordering_case =
         (List.length (List.sort_uniq compare (Shared_thread_http_fixture.feed_ids items)));
       (* Shared rows carry their context; own rows carry none. *)
       List.iter
-        (fun (it : Earde.Db.feed_item) ->
-          match it.Earde.Db.fi_shared with
+        (fun (it : Earde.Post_types.feed_item) ->
+          match it.Earde.Post_types.fi_shared with
           | Some ctx ->
               Alcotest.(check bool) "shared row is a placement row" true
-                (List.mem it.Earde.Db.fi_post.id [ post; shared2 ]);
+                (List.mem it.Earde.Post_types.fi_post.id [ post; shared2 ]);
               Alcotest.(check string) "origin name travels"
-                "Sth dg Origin" ctx.Earde.Db.fs_origin_name
+                "Sth dg Origin" ctx.Earde.Post_types.fs_origin_name
           | None ->
               Alcotest.(check bool) "own row is the community's" true
-                (List.mem it.Earde.Db.fi_post.id [ own_a; own_b ]))
+                (List.mem it.Earde.Post_types.fi_post.id [ own_a; own_b ]))
         items;
-      let* items = feed Earde.Db.Top 20 0 in
+      let* items = feed Earde.Post_types.Top 20 0 in
       Alcotest.(check (list int)) "top"
         [ shared2; own_a; post; own_b ] (Shared_thread_http_fixture.feed_ids items);
-      let* items = feed Earde.Db.Hot 20 0 in
+      let* items = feed Earde.Post_types.Hot 20 0 in
       Alcotest.(check (list int)) "hot"
         [ own_b; post; own_a; shared2 ] (Shared_thread_http_fixture.feed_ids items);
-      let* items = feed Earde.Db.Active 20 0 in
+      let* items = feed Earde.Post_types.Active 20 0 in
       Alcotest.(check (list int)) "active"
         [ post; own_a; own_b; shared2 ] (Shared_thread_http_fixture.feed_ids items);
       (* Pagination applies to the combined result, never per arm. *)
-      let* items = feed Earde.Db.Newest 2 0 in
+      let* items = feed Earde.Post_types.Newest 2 0 in
       Alcotest.(check (list int)) "first page" [ own_b; post ]
         (Shared_thread_http_fixture.feed_ids items);
-      let* items = feed Earde.Db.Newest 2 2 in
+      let* items = feed Earde.Post_types.Newest 2 2 in
       Alcotest.(check (list int)) "second page" [ own_a; shared2 ]
         (Shared_thread_http_fixture.feed_ids items);
       Lwt.return_unit)
@@ -230,13 +230,13 @@ let section_stats_case =
       let* _, body = Shared_thread_http_fixture.get ~target:"/c/sth-ds-d/s/sth-ds-stwo" anon in
       must_not body "Sth ds sectioned";
       (* Destination statistics count it, with real activity. *)
-      let* stats = Earde.Db.get_sections_with_stats conn d in
+      let* stats = Earde.Section_store.get_sections_with_stats conn d in
       let stats = Shared_thread_http_fixture.ok "dest stats" stats in
       let stat_of sid =
         match
           List.find_opt
-            (fun ((s : Earde.Db.community_section), _, _) ->
-              s.Earde.Db.section_id = sid)
+            (fun ((s : Earde.Section_store.community_section), _, _) ->
+              s.Earde.Section_store.section_id = sid)
             stats
         with
         | Some (_, n, act) -> (n, act)
@@ -255,12 +255,12 @@ let section_stats_case =
       let* stored_section = find conn "origin section" Shared_thread_http_fixture.q_origin_section_of post2 in
       Alcotest.(check (option int)) "origin section assignment intact"
         (Some osec) stored_section;
-      let* ostats = Earde.Db.get_sections_with_stats conn o in
+      let* ostats = Earde.Section_store.get_sections_with_stats conn o in
       let ostats = Shared_thread_http_fixture.ok "origin stats" ostats in
       (match
          List.find_opt
-           (fun ((s : Earde.Db.community_section), _, _) ->
-             s.Earde.Db.section_id = osec)
+           (fun ((s : Earde.Section_store.community_section), _, _) ->
+             s.Earde.Section_store.section_id = osec)
            ostats
        with
        | Some (_, n, _) ->
@@ -273,13 +273,13 @@ let section_stats_case =
       Alcotest.(check int) "uncategorized 200" 200 (status_of response);
       Shared_thread_http_fixture.count "released into Uncategorized" body "Sth ds sectioned" 1;
       must body "Shared from";
-      let* orphaned = Earde.Db.get_orphaned_count_and_activity conn d in
+      let* orphaned = Earde.Section_store.get_orphaned_count_and_activity conn d in
       let n, act = Shared_thread_http_fixture.ok "orphaned" orphaned in
       Alcotest.(check int) "orphaned count includes the placement" 1 n;
       Alcotest.(check bool) "orphaned activity is real" true (act <> None);
       (* Removal takes it out of the counts and the surface. *)
       let* () = Shared_thread_http_fixture.remove_seed conn ~actor:dtop ~placement:pl ~acting:d in
-      let* orphaned = Earde.Db.get_orphaned_count_and_activity conn d in
+      let* orphaned = Earde.Section_store.get_orphaned_count_and_activity conn d in
       let n, _ = Shared_thread_http_fixture.ok "orphaned after removal" orphaned in
       Alcotest.(check int) "orphaned count falls back to zero" 0 n;
       let* response, _ = Shared_thread_http_fixture.get ~target:"/c/sth-ds-d/s/uncategorized" anon in

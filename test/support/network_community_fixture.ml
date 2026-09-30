@@ -275,12 +275,12 @@ let check_published label conn ~cid ~project ~rid ~before ~name
   Lwt.return_unit
 
 let search_lists label conn ~name ~slug expected =
-  let* r = Earde.Db.search_communities conn name 50 0 in
+  let* r = Earde.Community_store.search_communities conn name 50 0 in
   match r with
   | Error e -> Alcotest.failf "%s: search failed: %s" label e
   | Ok rows ->
       Alcotest.(check bool) label expected
         (List.exists
-           (fun (c : Earde.Db.community) -> String.equal c.slug slug)
+           (fun (c : Earde.Community_types.community) -> String.equal c.slug slug)
            rows);
       Lwt.return_unit

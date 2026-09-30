@@ -1,8 +1,7 @@
 (** Issuance and persistence of GitHub onboarding callback states, plus
     mid-flow attachment of the untrusted installation id from the GitHub App
     setup return (lookup/consumption is a separate slice). This feature
-    module owns its SQL; nothing here belongs
-    to the legacy [Db] macro-module. The database only ever receives the
+    module owns its SQL. The database only ever receives the
     deterministic lookup hashes: the raw state lives solely in the returned
     abstract value, and the raw session binding never reaches this module at
     all, so a database leak cannot be replayed against the callback. The

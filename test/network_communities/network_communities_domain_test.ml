@@ -27,12 +27,12 @@ let nc_parse_err name input =
 let nc_check_config ~visibility ~indexable ~discoverable
     (c : NC.publication_configuration) =
   Alcotest.(check string) "visibility"
-    (Earde.Db.community_visibility_to_string visibility)
-    (Earde.Db.community_visibility_to_string c.visibility);
+    (Earde.Community_types.community_visibility_to_string visibility)
+    (Earde.Community_types.community_visibility_to_string c.visibility);
   Alcotest.(check bool) "indexable" indexable c.indexable;
   Alcotest.(check bool) "discoverable" discoverable c.discoverable;
   Alcotest.(check string) "onboarding_state" "published"
-    (Earde.Db.string_of_community_onboarding_state c.onboarding_state)
+    (Earde.Community_types.string_of_community_onboarding_state c.onboarding_state)
 
 let nc_publish_err name expected ~is_network_community ~onboarding_state mode =
   nc_case name (fun () ->
@@ -62,7 +62,7 @@ let nc_valid_case name expected ~is_network_community ~onboarding_state
    the loaded record before writing. These prove the settings flow invokes the
    lifecycle rule; the exhaustive matrix lives in network_visibility_change. *)
 let vis_gate_community ~is_network_community ~onboarding_state ~visibility :
-    Earde.Db.community =
+    Earde.Community_types.community =
   { id = 7; slug = "gate"; name = "Gate"; description = None; rules = None
   ; avatar_url = None; banner_url = None; allow_downvotes = true
   ; sections_enabled = false; visibility; indexable = true
@@ -119,12 +119,12 @@ let suites =
   ; ( "network_publication_config"
     , [ nc_case "Public: public + indexable + discoverable + published"
           (fun () ->
-            nc_check_config ~visibility:Earde.Db.Community_public
+            nc_check_config ~visibility:Earde.Community_types.Community_public
               ~indexable:true ~discoverable:true
               (NC.configuration_for_publication NC.Public))
       ; nc_case "Unlisted: public, not indexable, not discoverable, published"
           (fun () ->
-            nc_check_config ~visibility:Earde.Db.Community_public
+            nc_check_config ~visibility:Earde.Community_types.Community_public
               ~indexable:false ~discoverable:false
               (NC.configuration_for_publication NC.Unlisted))
       ] )
@@ -132,34 +132,34 @@ let suites =
   ; ( "network_publish_decision"
     , [ nc_publish_err "legacy draft rejected" NC.Not_a_network_community
           ~is_network_community:false
-          ~onboarding_state:Earde.Db.Community_draft NC.Public
+          ~onboarding_state:Earde.Community_types.Community_draft NC.Public
       ; nc_publish_err "legacy published rejected" NC.Not_a_network_community
           ~is_network_community:false
-          ~onboarding_state:Earde.Db.Community_published NC.Public
+          ~onboarding_state:Earde.Community_types.Community_published NC.Public
       ; nc_publish_err "network published rejected"
           NC.Community_already_published ~is_network_community:true
-          ~onboarding_state:Earde.Db.Community_published NC.Unlisted
+          ~onboarding_state:Earde.Community_types.Community_published NC.Unlisted
       ; nc_case "network draft + Public succeeds" (fun () ->
             match
               NC.publish ~is_network_community:true
-                ~onboarding_state:Earde.Db.Community_draft NC.Public
+                ~onboarding_state:Earde.Community_types.Community_draft NC.Public
             with
             | Error e ->
                 Alcotest.failf "expected Ok, got %s"
                   (NC.string_of_publication_error e)
             | Ok c ->
-                nc_check_config ~visibility:Earde.Db.Community_public
+                nc_check_config ~visibility:Earde.Community_types.Community_public
                   ~indexable:true ~discoverable:true c)
       ; nc_case "network draft + Unlisted succeeds" (fun () ->
             match
               NC.publish ~is_network_community:true
-                ~onboarding_state:Earde.Db.Community_draft NC.Unlisted
+                ~onboarding_state:Earde.Community_types.Community_draft NC.Unlisted
             with
             | Error e ->
                 Alcotest.failf "expected Ok, got %s"
                   (NC.string_of_publication_error e)
             | Ok c ->
-                nc_check_config ~visibility:Earde.Db.Community_public
+                nc_check_config ~visibility:Earde.Community_types.Community_public
                   ~indexable:false ~discoverable:false c)
       ] )
     (* Full matrix: the only forbidden transition is published network
@@ -167,36 +167,36 @@ let suites =
   ; ( "network_visibility_change"
     , [ nc_vis_case "legacy draft -> public" true
           ~is_network_community:false
-          ~onboarding_state:Earde.Db.Community_draft
-          ~requested_visibility:Earde.Db.Community_public
+          ~onboarding_state:Earde.Community_types.Community_draft
+          ~requested_visibility:Earde.Community_types.Community_public
       ; nc_vis_case "legacy draft -> private" true
           ~is_network_community:false
-          ~onboarding_state:Earde.Db.Community_draft
-          ~requested_visibility:Earde.Db.Community_private
+          ~onboarding_state:Earde.Community_types.Community_draft
+          ~requested_visibility:Earde.Community_types.Community_private
       ; nc_vis_case "legacy published -> public" true
           ~is_network_community:false
-          ~onboarding_state:Earde.Db.Community_published
-          ~requested_visibility:Earde.Db.Community_public
+          ~onboarding_state:Earde.Community_types.Community_published
+          ~requested_visibility:Earde.Community_types.Community_public
       ; nc_vis_case "legacy published -> private" true
           ~is_network_community:false
-          ~onboarding_state:Earde.Db.Community_published
-          ~requested_visibility:Earde.Db.Community_private
+          ~onboarding_state:Earde.Community_types.Community_published
+          ~requested_visibility:Earde.Community_types.Community_private
       ; nc_vis_case "network draft -> public" true
           ~is_network_community:true
-          ~onboarding_state:Earde.Db.Community_draft
-          ~requested_visibility:Earde.Db.Community_public
+          ~onboarding_state:Earde.Community_types.Community_draft
+          ~requested_visibility:Earde.Community_types.Community_public
       ; nc_vis_case "network draft -> private" true
           ~is_network_community:true
-          ~onboarding_state:Earde.Db.Community_draft
-          ~requested_visibility:Earde.Db.Community_private
+          ~onboarding_state:Earde.Community_types.Community_draft
+          ~requested_visibility:Earde.Community_types.Community_private
       ; nc_vis_case "network published -> public" true
           ~is_network_community:true
-          ~onboarding_state:Earde.Db.Community_published
-          ~requested_visibility:Earde.Db.Community_public
+          ~onboarding_state:Earde.Community_types.Community_published
+          ~requested_visibility:Earde.Community_types.Community_public
       ; nc_vis_case "network published -> private forbidden" false
           ~is_network_community:true
-          ~onboarding_state:Earde.Db.Community_published
-          ~requested_visibility:Earde.Db.Community_private
+          ~onboarding_state:Earde.Community_types.Community_published
+          ~requested_visibility:Earde.Community_types.Community_private
       ] )
     (* Settings-flow gate: the decision the visibility POST handler acts on.
        None = the existing update flow continues; Some = `Conflict before any
@@ -205,97 +205,97 @@ let suites =
   ; ( "settings_visibility_gate"
     , [ vis_gate_allowed "legacy published -> private still allowed"
           ~is_network_community:false
-          ~onboarding_state:Earde.Db.Community_published
-          ~visibility:Earde.Db.Community_public
-          ~requested_visibility:Earde.Db.Community_private
+          ~onboarding_state:Earde.Community_types.Community_published
+          ~visibility:Earde.Community_types.Community_public
+          ~requested_visibility:Earde.Community_types.Community_private
       ; vis_gate_allowed "legacy draft-shaped -> private still allowed"
           ~is_network_community:false
-          ~onboarding_state:Earde.Db.Community_draft
-          ~visibility:Earde.Db.Community_public
-          ~requested_visibility:Earde.Db.Community_private
+          ~onboarding_state:Earde.Community_types.Community_draft
+          ~visibility:Earde.Community_types.Community_public
+          ~requested_visibility:Earde.Community_types.Community_private
       ; vis_gate_allowed "legacy existing private -> public unaffected"
           ~is_network_community:false
-          ~onboarding_state:Earde.Db.Community_published
-          ~visibility:Earde.Db.Community_private
-          ~requested_visibility:Earde.Db.Community_public
+          ~onboarding_state:Earde.Community_types.Community_published
+          ~visibility:Earde.Community_types.Community_private
+          ~requested_visibility:Earde.Community_types.Community_public
       ; vis_gate_allowed "legacy existing private -> private unaffected"
           ~is_network_community:false
-          ~onboarding_state:Earde.Db.Community_published
-          ~visibility:Earde.Db.Community_private
-          ~requested_visibility:Earde.Db.Community_private
+          ~onboarding_state:Earde.Community_types.Community_published
+          ~visibility:Earde.Community_types.Community_private
+          ~requested_visibility:Earde.Community_types.Community_private
       ; vis_gate_allowed "network draft -> private allowed"
           ~is_network_community:true
-          ~onboarding_state:Earde.Db.Community_draft
-          ~visibility:Earde.Db.Community_private
-          ~requested_visibility:Earde.Db.Community_private
+          ~onboarding_state:Earde.Community_types.Community_draft
+          ~visibility:Earde.Community_types.Community_private
+          ~requested_visibility:Earde.Community_types.Community_private
       ; vis_gate_allowed "network published -> public allowed"
           ~is_network_community:true
-          ~onboarding_state:Earde.Db.Community_published
-          ~visibility:Earde.Db.Community_public
-          ~requested_visibility:Earde.Db.Community_public
+          ~onboarding_state:Earde.Community_types.Community_published
+          ~visibility:Earde.Community_types.Community_public
+          ~requested_visibility:Earde.Community_types.Community_public
       ; vis_gate_rejected "network published -> private rejected"
           ~is_network_community:true
-          ~onboarding_state:Earde.Db.Community_published
-          ~visibility:Earde.Db.Community_public
-          ~requested_visibility:Earde.Db.Community_private
+          ~onboarding_state:Earde.Community_types.Community_published
+          ~visibility:Earde.Community_types.Community_public
+          ~requested_visibility:Earde.Community_types.Community_private
       ] )
     (* Whole-state validity: legacy always passes; drafts must be fully
        hidden; published states are exactly Public or Unlisted shaped. *)
   ; ( "network_lifecycle_validity"
     , [ nc_valid_case "legacy public indexable accepted" true
           ~is_network_community:false
-          ~onboarding_state:Earde.Db.Community_published
-          ~visibility:Earde.Db.Community_public ~indexable:true
+          ~onboarding_state:Earde.Community_types.Community_published
+          ~visibility:Earde.Community_types.Community_public ~indexable:true
           ~discoverable:false
       ; nc_valid_case "legacy private draft accepted" true
           ~is_network_community:false
-          ~onboarding_state:Earde.Db.Community_draft
-          ~visibility:Earde.Db.Community_private ~indexable:true
+          ~onboarding_state:Earde.Community_types.Community_draft
+          ~visibility:Earde.Community_types.Community_private ~indexable:true
           ~discoverable:true
       ; nc_valid_case "canonical private draft accepted" true
           ~is_network_community:true
-          ~onboarding_state:Earde.Db.Community_draft
-          ~visibility:Earde.Db.Community_private ~indexable:false
+          ~onboarding_state:Earde.Community_types.Community_draft
+          ~visibility:Earde.Community_types.Community_private ~indexable:false
           ~discoverable:false
       ; nc_valid_case "public draft rejected" false
           ~is_network_community:true
-          ~onboarding_state:Earde.Db.Community_draft
-          ~visibility:Earde.Db.Community_public ~indexable:false
+          ~onboarding_state:Earde.Community_types.Community_draft
+          ~visibility:Earde.Community_types.Community_public ~indexable:false
           ~discoverable:false
       ; nc_valid_case "indexable draft rejected" false
           ~is_network_community:true
-          ~onboarding_state:Earde.Db.Community_draft
-          ~visibility:Earde.Db.Community_private ~indexable:true
+          ~onboarding_state:Earde.Community_types.Community_draft
+          ~visibility:Earde.Community_types.Community_private ~indexable:true
           ~discoverable:false
       ; nc_valid_case "discoverable draft rejected" false
           ~is_network_community:true
-          ~onboarding_state:Earde.Db.Community_draft
-          ~visibility:Earde.Db.Community_private ~indexable:false
+          ~onboarding_state:Earde.Community_types.Community_draft
+          ~visibility:Earde.Community_types.Community_private ~indexable:false
           ~discoverable:true
       ; nc_valid_case "canonical published Public accepted" true
           ~is_network_community:true
-          ~onboarding_state:Earde.Db.Community_published
-          ~visibility:Earde.Db.Community_public ~indexable:true
+          ~onboarding_state:Earde.Community_types.Community_published
+          ~visibility:Earde.Community_types.Community_public ~indexable:true
           ~discoverable:true
       ; nc_valid_case "canonical published Unlisted accepted" true
           ~is_network_community:true
-          ~onboarding_state:Earde.Db.Community_published
-          ~visibility:Earde.Db.Community_public ~indexable:false
+          ~onboarding_state:Earde.Community_types.Community_published
+          ~visibility:Earde.Community_types.Community_public ~indexable:false
           ~discoverable:false
       ; nc_valid_case "published private rejected" false
           ~is_network_community:true
-          ~onboarding_state:Earde.Db.Community_published
-          ~visibility:Earde.Db.Community_private ~indexable:true
+          ~onboarding_state:Earde.Community_types.Community_published
+          ~visibility:Earde.Community_types.Community_private ~indexable:true
           ~discoverable:true
       ; nc_valid_case "published indexable-only rejected" false
           ~is_network_community:true
-          ~onboarding_state:Earde.Db.Community_published
-          ~visibility:Earde.Db.Community_public ~indexable:true
+          ~onboarding_state:Earde.Community_types.Community_published
+          ~visibility:Earde.Community_types.Community_public ~indexable:true
           ~discoverable:false
       ; nc_valid_case "published discoverable-only rejected" false
           ~is_network_community:true
-          ~onboarding_state:Earde.Db.Community_published
-          ~visibility:Earde.Db.Community_public ~indexable:false
+          ~onboarding_state:Earde.Community_types.Community_published
+          ~visibility:Earde.Community_types.Community_public ~indexable:false
           ~discoverable:true
       ] )
   ]

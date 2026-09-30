@@ -128,8 +128,8 @@ let community_structurally_valid ~is_network_community ~onboarding_state
   Network_communities.lifecycle_state_valid ~is_network_community
     ~onboarding_state ~visibility ~indexable ~discoverable
   || is_network_community
-     && onboarding_state = Db.Community_published
-     && visibility = Db.Community_private
+     && onboarding_state = Community_types.Community_published
+     && visibility = Community_types.Community_private
      && (not indexable) && not discoverable
 
 (* The exact unpublished dedicated-community setup draft: a network
@@ -144,8 +144,8 @@ let community_structurally_valid ~is_network_community ~onboarding_state
 let unpublished_setup_draft ~is_network_community ~onboarding_state ~visibility
     ~indexable ~discoverable =
   is_network_community
-  && onboarding_state = Db.Community_draft
-  && visibility = Db.Community_private
+  && onboarding_state = Community_types.Community_draft
+  && visibility = Community_types.Community_private
   && (not indexable) && not discoverable
 
 (* Actor authorization, third, fourth and fifth: all three durable sources
@@ -475,8 +475,8 @@ let remove (module C : Caqti_lwt.CONNECTION) ~actor_user_id ~project_slug
              corruption at this step, and removal never requires current
              host eligibility. *)
           match
-            ( Db.community_visibility_of_string visibility_raw,
-              Db.community_onboarding_state_of_string onboarding_raw )
+            ( Community_types.community_visibility_of_string visibility_raw,
+              Community_types.community_onboarding_state_of_string onboarding_raw )
           with
           | None, _ | _, Error _ -> rollback_to Inconsistent_data
           | Some visibility, Ok onboarding_state ->

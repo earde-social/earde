@@ -126,7 +126,7 @@ type feedback =
 val share_page :
   ?user:string ->
   ?request:Dream.request ->
-  ?shell:Db.community * Db.community list * string ->
+  ?shell:Community_types.community * Community_types.community list * string ->
   state:share_state ->
   notice:notice option ->
   feedback:feedback option ->
@@ -143,7 +143,7 @@ val share_page :
 val management_page :
   ?user:string ->
   ?request:Dream.request ->
-  ?shell:Db.community * Db.community list * string ->
+  ?shell:Community_types.community * Community_types.community list * string ->
   state:management_state ->
   notice:notice option ->
   feedback:feedback option ->

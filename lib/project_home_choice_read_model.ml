@@ -206,8 +206,8 @@ let community_identity_valid ~id ~name ~slug ~description =
 let active_target_visibility ~visibility_raw ~onboarding_raw
     ~is_network_community ~indexable ~discoverable =
   match
-    ( Db.community_visibility_of_string visibility_raw,
-      Db.community_onboarding_state_of_string onboarding_raw )
+    ( Community_types.community_visibility_of_string visibility_raw,
+      Community_types.community_onboarding_state_of_string onboarding_raw )
   with
   | Some parsed_visibility, Ok parsed_onboarding ->
       if indexable <> discoverable then Error ()
@@ -225,13 +225,13 @@ let active_target_visibility ~visibility_raw ~onboarding_raw
            which is where the store's own answer would land it. Only the
            boolean crosses — no lifecycle detail rides with it. *)
         let removal_allowed =
-          not (is_network_community && parsed_onboarding = Db.Community_draft)
+          not (is_network_community && parsed_onboarding = Community_types.Community_draft)
         in
         let visibility =
           if
             is_network_community
-            && parsed_onboarding = Db.Community_published
-            && parsed_visibility = Db.Community_public
+            && parsed_onboarding = Community_types.Community_published
+            && parsed_visibility = Community_types.Community_public
           then if indexable then Public else Unlisted
           else Currently_unavailable
         in
@@ -278,8 +278,8 @@ let eligible_community_of_row
     Error ()
   else
     match
-      ( Db.community_visibility_of_string visibility_raw,
-        Db.community_onboarding_state_of_string onboarding_raw )
+      ( Community_types.community_visibility_of_string visibility_raw,
+        Community_types.community_onboarding_state_of_string onboarding_raw )
     with
     | Some parsed_visibility, Ok parsed_onboarding ->
         if

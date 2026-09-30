@@ -9,11 +9,11 @@ let index_of html needle =
   in
   go 0
 
-let community : Earde.Db.community =
+let community : Earde.Community_types.community =
   { id = 7711; slug = "cmia";
     name = "Cartographic Mapping Interest Assembly";
     description = Some "Two ways to take part."; rules = None;
     avatar_url = None; banner_url = None; allow_downvotes = true;
-    sections_enabled = true; visibility = Earde.Db.Community_public;
+    sections_enabled = true; visibility = Earde.Community_types.Community_public;
     indexable = true; is_network_community = false;
-    onboarding_state = Earde.Db.Community_published; discoverable = true }
+    onboarding_state = Earde.Community_types.Community_published; discoverable = true }

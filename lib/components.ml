@@ -1,9 +1,3 @@
-(* Bound before `open Db`, which would otherwise shadow the top-level
-   Analytics module with Db.Analytics. *)
-module Posthog = Analytics
-
-open Db
-
 (* Defense-in-depth: escape before string-interpolation into HTML templates.
    Caqti prevents SQLi; this prevents stored/reflected XSS. *)
 let html_escape s =
@@ -220,7 +214,7 @@ let mobile_desktop_gate =
    community:<id>, keyed by the immutable numeric id). Shared by every
    launch_* document so all of them carry the exact same analytics assets. *)
 let analytics_assets ?request ?analytics_community () =
-  match Posthog.browser_config () with
+  match Analytics.browser_config () with
     | None -> ("", "")
     | Some cfg ->
         let identity_attr =
@@ -235,11 +229,11 @@ let analytics_assets ?request ?analytics_community () =
                   match int_of_string_opt uid_str with
                   | Some id ->
                       Printf.sprintf " data-analytics-user='%s'"
-                        (html_escape (Posthog.distinct_id_of_user_id id))
+                        (html_escape (Analytics.distinct_id_of_user_id id))
                   | None -> ""))
         in
         (* Community context arrives as (id, authoritative visibility) — the
-           pair comes from the Db.community record the page already holds, so
+           pair comes from the Community_types.community record the page already holds, so
            the §13 private marker can never be derived from URL shape and a
            call site cannot pass the id without stating visibility. The
            marker value is only "true": no name, no slug. On marked
@@ -248,8 +242,8 @@ let analytics_assets ?request ?analytics_community () =
           match analytics_community with
           | Some (community_id, visibility) ->
               ( Printf.sprintf " data-analytics-group='%s'"
-                  (html_escape (Posthog.community_group_key community_id)),
-                if Db.community_is_private visibility then
+                  (html_escape (Analytics.community_group_key community_id)),
+                if Community_types.community_is_private visibility then
                   " data-analytics-private-community='true'"
                 else "" )
           | None -> ("", "")
@@ -264,9 +258,9 @@ let analytics_assets ?request ?analytics_community () =
                  <span data-analytics-error hidden class='text-xs text-red-600'>Couldn&#39;t save &mdash; try again.</span>\
                </div>\
              </div>"
-            (html_escape cfg.Posthog.browser_token)
-            (html_escape cfg.Posthog.browser_api_host)
-            (html_escape cfg.Posthog.browser_deployment_environment)
+            (html_escape cfg.Analytics.browser_token)
+            (html_escape cfg.Analytics.browser_api_host)
+            (html_escape cfg.Analytics.browser_deployment_environment)
             identity_attr group_attr private_attr )
 
 (* The pre-launch page furniture (the warm Tailwind `Site navbar + footer, the
@@ -820,7 +814,7 @@ let launch_app_page ?(noindex = false) ?request ?user ?(rail_communities = [])
   in
   let tiles =
     List.map
-      (fun (c : community) ->
+      (fun (c : Community_types.community) ->
         let face =
           match c.avatar_url with
           | Some url when String.trim url <> "" ->
@@ -1043,7 +1037,7 @@ let launch_onboarding_page ?(noindex = false) ?request ?user ?(stepper = "")
    global rails can never diverge. *)
 let launch_community_doc ?(noindex = false) ?request ?user
     ?(rail_communities = []) ?(head_extra = "") ?(aside = "")
-    ~(community : community) ~sidebar ~page_class ~title ~main_el () =
+    ~(community : Community_types.community) ~sidebar ~page_class ~title ~main_el () =
   let analytics_head, analytics_banner =
     analytics_assets ?request
       ~analytics_community:(community.id, community.visibility) ()
@@ -1126,7 +1120,7 @@ let launch_community_doc ?(noindex = false) ?request ?user
     in
     String.capitalize_ascii raw
   in
-  let tile_face_of (c : community) =
+  let tile_face_of (c : Community_types.community) =
     match c.avatar_url with
     | Some url when String.trim url <> "" ->
         let src = safe_img_src url in
@@ -1139,7 +1133,7 @@ let launch_community_doc ?(noindex = false) ?request ?user
      belongs to it, appended at the end when directly visiting a community
      they haven't joined — an anonymous viewer's rail reduces to exactly the
      current tile). *)
-  let rail_tile (c : community) =
+  let rail_tile (c : Community_types.community) =
     let marker =
       if c.slug = community.slug
       then "<span class='rail__marker rail__marker--community'></span>"
@@ -1151,7 +1145,7 @@ let launch_community_doc ?(noindex = false) ?request ?user
       (launch_tile_color c.slug) marker (tile_face_of c)
   in
   let rail_run =
-    if List.exists (fun (c : community) -> c.slug = community.slug) rail_communities
+    if List.exists (fun (c : Community_types.community) -> c.slug = community.slug) rail_communities
     then rail_communities
     else rail_communities @ [community]
   in
@@ -1169,7 +1163,7 @@ let launch_community_doc ?(noindex = false) ?request ?user
   in
   (* Replay privacy on the existing shell element — class only, no wrapper. *)
   let shell_cls =
-    if Db.community_is_private community.visibility then "shell ph-no-capture"
+    if Community_types.community_is_private community.visibility then "shell ph-no-capture"
     else "shell"
   in
   let behavior_script = match user with
@@ -1225,7 +1219,7 @@ let launch_community_doc ?(noindex = false) ?request ?user
    route add a small head fragment; the flat community home uses it to ship
    the guest-only [launch_share_script]. *)
 let launch_community_page ?noindex ?request ?user ?rail_communities ?head_extra
-    ~(community : community) ~sidebar ~page_class ~title ~content () =
+    ~(community : Community_types.community) ~sidebar ~page_class ~title ~content () =
   launch_community_doc ?noindex ?request ?user ?rail_communities ?head_extra
     ~community ~sidebar ~page_class
     ~title ~main_el:("<main class='main'>\n" ^ content ^ "\n</main>") ()
@@ -1241,14 +1235,14 @@ let launch_community_page ?noindex ?request ?user ?rail_communities ?head_extra
    [rail_communities] the real joined communities its handler already
    loads. Used only by [Pages.community_channel_shell_page]. *)
 let launch_community_surface_page ?noindex ?request ?user ?rail_communities
-    ?head_extra ?aside ~(community : community) ~sidebar ~page_class ~title
+    ?head_extra ?aside ~(community : Community_types.community) ~sidebar ~page_class ~title
     ~main_el () =
   launch_community_doc ?noindex ?request ?user ?rail_communities ?head_extra
     ?aside ~community ~sidebar ~page_class ~title ~main_el ()
 
 (* === HELPERS === *)
 
-(* "[deleted_" is set by anonymize_user in Db — both sides must agree on the tombstone format. *)
+(* "[deleted_" is set by User_store.anonymize_user — both sides must agree on the tombstone format. *)
 let is_deleted_user u = String.length u >= 9 && String.sub u 0 9 = "[deleted_"
 
 (* mod_usernames/admin_usernames enable badge rendering at call sites that know the community;
@@ -1320,7 +1314,7 @@ let format_month_year date_str =
    Rule A/B/C visibility can be reused by other surfaces (e.g. search results) with zero
    drift. Returns "" when the viewer has no actionable controls. csrf_token is passed in so
    the caller computes it once and shares it with its other forms. *)
-let post_admin_actions ?(is_current_user_mod=false) ?(admin_usernames=[]) ?(banned_usernames=[]) ~csrf_token request (post : post) =
+let post_admin_actions ?(is_current_user_mod=false) ?(admin_usernames=[]) ?(banned_usernames=[]) ~csrf_token request (post : Post_types.post) =
   let current_user = Dream.session_field request "username" in
   let is_admin = Dream.session_field request "is_admin" = Some "true" in
   (* Tombstone check: both the username prefix (anonymize_user) and content sentinels signal
@@ -1485,7 +1479,7 @@ let post_admin_actions ?(is_current_user_mod=false) ?(admin_usernames=[]) ?(bann
 
 (* URL slug from a thread title — descriptive only. post_id is the authoritative key in
    /c/:slug/t/:post_id-:post_slug, so a stale or missing slug still resolves (the handler 301s
-   to canonical). Same shape as Db's section/community slugify: lowercase, any run of
+   to canonical). Same shape as the section and community stores' slugify: lowercase, any run of
    non-alphanumerics collapses to a single '-', trimmed, length-capped so URLs stay readable. *)
 let slugify title =
   let b = Buffer.create (String.length title) in
@@ -1520,9 +1514,9 @@ let canonical_thread_path community_slug post_id title =
    community's own post and renders byte-identically to before. The origin
    name may be linked because the feed queries only return a shared row
    while the origin community is currently public. *)
-type feed_shared = string * Db.feed_shared_context
+type feed_shared = string * Post_types.feed_shared_context
 
-let shared_from_html (post : post) (ctx : Db.feed_shared_context) =
+let shared_from_html (post : Post_types.post) (ctx : Post_types.feed_shared_context) =
   Printf.sprintf
     "<span class='sth-shared-from'>&#8644; Shared from <a href='/c/%s'>%s</a></span>"
     (html_escape post.community_slug) (html_escape ctx.fs_origin_name)
@@ -1548,7 +1542,7 @@ let shared_with_html (destinations : (string * string) list) =
         "<span class='sth-shared-from'>&#8644; Shared with <a href='/c/%s'>%s</a>%s</span>"
         (html_escape slug) (html_escape name) more
 
-let render_post ?(is_current_user_mod=false) ?(mod_usernames=[]) ?(admin_usernames=[]) ?(banned_usernames=[]) ?(shared : feed_shared option) request user_votes (post : post) =
+let render_post ?(is_current_user_mod=false) ?(mod_usernames=[]) ?(admin_usernames=[]) ?(banned_usernames=[]) ?(shared : feed_shared option) request user_votes (post : Post_types.post) =
   let csrf_token = Dream.csrf_tag request in
   let content_preview = Option.value ~default:"" post.content in
   let link_part = match post.url with | Some u -> Printf.sprintf "<a href='%s' class='text-xs text-[#C94C4C] hover:underline' target='_blank'>%s ↗</a>" (safe_url u) (html_escape u) | None -> "" in
@@ -1701,7 +1695,7 @@ let extract_domain url =
    Returns "" when the viewer has no available action (anon, or a tombstoned / admin-protected
    target) so the caller can omit the menu entirely. Dialog ids are keyed by post.id and never
    collide with render_post because the two renderers never appear on the same page. *)
-let mod_action_controls ~is_current_user_mod ~admin_usernames ~banned_usernames request (post : post) =
+let mod_action_controls ~is_current_user_mod ~admin_usernames ~banned_usernames request (post : Post_types.post) =
   let csrf_token = Dream.csrf_tag request in
   let current_user = Dream.session_field request "username" in
   let is_admin = Dream.session_field request "is_admin" = Some "true" in
@@ -1858,7 +1852,7 @@ let mod_action_controls ~is_current_user_mod ~admin_usernames ~banned_usernames 
    the upvote form, the score <span>, and the downvote form, with the same Tailwind colour classes
    the JS toggles. The body is intentionally lighter than the card: strong title, an optional
    single-line preview, a compact monospace meta row, and moderation tucked into a ⋯ menu. *)
-let render_forum_row ?(is_current_user_mod=false) ?(mod_usernames=[]) ?(admin_usernames=[]) ?(banned_usernames=[]) ?(show_context=false) ?(shared : feed_shared option) ?(shared_with=[]) request user_votes (post : post) =
+let render_forum_row ?(is_current_user_mod=false) ?(mod_usernames=[]) ?(admin_usernames=[]) ?(banned_usernames=[]) ?(show_context=false) ?(shared : feed_shared option) ?(shared_with=[]) request user_votes (post : Post_types.post) =
   let csrf_token = Dream.csrf_tag request in
   let current_user = Dream.session_field request "username" in
   let current_vote = Option.value ~default:0 (List.assoc_opt post.id user_votes) in
@@ -1967,7 +1961,7 @@ let render_forum_row ?(is_current_user_mod=false) ?(mod_usernames=[]) ?(admin_us
 (* Replay privacy (analytics spec §6): private-community page content is
    blocked from session replay entirely via PostHog's built-in ph-no-capture
    class, on top of the selector-based text masking. *)
-let private_replay_guard ~(community : Db.community) body =
-  if community.Db.visibility = Db.Community_private then
+let private_replay_guard ~(community : Community_types.community) body =
+  if community.Community_types.visibility = Community_types.Community_private then
     "<div class='ph-no-capture'>" ^ body ^ "</div>"
   else body

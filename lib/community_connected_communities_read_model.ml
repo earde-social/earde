@@ -83,8 +83,8 @@ let counterparts_query =
    off-enum stored value is corruption, never a quietly ineligible row. *)
 let eligibility ~visibility_raw ~onboarding_raw ~discoverable =
   match
-    ( Db.community_visibility_of_string visibility_raw,
-      Db.community_onboarding_state_of_string onboarding_raw )
+    ( Community_types.community_visibility_of_string visibility_raw,
+      Community_types.community_onboarding_state_of_string onboarding_raw )
   with
   | Some visibility, Ok onboarding_state ->
       Some (Cc.connection_eligible ~visibility ~onboarding_state ~discoverable)

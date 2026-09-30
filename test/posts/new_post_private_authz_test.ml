@@ -5,7 +5,7 @@
       canonical community_not_found 404, byte-identical to a missing slug,
       instead of learning the community's existence and name from the join
       gate and document title.
-   2. The no-parameter chooser filters Db.get_all_communities through the
+   2. The no-parameter chooser filters Community_store.get_all_communities through the
       same predicate — private communities are listed only for members,
       moderators, and admins.
    Exercises the REAL handler through the production-like Dream router,

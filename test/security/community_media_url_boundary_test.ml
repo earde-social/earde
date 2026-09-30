@@ -57,14 +57,14 @@ let client_peer = "198.51.100.242:4242"
 
 let cmub_secret = "cmub-test-secret-value"
 
-let form_community : Earde.Db.community =
+let form_community : Earde.Community_types.community =
   { id = 7710; slug = community_slug; name = "Cmub Media";
     description = None; rules = None;
     avatar_url = Some stored_avatar; banner_url = Some stored_banner;
     allow_downvotes = true; sections_enabled = false;
-    visibility = Earde.Db.Community_public; indexable = true;
+    visibility = Earde.Community_types.Community_public; indexable = true;
     is_network_community = false;
-    onboarding_state = Earde.Db.Community_published; discoverable = true }
+    onboarding_state = Earde.Community_types.Community_published; discoverable = true }
 
 let render_settings () =
   let captured = ref None in

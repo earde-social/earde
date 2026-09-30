@@ -80,7 +80,7 @@ let resolve_destination_context (module C : Caqti_lwt.CONNECTION) ~post_id
 
 (* Origin-side provenance, batched for a page of already-selected canonical
    post ids (CSV-joined and expanded via string_to_array — the same bounded
-   IN-list idiom as Db.get_thread_sources_for_posts, so no N+1 and no feed
+   IN-list idiom as Thread_source_store.get_thread_sources_for_posts, so no N+1 and no feed
    query changes). A destination appears iff its placement is CURRENTLY
    publicly renderable: accepted status, a currently public origin (the
    destination feed arm's own rule — an origin turning private stops the

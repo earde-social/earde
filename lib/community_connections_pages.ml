@@ -399,9 +399,9 @@ let document ?user ?request ?shell ~title ~body () =
       Components.launch_message_page ?request ~noindex:true ~title
         ~content:(Printf.sprintf "<div class='create-shell'>%s</div>" wrapped)
         ()
-  | Some ((community_record : Db.community), rail_communities, sidebar) ->
+  | Some ((community_record : Community_types.community), rail_communities, sidebar) ->
       let content =
-        Community_settings_shell.wrap ~slug:community_record.Db.slug
+        Community_settings_shell.wrap ~slug:community_record.slug
           ~active:Community_settings_shell.Connections
           ~can_complete_setup:
             (Community_settings_shell.can_complete_setup

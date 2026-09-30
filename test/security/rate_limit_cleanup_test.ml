@@ -1,4 +1,4 @@
-(* Db.Rate_limit.cleanup_expired: retention derives from the single
+(* Rate_limit_store.cleanup_expired: retention derives from the single
    enforcement window (2x, so no configured window can outlive cleanup), the
    boundary rule is strict-< (a row at exactly now - cleanup_after_seconds is
    kept), active buckets survive, a forced DELETE failure surfaces as a
@@ -82,21 +82,21 @@ let derivation_case =
   Alcotest.test_case "retention derives from the enforcement window" `Quick
     (fun () ->
       Alcotest.(check (float 0.0001))
-        "one-minute window" 60.0 Earde.Db.Rate_limit.window_seconds;
+        "one-minute window" 60.0 Earde.Rate_limit_store.window_seconds;
       Alcotest.(check (float 0.0001))
         "retention is exactly two windows"
-        (2.0 *. Earde.Db.Rate_limit.window_seconds)
-        Earde.Db.Rate_limit.cleanup_after_seconds;
+        (2.0 *. Earde.Rate_limit_store.window_seconds)
+        Earde.Rate_limit_store.cleanup_after_seconds;
       Alcotest.(check bool)
         "retention can never undercut the window" true
-        (Earde.Db.Rate_limit.cleanup_after_seconds
-        >= Earde.Db.Rate_limit.window_seconds))
+        (Earde.Rate_limit_store.cleanup_after_seconds
+        >= Earde.Rate_limit_store.window_seconds))
 
 let expiry_case =
   db_case "expired rows go, boundary and active rows stay" (fun conn c ->
       let (module C : Caqti_lwt.CONNECTION) = c in
       let now = 2_000_000.0 in
-      let retention = Earde.Db.Rate_limit.cleanup_after_seconds in
+      let retention = Earde.Rate_limit_store.cleanup_after_seconds in
       let insert ip age =
         let* r = C.exec q_insert_row ((ip, "/login"), (3, now -. age)) in
         or_fail "fixture row" r
@@ -105,7 +105,7 @@ let expiry_case =
       (* Exactly at the boundary: the documented strict-< rule keeps it. *)
       let* () = insert "rlc-boundary" retention in
       let* () = insert "rlc-active" 10.0 in
-      let* deleted = Earde.Db.Rate_limit.cleanup_expired ~now conn in
+      let* deleted = Earde.Rate_limit_store.cleanup_expired ~now conn in
       let* deleted = or_fail_s "cleanup" deleted in
       Alcotest.(check int) "exactly the expired row" 1 deleted;
       let* ips = C.collect_list q_surviving_ips () in
@@ -121,7 +121,7 @@ let failure_case =
     (fun conn c ->
       let (module C : Caqti_lwt.CONNECTION) = c in
       let now = 2_000_000.0 in
-      let retention = Earde.Db.Rate_limit.cleanup_after_seconds in
+      let retention = Earde.Rate_limit_store.cleanup_after_seconds in
       let* r =
         C.exec q_insert_row
           (("rlc-203.0.113.9", "/login"), (3, now -. retention -. 5.0))
@@ -131,7 +131,7 @@ let failure_case =
       let* () = or_fail "create fn" r in
       let* r = C.exec q_create_fail_trigger () in
       let* () = or_fail "create trigger" r in
-      let* result = Earde.Db.Rate_limit.cleanup_expired ~now conn in
+      let* result = Earde.Rate_limit_store.cleanup_expired ~now conn in
       let* err =
         match result with
         | Error e -> Lwt.return e
@@ -142,7 +142,7 @@ let failure_case =
       Alcotest.(check bool) "error carries no fixture IP" false
         (Html_assert.contains err "203.0.113");
       (* The limiter's own path is untouched by a broken cleanup. *)
-      let* check = Earde.Db.Rate_limit.check c "rlc-fresh" "/login" in
+      let* check = Earde.Rate_limit_store.check c "rlc-fresh" "/login" in
       let* check = or_fail_s "check still works" check in
       Alcotest.(check bool) "fresh request allowed" true
         (check = `Allowed);
@@ -151,7 +151,7 @@ let failure_case =
       let* r = C.exec q_drop_fail_fn () in
       let* () = or_fail "drop fn" r in
       (* Transient: with the fault removed the same cleanup succeeds. *)
-      let* deleted = Earde.Db.Rate_limit.cleanup_expired ~now conn in
+      let* deleted = Earde.Rate_limit_store.cleanup_expired ~now conn in
       let* deleted = or_fail_s "cleanup after recovery" deleted in
       Alcotest.(check bool) "expired rows now removed" true (deleted >= 1);
       Lwt.return_unit)

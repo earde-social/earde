@@ -137,12 +137,12 @@ let status_of_relation conn id = find conn "status" Home_review_fixture.q_status
 
 (* === DB-free: settings navigation link === *)
 
-let settings_community : Earde.Db.community =
+let settings_community : Earde.Community_types.community =
   { id = 4242; slug = "phhr-nav"; name = "Phhr Nav"; description = None;
     rules = None; avatar_url = None; banner_url = None; allow_downvotes = true;
-    sections_enabled = false; visibility = Earde.Db.Community_public;
+    sections_enabled = false; visibility = Earde.Community_types.Community_public;
     indexable = true; is_network_community = true;
-    onboarding_state = Earde.Db.Community_published; discoverable = true }
+    onboarding_state = Earde.Community_types.Community_published; discoverable = true }
 
 (* The settings page renders a framework CSRF field, so it needs a live
    request under a secret + sessions pipeline; no SQL is touched. *)

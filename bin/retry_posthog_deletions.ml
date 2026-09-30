@@ -47,7 +47,7 @@ let run url =
         Earde.Posthog_deletion.process_batch
           ~claim:(fun () ->
             let* jobs =
-              Earde.Db.claim_posthog_deletion_batch conn ~limit:batch_limit ()
+              Earde.Posthog_deletion_job_store.claim_batch conn ~limit:batch_limit ()
             in
             (match jobs with
             | Ok jobs ->
@@ -61,10 +61,10 @@ let run url =
             Lwt.return jobs)
           ~mark_completed:(fun job_id ->
             Printf.printf "job %d: completed\n%!" job_id;
-            Earde.Db.complete_posthog_deletion_job conn job_id)
+            Earde.Posthog_deletion_job_store.mark_completed conn job_id)
           ~mark_failed:(fun job_id err ->
             Printf.printf "job %d: still pending (%s)\n%!" job_id err;
-            Earde.Db.fail_posthog_deletion_job conn job_id err)
+            Earde.Posthog_deletion_job_store.mark_failed conn job_id err)
           ()
       in
       match summary with
@@ -81,7 +81,7 @@ let run url =
             Earde.Posthog_deletion.process_group_batch
               ~claim:(fun () ->
                 let* jobs =
-                  Earde.Db.claim_posthog_group_cleanup_batch conn
+                  Earde.Posthog_group_cleanup_job_store.claim_batch conn
                     ~limit:batch_limit ()
                 in
                 (match jobs with
@@ -96,11 +96,11 @@ let run url =
                 Lwt.return jobs)
               ~mark_completed:(fun job_id ->
                 Printf.printf "group cleanup %d: completed\n%!" job_id;
-                Earde.Db.complete_posthog_group_cleanup_job conn job_id)
+                Earde.Posthog_group_cleanup_job_store.mark_completed conn job_id)
               ~mark_failed:(fun job_id err ->
                 Printf.printf "group cleanup %d: still pending (%s)\n%!" job_id
                   err;
-                Earde.Db.fail_posthog_group_cleanup_job conn job_id err)
+                Earde.Posthog_group_cleanup_job_store.mark_failed conn job_id err)
               ()
           in
           (match group_summary with

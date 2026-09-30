@@ -21,8 +21,8 @@
 val community_network_page :
   ?user:string ->
   ?noindex:bool ->
-  ?rail_communities:Db.community list ->
-  community:Db.community ->
+  ?rail_communities:Community_types.community list ->
+  community:Community_types.community ->
   sidebar:string ->
   projects_section:string ->
   communities_section:string ->

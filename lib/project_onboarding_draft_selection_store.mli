@@ -1,6 +1,6 @@
 (** Owner-authorized, transactional replacement of the repository selection
     on one available project-onboarding draft. This feature module owns its
-    SQL; nothing here belongs to the legacy [Db] macro-module.
+    SQL.
 
     The caller identifies repositories by LOCAL
     [project_onboarding_draft_repositories] row ids — never by GitHub

@@ -1424,7 +1424,7 @@ let notif_render_case =
           ~post ~destination:d ()
       in
       let unread_of label user =
-        let* counted = Earde.Db.count_unread_notifs conn user in
+        let* counted = Earde.Notification_store.count_unread_notifs conn user in
         match counted with
         | Ok n -> Lwt.return n
         | Error e -> Alcotest.failf "%s: %s" label e

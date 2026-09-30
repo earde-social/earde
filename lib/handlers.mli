@@ -128,7 +128,7 @@ val chat_message_json :
   channel_id:int ->
   community_id:int ->
   ?thread_id:int ->
-  Db.chat_message * string option ->
+  Chat_store.chat_message * string option ->
   Yojson.Safe.t
 
 val send_message_handler : Dream.handler
@@ -143,7 +143,7 @@ val community_settings_handler : Dream.handler
     rejection (published network communities must remain public). Delegates to
     {!Network_communities.visibility_change_allowed}. *)
 val visibility_update_rejection :
-  Db.community -> requested_visibility:Db.community_visibility -> string option
+  Community_types.community -> requested_visibility:Community_types.community_visibility -> string option
 
 val update_community_visibility_handler : Dream.handler
 val update_community_indexability_handler : Dream.handler

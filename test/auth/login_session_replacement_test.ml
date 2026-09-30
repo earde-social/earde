@@ -385,7 +385,7 @@ let confirm_no_session_case =
   db_case "signup email confirmation establishes no authenticated session"
     (fun ~url c ->
       let (module C : Caqti_lwt.CONNECTION) = c in
-      let hash = Earde.Db.pending_signup_hash_token "asr_confirm_tok" in
+      let hash = Earde.Pending_signup_store.hash_token "asr_confirm_tok" in
       let* r = C.exec q_insert_pending ("asr_signup", hash) in
       let* () = or_fail "pending" r in
       let client = make_client ~url ~poison_fields:[] in

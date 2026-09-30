@@ -17,17 +17,17 @@ let at html needle =
   | Some i -> i
   | None -> Alcotest.failf "the document has no %S" needle
 
-let section ?description ~name ~slug () : Earde.Db.community_section =
+let section ?description ~name ~slug () : Earde.Section_store.community_section =
   { section_id = 1; community_id = 7711; name; slug; description;
     position = 0; default_sort = "hot"; is_introduction_section = false;
     indexable = true }
 
-let channel ~slug () : Earde.Db.channel =
+let channel ~slug () : Earde.Channel_store.channel =
   { id = 1; community_id = 7711; slug; name = slug; topic = None;
     position = 0; is_archived = false; created_at = "2026-07-31 10:00:00";
     indexable = true }
 
-let post ~title () : Earde.Db.post =
+let post ~title () : Earde.Post_types.post =
   { id = 501; title; url = None; content = Some "Body."; community_id = 7711;
     user_id = 9; username = "mapmaker"; community_slug = "cmia";
     created_at = "2026-07-31 10:00:00"; score = 3; comment_count = 1;
@@ -125,7 +125,7 @@ let recent_case =
       let html =
         render ~channels:one_channel ~sections:one_section
           ~recent_posts:
-            [ { Earde.Db.fi_post = post ~title:"Contour intervals" ();
+            [ { Earde.Post_types.fi_post = post ~title:"Contour intervals" ();
                 fi_shared = None } ] ()
       in
       let recent = at html "<span class='kicker'>Recent durable knowledge</span>" in

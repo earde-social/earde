@@ -403,7 +403,7 @@ let header_suite =
 (* --- forced database failures must stay payload-free --- *)
 
 (* A pool whose connections resolve only the tables of [schema]: with the
-   nonexistent 'osshard_void' every Db call fails; with 'osshard_half'
+   nonexistent 'osshard_void' every store call fails; with 'osshard_half'
    (a schema exposing only a communities view) the community lookup
    succeeds and the *next* query fails, reaching deeper error arms. Either
    way the failure is a real PostgreSQL error carrying SQL text and the
@@ -575,7 +575,7 @@ let make_schema (module C : Caqti_lwt.CONNECTION) statements =
     statements
 
 (* [users] is a plain SELECT * view and therefore auto-updatable: the
-   current-admin SELECT and Db.ban_user's own "UPDATE users SET is_banned"
+   current-admin SELECT and Admin_store.ban_user's own "UPDATE users SET is_banned"
    both succeed. What is missing is dream_session, so the session revocation
    inside the ban transaction fails and the ban must roll back. *)
 let q_no_sessions_schema =
@@ -600,7 +600,7 @@ let q_is_banned =
   (Caqti_type.int ->! Caqti_type.bool)
   "SELECT is_banned FROM users WHERE id = $1"
 
-(* A durable session row for the target, written directly. Db.ban_user
+(* A durable session row for the target, written directly. Admin_store.ban_user
    deletes exactly the rows whose payload names this user_id, so the row
    surviving is what proves the rolled-back ban revoked nothing either. *)
 let q_insert_session =
@@ -762,24 +762,24 @@ let promote_typed_contract_case =
          result must be the storage constructor, never a domain refusal. *)
       let* broke = C.exec q_break_path () in
       let* () = Lwt.map ignore (or_fail "break search_path" broke) in
-      let* storage = Earde.Db.promote_to_top_mod (module C) uid cid in
+      let* storage = Earde.Moderator_store.promote_to_top_mod (module C) uid cid in
       let* reset = C.exec q_reset_path () in
       let* () = Lwt.map ignore (or_fail "reset search_path" reset) in
       (match storage with
-       | Error (Earde.Db.Promotion_storage_error s) ->
+       | Error (Earde.Moderator_store.Promotion_storage_error s) ->
            Alcotest.(check bool) "storage detail retained for the log" true
              (String.length s > 0)
-       | Error (Earde.Db.Promotion_refused m) ->
+       | Error (Earde.Moderator_store.Promotion_refused m) ->
            Alcotest.failf "storage failure classified as domain: %s" m
        | Ok () -> Alcotest.fail "succeeded on a broken connection");
       (* A non-moderator target is a domain refusal with the fixed friendly
          message, never a storage error. *)
-      let* refused = Earde.Db.promote_to_top_mod (module C) uid cid in
+      let* refused = Earde.Moderator_store.promote_to_top_mod (module C) uid cid in
       (match refused with
-       | Error (Earde.Db.Promotion_refused m) ->
+       | Error (Earde.Moderator_store.Promotion_refused m) ->
            Alcotest.(check string) "friendly domain message"
              "User is not a moderator of this community" m
-       | Error (Earde.Db.Promotion_storage_error s) ->
+       | Error (Earde.Moderator_store.Promotion_storage_error s) ->
            Alcotest.failf "domain refusal classified as storage: %s" s
        | Ok () -> Alcotest.fail "promoted a non-moderator");
       Lwt.return_unit)

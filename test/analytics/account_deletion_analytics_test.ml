@@ -118,7 +118,7 @@ let atomic_case =
       let* r = C.exec q_set_profile uid in
       let* () = or_fail "profile fixture" r in
       let did = "user:" ^ string_of_int uid in
-      let* r = Earde.Db.anonymize_user_and_enqueue_posthog_deletion conn uid in
+      let* r = Earde.Posthog_deletion_job_store.anonymize_and_enqueue conn uid in
       let* job_id, distinct_id = or_fail_s "anonymize+enqueue" r in
       Alcotest.(check string) "immutable distinct id" did distinct_id;
       let* name = C.find_opt Analytics_fixture.q_username_by_id uid in
@@ -143,7 +143,7 @@ let atomic_case =
            Alcotest.(check (option string)) "no error" None last_error
        | None -> Alcotest.fail "job row missing");
       (* Duplicate call converges on the SAME job — no competitors. *)
-      let* r2 = Earde.Db.anonymize_user_and_enqueue_posthog_deletion conn uid in
+      let* r2 = Earde.Posthog_deletion_job_store.anonymize_and_enqueue conn uid in
       let* job_id2, _ = or_fail_s "second call" r2 in
       Alcotest.(check int) "same job id" job_id job_id2;
       let* count = C.find q_count_jobs_for did in
@@ -162,7 +162,7 @@ let rollback_case =
       let* r = C.exec q_create_fail_trigger () in
       let* () = or_fail "create trigger" r in
       let* result =
-        Earde.Db.anonymize_user_and_enqueue_posthog_deletion conn uid
+        Earde.Posthog_deletion_job_store.anonymize_and_enqueue conn uid
       in
       (match result with
        | Error _ -> ()
@@ -187,7 +187,7 @@ let claim_case =
       let (module C : Caqti_lwt.CONNECTION) = c in
       let* job_id = C.find q_insert_job "user:9700001" in
       let* job_id = or_fail "job" job_id in
-      let* claimed = Earde.Db.claim_posthog_deletion_job conn job_id in
+      let* claimed = Earde.Posthog_deletion_job_store.claim conn job_id in
       let* claimed = or_fail_s "claim" claimed in
       Alcotest.(check (option string)) "claim returns the distinct id"
         (Some "user:9700001") claimed;
@@ -197,24 +197,24 @@ let claim_case =
            Alcotest.(check int) "attempts incremented exactly once" 1 attempts
        | None -> Alcotest.fail "job vanished");
       (* Fresh lease: a concurrent attempt cannot claim it. *)
-      let* again = Earde.Db.claim_posthog_deletion_job conn job_id in
+      let* again = Earde.Posthog_deletion_job_store.claim conn job_id in
       let* again = or_fail_s "concurrent claim" again in
       Alcotest.(check (option string)) "lease blocks reclaim" None again;
       (* Failure records the safe class; the stale lease re-opens the job. *)
-      let* r = Earde.Db.fail_posthog_deletion_job conn job_id "timeout" in
+      let* r = Earde.Posthog_deletion_job_store.mark_failed conn job_id "timeout" in
       let* () = or_fail_s "mark failed" r in
       let* r = C.exec q_backdate_attempt job_id in
       let* () = or_fail "backdate" r in
-      let* reclaimed = Earde.Db.claim_posthog_deletion_job conn job_id in
+      let* reclaimed = Earde.Posthog_deletion_job_store.claim conn job_id in
       let* reclaimed = or_fail_s "stale reclaim" reclaimed in
       Alcotest.(check (option string)) "stale lease eligible again"
         (Some "user:9700001") reclaimed;
       (* Completion clears the error and closes the job for good. *)
-      let* r = Earde.Db.complete_posthog_deletion_job conn job_id in
+      let* r = Earde.Posthog_deletion_job_store.mark_completed conn job_id in
       let* () = or_fail_s "complete" r in
       let* r = C.exec q_backdate_attempt job_id in
       let* () = or_fail "backdate completed" r in
-      let* never = Earde.Db.claim_posthog_deletion_job conn job_id in
+      let* never = Earde.Posthog_deletion_job_store.claim conn job_id in
       let* never = or_fail_s "claim completed" never in
       Alcotest.(check (option string)) "completed jobs never claimed" None
         never;
@@ -237,7 +237,7 @@ let batch_case =
       let* middle = or_fail "middle" middle in
       let* newest = C.find q_insert_job_aged ("user:9700013", 1) in
       let* newest = or_fail "newest" newest in
-      let* claimed = Earde.Db.claim_posthog_deletion_batch conn ~limit:2 () in
+      let* claimed = Earde.Posthog_deletion_job_store.claim_batch conn ~limit:2 () in
       let* claimed = or_fail_s "batch claim" claimed in
       Alcotest.(check (list (pair int string)))
         "bound respected; oldest two, oldest first"
@@ -278,11 +278,11 @@ let batch_worker_case =
           let* summary =
             Earde.Posthog_deletion.process_batch
               ~claim:(fun () ->
-                Earde.Db.claim_posthog_deletion_batch conn ~limit:25 ())
+                Earde.Posthog_deletion_job_store.claim_batch conn ~limit:25 ())
               ~mark_completed:(fun job_id ->
-                Earde.Db.complete_posthog_deletion_job conn job_id)
+                Earde.Posthog_deletion_job_store.mark_completed conn job_id)
               ~mark_failed:(fun job_id err ->
-                Earde.Db.fail_posthog_deletion_job conn job_id err)
+                Earde.Posthog_deletion_job_store.mark_failed conn job_id err)
               ()
           in
           let* summary = or_fail_s "process_batch" summary in
@@ -350,20 +350,20 @@ let run_delete_account ~url ~configure ?(consent = Some "granted")
       Lwt.return_unit)
 
 let job_completed conn did () =
-  let* job = Earde.Db.get_posthog_deletion_job conn did in
+  let* job = Earde.Posthog_deletion_job_store.get_by_distinct_id conn did in
   match job with
   | Ok (Some (_, "completed", _, _)) -> Lwt.return true
   | _ -> Lwt.return false
 
 let job_has_error conn did () =
-  let* job = Earde.Db.get_posthog_deletion_job conn did in
+  let* job = Earde.Posthog_deletion_job_store.get_by_distinct_id conn did in
   match job with
   | Ok (Some (_, _, _, Some _)) -> Lwt.return true
   | _ -> Lwt.return false
 
 let drop_job_and_user c ~did ~uid =
   let (module C : Caqti_lwt.CONNECTION) = c in
-  let* job = Earde.Db.get_posthog_deletion_job c did in
+  let* job = Earde.Posthog_deletion_job_store.get_by_distinct_id c did in
   let* () =
     match job with
     | Ok (Some (job_id, _, _, _)) ->
@@ -429,7 +429,7 @@ let consented_flow_case =
                  (Some [ did ])
                  (List.assoc_opt "distinct_id" lookup.Posthog_persons_stub.query)
            | None -> Alcotest.fail "no Persons lookup recorded");
-          let* job = Earde.Db.get_posthog_deletion_job conn did in
+          let* job = Earde.Posthog_deletion_job_store.get_by_distinct_id conn did in
           let* job = or_fail_s "job" job in
           (match job with
            | Some (_, status, attempts, last_error) ->
@@ -498,7 +498,7 @@ let capture_failure_case =
           Alcotest.(check bool) "redirects" true (Http_fixture.is_redirect status);
           Alcotest.(check bool) "deletion still attempted" true
             (List.length !seen >= 1);
-          let* job = Earde.Db.get_posthog_deletion_job conn did in
+          let* job = Earde.Posthog_deletion_job_store.get_by_distinct_id conn did in
           let* job = or_fail_s "job" job in
           (match job with
            | Some (_, status, _, _) ->
@@ -526,7 +526,7 @@ let missing_config_case =
         (Http_fixture.is_redirect status);
       Alcotest.(check int) "capture still emitted (consented)" 1
         (List.length payloads);
-      let* job = Earde.Db.get_posthog_deletion_job conn did in
+      let* job = Earde.Posthog_deletion_job_store.get_by_distinct_id conn did in
       let* job = or_fail_s "job" job in
       (match job with
        | Some (_, status, attempts, last_error) ->
@@ -554,7 +554,7 @@ let posthog_down_case =
               ~done_pred:(job_has_error conn did) ()
           in
           Alcotest.(check bool) "redirects" true (Http_fixture.is_redirect status);
-          let* job = Earde.Db.get_posthog_deletion_job conn did in
+          let* job = Earde.Posthog_deletion_job_store.get_by_distinct_id conn did in
           let* job = or_fail_s "job" job in
           (match job with
            | Some (_, status, _, last_error) ->

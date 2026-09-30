@@ -802,7 +802,7 @@ let notifications_page_for ~url ~label user_id =
   Lwt.return body
 
 let notifications_of conn user_id =
-  let* r = Earde.Db.get_notifications conn ~session_admin:false user_id in
+  let* r = Earde.Notification_store.get_notifications conn ~session_admin:false user_id in
   match r with
   | Ok rows -> Lwt.return rows
   | Error e -> Alcotest.failf "get_notifications: %s" e
@@ -828,13 +828,13 @@ let counterpart_case =
       (match brows with
       | [ n ] ->
           Alcotest.(check string) "b: kind"
-            "community_connection_requested" n.Earde.Db.notif_type;
+            "community_connection_requested" n.Earde.Notification_store.notif_type;
           Alcotest.(check (option string)) "b: context" (Some "ccnt-cp-b")
-            n.Earde.Db.community_slug;
+            n.community_slug;
           Alcotest.(check (option string)) "b: counterpart"
-            (Some "ccnt-cp-a") n.Earde.Db.counterpart_slug;
+            (Some "ccnt-cp-a") n.Earde.Notification_store.counterpart_slug;
           Alcotest.(check (option string)) "b: counterpart name"
-            (Some "Ccnt Alpha") n.Earde.Db.counterpart_name
+            (Some "Ccnt Alpha") n.Earde.Notification_store.counterpart_name
       | rows -> Alcotest.failf "b: %d rows" (List.length rows));
       (* a's top mod was notified about the acceptance; their context is a,
          so the same durable connection yields b as the counterpart. *)
@@ -842,13 +842,13 @@ let counterpart_case =
       (match arows with
       | [ n ] ->
           Alcotest.(check string) "a: kind" "community_connection_accepted"
-            n.Earde.Db.notif_type;
+            n.Earde.Notification_store.notif_type;
           Alcotest.(check (option string)) "a: context" (Some "ccnt-cp-a")
-            n.Earde.Db.community_slug;
+            n.community_slug;
           Alcotest.(check (option string)) "a: counterpart"
-            (Some "ccnt-cp-b") n.Earde.Db.counterpart_slug;
+            (Some "ccnt-cp-b") n.Earde.Notification_store.counterpart_slug;
           Alcotest.(check (option string)) "a: counterpart name"
-            (Some "Ccnt Beta") n.Earde.Db.counterpart_name
+            (Some "Ccnt Beta") n.Earde.Notification_store.counterpart_name
       | rows -> Alcotest.failf "a: %d rows" (List.length rows));
       Lwt.return_unit)
 

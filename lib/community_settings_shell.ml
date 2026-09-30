@@ -54,11 +54,11 @@ let canonical_network_slug value =
    an unpublished network setup draft, an authorized (top-mod/admin) viewer,
    and a canonical slug. The setup surface independently reauthorizes, so
    this only suppresses a pointless link, never grants anything. *)
-let can_complete_setup ~(community : Db.community) ~authorized =
-  community.Db.is_network_community
-  && community.Db.onboarding_state = Db.Community_draft
+let can_complete_setup ~(community : Community_types.community) ~authorized =
+  community.Community_types.is_network_community
+  && community.Community_types.onboarding_state = Community_types.Community_draft
   && authorized
-  && canonical_network_slug community.Db.slug
+  && canonical_network_slug community.slug
 
 (* The shared settings page header band: community identity plus the one
    canonical back link. Every shell surface renders this exact band, so the

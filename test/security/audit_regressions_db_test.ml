@@ -587,12 +587,12 @@ let password_reset_revocation_case =
 
       let token = "sec-reset-token-value" in
       let* created =
-        Earde.Db.password_reset_create_token c
+        Earde.Credential_store.create_token c
           ("sec_resetter@sec.invalid") token
       in
       let* created = or_fail_s "create token" created in
       Alcotest.(check bool) "token created" true created;
-      let* ok = Earde.Db.password_reset_atomically c token "sec-new-hash" in
+      let* ok = Earde.Credential_store.reset_password_atomically c token "sec-new-hash" in
       let* ok = or_fail_s "reset" ok in
       Alcotest.(check bool) "reset applied" true ok;
 
@@ -620,7 +620,7 @@ let password_reset_kills_other_links_case =
       let* bystander = or_fail "bystander" bystander in
       let email = "sec_twolinks@sec.invalid" in
       let mint token =
-        let* created = Earde.Db.password_reset_create_token c email token in
+        let* created = Earde.Credential_store.create_token c email token in
         let* created = or_fail_s ("create " ^ token) created in
         Alcotest.(check bool) ("created " ^ token) true created;
         Lwt.return_unit
@@ -628,20 +628,20 @@ let password_reset_kills_other_links_case =
       let* () = mint "sec-older-link" in
       let* () = mint "sec-newer-link" in
       let* created =
-        Earde.Db.password_reset_create_token c
+        Earde.Credential_store.create_token c
           "sec_twolinks_bystander@sec.invalid" "sec-bystander-link"
       in
       let* _ = or_fail_s "bystander token" created in
       let* n = C.find q_count_reset_tokens uid in
       let* n = or_fail "tokens before" n in
       Alcotest.(check int) "two links outstanding" 2 n;
-      let* ok = Earde.Db.password_reset_atomically c "sec-newer-link" "sec-owner-hash" in
+      let* ok = Earde.Credential_store.reset_password_atomically c "sec-newer-link" "sec-owner-hash" in
       let* ok = or_fail_s "owner reset" ok in
       Alcotest.(check bool) "owner's reset applied" true ok;
-      let* valid = Earde.Db.password_reset_validate_token c "sec-older-link" in
+      let* valid = Earde.Credential_store.validate_token c "sec-older-link" in
       let* valid = or_fail_s "validate older" valid in
       Alcotest.(check (option int)) "the older link no longer validates" None valid;
-      let* again = Earde.Db.password_reset_atomically c "sec-older-link" "sec-attacker-hash" in
+      let* again = Earde.Credential_store.reset_password_atomically c "sec-older-link" "sec-attacker-hash" in
       let* again = or_fail_s "older reset" again in
       Alcotest.(check bool) "the older link cannot reset again" false again;
       let* stored = C.find_opt q_password_hash uid in
@@ -922,7 +922,7 @@ let parent_binding_case =
 
       let create ?parent label =
         let* r =
-          Earde.Db.create_comment c ("sec reply " ^ label) post_a author
+          Earde.Comment_store.create_comment c ("sec reply " ^ label) post_a author
             parent
         in
         or_fail_s ("create " ^ label) r
@@ -1168,28 +1168,28 @@ let upload_rate_limit_case =
       let rec hit n acc =
         if n = 0 then Lwt.return (List.rev acc)
         else
-          let* r = Earde.Db.Rate_limit.check_upload c ip in
+          let* r = Earde.Rate_limit_store.check_upload c ip in
           let* r = or_fail_s "check_upload" r in
           hit (n - 1) (r :: acc)
       in
-      let* results = hit (Earde.Db.Rate_limit.upload_max_attempts + 2) [] in
+      let* results = hit (Earde.Rate_limit_store.upload_max_attempts + 2) [] in
       let allowed =
         List.length (List.filter (fun r -> r = `Allowed) results)
       in
       Alcotest.(check int) "allowance is spent, then blocked"
-        Earde.Db.Rate_limit.upload_max_attempts allowed;
+        Earde.Rate_limit_store.upload_max_attempts allowed;
       Alcotest.(check bool) "the tail is blocked" true
         (List.exists (fun r -> r = `Blocked) results);
       (* Distinct from the authentication bucket: spending the upload
          allowance must not lock the user out of logging in. *)
-      let* login_check = Earde.Db.Rate_limit.check c ip "/login" in
+      let* login_check = Earde.Rate_limit_store.check c ip "/login" in
       let* login_check = or_fail_s "login bucket" login_check in
       Alcotest.(check bool) "the /login bucket is untouched" true
         (login_check = `Allowed);
       Alcotest.(check bool) "upload allowance differs from auth allowance"
         true
-        (Earde.Db.Rate_limit.upload_max_attempts <> 5
-        || Earde.Db.Rate_limit.upload_endpoint <> "/login");
+        (Earde.Rate_limit_store.upload_max_attempts <> 5
+        || Earde.Rate_limit_store.upload_endpoint <> "/login");
       Lwt.return_unit)
 
 (* ------------------------------------------------------------------ *)
@@ -1274,22 +1274,22 @@ let legacy_mod_routes_case =
 
       (* Nothing changed, and the modern surface still refuses an ordinary
          moderator on its own terms rather than by being absent. *)
-      let* mods = Earde.Db.get_community_moderators c community in
+      let* mods = Earde.Moderator_store.get_community_moderators c community in
       let* mods = or_fail_s "mods" mods in
       Alcotest.(check bool) "the Top Mod is still a moderator" true
-        (List.exists (fun (u : Earde.Db.user) -> u.id = top) mods);
+        (List.exists (fun (u : Earde.User_store.user) -> u.id = top) mods);
       Alcotest.(check bool) "no new moderator was appointed" false
-        (List.exists (fun (u : Earde.Db.user) -> u.id = target) mods);
+        (List.exists (fun (u : Earde.User_store.user) -> u.id = target) mods);
       let* status =
         post "/c/sec-mods/manage-mods/add" [ ("username", "sec_modtarget") ]
       in
       Alcotest.(check bool)
         "the modern add surface refuses an ordinary moderator" true
         (status <> 303);
-      let* mods = Earde.Db.get_community_moderators c community in
+      let* mods = Earde.Moderator_store.get_community_moderators c community in
       let* mods = or_fail_s "mods again" mods in
       Alcotest.(check bool) "still no new moderator" false
-        (List.exists (fun (u : Earde.Db.user) -> u.id = target) mods);
+        (List.exists (fun (u : Earde.User_store.user) -> u.id = target) mods);
       Lwt.return_unit)
 
 (* ------------------------------------------------------------------ *)
@@ -1313,7 +1313,7 @@ let check_post_vote_state label c ~voter ~post ~author ~community ~vote
   let* actual_local = or_fail "local karma" actual_local in
   Alcotest.(check (option int))
     (label ^ ": author local karma") local actual_local;
-  let* actual_karma = Earde.Db.get_user_karma c author in
+  let* actual_karma = Earde.User_store.get_user_karma c author in
   let* actual_karma = or_fail_s "karma" actual_karma in
   Alcotest.(check int) (label ^ ": author karma") karma actual_karma;
   Lwt.return_unit
@@ -1331,7 +1331,7 @@ let check_comment_vote_state label c ~voter ~comment ~author ~community ~vote
   let* actual_local = or_fail "local karma" actual_local in
   Alcotest.(check (option int))
     (label ^ ": author local karma") local actual_local;
-  let* actual_karma = Earde.Db.get_user_karma c author in
+  let* actual_karma = Earde.User_store.get_user_karma c author in
   let* actual_karma = or_fail_s "karma" actual_karma in
   Alcotest.(check int) (label ^ ": author karma") karma actual_karma;
   Lwt.return_unit
@@ -1729,7 +1729,7 @@ let password_change_kills_reset_links_case =
       let* uid = C.find q_user_hashed ("sec_pwlinks", strip_nuls hash) in
       let* uid = or_fail "user" uid in
       let* created =
-        Earde.Db.password_reset_create_token c "sec_pwlinks@sec.invalid" "sec-pre-change-link"
+        Earde.Credential_store.create_token c "sec_pwlinks@sec.invalid" "sec-pre-change-link"
       in
       let* _ = or_fail_s "create" created in
       let* cookie, token = login ~url ~username:"sec_pwlinks" uid in
@@ -1739,7 +1739,7 @@ let password_change_kills_reset_links_case =
       in
       Alcotest.(check int) "change accepted" 200 status;
       Alcotest.(check bool) "change applied" true (contains body "Password Changed");
-      let* again = Earde.Db.password_reset_atomically c "sec-pre-change-link" "sec-attacker-hash" in
+      let* again = Earde.Credential_store.reset_password_atomically c "sec-pre-change-link" "sec-attacker-hash" in
       let* again = or_fail_s "old link reset" again in
       Alcotest.(check bool) "a link issued before the change cannot reset" false again;
       let* n = C.find q_count_reset_tokens uid in

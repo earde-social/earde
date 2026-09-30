@@ -22,8 +22,8 @@
    ineligible community, or going private would weld its connections in
    place. *)
 let connection_eligible ~visibility ~onboarding_state ~discoverable =
-  visibility = Db.Community_public
-  && onboarding_state = Db.Community_published
+  visibility = Community_types.Community_public
+  && onboarding_state = Community_types.Community_published
   && discoverable
 
 type status =

@@ -40,7 +40,7 @@ let db_case name ~endpoint f =
 
 (* Repeats the same GET through the real middleware until the limiter
    blocks (bounded well past the production limit, which stays private to
-   Db), returning the blocked response's status and body. *)
+   Rate_limit_store), returning the blocked response's status and body. *)
 let run_until_blocked ~url ~target =
   let handler =
     Dream.sql_pool url @@ Dream.memory_sessions

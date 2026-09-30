@@ -177,8 +177,8 @@ let verification_of_string = function
    clears the indexing/discovery flags, still visibility = 'public'). *)
 let currently_eligible ~is_network_community ~onboarding_state ~visibility =
   is_network_community
-  && onboarding_state = Db.Community_published
-  && visibility = Db.Community_public
+  && onboarding_state = Community_types.Community_published
+  && visibility = Community_types.Community_public
 
 (* Structural validity of the target community. The shared lifecycle rule
    decides most shapes; the one drifted shape it rejects but review must
@@ -191,8 +191,8 @@ let community_structurally_valid ~is_network_community ~onboarding_state
   Network_communities.lifecycle_state_valid ~is_network_community
     ~onboarding_state ~visibility ~indexable ~discoverable
   || is_network_community
-     && onboarding_state = Db.Community_published
-     && visibility = Db.Community_private
+     && onboarding_state = Community_types.Community_published
+     && visibility = Community_types.Community_private
      && (not indexable) && not discoverable
 
 (* === queries === *)
@@ -261,8 +261,8 @@ let community_of_row (id, slug, name, visibility_raw)
   if not (id > 0 && nonblank name && single_path_segment slug) then Error ()
   else
     match
-      ( Db.community_visibility_of_string visibility_raw,
-        Db.community_onboarding_state_of_string onboarding_raw )
+      ( Community_types.community_visibility_of_string visibility_raw,
+        Community_types.community_onboarding_state_of_string onboarding_raw )
     with
     | Some visibility, Ok onboarding_state ->
         if

@@ -138,16 +138,16 @@ let external_assets_case =
         approved_stylesheets)
 
 (* --- 6./13. rendered documents: approved local CSS only ---------------- *)
-let census_community ~visibility : Earde.Db.community =
+let census_community ~visibility : Earde.Community_types.community =
   { id = 3; slug = "census"; name = "Census"; description = None
   ; rules = None; avatar_url = None; banner_url = None
   ; allow_downvotes = true; sections_enabled = true; visibility
   ; indexable = true; is_network_community = false
-  ; onboarding_state = Earde.Db.Community_published; discoverable = true }
+  ; onboarding_state = Earde.Community_types.Community_published; discoverable = true }
 
 (* One document per live wrapper family. *)
 let launch_documents () =
-  let community = census_community ~visibility:Earde.Db.Community_public in
+  let community = census_community ~visibility:Earde.Community_types.Community_public in
   [ ( "launch_entry_page"
     , Earde.Components.launch_entry_page ~page_class:"launch-bring"
         ~title:"T" ~content:"B" () )

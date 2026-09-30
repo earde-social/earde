@@ -5,7 +5,7 @@ module Phr = Earde.Project_home_relation
    the page the existing route already serves, for exactly the visitors that
    route already authorizes, and never for anyone else. The real handler runs
    behind the real production pipeline shape — sql_pool + secret + memory
-   sessions + the real router path — so :slug, Db.get_community_by_slug and
+   sessions + the real router path — so :slug, Community_store.get_community_by_slug and
    can_view_community behave exactly as in bin/main; no synthetic parallel
    handler exists. Database-gated with its own reserved
    external-installation-id range 947000001..947000999 (hence account ids

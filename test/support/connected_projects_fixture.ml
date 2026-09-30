@@ -53,7 +53,7 @@ let q_show_relations =
    swapped per request instead; cases run sequentially. Everything else is
    the real production shape — secret, memory sessions, and the real
    "/c/:slug" router path bound to the real handler, so :slug,
-   Db.get_community_by_slug and can_view_community behave exactly as in
+   Community_store.get_community_by_slug and can_view_community behave exactly as in
    bin/main. *)
 let shared_identity : (int * bool) option ref = ref None
 

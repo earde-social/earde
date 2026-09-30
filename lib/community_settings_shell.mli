@@ -23,7 +23,7 @@ type item =
 (** Whether the "Complete setup and publish" affordance is worth showing: an
     unpublished network setup draft, an authorized (top-mod/admin) viewer and
     a canonical slug. The setup surface independently reauthorizes. *)
-val can_complete_setup : community:Db.community -> authorized:bool -> bool
+val can_complete_setup : community:Community_types.community -> authorized:bool -> bool
 
 (** The shared settings header band (community identity + the canonical
     back-to-community link). [slug] is the raw canonical slug; escaping is

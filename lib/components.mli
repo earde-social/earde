@@ -155,7 +155,7 @@ val launch_message_page : ?noindex:bool -> ?request:Dream.request -> title:strin
     surfaces whose content is community-bound (the post-creation form and its
     join gate); absent, the assets are byte-identical to before.
     Used only by [Pages.feed_page]; no existing wrapper changes. *)
-val launch_app_page : ?noindex:bool -> ?request:Dream.request -> ?user:string -> ?rail_communities:Db.community list -> ?analytics_community:(int * Db.community_visibility) -> ?aside:string -> page_class:string -> title:string -> content:string -> unit -> string
+val launch_app_page : ?noindex:bool -> ?request:Dream.request -> ?user:string -> ?rail_communities:Community_types.community list -> ?analytics_community:(int * Community_types.community_visibility) -> ?aside:string -> page_class:string -> title:string -> content:string -> unit -> string
 
 (** Cartographic Civic launch onboarding document (pass 4: /projects/new only).
     A complete, self-contained document loading only /static/css/earde.css plus
@@ -201,7 +201,7 @@ val launch_onboarding_page : ?noindex:bool -> ?request:Dream.request -> ?user:st
     ship [launch_share_script] to guests. [page_class]
     ("launch-community-overview") is the scoping root stamped on <body> for
     the integration CSS at the end of earde.css. *)
-val launch_community_page : ?noindex:bool -> ?request:Dream.request -> ?user:string -> ?rail_communities:Db.community list -> ?head_extra:string -> community:Db.community -> sidebar:string -> page_class:string -> title:string -> content:string -> unit -> string
+val launch_community_page : ?noindex:bool -> ?request:Dream.request -> ?user:string -> ?rail_communities:Community_types.community list -> ?head_extra:string -> community:Community_types.community -> sidebar:string -> page_class:string -> title:string -> content:string -> unit -> string
 
 (** Guest-only public-interaction script: exactly the shared [copyPostLink]
     definition the authenticated behavior script also embeds (one source
@@ -229,7 +229,7 @@ val launch_share_script : string
     them; the current community's tile carries the active marker in its
     joined slot, or is appended when not joined). Used only by
     [Pages.community_channel_shell_page]; no existing wrapper changes. *)
-val launch_community_surface_page : ?noindex:bool -> ?request:Dream.request -> ?user:string -> ?rail_communities:Db.community list -> ?head_extra:string -> ?aside:string -> community:Db.community -> sidebar:string -> page_class:string -> title:string -> main_el:string -> unit -> string
+val launch_community_surface_page : ?noindex:bool -> ?request:Dream.request -> ?user:string -> ?rail_communities:Community_types.community list -> ?head_extra:string -> ?aside:string -> community:Community_types.community -> sidebar:string -> page_class:string -> title:string -> main_el:string -> unit -> string
 
 (** Deterministic launch-palette colour (hex string) for a community slug.
     The database stores no per-community colour, so launch chrome derives a
@@ -249,16 +249,16 @@ val format_month_year : string -> string
     (own-post Delete, Mod/Admin Remove dialog, Mod/Admin Ban dialog), or "" when the viewer has
     no controls. Shared by [render_post] and the search results page so both emit identical
     forms/routes/CSRF/dialogs/reason fields with the same Rule A/B/C visibility. *)
-val post_admin_actions : ?is_current_user_mod:bool -> ?admin_usernames:string list -> ?banned_usernames:string list -> csrf_token:string -> Dream.request -> Db.post -> string
+val post_admin_actions : ?is_current_user_mod:bool -> ?admin_usernames:string list -> ?banned_usernames:string list -> csrf_token:string -> Dream.request -> Post_types.post -> string
 
 (** Destination rendering context for an accepted shared-thread placement feed row:
     the destination community's slug (all internal links stay in the destination
     context) paired with the row's provenance/destination-section fields. Absent =
     the community's own post, byte-identical rendering. On a shared row the
     destination's moderator standing grants no canonical-content controls. *)
-type feed_shared = string * Db.feed_shared_context
+type feed_shared = string * Post_types.feed_shared_context
 
-val render_post : ?is_current_user_mod:bool -> ?mod_usernames:string list -> ?admin_usernames:string list -> ?banned_usernames:string list -> ?shared:feed_shared -> Dream.request -> (int * int) list -> Db.post -> string
+val render_post : ?is_current_user_mod:bool -> ?mod_usernames:string list -> ?admin_usernames:string list -> ?banned_usernames:string list -> ?shared:feed_shared -> Dream.request -> (int * int) list -> Post_types.post -> string
 
 (** Origin-side provenance label, the one centralized copy helper for
     "Shared with <destination>": one [(slug, name)] pair renders
@@ -275,7 +275,7 @@ val shared_with_html : (string * string) list -> string
     [show_context] context line — the global feed's origin-card enrichment. It never combines
     with [shared] (a destination-context row keeps its one "Shared from" direction), and []
     leaves every existing caller's markup byte-identical. *)
-val render_forum_row : ?is_current_user_mod:bool -> ?mod_usernames:string list -> ?admin_usernames:string list -> ?banned_usernames:string list -> ?show_context:bool -> ?shared:feed_shared -> ?shared_with:(string * string) list -> Dream.request -> (int * int) list -> Db.post -> string
+val render_forum_row : ?is_current_user_mod:bool -> ?mod_usernames:string list -> ?admin_usernames:string list -> ?banned_usernames:string list -> ?show_context:bool -> ?shared:feed_shared -> ?shared_with:(string * string) list -> Dream.request -> (int * int) list -> Post_types.post -> string
 
 (** [slugify title] → a URL-safe, descriptive thread slug (lowercase, non-alphanumerics
     collapsed to single dashes, trimmed, length-capped). Descriptive only — [post_id] is
@@ -290,4 +290,4 @@ val canonical_thread_path : string -> int -> string -> string
 (** Replay privacy (analytics spec §6): wraps [body] in PostHog's built-in
     ph-no-capture block class when the community is private, excluding its
     content from session replay. Identity for public communities. *)
-val private_replay_guard : community:Db.community -> string -> string
+val private_replay_guard : community:Community_types.community -> string -> string
