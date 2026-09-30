@@ -3,7 +3,7 @@
 %% tests drive the real server without extra dependencies.
 -module(gateway_test_ffi).
 -export([links/1, listener_owner/1, connection_owner/2, wait_down/2,
-         http_status/2, http_post/4, ws_connect/2, ws_send/2, ws_recv/2, ws_close/1,
+         http_status/2, http_post/4, ws_connect/3, ws_send/2, ws_recv/2, ws_close/1,
          putenv/2, now_ms/0]).
 
 links(Pid) ->
@@ -80,13 +80,14 @@ http_post(Port, Path, Secret, Body) ->
             {error, nil}
     end.
 
-ws_connect(Port, Target) ->
+ws_connect(Port, Target, Origin) ->
     case gen_tcp:connect({127, 0, 0, 1}, Port, [binary, {active, false}], 1000) of
         {ok, S} ->
             Key = base64:encode(crypto:strong_rand_bytes(16)),
             ok = gen_tcp:send(S, [<<"GET ">>, Target, <<" HTTP/1.1\r\n">>,
                                   <<"Host: localhost\r\nUpgrade: websocket\r\n">>,
                                   <<"Connection: Upgrade\r\nSec-WebSocket-Version: 13\r\n">>,
+                                  <<"Origin: ">>, Origin, <<"\r\n">>,
                                   <<"Sec-WebSocket-Key: ">>, Key, <<"\r\n\r\n">>]),
             case read_head(S, <<>>) of
                 {ok, <<"HTTP/1.1 101", _/binary>>, Rest} ->
