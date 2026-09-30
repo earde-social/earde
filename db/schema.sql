@@ -1177,7 +1177,7 @@ CREATE TABLE public.rate_limits (
     ip_address text NOT NULL,
     endpoint text NOT NULL,
     attempts integer DEFAULT 1 NOT NULL,
-    window_start real NOT NULL
+    window_start double precision NOT NULL
 );
 
 
@@ -3174,4 +3174,5 @@ INSERT INTO public.schema_migrations (version) VALUES
     ('20260731130000'),
     ('20260803120000'),
     ('20260929120000'),
-    ('20260929130000');
+    ('20260929130000'),
+    ('20260930120000');
